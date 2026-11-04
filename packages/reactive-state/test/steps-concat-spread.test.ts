@@ -126,3 +126,105 @@ describe('what a dynamic site gives `concat` to spread', () => {
     expect(made).toStrictEqual([0, 1]);
   });
 });
+
+/** `[<hole>, 'b']`, of a prototype of arrays that holds position 0 as `held` says. */
+function holeyOf(held: PropertyDescriptor): unknown[] {
+  const prototype = Object.create(Array.prototype, { 0: held }) as unknown[];
+  const holey = Object.setPrototypeOf([], prototype) as unknown[];
+  holey.length = 2;
+  holey[1] = 'b';
+  return holey;
+}
+
+/** A getter of `'a'`, counting its calls in `calls.count`. */
+function counting(calls: { count: number }): () => string {
+  return () => {
+    calls.count += 1;
+    return 'a';
+  };
+}
+
+describe('what `concat` reads, as ECMA-262 has it read', () => {
+  it('charges a callable it spreads as long as its stored length says, before it walks one', () => {
+    const value = Object.defineProperties(() => 0, {
+      length: { value: PAST },
+      [Symbol.isConcatSpreadable]: { value: true },
+    });
+
+    expect(concatenated(value)).toThrow(RangeError);
+  });
+
+  it('charges what it spreads as it is called, though the value was counted shorter as it was made', () => {
+    const value = { [Symbol.isConcatSpreadable]: true, length: 1 };
+    function lengthened(): unknown {
+      return withinSteps(() => {
+        const kept = counted(value);
+        kept.length = PAST;
+        return method([] as unknown[], 'concat')(kept);
+      });
+    }
+
+    expect(lengthened).toThrow(RangeError);
+  });
+
+  it('refuses an array an accessor says spreads, of its own or of what it inherits', () => {
+    const calls = { count: 0 };
+    const own = Object.defineProperty(['a'], Symbol.isConcatSpreadable, {
+      get: () => counting(calls)() === 'a',
+    });
+    const prototype = Object.create(Array.prototype, {
+      [Symbol.isConcatSpreadable]: { get: () => counting(calls)() === 'a' },
+    }) as unknown[];
+    const inherited: unknown = Object.setPrototypeOf(['a'], prototype);
+
+    expect(concatenated(own)).toThrow(TypeError);
+    expect(concatenated(inherited)).toThrow(TypeError);
+    expect(calls.count).toBe(0);
+  });
+
+  it('refuses what it would read a position of through an accessor, its own or one at a hole', () => {
+    const calls = { count: 0 };
+    const own = Object.defineProperty(['x', 'y'], 1, { get: counting(calls) });
+    const holey = holeyOf({ get: counting(calls) });
+    const spread = Object.defineProperty({ [Symbol.isConcatSpreadable]: true, length: 1 }, 0, {
+      enumerable: true,
+      get: counting(calls),
+    });
+
+    expect(concatenated(own)).toThrow(TypeError);
+    expect(concatenated(holey)).toThrow(TypeError);
+    expect(concatenated(spread)).toThrow(TypeError);
+    expect(calls.count).toBe(0);
+  });
+
+  it('refuses a receiver whose array the application’s class or accessor would make', () => {
+    let made = 0;
+    class Listed extends Array<string> {
+      constructor(...items: string[]) {
+        super(...items);
+        made += 1;
+      }
+    }
+    const subclassed = Listed.from(['a']);
+    made = 0;
+    const constructed = Object.defineProperty(['a'], 'constructor', {
+      get: () => {
+        made += 1;
+        return Array;
+      },
+    });
+
+    expect(() => withinSteps(() => method(subclassed, 'concat')(['b']))).toThrow(TypeError);
+    expect(() => withinSteps(() => method(constructed, 'concat')(['b']))).toThrow(TypeError);
+    expect(made).toBe(0);
+  });
+
+  it('reads what a hole inherits of data, as before', () => {
+    const holey = holeyOf({ value: 'inherited' });
+
+    expect(withinSteps(() => method([] as unknown[], 'concat')(counted(holey)))).toStrictEqual([
+      'inherited',
+      'b',
+    ]);
+  });
+});

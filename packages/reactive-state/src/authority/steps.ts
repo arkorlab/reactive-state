@@ -186,7 +186,7 @@ export function method<T, K extends keyof (MethodObject & NonNullable<T>)>(
   receiver: T,
   key: K,
 ): OmitThisParameter<MethodValue<T, K>> {
-  return methodOf(receiver, key, running(), refuseUnmeasuredSpread);
+  return methodOf(receiver, key, running(), chargeConcat);
 }
 
 /** Spends `steps`; past `VIEW_LIMITS.steps`, throws. */
@@ -285,14 +285,20 @@ function indexedKey(key: string | symbol, length: number): boolean {
 /**
  * The language's own functions what follows reads a value's entries with, as they were as this
  * module loaded: one the application's code puts in the place of one later neither answers for the
- * check before `concat` (`refuseUnmeasuredSpread`) nor stops it.
+ * check before `concat` (`chargeConcat`) nor stops it.
  */
 const INTRINSIC = Object.freeze({
   describe: Object.getOwnPropertyDescriptor,
+  floor: Math.floor,
   isArray: Array.isArray,
   isProxy: types.isProxy,
+  isSafeInteger: Number.isSafeInteger,
+  keys: Reflect.ownKeys,
+  min: Math.min,
   prototypeOf: Object.getPrototypeOf,
   toBoolean: Boolean,
+  toNumber: Number,
+  toText: String,
 });
 
 /** A Proxy cannot be inspected for size without executing otherwise unused application traps. */
@@ -434,53 +440,170 @@ function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor 
 const CONCAT: unknown = Reflect.get(Array.prototype, 'concat');
 
 /**
- * Refuses, before `concat` is called, what it would spread as long as the application's code says
- * as it is read: one an accessor makes spreadable, or one spread whose `length` an accessor answers,
- * or an object `concat` converts. `measure` runs no such code, and so counts what it holds of them
- * as no array's (`arrayLength`), where `concat` would walk each position the code says before a
- * step counts the array it makes. Of what else it spreads, what its stored entries say was counted
- * as it was made; an array spreads as long as it holds.
+ * What `concat` reads by, as this module loaded: the symbols it asks a value of, the language's
+ * `Array` and what answers its `Symbol.species`, and the longest length `ToLength` makes.
  */
-function refuseUnmeasuredSpread(called: unknown, given: readonly unknown[]): void {
+const CONCAT_READS = Object.freeze({
+  array: Array,
+  most: Number.MAX_SAFE_INTEGER,
+  species: Symbol.species,
+  speciesOfArray: Reflect.get(INTRINSIC.describe(Array, Symbol.species) ?? {}, 'get') as unknown,
+  spreadable: Symbol.isConcatSpreadable,
+});
+
+/**
+ * Charges, or refuses, before `concat` is called, what it would read and spread, as ECMA-262 has it
+ * read (`Array.prototype.concat`): the array it makes (`ArraySpeciesCreate`), and of each value it is
+ * given, its receiver first, whether it spreads (`IsConcatSpreadable`), how far (`LengthOfArrayLike`)
+ * and each position it reads (`HasProperty`, `Get`). What only the application's code would answer
+ * of them, as it ran, is refused, since no step could count it first. Each length it spreads is
+ * charged, whatever counted the value as it was made: a callable is counted as none of it, and what
+ * was counted shorter may be longer since.
+ */
+function chargeConcat(called: unknown, receiver: unknown, given: readonly unknown[]): void {
   if (called !== CONCAT) {
     return;
   }
-  // By position, through no method of an array nor its iterator, either of which the application's
-  // code may have replaced.
+  refuseOtherSpecies(receiver);
+  chargeSpread(receiver);
+  eachOf(given, chargeSpread);
+}
+
+/** Calls `each` of each element of `list`, through no method of it nor its iterator. */
+function eachOf<T>(list: readonly T[], each: (item: T) => void): void {
+  // By position: the application's code may have replaced an array's methods, or its iterator.
   // eslint-disable-next-line @typescript-eslint/prefer-for-of, unicorn/no-for-loop -- see above
-  for (let index = 0; index < given.length; index += 1) {
-    if (spreadUnmeasured(given[index])) {
-      throw new TypeError(
-        "A dynamic site gives `concat` what it would spread as long as the application's code says as it is read — what an accessor makes spreadable, or a `length` an accessor answers or that converts — whose size cannot be measured without running that code: return an ordinary value from the shared helper.",
-      );
-    }
+  for (let index = 0; index < list.length; index += 1) {
+    each(list[index] as T);
   }
 }
 
-/** Whether `concat` would read whether `value` spreads, or how far, of the application's code. */
-function spreadUnmeasured(value: unknown): boolean {
-  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+/** Refuses what `concat` would read of by running the application's code. */
+function refuseConcatCode(): never {
+  throw new TypeError(
+    "A dynamic site gives `concat` what it would read by running the application's code — an accessor of `Symbol.isConcatSpreadable`, of `length` or of a position it spreads, a `length` it converts, or a receiver whose array the application's class or species would make — which no step counts before it runs: return an ordinary value from the shared helper.",
+  );
+}
+
+/**
+ * Refuses a receiver of whose `constructor` `concat` would make its array by the application's code
+ * (`ArraySpeciesCreate`): one an accessor answers, one of any value but the language's `Array` or
+ * none — a class of the application's, whose constructor would run — or the language's `Array`, of
+ * a `Symbol.species` the application's code put on it.
+ */
+function refuseOtherSpecies(receiver: unknown): void {
+  refuseProxy(receiver);
+  const made = INTRINSIC.isArray(receiver) ? storedDescriptor(receiver, 'constructor') : undefined;
+  if (made === undefined) {
+    return;
+  }
+  if (!('value' in made)) {
+    refuseConcatCode();
+  }
+  const by: unknown = made.value;
+  const species = INTRINSIC.describe(CONCAT_READS.array, CONCAT_READS.species);
+  if (
+    by !== undefined &&
+    (by !== CONCAT_READS.array || species?.get !== CONCAT_READS.speciesOfArray)
+  ) {
+    refuseConcatCode();
+  }
+}
+
+/**
+ * Charges what `concat` would spread of `item`, as long as the `length` it holds says, before it
+ * reads a position: refused where whether it spreads, its length or a position it reads is answered
+ * by the application's code.
+ */
+function chargeSpread(item: unknown): void {
+  if (item === null || (typeof item !== 'object' && typeof item !== 'function')) {
+    return;
+  }
+  const flag = storedDescriptor(item, CONCAT_READS.spreadable);
+  if (flag !== undefined && !('value' in flag)) {
+    refuseConcatCode();
+  }
+  const stored: unknown = flag?.value;
+  const spreads = stored === undefined ? INTRINSIC.isArray(item) : INTRINSIC.toBoolean(stored);
+  if (!spreads) {
+    return;
+  }
+  const length = lengthOf(item);
+  spend(length);
+  refuseReadPositions(item, length);
+}
+
+/**
+ * What `LengthOfArrayLike` answers of `item`, of the `length` it holds or inherits: none of none;
+ * refused of an accessor's, or of an object or a function, which `ToNumber` converts by the
+ * application's code. None of a symbol or a `bigint` either, which no number is: `concat` throws on
+ * one before it spreads anything.
+ */
+function lengthOf(item: WeakKey): number {
+  const entry = storedDescriptor(item, 'length');
+  if (entry === undefined) {
+    return 0;
+  }
+  if (!('value' in entry)) {
+    refuseConcatCode();
+  }
+  const stored: unknown = entry.value;
+  if (typeof stored === 'function' || (typeof stored === 'object' && stored !== null)) {
+    refuseConcatCode();
+  }
+  if (typeof stored === 'symbol' || typeof stored === 'bigint') {
+    return 0;
+  }
+  // `ToLength`: an integer, of `NaN` and of what is below one none, and at most 2^53 − 1.
+  const length = INTRINSIC.floor(INTRINSIC.toNumber(stored));
+  return length > 0 ? INTRINSIC.min(length, CONCAT_READS.most) : 0;
+}
+
+/**
+ * Refuses `item` where a position below `length` that `concat` reads of it is an accessor's, which
+ * `Get` would call: one it holds, or, at a position it holds nothing at, one it inherits. What it
+ * holds is looked up position by position, as many as were charged; what it inherits, only where it
+ * holds a hole, by what its prototypes hold, which are few.
+ */
+function refuseReadPositions(item: WeakKey, length: number): void {
+  let held = 0;
+  for (let index = 0; index < length; index += 1) {
+    const entry = INTRINSIC.describe(item, index);
+    if (entry !== undefined) {
+      held += 1;
+      if (!('value' in entry)) {
+        refuseConcatCode();
+      }
+    }
+  }
+  if (held === length) {
+    return;
+  }
+  for (
+    let current: unknown = INTRINSIC.prototypeOf(item);
+    current !== null && (typeof current === 'object' || typeof current === 'function');
+    current = INTRINSIC.prototypeOf(current)
+  ) {
+    refuseProxy(current);
+    eachOf(INTRINSIC.keys(current), (key) => {
+      const entry = positionBelow(key, length) ? storedDescriptor(item, key) : undefined;
+      if (entry !== undefined && !('value' in entry)) {
+        refuseConcatCode();
+      }
+    });
+  }
+}
+
+/** Whether `key` names a position below `length`, as the language writes one: `'7'`, never `'07'`. */
+function positionBelow(key: string | symbol, length: number): boolean {
+  if (typeof key !== 'string') {
     return false;
   }
-  refuseProxy(value);
-  const spreads = INTRINSIC.isArray(value)
-    ? undefined
-    : storedDescriptor(value, Symbol.isConcatSpreadable);
-  if (spreads === undefined) {
-    return false;
-  }
-  if (!('value' in spreads)) {
-    return true;
-  }
-  // Held as one element, or spread as long as `length` says: of nothing, none.
-  const spreading = INTRINSIC.toBoolean(spreads.value);
-  const length = spreading ? storedDescriptor(value, 'length') : undefined;
-  if (length === undefined) {
-    return false;
-  }
-  if (!('value' in length)) {
-    return true;
-  }
-  const stored: unknown = length.value;
-  return typeof stored === 'function' || (typeof stored === 'object' && stored !== null);
+  const index = INTRINSIC.toNumber(key);
+  return (
+    INTRINSIC.isSafeInteger(index) &&
+    index >= 0 &&
+    index < length &&
+    INTRINSIC.toText(index) === key
+  );
 }
