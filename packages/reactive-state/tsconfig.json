@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2024", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    "types": ["node"],
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "paths": {
+      "framework/*": ["./src/framework/*.ts"],
+      "@/*": ["./test/support/app/*"]
+    }
+  },
+  "include": ["src/**/*", "test/**/*", "vitest.config.mts", "vitest.workers.config.mts"],
+  "exclude": ["src/cloudflare/**/*", "test/cloudflare/**/*"]
+}
