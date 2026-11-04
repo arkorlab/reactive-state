@@ -102,6 +102,17 @@ describe('aliasesOf', () => {
     expect(resolveAlias(aliases, '@/x')).toBe(path.join(directory, 'base/lib/x.ts'));
   });
 
+  it('takes no substitution of a pattern that is no array, nor one that is no text', async () => {
+    // TypeScript reports both (TS5063, TS5064); the pattern still takes the specifiers it matches.
+    const directory = await directoryOf({
+      compilerOptions: { paths: { '@/*': './lib/*', '~/*': [5, '../base/lib/*'] } },
+    });
+    const aliases = aliasesOf(path.join(directory, 'child/tsconfig.json'));
+
+    expect(resolveAlias(aliases, '@/x')).toBeUndefined();
+    expect(resolveAlias(aliases, '~/x')).toBe(path.join(directory, 'base/lib/x.ts'));
+  });
+
   it('reads `paths` of another type as none, as TypeScript 6.0 does', async () => {
     const directory = await directoryOf({
       compilerOptions: { paths: './lib/*' },

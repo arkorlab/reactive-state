@@ -156,7 +156,7 @@ interface Declared {
   /** `paths`, and the directory of the configuration that declared it. */
   readonly paths?:
     | {
-        readonly entries: Readonly<Record<string, readonly string[]>>;
+        readonly entries: Readonly<Record<string, unknown>>;
         readonly from: string;
       }
     | undefined;
@@ -169,7 +169,7 @@ interface ConfigJson {
   readonly extends?: string | readonly string[];
   readonly compilerOptions?: {
     readonly baseUrl?: string | null;
-    readonly paths?: Readonly<Record<string, readonly string[]>> | null;
+    readonly paths?: Readonly<Record<string, unknown>> | null;
   };
 }
 
@@ -329,10 +329,21 @@ export function aliasesOf(tsconfig: string): Aliases {
     paths: Object.entries(paths?.entries ?? {}).map(([pattern, targets]) => {
       return {
         ...split(pattern),
-        targets: targets.map((target) => split(absolute(target))),
+        targets: substitutionsOf(targets).map((target) => split(absolute(target))),
       };
     }),
   };
+}
+
+/**
+ * A pattern's substitutions, as `paths` holds them: the texts of its array. TypeScript reports a
+ * value that is no array (TS5063) and an entry that is no text (TS5064); either names nothing here,
+ * and a specifier the pattern matches resolves to nothing through it.
+ */
+function substitutionsOf(targets: unknown): readonly string[] {
+  return Array.isArray(targets)
+    ? targets.filter((target: unknown): target is string => typeof target === 'string')
+    : [];
 }
 
 /** The `tsconfig.json` nearest `file`, in its directory or above it; none where there is none. */
