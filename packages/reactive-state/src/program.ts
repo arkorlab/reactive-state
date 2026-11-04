@@ -142,11 +142,14 @@ export function componentRef(component: string): ComponentRef {
 }
 
 export function actionRef(module: string, name: string, bound: readonly Json[] = []): ActionRef {
+  // The arguments as they are now, which `bound` holds and `bind` binds after: an array the caller
+  // changes later changes neither.
+  const kept = Object.freeze([...bound]);
   const reference: ActionRef = {
     [REFERENCE]: true,
     bind: (_thisArg: unknown, ...args: readonly Json[]): ActionRef =>
-      actionRef(module, name, [...bound, ...args]),
-    bound: Object.freeze([...bound]),
+      actionRef(module, name, [...kept, ...args]),
+    bound: kept,
     kind: 'action',
     module,
     name,
