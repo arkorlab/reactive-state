@@ -16,8 +16,9 @@ updates:
       default-days: 1
     open-pull-requests-limit: 0
 
-  # The workflows name each action by tag, and `.github/workflows/actions.lock` records the commit
-  # each tag stood for; an update here regenerates the lockfile's entry in the same pull request.
+  # The workflows pin each action to its full commit SHA, with the tag in a trailing comment, and
+  # `.github/workflows/actions.lock` records the same commits; an update here changes both in the
+  # same pull request.
   - package-ecosystem: github-actions
     directory: /
     schedule:
