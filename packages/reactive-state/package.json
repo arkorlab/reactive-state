@@ -12,7 +12,9 @@
   "type": "module",
   "exports": {
     "./authority": "./src/authority/index.ts",
+    "./bridge": "./src/bridge/index.ts",
     "./client": "./src/client/index.ts",
+    "./d1": "./src/cloudflare/d1-store.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
     "./program": "./src/program.ts",
@@ -23,7 +25,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/cloudflare"
   },
   "dependencies": {
     "typescript": "catalog:typescript-api"
