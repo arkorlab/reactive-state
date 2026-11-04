@@ -282,9 +282,22 @@ function indexedKey(key: string | symbol, length: number): boolean {
   return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 
+/**
+ * The language's own functions what follows reads a value's entries with, as they were as this
+ * module loaded: one the application's code puts in the place of one later neither answers for the
+ * check before `concat` (`refuseUnmeasuredSpread`) nor stops it.
+ */
+const INTRINSIC = Object.freeze({
+  describe: Object.getOwnPropertyDescriptor,
+  isArray: Array.isArray,
+  isProxy: types.isProxy,
+  prototypeOf: Object.getPrototypeOf,
+  toBoolean: Boolean,
+});
+
 /** A Proxy cannot be inspected for size without executing otherwise unused application traps. */
 function refuseProxy(value: unknown): void {
-  if (types.isProxy(value)) {
+  if (INTRINSIC.isProxy(value)) {
     throw new TypeError(
       'A dynamic site made a Proxy intermediate, whose size cannot be measured without invoking application traps: return an ordinary value from the shared helper.',
     );
@@ -408,11 +421,11 @@ function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor 
     current !== null && (typeof current === 'object' || typeof current === 'function');
   ) {
     refuseProxy(current);
-    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    const descriptor = INTRINSIC.describe(current, key);
     if (descriptor !== undefined) {
       return descriptor;
     }
-    current = Object.getPrototypeOf(current);
+    current = INTRINSIC.prototypeOf(current);
   }
   return undefined;
 }
@@ -429,10 +442,18 @@ const CONCAT: unknown = Reflect.get(Array.prototype, 'concat');
  * as it was made; an array spreads as long as it holds.
  */
 function refuseUnmeasuredSpread(called: unknown, given: readonly unknown[]): void {
-  if (called === CONCAT && given.some((each) => spreadUnmeasured(each))) {
-    throw new TypeError(
-      "A dynamic site gives `concat` what it would spread as long as the application's code says as it is read — what an accessor makes spreadable, or a `length` an accessor answers or that converts — whose size cannot be measured without running that code: return an ordinary value from the shared helper.",
-    );
+  if (called !== CONCAT) {
+    return;
+  }
+  // By position, through no method of an array nor its iterator, either of which the application's
+  // code may have replaced.
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of, unicorn/no-for-loop -- see above
+  for (let index = 0; index < given.length; index += 1) {
+    if (spreadUnmeasured(given[index])) {
+      throw new TypeError(
+        "A dynamic site gives `concat` what it would spread as long as the application's code says as it is read — what an accessor makes spreadable, or a `length` an accessor answers or that converts — whose size cannot be measured without running that code: return an ordinary value from the shared helper.",
+      );
+    }
   }
 }
 
@@ -442,7 +463,7 @@ function spreadUnmeasured(value: unknown): boolean {
     return false;
   }
   refuseProxy(value);
-  const spreads = Array.isArray(value)
+  const spreads = INTRINSIC.isArray(value)
     ? undefined
     : storedDescriptor(value, Symbol.isConcatSpreadable);
   if (spreads === undefined) {
@@ -452,7 +473,7 @@ function spreadUnmeasured(value: unknown): boolean {
     return true;
   }
   // Held as one element, or spread as long as `length` says: of nothing, none.
-  const spreading = Boolean(spreads.value);
+  const spreading = INTRINSIC.toBoolean(spreads.value);
   const length = spreading ? storedDescriptor(value, 'length') : undefined;
   if (length === undefined) {
     return false;
