@@ -12,7 +12,12 @@
     "format": "oxfmt --check",
     "format:write": "oxfmt",
     "knip": "knip",
-    "test": "vitest run"
+    "test": "vitest run",
+    "lint": "eslint --max-warnings 0",
+    "lint:fast": "oxlint --max-warnings 0",
+    "oxlint-config:check": "node tools/oxlint-config.mts check",
+    "oxlint-config:generate": "node tools/oxlint-config.mts generate",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",

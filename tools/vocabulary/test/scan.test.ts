@@ -6,10 +6,12 @@ import { FIXTURE_ALLOWED, FIXTURE_TERMS } from './fixture-terms.ts';
 
 /** What a file says of the fixture's terms, each by its id and as the file wrote it. */
 function saidIn(text: string): { readonly id: string; readonly text: string }[] {
-  return hitsOfFile('file.ts', text, FIXTURE_TERMS, FIXTURE_ALLOWED).map((hit) => ({
-    id: hit.term.id,
-    text: hit.text,
-  }));
+  return hitsOfFile('file.ts', text, FIXTURE_TERMS, FIXTURE_ALLOWED).map((hit) => {
+    return {
+      id: hit.term.id,
+      text: hit.text,
+    };
+  });
 }
 
 /** Where a file says the fixture's terms, each by the line and the column it starts at. */

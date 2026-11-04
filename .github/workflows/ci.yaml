@@ -27,9 +27,13 @@ jobs:
           node-version-file: package.json
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
       - run: pnpm format
       - run: pnpm knip
       - run: pnpm exec tsc --noEmit -p tools/vocabulary
+      # `.oxlintrc.json` is derived from `eslint.config.ts`; this fails when it no longer says
+      # what the ESLint config makes of it.
+      - run: pnpm oxlint-config:check
       # Nothing here describes one host in particular (`tools/vocabulary`): each mention is
       # annotated on the line that makes it.
       - run: pnpm check:vocabulary --format github
@@ -50,6 +54,44 @@ jobs:
       # No install scripts: the audit reads the lockfile, and nothing it installs needs to run.
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm audit --audit-level low
+
+  eslint:
+    name: Lint (ESLint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Every rule, type-aware throughout; the verdict on what oxlint answers first.
+      - run: pnpm lint
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+
+  oxlint:
+    name: Lint (oxlint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The rules oxlint implements natively, then typescript-eslint's type-aware ones through
+      # tsgolint: a first answer in seconds, and a subset of ESLint's (`tools/oxlint-config.mts`).
+      - run: pnpm lint:fast
+      - run: pnpm lint:fast --type-aware
 
   unit-tests:
     name: Tests (${{ matrix.shard }}/2)
@@ -74,10 +116,12 @@ jobs:
         env:
           SHARD: ${{ matrix.shard }}
 
-  test:
-    name: test
+  # The one name the ruleset requires: it passes only when every other gate passed, so a failing
+  # shard, linter or check anywhere keeps a pull request from merging.
+  check:
+    name: check
     if: ${{ always() }}
-    needs: [unit-tests]
+    needs: [check-static, audit, lint, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}
@@ -86,12 +130,22 @@ jobs:
           RESULTS: ${{ toJSON(needs) }}
         run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
 
-  # The one name the ruleset requires: it passes only when every other gate passed, so a failing
-  # shard or check anywhere keeps a pull request from merging.
-  check:
-    name: check
+  lint:
+    name: lint
     if: ${{ always() }}
-    needs: [check-static, audit, test]
+    needs: [eslint, oxlint]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
+
+  test:
+    name: test
+    if: ${{ always() }}
+    needs: [unit-tests]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions: {}

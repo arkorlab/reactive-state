@@ -128,13 +128,6 @@ export const TERMS: readonly Term[] = [
     passes: ['billion'],
   },
   {
-    id: 'inspector',
-    pattern: /\binspectors?(?![\da-z])/giu,
-    why: "a host's own view of a deployment",
-    finds: ['the inspector', 'an Inspector', 'cacheInspector', 'inspector_link', 'inspectors'],
-    passes: ['inspectorate', 'inspect it'],
-  },
-  {
     id: 'readme-reference',
     pattern: /\(README, +"/gu,
     why: "a section of another repository's README: cite this repository's documents by their path",

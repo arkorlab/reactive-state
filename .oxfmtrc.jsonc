@@ -15,7 +15,8 @@
     "**/dist/**",
     "**/coverage/**",
     "**/next-env.d.ts",
-    "**/drizzle/**",
+    // Drizzle Kit's migrations, as it writes them.
+    "examples/*/drizzle/**",
     "pnpm-lock.yaml",
     "**/test/fixtures/**",
     // What the compiler writes from an application's components, and the route it writes into the
