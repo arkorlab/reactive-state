@@ -72,8 +72,9 @@ export function reflects(
 /**
  * The value of `field` a page rendered with `frame`, for `session`, shows: the frame's, with each
  * of `pending` the frame does not reflect applied on top in the order they were made. A prediction
- * that throws leaves the value as it was; nothing at all for a field the frame does not hold and no
- * `set` writes.
+ * that throws leaves the value as it was, and so does one that answers a number that is not finite
+ * — `1 / 0`, `Math.sqrt(-1)` — which no field holds and the authority refuses to write; nothing at
+ * all for a field the frame does not hold and no `set` writes.
  */
 export function displayValue(
   frame: Frame,
@@ -94,7 +95,11 @@ export function displayValue(
       continue;
     }
     try {
-      value = operation.predict(value);
+      const predicted = operation.predict(value);
+      // A number that is not finite, which no field holds, is refused where the page meets it.
+      if (typeof predicted !== 'number' || Number.isFinite(predicted)) {
+        value = predicted;
+      }
     } catch {
       // A prediction that throws leaves the value as it was: the authority's own update decides.
     }
