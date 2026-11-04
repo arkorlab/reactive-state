@@ -28,6 +28,11 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format
+      - run: pnpm knip
+      - run: pnpm exec tsc --noEmit -p tools/vocabulary
+      # Nothing here describes one host in particular (`tools/vocabulary`): each mention is
+      # annotated on the line that makes it.
+      - run: pnpm check:vocabulary --format github
 
   audit:
     name: Dependency audit
@@ -45,6 +50,41 @@ jobs:
       # No install scripts: the audit reads the lockfile, and nothing it installs needs to run.
       - run: pnpm install --frozen-lockfile --ignore-scripts
       - run: pnpm audit --audit-level low
+
+  unit-tests:
+    name: Tests (${{ matrix.shard }}/2)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # As many shards as there are files to deal out; grown as the package's tests arrive.
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6.1.0
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test --shard="${SHARD}/2"
+        env:
+          SHARD: ${{ matrix.shard }}
+
+  test:
+    name: test
+    if: ${{ always() }}
+    needs: [unit-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'all(.[]; .result == "success")' <<< "$RESULTS"
 
   # The one name a ruleset requires: it passes only when every job it needs passed.
   check:

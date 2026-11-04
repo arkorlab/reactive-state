@@ -8,8 +8,11 @@
   },
   "type": "module",
   "scripts": {
+    "check:vocabulary": "node tools/vocabulary/src/main.ts",
     "format": "oxfmt --check",
-    "format:write": "oxfmt"
+    "format:write": "oxfmt",
+    "knip": "knip",
+    "test": "vitest run"
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
