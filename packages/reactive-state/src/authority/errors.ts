@@ -93,7 +93,10 @@ export function messageOf(thrown: unknown, length: number): string {
 /** What a thrown value says, for a log; it never throws, whatever was thrown. */
 export function describeThrown(thrown: unknown): string {
   try {
-    return thrown instanceof Error ? (thrown.stack ?? thrown.message) : String(thrown);
+    // An error's `stack` and `message` hold whatever was set on them: made text here, inside the
+    // `try`, a conversion that throws is answered as well.
+    const said: unknown = thrown instanceof Error ? (thrown.stack ?? thrown.message) : thrown;
+    return String(said);
   } catch {
     return 'a value that does not say what it is';
   }
