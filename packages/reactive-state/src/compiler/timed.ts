@@ -1,0 +1,209 @@
+import {
+  type Expression,
+  type Identifier,
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isBigIntLiteral,
+  isBinaryExpression,
+  isBindingElement,
+  isCallExpression,
+  isClassExpression,
+  isComputedPropertyName,
+  isConditionalExpression,
+  isElementAccessExpression,
+  isFunctionExpression,
+  isIdentifier,
+  isNewExpression,
+  isObjectBindingPattern,
+  isObjectLiteralExpression,
+  isPropertyAccessExpression,
+  isPropertyAssignment,
+  isRegularExpressionLiteral,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
+  isStringLiteral,
+  isTemplateExpression,
+  isVariableDeclaration,
+  type NewExpression,
+  type Node,
+  SyntaxKind,
+} from 'typescript/ast';
+
+import { literalName, unwrapped } from './bounded.ts';
+import { globalPathOf, patternKey } from './code-globals.ts';
+import { initializerOf } from './framed.ts';
+import { constantValue } from './numbers.ts';
+
+/**
+ * What of a shared module's code reads the time through what the platform makes (`settled.ts`): a
+ * `File` made of no `lastModified`, which it takes of now, and an event's `timeStamp`, of when the
+ * event was made.
+ */
+
+/**
+ * What of `node` reads the time through what the platform makes: `new File(…)` of no
+ * `lastModified` the code writes, `new File([], 'x')`; `timeStamp` of an event the code makes,
+ * `new Event('x').timeStamp` — none of another.
+ */
+export function timedMaking(node: Node): string | undefined {
+  if (isNewExpression(node) && isClass(node.expression, 'File') && !isDated(node)) {
+    return 'makes a `File` of no `lastModified`, which it takes of the time';
+  }
+  return eventReadsClock(node)
+    ? "reads an event's `timeStamp`, of the time it was made"
+    : undefined;
+}
+
+/** Whether `node` reads the creation time of an event the code makes. */
+export function eventReadsClock(node: Node): boolean {
+  const read = memberRead(node);
+  return read?.name === 'timeStamp' && isEvent(unwrapped(read.of), new Set());
+}
+
+/** Whether `node` names the global class `name`. */
+function isClass(node: Expression, name: string): boolean {
+  return globalPathOf(unwrapped(node))?.join('.') === name;
+}
+
+/**
+ * Whether `made`, a `File`, is made of a `lastModified` the code writes: of options it writes there,
+ * or variables around it are declared of, of no spread, whose last `lastModified` is shown defined.
+ */
+function isDated(made: NewExpression): boolean {
+  const options = made.arguments?.[2];
+  const value = options === undefined ? undefined : declaredValue(options);
+  if (value === undefined || !isObjectLiteralExpression(value)) {
+    return false;
+  }
+  let dated = false;
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) {
+      return false;
+    }
+    const key = keyOf(property.name);
+    if (key === undefined) {
+      dated = false;
+    } else if (key === 'lastModified') {
+      dated =
+        (isPropertyAssignment(property) && definedValue(property.initializer)) ||
+        (isShorthandPropertyAssignment(property) &&
+          isIdentifier(property.name) &&
+          definedValue(property.name));
+    }
+  }
+  return dated;
+}
+
+/** The name of an entry the code writes: of a name, or text; none of another. */
+function keyOf(name: Node): string | undefined {
+  if (isIdentifier(name) || isStringLiteral(name)) {
+    return name.text;
+  }
+  const key = isComputedPropertyName(name)
+    ? constantValue(name.expression, initializerOf)
+    : undefined;
+  return typeof key === 'string' ? key : undefined;
+}
+
+/** What a variable around a value is declared of, in turn, without following an alias twice. */
+function declaredValue(node: Expression): Expression {
+  let value = unwrapped(node);
+  const seen = new Set<Expression>();
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const declared = initializerOf(value);
+    if (declared === undefined) {
+      break;
+    }
+    value = unwrapped(declared);
+  }
+  return value;
+}
+
+/** Whether a timestamp expression is shown defined, so a File cannot default it to the current time. */
+function definedValue(node: Expression, seen = new Set<Expression>()): boolean {
+  const value = declaredValue(node);
+  if (seen.has(value)) {
+    return false;
+  }
+  const following = new Set([...seen, value]);
+  if (constantValue(value, initializerOf) !== undefined) {
+    return true;
+  }
+  if (isConditionalExpression(value)) {
+    return definedValue(value.whenTrue, following) && definedValue(value.whenFalse, following);
+  }
+  if (isBinaryExpression(value)) {
+    return definedBinary(value, following);
+  }
+  if (isCallExpression(value)) {
+    return ['Boolean', 'Number', 'String'].includes(
+      globalPathOf(unwrapped(value.expression))?.join('.') ?? '',
+    );
+  }
+  return (
+    [SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword, SyntaxKind.TrueKeyword].includes(
+      value.kind,
+    ) ||
+    isBigIntLiteral(value) ||
+    isArrayLiteralExpression(value) ||
+    isObjectLiteralExpression(value) ||
+    isArrowFunction(value) ||
+    isFunctionExpression(value) ||
+    isClassExpression(value) ||
+    isRegularExpressionLiteral(value) ||
+    isNewExpression(value) ||
+    isTemplateExpression(value)
+  );
+}
+
+/** Whether an expression selecting a value has no branch that may answer undefined. */
+function definedBinary(value: Expression, seen: Set<Expression>): boolean {
+  if (!isBinaryExpression(value)) {
+    return false;
+  }
+  if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
+    return definedValue(value.left, seen) || definedValue(value.right, seen);
+  }
+  return value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen);
+}
+
+/**
+ * What `node` reads a member of, by the member's name: `event.timeStamp`, `event['timeStamp']`,
+ * `const { timeStamp } = event`; none of another node.
+ */
+function memberRead(node: Node): { readonly name: string; readonly of: Expression } | undefined {
+  if (isPropertyAccessExpression(node)) {
+    return { name: node.name.text, of: node.expression };
+  }
+  if (isElementAccessExpression(node)) {
+    const name = literalName(node);
+    return name === undefined ? undefined : { name, of: node.expression };
+  }
+  if (!isBindingElement(node) || !isObjectBindingPattern(node.parent)) {
+    return undefined;
+  }
+  const declaration = node.parent.parent;
+  const name = patternKey(node);
+  return name !== undefined &&
+    isVariableDeclaration(declaration) &&
+    declaration.initializer !== undefined
+    ? { name, of: declaration.initializer }
+    : undefined;
+}
+
+/**
+ * Whether `node` is an event the code makes: `new Event('x')`, or what a variable around it is
+ * declared of (`initializerOf`), in turn.
+ */
+function isEvent(node: Expression, seen: Set<Identifier>): boolean {
+  if (isNewExpression(node)) {
+    return isClass(node.expression, 'Event');
+  }
+  if (!isIdentifier(node) || seen.has(node)) {
+    return false;
+  }
+  seen.add(node);
+  const declared = initializerOf(node);
+  return declared !== undefined && isEvent(unwrapped(declared), seen);
+}
