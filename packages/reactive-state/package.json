@@ -11,6 +11,7 @@
   },
   "type": "module",
   "exports": {
+    "./framework/react": "./src/framework/react.ts",
     "./program": "./src/program.ts",
     "./routing": "./src/routing.ts"
   },
