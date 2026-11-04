@@ -328,7 +328,7 @@ function uniqueOf(fields: Fields, unique: unknown): readonly (readonly string[])
  * store's name that is none.
  */
 function checkExternal(
-  external: string | undefined,
+  external: unknown,
   options: {
     readonly public?: readonly unknown[] | undefined;
     readonly unique?: readonly unknown[] | undefined;
@@ -336,6 +336,11 @@ function checkExternal(
 ): void {
   if (external === undefined) {
     return;
+  }
+  // Text alone, as a caller in JavaScript, or through `any`, may give another value: `NAME` would
+  // test the text it converts to, and take `null`, `true` or `['store']` for a name.
+  if (typeof external !== 'string') {
+    fail("a store's name is text: a letter, then letters, digits or _");
   }
   if (!NAME.test(external)) {
     fail(`\`${external}\` is not a store's name: a letter, then letters, digits or _`);
