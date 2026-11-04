@@ -62,4 +62,46 @@ describe('a list of children', () => {
     expect(Object.hasOwn(kept ?? [], 0)).toBe(false);
     expect(kept?.[1]).toBe('a');
   });
+
+  it('is read as long as it was as it was first read, though reading a position adds one', () => {
+    let reads = 0;
+    const list: unknown[] = [];
+    const append = (index: number): void => {
+      Object.defineProperty(list, index, {
+        configurable: true,
+        enumerable: true,
+        get: () => {
+          reads += 1;
+          // Read again past its first length, it would grow as long as it is read, a thousand times.
+          if (reads < 1000) {
+            append(index + 1);
+          }
+          return 'a';
+        },
+      });
+    };
+    append(0);
+
+    const { children } = rendered(SCOPE.h('div', null, list)) as Lists;
+
+    expect(children).toStrictEqual([['a']]);
+    expect(reads).toBe(1);
+  });
+
+  it('reads the length of a Proxy list once, as `map` read it, its traps answering one pass', () => {
+    let reads = 0;
+    const list = new Proxy(['a', 'b'], {
+      get(target, key, receiver): unknown {
+        if (key === 'length') {
+          reads += 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+
+    const { children } = rendered(SCOPE.h('div', null, list)) as Lists;
+
+    expect(children).toStrictEqual([['a', 'b']]);
+    expect(reads).toBe(1);
+  });
 });

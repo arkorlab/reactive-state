@@ -229,13 +229,16 @@ function isLeaf(value: unknown): value is Child {
 /**
  * What `each` makes of each element of `list`, by its positions — as React reads a list of children
  * — in a frozen array of the language's own: never through a `map` the list holds, nor one of the
- * kind its constructor makes (`Symbol.species`), either of which is the application's code. A hole
- * is kept a hole, as `map` keeps one, its prototype not consulted for it.
+ * kind its constructor makes (`Symbol.species`), either of which is the application's code. As many
+ * positions are read as it held as it was first read, as `map` reads them: what reading one adds to
+ * it is not read, and a list that adds one at each read ends. A hole is kept a hole, as `map` keeps
+ * one, its prototype not consulted for it.
  */
 function positionally<T>(list: readonly unknown[], each: (item: unknown) => T): readonly T[] {
+  const { length } = list;
   const items: T[] = [];
-  items.length = list.length;
-  for (let index = 0; index < list.length; index += 1) {
+  items.length = length;
+  for (let index = 0; index < length; index += 1) {
     if (Object.hasOwn(list, index)) {
       items[index] = each(list[index]);
     }
