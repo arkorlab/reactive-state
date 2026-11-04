@@ -157,16 +157,26 @@ function isActionRef(value: unknown): value is ActionRef {
 
 /**
  * Whether `value` holds a node anywhere in it: a node is a plain object of JSON itself, which only
- * this tells from JSON a prop holds.
+ * this tells from JSON a prop holds. Each object is looked in once, what holds itself too, as for a
+ * reference (`holdsReference`): looked in each way it is reached, one that holds itself twice would
+ * be looked in twice as often at each depth, before what follows could refuse it as no JSON.
  */
-function holdsNode(value: unknown, depth = 0): boolean {
+function holdsNode(value: unknown, depth = 0, seen?: Set<WeakKey>): boolean {
   if (isNode(value)) {
     return true;
   }
-  if (typeof value !== 'object' || value === null || depth >= MAX_DEPTH) {
+  if (
+    typeof value !== 'object' ||
+    value === null ||
+    depth >= MAX_DEPTH ||
+    seen?.has(value) === true
+  ) {
     return false;
   }
-  return Object.values(value).some((item) => holdsNode(item, depth + 1));
+  // Made as the first object is looked in: none for the text and numbers most props are.
+  const looked = seen ?? new Set<WeakKey>();
+  looked.add(value);
+  return Object.values(value).some((item) => holdsNode(item, depth + 1, looked));
 }
 
 /**
