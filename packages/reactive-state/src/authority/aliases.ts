@@ -10,11 +10,11 @@ import path from 'node:path';
  *
  * A specifier takes the key TypeScript would take — one without `*` that is the specifier itself,
  * or else the matching key with the longest text before its `*` — and resolves to the first of that
- * key's targets that names a file: `./x.js` as `./x.ts` where there is one, as written, with `.ts`,
- * `.tsx`, `.js` or `.jsx` in TypeScript's order, or as a directory's `index`. A bare specifier no key
- * matches is looked for under `baseUrl`, where the configuration sets one, as TypeScript looks for
- * it there before it looks for a package. A configuration's own `paths` and `baseUrl`, or those it
- * inherits through `extends`, as TypeScript reads them.
+ * key's targets that names a file: `./x.js` as `./x.ts` or `./x.tsx` where there is one, as
+ * written, with `.ts`, `.tsx`, `.js` or `.jsx` in TypeScript's order, or as a directory's `index`.
+ * A bare specifier no key matches is looked for under `baseUrl`, where the configuration sets one,
+ * as TypeScript looks for it there before it looks for a package. A configuration's own `paths` and
+ * `baseUrl`, or those it inherits through `extends`, as TypeScript reads them.
  */
 
 /**
@@ -25,10 +25,17 @@ import path from 'node:path';
 const EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'] as const;
 const INDEXES = EXTENSIONS.map((extension) => `index${extension}`);
 /**
- * A JavaScript extension, which TypeScript reads as the TypeScript file's of the same name:
- * `.js` as `.ts`, `.mjs` as `.mts`, `.cjs` as `.cts`.
+ * The JavaScript extensions TypeScript reads as a TypeScript file's of the same name, each with the
+ * TypeScript extensions it tries for it, in its order: `.js` as `.ts` and then `.tsx`, `.jsx` as
+ * `.tsx` and then `.ts`, `.mjs` as `.mts`, `.cjs` as `.cts`. The declaration it tries after them is
+ * no module to load. None ends with another, so a path ends with one of them at most.
  */
-const SCRIPT = /\.([cm]?)js$/u;
+const SCRIPTS: ReadonlyMap<string, readonly string[]> = new Map([
+  ['.cjs', ['.cts']],
+  ['.js', ['.ts', '.tsx']],
+  ['.jsx', ['.tsx', '.ts']],
+  ['.mjs', ['.mts']],
+]);
 const TSCONFIG = 'tsconfig.json';
 const PACKAGE_JSON = 'package.json';
 const WHITE_SPACE = /\s/u;
@@ -387,12 +394,17 @@ export function fileFor(candidate: string): string | undefined {
 
 /**
  * The TypeScript file a path to JavaScript stands for, as TypeScript reads `./x.js` — `./x.ts`
- * where there is one, though an `x.js` stands beside it, and `.mjs` and `.cjs` as `.mts` and
- * `.cts`; none where there is none.
+ * where there is one, though an `x.js` stands beside it, and else `./x.tsx` — and `.jsx`, `.mjs`
+ * and `.cjs` in their turn (`SCRIPTS`); none where there is none.
  */
 export function typescriptFor(candidate: string): string | undefined {
-  const typescript = candidate.replace(SCRIPT, '.$1ts');
-  return typescript !== candidate && isFile(typescript) ? typescript : undefined;
+  for (const [script, extensions] of SCRIPTS) {
+    if (candidate.endsWith(script)) {
+      const stem = candidate.slice(0, -script.length);
+      return extensions.map((extension) => `${stem}${extension}`).find((file) => isFile(file));
+    }
+  }
+  return undefined;
 }
 
 /** Whether `specifier` matches a key with a `*`, around whatever the `*` stands for. */
