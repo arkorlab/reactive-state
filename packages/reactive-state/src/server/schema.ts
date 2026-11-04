@@ -87,9 +87,14 @@ export type Where<F extends Fields> = {
 /** The fields a query answers of each record, its `id` among them where it is named. */
 export type Select<F extends Fields> = Partial<Readonly<Record<keyof F | 'id', true>>>;
 
-/** A record as a query that selects `S` answers it: the fields it selects, and nothing else. */
+/**
+ * A record as a query that selects `S` answers it: the fields it selects, and nothing else. A field
+ * `S` may leave out — any, of a selection typed `Select<F>` — is one the record may not hold.
+ */
 export type Selected<F extends Fields, S> = {
-  readonly [K in (keyof F | 'id') & keyof S]: K extends 'id' ? string : FieldType<F[K & keyof F]>;
+  readonly [K in keyof S as K extends keyof F | 'id' ? K : never]: K extends 'id'
+    ? string
+    : FieldType<F[K & keyof F]>;
 };
 
 type Sortable<F extends Fields> = (Comparable<F> & string) | 'id';
