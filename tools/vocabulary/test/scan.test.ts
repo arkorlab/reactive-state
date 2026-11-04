@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { hitsOfFile, hitsOfPath, selfCheck, textOf } from '../src/scan.ts';
-import type { Term } from '../src/terms.ts';
+import { ALLOWED, type Term, TERMS } from '../src/terms.ts';
 import { FIXTURE_ALLOWED, FIXTURE_TERMS } from './fixture-terms.ts';
 
 /** What a file says of the fixture's terms, each by its id and as the file wrote it. */
@@ -10,6 +10,21 @@ function saidIn(text: string): { readonly id: string; readonly text: string }[] 
     id: hit.term.id,
     text: hit.text,
   }));
+}
+
+/** Where a file says the fixture's terms, each by the line and the column it starts at. */
+function placesIn(text: string): { readonly line: number; readonly column: number }[] {
+  return hitsOfFile('a.ts', text, FIXTURE_TERMS, FIXTURE_ALLOWED).map(({ line, column }) => {
+    return {
+      line,
+      column,
+    };
+  });
+}
+
+/** The ids of what a text says of the repository's own terms. */
+function termsIn(text: string): string[] {
+  return hitsOfFile('a.md', text, TERMS, ALLOWED).map((hit) => hit.term.id);
 }
 
 describe('the terms', () => {
@@ -58,6 +73,15 @@ describe('a file', () => {
     expect(hit).toMatchObject({ file: 'src/a.ts', line: 2, column: 8, text: 'sprocket gear' });
   });
 
+  it('says the line a term is on, whatever ends the lines before it', () => {
+    expect(placesIn('a\rwidget')).toStrictEqual([{ line: 2, column: 1 }]);
+    expect(placesIn('a\u{2028}widget')).toStrictEqual([{ line: 2, column: 1 }]);
+    expect(placesIn('a\u{2029}widget')).toStrictEqual([{ line: 2, column: 1 }]);
+    // CRLF is one line break, not two.
+    expect(placesIn('a\r\nb\r\nwidget')).toStrictEqual([{ line: 3, column: 1 }]);
+    expect(placesIn('a\nb\n  widget')).toStrictEqual([{ line: 3, column: 3 }]);
+  });
+
   it('says its terms in the order it writes them, whatever order the terms are listed in', () => {
     expect(
       saidIn('// a gizmo\n// the widget\n// the sprocket gear').map(({ id }) => id),
@@ -100,6 +124,20 @@ describe('a file', () => {
     expect(
       hitsOfFile('a.ts', "'x-widget-ok', the gizmo", FIXTURE_TERMS, FIXTURE_ALLOWED),
     ).toMatchObject([{ line: 1, column: 20, text: 'gizmo' }]);
+  });
+});
+
+describe('the allowed forms', () => {
+  it('hide no name made from them, whatever joins it', () => {
+    expect(termsIn("const marker = '__arkor-extra';")).toStrictEqual(['host-name']);
+    expect(termsIn('mail security@arkor.ai.example')).toStrictEqual(['host-name']);
+    expect(termsIn('mail security@arkor.ai+x')).toStrictEqual(['host-name']);
+  });
+
+  it('still pass where a sentence or a bracket ends after them', () => {
+    expect(termsIn('Write to security@arkor.ai.')).toStrictEqual([]);
+    expect(termsIn('(security@arkor.ai)')).toStrictEqual([]);
+    expect(termsIn("const marker = '__arkor';")).toStrictEqual([]);
   });
 });
 

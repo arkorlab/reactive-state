@@ -2,8 +2,8 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 
 import { annotationOf, errorAnnotation, plainDiagnostic } from './annotate.ts';
-import { boundedFile, MAX_SCAN_BYTES } from './read.ts';
-import { type Hit, hitsOfFile, hitsOfPath, selfCheck, textOf } from './scan.ts';
+import { MAX_SCAN_BYTES, readRepositoryFile } from './read.ts';
+import { type Hit, hitsOfFile, hitsOfPath, selfCheck } from './scan.ts';
 
 /**
  * Holds this repository to the words any host would use.
@@ -66,9 +66,9 @@ function readFiles(): { readonly file: string; readonly text: string | undefined
     .filter((file) => !deleted.has(file))
     .toSorted(byCodeUnit)
     .map((file) => {
-      const bytes = boundedFile(REPO_ROOT, file, remaining);
-      remaining -= bytes.byteLength;
-      return { file, text: textOf(file, bytes) };
+      const { bytes, text } = readRepositoryFile(REPO_ROOT, file, remaining);
+      remaining -= bytes;
+      return { file, text };
     });
 }
 

@@ -37,7 +37,24 @@ export function errorAnnotation(message: string): string {
   return `::error title=vocabulary::${commandData(message)}`;
 }
 
-/** JSON string encoding preserves a plain diagnostic's line boundary and terminal controls. */
+/**
+ * What JSON's string encoding leaves as it is but a terminal or a reader of lines takes as more than
+ * text: DEL, the C1 controls (`U+009B` begins an escape sequence on its own), and the Unicode line
+ * and paragraph separators.
+ */
+const UNSAFE_AFTER_JSON = /[\u{7F}-\u{9F}\u{2028}\u{2029}]/gu;
+const HEX = 16;
+const ESCAPE_DIGITS = 4;
+
+/**
+ * A plain diagnostic kept to one line of text: JSON's string encoding of it, which escapes the C0
+ * controls, and the escapes of what it leaves (`UNSAFE_AFTER_JSON`).
+ */
 export function plainDiagnostic(value: string): string {
-  return JSON.stringify(value).slice(1, -1);
+  return JSON.stringify(value)
+    .slice(1, -1)
+    .replaceAll(UNSAFE_AFTER_JSON, (character) => {
+      const code = (character.codePointAt(0) ?? 0).toString(HEX).padStart(ESCAPE_DIGITS, '0');
+      return String.raw`\u${code}`;
+    });
 }
