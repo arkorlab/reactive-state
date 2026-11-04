@@ -11,7 +11,8 @@
   },
   "type": "module",
   "exports": {
-    "./program": "./src/program.ts"
+    "./program": "./src/program.ts",
+    "./routing": "./src/routing.ts"
   },
   "scripts": {
     "test": "vitest run",
