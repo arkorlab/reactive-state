@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { errorAnnotation, plainDiagnostic } from '../src/annotate.ts';
-import { boundedFile, MAX_FILE_BYTES } from '../src/read.ts';
+import { boundedFile, MAX_FILE_BYTES, readRepositoryFile } from '../src/read.ts';
 import { hitsOfFile } from '../src/scan.ts';
 import { FIXTURE_ALLOWED, FIXTURE_TERMS } from './fixture-terms.ts';
 
@@ -35,17 +35,46 @@ describe('vocabulary security', () => {
       expect(() => boundedFile(root, 'large')).toThrow('byte budget');
     });
 
-    it('refuses symlinks, directories, and a parent that escapes the repository', () => {
+    it('refuses a directory', () => {
       const root = directory();
-      const outside = directory();
-      writeFileSync(path.join(outside, 'file'), 'private');
-      symlinkSync(path.join(outside, 'file'), path.join(root, 'link'));
-      symlinkSync(outside, path.join(root, 'parent'), 'dir');
       mkdirSync(path.join(root, 'dir'));
 
-      expect(() => boundedFile(root, 'link')).toThrow('regular file');
       expect(() => boundedFile(root, 'dir')).toThrow('regular file');
-      expect(() => boundedFile(root, 'parent/file')).toThrow('outside the repository');
+    });
+
+    // Windows refuses to make a symbolic link without a privilege a test cannot count on (EPERM).
+    it.skipIf(process.platform === 'win32')(
+      'refuses symlinks, and a parent that escapes the repository',
+      () => {
+        const root = directory();
+        const outside = directory();
+        writeFileSync(path.join(outside, 'file'), 'private');
+        symlinkSync(path.join(outside, 'file'), path.join(root, 'link'));
+        symlinkSync(outside, path.join(root, 'parent'), 'dir');
+
+        expect(() => boundedFile(root, 'link')).toThrow('regular file');
+        expect(() => boundedFile(root, 'parent/file')).toThrow('outside the repository');
+      },
+    );
+
+    it('leaves a binary past the bound unread, by what its first bytes are', () => {
+      const root = directory();
+      const png = Buffer.concat([
+        Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        Buffer.alloc(MAX_FILE_BYTES),
+      ]);
+      writeFileSync(path.join(root, 'large.png'), png);
+
+      expect(readRepositoryFile(root, 'large.png').text).toBeUndefined();
+    });
+
+    it('still refuses text past the bound, whatever the name says it is', () => {
+      const root = directory();
+      writeFileSync(path.join(root, 'large.png'), Buffer.alloc(MAX_FILE_BYTES + 1, 0x61));
+      writeFileSync(path.join(root, 'large.ts'), Buffer.alloc(MAX_FILE_BYTES + 1, 0x61));
+
+      expect(() => readRepositoryFile(root, 'large.png')).toThrow('byte budget');
+      expect(() => readRepositoryFile(root, 'large.ts')).toThrow('byte budget');
     });
 
     it.skipIf(process.platform === 'win32')('refuses a FIFO before trying to read it', () => {
@@ -72,6 +101,12 @@ describe('vocabulary security', () => {
       { line: 1002, column: 3 },
       { line: 1002, column: 10 },
     ]);
+  });
+
+  it('escapes DEL, the C1 controls and the Unicode line separators too', () => {
+    expect(plainDiagnostic('a\u{7F}b\u{9B}31mc\u{85}d\u{2028}e\u{2029}f')).toBe(
+      String.raw`a\u007fb\u009b31mc\u0085d\u2028e\u2029f`,
+    );
   });
 
   it('keeps hostile filenames and errors within one diagnostic line', () => {

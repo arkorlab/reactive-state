@@ -1,4 +1,4 @@
 {
   "autoReview": ["open", "push"],
-  "ignorePatterns": "pnpm-lock.yaml\n**/.reactive/**\nexamples/*/src/app/api/reactive-state/**\n**/drizzle/meta/**\nfixtures/next-project-todo/**"
+  "ignorePatterns": "pnpm-lock.yaml\n**/.reactive/**\nexamples/*/src/app/api/reactive-state/**\nexamples/*/app/api/reactive-state/**\n**/drizzle/meta/**\nfixtures/next-project-todo/**"
 }

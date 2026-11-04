@@ -94,6 +94,11 @@ const BINARY_EXTENSIONS = new Set(
     .split(' '),
 );
 
+/** Whether a file's name says it is of a kind binary by nature (`BINARY_EXTENSIONS`). */
+export function isBinaryKind(file: string): boolean {
+  return BINARY_EXTENSIONS.has(path.extname(file).toLowerCase());
+}
+
 /**
  * Every file is read as text, whatever its extension: a list of the extensions to read would leave
  * out the next kind of source the repository starts using. A NUL byte, or a byte that is not UTF-8, says
@@ -103,7 +108,7 @@ const BINARY_EXTENSIONS = new Set(
  * either would pass whatever it said.
  */
 export function textOf(file: string, bytes: Uint8Array): string | undefined {
-  const binary = BINARY_EXTENSIONS.has(path.extname(file).toLowerCase());
+  const binary = isBinaryKind(file);
   if (bytes.includes(0)) {
     if (binary) {
       return undefined;
@@ -120,9 +125,15 @@ export function textOf(file: string, bytes: Uint8Array): string | undefined {
   }
 }
 
+/**
+ * What ends a line, as an editor counts lines: a CRLF, which is one break, a lone CR or LF, and the
+ * Unicode line and paragraph separators.
+ */
+const LINE_BREAK = /\r\n|[\n\r\u{2028}\u{2029}]/gu;
+
 /** The offset each line of `text` starts at, the first line's first. */
 function lineStarts(text: string): number[] {
-  return [0, ...[...text.matchAll(/\n/gu)].map((match) => match.index + 1)];
+  return [0, ...[...text.matchAll(LINE_BREAK)].map((match) => match.index + match[0].length)];
 }
 
 /**

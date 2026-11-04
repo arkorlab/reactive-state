@@ -33,6 +33,9 @@ export const TERMS: readonly Term[] = [
       'MY_ARKOR_KEY',
       'arkor:module',
       'my__arkor',
+      '__arkor-extra',
+      'security@arkor.ai.example',
+      'security@arkor.ai+x',
     ],
     passes: [
       'x-arkor-edge',
@@ -42,6 +45,8 @@ export const TERMS: readonly Term[] = [
       'darkorange',
       '@arkorlab/reactive-state',
       'security@arkor.ai',
+      'write to security@arkor.ai.',
+      '(security@arkor.ai)',
       'Copyright 2026 Arkor and Contributors',
     ],
   },
@@ -158,14 +163,16 @@ export const TERMS: readonly Term[] = [
  * marker (`__arkor`), the organization's own name (`arkorlab`), the security contact, and the
  * copyright holder. Each is blanked only where nothing of a name — a letter or a digit of any script,
  * `_` or `-` — stands on either side of it, so another name made from it is still searched as any
- * name is. An addition here is reviewed as a change of its own.
+ * name is. The security contact is an address, so a `.` or a `+` before it, a `+` after it, or a `.`
+ * that a letter or a digit follows (a longer domain) makes it another address, searched as well; a
+ * sentence's full stop after it does not. An addition here is reviewed as a change of its own.
  */
 export const ALLOWED: readonly RegExp[] = [
   /(?<![\p{L}\p{N}_-])x-arkor-edge(?![\p{L}\p{N}_-])/giu,
   /(?<![\p{L}\p{N}_-])\.arkor(?![\p{L}\p{N}_-])/gu,
-  /(?<![\p{L}\p{N}_-])__arkor(?![\p{L}\p{N}_])/gu,
+  /(?<![\p{L}\p{N}_-])__arkor(?![\p{L}\p{N}_-])/gu,
   /(?<![\p{L}\p{N}_-])arkorlab(?![\p{L}\p{N}_-])/gu,
-  /(?<![\p{L}\p{N}_.+-])security@arkor\.ai(?![\p{L}\p{N}_-])/gu,
+  /(?<![\p{L}\p{N}_.+-])security@arkor\.ai(?![\p{L}\p{N}_+-]|\.[\p{L}\p{N}])/gu,
   /\bCopyright (?:\(c\) )?\d{4} Arkor and Contributors\b/gu,
 ];
 

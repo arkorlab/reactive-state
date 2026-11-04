@@ -30,9 +30,9 @@ reactive-state/
 ├── packages/
 │   └── reactive-state/      # @arkorlab/reactive-state — the compiler, the authority, the runtime
 │                            #   a page reads, and the Next.js integration
-├── examples/                # applications written the way a developer writes one
+├── examples/                # applications written the way a developer writes one (to come)
 ├── fixtures/
-│   └── next-project-todo/   # the application the package's tests compile, kept as written
+│   └── next-project-todo/   # the application the package's tests compile, kept as written (to come)
 └── tools/                   # what the repository's own checks run
 ```
 
