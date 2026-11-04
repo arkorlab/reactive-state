@@ -1,0 +1,21 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+reviews:
+  auto_review:
+    enabled: true
+    # Each push is reviewed again, however many there are: by default, automatic reviews pause
+    # after five reviewed commits, and a pull request here may take more rounds than that.
+    auto_incremental_review: true
+    auto_pause_after_reviewed_commits: 0
+    # Pull requests here are often stacked, each targeting the branch of the one below it. Review
+    # those as well as the ones that target the default branch.
+    base_branches:
+      - '.*'
+  path_filters:
+    # Generated, or kept byte for byte as an application wrote it.
+    - '!pnpm-lock.yaml'
+    - '!**/.reactive/**'
+    - '!examples/*/src/app/api/reactive-state/**'
+    - '!examples/*/app/api/reactive-state/**'
+    - '!**/drizzle/meta/**'
+    - '!fixtures/next-project-todo/**'
