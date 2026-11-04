@@ -186,7 +186,7 @@ export function method<T, K extends keyof (MethodObject & NonNullable<T>)>(
   receiver: T,
   key: K,
 ): OmitThisParameter<MethodValue<T, K>> {
-  return methodOf(receiver, key, running());
+  return methodOf(receiver, key, running(), refuseUnmeasuredSpread);
 }
 
 /** Spends `steps`; past `VIEW_LIMITS.steps`, throws. */
@@ -397,6 +397,12 @@ function arrayLength(value: Readonly<Record<PropertyKey, unknown>>): number {
 
 /** An own or inherited data member, without invoking accessors or passing a shadowing entry. */
 function storedMember(value: Readonly<Record<PropertyKey, unknown>>, key: PropertyKey): unknown {
+  const descriptor = storedDescriptor(value, key);
+  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+}
+
+/** What an own or inherited member is, the first along the prototypes that holds it, of no trap. */
+function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor | undefined {
   for (
     let current: unknown = value;
     current !== null && (typeof current === 'object' || typeof current === 'function');
@@ -404,9 +410,56 @@ function storedMember(value: Readonly<Record<PropertyKey, unknown>>, key: Proper
     refuseProxy(current);
     const descriptor = Object.getOwnPropertyDescriptor(current, key);
     if (descriptor !== undefined) {
-      return 'value' in descriptor ? descriptor.value : undefined;
+      return descriptor;
     }
     current = Object.getPrototypeOf(current);
   }
   return undefined;
+}
+
+/** `Array.prototype.concat`, which spreads what it is given as long as its `length` says. */
+const CONCAT: unknown = Reflect.get(Array.prototype, 'concat');
+
+/**
+ * Refuses, before `concat` is called, what it would spread as long as the application's code says
+ * as it is read: one an accessor makes spreadable, or one spread whose `length` an accessor answers,
+ * or an object `concat` converts. `measure` runs no such code, and so counts what it holds of them
+ * as no array's (`arrayLength`), where `concat` would walk each position the code says before a
+ * step counts the array it makes. Of what else it spreads, what its stored entries say was counted
+ * as it was made; an array spreads as long as it holds.
+ */
+function refuseUnmeasuredSpread(called: unknown, given: readonly unknown[]): void {
+  if (called === CONCAT && given.some((each) => spreadUnmeasured(each))) {
+    throw new TypeError(
+      "A dynamic site gives `concat` what it would spread as long as the application's code says as it is read — what an accessor makes spreadable, or a `length` an accessor answers or that converts — whose size cannot be measured without running that code: return an ordinary value from the shared helper.",
+    );
+  }
+}
+
+/** Whether `concat` would read whether `value` spreads, or how far, of the application's code. */
+function spreadUnmeasured(value: unknown): boolean {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
+    return false;
+  }
+  refuseProxy(value);
+  const spreads = Array.isArray(value)
+    ? undefined
+    : storedDescriptor(value, Symbol.isConcatSpreadable);
+  if (spreads === undefined) {
+    return false;
+  }
+  if (!('value' in spreads)) {
+    return true;
+  }
+  // Held as one element, or spread as long as `length` says: of nothing, none.
+  const spreading = Boolean(spreads.value);
+  const length = spreading ? storedDescriptor(value, 'length') : undefined;
+  if (length === undefined) {
+    return false;
+  }
+  if (!('value' in length)) {
+    return true;
+  }
+  const stored: unknown = length.value;
+  return typeof stored === 'function' || (typeof stored === 'object' && stored !== null);
 }

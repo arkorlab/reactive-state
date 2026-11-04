@@ -99,11 +99,15 @@ function nativePlaces(): ReadonlyMap<unknown, readonly Place[]> {
   return found;
 }
 
-/** A member captured once before arguments, refusing a known native function outside its canonical place. */
+/**
+ * A member captured once before arguments, refusing a known native function outside its canonical
+ * place; while `checking`, the function and its arguments handed to `before` before it is called.
+ */
 export function methodOf<T, K extends keyof (MethodObject & NonNullable<T>)>(
   receiver: T,
   key: K,
   checking: boolean,
+  before?: (called: unknown, given: readonly unknown[]) => void,
 ): OmitThisParameter<MethodValue<T, K>> {
   const value: unknown = receiver;
   if (value === null || value === undefined) {
@@ -120,6 +124,9 @@ export function methodOf<T, K extends keyof (MethodObject & NonNullable<T>)>(
   }
   const invoke = (...given: readonly unknown[]): unknown => {
     const actual = called as (...args: readonly unknown[]) => unknown;
+    if (checking) {
+      before?.(actual, given);
+    }
     return Reflect.apply(actual, receiver, given);
   };
   return invoke as OmitThisParameter<MethodValue<T, K>>;
