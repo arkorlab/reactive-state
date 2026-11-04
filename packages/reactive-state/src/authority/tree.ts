@@ -216,13 +216,30 @@ function isLeaf(value: unknown): value is Child {
   );
 }
 
+/**
+ * What `each` makes of each element of `list`, by its positions — as React reads a list of children
+ * — in a frozen array of the language's own: never through a `map` the list holds, nor one of the
+ * kind its constructor makes (`Symbol.species`), either of which is the application's code. A hole
+ * is kept a hole, as `map` keeps one, its prototype not consulted for it.
+ */
+function positionally<T>(list: readonly unknown[], each: (item: unknown) => T): readonly T[] {
+  const items: T[] = [];
+  items.length = list.length;
+  for (let index = 0; index < list.length; index += 1) {
+    if (Object.hasOwn(list, index)) {
+      items[index] = each(list[index]);
+    }
+  }
+  return Object.freeze(items);
+}
+
 /** What a reactive component is handed, as the tree keeps it: an `undefined` kept apart. */
 function givenChildOf(value: unknown): GivenChild {
   let given: GivenChild;
   if (value === undefined) {
     given = UNDEFINED_CHILD;
   } else if (Array.isArray(value)) {
-    given = Object.freeze((value as readonly unknown[]).map((item) => givenChildOf(item)));
+    given = positionally(value as readonly unknown[], (item) => givenChildOf(item));
   } else {
     given = childOf(value);
   }
@@ -237,7 +254,7 @@ function childOf(value: unknown): Child {
   } else if (isLeaf(value)) {
     child = value;
   } else if (Array.isArray(value)) {
-    child = Object.freeze((value as readonly unknown[]).map((item) => childOf(item)));
+    child = positionally(value as readonly unknown[], (item) => childOf(item));
   } else {
     throw new TypeError(
       'A component rendered what no child is: text, a number, an element, or a list of them.',
