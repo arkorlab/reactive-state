@@ -128,7 +128,7 @@ export interface ActionRef {
   readonly name: string;
   readonly bound: readonly Json[];
   /** `Function.prototype.bind`'s shape: `this` is never read, the rest are bound after `bound`. */
-  bind: (thisArg: unknown, ...args: readonly Json[]) => ActionRef;
+  readonly bind: (thisArg: unknown, ...args: readonly Json[]) => ActionRef;
 }
 
 export function moduleRef(module: string, name: string): ModuleRef {

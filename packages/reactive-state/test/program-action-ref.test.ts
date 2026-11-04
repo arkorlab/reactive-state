@@ -15,4 +15,13 @@ describe('actionRef', () => {
     expect(bound.bound).toStrictEqual(['project-1', 'todo-1']);
     expect(bound.bind(null, 'todo-2').bound).toStrictEqual(['project-1', 'todo-1', 'todo-2']);
   });
+
+  it('keeps `bind` read-only in its type, as the frozen reference keeps it at run time', () => {
+    const reference = actionRef('actions/todos', 'deleteTodo');
+
+    expect(() => {
+      // @ts-expect-error -- `bind` is read-only, as every other member of a reference is.
+      reference.bind = () => reference;
+    }).toThrow("Cannot assign to read only property 'bind'");
+  });
 });
