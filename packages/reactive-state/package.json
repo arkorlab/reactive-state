@@ -15,6 +15,7 @@
     "./bridge": "./src/bridge/index.ts",
     "./client": "./src/client/index.ts",
     "./cloudflare": "./src/cloudflare/index.ts",
+    "./compiler": "./src/compiler/index.ts",
     "./d1": "./src/cloudflare/d1-store.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",

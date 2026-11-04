@@ -1,0 +1,503 @@
+import { createHash } from 'node:crypto';
+import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
+import type { API } from 'typescript/sync';
+
+import { PROTOCOL_VERSION } from '../program.ts';
+import { appRouteOf, GENERATED, routeCollisions } from './app-route.ts';
+import { compileComponent } from './compile.ts';
+import type { DatabaseExport } from './database-handle.ts';
+import {
+  type AppInput,
+  type CompiledComponent,
+  emitElements,
+  emitRegistry,
+  emitRoot,
+  emitRoute,
+  emitServerFunctions,
+  manifestOf,
+  relativeSpecifier,
+} from './emit-app.ts';
+import { emitAuthority } from './emit-authority.ts';
+import { emitClient } from './emit-client.ts';
+import { emitHookModule } from './emit-hooks.ts';
+import { type HostOptions, namedOf } from './emit-host.ts';
+import { emitRoutesModule, middlewareOutputs, ROUTES_MODULE } from './emit-routes.ts';
+import { ReactiveCompileError } from './errors.ts';
+import { type HookModule, HookModules } from './hooks.ts';
+import { emitStubs, hostOf, rootPrefetch } from './host.ts';
+import type { ImportedModule } from './imports.ts';
+import type { Manifest } from './manifest.ts';
+import { rememberModuleResolutions } from './module-resolutions.ts';
+import { COMPONENT_SUFFIX, type ModuleClass, Modules } from './modules.ts';
+import { checkNodeArguments } from './node-arguments.ts';
+import { operationCallables } from './operation-callables.ts';
+import { type OperationModule, operationExports } from './operations.ts';
+import { NO_ROUTING, scanRouting } from './routes.ts';
+import { byCodeUnits } from './splice.ts';
+import { typeNames } from './type-names.ts';
+import { openTypeScript } from './typescript.ts';
+
+export { ReactiveCompileError } from './errors.ts';
+export type { Manifest } from './manifest.ts';
+export { COMPONENT_SUFFIX } from './modules.ts';
+export { openTypeScript } from './typescript.ts';
+
+/**
+ * The compiler of an application's `.reactive.tsx` components — the documented subset, and nothing
+ * it cannot carry over whole (packages/reactive-state/README.md). Every component under the source
+ * directory is compiled, with the custom hooks, the `'use server'` modules and the shared modules it
+ * reaches, into one build:
+ *
+ * - `<id>.authority.mts`, the authority's program of each component: its server part, as the
+ *   application wrote it, its JSX rendered as data, and for one with state, its client part;
+ * - `<id>.client.tsx`, the Client Component of each component with state, which holds nothing of
+ *   the server's;
+ * - `<id>.root.tsx`, what a page renders when it imports the component;
+ * - a copy of each module of custom hooks, a stub of each `'use server'` module, the elements the
+ *   host renders with, the Server Functions a page writes and has its dynamic sites rendered with,
+ *   the authority's registry, the route a page follows its roots by, and the build's manifest.
+ *
+ * It runs on TypeScript 7.1's API, reading syntax alone: no program, no checker. What it writes of
+ * the application's code it writes as the source holds it, comments and all (`splice.ts`).
+ */
+
+export interface CompileOptions {
+  /** The application's source directory, which every component's id is the path in. */
+  readonly srcDir: string;
+  /** Where the compile writes its outputs: `.reactive`, in the application's root. */
+  readonly outDir: string;
+  /** The application's `app` directory, which the compile writes the route into. */
+  readonly appDir: string;
+  /** The module and the export the application's database is: `@/db#db` when not given. */
+  readonly database?: string;
+  /**
+   * The module and the export the application reads its own signed-in session by (`SessionSource`
+   * of `./next`), where it signs its users in itself: `<specifier>#<export>`. Not given, sessions
+   * are the demo's.
+   */
+  readonly session?: string;
+  /**
+   * The private cache a root renders inside, for a link's prefetch to carry it: a `cacheLife`
+   * profile of the application's config, or `<stale>/<revalidate>/<expire>` in seconds. Not given,
+   * no root is cached.
+   */
+  readonly prefetch?: string;
+  /**
+   * `false` turns sharing off: the compile shares no route's view, and every root renders for its
+   * own session. Not given, it shares what it shows renders alike for every visitor.
+   */
+  readonly share?: boolean;
+  /** A compiler already open, for a caller that compiles many times; else one is opened. */
+  readonly api?: API;
+}
+
+export interface Compiled {
+  /** Each file the compile writes, by its path, with its text; none where it refused. */
+  readonly outputs: ReadonlyMap<string, string>;
+  /** Everything it refused, each where it stands. */
+  readonly refusals: readonly ReactiveCompileError[];
+  readonly buildId: string;
+  readonly manifest: Manifest | undefined;
+  /**
+   * Each file the compile read, by its path, with the text it read of it: the application's
+   * modules wherever they are — outside its directory too, where an alias leads — and the
+   * configurations their aliases come from. What a compile of the same texts writes the same of.
+   */
+  readonly reads: ReadonlyMap<string, string>;
+}
+
+/** What `modules` has read: each module, and each configuration of its aliases, with its text. */
+function readsOf(modules: Modules): ReadonlyMap<string, string> {
+  const reads = new Map(modules.sources());
+  for (const [file, text] of modules.configurations()) {
+    reads.set(file, text);
+  }
+  return rememberModuleResolutions(reads, modules.resolutions());
+}
+
+/** The length of a build id's hash. */
+const BUILD_HASH_LENGTH = 20;
+
+const DEFAULT_DATABASE = '@/db#db';
+
+export function compileApp(options: CompileOptions): Compiled {
+  if (options.api !== undefined) {
+    return compileWith(options.api, options);
+  }
+  using api = openTypeScript();
+  return compileWith(api, options);
+}
+
+/** The application's own path for `directory`: through any symbolic link to it. */
+function realDirectory(directory: string): string {
+  const absolute = path.resolve(directory);
+  try {
+    return realpathSync(absolute);
+  } catch {
+    return absolute;
+  }
+}
+
+function compileWith(api: API, options: CompileOptions): Compiled {
+  // What the host tells the compile is refused before a source is read: nothing is written of a
+  // build its host misnamed the session source, or the prefetch's lifetime, of.
+  let host: HostOptions;
+  try {
+    host = hostOf(options);
+  } catch (error) {
+    if (error instanceof ReactiveCompileError) {
+      return {
+        buildId: '',
+        manifest: undefined,
+        outputs: new Map(),
+        reads: new Map(),
+        refusals: [error],
+      };
+    }
+    throw error;
+  }
+  const srcDir = realDirectory(options.srcDir);
+  const outDir = path.resolve(options.outDir);
+  const appDir = path.resolve(options.appDir);
+  using modules = new Modules(api, srcDir);
+  const hooks = new HookModules(modules);
+  const refusals: ReactiveCompileError[] = [];
+  const attempt = <T>(run: () => T): T | undefined => {
+    try {
+      return run();
+    } catch (error) {
+      if (error instanceof ReactiveCompileError) {
+        if (refusals.every((refusal) => refusal.message !== error.message)) {
+          refusals.push(error);
+        }
+        return undefined;
+      }
+      throw error;
+    }
+  };
+  const components = componentFiles(srcDir, outDir).flatMap((file) => {
+    const compiled = attempt(() => compileComponent(file, { hooks, modules }));
+    return compiled === undefined ? [] : [compiled];
+  });
+  checkNodeArguments(components, attempt);
+  const operations = operationModules(components, hooks.all(), modules, attempt);
+  const database = namedOf(options.database ?? DEFAULT_DATABASE);
+  const exported = database === undefined ? undefined : resolvedDatabase(database, modules, outDir);
+  // The pages, the layouts and the route middleware it reads are the build's as much as a
+  // component is: each is read through `modules`, whose sources the build's id hashes.
+  const routing = scanRouting({
+    appDir,
+    attempt,
+    components,
+    database: exported,
+    modules,
+    outDir,
+    unshared: host.share === false,
+  });
+  // Nothing of the application's is written over, nor served beside the compile's route.
+  for (const { file, reason } of routeCollisions(appDir, outDir)) {
+    attempt(() => {
+      throw new ReactiveCompileError(reason, {
+        fileName: modules.nameOf(file),
+        position: { character: 0, line: 0 },
+      });
+    });
+  }
+  if (database === undefined || refusals.length > 0) {
+    if (database === undefined) {
+      refusals.push(
+        new ReactiveCompileError(
+          `\`${options.database ?? ''}\` names no database: it is \`<specifier>#<export>\`, as \`@/db#db\`.`,
+          {
+            fileName: '--database',
+            position: { character: 0, line: 0 },
+          },
+        ),
+      );
+    }
+    return {
+      buildId: '',
+      manifest: undefined,
+      outputs: new Map(),
+      reads: readsOf(modules),
+      refusals,
+    };
+  }
+  // The database is the authority's whatever imports it: its declaration — tables, defaults, what
+  // is public, the seed — is in the build's id as much as a component's code is, read from where the
+  // registry the compile writes imports it.
+  if (exported !== undefined) {
+    modules.kindOf(exported.file);
+  }
+  const app = (buildId: string): AppInput => {
+    return {
+      buildId,
+      classes: classesOf(components, hooks.all()),
+      components,
+      database,
+      hooks: hooks.all(),
+      host,
+      operations,
+      routing,
+    };
+  };
+  const written = (buildId: string): Map<string, string> =>
+    emitAll({ app: app(buildId), appDir, outDir });
+  // The build's id says which code the browser and the authority run, so it hashes what the
+  // compile writes as well as what it read: a compiler that writes something else from the same
+  // application makes another build.
+  const sources = [...modules.sources()].map(([file, text]) => [portable(srcDir, file), text]);
+  const drafted = attempt(() => written(''));
+  if (drafted === undefined) {
+    return {
+      buildId: '',
+      manifest: undefined,
+      outputs: new Map(),
+      reads: readsOf(modules),
+      refusals,
+    };
+  }
+  const draft = [...drafted].map(([file, text]) => [portable(outDir, file), text]);
+  const hash = createHash('sha256')
+    .update(JSON.stringify([PROTOCOL_VERSION, sources.toSorted(byPath), draft.toSorted(byPath)]))
+    .digest('hex');
+  const buildId = `b_${hash.slice(0, BUILD_HASH_LENGTH)}`;
+  return {
+    buildId,
+    manifest: manifestOf(app(buildId)),
+    outputs: written(buildId),
+    reads: readsOf(modules),
+    refusals,
+  };
+}
+
+/** `file`'s path from `directory`, its parts joined by `/` on every system, as the build's id hashes it. */
+function portable(directory: string, file: string): string {
+  return path.relative(directory, file).split(path.sep).join('/');
+}
+
+function byPath(a: readonly string[], b: readonly string[]): number {
+  return byCodeUnits(a[0] ?? '', b[0] ?? '');
+}
+
+/** Whether a directory holds no component of the application's: packages, and what is hidden. */
+function isHidden(name: string): boolean {
+  return name === 'node_modules' || name.startsWith('.');
+}
+
+/** Every component under `srcDir`, in a stable order: no package's, none of what the compile wrote. */
+function componentFiles(srcDir: string, outDir: string): readonly string[] {
+  const found: string[] = [];
+  const visit = (directory: string): void => {
+    const entries = readdirSync(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(directory, entry.name);
+      const skipped = full === outDir || isHidden(entry.name);
+      if (!skipped && entry.isDirectory()) {
+        visit(full);
+      } else if (entry.isFile() && entry.name.endsWith(COMPONENT_SUFFIX)) {
+        found.push(full);
+      }
+    }
+  };
+  visit(srcDir);
+  return found.toSorted(byCodeUnits);
+}
+
+/** The `'use server'` modules the components and the hooks import, each read once. */
+function operationModules(
+  components: readonly CompiledComponent[],
+  hookModules: readonly HookModule[],
+  modules: Modules,
+  attempt: <T>(run: () => T) => T | undefined,
+): readonly OperationModule[] {
+  const found = new Map<string, OperationModule>();
+  const imported: ImportedModule[] = [
+    ...components.flatMap(({ component }) => component.modules),
+    ...hookModules.flatMap((module) => module.modules),
+  ];
+  for (const module of imported) {
+    const { file, id, kind } = module.target;
+    if (file === undefined || kind !== 'operations' || found.has(file)) {
+      continue;
+    }
+    const parsed = modules.parse(file, false);
+    const described = attempt(() => {
+      const exports = operationExports(parsed);
+      const callables = operationCallables(parsed);
+      return { callables, exports };
+    });
+    if (id !== undefined && described !== undefined) {
+      found.set(file, { ...described, fileName: parsed.name, id, written: module.written });
+    }
+  }
+  return [...found.values()].toSorted((a, b) => byCodeUnits(a.id, b.id));
+}
+
+/**
+ * The module and the export `database` names, its module resolved from where the registry the
+ * compile writes in `outDir` imports it; none where it resolves to no module of the application's.
+ */
+function resolvedDatabase(
+  database: { readonly specifier: string; readonly name: string },
+  modules: Modules,
+  outDir: string,
+): DatabaseExport | undefined {
+  const file = modules.resolve(database.specifier, path.join(outDir, 'authority.mts'));
+  return file === undefined ? undefined : { file, name: database.name };
+}
+
+/** What each module the components and the hooks import is to the compile, by specifier. */
+function classesOf(
+  components: readonly CompiledComponent[],
+  hookModules: readonly HookModule[],
+): ReadonlyMap<string, string> {
+  const classes = new Map<string, string>();
+  const modules = [
+    ...components.flatMap(({ component }) => component.modules),
+    ...hookModules.flatMap((module) => module.modules),
+  ];
+  for (const module of modules) {
+    classes.set(module.specifier, module.target.kind);
+  }
+  return classes;
+}
+
+interface Emitting {
+  readonly app: AppInput;
+  readonly outDir: string;
+  readonly appDir: string;
+}
+
+/** Every file of the build, by its path. */
+function emitAll(emitting: Emitting): Map<string, string> {
+  const { app, appDir, outDir } = emitting;
+  const outputs = new Map<string, string>();
+  const put = (file: string, text: string): void => {
+    if (outputs.has(file)) {
+      throw new ReactiveCompileError(
+        `Two of what the compile writes are \`${path.relative(outDir, file)}\`: rename the module of the application's that takes the name.`,
+        {
+          fileName: path.relative(outDir, file),
+          position: { character: 0, line: 0 },
+        },
+      );
+    }
+    outputs.set(file, text);
+  };
+  const outputOf = (from: string) => {
+    return (target: ModuleClass): string | undefined => {
+      return (target.kind === 'hooks' || target.kind === 'operations') && target.id !== undefined
+        ? relativeSpecifier(from, path.join(outDir, target.id))
+        : undefined;
+    };
+  };
+  for (const compiled of app.components) {
+    const { component, sides, writes } = compiled;
+    const base = path.join(outDir, component.id);
+    put(
+      `${base}.authority.mts`,
+      emitAuthority({
+        buildId: app.buildId,
+        component,
+        propTypes: typeNames(component.propsType),
+        sides,
+        updaters: compiled.updaters,
+        writable: compiled.writable,
+      }),
+    );
+    if (component.returned !== undefined) {
+      const file = `${base}.client.tsx`;
+      put(file, emitClient({ component, outputOf: outputOf(file), sides, writes }));
+    }
+    const route = app.routing?.roots.get(component.id);
+    const sharedRoute = app.routing?.routes.find((each) => each.route === route)?.shared;
+    const prefetch = rootPrefetch(app.host, { route, sharedRoute });
+    put(`${base}.root.tsx`, emitRoot(compiled, `${base}.root.tsx`, outDir, { prefetch, route }));
+  }
+  for (const module of app.hooks) {
+    const file = path.join(outDir, `${module.id}${path.extname(module.file)}`);
+    put(file, emitHookModule({ module, outputOf: outputOf(file) }));
+  }
+  const session = app.host?.session;
+  emitStubs(app, outDir, put);
+  put(path.join(outDir, 'elements.ts'), emitElements(app));
+  put(path.join(outDir, 'server-functions.ts'), emitServerFunctions(session !== undefined));
+  put(path.join(outDir, 'authority.mts'), emitRegistry(app));
+  const routing = app.routing ?? NO_ROUTING;
+  for (const [file, text] of middlewareOutputs(routing, outDir, app.buildId)) {
+    put(file, text);
+  }
+  put(path.join(outDir, ROUTES_MODULE), emitRoutesModule(routing));
+  put(path.join(outDir, 'manifest.json'), `${JSON.stringify(manifestOf(app), null, 2)}\n`);
+  const route = appRouteOf(appDir);
+  put(route, emitRoute(route, outDir, session !== undefined));
+  return outputs;
+}
+
+/** One file a compile writes, and whether what is on disk was already what it would write. */
+export interface Output {
+  readonly path: string;
+  /** `true` where the file was what the compile writes; `false` where it was not, or is to be removed. */
+  readonly current: boolean;
+  /** Whether it is a file a compile wrote before that this one does not, which a write removes. */
+  readonly leftover: boolean;
+}
+
+export interface WriteOptions {
+  /** Compare with what is on disk and write nothing. */
+  readonly check?: boolean;
+}
+
+/**
+ * Writes `outputs`, or with `check`, says which of them are stale. A file the compile wrote into
+ * `outDir` before — one that opens as what it writes does — that it no longer writes is stale too,
+ * and a write removes it.
+ */
+export function writeOutputs(
+  outputs: ReadonlyMap<string, string>,
+  outDir: string,
+  options: WriteOptions = {},
+): readonly Output[] {
+  const check = options.check === true;
+  const written = [...outputs].map(([file, text]): Output => {
+    const current = readIfPresent(file) === text;
+    if (!current && !check) {
+      mkdirSync(path.dirname(file), { recursive: true });
+      writeFileSync(file, text);
+    }
+    return { current, leftover: false, path: file };
+  });
+  const leftovers = generatedFiles(path.resolve(outDir)).filter((file) => !outputs.has(file));
+  for (const file of leftovers) {
+    if (!check) {
+      rmSync(file);
+    }
+  }
+  return [...written, ...leftovers.map((file) => ({ current: false, leftover: true, path: file }))];
+}
+
+/** The files under `directory` that a compile wrote. */
+function generatedFiles(directory: string): readonly string[] {
+  let entries;
+  try {
+    entries = readdirSync(directory, { recursive: true, withFileTypes: true });
+  } catch {
+    return [];
+  }
+  return entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(entry.parentPath, entry.name))
+    .filter((file) => readIfPresent(file)?.startsWith(GENERATED) === true)
+    .toSorted(byCodeUnits);
+}
+
+function readIfPresent(file: string): string | undefined {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
+}
