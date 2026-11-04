@@ -19,7 +19,10 @@ export interface MemoEntry {
   readonly requestBound?: string | undefined;
 }
 
-/** How many components the memo keeps the rendering of, the least recently used let go first. */
+/**
+ * How many components the memo keeps the rendering of: past it, those that expired are let go of
+ * first, and then the least recently used.
+ */
 const MEMO_ENTRIES = 10_000;
 /**
  * How long a rendering is kept, whatever commits: what a component read other than the database —
@@ -35,7 +38,13 @@ const MEMO_TTL_MS = 30_000;
  * A render runs alone in the authority's queue, so nothing commits while one is made.
  */
 export class Memo {
+  /** Each rendering, by its key, the least recently used first. */
   readonly #entries = new Map<string, { readonly entry: MemoEntry; readonly at: number }>();
+  /**
+   * When each rendering was made, by its key, the first made first: a read moves none, so by a clock
+   * that goes forward those that expired lead, wherever a read since put them among `#entries`.
+   */
+  readonly #made = new Map<string, number>();
   readonly #clock: () => number;
   readonly #limit: number;
   readonly #ttlMs: number;
@@ -44,6 +53,11 @@ export class Memo {
     this.#clock = clock;
     this.#limit = limit;
     this.#ttlMs = ttlMs;
+  }
+
+  #letGo(key: string): void {
+    this.#entries.delete(key);
+    this.#made.delete(key);
   }
 
   get size(): number {
@@ -56,7 +70,7 @@ export class Memo {
     const now = this.#clock();
     for (const [key, { at, entry }] of this.#entries) {
       if (now - at >= this.#ttlMs) {
-        this.#entries.delete(key);
+        this.#letGo(key);
       } else if (entry.dependencies.reads(tables)) {
         retained = true;
       }
@@ -71,6 +85,7 @@ export class Memo {
     }
     this.#entries.delete(key);
     if (this.#clock() - kept.at >= this.#ttlMs) {
+      this.#made.delete(key);
       return undefined;
     }
     // The most recently used, last.
@@ -79,13 +94,22 @@ export class Memo {
   }
 
   set(key: string, entry: MemoEntry): void {
-    this.#entries.delete(key);
-    this.#entries.set(key, { at: this.#clock(), entry });
+    const now = this.#clock();
+    this.#letGo(key);
+    this.#entries.set(key, { at: now, entry });
+    this.#made.set(key, now);
+    // What expired first, which no read answers: it holds no place a live rendering could hold.
+    for (const [made, at] of this.#made) {
+      if (now - at < this.#ttlMs) {
+        break;
+      }
+      this.#letGo(made);
+    }
     for (const oldest of this.#entries.keys()) {
       if (this.#entries.size <= this.#limit) {
         break;
       }
-      this.#entries.delete(oldest);
+      this.#letGo(oldest);
     }
   }
 
@@ -97,7 +121,7 @@ export class Memo {
     let evicted = 0;
     for (const [key, { entry }] of this.#entries) {
       if (entry.dependencies.changedBy(rows)) {
-        this.#entries.delete(key);
+        this.#letGo(key);
         evicted += 1;
       }
     }
