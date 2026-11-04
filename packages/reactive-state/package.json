@@ -11,10 +11,12 @@
   },
   "type": "module",
   "exports": {
+    "./client": "./src/client/index.ts",
     "./framework/react": "./src/framework/react.ts",
     "./program": "./src/program.ts",
     "./react": "./src/react/index.tsx",
     "./routing": "./src/routing.ts",
+    "./server": "./src/server/index.ts",
     "./store": "./src/runtime/store.ts"
   },
   "scripts": {
