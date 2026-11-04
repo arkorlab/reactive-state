@@ -52,6 +52,17 @@ describe('a query of what is no plain object', () => {
     );
   });
 
+  it('is refused for a key of `orderBy` of a class, though its own entry names one field', () => {
+    /** An order of the application's own: its one own entry is the field and the direction. */
+    class ByTitle {
+      readonly title = 'asc';
+    }
+
+    expect(() =>
+      queryOf('db.todos.findMany', todos, { orderBy: [new ByTitle()], where: {} }, 'findMany'),
+    ).toThrow('db.todos.findMany: each key of `orderBy` names one field, `"asc"` or `"desc"`');
+  });
+
   it('reads an object of no prototype as one of `Object`’s', () => {
     const where: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     where['owner'] = 'alice';
