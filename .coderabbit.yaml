@@ -16,5 +16,6 @@ reviews:
     - '!pnpm-lock.yaml'
     - '!**/.reactive/**'
     - '!examples/*/src/app/api/reactive-state/**'
+    - '!examples/*/app/api/reactive-state/**'
     - '!**/drizzle/meta/**'
     - '!fixtures/next-project-todo/**'
