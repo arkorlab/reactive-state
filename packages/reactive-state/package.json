@@ -26,7 +26,7 @@
   },
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p src/cloudflare && tsc --noEmit -p test/cloudflare"
+    "typecheck": "node ../../tools/typecheck-expecting.mts typecheck-expected.txt && tsc --noEmit -p src/cloudflare && tsc --noEmit -p test/cloudflare"
   },
   "dependencies": {
     "typescript": "catalog:typescript-api"

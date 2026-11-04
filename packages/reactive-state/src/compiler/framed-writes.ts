@@ -1,0 +1,360 @@
+import {
+  type Expression,
+  type Identifier,
+  isArrayLiteralExpression,
+  isBinaryExpression,
+  isClassStaticBlockDeclaration,
+  isConditionalExpression,
+  isFunctionDeclaration,
+  isClassDeclaration,
+  isConstructorDeclaration,
+  isDoStatement,
+  isForInStatement,
+  isForOfStatement,
+  isForStatement,
+  isBlock,
+  isExpressionStatement,
+  isExpression,
+  isIdentifier,
+  isObjectLiteralExpression,
+  isPropertyAssignment,
+  isPropertyDeclaration,
+  isVariableDeclarationList,
+  isTypeNode,
+  isNumericLiteral,
+  isStringLiteral,
+  isNoSubstitutionTemplateLiteral,
+  type VariableDeclaration,
+  isIfStatement,
+  isSourceFile,
+  isSetAccessorDeclaration,
+  isSpreadElement,
+  isVariableDeclaration,
+  isVariableStatement,
+  isWhileStatement,
+  type Node,
+  SyntaxKind,
+} from 'typescript/ast';
+
+import { isAnswering } from './answers.ts';
+import { unwrapped } from './bounded.ts';
+import { destructuredFirst } from './destructuring-order.ts';
+import {
+  type AssignedFrameSource,
+  assignmentPatternDefault,
+  assignmentPatternSources,
+  iteratedAssignmentSources,
+} from './framed-assignment-patterns.ts';
+import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { framedCondition } from './framed-sources.ts';
+import { readsBinding } from './scope.ts';
+
+/** Source-visible assignments that can supply a local receiver at its lexical read. */
+
+const DIRECT_WRITES: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** Earlier same-owner writes and possible cross-owner writes, retaining lexical binding identity. */
+export function framedAssignedValues(name: Identifier): readonly Expression[] {
+  return framedAssignedSources(name).map((source) => source.value);
+}
+
+/** Pattern selections retain their remaining member path when only a declared source type is known. */
+export function framedAssignedSources(name: Identifier): readonly AssignedFrameSource[] {
+  const declared = frameDeclarationOf(name);
+  if (declared === undefined) return [];
+  const values: AssignedFrameSource[] = [];
+  const owner = executionOwner(name);
+  const cutoff = dataOverwrite(name, owner, declared);
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (
+      (isBinaryExpression(node) || isForOfStatement(node)) &&
+      !overwrittenSource(node, cutoff, owner) &&
+      framedPossibleBranch(node)
+    )
+      values.push(...assignedAt(node, name, declared, { owner, cutoff }));
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return values;
+}
+
+/** Direct and iteration assignments supply the same lexical pattern targets. */
+function assignedAt(
+  node: Node,
+  name: Identifier,
+  declared: NonNullable<ReturnType<typeof frameDeclarationOf>>,
+  context: { readonly owner: Node; readonly cutoff: Node | undefined },
+): readonly AssignedFrameSource[] {
+  if (!possibleWriteBefore(node, name, declared, context)) return [];
+  if (
+    isBinaryExpression(node) &&
+    DIRECT_WRITES.has(node.operatorToken.kind) &&
+    !assignmentPatternDefault(node)
+  )
+    return assignmentPatternSources(node.left, node.right, name, declared);
+  if (isForOfStatement(node) && isExpression(node.initializer))
+    return iteratedAssignmentSources(node.initializer, node.expression, name, declared);
+  return [];
+}
+
+/**
+ * Referenced closures remain possible; an entirely unreferenced nested declaration does not run. A
+ * write in what a pattern destructures runs before the pattern's defaults and computed keys.
+ */
+function possibleWriteBefore(
+  node: Node,
+  name: Identifier,
+  declared: Node,
+  context: { readonly owner: Node; readonly cutoff: Node | undefined },
+): boolean {
+  const { owner, cutoff } = context;
+  const writer = executionOwner(node);
+  if (writer !== owner) return !unreferencedLocalFunction(writer, owner);
+  return (
+    node.pos < name.pos ||
+    destructuredFirst(node, name) ||
+    repeatedFrameRead(node, name, declared, owner) ||
+    (cutoff === undefined && bindingOwner(declared) !== owner)
+  );
+}
+
+/** Named function and class values are bound where their declaration is evaluated. */
+function bindingOwner(declared: Node): Node {
+  return executionOwner(
+    isFunctionDeclaration(declared) || isClassDeclaration(declared) ? declared.parent : declared,
+  );
+}
+
+/**
+ * A later write in a repeatable loop around a read can reach that read on the next pass where the
+ * write lies in the loop's body, condition, update or iteration binding rather than a for
+ * initializer or iterable that runs once, unless the body initializes the binding anew first.
+ */
+export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner: Node): boolean {
+  for (let at = name.parent; at !== owner; at = at.parent) {
+    const body = loopBody(at);
+    if (
+      body !== undefined &&
+      canRepeat(at) &&
+      withinBody(node, at) &&
+      !runsOnce(node, at) &&
+      !initializedWithin(declared, name, body)
+    )
+      return true;
+  }
+  return false;
+}
+
+/** A for initializer and a for-of or for-in iterable run once, before the loop's first pass. */
+function runsOnce(node: Node, loop: Node): boolean {
+  if (isForStatement(loop))
+    return loop.initializer !== undefined && withinBody(node, loop.initializer);
+  return (isForOfStatement(loop) || isForInStatement(loop)) && withinBody(node, loop.expression);
+}
+
+/** The written body of the language's loop forms, one of the parts each later pass repeats. */
+function loopBody(node: Node): Node | undefined {
+  return isForStatement(node) ||
+    isForOfStatement(node) ||
+    isForInStatement(node) ||
+    isWhileStatement(node) ||
+    isDoStatement(node)
+    ? node.statement
+    : undefined;
+}
+
+/** A false loop condition or a fixed singleton iterable cannot produce a second iteration. */
+function canRepeat(node: Node): boolean {
+  if (isWhileStatement(node) || isDoStatement(node))
+    return framedCondition(node.expression) !== false;
+  if (isForStatement(node))
+    return node.condition === undefined || framedCondition(node.condition) !== false;
+  if (isForOfStatement(node)) {
+    const value = unwrapped(node.expression);
+    return (
+      !isArrayLiteralExpression(value) ||
+      value.elements.length > 1 ||
+      value.elements.some((each) => isSpreadElement(each))
+    );
+  }
+  return isForInStatement(node);
+}
+
+/** An unconditional declaration prefix initializes this binding whenever that body reaches its read. */
+function initializedWithin(declared: Node, name: Node, body: Node): boolean {
+  if (!isVariableDeclaration(declared) || declared.initializer === undefined) return false;
+  const statement = declared.parent.parent;
+  return (
+    isVariableStatement(statement) &&
+    statement.pos < name.pos &&
+    withinBody(statement, body) &&
+    withinBody(name, statement.parent)
+  );
+}
+
+/** Whether a syntax node belongs to this enclosing body. */
+function withinBody(node: Node, body: Node): boolean {
+  for (let at = node; ; at = at.parent) {
+    if (at === body) return true;
+    if (isSourceFile(at)) return false;
+  }
+}
+
+/** The synchronous body whose textual prefix constrains a write; another body may run later. */
+function executionOwner(node: Node): Node {
+  for (let at = node, within = node; ; within = at, at = at.parent) {
+    if (
+      (isPropertyDeclaration(at) &&
+        isExpression(within) &&
+        within === at.initializer &&
+        at.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true) ||
+      isAnswering(at) ||
+      isConstructorDeclaration(at) ||
+      isSetAccessorDeclaration(at) ||
+      isClassStaticBlockDeclaration(at) ||
+      isSourceFile(at)
+    )
+      return at;
+  }
+}
+
+/** The arm a written constant condition rules out; unknown conditions retain both arms. */
+function unselectedBranch(node: Node): Node | undefined {
+  if (isIfStatement(node)) {
+    const condition = framedCondition(node.expression);
+    if (condition === undefined) return undefined;
+    return condition ? node.elseStatement : node.thenStatement;
+  }
+  if (isConditionalExpression(node)) {
+    const condition = framedCondition(node.condition);
+    if (condition === undefined) return undefined;
+    return condition ? node.whenFalse : node.whenTrue;
+  }
+  return undefined;
+}
+
+/** A source-proven unselected if or conditional arm cannot supply a receiver. */
+export function framedPossibleBranch(node: Node): boolean {
+  for (let parent = node.parent, within = node; ; within = parent, parent = parent.parent) {
+    if (isSourceFile(parent) || isAnswering(parent) || isClassStaticBlockDeclaration(parent))
+      return true;
+    if (within === unselectedBranch(parent)) return false;
+  }
+}
+
+/** A closed, same-block data assignment replaces older same-owner values before this read. */
+function dataOverwrite(
+  name: Identifier,
+  owner: Node,
+  declared: NonNullable<ReturnType<typeof frameDeclarationOf>>,
+): Node | undefined {
+  for (let at: Node = name; at !== owner; at = at.parent)
+    if (loopBody(at) !== undefined) return undefined;
+  let at: Node = name;
+  while (!isBlock(at.parent) && !isSourceFile(at.parent)) at = at.parent;
+  let last: Node | undefined;
+  for (const statement of at.parent.statements) {
+    if (statement === at) break;
+    if (!isExpressionStatement(statement)) continue;
+    const value = unwrapped(statement.expression);
+    if (
+      isBinaryExpression(value) &&
+      value.operatorToken.kind === SyntaxKind.EqualsToken &&
+      isIdentifier(value.left) &&
+      frameDeclarationOf(value.left) === declared &&
+      executionOwner(value) === owner &&
+      closedData(value.right)
+    )
+      last = value;
+  }
+  return last;
+}
+
+/** A possible closure write remains independent of a same-owner overwrite. */
+function overwrittenSource(node: Node, cutoff: Node | undefined, owner: Node): boolean {
+  return (
+    cutoff !== undefined &&
+    node !== cutoff &&
+    node.end <= cutoff.end &&
+    executionOwner(node) === owner
+  );
+}
+
+/** Literal data and unexposed constant aliases establish a data replacement without call inference. */
+function closedData(node: Expression): boolean {
+  let value = unwrapped(node);
+  const seen = new Set<Node>();
+  while (isIdentifier(value)) {
+    if (seen.has(value)) return false;
+    seen.add(value);
+    const selected = frameBindingOf(value);
+    const binding = selected?.binding;
+    if (
+      binding === undefined ||
+      selected === undefined ||
+      selected.keys.length > 0 ||
+      !isVariableDeclaration(binding) ||
+      !isVariableDeclarationList(binding.parent) ||
+      !/^const\s/u.test(binding.parent.getText(binding.getSourceFile())) ||
+      binding.initializer === undefined ||
+      otherUse(value, binding)
+    )
+      return false;
+    value = unwrapped(binding.initializer);
+  }
+  if (!isObjectLiteralExpression(value)) return primitiveData(value);
+  return value.properties.every((property) => {
+    if (!isPropertyAssignment(property)) return false;
+    const key = property.name;
+    const name =
+      isIdentifier(key) ||
+      isStringLiteral(key) ||
+      isNoSubstitutionTemplateLiteral(key) ||
+      isNumericLiteral(key)
+        ? key.text
+        : undefined;
+    return (
+      name !== undefined && name !== '__proto__' && primitiveData(unwrapped(property.initializer))
+    );
+  });
+}
+
+/** A primitive literal value neither inherits Error identity nor invokes application conversion. */
+function primitiveData(value: Expression): boolean {
+  return (
+    isNumericLiteral(value) ||
+    isStringLiteral(value) ||
+    isNoSubstitutionTemplateLiteral(value) ||
+    value.kind === SyntaxKind.TrueKeyword ||
+    value.kind === SyntaxKind.FalseKeyword ||
+    value.kind === SyntaxKind.NullKeyword
+  );
+}
+
+/** Another value reference can mutate or expose an object alias, so it removes a closed-data proof. */
+function otherUse(name: Identifier, binding: VariableDeclaration): boolean {
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (
+      node !== name &&
+      node !== binding.name &&
+      isIdentifier(node) &&
+      readsBinding(node) &&
+      frameDeclarationOf(node) === binding
+    )
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
