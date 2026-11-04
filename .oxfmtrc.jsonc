@@ -1,0 +1,31 @@
+{
+  "$schema": "./node_modules/oxfmt/configuration_schema.json",
+  "printWidth": 100,
+  "tabWidth": 2,
+  "useTabs": false,
+  "semi": true,
+  "singleQuote": true,
+  "trailingComma": "all",
+  "insertFinalNewline": true,
+  "sortImports": {},
+  "sortPackageJson": {},
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/.next/**",
+    "**/dist/**",
+    "**/coverage/**",
+    "**/next-env.d.ts",
+    "**/drizzle/**",
+    "pnpm-lock.yaml",
+    "**/test/fixtures/**",
+    // What the compiler writes from an application's components, and the route it writes into the
+    // application; `compile --check` compares bytes.
+    "examples/*/.reactive/**",
+    "examples/*/{app,src/app}/api/reactive-state/**",
+    // The application the package's tests compile, kept byte for byte: that it compiles as written
+    // is the point.
+    "fixtures/next-project-todo/**",
+    // Written by `pnpm oxlint-config:generate`; `oxlint-config:check` compares bytes.
+    ".oxlintrc.json",
+  ],
+}

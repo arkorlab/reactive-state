@@ -1,0 +1,125 @@
+packages:
+  - packages/*
+  - examples/*
+  - tools/*
+
+# One version of each dependency, named once here and read as `catalog:` everywhere else.
+catalog:
+  '@cloudflare/vitest-plugin': 1.4.11
+  '@cloudflare/workers-types': 5.20261030.1
+  '@electric-sql/pglite': 0.5.13
+  '@eslint/js': 10.0.1
+  '@oxlint/migrate': 1.90.0
+  '@testing-library/dom': 10.4.2
+  '@testing-library/react': 16.3.3
+  '@types/node': 24.19.2
+  '@types/react': 19.3.0
+  '@types/react-dom': 19.3.0
+  '@vitejs/plugin-react': 6.1.2
+  '@vitest/eslint-plugin': 1.6.28
+  drizzle-kit: 0.31.11
+  drizzle-orm: 0.45.4
+  eslint: 10.13.0
+  eslint-config-prettier: 10.1.8
+  eslint-import-resolver-typescript: 4.4.5
+  eslint-plugin-import-x: 4.17.1
+  eslint-plugin-n: 18.5.0
+  eslint-plugin-no-secrets: 2.3.3
+  eslint-plugin-perfectionist: 5.13.0
+  eslint-plugin-promise: 7.3.0
+  eslint-plugin-redos: 4.6.2
+  eslint-plugin-regexp: 3.3.2
+  eslint-plugin-security: 4.2.0
+  eslint-plugin-sonarjs: 4.2.2
+  eslint-plugin-unicorn: 79.0.0
+  globals: 17.13.0
+  # ESLint reads `eslint.config.ts` through it.
+  jiti: 2.7.0
+  jsdom: 30.1.3
+  knip: 6.44.0
+  next: 16.4.5
+  oxfmt: 0.75.0
+  oxlint: 1.90.0
+  oxlint-tsgolint: 7.0.2005
+  playwright: 1.64.1
+  react: 19.3.1
+  react-dom: 19.3.1
+  # The workspace's TypeScript: typescript-eslint's type-aware rules and knip read its JavaScript API,
+  # which TypeScript 7 does not have.
+  typescript: 6.0.3
+  typescript-eslint: 8.72.1
+  # A required peer of Vitest and of the React plugin; named so both resolve the same copy.
+  vite: 8.3.5
+  vitest: 5.0.5
+
+catalogs:
+  # The compiler runs on TypeScript 7.1's own API (`typescript/sync`, `typescript/ast`), which
+  # TypeScript 7.1 is the first release to ship; the package depends on it and type-checks with it.
+  typescript-api:
+    typescript: 7.1.0-beta
+
+# Only these dependencies may run install scripts.
+allowBuilds:
+  esbuild: true
+  sharp: false
+  unrs-resolver: false
+  workerd: true
+
+strictPeerDependencies: true
+
+overrides:
+  # GHSA-g3hv-75wg-m249: these lint dependencies use the maintained matcher API. import-x alone needs
+  # its removed `makeRe` calls adapted, which the exact-version patch below does.
+  'eslint>minimatch': 11.0.3
+  '@eslint/config-array>minimatch': 11.0.3
+  '@typescript-eslint/typescript-estree>minimatch': 11.0.3
+  'eslint-plugin-import-x>minimatch': 11.0.3
+  'eslint-plugin-sonarjs>minimatch': 11.0.3
+  # Drizzle Kit's archived TypeScript loader pins a copy of esbuild affected by GHSA-67mh-4wv8-2f99;
+  # it reuses Drizzle Kit's own patched release. Migrations run at development time only.
+  '@esbuild-kit/core-utils@3.3.2>esbuild': 0.25.12
+
+patchedDependencies:
+  eslint-plugin-import-x@4.17.1: patches/eslint-plugin-import-x@4.17.1.patch
+
+# A `pnpm run` installs nothing behind the caller's back.
+verifyDepsBeforeRun: false
+
+# Supply-chain cooldown: a release installs once it is a day old, so that a compromised release is
+# caught by somebody else first.
+minimumReleaseAge: 1440
+# Exempt at exact versions only, since a pattern cannot carry one: a security release of Next.js,
+# whose fix is public along with what it fixes, and the TypeScript 7.1 beta the compiler needs.
+minimumReleaseAgeExclude:
+  - next@16.4.5
+  - '@next/env@16.4.5'
+  - '@next/swc-darwin-arm64@16.4.5'
+  - '@next/swc-darwin-x64@16.4.5'
+  - '@next/swc-linux-arm64-gnu@16.4.5'
+  - '@next/swc-linux-arm64-musl@16.4.5'
+  - '@next/swc-linux-x64-gnu@16.4.5'
+  - '@next/swc-linux-x64-musl@16.4.5'
+  - '@next/swc-win32-arm64-msvc@16.4.5'
+  - '@next/swc-win32-x64-msvc@16.4.5'
+  - typescript@7.1.0-beta
+  - '@typescript/typescript-aix-ppc64@7.1.0-beta'
+  - '@typescript/typescript-android-arm64@7.1.0-beta'
+  - '@typescript/typescript-darwin-arm64@7.1.0-beta'
+  - '@typescript/typescript-darwin-x64@7.1.0-beta'
+  - '@typescript/typescript-freebsd-arm64@7.1.0-beta'
+  - '@typescript/typescript-freebsd-x64@7.1.0-beta'
+  - '@typescript/typescript-linux-arm@7.1.0-beta'
+  - '@typescript/typescript-linux-arm64@7.1.0-beta'
+  - '@typescript/typescript-linux-loong64@7.1.0-beta'
+  - '@typescript/typescript-linux-mips64el@7.1.0-beta'
+  - '@typescript/typescript-linux-ppc64@7.1.0-beta'
+  - '@typescript/typescript-linux-riscv64@7.1.0-beta'
+  - '@typescript/typescript-linux-s390x@7.1.0-beta'
+  - '@typescript/typescript-linux-x64@7.1.0-beta'
+  - '@typescript/typescript-netbsd-arm64@7.1.0-beta'
+  - '@typescript/typescript-netbsd-x64@7.1.0-beta'
+  - '@typescript/typescript-openbsd-arm64@7.1.0-beta'
+  - '@typescript/typescript-openbsd-x64@7.1.0-beta'
+  - '@typescript/typescript-sunos-x64@7.1.0-beta'
+  - '@typescript/typescript-win32-arm64@7.1.0-beta'
+  - '@typescript/typescript-win32-x64@7.1.0-beta'
