@@ -147,23 +147,29 @@ function split(pattern: string): Pattern {
     : { prefix: pattern.slice(0, star), suffix: pattern.slice(star + 1), wildcard: true };
 }
 
-/** What a configuration declares of its aliases, its own or inherited, as TypeScript reads it. */
+/**
+ * What a configuration declares of its aliases, its own or inherited, as TypeScript reads it: each
+ * `undefined` where a configuration cleared it, which stands in place of an earlier value as a
+ * value would.
+ */
 interface Declared {
   /** `paths`, and the directory of the configuration that declared it. */
-  readonly paths?: {
-    readonly entries: Readonly<Record<string, readonly string[]>>;
-    readonly from: string;
-  };
+  readonly paths?:
+    | {
+        readonly entries: Readonly<Record<string, readonly string[]>>;
+        readonly from: string;
+      }
+    | undefined;
   /** `baseUrl`, made absolute from the configuration that declared it. */
-  readonly baseUrl?: string;
+  readonly baseUrl?: string | undefined;
 }
 
 /** What a configuration's JSON holds of what is read here. */
 interface ConfigJson {
   readonly extends?: string | readonly string[];
   readonly compilerOptions?: {
-    readonly baseUrl?: string;
-    readonly paths?: Readonly<Record<string, readonly string[]>>;
+    readonly baseUrl?: string | null;
+    readonly paths?: Readonly<Record<string, readonly string[]>> | null;
   };
 }
 
@@ -251,8 +257,10 @@ function extendedFile(extended: string, directory: string): string | undefined {
 /**
  * What `tsconfig` declares of its aliases, as TypeScript reads it: its own `paths` and `baseUrl`,
  * each in place of what it inherits through `extends` — the later of an array over the earlier —
- * and otherwise what it inherits. A configuration that extends itself, at any remove, is read once.
- * Each file read is noted in `read`, with its text.
+ * and otherwise what it inherits. Either of them `null` is none in place of what it inherits —
+ * TypeScript 6's migration writes a `baseUrl` of `null` to clear an inherited one — and so is
+ * either of another type, which TypeScript 6.0 refuses and reads as none. A configuration that
+ * extends itself, at any remove, is read once. Each file read is noted in `read`, with its text.
  */
 function declaredBy(
   tsconfig: string,
@@ -280,12 +288,20 @@ function declaredBy(
   return {
     ...declared,
     ...(baseUrl !== undefined && {
-      baseUrl: path.resolve(
-        directory,
-        baseUrl.replaceAll(CONFIG_DIR, () => configDir),
-      ),
+      baseUrl:
+        typeof baseUrl === 'string'
+          ? path.resolve(
+              directory,
+              baseUrl.replaceAll(CONFIG_DIR, () => configDir),
+            )
+          : undefined,
     }),
-    ...(paths !== undefined && { paths: { entries: paths, from: directory } }),
+    ...(paths !== undefined && {
+      paths:
+        typeof paths === 'object' && paths !== null
+          ? { entries: paths, from: directory }
+          : undefined,
+    }),
   };
 }
 
