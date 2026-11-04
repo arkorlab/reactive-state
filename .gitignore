@@ -1,0 +1,17 @@
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+dist/
+coverage/
+
+# What a compile keeps beside its output, never committed.
+**/.reactive/.input-digest
+**/.reactive/.lock
+
+# The examples' local databases.
+.data/
+
+# What the package's tests make in its directory while they run.
+packages/reactive-state/.reactive-state-compiler-*/
+packages/reactive-state/.operation-stub-types-*/
