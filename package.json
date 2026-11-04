@@ -1,0 +1,50 @@
+{
+  "name": "reactive-state",
+  "private": true,
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arkorlab/reactive-state.git"
+  },
+  "type": "module",
+  "scripts": {
+    "format": "oxfmt --check",
+    "format:write": "oxfmt"
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@oxlint/migrate": "catalog:",
+    "@types/node": "catalog:",
+    "@vitest/eslint-plugin": "catalog:",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "eslint-import-resolver-typescript": "catalog:",
+    "eslint-plugin-import-x": "catalog:",
+    "eslint-plugin-n": "catalog:",
+    "eslint-plugin-no-secrets": "catalog:",
+    "eslint-plugin-perfectionist": "catalog:",
+    "eslint-plugin-promise": "catalog:",
+    "eslint-plugin-redos": "catalog:",
+    "eslint-plugin-regexp": "catalog:",
+    "eslint-plugin-security": "catalog:",
+    "eslint-plugin-sonarjs": "catalog:",
+    "eslint-plugin-unicorn": "catalog:",
+    "globals": "catalog:",
+    "jiti": "catalog:",
+    "knip": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "oxlint-tsgolint": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
+  },
+  "devEngines": {
+    "runtime": {
+      "name": "node",
+      "version": "26.13.0",
+      "onFail": "warn"
+    }
+  },
+  "packageManager": "pnpm@12.16.1+sha512.091d1dee7927575661b25dab3c2ae31cafc1c54d6b71ed6a6600cf0c1cb10434a447eae14015f1b23e2e6bedeed79df94a932e2164d2832280dce3fb32f656d1"
+}

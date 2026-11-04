@@ -1,0 +1,48 @@
+{
+  "name": "@arkorlab/reactive-state",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Server-owned React state: a compiler, on TypeScript 7.1's API, that splits a `.reactive.tsx` component into the authorization it replays — the application's own code — the updates it registers and a Client Component; the optimistic store that component reads; and the authority that owns the application's declared tables — a local SQLite process, or a Durable Object on Cloudflare.",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arkorlab/reactive-state.git",
+    "directory": "packages/reactive-state"
+  },
+  "type": "module",
+  "exports": {},
+  "scripts": {},
+  "dependencies": {
+    "typescript": "catalog:typescript-api"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "catalog:",
+    "@cloudflare/workers-types": "catalog:",
+    "@electric-sql/pglite": "catalog:",
+    "@testing-library/dom": "catalog:",
+    "@testing-library/react": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "drizzle-orm": "catalog:",
+    "jsdom": "catalog:",
+    "next": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "catalog:",
+    "next": "catalog:",
+    "react": "catalog:"
+  },
+  "peerDependenciesMeta": {
+    "drizzle-orm": {
+      "optional": true
+    }
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
