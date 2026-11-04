@@ -1,0 +1,2359 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "categories": {
+    "correctness": "off"
+  },
+  "env": {
+    "builtin": true,
+    "es2026": true
+  },
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/.next/**",
+    "**/out/**",
+    "**/.wrangler/**",
+    "**/dist/**",
+    "**/coverage/**",
+    "**/next-env.d.ts",
+    "examples/*/drizzle/**",
+    "examples/*/.reactive/**",
+    "examples/*/{app,src/app}/api/reactive-state/**",
+    "fixtures/next-project-todo/**",
+    "examples/drizzle/src/{actions,reactive}/**",
+    "examples/drizzle/src/{db,permissions,schema}.ts"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "**/*.{ts,tsx,mts,cts}"
+      ],
+      "rules": {
+        "accessor-pairs": "error",
+        "array-callback-return": "error",
+        "arrow-body-style": "off",
+        "block-scoped-var": "error",
+        "capitalized-comments": "off",
+        "class-methods-use-this": "off",
+        "complexity": "error",
+        "constructor-super": "error",
+        "default-case": "off",
+        "default-case-last": "error",
+        "default-param-last": "error",
+        "eqeqeq": "error",
+        "for-direction": "error",
+        "func-name-matching": "error",
+        "func-names": "error",
+        "func-style": [
+          "error",
+          "declaration",
+          {
+            "allowArrowFunctions": true
+          }
+        ],
+        "getter-return": "error",
+        "grouped-accessor-pairs": "error",
+        "guard-for-in": "error",
+        "id-denylist": "error",
+        "id-length": "off",
+        "init-declarations": "off",
+        "max-classes-per-file": [
+          "error",
+          3
+        ],
+        "max-depth": "error",
+        "max-lines": [
+          "error",
+          {
+            "max": 500,
+            "skipBlankLines": true,
+            "skipComments": true
+          }
+        ],
+        "max-lines-per-function": "off",
+        "max-nested-callbacks": "error",
+        "max-params": [
+          "error",
+          4
+        ],
+        "max-statements": "off",
+        "new-cap": "error",
+        "no-alert": "error",
+        "no-async-promise-executor": "error",
+        "no-await-in-loop": "off",
+        "no-bitwise": "error",
+        "no-caller": "error",
+        "no-case-declarations": "error",
+        "no-class-assign": "error",
+        "no-compare-neg-zero": "error",
+        "no-cond-assign": "error",
+        "no-console": "error",
+        "no-const-assign": "error",
+        "no-constant-binary-expression": "error",
+        "no-constant-condition": "error",
+        "no-constructor-return": "error",
+        "no-continue": "off",
+        "no-debugger": "error",
+        "no-delete-var": "error",
+        "no-div-regex": "error",
+        "no-dupe-class-members": "error",
+        "no-dupe-else-if": "error",
+        "no-dupe-keys": "error",
+        "no-duplicate-case": "error",
+        "no-duplicate-imports": "off",
+        "no-else-return": "error",
+        "no-empty": "error",
+        "no-empty-pattern": "error",
+        "no-empty-static-block": "error",
+        "no-eq-null": "error",
+        "no-eval": "error",
+        "no-ex-assign": "error",
+        "no-extend-native": "error",
+        "no-extra-bind": "error",
+        "no-extra-boolean-cast": "error",
+        "no-extra-label": "error",
+        "no-fallthrough": "error",
+        "no-func-assign": "error",
+        "no-global-assign": "error",
+        "no-implicit-coercion": "error",
+        "no-implicit-globals": "error",
+        "no-import-assign": "error",
+        "no-inline-comments": "off",
+        "no-inner-declarations": "error",
+        "no-irregular-whitespace": "error",
+        "no-iterator": "error",
+        "no-label-var": "error",
+        "no-labels": "error",
+        "no-lone-blocks": "error",
+        "no-lonely-if": "error",
+        "no-loop-func": "error",
+        "no-loss-of-precision": "error",
+        "no-magic-numbers": "off",
+        "no-multi-assign": "error",
+        "no-multi-str": "error",
+        "no-new": "error",
+        "no-new-func": "error",
+        "no-new-native-nonconstructor": "error",
+        "no-new-wrappers": "error",
+        "no-nonoctal-decimal-escape": "error",
+        "no-obj-calls": "error",
+        "no-object-constructor": "error",
+        "no-param-reassign": "error",
+        "no-plusplus": [
+          "error",
+          {
+            "allowForLoopAfterthoughts": true
+          }
+        ],
+        "no-promise-executor-return": "error",
+        "no-proto": "error",
+        "no-prototype-builtins": "error",
+        "no-redeclare": "error",
+        "no-restricted-globals": "error",
+        "no-restricted-imports": "error",
+        "no-restricted-properties": "error",
+        "no-return-assign": "error",
+        "no-script-url": "error",
+        "no-self-assign": "error",
+        "no-self-compare": "error",
+        "no-sequences": "error",
+        "no-setter-return": "error",
+        "no-shadow": "off",
+        "no-shadow-restricted-names": "error",
+        "no-sparse-arrays": "error",
+        "no-template-curly-in-string": "error",
+        "no-ternary": "off",
+        "no-this-before-super": "error",
+        "no-unassigned-vars": "error",
+        "no-undefined": "off",
+        "no-underscore-dangle": "off",
+        "no-unmodified-loop-condition": "error",
+        "no-unneeded-ternary": "error",
+        "no-unreachable": "error",
+        "no-unsafe-finally": "error",
+        "no-unsafe-negation": "error",
+        "no-unused-labels": "error",
+        "no-unused-private-class-members": "error",
+        "no-use-before-define": "off",
+        "no-useless-call": "error",
+        "no-useless-catch": "error",
+        "no-useless-computed-key": "error",
+        "no-useless-concat": "error",
+        "no-useless-escape": "error",
+        "no-useless-rename": "error",
+        "no-useless-return": "error",
+        "no-var": "error",
+        "no-void": [
+          "error",
+          {
+            "allowAsStatement": true
+          }
+        ],
+        "no-warning-comments": [
+          "error",
+          {
+            "location": "anywhere",
+            "terms": [
+              "todo",
+              "fixme",
+              "xxx"
+            ]
+          }
+        ],
+        "no-with": "error",
+        "object-shorthand": "error",
+        "one-var": "off",
+        "operator-assignment": "error",
+        "prefer-arrow-callback": "error",
+        "prefer-const": "error",
+        "prefer-destructuring": "off",
+        "prefer-exponentiation-operator": "error",
+        "prefer-named-capture-group": "off",
+        "prefer-numeric-literals": "error",
+        "prefer-object-has-own": "error",
+        "prefer-object-spread": "error",
+        "prefer-rest-params": "error",
+        "prefer-spread": "error",
+        "prefer-template": "error",
+        "preserve-caught-error": "error",
+        "radix": "error",
+        "require-unicode-regexp": "error",
+        "require-yield": "error",
+        "sort-keys": "off",
+        "sort-vars": "error",
+        "symbol-description": "error",
+        "typescript/consistent-return": "off",
+        "unicode-bom": "error",
+        "use-isnan": "error",
+        "valid-typeof": "error",
+        "vars-on-top": "error",
+        "yoda": "error"
+      }
+    },
+    {
+      "files": [
+        "**/*.ts",
+        "**/*.tsx",
+        "**/*.mts",
+        "**/*.cts"
+      ],
+      "rules": {
+        "constructor-super": "off",
+        "getter-return": "off",
+        "no-class-assign": "off",
+        "no-const-assign": "off",
+        "no-dupe-class-members": "off",
+        "no-dupe-keys": "off",
+        "no-func-assign": "off",
+        "no-import-assign": "off",
+        "no-new-native-nonconstructor": "off",
+        "no-obj-calls": "off",
+        "no-redeclare": "off",
+        "no-setter-return": "off",
+        "no-this-before-super": "off",
+        "no-unreachable": "off",
+        "no-unsafe-negation": "off",
+        "no-var": "error",
+        "no-with": "off",
+        "prefer-const": "error",
+        "prefer-rest-params": "error",
+        "prefer-spread": "error"
+      }
+    },
+    {
+      "files": [
+        "**/*.{js,mjs,cjs}"
+      ],
+      "rules": {
+        "typescript/await-thenable": "off",
+        "typescript/consistent-return": "off",
+        "typescript/consistent-type-exports": "off",
+        "typescript/dot-notation": "off",
+        "typescript/no-array-delete": "off",
+        "typescript/no-base-to-string": "off",
+        "typescript/no-confusing-void-expression": "off",
+        "typescript/no-deprecated": "off",
+        "typescript/no-duplicate-type-constituents": "off",
+        "typescript/no-floating-promises": "off",
+        "typescript/no-for-in-array": "off",
+        "typescript/no-generated-empty-object-type": "off",
+        "typescript/no-implied-eval": "off",
+        "typescript/no-meaningless-void-operator": "off",
+        "typescript/no-misused-promises": "off",
+        "typescript/no-misused-spread": "off",
+        "typescript/no-mixed-enums": "off",
+        "typescript/no-redundant-type-constituents": "off",
+        "typescript/no-unnecessary-boolean-literal-compare": "off",
+        "typescript/no-unnecessary-qualifier": "off",
+        "typescript/no-unnecessary-template-expression": "off",
+        "typescript/no-unnecessary-type-arguments": "off",
+        "typescript/no-unnecessary-type-assertion": "off",
+        "typescript/no-unnecessary-type-conversion": "off",
+        "typescript/no-unnecessary-type-parameters": "off",
+        "typescript/no-unsafe-argument": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "typescript/no-unsafe-call": "off",
+        "typescript/no-unsafe-enum-assignment": "off",
+        "typescript/no-unsafe-enum-comparison": "off",
+        "typescript/no-unsafe-member-access": "off",
+        "typescript/no-unsafe-return": "off",
+        "typescript/no-unsafe-type-assertion": "off",
+        "typescript/no-unsafe-unary-minus": "off",
+        "typescript/no-useless-default-assignment": "off",
+        "typescript/non-nullable-type-assertion-style": "off",
+        "typescript/only-throw-error": "off",
+        "typescript/prefer-find": "off",
+        "typescript/prefer-includes": "off",
+        "typescript/prefer-nullish-coalescing": "off",
+        "typescript/prefer-promise-reject-errors": "off",
+        "typescript/prefer-readonly": "off",
+        "typescript/prefer-readonly-parameter-types": "off",
+        "typescript/prefer-reduce-type-parameter": "off",
+        "typescript/prefer-regexp-exec": "off",
+        "typescript/prefer-return-this-type": "off",
+        "typescript/prefer-string-starts-ends-with": "off",
+        "typescript/promise-function-async": "off",
+        "typescript/related-getter-setter-pairs": "off",
+        "typescript/require-array-sort-compare": "off",
+        "typescript/require-await": "off",
+        "typescript/restrict-plus-operands": "off",
+        "typescript/restrict-template-expressions": "off",
+        "typescript/return-await": "off",
+        "typescript/strict-boolean-expressions": "off",
+        "typescript/strict-void-return": "off",
+        "typescript/switch-exhaustiveness-check": "off",
+        "typescript/unbound-method": "off",
+        "typescript/use-unknown-in-catch-callback-variable": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.{ts,tsx,mts,cts}"
+      ],
+      "plugins": [
+        "import"
+      ],
+      "rules": {
+        "import/no-anonymous-default-export": "error",
+        "import/no-cycle": "error",
+        "import/no-default-export": "error",
+        "import/no-duplicates": [
+          "error",
+          {
+            "prefer-inline": true
+          }
+        ],
+        "import/no-self-import": "error",
+        "no-magic-numbers": [
+          "error",
+          {
+            "ignore": [
+              -1,
+              0,
+              1,
+              2
+            ],
+            "ignoreArrayIndexes": true,
+            "ignoreDefaultValues": true,
+            "ignoreEnums": true,
+            "ignoreNumericLiteralTypes": true,
+            "ignoreReadonlyClassProperties": true,
+            "ignoreTypeIndexes": true
+          }
+        ],
+        "no-shadow": "error",
+        "no-use-before-define": [
+          "error",
+          {
+            "functions": false,
+            "ignoreTypeReferences": true,
+            "typedefs": false
+          }
+        ],
+        "promise/no-multiple-resolved": "error",
+        "promise/no-nesting": "error",
+        "typescript/consistent-type-exports": "error",
+        "typescript/consistent-type-imports": [
+          "error",
+          {
+            "fixStyle": "inline-type-imports",
+            "prefer": "type-imports"
+          }
+        ],
+        "typescript/explicit-module-boundary-types": "error",
+        "typescript/no-floating-promises": [
+          "error",
+          {
+            "ignoreVoid": false
+          }
+        ],
+        "typescript/no-misused-promises": [
+          "error",
+          {
+            "checksVoidReturn": {
+              "attributes": false
+            }
+          }
+        ],
+        "typescript/no-restricted-types": [
+          "error",
+          {
+            "types": {
+              "object": {
+                "message": "Use a precise object type or `Record<string, unknown>`."
+              },
+              "{}": {
+                "message": "Use a precise object type or `Record<string, never>`."
+              }
+            }
+          }
+        ],
+        "typescript/require-array-sort-compare": "error",
+        "typescript/restrict-template-expressions": [
+          "error",
+          {
+            "allowNumber": true
+          }
+        ],
+        "typescript/strict-boolean-expressions": "error",
+        "typescript/switch-exhaustiveness-check": [
+          "error",
+          {
+            "considerDefaultExhaustiveForUnions": false,
+            "requireDefaultForNonUnion": true
+          }
+        ],
+        "unicorn/filename-case": [
+          "error",
+          {
+            "case": "kebabCase",
+            "ignore": [
+              "^\\[.*\\]",
+              "^_",
+              "\\.d\\.ts$"
+            ]
+          }
+        ],
+        "unicorn/import-style": "off",
+        "unicorn/no-await-expression-member": "off",
+        "unicorn/no-null": "off",
+        "unicorn/prefer-number-coercion": "off",
+        "unicorn/prefer-ternary": "off",
+        "unicorn/prefer-top-level-await": "off"
+      }
+    },
+    {
+      "files": [
+        "examples/*/{app,src/app}/**/{page,layout,route,not-found,error}.{ts,tsx}",
+        "examples/*/pages/**/*.{ts,tsx}",
+        "examples/*/proxy.ts",
+        "examples/*/instrumentation.ts",
+        "**/*.reactive.tsx",
+        "**/*.config.{ts,mts}",
+        "tools/*/src/main.ts"
+      ],
+      "plugins": [
+        "import"
+      ],
+      "rules": {
+        "import/no-default-export": "off"
+      }
+    },
+    {
+      "env": {
+        "serviceworker": true
+      },
+      "files": [
+        "packages/reactive-state/src/{client,cloudflare,delivery,server}/**/*.ts",
+        "packages/reactive-state/src/next/{authority,chain,deliver,index,operate,render,route,shared-root,site}.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "assert"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:assert"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "assert/strict"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:assert/strict"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "async_hooks"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:async_hooks"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "buffer"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:buffer"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "child_process"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:child_process"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "cluster"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:cluster"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "console"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:console"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "constants"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:constants"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "crypto"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:crypto"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "dgram"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:dgram"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "diagnostics_channel"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:diagnostics_channel"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "dns"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:dns"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "dns/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:dns/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "domain"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:domain"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "events"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:events"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "fs"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:fs"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "fs/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:fs/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "http"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:http"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "http2"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:http2"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "https"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:https"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "inspector"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:inspector"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "inspector/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:inspector/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "module"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:module"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "net"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:net"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "os"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:os"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "path"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:path"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "path/posix"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:path/posix"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "path/win32"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:path/win32"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "perf_hooks"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:perf_hooks"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "process"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:process"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "punycode"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:punycode"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "querystring"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:querystring"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "readline"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:readline"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "readline/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:readline/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "repl"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:repl"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "stream"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:stream"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "stream/consumers"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:stream/consumers"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "stream/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:stream/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "stream/web"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:stream/web"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "string_decoder"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:string_decoder"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "sys"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:sys"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "timers"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:timers"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "timers/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:timers/promises"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "tls"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:tls"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "trace_events"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:trace_events"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "tty"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:tty"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "url"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:url"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "util"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:util"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "util/types"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:util/types"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "v8"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:v8"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "vm"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:vm"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "wasi"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:wasi"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "worker_threads"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:worker_threads"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "zlib"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:zlib"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:ffi"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:node:ffi"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:sea"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:node:sea"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:sqlite"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:node:sqlite"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:test"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:node:test"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:test/reporters"
+              },
+              {
+                "message": "This package must stay runtime-neutral: no Node.js built-in modules.",
+                "name": "node:node:test/reporters"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/reactive-state/src/server/**/*.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "assert"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:assert"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "assert/strict"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:assert/strict"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "buffer"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:buffer"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "child_process"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:child_process"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "cluster"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:cluster"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "console"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:console"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "constants"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:constants"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "crypto"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:crypto"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "dgram"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:dgram"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "diagnostics_channel"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:diagnostics_channel"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "dns"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:dns"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "dns/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:dns/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "domain"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:domain"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "events"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:events"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "fs"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:fs"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "fs/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:fs/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "http"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:http"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "http2"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:http2"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "https"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:https"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "inspector"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:inspector"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "inspector/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:inspector/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "module"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:module"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "net"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:net"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "os"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:os"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "path"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:path"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "path/posix"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:path/posix"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "path/win32"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:path/win32"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "perf_hooks"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:perf_hooks"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "process"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:process"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "punycode"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:punycode"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "querystring"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:querystring"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "readline"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:readline"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "readline/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:readline/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "repl"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:repl"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "stream"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:stream"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "stream/consumers"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:stream/consumers"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "stream/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:stream/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "stream/web"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:stream/web"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "string_decoder"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:string_decoder"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "sys"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:sys"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "timers"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:timers"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "timers/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:timers/promises"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "tls"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:tls"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "trace_events"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:trace_events"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "tty"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:tty"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "url"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:url"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "util"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:util"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "util/types"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:util/types"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "v8"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:v8"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "vm"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:vm"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "wasi"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:wasi"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "worker_threads"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:worker_threads"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "zlib"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:zlib"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:ffi"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:node:ffi"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:sea"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:node:sea"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:sqlite"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:node:sqlite"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:test"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:node:test"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:test/reporters"
+              },
+              {
+                "message": "What a scope reads runs in a Durable Object too, where `node:async_hooks` is the one built-in it may use.",
+                "name": "node:node:test/reporters"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/reactive-state/src/{react,runtime}/**/*.{ts,tsx}"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "group": [
+                  "../server/*",
+                  "../authority/*",
+                  "../cloudflare/*",
+                  "../bridge/*",
+                  "../next/*"
+                ],
+                "message": "The browser's half of the package imports nothing of the authority's, nor of the application server's."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "packages/reactive-state/src/authority/{assemble,bindings,canonical,database,dependencies,engine,errors,evaluation,fields,frames,gate-answers,guards,materialize,memo,model,operations,programs,public,query,records,render,replay,requests,route-guards,route-registry,rows,schema,seed,shared-entry,shared-events,shared-generate,shared-jobs,shared-render,shared-requests,shared-store,shared-views,skeleton,sql,tables,transaction,tree,view-tokens,views}.ts"
+      ],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "paths": [
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "assert"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:assert"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "assert/strict"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:assert/strict"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "async_hooks"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:async_hooks"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "buffer"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:buffer"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "child_process"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:child_process"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "cluster"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:cluster"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "console"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:console"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "constants"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:constants"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "dgram"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:dgram"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "diagnostics_channel"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:diagnostics_channel"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "dns"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:dns"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "dns/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:dns/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "domain"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:domain"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "events"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:events"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "fs"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:fs"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "fs/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:fs/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "http"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:http"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "http2"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:http2"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "https"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:https"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "inspector"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:inspector"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "inspector/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:inspector/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "module"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:module"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "net"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:net"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "os"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:os"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "path"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:path"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "path/posix"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:path/posix"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "path/win32"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:path/win32"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "perf_hooks"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:perf_hooks"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "process"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:process"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "punycode"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:punycode"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "querystring"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:querystring"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "readline"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:readline"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "readline/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:readline/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "repl"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:repl"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "stream"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:stream"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "stream/consumers"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:stream/consumers"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "stream/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:stream/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "stream/web"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:stream/web"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "string_decoder"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:string_decoder"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "sys"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:sys"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "timers"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:timers"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "timers/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:timers/promises"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "tls"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:tls"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "trace_events"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:trace_events"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "tty"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:tty"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "url"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:url"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "util"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:util"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "util/types"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:util/types"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "v8"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:v8"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "vm"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:vm"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "wasi"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:wasi"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "worker_threads"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:worker_threads"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "zlib"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:zlib"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:ffi"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:node:ffi"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:sea"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:node:sea"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:sqlite"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:node:sqlite"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:test"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:node:test"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:test/reporters"
+              },
+              {
+                "message": "The engine runs in a Durable Object too, where `node:crypto` is the one built-in it may use.",
+                "name": "node:node:test/reporters"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": [
+        "**/logger.ts",
+        "**/logger/*.ts",
+        "tools/**/*.ts",
+        "tools/**/*.mts"
+      ],
+      "rules": {
+        "no-console": "off"
+      }
+    },
+    {
+      "files": [
+        "*.config.ts",
+        "**/*.config.{ts,mts}",
+        "eslint.config.ts"
+      ],
+      "rules": {
+        "max-lines": "off",
+        "no-magic-numbers": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.d.{ts,mts,cts}"
+      ],
+      "plugins": [
+        "import"
+      ],
+      "rules": {
+        "import/no-default-export": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.reactive.tsx"
+      ],
+      "rules": {
+        "typescript/explicit-module-boundary-types": "off"
+      }
+    },
+    {
+      "env": {
+        "node": true
+      },
+      "files": [
+        "tools/**/*.ts",
+        "tools/**/*.mts",
+        "tools/**/*.cts",
+        "*.config.ts",
+        "**/*.config.ts",
+        "**/*.config.mts",
+        "packages/reactive-state/src/{authority,bridge,compiler}/**/*.ts",
+        "packages/reactive-state/src/next/{adapter,compile-on-build,config}.ts",
+        "examples/*/scripts/**/*.mts"
+      ],
+      "plugins": [
+        "node"
+      ],
+      "rules": {
+        "node/no-exports-assign": "error",
+        "node/no-process-env": "off"
+      }
+    },
+    {
+      "files": [
+        "**/*.test.{ts,tsx}",
+        "**/test/**/*.{ts,tsx}"
+      ],
+      "plugins": [
+        "vitest"
+      ],
+      "rules": {
+        "max-lines": "off",
+        "no-magic-numbers": "off",
+        "typescript/no-non-null-assertion": "off",
+        "typescript/no-unsafe-assignment": "off",
+        "vitest/consistent-each-for": "warn",
+        "vitest/consistent-test-filename": "warn",
+        "vitest/consistent-test-it": "warn",
+        "vitest/consistent-vitest-vi": "warn",
+        "vitest/expect-expect": [
+          "error",
+          {
+            "assertFunctionNames": [
+              "expect",
+              "expectTypeOf",
+              "assert"
+            ]
+          }
+        ],
+        "vitest/hoisted-apis-on-top": "warn",
+        "vitest/max-expects": [
+          "error",
+          {
+            "max": 8
+          }
+        ],
+        "vitest/max-nested-describe": "warn",
+        "vitest/no-alias-methods": "warn",
+        "vitest/no-commented-out-tests": "warn",
+        "vitest/no-conditional-expect": "warn",
+        "vitest/no-conditional-tests": "warn",
+        "vitest/no-disabled-tests": "warn",
+        "vitest/no-duplicate-hooks": "warn",
+        "vitest/no-focused-tests": "warn",
+        "vitest/no-hooks": "off",
+        "vitest/no-identical-title": "warn",
+        "vitest/no-import-node-test": "warn",
+        "vitest/no-importing-vitest-globals": "off",
+        "vitest/no-interpolation-in-snapshots": "warn",
+        "vitest/no-large-snapshots": "warn",
+        "vitest/no-mocks-import": "warn",
+        "vitest/no-restricted-matchers": "warn",
+        "vitest/no-restricted-vi-methods": "warn",
+        "vitest/no-standalone-expect": "warn",
+        "vitest/no-test-prefixes": "warn",
+        "vitest/no-test-return-statement": "warn",
+        "vitest/no-unneeded-async-expect-function": "warn",
+        "vitest/padding-around-after-all-blocks": "warn",
+        "vitest/padding-around-test-blocks": "warn",
+        "vitest/prefer-called-exactly-once-with": "warn",
+        "vitest/prefer-called-once": "off",
+        "vitest/prefer-called-times": "warn",
+        "vitest/prefer-called-with": "warn",
+        "vitest/prefer-comparison-matcher": "warn",
+        "vitest/prefer-describe-function-title": "off",
+        "vitest/prefer-each": "warn",
+        "vitest/prefer-equality-matcher": "warn",
+        "vitest/prefer-expect-assertions": "off",
+        "vitest/prefer-expect-resolves": "warn",
+        "vitest/prefer-expect-type-of": "warn",
+        "vitest/prefer-hooks-in-order": "warn",
+        "vitest/prefer-hooks-on-top": "warn",
+        "vitest/prefer-import-in-mock": "warn",
+        "vitest/prefer-importing-vitest-globals": "warn",
+        "vitest/prefer-lowercase-title": "warn",
+        "vitest/prefer-mock-promise-shorthand": "warn",
+        "vitest/prefer-snapshot-hint": "warn",
+        "vitest/prefer-spy-on": "warn",
+        "vitest/prefer-strict-boolean-matchers": "warn",
+        "vitest/prefer-strict-equal": "warn",
+        "vitest/prefer-to-be": "warn",
+        "vitest/prefer-to-be-falsy": "off",
+        "vitest/prefer-to-be-object": "warn",
+        "vitest/prefer-to-be-truthy": "off",
+        "vitest/prefer-to-contain": "warn",
+        "vitest/prefer-to-have-been-called-times": "warn",
+        "vitest/prefer-to-have-length": "warn",
+        "vitest/prefer-todo": "warn",
+        "vitest/require-awaited-expect-poll": "warn",
+        "vitest/require-hook": "warn",
+        "vitest/require-local-test-context-for-concurrent-snapshots": "warn",
+        "vitest/require-mock-type-parameters": "off",
+        "vitest/require-test-timeout": "off",
+        "vitest/require-to-throw-message": "warn",
+        "vitest/require-top-level-describe": "warn",
+        "vitest/valid-describe-callback": "warn",
+        "vitest/valid-expect": "warn",
+        "vitest/valid-expect-in-promise": "warn",
+        "vitest/valid-title": "warn"
+      }
+    }
+  ],
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "promise"
+  ],
+  "rules": {
+    "no-array-constructor": "error",
+    "no-control-regex": "error",
+    "no-empty-function": "error",
+    "no-misleading-character-class": "error",
+    "no-regex-spaces": "error",
+    "no-unused-expressions": "error",
+    "no-unused-vars": "error",
+    "no-useless-constructor": "error",
+    "prefer-regex-literals": "error",
+    "promise/always-return": "error",
+    "promise/catch-or-return": "error",
+    "promise/no-callback-in-promise": "warn",
+    "promise/no-nesting": "warn",
+    "promise/no-new-statics": "error",
+    "promise/no-promise-in-callback": "warn",
+    "promise/no-return-wrap": "error",
+    "promise/param-names": "error",
+    "promise/valid-params": "warn",
+    "typescript/adjacent-overload-signatures": "error",
+    "typescript/array-type": "error",
+    "typescript/await-thenable": "error",
+    "typescript/ban-ts-comment": [
+      "error",
+      {
+        "minimumDescriptionLength": 10
+      }
+    ],
+    "typescript/ban-tslint-comment": "error",
+    "typescript/class-literal-property-style": "error",
+    "typescript/consistent-generic-constructors": "error",
+    "typescript/consistent-indexed-object-style": "error",
+    "typescript/consistent-type-assertions": "error",
+    "typescript/consistent-type-definitions": "error",
+    "typescript/dot-notation": "error",
+    "typescript/no-array-delete": "error",
+    "typescript/no-base-to-string": "error",
+    "typescript/no-confusing-non-null-assertion": "error",
+    "typescript/no-confusing-void-expression": "error",
+    "typescript/no-deprecated": "error",
+    "typescript/no-duplicate-enum-values": "error",
+    "typescript/no-duplicate-type-constituents": "error",
+    "typescript/no-dynamic-delete": "error",
+    "typescript/no-empty-object-type": "error",
+    "typescript/no-explicit-any": "error",
+    "typescript/no-extra-non-null-assertion": "error",
+    "typescript/no-extraneous-class": "error",
+    "typescript/no-floating-promises": "error",
+    "typescript/no-for-in-array": "error",
+    "typescript/no-generated-empty-object-type": "error",
+    "typescript/no-implied-eval": "error",
+    "typescript/no-inferrable-types": "error",
+    "typescript/no-invalid-void-type": "error",
+    "typescript/no-meaningless-void-operator": "error",
+    "typescript/no-misused-new": "error",
+    "typescript/no-misused-promises": "error",
+    "typescript/no-misused-spread": "error",
+    "typescript/no-mixed-enums": "error",
+    "typescript/no-namespace": "error",
+    "typescript/no-non-null-asserted-nullish-coalescing": "error",
+    "typescript/no-non-null-asserted-optional-chain": "error",
+    "typescript/no-non-null-assertion": "error",
+    "typescript/no-redundant-type-constituents": "error",
+    "typescript/no-require-imports": "error",
+    "typescript/no-this-alias": "error",
+    "typescript/no-unnecessary-boolean-literal-compare": "error",
+    "typescript/no-unnecessary-template-expression": "error",
+    "typescript/no-unnecessary-type-arguments": "error",
+    "typescript/no-unnecessary-type-assertion": "error",
+    "typescript/no-unnecessary-type-constraint": "error",
+    "typescript/no-unnecessary-type-conversion": "error",
+    "typescript/no-unnecessary-type-parameters": "error",
+    "typescript/no-unsafe-argument": "error",
+    "typescript/no-unsafe-assignment": "error",
+    "typescript/no-unsafe-call": "error",
+    "typescript/no-unsafe-declaration-merging": "error",
+    "typescript/no-unsafe-enum-assignment": "error",
+    "typescript/no-unsafe-enum-comparison": "error",
+    "typescript/no-unsafe-function-type": "error",
+    "typescript/no-unsafe-member-access": "error",
+    "typescript/no-unsafe-return": "error",
+    "typescript/no-unsafe-unary-minus": "error",
+    "typescript/no-useless-default-assignment": "error",
+    "typescript/no-wrapper-object-types": "error",
+    "typescript/non-nullable-type-assertion-style": "error",
+    "typescript/only-throw-error": "error",
+    "typescript/prefer-as-const": "error",
+    "typescript/prefer-find": "error",
+    "typescript/prefer-for-of": "error",
+    "typescript/prefer-function-type": "error",
+    "typescript/prefer-includes": "error",
+    "typescript/prefer-literal-enum-member": "error",
+    "typescript/prefer-namespace-keyword": "error",
+    "typescript/prefer-nullish-coalescing": "error",
+    "typescript/prefer-promise-reject-errors": "error",
+    "typescript/prefer-reduce-type-parameter": "error",
+    "typescript/prefer-regexp-exec": "error",
+    "typescript/prefer-return-this-type": "error",
+    "typescript/prefer-string-starts-ends-with": "error",
+    "typescript/related-getter-setter-pairs": "error",
+    "typescript/require-await": "error",
+    "typescript/restrict-plus-operands": [
+      "error",
+      {
+        "allowAny": false,
+        "allowBoolean": false,
+        "allowNullish": false,
+        "allowNumberAndString": false,
+        "allowRegExp": false
+      }
+    ],
+    "typescript/restrict-template-expressions": [
+      "error",
+      {
+        "allowAny": false,
+        "allowBoolean": false,
+        "allowNever": false,
+        "allowNullish": false,
+        "allowNumber": false,
+        "allowRegExp": false
+      }
+    ],
+    "typescript/return-await": [
+      "error",
+      "error-handling-correctness-only"
+    ],
+    "typescript/triple-slash-reference": "error",
+    "typescript/unbound-method": "error",
+    "typescript/unified-signatures": "error",
+    "typescript/use-unknown-in-catch-callback-variable": "error",
+    "unicorn/catch-error-name": "error",
+    "unicorn/consistent-assert": "error",
+    "unicorn/consistent-date-clone": "error",
+    "unicorn/consistent-empty-array-spread": "error",
+    "unicorn/consistent-existence-index-check": "error",
+    "unicorn/consistent-template-literal-escape": "error",
+    "unicorn/custom-error-definition": "error",
+    "unicorn/error-message": "error",
+    "unicorn/escape-case": "error",
+    "unicorn/explicit-length-check": "error",
+    "unicorn/explicit-timer-delay": "error",
+    "unicorn/filename-case": "error",
+    "unicorn/import-style": "error",
+    "unicorn/max-nested-calls": "error",
+    "unicorn/new-for-builtins": "error",
+    "unicorn/no-accessor-recursion": "error",
+    "unicorn/no-anonymous-default-export": "error",
+    "unicorn/no-array-fill-with-reference-type": "error",
+    "unicorn/no-array-reduce": "error",
+    "unicorn/no-array-reverse": "error",
+    "unicorn/no-array-sort": "error",
+    "unicorn/no-await-expression-member": "error",
+    "unicorn/no-await-in-promise-methods": "error",
+    "unicorn/no-confusing-array-with": "error",
+    "unicorn/no-console-spaces": "error",
+    "unicorn/no-document-cookie": "error",
+    "unicorn/no-empty-file": "error",
+    "unicorn/no-immediate-mutation": "error",
+    "unicorn/no-instanceof-builtins": "error",
+    "unicorn/no-invalid-fetch-options": "error",
+    "unicorn/no-invalid-remove-event-listener": "error",
+    "unicorn/no-lonely-if": "error",
+    "unicorn/no-magic-array-flat-depth": "error",
+    "unicorn/no-negated-condition": "error",
+    "unicorn/no-negation-in-equality-check": "error",
+    "unicorn/no-new-array": "error",
+    "unicorn/no-new-buffer": "error",
+    "unicorn/no-null": "error",
+    "unicorn/no-object-as-default-parameter": "error",
+    "unicorn/no-process-exit": "error",
+    "unicorn/no-single-promise-in-promise-methods": "error",
+    "unicorn/no-static-only-class": "error",
+    "unicorn/no-thenable": "error",
+    "unicorn/no-this-assignment": "error",
+    "unicorn/no-typeof-undefined": "error",
+    "unicorn/no-unnecessary-array-flat-depth": "error",
+    "unicorn/no-unnecessary-array-splice-count": "error",
+    "unicorn/no-unnecessary-await": "error",
+    "unicorn/no-unnecessary-slice-end": "error",
+    "unicorn/no-unreadable-array-destructuring": "error",
+    "unicorn/no-unreadable-iife": "error",
+    "unicorn/no-useless-collection-argument": "error",
+    "unicorn/no-useless-error-capture-stack-trace": "error",
+    "unicorn/no-useless-fallback-in-spread": "error",
+    "unicorn/no-useless-length-check": "error",
+    "unicorn/no-useless-promise-resolve-reject": "error",
+    "unicorn/no-useless-spread": "error",
+    "unicorn/no-useless-switch-case": "error",
+    "unicorn/no-zero-fractions": "error",
+    "unicorn/numeric-separators-style": "error",
+    "unicorn/prefer-add-event-listener": "error",
+    "unicorn/prefer-array-find": "error",
+    "unicorn/prefer-array-flat": "error",
+    "unicorn/prefer-array-flat-map": "error",
+    "unicorn/prefer-array-index-of": "error",
+    "unicorn/prefer-array-some": "error",
+    "unicorn/prefer-at": "error",
+    "unicorn/prefer-bigint-literals": "error",
+    "unicorn/prefer-blob-reading-methods": "error",
+    "unicorn/prefer-class-fields": "error",
+    "unicorn/prefer-classlist-toggle": "error",
+    "unicorn/prefer-code-point": "error",
+    "unicorn/prefer-date-now": "error",
+    "unicorn/prefer-default-parameters": "error",
+    "unicorn/prefer-dom-node-append": "error",
+    "unicorn/prefer-dom-node-remove": "error",
+    "unicorn/prefer-dom-node-text-content": "error",
+    "unicorn/prefer-event-target": "error",
+    "unicorn/prefer-export-from": "error",
+    "unicorn/prefer-global-this": "error",
+    "unicorn/prefer-import-meta-properties": "error",
+    "unicorn/prefer-includes": "error",
+    "unicorn/prefer-keyboard-event-key": "error",
+    "unicorn/prefer-logical-operator-over-ternary": "error",
+    "unicorn/prefer-math-min-max": "error",
+    "unicorn/prefer-math-trunc": "error",
+    "unicorn/prefer-modern-dom-apis": "error",
+    "unicorn/prefer-modern-math-apis": "error",
+    "unicorn/prefer-module": "error",
+    "unicorn/prefer-native-coercion-functions": "error",
+    "unicorn/prefer-negative-index": "error",
+    "unicorn/prefer-node-protocol": "error",
+    "unicorn/prefer-number-coercion": "error",
+    "unicorn/prefer-object-from-entries": "error",
+    "unicorn/prefer-optional-catch-binding": "error",
+    "unicorn/prefer-prototype-methods": "error",
+    "unicorn/prefer-query-selector": "error",
+    "unicorn/prefer-reflect-apply": "error",
+    "unicorn/prefer-regexp-test": "error",
+    "unicorn/prefer-response-static-json": "error",
+    "unicorn/prefer-set-has": "error",
+    "unicorn/prefer-set-size": "error",
+    "unicorn/prefer-single-call": "error",
+    "unicorn/prefer-spread": "error",
+    "unicorn/prefer-string-raw": "error",
+    "unicorn/prefer-string-replace-all": "error",
+    "unicorn/prefer-string-slice": "error",
+    "unicorn/prefer-string-starts-ends-with": "error",
+    "unicorn/prefer-string-trim-start-end": "error",
+    "unicorn/prefer-structured-clone": "error",
+    "unicorn/prefer-ternary": "error",
+    "unicorn/prefer-top-level-await": "error",
+    "unicorn/prefer-type-error": "error",
+    "unicorn/relative-url-style": "error",
+    "unicorn/require-array-join-separator": "error",
+    "unicorn/require-module-attributes": "error",
+    "unicorn/require-module-specifiers": "error",
+    "unicorn/require-number-to-fixed-digits-argument": "error",
+    "unicorn/require-post-message-target-origin": "error",
+    "unicorn/switch-case-braces": "error",
+    "unicorn/switch-case-break-position": "error",
+    "unicorn/text-encoding-identifier-case": "error",
+    "unicorn/throw-new-error": "error"
+  },
+  "settings": {
+    "react": {
+      "version": "999.999.999"
+    }
+  }
+}

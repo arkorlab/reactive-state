@@ -61,10 +61,12 @@ describe('vocabulary security', () => {
     const text = `widget\n${'\n'.repeat(1000)}  widget widget\n`;
 
     expect(
-      hitsOfFile('source', text, FIXTURE_TERMS, FIXTURE_ALLOWED).map(({ line, column }) => ({
-        line,
-        column,
-      })),
+      hitsOfFile('source', text, FIXTURE_TERMS, FIXTURE_ALLOWED).map(({ line, column }) => {
+        return {
+          line,
+          column,
+        };
+      }),
     ).toStrictEqual([
       { line: 1, column: 1 },
       { line: 1002, column: 3 },

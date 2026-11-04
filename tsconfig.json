@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "eslint.config.ts",
+    "knip.config.ts",
+    "vitest.config.mts",
+    "tools/*.mts",
+    "types/**/*.d.ts"
+  ]
+}
