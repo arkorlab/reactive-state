@@ -247,3 +247,28 @@ describe('what `concat` reads, as ECMA-262 has it read', () => {
     expect(performance.now() - started).toBeLessThan(1000);
   });
 });
+
+describe('a call of `concat` is checked as it runs', () => {
+  it('in a call of a site’s function, though it was made outside one', () => {
+    const concat = method([] as unknown[], 'concat');
+    const value = {
+      [Symbol.isConcatSpreadable]: true,
+      get length() {
+        return PAST;
+      },
+    };
+
+    expect(() => withinSteps(() => concat(counted(value)))).toThrow(TypeError);
+  });
+
+  // Last: where it fails, what it leaves counting outside a call would count the rest.
+  it('outside one, though it was made in one, spending nothing and leaving nothing counting', () => {
+    const concat = withinSteps(() => method([] as unknown[], 'concat'));
+
+    const made = concat([1]);
+
+    expect(made).toStrictEqual([1]);
+    // Counted outside any call, past what one may spend, as nothing counts there.
+    expect(counted('x'.repeat(PAST))).toHaveLength(PAST);
+  });
+});

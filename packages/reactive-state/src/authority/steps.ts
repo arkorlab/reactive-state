@@ -189,9 +189,15 @@ export function method<T, K extends keyof (MethodObject & NonNullable<T>)>(
   return methodOf(receiver, key, running(), chargeConcat);
 }
 
-/** Spends `steps`; past `VIEW_LIMITS.steps`, throws. */
+/**
+ * Spends `steps` of the call of a site's function in progress; past `VIEW_LIMITS.steps`, throws.
+ * Outside one nothing is spent, and no budget begins that would count what runs after.
+ */
 function spend(steps: number): void {
-  const spent = (budget.spent ?? 0) + steps;
+  if (budget.spent === undefined) {
+    return;
+  }
+  const spent = budget.spent + steps;
   budget.spent = spent;
   if (spent > VIEW_LIMITS.steps) {
     throw new RangeError(
@@ -458,7 +464,9 @@ const CONCAT_READS = Object.freeze({
  * was counted shorter may be longer since.
  */
 function chargeConcat(called: unknown, receiver: unknown, given: readonly unknown[]): void {
-  if (called !== CONCAT) {
+  // As it runs: a call captured in a site's function may run after it, and one captured outside run
+  // in one.
+  if (called !== CONCAT || !running()) {
     return;
   }
   refuseOtherSpecies(receiver);
