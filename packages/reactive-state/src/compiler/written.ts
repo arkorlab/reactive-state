@@ -1,0 +1,561 @@
+import {
+  type CallExpression,
+  type Expression,
+  isArrayLiteralExpression,
+  isBinaryExpression,
+  isCallExpression,
+  isDeleteExpression,
+  isElementAccessExpression,
+  isForInStatement,
+  isForOfStatement,
+  isIdentifier,
+  isNewExpression,
+  isObjectLiteralExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
+  isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isComputedPropertyName,
+  isSpreadAssignment,
+  isSpreadElement,
+  isVariableDeclarationList,
+  type Node,
+  type ObjectLiteralElementLike,
+  type SpreadAssignment,
+  SyntaxKind,
+} from 'typescript/ast';
+
+import { literalName, unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
+import { initializerOf, takenApartOf } from './framed.ts';
+import { constantValue } from './numbers.ts';
+import {
+  isStickyPattern,
+  keepsPatternIndex,
+  patternSymbolName,
+  symbolPatternChanges,
+} from './pattern-writes.ts';
+
+/**
+ * What of a shared module's code writes into what it is given, where it writes it (`settled.ts`):
+ * what an assignment, a count or a `delete` writes, what a loop of no declaration writes into, what
+ * a method changes of what it is called on, borrowed too, and what a global's function changes of
+ * what it is given.
+ */
+
+/**
+ * The methods that change what they are called on in place: an array's, a typed array's, a `Map`'s,
+ * a `Set`'s; a date's setters, in UTC as in local time, `setUTCSeconds`, and `setTime`; a
+ * `DataView`'s; a pattern's `compile`; a buffer's `resize`, `grow` and `transfer`, which detaches
+ * it; the platform's — `append` of a `URLSearchParams`, a `Headers`, a `FormData`, `abort` of an
+ * `AbortController`, an `EventTarget`'s listeners, including one a dispatch consumes once; an
+ * event's cancellation and propagation flags or its initialized type; what locks a stream or queues
+ * in it — and
+ * what advances an iterator, or ends it: `next`, `return`, `throw`.
+ */
+const CHANGING_METHODS: ReadonlySet<string> = new Set([
+  'abort',
+  'add',
+  'addEventListener',
+  'append',
+  'clear',
+  'compile',
+  'copyWithin',
+  'delete',
+  'dispatchEvent',
+  'enqueue',
+  'fill',
+  'getOrInsert',
+  'getOrInsertComputed',
+  'getReader',
+  'getWriter',
+  'grow',
+  'initEvent',
+  'next',
+  'pipeThrough',
+  'pipeTo',
+  'pop',
+  'prepend',
+  'preventDefault',
+  'push',
+  'releaseLock',
+  'removeEventListener',
+  'resize',
+  'return',
+  'reverse',
+  'set',
+  'setBigInt64',
+  'setBigUint64',
+  'setDate',
+  'setFloat16',
+  'setFloat32',
+  'setFloat64',
+  'setFullYear',
+  'setHours',
+  'setInt8',
+  'setInt16',
+  'setInt32',
+  'setMilliseconds',
+  'setMinutes',
+  'setMonth',
+  'setSeconds',
+  'setTime',
+  'setUint8',
+  'setUint16',
+  'setUint32',
+  'setUTCDate',
+  'setUTCFullYear',
+  'setUTCHours',
+  'setUTCMilliseconds',
+  'setUTCMinutes',
+  'setUTCMonth',
+  'setUTCSeconds',
+  'setYear',
+  'shift',
+  'sort',
+  'splice',
+  'stopImmediatePropagation',
+  'stopPropagation',
+  'tee',
+  'throw',
+  'transfer',
+  'transferToFixedLength',
+  'unshift',
+]);
+
+/**
+ * The methods of a pattern that move where it matches from next, its `lastIndex`, where it is of
+ * `g` or `y` (`keepsPatternIndex`): `exec`, `test`.
+ */
+const INDEXING_METHODS: ReadonlySet<string> = new Set(['exec', 'test']);
+
+/** The methods of text that move where a pattern of `y` and no `g` they are given matches from (`isStickyPattern`). */
+const STICKY_TAKERS: ReadonlySet<string> = new Set(['match', 'replace']);
+
+/**
+ * The functions of globals that change what they are given first: `Atomics`' that write among them;
+ * `Object`'s and `Reflect`'s that set, define or delete its entries, set its prototype, or lock it —
+ * `Object.freeze`, `Object.seal`, `preventExtensions` — of which `Object.isFrozen` answers otherwise.
+ */
+export const CHANGING_FUNCTIONS: ReadonlySet<string> = new Set([
+  'Atomics.add',
+  'Atomics.and',
+  'Atomics.compareExchange',
+  'Atomics.exchange',
+  'Atomics.or',
+  'Atomics.store',
+  'Atomics.sub',
+  'Atomics.xor',
+  'Object.assign',
+  'Object.defineProperties',
+  'Object.defineProperty',
+  'Object.freeze',
+  'Object.preventExtensions',
+  'Object.seal',
+  'Object.setPrototypeOf',
+  'Reflect.defineProperty',
+  'Reflect.deleteProperty',
+  'Reflect.preventExtensions',
+  'Reflect.set',
+  'Reflect.setPrototypeOf',
+]);
+
+/** The operators that assign what stands on their right to what stands on their left. */
+const ASSIGNING: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.AmpersandEqualsToken,
+  SyntaxKind.AsteriskAsteriskEqualsToken,
+  SyntaxKind.AsteriskEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.BarEqualsToken,
+  SyntaxKind.CaretEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.GreaterThanGreaterThanEqualsToken,
+  SyntaxKind.GreaterThanGreaterThanGreaterThanEqualsToken,
+  SyntaxKind.LessThanLessThanEqualsToken,
+  SyntaxKind.MinusEqualsToken,
+  SyntaxKind.PercentEqualsToken,
+  SyntaxKind.PlusEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+  SyntaxKind.SlashEqualsToken,
+]);
+
+/**
+ * The methods of a stream, its reader, its writer or its controller that change it — what ends it,
+ * `close`, `cancel`, `error`, `terminate`, and what reads of it or writes into it, `read`, `write`
+ * — which text and the platform's other values hold of those names too, `console.error`, so of what
+ * the code shows is one alone (`isStream`).
+ */
+const STREAMING: ReadonlySet<string> = new Set([
+  'cancel',
+  'close',
+  'error',
+  'read',
+  'terminate',
+  'write',
+]);
+
+/** The platform's streams. */
+const STREAMS: ReadonlySet<string> = new Set([
+  'CompressionStream',
+  'DecompressionStream',
+  'ReadableStream',
+  'TextDecoderStream',
+  'TextEncoderStream',
+  'TransformStream',
+  'WritableStream',
+]);
+
+/** The methods of a stream that answer its reader, its writer, or another stream of it. */
+const STREAM_PARTS: ReadonlySet<string> = new Set(['getReader', 'getWriter', 'pipeThrough']);
+
+/** The name of the method `call` calls, by its name or by text in brackets; none of another call. */
+export function methodOf(call: CallExpression): string | undefined {
+  return nameOf(call.expression);
+}
+
+/** What `node` writes into, where it writes: what it assigns, counts up, deletes, changes in place. */
+export function writtenBy(node: Node): Node | undefined {
+  if (isBinaryExpression(node) && ASSIGNING.has(node.operatorToken.kind)) {
+    return node.left;
+  }
+  if (
+    (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)) &&
+    (node.operator === SyntaxKind.PlusPlusToken || node.operator === SyntaxKind.MinusMinusToken)
+  ) {
+    return node.operand;
+  }
+  if (isDeleteExpression(node)) {
+    return node.expression;
+  }
+  // `for (current of items)`: a loop of no declaration writes into what it is given each time.
+  if (
+    (isForOfStatement(node) || isForInStatement(node)) &&
+    !isVariableDeclarationList(node.initializer)
+  ) {
+    return node.initializer;
+  }
+  return isCallExpression(node) ? calledWrite(node) : undefined;
+}
+
+/**
+ * What a call writes beside its receiver: the event `dispatchEvent` is given, whose target and
+ * cancellation flags a dispatch changes, or the buffers a structured clone's transfer list detaches.
+ */
+export function writtenArgumentBy(node: Node): readonly Node[] {
+  if (!isCallExpression(node)) {
+    return [];
+  }
+  if (globalPathOf(unwrapped(node.expression))?.join('.') === 'structuredClone') {
+    return transferredBy(node.arguments[1]);
+  }
+  const invoked = borrowedOf(node) ?? boundOf(node);
+  if ((invoked?.method ?? methodOf(node)) !== 'dispatchEvent') {
+    return [];
+  }
+  const [argument] = invoked?.given ?? node.arguments;
+  if (argument === undefined) {
+    return [];
+  }
+  return [isSpreadElement(argument) ? argument.expression : argument];
+}
+
+/** The transfer list structuredClone detaches, where the code writes its options and their aliases. */
+function transferredBy(options: Expression | undefined): readonly Node[] {
+  const value = options === undefined ? undefined : patternValue(options);
+  if (value === undefined || !isObjectLiteralExpression(value)) {
+    return [];
+  }
+  const pending = [...value.properties];
+  const seen = new Set<Expression>([value]);
+  for (let property = pending.pop(); property !== undefined; property = pending.pop()) {
+    if (isSpreadAssignment(property)) {
+      const targets = spreadTransfers(property.expression, pending, seen);
+      if (targets !== undefined) {
+        return targets;
+      }
+      continue;
+    }
+    const targets = propertyTransfers(property, value);
+    if (targets !== undefined) {
+      return targets;
+    }
+  }
+  return [];
+}
+
+/** The transfer targets one options property writes, or none where it names another option. */
+function propertyTransfers(
+  property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
+  options: Expression,
+): readonly Node[] | undefined {
+  const { name } = property;
+  const key = isComputedPropertyName(name)
+    ? constantValue(name.expression, initializerOf)
+    : name.text;
+  if (key === undefined) {
+    return transferTargets(options);
+  }
+  if (key !== 'transfer') {
+    return undefined;
+  }
+  if (isPropertyAssignment(property)) {
+    return transferTargets(property.initializer);
+  }
+  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+    ? transferTargets(property.name)
+    : [];
+}
+
+/** Adds a known options spread's properties, or reads an unknown spread as what may be transferred. */
+function spreadTransfers(
+  expression: Expression,
+  pending: ObjectLiteralElementLike[],
+  seen: Set<Expression>,
+): readonly Node[] | undefined {
+  const spread = patternValue(expression);
+  if (!isObjectLiteralExpression(spread)) {
+    return transferTargets(expression);
+  }
+  if (seen.has(spread)) {
+    return [];
+  }
+  seen.add(spread);
+  pending.push(...spread.properties);
+  return undefined;
+}
+
+/** The buffers a transfer list holds, through list and entry aliases, without following their constructions. */
+function transferTargets(list: Expression): readonly Node[] {
+  const pending = [list];
+  const seen = new Set<Expression>();
+  const targets: Node[] = [];
+  while (pending.length > 0) {
+    const expression = pending.pop();
+    if (expression === undefined) {
+      break;
+    }
+    const value = unwrapped(expression);
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    if (isArrayLiteralExpression(value)) {
+      pending.push(...value.elements);
+      continue;
+    }
+    if (isSpreadElement(value)) {
+      pending.push(value.expression);
+      continue;
+    }
+    const declared = transferAlias(value);
+    if (declared === undefined) {
+      targets.push(value);
+    } else {
+      pending.push(declared);
+    }
+  }
+  return targets;
+}
+
+/** The alias or container a transfer entry is declared of; none of the construction that makes it. */
+function transferAlias(value: Expression): Expression | undefined {
+  const initial = isIdentifier(value) ? initializerOf(value) : undefined;
+  const declared = initial === undefined ? undefined : unwrapped(initial);
+  return declared !== undefined &&
+    (isIdentifier(declared) ||
+      isArrayLiteralExpression(declared) ||
+      isObjectLiteralExpression(declared))
+    ? declared
+    : undefined;
+}
+
+/**
+ * What `call` writes into: what a global's function that changes what it is given is given first;
+ * what a method that changes what it is called on is called on (`changes`), borrowed too.
+ */
+function calledWrite(call: CallExpression): Node | undefined {
+  const callee = unwrapped(call.expression);
+  // `Atomics.add(counts, …)`, `Reflect.set(target, …)`: what a global's function is given, not the
+  // global, though its name is a method's that changes what it is called on.
+  if (CHANGING_FUNCTIONS.has(globalPathOf(callee)?.join('.') ?? '')) {
+    return call.arguments[0];
+  }
+  const borrowed = borrowedOf(call) ?? boundOf(call);
+  if (borrowed !== undefined) {
+    return changes(borrowed.method, borrowed.receiver) ? borrowed.receiver : undefined;
+  }
+  const method = methodOf(call);
+  // `text.match(word)` of a pattern of `y` and no `g` moves where it matches from, as `exec` does.
+  const [first] = call.arguments;
+  if (
+    method !== undefined &&
+    first !== undefined &&
+    STICKY_TAKERS.has(method) &&
+    isStickyPattern(first)
+  ) {
+    return first;
+  }
+  return method !== undefined &&
+    (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) &&
+    changes(method, callee.expression)
+    ? callee.expression
+    : undefined;
+}
+
+/**
+ * Whether the method `method`, called on `receiver`, changes it: one that changes what it is called
+ * on (`CHANGING_METHODS`), or `exec` and `test` of a pattern that keeps where it matches from.
+ */
+function changes(method: string, receiver: Expression): boolean {
+  return (
+    CHANGING_METHODS.has(method) ||
+    (INDEXING_METHODS.has(method) && keepsPatternIndex(receiver)) ||
+    symbolPatternChanges(method, receiver) ||
+    (STREAMING.has(method) && isStream(receiver, new Set()))
+  );
+}
+
+/**
+ * Whether `receiver` is a stream, or its reader or writer, the code shows it makes: `new
+ * WritableStream()`, what `getWriter` answers of one, the `readable` or the `writable` of one, read
+ * or taken apart — through what a variable around it is declared of, in turn.
+ */
+function isStream(receiver: Expression, seen: Set<Expression>): boolean {
+  let value = unwrapped(receiver);
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const declared = initializerOf(value);
+    if (declared === undefined) {
+      // `const { writable } = new TransformStream()`.
+      const taken = takenApartOf(value);
+      return (
+        taken !== undefined &&
+        (taken.key === 'readable' || taken.key === 'writable') &&
+        isStream(taken.of, seen)
+      );
+    }
+    value = unwrapped(declared);
+  }
+  if (isNewExpression(value)) {
+    return STREAMS.has(globalPathOf(unwrapped(value.expression))?.join('.') ?? '');
+  }
+  if (isPropertyAccessExpression(value)) {
+    return (
+      (value.name.text === 'readable' || value.name.text === 'writable') &&
+      isStream(value.expression, seen)
+    );
+  }
+  if (isCallExpression(value)) {
+    const method = methodOf(value);
+    const callee = unwrapped(value.expression);
+    return (
+      method !== undefined &&
+      STREAM_PARTS.has(method) &&
+      (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) &&
+      isStream(callee.expression, seen)
+    );
+  }
+  return false;
+}
+
+/**
+ * The method `call` borrows of another value, and what it calls it on — of `call` and `apply`,
+ * `RegExp.prototype.test.call(word, text)`, `Array.prototype.push.apply(list, items)`, and of
+ * `Reflect.apply(Map.prototype.set, table, [key, value])` — none of another call.
+ */
+function borrowedOf(call: CallExpression): LentMethod | undefined {
+  const callee = unwrapped(call.expression);
+  const [first, second] = call.arguments;
+  if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
+    return lentOf(first, second, appliedValues(call.arguments[2]));
+  }
+  if (
+    !isPropertyAccessExpression(callee) ||
+    (callee.name.text !== 'call' && callee.name.text !== 'apply')
+  ) {
+    return undefined;
+  }
+  const given = callee.name.text === 'apply' ? appliedValues(second) : call.arguments.slice(1);
+  return lentOf(callee.expression, first, given);
+}
+
+/** The arguments written for `apply`, or their holder where the code does not write them apart. */
+function appliedValues(node: Expression | undefined): readonly Expression[] {
+  if (node === undefined) {
+    return [];
+  }
+  const value = patternValue(node);
+  return isArrayLiteralExpression(value) ? value.elements : [value];
+}
+
+/**
+ * The method a name `call` calls holds bound, and what it is bound to — `push` of `const push =
+ * items.push.bind(items)`, of `Array.prototype.push.bind(items)` — none of another call.
+ */
+function boundOf(call: CallExpression): LentMethod | undefined {
+  const callee = unwrapped(call.expression);
+  const declared = isIdentifier(callee) ? initializerOf(callee) : undefined;
+  const binding = declared === undefined ? undefined : unwrapped(declared);
+  if (binding === undefined || !isCallExpression(binding)) {
+    return undefined;
+  }
+  const binder = unwrapped(binding.expression);
+  const named =
+    isPropertyAccessExpression(binder) || isElementAccessExpression(binder)
+      ? nameOf(binder)
+      : undefined;
+  return named === 'bind' &&
+    (isPropertyAccessExpression(binder) || isElementAccessExpression(binder))
+    ? lentOf(binder.expression, binding.arguments[0], [
+        ...binding.arguments.slice(1),
+        ...call.arguments,
+      ])
+    : undefined;
+}
+
+/** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
+interface LentMethod {
+  readonly method: string;
+  readonly receiver: Expression;
+  readonly given: readonly Expression[];
+}
+
+/** The name of the method `method` reads, lent to `receiver`; none of a method the compile cannot name. */
+function lentOf(
+  method: Expression | undefined,
+  receiver: Expression | undefined,
+  given: readonly Expression[],
+): LentMethod | undefined {
+  const name = nameOf(method);
+  return name === undefined || receiver === undefined
+    ? undefined
+    : { given, method: name, receiver };
+}
+
+/** The name `node` reads of what it reads it of, by its name or by text in brackets; none of another. */
+function nameOf(node: Expression | undefined): string | undefined {
+  const value = node === undefined ? undefined : unwrapped(node);
+  if (value !== undefined && isPropertyAccessExpression(value)) {
+    return value.name.text;
+  }
+  return value !== undefined && isElementAccessExpression(value)
+    ? (literalName(value) ?? patternSymbolName(value.argumentExpression))
+    : undefined;
+}
+
+/** What a pattern's name is declared of, through other names; itself where it shows none. */
+function patternValue(node: Expression): Expression {
+  let value = unwrapped(node);
+  const seen = new Set<Expression>();
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const declared = initializerOf(value);
+    if (declared === undefined) {
+      break;
+    }
+    value = unwrapped(declared);
+  }
+  return value;
+}
