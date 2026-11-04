@@ -227,4 +227,23 @@ describe('what `concat` reads, as ECMA-262 has it read', () => {
       'b',
     ]);
   });
+
+  it('looks of what a hole inherits at that position alone, however much its prototypes hold', () => {
+    const prototype = Object.create(Array.prototype) as Record<string, unknown>;
+    for (let key = 0; key < 100_000; key += 1) {
+      prototype[`unrelated${String(key)}`] = key;
+    }
+    const holey = Object.setPrototypeOf([], prototype) as unknown[];
+    holey.length = 2;
+    holey[1] = 'b';
+    const started = performance.now();
+
+    for (let turn = 0; turn < 100; turn += 1) {
+      withinSteps(() => method([] as unknown[], 'concat')(holey));
+    }
+
+    // A hundred, at 100,000 keys each, took seconds where the language's own `concat` takes less
+    // than a millisecond: a position at a time, they take as long as their length says.
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
 });

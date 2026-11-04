@@ -292,13 +292,10 @@ const INTRINSIC = Object.freeze({
   floor: Math.floor,
   isArray: Array.isArray,
   isProxy: types.isProxy,
-  isSafeInteger: Number.isSafeInteger,
-  keys: Reflect.ownKeys,
   min: Math.min,
   prototypeOf: Object.getPrototypeOf,
   toBoolean: Boolean,
   toNumber: Number,
-  toText: String,
 });
 
 /** A Proxy cannot be inspected for size without executing otherwise unused application traps. */
@@ -561,49 +558,16 @@ function lengthOf(item: WeakKey): number {
 
 /**
  * Refuses `item` where a position below `length` that `concat` reads of it is an accessor's, which
- * `Get` would call: one it holds, or, at a position it holds nothing at, one it inherits. What it
- * holds is looked up position by position, as many as were charged; what it inherits, only where it
- * holds a hole, by what its prototypes hold, which are few.
+ * `Get` would call: one it holds, or, at a position it holds nothing at, the one it inherits there.
+ * Each position is looked up once, of as many as were charged, and a hole's of each prototype in
+ * turn, as `HasProperty` and `Get` look it up: not what else its prototypes hold, however much.
  */
 function refuseReadPositions(item: WeakKey, length: number): void {
-  let held = 0;
+  const inherits: unknown = INTRINSIC.prototypeOf(item);
   for (let index = 0; index < length; index += 1) {
-    const entry = INTRINSIC.describe(item, index);
-    if (entry !== undefined) {
-      held += 1;
-      if (!('value' in entry)) {
-        refuseConcatCode();
-      }
+    const entry = INTRINSIC.describe(item, index) ?? storedDescriptor(inherits, index);
+    if (entry !== undefined && !('value' in entry)) {
+      refuseConcatCode();
     }
   }
-  if (held === length) {
-    return;
-  }
-  for (
-    let current: unknown = INTRINSIC.prototypeOf(item);
-    current !== null && (typeof current === 'object' || typeof current === 'function');
-    current = INTRINSIC.prototypeOf(current)
-  ) {
-    refuseProxy(current);
-    eachOf(INTRINSIC.keys(current), (key) => {
-      const entry = positionBelow(key, length) ? storedDescriptor(item, key) : undefined;
-      if (entry !== undefined && !('value' in entry)) {
-        refuseConcatCode();
-      }
-    });
-  }
-}
-
-/** Whether `key` names a position below `length`, as the language writes one: `'7'`, never `'07'`. */
-function positionBelow(key: string | symbol, length: number): boolean {
-  if (typeof key !== 'string') {
-    return false;
-  }
-  const index = INTRINSIC.toNumber(key);
-  return (
-    INTRINSIC.isSafeInteger(index) &&
-    index >= 0 &&
-    index < length &&
-    INTRINSIC.toText(index) === key
-  );
 }
