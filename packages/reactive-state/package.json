@@ -20,6 +20,8 @@
     "./drizzle": "./src/sql/index.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
+    "./next/adapter": "./src/next/adapter.ts",
+    "./next/compile-on-build": "./src/next/compile-on-build.ts",
     "./next/config": "./src/next/config.ts",
     "./program": "./src/program.ts",
     "./react": "./src/react/index.tsx",
