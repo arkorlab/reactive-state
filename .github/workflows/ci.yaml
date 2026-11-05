@@ -28,6 +28,7 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      - run: pnpm --filter @arkorlab/reactive-state typecheck
       - run: pnpm format
       - run: pnpm knip
       - run: pnpm exec tsc --noEmit -p tools/vocabulary

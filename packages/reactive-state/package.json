@@ -10,8 +10,13 @@
     "directory": "packages/reactive-state"
   },
   "type": "module",
-  "exports": {},
-  "scripts": {},
+  "exports": {
+    "./program": "./src/program.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "typescript": "catalog:typescript-api"
   },
