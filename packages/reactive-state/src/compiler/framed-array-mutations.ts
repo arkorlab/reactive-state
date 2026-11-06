@@ -10,6 +10,7 @@ import {
   isConstructorDeclaration,
   isDeleteExpression,
   isElementAccessExpression,
+  isExpression,
   isForInStatement,
   isForOfStatement,
   isFunctionDeclaration,
@@ -21,6 +22,7 @@ import {
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
   isSatisfiesExpression,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
@@ -71,10 +73,14 @@ export function deferredArrayChange(
   return false;
 }
 
-/** A function body is deferred; its computed name and synchronous immediate invocation are not. */
+/**
+ * A function body is deferred; its computed name and synchronous immediate invocation are not. An
+ * instance field's initializer is deferred too, run at each construction; a static one's runs where
+ * its class is defined.
+ */
 export function executionOwner(node: Node): Node {
   for (let parent = node.parent, within: Node = node; ; within = parent, parent = parent.parent) {
-    if (isSourceFile(parent)) return parent;
+    if (isSourceFile(parent) || instanceInitializer(parent, within)) return parent;
     if (
       !isAnswering(parent) &&
       !isConstructorDeclaration(parent) &&
@@ -86,6 +92,16 @@ export function executionOwner(node: Node): Node {
     const { parent: use } = useOf(parent);
     if (!isCallExpression(use) || eagerBody(use) !== parent.body) return parent;
   }
+}
+
+/** Whether `within` is the initializer of the instance field `parent`, which a construction runs. */
+function instanceInitializer(parent: Node, within: Node): boolean {
+  return (
+    isPropertyDeclaration(parent) &&
+    isExpression(within) &&
+    within === parent.initializer &&
+    parent.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true
+  );
 }
 
 /** Function declarations need binding writes; mutable objects also lose proof when handed away. */
