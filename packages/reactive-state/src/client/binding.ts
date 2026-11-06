@@ -50,14 +50,17 @@ function crossing(session: SessionId): SessionId {
 
 const TIMED_OUT = Symbol('timed out');
 
-/** Whether an RPC answered a `Result`, as the contract says it does — and an older class may not. */
+/**
+ * Whether an RPC answered a `Result`, as the contract says it does — and an older class may not: a
+ * success carries its value, whatever it is, and a failure its status, code and message.
+ */
 function isResult(value: unknown): value is Result<unknown> {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
   const { code, message, ok, status } = value as Partial<Record<string, unknown>>;
   return (
-    ok === true ||
+    (ok === true && Object.hasOwn(value, 'value')) ||
     (ok === false &&
       typeof status === 'number' &&
       typeof code === 'string' &&
