@@ -104,6 +104,15 @@ function call(indent: string, head: readonly [Piece, Piece], children: readonly 
 
 const EMPTY_EXPRESSION = 'An attribute is given a value: `{}` holds none.';
 
+/**
+ * Why an attribute `__proto__` given a value is refused: React's transforms write it into an object
+ * literal, where it sets the props' prototype, and React's `jsx` hands the component what they
+ * inherit — the authority reads their own fields alone. Given text, or nothing, it sets none, and is
+ * dropped alike on both sides.
+ */
+const INHERITED =
+  "An attribute `__proto__` given a value — in braces, or an element — sets what the props inherit rather than a prop: React hands the component what that value holds, and what the authority renders reads the props' own fields alone. Name the attribute otherwise.";
+
 /** The props of an element: `null` where it has no attribute, as React's transform writes it. */
 function propsOf(attributes: JsxAttributes, rendering: Rendering): Piece {
   const { fail, sourceFile } = rendering;
@@ -122,6 +131,9 @@ function propsOf(attributes: JsxAttributes, rendering: Rendering): Piece {
       );
     }
     const { initializer } = attribute;
+    if (name === '__proto__' && initializer !== undefined && !isStringLiteral(initializer)) {
+      fail(INHERITED, attribute);
+    }
     let value: string;
     if (initializer === undefined) {
       value = 'true';
