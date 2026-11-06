@@ -441,7 +441,38 @@ function storedMember(value: Readonly<Record<PropertyKey, unknown>>, key: Proper
   return dataOf(storedDescriptor(value, key));
 }
 
-/** What an own or inherited member is, the first along the prototypes that holds it, of no trap. */
+/**
+ * The language's own prototypes a lookup passes through as no step (`storedDescriptor`): those what
+ * the language makes ends at — an object, an array, a function, a map, a set — each held once in a
+ * chain at most, as no chain holds itself. Any other, the application's or another of the
+ * language's, is a step to pass.
+ */
+const OWN_PROTOTYPES = Object.freeze({
+  array: Array.prototype,
+  function: Function.prototype,
+  map: Map.prototype,
+  object: Object.prototype,
+  set: Set.prototype,
+});
+
+/** Whether `value` is one of `OWN_PROTOTYPES`, told by identity alone. */
+function ownPrototype(value: unknown): boolean {
+  return (
+    value === OWN_PROTOTYPES.object ||
+    value === OWN_PROTOTYPES.array ||
+    value === OWN_PROTOTYPES.function ||
+    value === OWN_PROTOTYPES.map ||
+    value === OWN_PROTOTYPES.set
+  );
+}
+
+/**
+ * What an own or inherited member is, the first along the prototypes that holds it, of no trap.
+ * Each prototype it passes to is a step of the call of a site's function in progress, but for the
+ * language's own (`OWN_PROTOTYPES`): looked up at each member or position, as `measure` and the check
+ * before `concat` look them up, a chain of the application's is walked no further than the steps
+ * allow, however long it is.
+ */
 function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor | undefined {
   for (
     let current: unknown = value;
@@ -453,6 +484,9 @@ function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor 
       return descriptor;
     }
     current = INTRINSIC.prototypeOf(current);
+    if (current !== null && !ownPrototype(current)) {
+      spend(1);
+    }
   }
   return undefined;
 }
@@ -587,12 +621,12 @@ function lengthOf(item: WeakKey): number {
  * Refuses `item` where a position below `length` that `concat` reads of it is an accessor's, which
  * `Get` would call: one it holds, or, at a position it holds nothing at, the one it inherits there.
  * Each position is looked up once, of as many as were charged, and a hole's of each prototype in
- * turn, as `HasProperty` and `Get` look it up: not what else its prototypes hold, however much.
+ * turn, as `HasProperty` and `Get` look it up, each but the language's own a step
+ * (`storedDescriptor`): not what else its prototypes hold, however much.
  */
 function refuseReadPositions(item: WeakKey, length: number): void {
-  const inherits: unknown = INTRINSIC.prototypeOf(item);
   for (let index = 0; index < length; index += 1) {
-    const entry = INTRINSIC.describe(item, index) ?? storedDescriptor(inherits, index);
+    const entry = storedDescriptor(item, index);
     if (entry !== undefined && !isData(entry)) {
       refuseConcatCode();
     }
