@@ -148,4 +148,29 @@ describe('a list of children', () => {
       'RangeError',
     ]);
   });
+
+  it('reads a hole as `map` reads one: of what a prototype holds there, a value or an accessor', () => {
+    let reads = 0;
+    const prototype = Object.create(Array.prototype, {
+      0: { value: 'visible child' },
+      1: {
+        get: () => {
+          reads += 1;
+          return 'read child';
+        },
+      },
+    }) as unknown[];
+    // Of what it holds of its own, nothing: 0 and 1 inherited, 2 a hole of nothing anywhere.
+    const list = Object.setPrototypeOf([], prototype) as unknown[];
+    list.length = 3;
+    const visible: unknown[] = ['visible child', 'read child'];
+    visible.length = 3;
+
+    const { children } = rendered(SCOPE.h('div', null, list)) as Lists;
+    const [kept] = children;
+
+    expect(kept).toStrictEqual(visible);
+    expect(reads).toBe(1);
+    expect(Array.prototype.map.call(list, (item: unknown) => item)).toStrictEqual(visible);
+  });
 });

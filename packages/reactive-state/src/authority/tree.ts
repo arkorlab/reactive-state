@@ -241,8 +241,10 @@ function lengthOf(stated: number): number {
  * — in a frozen array of the language's own: never through a `map` the list holds, nor one of the
  * kind its constructor makes (`Symbol.species`), either of which is the application's code. As many
  * positions are read as it held as it was first read, as `map` reads them: what reading one adds to
- * it is not read, and a list that adds one at each read ends. A hole is kept a hole, as `map` keeps
- * one, its prototype not consulted for it.
+ * it is not read, and a list that adds one at each read ends. Each position is read as `map` reads
+ * it, and React a list's (`children[i]`): whether the list holds one there, of its own or of a
+ * prototype's (`HasProperty`), and then what it holds (`Get`) — a hole a prototype holds a child at
+ * shows that child, as it did. One held nowhere is kept a hole, as `map` keeps one.
  */
 function positionally<T>(list: readonly unknown[], each: (item: unknown) => T): readonly T[] {
   const length = lengthOf(list.length);
@@ -250,7 +252,7 @@ function positionally<T>(list: readonly unknown[], each: (item: unknown) => T): 
   const items: T[] = [];
   items.length = length;
   for (let index = 0; index < length; index += 1) {
-    if (Object.hasOwn(list, index)) {
+    if (Reflect.has(list, index)) {
       items[index] = each(list[index]);
     }
   }
