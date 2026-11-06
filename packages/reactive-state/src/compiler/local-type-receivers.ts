@@ -26,17 +26,25 @@ export function receiverReading(
     : undefined;
 }
 
-/** The last written callable signature supplies the native receiver utility's result. */
+/**
+ * The last written callable signature supplies the native receiver utility's result. Signatures an
+ * interface inherits that the reader cannot read leave it unresolved, unless one it reads follows.
+ */
 export function receiverUtilityReading(
   at: TypeReading,
   operands: (reading: TypeReading) => readonly TypeReading[],
 ): TypeReading | undefined {
   let result: TypeReading | undefined;
-  const pending = [at];
+  // `null` holds the place of signatures the reader cannot read, listed where TypeScript lists them.
+  const pending: (TypeReading | null)[] = [at];
   for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
+    if (reading === null) {
+      result = undefined;
+      continue;
+    }
     const { type } = reading;
     const interfaces = interfaceShapeReadings(reading, operands);
-    if (interfaces !== undefined) pending.push(...interfaces.sources.toReversed());
+    if (interfaces !== undefined) pending.push(...signatureParts(interfaces).toReversed());
     else if (isIntersectionTypeNode(type)) {
       const parts = type.types.flatMap((member) => operands({ ...reading, type: member }));
       pending.push(...parts.toReversed());
@@ -49,4 +57,13 @@ export function receiverUtilityReading(
     }
   }
   return result;
+}
+
+/** An interface's shapes in signature order, `null` where the signatures it cannot read are listed. */
+function signatureParts(
+  shapes: NonNullable<ReturnType<typeof interfaceShapeReadings>>,
+): (TypeReading | null)[] {
+  const parts: (TypeReading | null)[] = [...shapes.sources];
+  if (shapes.unknownAfter !== undefined) parts.splice(shapes.unknownAfter, 0, null);
+  return parts;
 }

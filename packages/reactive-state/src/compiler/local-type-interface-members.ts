@@ -129,28 +129,38 @@ interface InterfaceShapes {
   readonly unknown: boolean;
 }
 
+/** An interface's shapes in the order TypeScript lists their signatures: own, then each base's. */
+interface InterfaceSignatureShapes extends InterfaceShapes {
+  /** How many of `sources` precede the last part whose signatures cannot be read, if any. */
+  readonly unknownAfter?: number | undefined;
+}
+
 const INTERFACE_SHAPES = new WeakMap<InterfaceDeclaration, TypeLiteralNode>();
 
 /** Written interface bodies precede inherited signatures, retaining each original argument environment. */
 export function interfaceShapeReadings(
   at: TypeReading,
   operands: Operands,
-): InterfaceShapes | undefined {
+): InterfaceSignatureShapes | undefined {
   if (interfaceDeclaration(at.type) === undefined) return undefined;
   const sources: TypeReading[] = [];
-  const pending = [at];
-  let unknown = false;
+  // `null` holds the place of a base read as nothing, where its signatures would be listed.
+  const pending: (TypeReading | null)[] = [at];
+  let unknownAfter: number | undefined;
   for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
+    if (reading === null) {
+      unknownAfter = sources.length;
+      continue;
+    }
     const part = interfaceShapesStep(reading);
     sources.push(...part.sources);
-    unknown ||= part.unknown;
+    if (part.unknown) unknownAfter = sources.length;
     for (const base of part.bases.toReversed()) {
       const resolved = operands(base);
-      if (resolved.length === 0) unknown = true;
-      pending.push(...resolved.toReversed());
+      pending.push(...(resolved.length === 0 ? [null] : resolved.toReversed()));
     }
   }
-  return { sources, unknown };
+  return { sources, unknown: unknownAfter !== undefined, unknownAfter };
 }
 
 /** One inherited declaration is expanded once in its own bound environment, before following bases. */
