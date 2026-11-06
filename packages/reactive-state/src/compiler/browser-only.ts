@@ -21,6 +21,8 @@ import {
   isJsxExpression,
   isJsxOpeningElement,
   isJsxSelfClosingElement,
+  isModuleBlock,
+  isModuleDeclaration,
   isNamedExports,
   isNamespaceImport,
   isParameterDeclaration,
@@ -265,6 +267,23 @@ function exportedBy(statement: Statement): readonly string[] {
     : [];
 }
 
+/**
+ * The names `statements` export of the file's own (`exportedBy`), and those a namespace's body
+ * exports, which the code reads as members of the namespace, `Helpers.read()`, by no name of theirs.
+ */
+function exportedIn(statements: readonly Statement[]): readonly string[] {
+  return statements.flatMap((statement) => {
+    if (!isModuleDeclaration(statement)) {
+      return exportedBy(statement);
+    }
+    const { body } = statement;
+    if (body !== undefined && isModuleDeclaration(body)) {
+      return exportedIn([body]);
+    }
+    return body !== undefined && isModuleBlock(body) ? exportedIn(body.statements) : [];
+  });
+}
+
 /** What runs when a `const` is called: its function, or what `useCallback` is handed of one. */
 function constantBody(initializer: Expression): Node | undefined {
   const value = unwrapped(initializer);
@@ -347,15 +366,15 @@ function readInBrowser(read: Identifier, skipped: ReadonlySet<Node>): boolean {
 /**
  * The code of `sourceFile` that runs in the browser alone, as a predicate of each node: a function
  * handed to the browser where it is written (`isHandedToBrowser`), and a function of the file's
- * own, neither exported nor of a name declared twice, each of whose reads stands in such code or in
- * another function so skipped — all of them taken for skipped first, and each a read outside such
- * code is found of dropped, until none is.
+ * own, neither exported — by the module or by a namespace (`exportedIn`) — nor of a name declared
+ * twice, each of whose reads stands in such code or in another function so skipped — all of them
+ * taken for skipped first, and each a read outside such code is found of dropped, until none is.
  */
 export function browserOnlyIn(sourceFile: SourceFile): (node: Node) => boolean {
   let skips = SKIPPED.get(sourceFile);
   if (skips === undefined) {
     const { candidates, declared, reads } = namesOf(sourceFile);
-    const exported = new Set(sourceFile.statements.flatMap((statement) => exportedBy(statement)));
+    const exported = new Set(exportedIn(sourceFile.statements));
     let kept = candidates.filter(
       (candidate) => declared.get(candidate.name) === 1 && !exported.has(candidate.name),
     );
