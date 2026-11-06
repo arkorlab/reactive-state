@@ -36,6 +36,8 @@ export interface AssignedFrameSource {
 interface PatternWork {
   readonly target: Expression;
   readonly sources: readonly AssignedFrameSource[];
+  /** Some source holds nothing at the selected position, so that a default written there runs. */
+  readonly missing?: boolean;
 }
 
 /** The sources assigned to one lexical identifier, excluding fresh object and array rest copies. */
@@ -100,25 +102,34 @@ function assignmentSources(
       if (selected.text === name.text && frameDeclarationOf(selected) === declared)
         found.push(...at.sources);
     } else {
-      pending.push(...assignmentPatternTargets(selected, at.sources));
+      pending.push(...assignmentPatternTargets(selected, at.sources, at.missing));
     }
   }
   return found;
 }
 
-/** Defaults, array positions and object entries contribute their selected assignment targets. */
+/**
+ * Defaults, array positions and object entries contribute their selected assignment targets. A
+ * default runs where `missing` says some source held nothing at its position.
+ */
 export function assignmentPatternTargets(
   target: Expression,
   sources: readonly AssignedFrameSource[],
+  missing = false,
 ): readonly PatternWork[] {
   if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken)
-    return [{ target: target.left, sources: defaultSources(sources, target.right) }];
+    return [{ target: target.left, sources: defaultSources(sources, target.right, missing) }];
   if (isObjectLiteralExpression(target)) return objectTargets(target.properties, sources);
   if (!isArrayLiteralExpression(target)) return [];
   const targets: PatternWork[] = [];
   for (const [index, element] of target.elements.entries()) {
+    const key = String(index);
     if (!isSpreadElement(element) && !isOmittedExpression(element))
-      targets.push({ target: element, sources: selectSources(sources, String(index)) });
+      targets.push({
+        target: element,
+        sources: selectSources(sources, key),
+        missing: missingSelection(sources, key),
+      });
   }
   return targets;
 }
@@ -134,15 +145,16 @@ function objectTargets(
     const name = literalKey(property.name);
     if (name === undefined) continue;
     const values = selectSources(sources, name);
+    const missing = missingSelection(sources, name);
     if (isPropertyAssignment(property))
-      targets.push({ target: property.initializer, sources: values });
+      targets.push({ target: property.initializer, sources: values, missing });
     else if (isIdentifier(property.name))
       targets.push({
         target: property.name,
         sources:
           property.objectAssignmentInitializer === undefined
             ? values
-            : defaultSources(values, property.objectAssignmentInitializer),
+            : defaultSources(values, property.objectAssignmentInitializer, missing),
       });
   }
   return targets;
@@ -154,6 +166,11 @@ function selectSources(
   key: string,
 ): readonly AssignedFrameSource[] {
   return sources.flatMap((source) => selectSource(source, key));
+}
+
+/** Whether a literal source holds nothing at `key`: a hole, a position past its end, no such key. */
+function missingSelection(sources: readonly AssignedFrameSource[], key: string): boolean {
+  return sources.some((source) => selectSource(source, key).length === 0);
 }
 
 /** One source literal's selected value, or its original receiver with the remaining member path. */
@@ -200,13 +217,17 @@ function objectSource(
   return [];
 }
 
-/** A missing or possibly undefined selection may take its written fallback. */
+/**
+ * A missing or possibly undefined selection may take its written fallback, as one source's missing
+ * selection does beside other sources' present values.
+ */
 function defaultSources(
   sources: readonly AssignedFrameSource[],
   fallback: Expression,
+  missing: boolean,
 ): readonly AssignedFrameSource[] {
   const result = sources.filter((source) => !knownUndefined(source));
-  if (sources.length === 0 || sources.some((source) => mayBeUndefined(source)))
+  if (missing || sources.length === 0 || sources.some((source) => mayBeUndefined(source)))
     result.push({ value: fallback, keys: [] });
   return result;
 }
