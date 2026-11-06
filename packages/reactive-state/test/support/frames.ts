@@ -3,6 +3,7 @@ import {
   type Frame,
   type Rendered,
   type RenderedClient,
+  type RenderedProp,
   type Value,
 } from '../../src/program.ts';
 
@@ -60,6 +61,21 @@ export function deferred<T>(): Deferred<T> {
 }
 
 /**
+ * The kinds of a rendered node: no object a prop's JSON holds is of one, as the authority refuses
+ * JSON shaped as something rendered, whereas JSON of any other `kind` is JSON.
+ */
+const NODE_KINDS: ReadonlySet<unknown> = new Set(['client', 'element', 'fragment', 'module']);
+
+/** Whether a prop's value is something rendered: a node, and not an action or JSON. */
+function isRendered(value: RenderedProp): value is Rendered {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    NODE_KINDS.has((value as { readonly kind?: unknown }).kind)
+  );
+}
+
+/**
  * Each node of a tree, depth first, its props' rendered values, its slots and what its sites
  * rendered included.
  */
@@ -82,13 +98,8 @@ function* nodesOf(tree: Rendered): Generator<Exclude<Rendered, readonly Rendered
   yield* nodesOf(node.children);
   if (node.kind !== 'fragment') {
     for (const value of Object.values(node.props)) {
-      if (
-        typeof value === 'object' &&
-        value !== null &&
-        'kind' in value &&
-        value.kind !== 'action'
-      ) {
-        yield* nodesOf(value as Rendered);
+      if (isRendered(value)) {
+        yield* nodesOf(value);
       }
     }
   }
