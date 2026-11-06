@@ -33,8 +33,8 @@ const ITERATOR_HELPERS: ReadonlySet<string> = new Set(['drop', 'filter', 'flatMa
 /**
  * Whether `node` is an iterator, where the code makes one: of a method that answers one
  * (`ITERATING`), `items.values()`; of `Iterator.from(…)`; of a call `isGenerator` says calls a
- * generator; of a method of one that answers another (`ITERATOR_HELPERS`) — a name read as what
- * `reach` says it holds.
+ * generator; of a method of one that answers another (`ITERATOR_HELPERS`), read by its name or by
+ * text in brackets, `['map']` — a name read as what `reach` says it holds.
  */
 export function isIterator(
   node: Expression,
@@ -53,7 +53,11 @@ export function isIterator(
     if (name !== undefined && ITERATING.has(name)) {
       return true;
     }
-    if (name === undefined || !ITERATOR_HELPERS.has(name) || !isPropertyAccessExpression(callee)) {
+    if (
+      name === undefined ||
+      !ITERATOR_HELPERS.has(name) ||
+      !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
+    ) {
       return isGenerator(value);
     }
     value = reach(callee.expression);
