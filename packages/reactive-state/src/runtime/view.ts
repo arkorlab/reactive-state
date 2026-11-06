@@ -577,7 +577,9 @@ export class ViewController<T> {
 
   /**
    * The root committed `frame`: its first, one the route rendered, or an answer. The sites that
-   * waited render again, with what the frame's tree brought them.
+   * waited render again, with what the frame's tree brought them. A frame the route rendered
+   * answers none of the page's views — it was rendered for the sites the states' first values show
+   * — and the root is rendered again for what the page shows otherwise, as for the first.
    */
   show(frame: Frame): void {
     if (frame === this.#committed || frame.rootKey !== this.#rootKey) {
@@ -585,6 +587,9 @@ export class ViewController<T> {
     }
     this.#committed = frame;
     if (this.#shown === undefined || frame.revision >= this.#shown.revision) {
+      if (frame !== this.#shown) {
+        this.#answered = 0;
+      }
       this.#shown = frame;
     }
     if (this.#refreshing) {
