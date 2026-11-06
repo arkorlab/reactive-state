@@ -237,7 +237,10 @@ function declaredValue(node: Expression, made: NewExpression): Expression {
   return value;
 }
 
-/** Whether the holder is used only by this File, constant aliases, or non-mutating object spreads. */
+/**
+ * Whether the holder is used only by this File, constant aliases, or non-mutating object spreads —
+ * of the reads of its own name alone, before the binding each reads is resolved.
+ */
 function unchanged(
   declaration: VariableDeclaration,
   made: NewExpression,
@@ -261,6 +264,8 @@ function unchanged(
     }
     if (
       isIdentifier(node) &&
+      isIdentifier(declaration.name) &&
+      node.text === declaration.name.text &&
       node !== declaration.name &&
       readsBinding(node) &&
       localBinding(node) === declaration
