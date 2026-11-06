@@ -357,3 +357,42 @@ describe('a descriptor’s entries, read as its own, whatever every object inher
     expect(answer).toBe('RangeError');
   });
 });
+
+/** How many prototypes of the application's, empty, the values below inherit through. */
+const DEPTH = 2000;
+
+/** A prototype `DEPTH` prototypes of the application's, empty, above `base`. */
+function deepPrototype(base: unknown): Readonly<Record<string, unknown>> {
+  let prototype = base as Readonly<Record<string, unknown>>;
+  for (let level = 0; level < DEPTH; level += 1) {
+    prototype = Object.create(prototype) as Readonly<Record<string, unknown>>;
+  }
+  return prototype;
+}
+
+describe('the prototypes a lookup passes through', () => {
+  it('are each a step where `concat` reads a hole of what inherits many of the application’s', () => {
+    const holey = Object.setPrototypeOf([], deepPrototype(Array.prototype)) as unknown[];
+    holey.length = DEPTH;
+
+    expect(() => withinSteps(() => method([] as unknown[], 'concat')(counted(holey)))).toThrow(
+      RangeError,
+    );
+  });
+
+  it('are each a step where what is counted inherits many of the application’s', () => {
+    const prototype = deepPrototype(Object.prototype);
+    const values = Array.from({ length: 100 }, () => Object.create(prototype) as unknown);
+
+    expect(() => withinSteps(() => counted(values))).toThrow(RangeError);
+  });
+
+  it('are no step where they are the language’s own, a hole of an array’s among them', () => {
+    const holey: unknown[] = [];
+    holey.length = VIEW_LIMITS.steps / 4;
+
+    expect(withinSteps(() => method([] as unknown[], 'concat')(counted(holey)))).toHaveLength(
+      VIEW_LIMITS.steps / 4,
+    );
+  });
+});
