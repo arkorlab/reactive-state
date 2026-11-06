@@ -42,6 +42,13 @@ interface Input {
 
 type Inputs = readonly (readonly Input[])[];
 
+/** The parameters a default reads, what the construction supplies them, and getters' returns read. */
+interface Reading {
+  readonly parameters: readonly ParameterDeclaration[];
+  readonly slots: Inputs;
+  readonly returned: Expression[];
+}
+
 const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AwaitExpression,
   SyntaxKind.BinaryExpression,
@@ -63,17 +70,26 @@ const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.YieldExpression,
 ]);
 
-/** Application calls and unknown member getters in any parameter keep the earlier scan. */
+/**
+ * Application calls and unknown member getters in any parameter keep the earlier scan — those a
+ * read of a supplied getter runs too, whose return is scanned as the parameters are.
+ */
 export function framedConstructorDefaultEvaluation(
   parameters: readonly ParameterDeclaration[],
   slots: Inputs,
   evaluated: readonly Expression[],
 ): boolean {
   const pending: Node[] = [...parameters, ...evaluated];
+  const getters = new Set<Expression>();
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node) || isArrowFunction(node) || isFunctionExpression(node)) continue;
     if (OPAQUE_EVALUATION.has(node.kind)) return false;
-    if (!quietSelection(node, parameters, slots)) return false;
+    const returned: Expression[] = [];
+    if (!quietSelection(node, { parameters, returned, slots })) return false;
+    for (const each of returned) {
+      if (!getters.has(each)) pending.push(each);
+      getters.add(each);
+    }
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -82,14 +98,11 @@ export function framedConstructorDefaultEvaluation(
 }
 
 /** A top-level parameter pattern reads only a shown literal source rather than opaque getters. */
-function knownPattern(
-  parameter: ParameterDeclaration,
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): boolean {
+function knownPattern(parameter: ParameterDeclaration, reading: Reading): boolean {
+  const { parameters, slots } = reading;
   const source = parameterInput(parameters.indexOf(parameter), parameters, slots);
   if (source === undefined) return false;
-  const value = defaultSource(source.value, source.keys, parameters, slots);
+  const value = defaultSource(source.value, source.keys, reading);
   return (
     value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
   );
@@ -111,12 +124,14 @@ function parameterInput(
   return given.length === 1 ? given[0] : undefined;
 }
 
-/** Original parameter/member chains select only finite own literal fields, without call inference. */
+/**
+ * Original parameter/member chains select only finite own literal fields, without call inference;
+ * what a getter read on the way returns is kept (`returned`), for its evaluation to be scanned.
+ */
 function defaultSource(
   expression: Expression,
   keys: readonly string[],
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
+  reading: Reading,
 ): Expression | undefined {
   let value = unwrapped(expression);
   let remaining = [...keys];
@@ -124,7 +139,7 @@ function defaultSource(
   for (;;) {
     if (seen.has(value)) return undefined;
     seen.add(value);
-    const next = defaultStep(value, remaining, parameters, slots);
+    const next = defaultStep(value, remaining, reading);
     if (next === null) return value;
     if (next === undefined) return undefined;
     value = unwrapped(next.value);
@@ -132,11 +147,18 @@ function defaultSource(
   }
 }
 
-/** A default's member read reaches one ordinary own field or a present ordinary array slot. */
-function literalField(value: Expression, key: string): Expression | undefined {
+/**
+ * A default's member read reaches one ordinary own field or a present ordinary array slot; a
+ * getter's return, which the read evaluates, is kept (`returned`).
+ */
+function literalField(
+  value: Expression,
+  key: string,
+  returned: Expression[],
+): Expression | undefined {
   if (isArrayLiteralExpression(value)) return literalElement(value, key);
   if (!isObjectLiteralExpression(value)) return undefined;
-  let field: Expression | undefined;
+  let field: ObjectLiteralElementLike | undefined;
   for (const property of value.properties) {
     if (
       !isPropertyAssignment(property) &&
@@ -145,31 +167,30 @@ function literalField(value: Expression, key: string): Expression | undefined {
     )
       return undefined;
     if (literalName(property.name) !== key) continue;
-    field = fieldResult(property);
+    field = property;
   }
-  return field;
+  const result = field === undefined ? undefined : fieldResult(field);
+  if (result !== undefined && field !== undefined && isGetAccessorDeclaration(field))
+    returned.push(result);
+  return result;
 }
 
 /** Each source-written member or top-level pattern reads only a shown ordinary literal. */
-function quietSelection(
-  node: Node,
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): boolean {
+function quietSelection(node: Node, reading: Reading): boolean {
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node))
-    return defaultSource(node, [], parameters, slots) !== undefined;
+    return defaultSource(node, [], reading) !== undefined;
   if (!isObjectBindingPattern(node) && !isArrayBindingPattern(node)) return true;
-  const parameter = parameters.find((each) => each.name === node);
-  return parameter === undefined || knownPattern(parameter, parameters, slots);
+  const parameter = reading.parameters.find((each) => each.name === node);
+  return parameter === undefined || knownPattern(parameter, reading);
 }
 
 /** One parameter, member or literal field advances the finite default's original source. */
 function defaultStep(
   value: Expression,
   keys: readonly string[],
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
+  reading: Reading,
 ): Input | null | undefined {
+  const { parameters, slots } = reading;
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     const key = frameMemberName(value) ?? suppliedKey(value, parameters, slots);
     return key === undefined ? undefined : { value: value.expression, keys: [key, ...keys] };
@@ -177,7 +198,7 @@ function defaultStep(
   if (isIdentifier(value)) return selectedParameter(value, keys, parameters, slots);
   const [key, ...rest] = keys;
   if (key === undefined) return null;
-  const field = literalField(value, key);
+  const field = literalField(value, key, reading.returned);
   return field === undefined ? undefined : { value: field, keys: rest };
 }
 
