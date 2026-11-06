@@ -434,9 +434,15 @@ export async function settle(
         throw error;
       }
     }
-    if (Date.now() >= deadline) {
+    // A wait ends where the time does, rather than hold the deliveries after the settle past it, and
+    // no request is made once the time is up, which would have none of it left to be answered in.
+    const left = deadline - Date.now();
+    const wait = options.pollMs ?? DEFAULT_POLL_MS;
+    if (left > 0) {
+      await pause(Math.min(wait, left), signal);
+    }
+    if (wait >= left || Date.now() >= deadline) {
       throw new Error(`${page} still shows revision ${String(shown)}, not ${String(revision)}`);
     }
-    await pause(options.pollMs ?? DEFAULT_POLL_MS, signal);
   }
 }
