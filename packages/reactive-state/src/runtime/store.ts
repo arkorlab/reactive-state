@@ -65,7 +65,10 @@ export interface StoreOptions {
   readonly retryDelay?: number;
   /** Names a new operation; unique per operation. */
   readonly id?: () => string;
-  /** An operation committed at `revision`, which the page should show. */
+  /**
+   * An operation committed at `revision` — at the latest, where a frame told of it first — which the
+   * page should show.
+   */
   readonly onCommitted?: (revision: number) => void;
   /**
    * An operation was let go of whose effect the page cannot show from what it holds — the authority
@@ -278,15 +281,23 @@ export class PageStore {
    * A frame that names an operation whose outcome was unknown — its answer lost after the authority
    * committed it — answers what the page was checking: once no operation's outcome is unknown any
    * more, the page says so no longer, though no answer to a send of it ever comes.
+   *
+   * A commit a frame names before any answer said it — one that comes after, ignored once the
+   * operation is let go of, or none — is told as a receipt's is (`onCommitted`): every root renders
+   * that revision, which each must reflect before the operation is let go of.
    */
   #settle(): void {
     const shown = [...this.#roots.values()];
+    let learned = -Infinity;
     this.#remove((operation) => {
       const own = shown.filter(({ session }) => session === operation.target.session);
       for (const { frame } of own) {
         // Named by a frame, it committed at that frame's revision at the latest.
         const named = reflects(frame, { committedRevision: null, id: operation.id });
         if (named && (operation.committedRevision ?? Infinity) > frame.revision) {
+          if (operation.committedRevision === null) {
+            learned = Math.max(learned, frame.revision);
+          }
           operation.committedRevision = frame.revision;
           this.#changed(operation);
         }
@@ -297,6 +308,9 @@ export class PageStore {
     });
     if (this.#error === CHECKING && !this.#checking()) {
       this.#error = null;
+    }
+    if (learned > -Infinity) {
+      this.#onCommitted(learned);
     }
   }
 
