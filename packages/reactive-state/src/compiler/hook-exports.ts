@@ -120,10 +120,14 @@ function exportedAs(fn: FunctionDeclaration): string | undefined {
   return kinds.has(SyntaxKind.DefaultKeyword) ? 'default' : fn.name.text;
 }
 
-/** What an `export { … }` of local names exports, by the name each is exported under. */
+/**
+ * What an `export { … }` of local names exports, by the name each is exported under: none of a type
+ * alone, `export type { … }`, `{ type name }`, which exports nothing that runs.
+ */
 function listedExports(statement: Statement): readonly (readonly [string, string])[] {
   if (
     !isExportDeclaration(statement) ||
+    statement.isTypeOnly ||
     statement.moduleSpecifier !== undefined ||
     statement.exportClause === undefined ||
     !isNamedExports(statement.exportClause)
@@ -132,7 +136,7 @@ function listedExports(statement: Statement): readonly (readonly [string, string
   }
   return statement.exportClause.elements.flatMap((element) => {
     const local = element.propertyName ?? element.name;
-    return isIdentifier(local) && isIdentifier(element.name)
+    return !element.isTypeOnly && isIdentifier(local) && isIdentifier(element.name)
       ? [[element.name.text, local.text] as const]
       : [];
   });
