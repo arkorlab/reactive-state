@@ -149,7 +149,8 @@ function defaultSource(
 
 /**
  * A default's member read reaches one ordinary own field or a present ordinary array slot; a
- * getter's return, which the read evaluates, is kept (`returned`).
+ * getter's return, which the read evaluates, is kept (`returned`). A key the code computes after
+ * the field may replace it, `['message']`, with what the read cannot tell: none then.
  */
 function literalField(
   value: Expression,
@@ -159,6 +160,7 @@ function literalField(
   if (isArrayLiteralExpression(value)) return literalElement(value, key);
   if (!isObjectLiteralExpression(value)) return undefined;
   let field: ObjectLiteralElementLike | undefined;
+  let replaceable = false;
   for (const property of value.properties) {
     if (
       !isPropertyAssignment(property) &&
@@ -166,10 +168,13 @@ function literalField(
       !isGetAccessorDeclaration(property)
     )
       return undefined;
-    if (literalName(property.name) !== key) continue;
+    const name = literalName(property.name);
+    replaceable ||= name === undefined;
+    if (name !== key) continue;
     field = property;
+    replaceable = false;
   }
-  const result = field === undefined ? undefined : fieldResult(field);
+  const result = field === undefined || replaceable ? undefined : fieldResult(field);
   if (result !== undefined && field !== undefined && isGetAccessorDeclaration(field))
     returned.push(result);
   return result;
