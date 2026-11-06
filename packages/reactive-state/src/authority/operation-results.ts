@@ -27,9 +27,11 @@ interface Walk {
    */
   readonly copied: Set<WeakKey>;
   /**
-   * How many values the copies of objects already copied may still make — an array's elements, holes
-   * among them, an object's entries: at first as many as a request carries bytes, which bounds an
-   * array's holes as well (`arrayLength`).
+   * How many values the copy may still make that the application never made: those the copies of
+   * objects already copied make — an array's elements, holes among them, an object's entries — and
+   * the holes of an array copied the first time, each a `null` of no element, which the application
+   * makes as many of as it says at no cost. At first as many as a request carries bytes, which bounds
+   * each array's holes as well (`arrayLength`).
    */
   repeated: number;
 }
@@ -81,7 +83,7 @@ function arrayLength(entries: ReadonlyMap<string, OwnData>): number | undefined 
   return present !== length && minimum > MAX_CARRIED_BYTES ? undefined : length;
 }
 
-/** Whether a copy of an object copied before, of `values` values, fits what `walk` has left. */
+/** Whether `values` more values the application never made fit what `walk` has left of them. */
 function spent(values: number, walk: Walk): boolean {
   walk.repeated -= values;
   return walk.repeated >= 0;
@@ -96,7 +98,8 @@ function arraySnapshot(
 ): Snapshot {
   const length = arrayLength(entries);
   const result: Json[] = [];
-  let valid = length !== undefined && (!again || spent(length, walk));
+  // Of a first copy, its holes alone are what the application never made; of a later one, all.
+  let valid = length !== undefined && spent(again ? length : length - (entries.size - 1), walk);
   for (let index = 0; valid && index < (length ?? 0); index += 1) {
     const item = entries.get(String(index))?.value;
     const normalized = item === undefined ? null : snapshot(item, depth + 1, walk);
@@ -171,8 +174,8 @@ function snapshot(value: unknown, depth: number, walk: Walk): Snapshot {
 
 /**
  * An operation's JSON result in its original key order, or null for no JSON — and for one whose
- * copies of what it holds more than once would make more values than a request carries bytes
- * (`Walk`), as for an array whose holes would.
+ * copy would make more values the application never made than a request carries bytes (`Walk`):
+ * copies of what it holds more than once, and its arrays' holes, all together as of each array.
  */
 export function operationResult(returned: unknown): Json {
   const walk: Walk = { copied: new Set(), repeated: MAX_CARRIED_BYTES, seen: new Set() };
