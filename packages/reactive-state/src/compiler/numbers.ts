@@ -389,10 +389,11 @@ function textCall(
 /**
  * The number a method of a date answers: of one the code writes, there or through a constant
  * (`timeOf`), of a time the same wherever and whenever the code runs (`fixedTime`), as the engine
- * computes it — but of what it reads or sets in the time zone where it runs, `NaN` alone; of
- * another, the clock's among them, what a setter answers whatever the date — `NaN` of what is no
- * finite number, `setTime(Infinity)`, or of a time past the dates the language holds, `setTime(9e15)`
- * — but none of what the code writes as no date (`writtenOtherwise`), whose method is its own.
+ * computes it — but of what it reads or sets in the time zone where it runs, `NaN` alone where no
+ * time zone holds a time (`localNaN`); of another, the clock's among them, what a setter answers
+ * whatever the date — `NaN` of what is no finite number, `setTime(Infinity)`, or of a time past the
+ * dates the language holds, `setTime(9e15)` — but none of what the code writes as no date
+ * (`writtenOtherwise`), whose method is its own.
  */
 function dateCall(
   method: string,
@@ -406,11 +407,31 @@ function dateCall(
       ? setWhatever(method, given)
       : undefined;
   }
+  if (!DATE_TIMES.has(method) && !SETTING_UTC.has(method)) {
+    return localNaN(method, time, given) ? NaN : undefined;
+  }
   const date = new Date(time);
   const read = Reflect.get(date, method) as (...given: readonly number[]) => number;
-  const answered = Reflect.apply(read, date, given.map(Number));
-  const isExact = DATE_TIMES.has(method) || SETTING_UTC.has(method);
-  return isExact || Number.isNaN(answered) ? answered : undefined;
+  return Reflect.apply(read, date, given.map(Number));
+}
+
+/** The setters of a date's local time that start a date of none over, of the epoch: of a year. */
+const RESTARTING: ReadonlySet<string> = new Set(['setFullYear', 'setYear']);
+
+/**
+ * Whether a method of a date that reads or sets its time in the time zone where it runs answers
+ * `NaN` in every time zone: a read of a date of none, and a setting of one — but `setFullYear`,
+ * which starts it over — or of what is no finite number (`setWhatever`). A time zone moves a time
+ * by less than a day, so that a time near the dates the language holds is one in some time zones
+ * and none in others: of it, none here.
+ */
+function localNaN(method: string, time: number, given: readonly Constant[]): boolean {
+  if (LOCAL_TIMES.has(method)) {
+    return Number.isNaN(time);
+  }
+  return (
+    (Number.isNaN(time) && !RESTARTING.has(method)) || Number.isNaN(setWhatever(method, given) ?? 0)
+  );
 }
 
 /**
