@@ -1,18 +1,26 @@
 import {
+  type Identifier,
+  type ImportDeclaration,
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isClassDeclaration,
   isComputedPropertyName,
   isElementAccessExpression,
+  isEnumDeclaration,
   isExportDeclaration,
   isExpressionWithTypeArguments,
   isForInStatement,
   isForOfStatement,
+  isFunctionDeclaration,
   isIdentifier,
   isImportDeclaration,
+  isImportEqualsDeclaration,
   isInterfaceDeclaration,
+  isModuleDeclaration,
+  isNamespaceImport,
   isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
   isObjectBindingPattern,
@@ -30,12 +38,15 @@ import {
   isTypeNode,
   isTypeOfExpression,
   isTypeParameterDeclaration,
+  isVariableStatement,
   type Node,
+  type SourceFile,
+  type Statement,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
-import { readsBinding } from './scope.ts';
+import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 
 /**
  * What of a module's code makes code of the text it is given — the globals `eval` and `Function`,
@@ -115,7 +126,8 @@ export function readsCodeGlobal(node: Node): boolean {
 /**
  * The names a read of a global goes by, the global first — `crypto`, `subtle` of `crypto.subtle`,
  * of `globalThis.crypto.subtle` too, the global object read past — by its name or by text in
- * brackets; none of what reads no global, or by a key the code computes.
+ * brackets; none of what reads no global, or by a key the code computes. A name is the global's
+ * where no declaration in scope gives it, though one elsewhere in the module does (`scopedGlobal`).
  */
 export function globalPathOf(node: Node): readonly string[] | undefined {
   const names: string[] = [];
@@ -135,7 +147,8 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
       break;
     }
   }
-  const root = isIdentifier(each) && readsBinding(each) ? globalOf(each) : undefined;
+  const root =
+    isIdentifier(each) && readsBinding(each) ? (globalOf(each) ?? scopedGlobal(each)) : undefined;
   if (root === undefined) {
     return undefined;
   }
@@ -145,6 +158,102 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
     path.shift();
   }
   return path;
+}
+
+/** Each module's reads of a name no declaration where they stand gives (`globalReadsOf`). */
+const GLOBAL_READS = new WeakMap<SourceFile, ReadonlySet<Node>>();
+
+/**
+ * The global `name` reads where no declaration in scope gives its name, though one elsewhere in the
+ * module does — `Function` of `run` beside `function unrelated(Function: unknown) {}` — as a `shared`
+ * module may: `globalOf` reads a module whole, of which a component's walk refuses such a read.
+ * None of a read a declaration in scope gives.
+ */
+function scopedGlobal(name: Identifier): string | undefined {
+  const file = name.getSourceFile();
+  let reads = GLOBAL_READS.get(file);
+  if (reads === undefined) {
+    reads = globalReadsOf(file);
+    GLOBAL_READS.set(file, reads);
+  }
+  return reads.has(name) ? name.text : undefined;
+}
+
+/**
+ * The reads in `file`'s code of a name no declaration where they stand gives: none around them
+ * (`freeReads`), nor the module's own (`topLevelNames`). A namespace's code is left as `globalOf`
+ * reads it, as `freeReads` keeps no scope of what a namespace declares.
+ */
+function globalReadsOf(file: SourceFile): ReadonlySet<Node> {
+  const names = topLevelNames(file);
+  const reads = new Set<Node>();
+  for (const statement of file.statements) {
+    const found = isModuleDeclaration(statement) || isErased(statement) ? [] : freeReads(statement);
+    for (const read of found) {
+      if (!names.has(read.text)) {
+        reads.add(read);
+      }
+    }
+  }
+  return reads;
+}
+
+/**
+ * The names `file`'s top level gives a value: what it declares — a variable, a function, a class, an
+ * enum, a namespace — the `var`s of its blocks, which are the module's, and what it imports.
+ */
+function topLevelNames(file: SourceFile): ReadonlySet<string> {
+  const names = new Set(file.statements.flatMap((statement) => namesOf(statement)));
+  for (const declaration of hoistedIn(file.statements)) {
+    for (const name of bindingIdentifiers(declaration.name)) {
+      names.add(name.text);
+    }
+  }
+  return names;
+}
+
+/** The names a statement of a module's top level declares or imports. */
+function namesOf(statement: Statement): readonly string[] {
+  if (isVariableStatement(statement)) {
+    return statement.declarationList.declarations.flatMap((declaration) =>
+      bindingIdentifiers(declaration.name).map((name) => name.text),
+    );
+  }
+  if (isImportDeclaration(statement)) {
+    return importedNames(statement);
+  }
+  if (
+    isFunctionDeclaration(statement) ||
+    isClassDeclaration(statement) ||
+    isEnumDeclaration(statement) ||
+    isImportEqualsDeclaration(statement) ||
+    isModuleDeclaration(statement)
+  ) {
+    return statement.name !== undefined && isIdentifier(statement.name)
+      ? [statement.name.text]
+      : [];
+  }
+  return [];
+}
+
+/** The names an import gives a value: none of an import of a type alone, `import type`, `{ type T }`. */
+function importedNames(declaration: ImportDeclaration): readonly string[] {
+  const clause = declaration.importClause;
+  if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
+    return [];
+  }
+  const own = clause.name === undefined ? [] : [clause.name.text];
+  const named = clause.namedBindings;
+  if (named === undefined) {
+    return own;
+  }
+  if (isNamespaceImport(named)) {
+    return [...own, named.name.text];
+  }
+  return [
+    ...own,
+    ...named.elements.filter((element) => !element.isTypeOnly).map((element) => element.name.text),
+  ];
 }
 
 /**
