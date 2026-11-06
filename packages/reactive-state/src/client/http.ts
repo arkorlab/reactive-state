@@ -121,8 +121,16 @@ async function fetched(url: URL, init: RequestInit & { readonly signal: AbortSig
       ) {
         throw error;
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, RESTART.pollMs);
+      // The call's time runs out between its tries as in one: the wait ends with it, and the next
+      // try — a request whose signal has aborted, which is never sent — answers why.
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(done, RESTART.pollMs);
+        init.signal.addEventListener('abort', done, { once: true });
+        function done(): void {
+          clearTimeout(timer);
+          init.signal.removeEventListener('abort', done);
+          resolve();
+        }
       });
     }
   }
