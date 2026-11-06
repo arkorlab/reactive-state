@@ -100,15 +100,30 @@ function selectedEntries(
   const sources = assignedSources(value);
   if (sources === undefined) return undefined;
   let values: AssignedFrameSource[] = [];
+  const inherited: AssignedFrameSource[] = [];
   for (const source of sources) {
     const object = unwrapped(source);
     if (isObjectLiteralExpression(object)) {
+      inherited.push(...copiedPrototypes(object, key));
       const selected = ownEntries(object, key);
       if (selected.own) values = selected.values;
       else values.push(...selected.values);
     } else values.push({ value: source, keys: [key] });
   }
-  return values;
+  return [...values, ...inherited];
+}
+
+/**
+ * The empty target inherits `Object.prototype`'s `__proto__` setter, so a source's own `__proto__`
+ * entry, copied with `Set`, becomes the target's prototype, which a field is then read from. A later
+ * write may meet a setter of that prototype, so no later field hides it.
+ */
+function copiedPrototypes(
+  object: ObjectLiteralExpression,
+  key: string,
+): readonly AssignedFrameSource[] {
+  const prototypes = ownEntries(object, '__proto__', true).values;
+  return prototypes.map((each) => ({ value: each.value, keys: [...each.keys, key] }));
 }
 
 /**
@@ -159,8 +174,11 @@ interface EntryReading {
   own: boolean;
 }
 
-/** Literal spreads copy data values; a setter pairs only with a getter on the same receiver. */
-function ownEntries(object: ObjectLiteralExpression, key: string): EntryReading {
+/**
+ * Literal spreads copy data values; a setter pairs only with a getter on the same receiver. A copy
+ * takes no written `__proto__`, which sets the literal's prototype rather than an entry.
+ */
+function ownEntries(object: ObjectLiteralExpression, key: string, copied = false): EntryReading {
   const pending: EntryReading[] = [entryReading(object)];
   while (pending.length > 0) {
     const at = pending.at(-1);
@@ -172,6 +190,7 @@ function ownEntries(object: ObjectLiteralExpression, key: string): EntryReading 
       continue;
     }
     if (spreadEntry(property, at, key, pending)) continue;
+    if (copied && isPropertyAssignment(property) && prototypeName(property.name)) continue;
     selectEntry(at, property, key);
   }
   return entryReading(object);
