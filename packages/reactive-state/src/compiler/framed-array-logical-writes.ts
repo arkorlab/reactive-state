@@ -1,0 +1,164 @@
+import {
+  type BinaryExpression,
+  type Expression,
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isElementAccessExpression,
+  isFunctionExpression,
+  isIdentifier,
+  isNewExpression,
+  isObjectLiteralExpression,
+  isOmittedExpression,
+  isSpreadElement,
+  isTypeNode,
+  isVariableDeclaration,
+  isVariableDeclarationList,
+  isVoidExpression,
+  type Node,
+  SyntaxKind,
+} from 'typescript/ast';
+
+import { unwrapped } from './bounded.ts';
+import { globalPathOf, useOf } from './code-globals.ts';
+import { destructuredFirst } from './destructuring-order.ts';
+import { executionOwner } from './framed-array-mutations.ts';
+import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { framedCondition } from './framed-sources.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { constantValue } from './numbers.ts';
+import { readsBinding } from './scope.ts';
+
+/** A logical element assignment can skip its RHS only while its initial stored slot stays known. */
+export function framedLogicalElementSkipped(
+  node: BinaryExpression,
+  root: FrameBinding,
+  sameArray: (value: Expression) => boolean,
+): boolean {
+  if (node.operatorToken.kind === SyntaxKind.EqualsToken) return false;
+  const slot = initialSlot(node, root);
+  if (slot === undefined || !unchangedBefore(node, root, sameArray)) return false;
+  const value = slot.value === undefined ? undefined : logicalInitialValue(slot.value);
+  const nullish =
+    value === undefined ||
+    value.kind === SyntaxKind.NullKeyword ||
+    isVoidExpression(value) ||
+    globalPathOf(value)?.join('.') === 'undefined';
+  if (node.operatorToken.kind === SyntaxKind.QuestionQuestionEqualsToken)
+    return !nullish && knownPresent(value);
+  const truth = nullish ? false : knownTruth(value);
+  const skipWhenTruthy = node.operatorToken.kind === SyntaxKind.BarBarEqualsToken;
+  return truth === skipWhenTruthy;
+}
+
+/** A fixed index in a directly written literal keeps a missing entry distinct from an opaque value. */
+function initialSlot(
+  node: BinaryExpression,
+  root: FrameBinding,
+): { readonly value: Expression | undefined } | undefined {
+  const target = unwrapped(node.left);
+  if (!isElementAccessExpression(target) || root.initializer === undefined) return undefined;
+  const key = constantValue(unwrapped(target.argumentExpression));
+  const index = typeof key === 'string' && /^(?:0|[1-9]\d*)$/u.test(key) ? Number(key) : key;
+  if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) return undefined;
+  const array = unwrapped(root.initializer);
+  if (!isArrayLiteralExpression(array) || array.elements.some((each) => isSpreadElement(each)))
+    return undefined;
+  const value = array.elements[index];
+  return { value: value === undefined || isOmittedExpression(value) ? undefined : value };
+}
+
+/** Prior uses or referenced deferred uses lose the initial slot; whole const aliases retain it. */
+function unchangedBefore(
+  read: BinaryExpression,
+  root: FrameBinding,
+  sameArray: (value: Expression) => boolean,
+): boolean {
+  const pending: Node[] = [read.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (
+      isIdentifier(node) &&
+      (!isVariableDeclaration(node.parent) || node.parent.name !== node) &&
+      readsBinding(node) &&
+      sameArray(node) &&
+      canPrecede(node, read, root) &&
+      !wholeAlias(node)
+    )
+      return false;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return true;
+}
+
+/** The assignment itself is skipped as a unit; later iterations and referenced owners remain possible. */
+function canPrecede(node: Node, read: BinaryExpression, root: FrameBinding): boolean {
+  if (node.pos >= read.pos && node.end <= read.end) return false;
+  if (!framedPossibleBranch(node)) return false;
+  const owner = executionOwner(read);
+  const writer = executionOwner(node);
+  return writer === owner
+    ? node.pos < read.pos ||
+        destructuredFirst(node, read) ||
+        repeatedFrameRead(node, read, root, owner)
+    : !unreferencedLocalFunction(writer, owner);
+}
+
+/** A whole constant alias does not read or replace any stored array entry. */
+function wholeAlias(node: Expression): boolean {
+  const { parent } = useOf(node);
+  return (
+    isVariableDeclaration(parent) &&
+    isIdentifier(parent.name) &&
+    isVariableDeclarationList(parent.parent) &&
+    /^const\s/u.test(parent.parent.getText(parent.getSourceFile())) &&
+    parent.initializer !== undefined &&
+    unwrapped(parent.initializer) === node
+  );
+}
+
+/** Direct object-producing syntax and primitive literals are present, without inferring an input's shape. */
+function knownPresent(value: Expression | undefined): boolean {
+  return value !== undefined && (knownObject(value) || knownTruth(value) !== undefined);
+}
+
+/** Written primitives and object-producing syntax have fixed truthiness. */
+function knownTruth(value: Expression | undefined): boolean | undefined {
+  if (value === undefined) return false;
+  return knownObject(value) ? true : framedCondition(value);
+}
+
+/** A source-written object-producing expression cannot be nullish or falsy. */
+function knownObject(value: Expression): boolean {
+  return (
+    isObjectLiteralExpression(value) ||
+    isArrayLiteralExpression(value) ||
+    isArrowFunction(value) ||
+    isFunctionExpression(value) ||
+    isNewExpression(value)
+  );
+}
+
+/** Whole constant slot aliases retain their actual nullish value; opaque or cyclic names stay unknown. */
+function logicalInitialValue(expression: Expression): Expression {
+  let value = unwrapped(expression);
+  const seen = new Set<FrameBinding>();
+  while (isIdentifier(value)) {
+    const selected = frameBindingOf(value);
+    if (selected === undefined || selected.keys.length > 0) break;
+    const { binding } = selected;
+    if (
+      seen.has(binding) ||
+      !isVariableDeclaration(binding) ||
+      !isVariableDeclarationList(binding.parent) ||
+      binding.initializer === undefined ||
+      !/^const\s/u.test(binding.parent.getText(binding.getSourceFile()))
+    )
+      break;
+    seen.add(binding);
+    value = unwrapped(binding.initializer);
+  }
+  return value;
+}

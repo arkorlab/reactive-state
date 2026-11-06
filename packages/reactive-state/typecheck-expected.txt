@@ -1,0 +1,3 @@
+# What `tsc` reports while the compiler's sources arrive (`tools/typecheck-expecting.mts`):
+# `answers.ts` type-imports `exported-values.ts`, which a later pull request brings, and removes this.
+src/compiler/answers.ts(39,34): error TS2307: Cannot find module './exported-values.ts' or its corresponding type declarations.
