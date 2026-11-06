@@ -265,6 +265,9 @@ export function useSites(part: ClientPart<ReactNode>): Sites {
   const { instance } = part;
   // The sites this render names, by id.
   const named: Record<string, SiteInputs> = {};
+  // The items of no key this render names, each keyed apart from the others — siblings, as items
+  // of one list are, which React keeps apart by their keys — though each of them fails at once.
+  let unkeyed = 0;
   useEffect(() => {
     if (controller !== null && instance !== undefined) {
       controller.commit(instance, named);
@@ -293,7 +296,9 @@ export function useSites(part: ClientPart<ReactNode>): Sites {
     item: (site, inputs, entry, guarded = {}) => {
       const keyed = attempt(() => itemKeyOf(entry.key, site));
       if (!('made' in keyed)) {
-        return <Unsent error={keyed.error} key={site} />;
+        unkeyed += 1;
+        // Apart from an item of a key as well, which is keyed `site:key`.
+        return <Unsent error={keyed.error} key={`${site}#${String(unkeyed)}`} />;
       }
       const itemKey = keyed.made;
       const key = `${site}:${itemKey}`;
