@@ -16,7 +16,8 @@ import { framedCondition } from './framed-sources.ts';
 
 /**
  * Native filter numbers its result after skipping holes, and keeps an element for each truthy
- * predicate answer, which an async predicate's Promise always is.
+ * predicate answer, which an async predicate's Promise always is: where the kept elements' places
+ * are not shown, any of them may be selected.
  */
 
 /** A written constant predicate keeps or drops every element; other predicates keep each possible. */
@@ -37,7 +38,9 @@ export function filteredArrayViews(
   if (!written && !answersLater(predicate)) return [];
   return (
     compactedViews(copy, predicate, index, stable) ??
-    (written || quietAsyncFilterFallback(copy, predicate, stable) ? [base] : [])
+    (written || quietAsyncFilterFallback(copy, predicate, stable)
+      ? [base]
+      : [{ ...base, index: undefined }])
   );
 }
 
