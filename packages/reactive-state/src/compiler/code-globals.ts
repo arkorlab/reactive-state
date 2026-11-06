@@ -19,6 +19,7 @@ import {
   isImportDeclaration,
   isImportEqualsDeclaration,
   isInterfaceDeclaration,
+  isModuleBlock,
   isModuleDeclaration,
   isNamespaceImport,
   isNonNullExpression,
@@ -39,6 +40,7 @@ import {
   isTypeOfExpression,
   isTypeParameterDeclaration,
   isVariableStatement,
+  type ModuleDeclaration,
   type Node,
   type SourceFile,
   type Statement,
@@ -46,6 +48,7 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
+import { namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 
 /**
@@ -181,30 +184,78 @@ function scopedGlobal(name: Identifier): string | undefined {
 
 /**
  * The reads in `file`'s code of a name no declaration where they stand gives: none around them
- * (`freeReads`), nor the module's own (`topLevelNames`). A namespace's code is left as `globalOf`
- * reads it, as `freeReads` keeps no scope of what a namespace declares.
+ * (`freeReads`), nor the module's own (`scopeNames`), nor, in a namespace's body, the namespace's
+ * (`namespaceReads`).
  */
 function globalReadsOf(file: SourceFile): ReadonlySet<Node> {
-  const names = topLevelNames(file);
   const reads = new Set<Node>();
-  for (const statement of file.statements) {
-    const found = isModuleDeclaration(statement) || isErased(statement) ? [] : freeReads(statement);
-    for (const read of found) {
-      if (!names.has(read.text)) {
-        reads.add(read);
-      }
-    }
-  }
+  readsIn(file.statements, scopeNames(file.statements, file.statements), reads);
   return reads;
 }
 
 /**
- * The names `file`'s top level gives a value: what it declares — a variable, a function, a class, an
- * enum, a namespace — the `var`s of its blocks, which are the module's, and what it imports.
+ * Into `reads`, the reads in `statements` of a name none of `names` is, nor a declaration around
+ * them gives (`freeReads`): of a namespace's, the names in its body's scope too (`namespaceReads`).
  */
-function topLevelNames(file: SourceFile): ReadonlySet<string> {
-  const names = new Set(file.statements.flatMap((statement) => namesOf(statement)));
-  for (const declaration of hoistedIn(file.statements)) {
+function readsIn(
+  statements: readonly Statement[],
+  names: ReadonlySet<string>,
+  reads: Set<Node>,
+): void {
+  for (const statement of statements) {
+    if (isModuleDeclaration(statement)) {
+      namespaceReads(statement, names, reads);
+    } else if (!isErased(statement)) {
+      for (const read of freeReads(statement)) {
+        if (!names.has(read.text)) {
+          reads.add(read);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Into `reads`, the reads in `namespace`'s body of a name none of `names` is, nor the body gives:
+ * what it declares, what the bodies it merges with export (`namespaceStatements`), and the
+ * namespace a dotted name declares within another, `B` of `namespace A.B {}`.
+ */
+function namespaceReads(
+  namespace: ModuleDeclaration,
+  names: ReadonlySet<string>,
+  reads: Set<Node>,
+): void {
+  const { body } = namespace;
+  if (body !== undefined && isModuleDeclaration(body)) {
+    namespaceReads(body, widened(names, namesOf(body)), reads);
+  } else if (body !== undefined && isModuleBlock(body)) {
+    const own = scopeNames(namespaceStatements(body), body.statements);
+    readsIn(body.statements, widened(names, own), reads);
+  }
+}
+
+/** `names` and `more`, of an inner scope of names more than the outer one's. */
+function widened(names: ReadonlySet<string>, more: Iterable<string>): ReadonlySet<string> {
+  const all = new Set(names);
+  for (const name of more) {
+    all.add(name);
+  }
+  return all;
+}
+
+/**
+ * The names a scope gives a value — the module's top level, a namespace's body: what `declared`
+ * declare — a variable, a function, a class, an enum, a namespace — or import, and the `var`s of
+ * the blocks of `own`, the scope's own statements, which are the scope's. A nested namespace's
+ * `var`s are that namespace's.
+ */
+function scopeNames(
+  declared: readonly Statement[],
+  own: readonly Statement[],
+): ReadonlySet<string> {
+  const names = new Set(declared.flatMap((statement) => namesOf(statement)));
+  const code = own.filter((statement) => !isModuleDeclaration(statement));
+  for (const declaration of hoistedIn(code)) {
     for (const name of bindingIdentifiers(declaration.name)) {
       names.add(name.text);
     }
@@ -212,7 +263,7 @@ function topLevelNames(file: SourceFile): ReadonlySet<string> {
   return names;
 }
 
-/** The names a statement of a module's top level declares or imports. */
+/** The names a statement of a module's top level, or of a namespace's body, declares or imports. */
 function namesOf(statement: Statement): readonly string[] {
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.flatMap((declaration) =>
