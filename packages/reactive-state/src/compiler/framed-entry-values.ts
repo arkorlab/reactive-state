@@ -21,7 +21,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
-import { framedNativeConstructor } from './framed-sources.ts';
+import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
 
@@ -121,11 +121,26 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
     });
     const slot = tupleWrite(node, aliases);
     if (slot === null || !isBinaryExpression(node) || executionOwner(node) !== owner) continue;
+    if (!reachedWrite(node, call)) continue;
     if (slot === undefined || slot === '0') key = true;
     if ((slot === undefined || slot === '1') && VALUE_WRITES.has(node.operatorToken.kind))
       values.push({ value: node.right, keys: [] });
   }
   return { key, values };
+}
+
+/** A write the call's evaluation may reach: no written condition or short-circuit skips it. */
+function reachedWrite(node: Node, call: CallExpression): boolean {
+  if (!framedPossibleBranch(node)) return false;
+  for (let at = node; at !== call; at = at.parent) {
+    const { parent } = at;
+    if (!isBinaryExpression(parent) || parent.right !== at) continue;
+    const kind = parent.operatorToken.kind;
+    const condition = framedCondition(parent.left);
+    if (condition === false && kind === SyntaxKind.AmpersandAmpersandToken) return false;
+    if (condition === true && kind === SyntaxKind.BarBarToken) return false;
+  }
+  return true;
 }
 
 /** The slot an assignment writes on one of the tuple's bindings, none for an opaque key. */
