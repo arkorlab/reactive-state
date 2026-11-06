@@ -361,8 +361,9 @@ export function useSites(part: ClientPart<ReactNode>): Sites {
       const keyed = attempt(() => itemKeyOf(entry.key, site));
       if (!('made' in keyed)) {
         unkeyed += 1;
-        // Apart from an item of a key as well, which is keyed `site:key`.
-        return <Unsent error={keyed.error} key={`${site}#${String(unkeyed)}`} />;
+        // Keyed by its place alone, of no colon: apart from every item of a key, which is keyed
+        // `site:key`, whatever its site and its key hold.
+        return <Unsent error={keyed.error} key={`#${String(unkeyed)}`} />;
       }
       const itemKey = keyed.made;
       const key = `${site}:${itemKey}`;

@@ -12,6 +12,10 @@ const PART: ClientPart<ReactNode> = {
   slots: {},
   states: {},
   sites: {
+    a: {
+      inputs: {},
+      items: [{ content: <span data-testid="a">kept</span>, item: null, key: 'b#1' }],
+    },
     row: {
       inputs: {},
       items: [{ content: <span data-testid="row">kept</span>, item: null, key: 'kept' }],
@@ -44,6 +48,20 @@ function List({ keys }: { readonly keys: readonly unknown[] }): ReactNode {
   return <ul>{keys.map((key) => sites.item('row', {}, { item: null, key: key as never }))}</ul>;
 }
 
+/**
+ * An item of the key `b#1` of the site `a`, and beside it an item of no key of the site `a:b`:
+ * siblings, as the items of two lists in one card are, whose keys hold what any text holds.
+ */
+function Beside(): ReactNode {
+  const sites = useSites(PART);
+  return (
+    <p>
+      {sites.item('a', {}, { item: null, key: 'b#1' })}
+      {sites.item('a:b', {}, { item: null, key: undefined as never })}
+    </p>
+  );
+}
+
 /** What React reported, of what `console.error` was called with, of two siblings of one key. */
 function repeatedKeys(calls: readonly (readonly unknown[])[]): readonly (readonly unknown[])[] {
   return calls.filter(([message]) =>
@@ -72,6 +90,22 @@ describe('items of a list of no key', () => {
     );
 
     expect(screen.getByTestId('boundary').textContent).toBe(NO_KEY);
+    expect(repeatedKeys(errors.mock.calls)).toStrictEqual([]);
+  });
+
+  it('are keyed apart from every item of a key, whatever their sites and keys hold', () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {
+      // React reports the error the boundary caught.
+    });
+    render(
+      <Boundary>
+        <Beside />
+      </Boundary>,
+    );
+
+    expect(screen.getByTestId('boundary').textContent).toBe(
+      'An item of the list a:b has no key of text or a number.',
+    );
     expect(repeatedKeys(errors.mock.calls)).toStrictEqual([]);
   });
 });
