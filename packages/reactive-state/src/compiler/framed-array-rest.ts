@@ -3,7 +3,6 @@ import {
   isArrayBindingPattern,
   isBindingElement,
   isIdentifier,
-  isParameterDeclaration,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -30,7 +29,10 @@ export interface ArrayElementView {
   readonly typeOnly?: boolean;
 }
 
-/** A flat array-rest binding copies the remaining elements of its original initializer. */
+/**
+ * A flat array-rest binding of a variable copies the remaining elements of its original
+ * initializer — none of a parameter, whose default is no source where the call gives an argument.
+ */
 export function arrayRestView(
   value: Expression,
   index: number | undefined,
@@ -39,7 +41,7 @@ export function arrayRestView(
   const declaration = frameDeclarationOf(value);
   if (
     declaration === undefined ||
-    (!isVariableDeclaration(declaration) && !isParameterDeclaration(declaration)) ||
+    !isVariableDeclaration(declaration) ||
     !isArrayBindingPattern(declaration.name) ||
     declaration.initializer === undefined
   )
