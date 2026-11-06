@@ -388,11 +388,15 @@ describe('the prototypes a lookup passes through', () => {
   });
 
   it('are no step where they are the language’s own, a hole of an array’s among them', () => {
+    // Charged as `concat` spreads them and counted in its result, the holes cost about twice their
+    // number: as many as fit under the budget with a tenth of it to spare, so that a step more for
+    // each hole would pass it.
+    const length = Math.floor((VIEW_LIMITS.steps * 9) / 20);
     const holey: unknown[] = [];
-    holey.length = VIEW_LIMITS.steps / 4;
+    holey.length = length;
 
     expect(withinSteps(() => method([] as unknown[], 'concat')(counted(holey)))).toHaveLength(
-      VIEW_LIMITS.steps / 4,
+      length,
     );
   });
 });
