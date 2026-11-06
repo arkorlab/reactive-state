@@ -10,7 +10,8 @@ import { receiverUtilityReading } from '../src/compiler/local-type-receivers.ts'
  * them: an interface's own, then each of its bases' in turn, and an intersection's members' in
  * order. Where the last of them is one the reader cannot read — of a base it reads as nothing, an
  * import's — the receiver is not read: TypeScript's answer is that base's. One the reader reads that
- * follows such a base is still the last.
+ * follows such a base is still the last; where none follows, a signature written outside interfaces
+ * keeps the reading it gives, as `Parameters` and `InstanceType` read it.
  */
 
 const OPAQUE = 'type Base = import("./external.js").Base;\ntype Data = { stack: string };';
@@ -37,9 +38,14 @@ const CASES = [
     what: 'a base of no signature after one it reads as nothing',
   },
   {
-    receiver: undefined,
+    receiver: 'Error',
     source: `${OPAQUE}\ninterface Maker extends Base { (this: Data): void }\ntype Receiver = ThisParameterType<{ (this: Error): void } & Maker>;`,
     what: 'a written signature before an interface it cannot read',
+  },
+  {
+    receiver: undefined,
+    source: `${OPAQUE}\ninterface Maker extends Base { (this: Data): void }\ninterface Known { (this: Error): void }\ntype Receiver = ThisParameterType<Known & Maker>;`,
+    what: 'an interface it reads before one it cannot read',
   },
   {
     receiver: 'Error',
