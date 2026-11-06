@@ -43,7 +43,11 @@ function invalid(): Error {
   );
 }
 
-/** A guard request: the route, and the URL asked for — nothing else of what crossed. */
+/**
+ * A guard request: the route, and the URL asked for — nothing else of what crossed. A URL that reads
+ * as no URL against `URL_BASE` — `//`, `//:80`, `/\`, which the parser takes for a host, empty or
+ * invalid — is refused as a request of no URL is, not thrown by the parser as its params are read.
+ */
 export function guardRequestOf(value: unknown): GuardRequest {
   if (typeof value !== 'object' || value === null) {
     throw invalid();
@@ -55,7 +59,8 @@ export function guardRequestOf(value: unknown): GuardRequest {
     (admit !== undefined && admit !== true) ||
     route.length > MAX_ROUTE ||
     url.length > MAX_URL ||
-    !url.startsWith('/')
+    !url.startsWith('/') ||
+    !URL.canParse(url, URL_BASE)
   ) {
     throw invalid();
   }
