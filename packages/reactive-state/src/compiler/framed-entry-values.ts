@@ -1,6 +1,7 @@
 import {
   type CallExpression,
   type Expression,
+  isBinaryExpression,
   isCallExpression,
   isArrayLiteralExpression,
   isElementAccessExpression,
@@ -11,13 +12,14 @@ import {
   isVariableDeclarationList,
   isSpreadElement,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
-import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -78,16 +80,80 @@ interface EntrySelection {
 
 /** An unknown entry key may replace the selected field, but cannot erase an earlier possible value. */
 function entryValue(call: CallExpression, entry: Expression, key: string): EntrySelection {
+  const written = argumentTupleWrites(call, entry);
+  const opaque = { definite: false, values: [{ value: entry, keys: ['1'] }, ...written.values] };
   const tuple = framedAppliedArguments(call, entry) ?? packedEntryTuple(call, entry);
-  if (tuple === undefined) return { definite: false, values: [{ value: entry, keys: ['1'] }] };
+  if (tuple === undefined) return opaque;
   const prefix = framedArgumentPrefix(call, tuple);
   const name = prefix.values[0];
   const value = prefix.values[1];
-  if (name === undefined || value === undefined || prefix.unknown)
-    return { definite: false, values: [{ value: entry, keys: ['1'] }] };
-  const names = framedKeyNames(name);
+  if (name === undefined || value === undefined || prefix.unknown) return opaque;
+  const names = written.key ? undefined : framedKeyNames(name);
   if (names !== undefined && !names.includes(key)) return { definite: false, values: [] };
-  return { definite: names?.length === 1, values: [{ value, keys: [] }] };
+  return { definite: names?.length === 1, values: [{ value, keys: [] }, ...written.values] };
+}
+
+interface TupleWrites {
+  readonly key: boolean;
+  readonly values: readonly AssignedFrameSource[];
+}
+
+const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/**
+ * The call evaluates its whole argument list before native iteration reads an entry, so a slot
+ * that evaluation writes on the entry's tuple may be its key or value; an opaque slot may be either.
+ */
+function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrites {
+  const aliases = tupleAliases(entry);
+  const values: AssignedFrameSource[] = [];
+  let key = false;
+  const owner = executionOwner(call);
+  const pending: Node[] = aliases.size === 0 ? [] : [call];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+    const slot = tupleWrite(node, aliases);
+    if (slot === null || !isBinaryExpression(node) || executionOwner(node) !== owner) continue;
+    if (slot === undefined || slot === '0') key = true;
+    if ((slot === undefined || slot === '1') && VALUE_WRITES.has(node.operatorToken.kind))
+      values.push({ value: node.right, keys: [] });
+  }
+  return { key, values };
+}
+
+/** The slot an assignment writes on one of the tuple's bindings, none for an opaque key. */
+function tupleWrite(node: Node, aliases: ReadonlySet<FrameBinding>): string | undefined | null {
+  if (!isBinaryExpression(node)) return null;
+  const kind = node.operatorToken.kind;
+  if (kind < SyntaxKind.FirstAssignment || kind > SyntaxKind.LastAssignment) return null;
+  const member = unwrapped(node.left);
+  if (!isElementAccessExpression(member) && !isPropertyAccessExpression(member)) return null;
+  const receiver = unwrapped(member.expression);
+  const selected = isIdentifier(receiver) ? frameBindingOf(receiver) : undefined;
+  if (selected === undefined || selected.keys.length > 0 || !aliases.has(selected.binding))
+    return null;
+  return frameMemberName(member);
+}
+
+/** The bindings a written entry names, through whole aliases to its tuple. */
+function tupleAliases(entry: Expression): ReadonlySet<FrameBinding> {
+  const aliases = new Set<FrameBinding>();
+  let value = unwrapped(entry);
+  while (isIdentifier(value)) {
+    const selected = frameBindingOf(value);
+    if (selected === undefined || selected.keys.length > 0 || aliases.has(selected.binding)) break;
+    aliases.add(selected.binding);
+    if (selected.binding.initializer === undefined) break;
+    value = unwrapped(selected.binding.initializer);
+  }
+  return aliases;
 }
 
 /** A constant tuple packed into the known outer iterable retains its contents while unexposed. */
