@@ -7,7 +7,6 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
-  isCallExpression,
   isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
@@ -18,7 +17,6 @@ import {
   type Identifier,
   isIdentifier,
   isLiteralTypeNode,
-  isNewExpression,
   isObjectBindingPattern,
   isParameterDeclaration,
   isParenthesizedTypeNode,
@@ -61,13 +59,23 @@ const TARGET_WRITES: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
-/** Evaluation, besides a member read, that can run the application's code or let it run. */
+/**
+ * Evaluation, besides a member read, that can run the application's code or let it run: a call, a
+ * conversion, a computed key, a wait, and the getters and iteration of a spread, a pattern or a loop.
+ */
 const APPLICATION_WORK: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrayBindingPattern,
   SyntaxKind.AwaitExpression,
   SyntaxKind.BinaryExpression,
   SyntaxKind.CallExpression,
+  SyntaxKind.ComputedPropertyName,
+  SyntaxKind.Decorator,
   SyntaxKind.DeleteExpression,
+  SyntaxKind.ForInStatement,
+  SyntaxKind.ForOfStatement,
+  SyntaxKind.JsxSpreadAttribute,
   SyntaxKind.NewExpression,
+  SyntaxKind.ObjectBindingPattern,
   SyntaxKind.PostfixUnaryExpression,
   SyntaxKind.PrefixUnaryExpression,
   SyntaxKind.SpreadAssignment,
@@ -75,6 +83,17 @@ const APPLICATION_WORK: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TaggedTemplateExpression,
   SyntaxKind.TemplateExpression,
   SyntaxKind.YieldExpression,
+]);
+
+/** Work before the call that exposes a tuple wherever it stands: a call, a construction, a read. */
+const PRIOR_WORK: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.CallExpression,
+  SyntaxKind.Decorator,
+  SyntaxKind.ElementAccessExpression,
+  SyntaxKind.NewExpression,
+  SyntaxKind.PropertyAccessExpression,
+  SyntaxKind.TaggedTemplateExpression,
+  SyntaxKind.TemplateExpression,
 ]);
 
 /** The possible written keys of a member; none known means a computed key remains arbitrary. */
@@ -236,6 +255,11 @@ function arrayExposed(
   aliases: ReadonlySet<FrameBinding>,
   read: Expression,
 ): boolean {
+  let reachable: boolean | undefined;
+  const reached = (): boolean => {
+    reachable ??= namedElsewhere(binding, call);
+    return reachable;
+  };
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const repeated =
@@ -248,7 +272,7 @@ function arrayExposed(
     if (
       node.pos >= binding.end &&
       (repeated || node.end <= call.pos) &&
-      arrayExposure(node, binding, aliases)
+      arrayExposure(node, binding, aliases, reached)
     )
       return true;
     node.forEachChild((child) => {
@@ -370,19 +394,18 @@ function deferredTupleExposure(
   return false;
 }
 
-/** A prior effect or a use outside known constant aliases loses the mutable tuple proof. */
+/**
+ * A prior effect or a use outside known constant aliases loses the mutable tuple proof: a call —
+ * written, a template's tag or conversion, a decorator — a construction or a member read wherever it
+ * stands, and other work that runs the application's code where that code `reached` the tuple.
+ */
 function arrayExposure(
   node: Node,
   binding: FrameBinding,
   aliases: ReadonlySet<FrameBinding>,
+  reached: () => boolean,
 ): boolean {
-  if (
-    isCallExpression(node) ||
-    isNewExpression(node) ||
-    isPropertyAccessExpression(node) ||
-    isElementAccessExpression(node)
-  )
-    return true;
+  if (PRIOR_WORK.has(node.kind) || (APPLICATION_WORK.has(node.kind) && reached())) return true;
   return tupleBindingExposure(node, binding, aliases);
 }
 
