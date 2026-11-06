@@ -100,13 +100,19 @@ export function framedConstructorDefaultEvaluation(
   return true;
 }
 
-/** A parameter's pattern, or one inside it, reads only a shown literal source, not opaque getters. */
+/**
+ * A parameter's pattern, or one inside it, reads only a shown literal source, not opaque getters —
+ * an array pattern only an array literal's, which it iterates as the language does, not an
+ * object's own `Symbol.iterator`.
+ */
 function knownPattern(pattern: BindingPattern, reading: Reading): boolean {
   const source = patternInput(pattern, reading);
   if (source === undefined) return false;
   const value = defaultSource(source.value, source.keys, reading);
   return (
-    value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
+    value !== undefined &&
+    (isArrayLiteralExpression(value) ||
+      (!isArrayBindingPattern(pattern) && isObjectLiteralExpression(value)))
   );
 }
 
