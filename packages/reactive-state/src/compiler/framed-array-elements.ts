@@ -27,6 +27,7 @@ import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedCondition } from './framed-sources.ts';
+import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 
@@ -157,21 +158,23 @@ function elementSources(
     })
   )
     return [];
-  const inserted = insertedArguments(method, node.arguments);
+  const inserted = insertedArguments(method, node.arguments, node);
   return inserted.map((value) => ({ value, keys: [] }));
 }
 
 /**
  * Native insertion positions exclude splice's start/delete count and fill's range arguments; a
- * written argument before the first spread keeps its position, later ones may be inserted.
+ * written argument before the first spread keeps its position, later ones may be inserted. Fill
+ * writes its first runtime argument, which a spread may supply or leave to a later one.
  */
 function insertedArguments(
   method: string | undefined,
   given: readonly Expression[],
+  call: CallExpression,
 ): readonly Expression[] {
   if (method !== 'push' && method !== 'unshift' && method !== 'splice' && method !== 'fill')
     return [];
-  if (method === 'fill') return given.slice(0, 1);
+  if (method === 'fill') return framedConsumedArguments(call, given, 1);
   if (method !== 'splice') return given;
   const spread = given.findIndex((each) => isSpreadElement(each));
   return given.slice(spread === -1 ? 2 : Math.min(spread, 2));
@@ -244,7 +247,7 @@ function borrowedElements(
     })
   )
     return [];
-  const values = insertedArguments(borrowed.method, borrowed.given);
+  const values = insertedArguments(borrowed.method, borrowed.given, node);
   const possibleArray = ['fill', 'push', 'splice', 'unshift'].includes(borrowed.method)
     ? borrowed.unknownList
     : undefined;
