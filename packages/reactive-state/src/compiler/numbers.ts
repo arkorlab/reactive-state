@@ -436,12 +436,36 @@ function localNaN(method: string, time: number, given: readonly Constant[]): boo
   );
 }
 
+/** How many parts a setter of a date reads, past which it ignores what it is given. */
+const PARTS = { one: 1, two: 2, three: 3, four: 4 } as const;
+
+/** The parts each setter of a date reads, of the first it is given on: `setHours` up to four. */
+const SETTER_PARTS: ReadonlyMap<string, number> = new Map([
+  ['setDate', PARTS.one],
+  ['setFullYear', PARTS.three],
+  ['setHours', PARTS.four],
+  ['setMilliseconds', PARTS.one],
+  ['setMinutes', PARTS.three],
+  ['setMonth', PARTS.two],
+  ['setSeconds', PARTS.two],
+  ['setTime', PARTS.one],
+  ['setUTCDate', PARTS.one],
+  ['setUTCFullYear', PARTS.three],
+  ['setUTCHours', PARTS.four],
+  ['setUTCMilliseconds', PARTS.one],
+  ['setUTCMinutes', PARTS.three],
+  ['setUTCMonth', PARTS.two],
+  ['setUTCSeconds', PARTS.two],
+  ['setYear', PARTS.one],
+]);
+
 /**
- * What a date's setter answers whatever the date: `NaN` of what is no finite number — nothing given
- * first among it — and of `setTime`, of a time past the dates the language holds; none told else.
+ * What a date's setter answers whatever the date: `NaN` of what is no finite number among the parts
+ * it reads (`SETTER_PARTS`) — nothing given first among them — and of `setTime`, of a time past the
+ * dates the language holds; none told else. What it is given past its parts it ignores.
  */
 function setWhatever(method: string, given: readonly Constant[]): number | undefined {
-  const numbers = given.map(Number);
+  const numbers = given.slice(0, SETTER_PARTS.get(method) ?? given.length).map(Number);
   const [first = NaN] = numbers;
   if (!Number.isFinite(first) || numbers.some((each) => !Number.isFinite(each))) {
     return NaN;
