@@ -327,11 +327,16 @@ async function pause(ms: number, signal: AbortSignal | undefined): Promise<void>
   }
 }
 
-/** GETs `url` and answers its JSON; anything but a 2xx answer is an error naming the status. */
+/**
+ * GETs `url` and answers its JSON; anything but a 2xx answer is an error naming the status, its
+ * body canceled unread: left to come in, it would hold its connection past the request's time limit
+ * and its caller's signal, which go with the request.
+ */
 export async function getJson<T>(url: string, request: SiteRequest): Promise<T> {
   return within(request.timeoutMs, request.signal, async (signal) => {
     const response = await fetch(url, { headers: { ...request.headers }, signal });
     if (!response.ok) {
+      await response.body?.cancel();
       throw new Error(`${url}: HTTP ${String(response.status)}`);
     }
     return (await response.json()) as T;
