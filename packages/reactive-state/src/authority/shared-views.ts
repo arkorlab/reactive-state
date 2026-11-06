@@ -418,8 +418,17 @@ export class SharedViews {
       this.#persist(entry);
       throw error;
     }
-    this.#jobs.apply(entry, outcome);
-    this.#persist(entry);
+    try {
+      this.#jobs.apply(entry, outcome);
+      this.#persist(entry);
+    } catch (error) {
+      // A fault of the store's, as what was decided is kept — the view's row, or the epoch of its
+      // revocation: the requests the gate holds for the view answer 503 at once (`fault`), as for a
+      // fault of the application's code, and a later request, or a commit, tries again — never one
+      // of them left to wait out its deadline.
+      this.#jobs.fault(entry.key);
+      throw error;
+    }
     this.#jobs.wake(entry.key);
   }
 
