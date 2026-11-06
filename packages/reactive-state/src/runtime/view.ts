@@ -388,7 +388,8 @@ export class ViewController<T> {
     const kept = this.#set.kept;
     const valuesOf = (instance: string) => this.#valuesOf(instance);
     const held = this.#heldIn(subscription);
-    const { named, rest } = namedParts(this.#view, changed, { held, kept, valuesOf });
+    const answered = this.#answered === this.#generation;
+    const { named, rest } = namedParts(this.#view, changed, { answered, held, kept, valuesOf });
     const withValues = sentInputs(named, kept, valuesOf);
     // Past what a request carries with them, it goes without, and each part it names shows the sites
     // it names alone: one a followed state opens there is asked for once the page shows it.
