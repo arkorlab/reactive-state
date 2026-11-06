@@ -57,7 +57,7 @@ export function isIterator(
   for (let value = reach(node); isCallExpression(value) && !seen.has(value);) {
     seen.add(value);
     const callee = unwrapped(value.expression);
-    const path = globalPathOf(callee);
+    const path = globalPathOf(callee) ?? borrowedSymbolPath(callee);
     if (path !== undefined) {
       return makesIterator(path);
     }
@@ -80,8 +80,9 @@ export function isIterator(
 /**
  * Whether a call of the global `path` makes an iterator: of a function of `Iterator`'s that makes
  * one (`ITERATOR_MAKERS`), or of a method of a prototype that answers one (`ITERATING`) — or of
- * `Iterator.prototype`'s, another (`ITERATOR_HELPERS`) — called on the prototype, or on what `call`
- * or `apply` is given first, `Array.prototype.values.call(items)`. Any other function of a global
+ * `Iterator.prototype`'s, another (`ITERATOR_HELPERS`) — by its name or a symbol's
+ * (`borrowedSymbolPath`), called on the prototype, or on what `call` or `apply` is given first,
+ * `Array.prototype.values.call(items)`. Any other function of a global
  * answers what it is: `Object.keys(…)`, an array.
  */
 function makesIterator(path: readonly string[]): boolean {
@@ -96,6 +97,29 @@ function makesIterator(path: readonly string[]): boolean {
     more.length === 0 &&
     (ITERATING.has(method) || (root === 'Iterator' && ITERATOR_HELPERS.has(method)))
   );
+}
+
+/**
+ * The names of a global's method keyed by a symbol the language knows, called through `call` or
+ * `apply` — `Array.prototype[Symbol.iterator].call(items)` — as `globalPathOf` reads one by its
+ * name: the global's first, the symbol's, then `call`'s or `apply`'s; none of another callee.
+ */
+function borrowedSymbolPath(callee: Expression): readonly string[] | undefined {
+  const borrowing = calledName(callee);
+  if (
+    borrowing === undefined ||
+    !BORROWING.has(borrowing) ||
+    !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
+  ) {
+    return undefined;
+  }
+  const method = unwrapped(callee.expression);
+  const symbol = calledName(method);
+  if (symbol?.startsWith('Symbol.') !== true || !isElementAccessExpression(method)) {
+    return undefined;
+  }
+  const of = globalPathOf(unwrapped(method.expression));
+  return of === undefined ? undefined : [...of, symbol, borrowing];
 }
 
 /**
