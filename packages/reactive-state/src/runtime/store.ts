@@ -202,6 +202,11 @@ export class PageStore {
   #revoked = false;
   #mismatched = false;
   #sending = false;
+  /**
+   * The drains started, the one that sends the last: a frame that names the operation a drain waits
+   * on, unanswered, lets another start (`#settle`), and the one that waited stops once it is answered.
+   */
+  #drains = 0;
   #disposed = false;
   #status: StoreStatus;
 
@@ -297,6 +302,12 @@ export class PageStore {
         if (named && (operation.committedRevision ?? Infinity) > frame.revision) {
           if (operation.committedRevision === null) {
             learned = Math.max(learned, frame.revision);
+            // Its commit known before its answer came, the writes after it go — they commit after
+            // it, and a copy of it still on its way the authority answers with its receipt, writing
+            // nothing again; `attach` starts their drain.
+            if (operation.sending) {
+              this.#sending = false;
+            }
           }
           operation.committedRevision = frame.revision;
           this.#changed(operation);
@@ -334,16 +345,20 @@ export class PageStore {
       return;
     }
     this.#sending = true;
+    this.#drains += 1;
+    const drain = this.#drains;
     try {
       let operation = this.#next();
       while (operation !== undefined) {
-        if (!(await this.#send(operation))) {
+        if (!(await this.#send(operation)) || drain !== this.#drains) {
           break;
         }
         operation = this.#next();
       }
     } finally {
-      this.#sending = false;
+      if (drain === this.#drains) {
+        this.#sending = false;
+      }
     }
   }
 
