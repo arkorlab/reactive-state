@@ -1,13 +1,8 @@
 import type { FieldOperation, FieldReceipt, Frame, Json, Result, Value } from '../program.ts';
-import {
-  BUILD_MISMATCH,
-  HTTP_FORBIDDEN,
-  HTTP_NOT_FOUND,
-  HTTP_UNAUTHORIZED,
-  TARGET_CHANGED,
-} from '../status.ts';
+import { BUILD_MISMATCH, HTTP_UNAUTHORIZED } from '../status.ts';
 import { toJsonRecord } from './json.ts';
 import { type PendingOperation, type Predictor, reflects } from './operations.ts';
+import { isDefinitive, isReceipt, refusesBinding } from './store-answers.ts';
 
 /**
  * The page's store, one for the page however many roots it renders: every operation the page has
@@ -128,25 +123,6 @@ const RETRY_DELAY_MS = 200;
 /** The random bytes of an operation's id: 128 bits. */
 const OPERATION_ID_BYTES = 16;
 const HEX = 16;
-const CLIENT_ERRORS = { first: 400, last: 499 } as const;
-const HTTP_REQUEST_TIMEOUT = 408;
-const HTTP_TOO_MANY_REQUESTS = 429;
-/** Statuses of the 4xx class that say nothing of the operation: it may be sent again. */
-const TRANSIENT: ReadonlySet<number> = new Set([HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS]);
-/**
- * Whether a refusal is of the binding rather than of one operation: the session may no longer write
- * through it (403), the target is gone (404) or is no longer what the binding names (409
- * `TARGET_CHANGED`). Every operation of the binding would be refused alike; any other conflict — a
- * `unique` group another record holds — is the one operation's.
- */
-function refusesBinding(failure: { readonly status: number; readonly code: string }): boolean {
-  return (
-    failure.status === HTTP_FORBIDDEN ||
-    failure.status === HTTP_NOT_FOUND ||
-    failure.code === TARGET_CHANGED
-  );
-}
-
 const CHECKING = 'Checking whether the change was saved.';
 const NOT_SAVED = 'The change could not be saved.';
 /** What the page says of a write it let go of without learning whether the authority made it. */
@@ -171,19 +147,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-/** Whether a failed answer is the authority's refusal, which a resend would only repeat. */
-function isDefinitive(status: number): boolean {
-  return status >= CLIENT_ERRORS.first && status <= CLIENT_ERRORS.last && !TRANSIENT.has(status);
-}
-
-function isReceipt(value: unknown): value is FieldReceipt {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    Number.isSafeInteger((value as Partial<Record<string, unknown>>)['committedRevision'])
-  );
 }
 
 /** The operation as it is sent: a `set` carries its value — `false`, `0` or `''` too. */
