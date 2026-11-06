@@ -7,7 +7,6 @@ import {
   type ConstructSignatureDeclaration,
   isConstructSignatureDeclaration,
   isConstructorTypeNode,
-  isIntersectionTypeNode,
   isIdentifier,
   isClassDeclaration,
   isClassExpression,
@@ -19,7 +18,7 @@ import {
 
 import { heritageReference } from './local-type-class-bases.ts';
 import { constraintReading, type TypeReading } from './local-type-environment.ts';
-import { interfaceShapeReadings } from './local-type-interface-members.ts';
+import { lastSignatureOf } from './local-type-interface-members.ts';
 import { prototypeQueryBuiltin } from './local-type-prototype-queries.ts';
 
 /** Native instance utilities retain written constructor results and native error prototypes. */
@@ -27,34 +26,18 @@ import { prototypeQueryBuiltin } from './local-type-prototype-queries.ts';
 type Operands = (reading: TypeReading) => readonly TypeReading[];
 const UNKNOWN = factory.createKeywordTypeNode(SyntaxKind.UnknownKeyword);
 
-/** The last matching written construct signature supplies its original instance environment. */
+/**
+ * The last matching written construct signature supplies its original instance environment, as
+ * TypeScript lists signatures (`lastSignatureOf`).
+ */
 export function instanceUtilityReading(
   at: TypeReading,
   operands: Operands,
 ): TypeReading | undefined {
-  let result: TypeReading | undefined;
-  let expandInterfaces = true;
-  const pending = [at];
-  for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
-    const { type } = reading;
-    const interfaces = expandInterfaces ? interfaceShapeReadings(reading, operands) : undefined;
-    if (interfaces?.unknown === true) {
-      expandInterfaces = false;
-      result = undefined;
-      pending.length = 0;
-      pending.push(at);
-      continue;
-    }
-    if (interfaces !== undefined) {
-      pending.push(...interfaces.sources.toReversed());
-    } else if (isIntersectionTypeNode(type)) {
-      const signatures = type.types.flatMap((member) => operands({ ...reading, type: member }));
-      pending.push(...signatures.toReversed());
-    } else {
-      result = writtenInstanceReading(reading) ?? result;
-    }
-  }
-  return result;
+  return lastSignatureOf(at, operands, (reading) => {
+    const result = writtenInstanceReading(reading);
+    return result === undefined ? undefined : { result };
+  });
 }
 
 /** Written instance results, with native constructor queries reusing their original value scope. */
