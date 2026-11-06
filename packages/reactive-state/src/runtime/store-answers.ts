@@ -4,7 +4,8 @@ import { HTTP_FORBIDDEN, HTTP_NOT_FOUND, TARGET_CHANGED } from '../status.ts';
 /**
  * What the answer to one of the page's writes says, as its store reads it (`PageStore`): a receipt
  * of the write's commit, or a refusal — one a resend would only repeat, or not; of the one operation,
- * or of every operation of its binding.
+ * or of every operation of its binding. Whether a resend would only repeat a refusal, a root's view
+ * controller reads alike (`ViewController`).
  */
 
 const CLIENT_ERRORS = { first: 400, last: 499 } as const;
@@ -29,7 +30,10 @@ export function refusesBinding(failure: {
   );
 }
 
-/** Whether a failed answer is the authority's refusal, which a resend would only repeat. */
+/**
+ * Whether a failed answer is the authority's refusal, which a resend would only repeat: a 4xx, but a
+ * timeout's or a throttle's — of a write, or of a view.
+ */
 export function isDefinitive(status: number): boolean {
   return status >= CLIENT_ERRORS.first && status <= CLIENT_ERRORS.last && !TRANSIENT.has(status);
 }

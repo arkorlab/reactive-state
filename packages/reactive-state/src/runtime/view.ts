@@ -10,6 +10,7 @@ import type {
 import { BUILD_MISMATCH, REVOKING_STATUSES } from '../status.ts';
 import { canonicalJson } from './json.ts';
 import { type Keeping, SetStates } from './set-states.ts';
+import { isDefinitive } from './store-answers.ts';
 import {
   carries,
   type Held,
@@ -121,9 +122,6 @@ type Failure = Extract<Result<never>, { readonly ok: false }>;
 const REQUEST_TIMEOUT_MS = 20_000;
 const FIRST_RETRY_MS = 1000;
 const LONGEST_RETRY_MS = 30_000;
-const CLIENT_ERRORS = { first: 400, last: 499 } as const;
-const HTTP_REQUEST_TIMEOUT = 408;
-const HTTP_TOO_MANY_REQUESTS = 429;
 const REFUSED = 'The page could not be shown.';
 
 function own<T>(target: Record<string, T>, name: string, value: T): void {
@@ -185,16 +183,6 @@ function partsChanged(rendered: View, wanted: View): View {
     }
   }
   return changed;
-}
-
-/** Whether a refusal is one a resend would only repeat: a 4xx, but a timeout's or a throttle's. */
-function isDefinitive(status: number): boolean {
-  return (
-    status >= CLIENT_ERRORS.first &&
-    status <= CLIENT_ERRORS.last &&
-    status !== HTTP_REQUEST_TIMEOUT &&
-    status !== HTTP_TOO_MANY_REQUESTS
-  );
 }
 
 /** Whether a Server Function's answer is a `Result` of an answer, as a newer build's may not be. */
