@@ -54,12 +54,20 @@ function isModuleId(id: unknown): id is string {
   );
 }
 
+/**
+ * Whether `value` is a list of keys as a compile writes one: text at each index, none twice. A hole,
+ * which `every` passes over, is no key: each index is read, as the program's copy reads it.
+ */
 function isStrings(value: unknown): value is readonly string[] {
-  return (
-    Array.isArray(value) &&
-    value.every((item) => typeof item === 'string') &&
-    new Set(value).size === value.length
-  );
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  for (const item of value as readonly unknown[]) {
+    if (typeof item !== 'string') {
+      return false;
+    }
+  }
+  return new Set(value).size === value.length;
 }
 
 /** Why `updater` is none a program may register, or nothing when it is one. */
