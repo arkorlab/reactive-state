@@ -285,8 +285,12 @@ function unchanged(
   return safe;
 }
 
-/** Whether a value has no branch that may be undefined; unknown calls and reads stay unknown. */
-function isDefined(node: Expression, seen: ReadonlySet<Expression>): boolean {
+/**
+ * Whether a value has no branch that may be undefined — nor, where `nullable` is false, `null`;
+ * unknown calls and reads stay unknown. The left of `??` supplies its value only where it is
+ * neither: `null ?? undefined` is `undefined`.
+ */
+function isDefined(node: Expression, seen: ReadonlySet<Expression>, nullable = true): boolean {
   const value = unwrapped(node);
   if (seen.has(value)) {
     return false;
@@ -294,29 +298,34 @@ function isDefined(node: Expression, seen: ReadonlySet<Expression>): boolean {
   const following = new Set([...seen, value]);
   if (isIdentifier(value)) {
     const held = constantInitializer(value);
-    return held !== undefined && isDefined(held, following);
+    return held !== undefined && isDefined(held, following, nullable);
   }
   if (constantValue(value, constantInitializer) !== undefined) {
     return true;
   }
   if (isConditionalExpression(value)) {
-    return isDefined(value.whenTrue, following) && isDefined(value.whenFalse, following);
+    return (
+      isDefined(value.whenTrue, following, nullable) &&
+      isDefined(value.whenFalse, following, nullable)
+    );
   }
   if (isBinaryExpression(value)) {
     if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
-      return isDefined(value.left, following) || isDefined(value.right, following);
+      return isDefined(value.left, following, false) || isDefined(value.right, following, nullable);
     }
-    return value.operatorToken.kind === SyntaxKind.BarBarToken && isDefined(value.right, following);
+    return (
+      value.operatorToken.kind === SyntaxKind.BarBarToken &&
+      isDefined(value.right, following, nullable)
+    );
   }
-  return isDefinedLiteral(value);
+  return isDefinedLiteral(value, nullable);
 }
 
-/** Literal values and constructions always supply a value when they complete. */
-function isDefinedLiteral(value: Expression): boolean {
+/** Literals and constructions always supply a value when they complete; `null` if `nullable`. */
+function isDefinedLiteral(value: Expression, nullable: boolean): boolean {
   return (
-    [SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword, SyntaxKind.TrueKeyword].includes(
-      value.kind,
-    ) ||
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    [SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword].includes(value.kind) ||
     isBigIntLiteral(value) ||
     isArrayLiteralExpression(value) ||
     isObjectLiteralExpression(value) ||
