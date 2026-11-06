@@ -2,11 +2,16 @@ import {
   type CallExpression,
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
+  isArrowFunction,
   isBinaryExpression,
   isCallExpression,
+  isClassExpression,
+  isFunctionExpression,
   isIdentifier,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isObjectLiteralExpression,
   isPrefixUnaryExpression,
   isNewExpression,
   isPropertyAccessExpression,
@@ -18,6 +23,7 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 
 /**
  * What the code computes of numbers alone, as the language computes it — of literals, `NaN`,
@@ -363,7 +369,8 @@ function textCall(
  * The number a method of a date answers: of one the code writes, there or through a constant
  * (`timeOf`), as the engine computes it — but of what it reads or sets in the time zone where it
  * runs, `NaN` alone; of another, what a setter answers whatever the date — `NaN` of what is no
- * finite number, `setTime(Infinity)`, or of a time past the dates the language holds, `setTime(9e15)`.
+ * finite number, `setTime(Infinity)`, or of a time past the dates the language holds, `setTime(9e15)`
+ * — but none of what the code writes as no date (`writtenOtherwise`), whose method is its own.
  */
 function dateCall(
   method: string,
@@ -373,7 +380,9 @@ function dateCall(
 ): number | undefined {
   const time = timeOf(target, names);
   if (time === undefined) {
-    return setsTime(method) ? setWhatever(method, given) : undefined;
+    return setsTime(method) && !writtenOtherwise(target, names)
+      ? setWhatever(method, given)
+      : undefined;
   }
   const date = new Date(time);
   const read = Reflect.get(date, method) as (...given: readonly number[]) => number;
@@ -393,6 +402,42 @@ function setWhatever(method: string, given: readonly Constant[]): number | undef
     return NaN;
   }
   return method === 'setTime' && Math.abs(first) > MAX_TIME ? NaN : undefined;
+}
+
+/** What the code writes of a value of its own, whose methods are its own, or none at all. */
+const OWN_VALUES: readonly ((node: Expression) => boolean)[] = [
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isClassExpression,
+  isFunctionExpression,
+  isObjectLiteralExpression,
+];
+
+/**
+ * Whether the code writes `node` — there, or as what a constant it names holds (`names.resolve`)
+ * — as what is no date: an object, an array, a function or a class of its own, whose method of a
+ * date's name is its own, `({ setTime: () => 0 }).setTime(Infinity)`; what a class but the global
+ * `Date` makes; or a number or text, which hold none. What it does not show is read as a date: a
+ * method of a name of the language's, called on what the code does not show, is the language's.
+ */
+function writtenOtherwise(node: Expression, names: Names): boolean {
+  let value = unwrapped(node);
+  const following = new Set(names.following);
+  while (isIdentifier(value) && !following.has(value.text)) {
+    following.add(value.text);
+    const held = names.resolve?.(value);
+    if (held === undefined) {
+      break;
+    }
+    value = unwrapped(held);
+  }
+  if (isNewExpression(value)) {
+    return globalPathOf(unwrapped(value.expression))?.join('.') !== 'Date';
+  }
+  return (
+    OWN_VALUES.some((own) => own(value)) ||
+    constantOperand(value, { ...names, following }) !== undefined
+  );
 }
 
 /**
