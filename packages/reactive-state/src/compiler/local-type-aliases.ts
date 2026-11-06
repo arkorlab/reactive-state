@@ -202,8 +202,16 @@ function ownClassBinding(
   return bindsScopedValue(node, within, name) ? null : undefined;
 }
 
-/** Whether a catch, loop or function body declares a value binding of `name`. */
+/**
+ * Whether a catch, loop or function body declares a value binding of `name` — or the module, by a
+ * `var` of one of its blocks, which is the module's as a function's are the function's. A
+ * namespace's `var`s are its own.
+ */
 function bindsScopedValue(node: Node, within: Node, name: string): boolean {
+  if (isSourceFile(node)) {
+    const code = node.statements.filter((statement) => !isModuleDeclaration(statement));
+    return hoistedIn(code).some((declaration) => bindingNames(declaration.name, name));
+  }
   if (isCatchClause(node)) {
     return (
       node.variableDeclaration !== undefined && bindingNames(node.variableDeclaration.name, name)
