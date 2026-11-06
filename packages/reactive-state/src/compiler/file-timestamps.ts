@@ -301,12 +301,13 @@ function isDefined(node: Expression, seen: ReadonlySet<Expression>, nullable = t
     return false;
   }
   const following = new Set([...seen, value]);
+  // `NaN` and `Infinity` are numbers of their own, which no constant of the module declares.
+  if (constantValue(value, constantInitializer) !== undefined) {
+    return true;
+  }
   if (isIdentifier(value)) {
     const held = constantInitializer(value);
     return held !== undefined && isDefined(held, following, nullable);
-  }
-  if (constantValue(value, constantInitializer) !== undefined) {
-    return true;
   }
   if (isConditionalExpression(value)) {
     return (
