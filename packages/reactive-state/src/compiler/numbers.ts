@@ -387,13 +387,14 @@ function textCall(
 }
 
 /**
- * The number a method of a date answers: of one the code writes, there or through a constant
- * (`timeOf`), of a time the same wherever and whenever the code runs (`fixedTime`), as the engine
- * computes it — but of what it reads or sets in the time zone where it runs, `NaN` alone where no
- * time zone holds a time (`localNaN`); of another, the clock's among them, what a setter answers
- * whatever the date — `NaN` of what is no finite number, `setTime(Infinity)`, or of a time past the
- * dates the language holds, `setTime(9e15)` — but none of what the code writes as no date
- * (`writtenOtherwise`), whose method is its own.
+ * The number a method of a date answers: of one the code makes there, `new Date(0).getTime()`, of a
+ * time the same wherever and whenever the code runs (`fixedTime`), as the engine computes it — but
+ * of what it reads or sets in the time zone where it runs, `NaN` alone where no time zone holds a
+ * time (`localNaN`); of another, the clock's among them, and one a name holds, whose time a setter
+ * called on the name may have changed since, what a setter answers whatever the date — `NaN` of
+ * what is no finite number, `setTime(Infinity)`, or of a time past the dates the language holds,
+ * `setTime(9e15)` — but none of what the code writes as no date (`writtenOtherwise`), whose method
+ * is its own.
  */
 function dateCall(
   method: string,
@@ -401,7 +402,8 @@ function dateCall(
   given: readonly Constant[],
   names: Names,
 ): number | undefined {
-  const time = timeOf(target, names, true);
+  const value = unwrapped(target);
+  const time = isNewExpression(value) ? fixedTime(value, names) : undefined;
   if (time === undefined) {
     return setsTime(method) && !writtenOtherwise(target, names)
       ? setWhatever(method, given)
@@ -570,21 +572,18 @@ export function writtenTime(node: Expression, resolve?: Resolve): number | undef
   return timeOf(node, { following: new Set(), resolve });
 }
 
-/**
- * The time of a date the code writes (`writtenTime`), but of a name followed on the way already —
- * or, `fixed`, where it is the same wherever and whenever the code runs (`fixedTime`).
- */
-function timeOf(node: Expression, names: Names, fixed = false): number | undefined {
+/** The time of a date the code writes (`writtenTime`), but of a name followed on the way already. */
+function timeOf(node: Expression, names: Names): number | undefined {
   const value = unwrapped(node);
   if (isNewExpression(value)) {
-    return fixed ? fixedTime(value, names) : dateTime(value, names);
+    return dateTime(value, names);
   }
   if (!isIdentifier(value) || names.following.has(value.text)) {
     return undefined;
   }
   const held = names.resolve?.(value);
   const following = new Set([...names.following, value.text]);
-  return held === undefined ? undefined : timeOf(held, { ...names, following }, fixed);
+  return held === undefined ? undefined : timeOf(held, { ...names, following });
 }
 
 /**
