@@ -66,8 +66,14 @@ export function deferred<T>(): Deferred<T> {
  */
 const NODE_KINDS: ReadonlySet<unknown> = new Set(['client', 'element', 'fragment', 'module']);
 
-/** Whether a prop's value is something rendered: a node, and not an action or JSON. */
+/**
+ * Whether a prop's value is something rendered, as the authority tells one from JSON: a node, or a
+ * list that holds one — in a list of it, too — and not an action or JSON, whose lists hold none.
+ */
 function isRendered(value: RenderedProp): value is Rendered {
+  if (Array.isArray(value)) {
+    return (value as readonly RenderedProp[]).some((item) => isRendered(item));
+  }
   return (
     typeof value === 'object' &&
     value !== null &&
