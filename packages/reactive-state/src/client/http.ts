@@ -9,14 +9,7 @@ import {
 } from '../program.ts';
 import type { GateAnswer, GuardAnswer, SharedRenderAnswer } from '../routing.ts';
 import type { AuthorityClient, PublicView, SessionId, SignedIn } from './contract.ts';
-import {
-  type Failure,
-  refused,
-  REQUEST_TIMEOUT_MS,
-  TOO_SLOW,
-  unavailable,
-  UNREACHABLE,
-} from './results.ts';
+import { type Failure, refused, timeoutOf, TOO_SLOW, unavailable, UNREACHABLE } from './results.ts';
 
 /**
  * The authority on a developer's machine — the Node process `startAuthority` serves on a loopback
@@ -32,7 +25,10 @@ export interface HttpClientOptions {
   readonly url: string;
   /** The internal token it was started with, which never reaches a browser. */
   readonly token: string;
-  /** How long a call may wait for its whole answer, and the event stream for its opening. */
+  /**
+   * How long a call may wait for its whole answer, and the event stream for its opening: a positive
+   * whole number of milliseconds (`timeoutOf`), `REQUEST_TIMEOUT_MS` unless given.
+   */
   readonly timeoutMs?: number | undefined;
   /**
    * The deployment asking (`NEXT_DEPLOYMENT_ID`), which each gate's question names as the one its
@@ -230,7 +226,7 @@ function sessionIn(headers: Headers): string | undefined {
 }
 
 export function httpClient(options: HttpClientOptions): AuthorityClient {
-  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timeoutMs = timeoutOf(options.timeoutMs);
   // The whole exchange is timed, its answer's body included: the signal ends the reading as well.
   const exchange = async (path: string, call: Call = {}): Promise<Result<Response>> =>
     send(options, path, { ...call, signal: AbortSignal.timeout(timeoutMs) });

@@ -1,7 +1,7 @@
 import { assertedSessionOf } from '../asserted.ts';
 import type { Result } from '../program.ts';
 import { AUTHORITY_OBJECT_NAME, type AuthorityClient, type SessionId } from './contract.ts';
-import { REQUEST_TIMEOUT_MS, TOO_SLOW, unavailable, UNREACHABLE } from './results.ts';
+import { timeoutOf, TOO_SLOW, unavailable, UNREACHABLE } from './results.ts';
 
 /**
  * The authority on Cloudflare — a Durable Object the platform hosts for the application — over its
@@ -28,7 +28,10 @@ export interface BindingClientOptions {
    * catch that deployment's pages up, and each gate's question as the one its request is of.
    */
   readonly deployment?: string | undefined;
-  /** How long a call may wait for its answer, and the event stream for its opening. */
+  /**
+   * How long a call may wait for its answer, and the event stream for its opening: a positive whole
+   * number of milliseconds (`timeoutOf`), `REQUEST_TIMEOUT_MS` unless given.
+   */
   readonly timeoutMs?: number | undefined;
   /**
    * Where the object is placed when it is first made (`wnam`, `apac`, …): near the data it reads, for
@@ -124,7 +127,7 @@ export function bindingClient(
   namespace: AuthorityNamespace,
   options: BindingClientOptions = {},
 ): AuthorityClient {
-  const timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+  const timeoutMs = timeoutOf(options.timeoutMs);
   const placement =
     options.locationHint === undefined ? undefined : { locationHint: options.locationHint };
   // A stub per call: making one is no I/O, and one is not carried from a request into another.

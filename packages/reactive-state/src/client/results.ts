@@ -20,6 +20,24 @@ export const AUTHORITY_UNAVAILABLE = 'AUTHORITY_UNAVAILABLE';
  */
 export const REQUEST_TIMEOUT_MS = 15_000;
 
+/** The longest a timer waits: one asked to wait longer, Node runs after 1 ms instead. */
+const LONGEST_WAIT_MS = 2_147_483_647;
+
+/**
+ * How long a client's calls wait, as its options give it: `REQUEST_TIMEOUT_MS` unless given. A wait
+ * that is no positive whole number of milliseconds, or longer than a timer waits, is refused as the
+ * client is made, rather than read as another by each call: `AbortSignal.timeout` refuses what is
+ * no whole number, and a timer runs what is none, or longer, after 1 ms.
+ */
+export function timeoutOf(timeoutMs: number = REQUEST_TIMEOUT_MS): number {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > LONGEST_WAIT_MS) {
+    throw new TypeError(
+      `timeoutMs must be a positive whole number of milliseconds, at most ${String(LONGEST_WAIT_MS)}.`,
+    );
+  }
+  return timeoutMs;
+}
+
 export function refused(status: number, code: string, message: string): Failure {
   return { code, message, ok: false, status };
 }
