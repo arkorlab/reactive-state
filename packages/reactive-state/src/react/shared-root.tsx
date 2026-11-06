@@ -31,7 +31,11 @@ export interface SharedRootProps {
   readonly view: SharedView;
   /** Where the view's event stream is read from (`?view=` is added). */
   readonly events: string;
-  readonly status?: RenderStatus | undefined;
+  /**
+   * How the authority answered the render of the view: the tree is shown where it is `rendered`
+   * alone, so a root is always told — one told nothing would guess.
+   */
+  readonly status: RenderStatus;
   readonly children?: ReactNode;
 }
 
