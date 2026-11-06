@@ -25,6 +25,8 @@ interface Member {
 interface Selection {
   readonly pending: Member[];
   position: number;
+  /** Past a rest of unknown length, `position` is only the least offset a member can stand at. */
+  least: boolean;
 }
 interface TupleReadings {
   readonly index: number | undefined;
@@ -34,7 +36,10 @@ interface TupleReadings {
   readonly paths: Selection[];
 }
 
-/** Fixed prefixes and trailing rests keep literal offsets; numeric selections retain every rest. */
+/**
+ * Fixed prefixes and the first rest of unknown length keep literal offsets; a member past such a rest
+ * may stand at any offset from its least one; numeric selections retain every rest.
+ */
 export function writtenTupleReadings(
   at: TypeReading,
   index: number | undefined,
@@ -49,7 +54,7 @@ export function writtenTupleReadings(
     selectRest,
     operands,
     result: [],
-    paths: [{ pending: tupleMembers({ ...at, type: tuple }, []), position: 0 }],
+    paths: [{ least: false, pending: tupleMembers({ ...at, type: tuple }, []), position: 0 }],
   };
   for (let path = state.paths.pop(); path !== undefined; path = state.paths.pop()) {
     for (let member = path.pending.pop(); member !== undefined; member = path.pending.pop()) {
@@ -69,6 +74,7 @@ function selectTupleMember(member: Member, path: Selection, state: TupleReadings
   if (expanded === undefined) return selectOpaqueRest(restReading, path, state);
   for (const each of expanded) {
     state.paths.push({
+      least: path.least,
       pending: [...path.pending, ...tupleMembers(each, parents)],
       position: path.position,
     });
@@ -76,24 +82,35 @@ function selectTupleMember(member: Member, path: Selection, state: TupleReadings
   return true;
 }
 
-/** A fixed position retains its original member and environment before advancing the offset. */
+/**
+ * A fixed position retains its original member and environment before advancing the offset. Past a
+ * rest of unknown length, each member up to the index may be the one a shorter rest brings there.
+ */
 function selectFixedMember(member: Member, path: Selection, state: TupleReadings): boolean {
-  if (state.index === undefined || state.index === path.position)
+  const { index } = state;
+  if (index !== undefined && index < path.position) return true;
+  if (index === undefined || index === path.position || path.least)
     state.result.push({ ...member.reading, type: tupleElementType(member.element) });
-  if (state.index === path.position) return true;
+  if (index === path.position && !path.least) return true;
   path.position += 1;
   return false;
 }
 
-/** Unknown rest lengths keep the original numeric or trailing-rest selection boundary. */
+/**
+ * A rest of unknown length holds the index at the offset the fixed positions before it leave, or at
+ * any offset once an earlier rest left them unknown; the members after it may hold the index too.
+ */
 function selectOpaqueRest(reading: TypeReading, path: Selection, state: TupleReadings): boolean {
-  if (state.index === undefined) {
+  const { index } = state;
+  if (index === undefined) {
     state.result.push(...state.selectRest(reading, undefined));
     return false;
   }
-  if (path.pending.length === 0 && state.index >= path.position)
-    state.result.push(...state.selectRest(reading, state.index - path.position));
-  return true;
+  if (index < path.position) return true;
+  const offset = path.least ? undefined : index - path.position;
+  state.result.push(...state.selectRest(reading, offset));
+  path.least = true;
+  return path.pending.length === 0;
 }
 
 /** Only entirely written tuple alternatives determine the offset of a following member. */
