@@ -60,6 +60,12 @@ export interface FrameTypeSelection {
 
 const RESOLVING_KEYS = new WeakSet<Node>();
 
+/** The vars each function body, static block or source file holds, by the node that holds them. */
+const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
+
+/** What each block's statements declare (`declaredBy`), by the node that holds them. */
+const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration>>();
+
 /** The stable member name recorded after a framed read is classified, including coercion calls. */
 export function framedInputName(node: Node): string {
   return (
@@ -172,11 +178,8 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
     bindingIdentifiers(node.variableDeclaration.name).some((bound) => bound.text === name)
   )
     return node.variableDeclaration;
-  const statements = statementsOf(node);
-  if (statements !== undefined) {
-    const binding = statementBinding(statements, name);
-    if (binding !== undefined) return binding;
-  }
+  const binding = statementBinding(node, name);
+  if (binding !== undefined) return binding;
   const parameters = isSignatureDeclaration(node) ? node.parameters : undefined;
   const declared =
     parameters?.find((parameter) =>
@@ -194,13 +197,21 @@ function statementsOf(node: Node): readonly Statement[] | undefined {
   return isBlock(node) || isModuleBlock(node) || isSourceFile(node) ? node.statements : undefined;
 }
 
-/** A function, static block or source file owns its nested vars; nested functions and classes do not. */
+/**
+ * A function, static block or source file owns its nested vars; nested functions and classes do
+ * not. Each scope's are gathered once (`HOISTED`), for every name looked up in it.
+ */
 function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | undefined {
-  let roots: readonly Node[];
-  if (isSourceFile(node)) roots = node.statements;
-  else if ('body' in node && node.body === within) roots = [within];
+  let root: Node;
+  if (isSourceFile(node)) root = node;
+  else if ('body' in node && node.body === within) root = within;
   else return undefined;
-  return hoistedIn(roots).find((declaration) =>
+  let declarations = HOISTED.get(root);
+  if (declarations === undefined) {
+    declarations = hoistedIn(isSourceFile(root) ? root.statements : [root]);
+    HOISTED.set(root, declarations);
+  }
+  return declarations.find((declaration) =>
     bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
   );
 }
@@ -216,24 +227,37 @@ function loopBinding(node: Node, name: string): FrameBinding | undefined {
     : undefined;
 }
 
-/** The variable a block declares, with named functions and classes stopping outer lookup. */
-function statementBinding(
-  statements: readonly Statement[],
-  name: string,
-): FrameDeclaration | undefined {
-  for (const statement of statements) {
-    if (
-      (isFunctionDeclaration(statement) || isClassDeclaration(statement)) &&
-      statement.name?.text === name
-    )
-      return statement;
-    if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) continue;
-    const found = statement.declarationList.declarations.find((declaration) =>
-      bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
-    );
-    if (found !== undefined) return found;
+/**
+ * The variable a block declares, with named functions and classes stopping outer lookup: the first
+ * of its statements to declare the name. Each block's are gathered once (`DECLARED`), for every name
+ * looked up in it.
+ */
+function statementBinding(node: Node, name: string): FrameDeclaration | undefined {
+  let declared = DECLARED.get(node);
+  if (declared === undefined) {
+    declared = declaredBy(statementsOf(node) ?? []);
+    DECLARED.set(node, declared);
   }
-  return undefined;
+  return declared.get(name);
+}
+
+/** The functions, classes and block-scoped variables statements declare, the first of each name. */
+function declaredBy(statements: readonly Statement[]): ReadonlyMap<string, FrameDeclaration> {
+  const declared = new Map<string, FrameDeclaration>();
+  const add = (name: string, declaration: FrameDeclaration): void => {
+    if (!declared.has(name)) declared.set(name, declaration);
+  };
+  for (const statement of statements) {
+    if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
+      if (statement.name !== undefined) add(statement.name.text, statement);
+      continue;
+    }
+    if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      for (const bound of bindingIdentifiers(declaration.name)) add(bound.text, declaration);
+    }
+  }
+  return declared;
 }
 
 /** A declaration's binding path for one of the identifiers it binds. */
