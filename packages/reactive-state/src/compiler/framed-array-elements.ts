@@ -161,7 +161,10 @@ function elementSources(
   return inserted.map((value) => ({ value, keys: [] }));
 }
 
-/** Native insertion positions exclude splice's start/delete count and fill's range arguments. */
+/**
+ * Native insertion positions exclude splice's start/delete count and fill's range arguments; a
+ * written argument before the first spread keeps its position, later ones may be inserted.
+ */
 function insertedArguments(
   method: string | undefined,
   given: readonly Expression[],
@@ -170,7 +173,8 @@ function insertedArguments(
     return [];
   if (method === 'fill') return given.slice(0, 1);
   if (method !== 'splice') return given;
-  return given.some((each) => isSpreadElement(each)) ? given : given.slice(2);
+  const spread = given.findIndex((each) => isSpreadElement(each));
+  return given.slice(spread === -1 ? 2 : Math.min(spread, 2));
 }
 
 const MOVING = new Set(['copyWithin', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
