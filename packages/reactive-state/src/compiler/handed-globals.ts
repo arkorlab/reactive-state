@@ -4,7 +4,6 @@ import {
   isCallExpression,
   isElementAccessExpression,
   isExpressionWithTypeArguments,
-  isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isObjectBindingPattern,
@@ -17,7 +16,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, useOf } from './code-globals.ts';
+import { globalPathOf, patternKey, useOf } from './code-globals.ts';
 
 /**
  * What of a shared module's code reaches a member of a global's that answers otherwise as it runs,
@@ -119,16 +118,12 @@ function handsOn(node: Node, root: string, members: readonly string[]): boolean 
   return true;
 }
 
-/** The name a pattern takes `element` apart by, where the code writes it; none of a rest, or a key it computes. */
+/**
+ * The name a pattern takes `element` apart by, where the code writes it — `abs` of `{ abs }`, of
+ * `{ ['abs']: abs }` (`patternKey`); none of a rest, or a key it computes.
+ */
 function takenKey(element: BindingElement): string | undefined {
-  if (element.dotDotDotToken !== undefined) {
-    return undefined;
-  }
-  const key = element.propertyName ?? element.name;
-  if (key === undefined) {
-    return undefined;
-  }
-  return isIdentifier(key) ? key.text : keyOf(key);
+  return element.dotDotDotToken === undefined ? patternKey(element) : undefined;
 }
 
 /** The text `node` writes, a string; none of another node. */
