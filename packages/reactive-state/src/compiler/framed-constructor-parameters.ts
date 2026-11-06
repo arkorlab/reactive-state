@@ -206,7 +206,7 @@ function parameterValues(
   const path = readPath(name);
   const keys = [...selected.keys, ...path.keys];
   if (parameter.dotDotDotToken !== undefined)
-    return { defaults: [], values: restValues(slots.slice(index), keys) };
+    return { defaults: [], values: restValues(slots.slice(index), keys, path.any) };
   const given = slots[index] ?? [];
   const declared = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
   const takesDefault = framedDefaultTaken(given);
@@ -330,13 +330,16 @@ function readPath(name: Identifier): ReadPath {
   }
 }
 
-/** The rest positions a read selects: one by a written index, otherwise every position whole. */
-function restValues(rest: Slots, keys: readonly string[]): readonly ForwardedValue[] {
+/**
+ * The rest positions a read selects: one by a written index, otherwise every position whole — and
+ * any member after the path where a key on it is one the compile cannot read (`any`).
+ */
+function restValues(rest: Slots, keys: readonly string[], any: boolean): readonly ForwardedValue[] {
   const [first, ...remaining] = keys;
   const position = first === undefined ? undefined : restPosition(first);
-  if (position === undefined) return rest.flat();
+  if (position === undefined) return rest.flat().map((each) => selectedValue(each, [], any));
   const given = rest[position] ?? [];
-  return given.map((each) => selectedValue(each, remaining, false));
+  return given.map((each) => selectedValue(each, remaining, any));
 }
 
 /** A canonical array index, as a written key spells it. */
