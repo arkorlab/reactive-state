@@ -11,8 +11,11 @@ import {
   isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
+  isExportAssignment,
+  isExportSpecifier,
   isExpression,
   isForOfStatement,
+  type Identifier,
   isIdentifier,
   isLiteralTypeNode,
   isNewExpression,
@@ -21,9 +24,11 @@ import {
   isParenthesizedTypeNode,
   isPropertyAccessExpression,
   isSpreadElement,
+  isTypeNode,
   isUnionTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
+  isVariableStatement,
   type NewExpression,
   type Node,
   SyntaxKind,
@@ -31,6 +36,8 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { BUILT_INS } from './built-ins.ts';
+import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
@@ -52,6 +59,22 @@ const TARGET_WRITES: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BarBarEqualsToken,
   SyntaxKind.EqualsToken,
   SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** Evaluation, besides a member read, that can run the application's code or let it run. */
+const APPLICATION_WORK: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AwaitExpression,
+  SyntaxKind.BinaryExpression,
+  SyntaxKind.CallExpression,
+  SyntaxKind.DeleteExpression,
+  SyntaxKind.NewExpression,
+  SyntaxKind.PostfixUnaryExpression,
+  SyntaxKind.PrefixUnaryExpression,
+  SyntaxKind.SpreadAssignment,
+  SyntaxKind.SpreadElement,
+  SyntaxKind.TaggedTemplateExpression,
+  SyntaxKind.TemplateExpression,
+  SyntaxKind.YieldExpression,
 ]);
 
 /** The possible written keys of a member; none known means a computed key remains arbitrary. */
@@ -99,7 +122,7 @@ export function framedArgumentPrefix(
     }
     const selected = argumentArray(each.node.expression, each.seen, call);
     if (selected === undefined) return { values, unknown: true };
-    if (selected.exposed) return exposedArgumentPrefix(values, selected, call);
+    if (selected.exposed) return exposedArgumentPrefix(values, selected, call, each.node);
     for (const node of selected.array.elements.toReversed())
       pending.push({ node, seen: selected.seen });
   }
@@ -120,17 +143,23 @@ function exposedArgumentPrefix(
   values: Expression[],
   selected: ArgumentArray,
   call: CallExpression | NewExpression,
+  spread: Node,
 ): ArgumentPrefix {
-  const alternatives = values.length === 0 ? tupleTargetWrites(selected.seen, call) : [];
+  const alternatives = values.length === 0 ? tupleTargetWrites(selected.seen, call, spread) : [];
   const first = selected.array.elements[0];
   if (first !== undefined && values.length === 0 && !isSpreadElement(first)) values.push(first);
   return { values, unknown: true, alternatives };
 }
 
-/** A tuple's written first-entry replacements remain possible receivers after its proof is lost. */
+/**
+ * A tuple's written first-entry replacements remain possible receivers after its proof is lost:
+ * those written before the `spread` that reads it, in the call's own work too, and those a later
+ * pass or another owner may run first.
+ */
 function tupleTargetWrites(
   aliases: ReadonlySet<FrameBinding>,
   call: CallExpression | NewExpression,
+  spread: Node,
 ): readonly Expression[] {
   const values: Expression[] = [];
   const owner = executionOwner(call);
@@ -139,7 +168,7 @@ function tupleTargetWrites(
     if (
       isBinaryExpression(node) &&
       TARGET_WRITES.has(node.operatorToken.kind) &&
-      tupleWriteBefore(node, call, aliases, owner) &&
+      (node.end <= spread.pos || tupleWriteBefore(node, call, aliases, owner)) &&
       framedPossibleBranch(node) &&
       firstTupleEntry(node.left, aliases)
     )
@@ -191,17 +220,21 @@ function argumentArray(
     seen.add(binding);
     const values = constantKeys(binding);
     if (values?.length !== 1 || binding.initializer === undefined) return undefined;
-    exposed ||= arrayExposed(binding, call, seen);
+    exposed ||= arrayExposed(binding, call, seen, expression);
     value = unwrapped(binding.initializer);
   }
   return isArrayLiteralExpression(value) ? { array: value, seen, exposed } : undefined;
 }
 
-/** Prior reads or application work can change a captured array before the native call reads it. */
+/**
+ * Prior reads or application work can change a captured array before the native call reads it, and
+ * so can the call's own work before it reads `read` (`callWorkExposure`).
+ */
 function arrayExposed(
   binding: FrameBinding,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
+  read: Expression,
 ): boolean {
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -222,7 +255,101 @@ function arrayExposed(
       pending.push(child);
     });
   }
-  return deferredTupleExposure(binding, call, aliases);
+  return (
+    callWorkExposure(binding, call, aliases, read) || deferredTupleExposure(binding, call, aliases)
+  );
+}
+
+/**
+ * The call's own work before it reads `read`'s entries: its callee's, past the member path that
+ * selects its function, and its arguments' — every one, as a call reads a list it is given once it
+ * runs, or those before a spread, which reads its entries where it stands. A use of the tuple there
+ * exposes it; other work runs the application's code, which reaches the tuple only through a
+ * function of the module's that names it (`namedElsewhere`).
+ */
+function callWorkExposure(
+  binding: FrameBinding,
+  call: CallExpression | NewExpression,
+  aliases: ReadonlySet<FrameBinding>,
+  read: Expression,
+): boolean {
+  const { parent } = read;
+  const spread = isSpreadElement(parent) && within(parent, call) ? parent : undefined;
+  const pending: Node[] = [...calleeWork(call.expression), ...(call.arguments ?? [])];
+  let work = false;
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node === read || isTypeNode(node) || (spread !== undefined && node.pos >= spread.pos))
+      continue;
+    if (tupleBindingExposure(node, binding, aliases)) return true;
+    work ||= applicationWork(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return work && namedElsewhere(binding, call);
+}
+
+/** What a callee evaluates past the member path that selects its function: keys, a base not a name. */
+function calleeWork(callee: Expression): readonly Node[] {
+  const work: Node[] = [];
+  let each = unwrapped(callee);
+  while (isPropertyAccessExpression(each) || isElementAccessExpression(each)) {
+    if (isElementAccessExpression(each)) work.push(each.argumentExpression);
+    each = unwrapped(each.expression);
+  }
+  if (!isIdentifier(each)) work.push(each);
+  return work;
+}
+
+/**
+ * Evaluation that can run the application's code: a call, a construction, a conversion, a wait, a
+ * member read — but a member of the language's own globals, such as the native function an argument
+ * names.
+ */
+function applicationWork(node: Node): boolean {
+  if (isPropertyAccessExpression(node) || isElementAccessExpression(node))
+    return !BUILT_INS.has(globalPathOf(node)?.[0] ?? '');
+  return APPLICATION_WORK.has(node.kind);
+}
+
+/**
+ * Whether code that work may run reaches the tuple: a function of the module's that names it outside
+ * the call, or another module's, where the module exports it.
+ */
+function namedElsewhere(binding: FrameBinding, call: CallExpression | NewExpression): boolean {
+  const statement = binding.parent.parent;
+  if (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
+  )
+    return true;
+  const owner = executionOwner(call);
+  const pending: Node[] = [binding.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node === call || isTypeNode(node)) continue;
+    if (
+      isIdentifier(node) &&
+      node !== binding.name &&
+      readsBinding(node) &&
+      frameBindingOf(node)?.binding === binding &&
+      (executionOwner(node) !== owner || exportedName(node))
+    )
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** Whether `name` is exported where it stands: `export { name }`, `export default name`. */
+function exportedName(name: Identifier): boolean {
+  return isExportSpecifier(name.parent) || isExportAssignment(name.parent);
+}
+
+/** Whether `node` is written within `call`. */
+function within(node: Node, call: CallExpression | NewExpression): boolean {
+  return node.pos >= call.pos && node.end <= call.end;
 }
 
 /** A deferred read also sees later uses that can replace a captured tuple's entries. */
