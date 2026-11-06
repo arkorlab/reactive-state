@@ -207,13 +207,16 @@ function isResult<T>(value: unknown): value is Result<ViewAnswer<T>> {
     return true;
   }
   const frame = (value as { readonly value?: { readonly frame?: Partial<Frame> } }).value?.frame;
+  // A frame of `null`, or of a view of `null`, which JSON and React's payload carry, is none either,
+  // though `typeof` says `null` is an object.
+  const view: unknown = frame?.view;
   return (
     ok === true &&
-    typeof frame === 'object' &&
-    typeof frame.rootKey === 'string' &&
+    typeof frame?.rootKey === 'string' &&
     typeof frame.revision === 'number' &&
     typeof frame.subscription === 'string' &&
-    typeof frame.view === 'object'
+    typeof view === 'object' &&
+    view !== null
   );
 }
 
