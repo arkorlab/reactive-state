@@ -32,12 +32,15 @@ import {
   writtenArrayFunction,
   writtenArrayKey,
 } from './framed-array-functions.ts';
+import { executionOwner } from './framed-array-mutations.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
+import { framedPossibleBranch } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
@@ -275,7 +278,11 @@ export function arrayMethodOverride(
   return ownMethods(receiver, call).get(method);
 }
 
-/** Prior direct writes and native object mutators share one lexical array identity. */
+/**
+ * Prior direct writes and native object mutators share one lexical array identity. A write the
+ * block's earlier statements may make otherwise — in a branch, an operand, the read's own
+ * statement — or another function may make before the read leaves the methods it names unproven.
+ */
 function ownMethods(receiver: Expression, call: Node): OwnMethods {
   const own: OwnMethods = new Map();
   const root = arrayIdentity(receiver);
@@ -283,16 +290,88 @@ function ownMethods(receiver: Expression, call: Node): OwnMethods {
   let statement = call;
   while (!isSourceFile(statement.parent) && !isBlock(statement.parent))
     statement = statement.parent;
+  const owner = executionOwner(call);
   for (const before of statement.parent.statements) {
     if (before === statement) break;
-    if (!isExpressionStatement(before)) continue;
-    const assignment = ownMethodAssignment(before.expression, root);
-    if (assignment !== undefined) own.set(assignment.key, assignment);
-    opaqueMethodAssignment(before.expression, root, own);
-    callMethodWrites(before.expression, root, own);
-    deletedMethod(before.expression, root, own);
+    let definite: Node | undefined;
+    if (isExpressionStatement(before)) {
+      const assignment = ownMethodAssignment(before.expression, root);
+      if (assignment !== undefined) own.set(assignment.key, assignment);
+      callMethodWrites(before.expression, root, own);
+      deletedMethod(before.expression, root, own);
+      if (assignment !== undefined || isCallExpression(before.expression))
+        definite = before.expression;
+    }
+    possibleMethodWrites(before, { root, owner, own, definite, until: before.end });
   }
+  possibleMethodWrites(statement, { root, owner, own, definite: undefined, until: call.end });
+  deferredMethodWrites(call, root, own);
   return own;
+}
+
+interface MethodWrites {
+  readonly root: FrameBinding;
+  readonly owner: Node;
+  readonly own: OwnMethods;
+  readonly definite: Node | undefined;
+  readonly until: number;
+}
+
+/** The read's own execution makes these writes in source order, before its later definite proofs. */
+function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
+  const pending: Node[] = [statement];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node.pos >= writes.until) continue;
+    const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
+    if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
+      for (const key of keys) writes.own.set(key, { own: false });
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+}
+
+/** Another function that may run before the read may write any method at any point before it. */
+function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods): void {
+  const owner = executionOwner(call);
+  const pending: Node[] = [call.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    const keys = writtenMethods(node, root);
+    const writer = keys.length > 0 ? executionOwner(node) : owner;
+    if (writer !== owner && !unreferencedLocalFunction(writer, owner) && framedPossibleBranch(node))
+      for (const key of keys) own.set(key, { own: false });
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+}
+
+/** The methods a write to the array may replace, whichever value it writes. */
+function writtenMethods(node: Node, root: FrameBinding): readonly string[] {
+  const written: OwnMethods = new Map();
+  if (isBinaryExpression(node) && assignmentOperator(node.operatorToken.kind))
+    for (const key of assignedMethods(node.left, root)) written.set(key, { own: false });
+  if (isDeleteExpression(node)) deletedMethod(node, root, written);
+  if (isCallExpression(node)) callMethodWrites(node, root, written);
+  return [...written.keys()];
+}
+
+/** Simple, compound and logical assignments alike. */
+function assignmentOperator(kind: SyntaxKind): boolean {
+  return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+}
+
+/** The methods an assignment to the array's member may replace: each its key's names allow. */
+function assignedMethods(target: Expression, root: FrameBinding): readonly string[] {
+  const member = unwrapped(target);
+  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
+  if (arrayIdentity(member.expression) !== root) return [];
+  const key = frameMemberName(member);
+  const opaque = isElementAccessExpression(member)
+    ? framedKeyNames(member.argumentExpression)
+    : undefined;
+  const keys = key === undefined ? (opaque ?? [...OWN_METHODS]) : [key];
+  return keys.filter((each) => OWN_METHODS.has(each));
 }
 
 /** A completed deletion reveals an inherited method; an opaque key may remove either proof. */
@@ -304,16 +383,6 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods): v
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
-}
-
-/** An opaque key may assign any method its written names allow, the native one included. */
-function opaqueMethodAssignment(node: Expression, root: FrameBinding, own: OwnMethods): void {
-  if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.EqualsToken) return;
-  const member = unwrapped(node.left);
-  if (!isElementAccessExpression(member) || frameMemberName(member) !== undefined) return;
-  if (arrayIdentity(member.expression) !== root) return;
-  const keys = framedKeyNames(member.argumentExpression) ?? OWN_METHODS;
-  for (const key of keys) if (OWN_METHODS.has(key)) own.set(key, { own: false });
 }
 
 /** Native object mutators replace own methods in source order, retaining unknown writes as unknown. */
