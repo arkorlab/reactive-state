@@ -110,7 +110,8 @@ describe('the inputs of a list site', () => {
     expect(copiesOf(30)).toBe(copiesOf(3));
   });
 
-  // A pin, which passes before the change as well: each render copies what it is handed.
+  // A pin, which passes before the change as well: each render copies what it is handed, the very
+  // array the render before it was handed among them — which the page may have changed since.
   it('are copied anew by each render, which shows and names what it is handed', () => {
     // Never started: it asks for nothing, and is only told what the part names.
     const controller = new ViewController<ReactNode>('root:p1', {
@@ -130,18 +131,22 @@ describe('the inputs of a list site', () => {
       sites: controller,
       store: null,
     };
+    const page = (panels: readonly Panel[]): ReactNode => {
+      return (
+        <LiveContext value={live}>
+          <Lists panels={panels} part={partOf(panels)} />
+        </LiveContext>
+      );
+    };
     const first = panelsOf(2, 'First');
     const later = panelsOf(3, 'Later');
-    const { rerender } = render(
-      <LiveContext value={live}>
-        <Lists panels={first} part={partOf(first)} />
-      </LiveContext>,
-    );
-    rerender(
-      <LiveContext value={live}>
-        <Lists panels={later} part={partOf(later)} />
-      </LiveContext>,
-    );
+    const { rerender } = render(page(first));
+    const copied = copies.made;
+    rerender(page(first));
+
+    expect(copies.made).toBeGreaterThan(copied);
+
+    rerender(page(later));
 
     expect(shownOf('d0')).toStrictEqual(['Later 0', 'Later 1', 'Later 2']);
     expect(shownOf('d1')).toStrictEqual(['Later 0', 'Later 1', 'Later 2']);
