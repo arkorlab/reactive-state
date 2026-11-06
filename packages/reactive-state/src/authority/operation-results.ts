@@ -15,6 +15,25 @@ interface OwnData {
   readonly value: unknown;
 }
 
+/** What one result's snapshot walks with, from its root on. */
+interface Walk {
+  /** The objects on the path to the value copied now: one met again among them is a cycle. */
+  readonly seen: Set<WeakKey>;
+  /**
+   * Each object copied once already. One the result holds again — no cycle: shared — is copied again
+   * where it stands, as JSON writes it at each place, though the application made it once: of a few
+   * arrays, each holding the next twice, the copies would make as many values as two to the power of
+   * how many arrays there are. Each copy after the first spends what it makes (`repeated`).
+   */
+  readonly copied: Set<WeakKey>;
+  /**
+   * How many values the copies of objects already copied may still make — an array's elements, holes
+   * among them, an object's entries: at first as many as a request carries bytes, which bounds an
+   * array's holes as well (`arrayLength`).
+   */
+  repeated: number;
+}
+
 /** Each listed own descriptor is observed once; its data is all the later walk consumes. */
 function ownData(value: Exclude<WeakKey, symbol>): ReadonlyMap<string, OwnData> | undefined {
   const entries = new Map<string, OwnData>();
@@ -62,18 +81,25 @@ function arrayLength(entries: ReadonlyMap<string, OwnData>): number | undefined 
   return present !== length && minimum > MAX_CARRIED_BYTES ? undefined : length;
 }
 
+/** Whether a copy of an object copied before, of `values` values, fits what `walk` has left. */
+function spent(values: number, walk: Walk): boolean {
+  walk.repeated -= values;
+  return walk.repeated >= 0;
+}
+
 /** Missing and undefined own slots carry null, without any inherited indexed read. */
 function arraySnapshot(
   entries: ReadonlyMap<string, OwnData>,
   depth: number,
-  seen: Set<WeakKey>,
+  walk: Walk,
+  again: boolean,
 ): Snapshot {
   const length = arrayLength(entries);
   const result: Json[] = [];
-  let valid = length !== undefined;
-  for (let index = 0; index < (length ?? 0); index += 1) {
+  let valid = length !== undefined && (!again || spent(length, walk));
+  for (let index = 0; valid && index < (length ?? 0); index += 1) {
     const item = entries.get(String(index))?.value;
-    const normalized = item === undefined ? null : snapshot(item, depth + 1, seen);
+    const normalized = item === undefined ? null : snapshot(item, depth + 1, walk);
     if (normalized === INVALID) {
       valid = false;
       break;
@@ -87,17 +113,18 @@ function arraySnapshot(
 function objectSnapshot(
   entries: ReadonlyMap<string, OwnData>,
   depth: number,
-  seen: Set<WeakKey>,
+  walk: Walk,
+  again: boolean,
 ): Snapshot {
   const result: Record<string, Json> = {};
-  let valid = true;
+  let valid = !again || spent(entries.size, walk);
   for (const [key, entry] of entries) {
-    if (!entry.enumerable) {
+    if (!valid || !entry.enumerable) {
       valid = false;
       break;
     }
     if (entry.value === undefined) continue;
-    const normalized = snapshot(entry.value, depth + 1, seen);
+    const normalized = snapshot(entry.value, depth + 1, walk);
     if (normalized === INVALID) {
       valid = false;
       break;
@@ -113,37 +140,42 @@ function objectSnapshot(
 }
 
 /** Detached object data, with source reflection complete before its captured values are visited. */
-function containerSnapshot(
-  value: Exclude<WeakKey, symbol>,
-  depth: number,
-  seen: Set<WeakKey>,
-): Snapshot {
+function containerSnapshot(value: Exclude<WeakKey, symbol>, depth: number, walk: Walk): Snapshot {
   let result: Snapshot = INVALID;
   const array = Array.isArray(value);
   const entries = array || ordinary(value) ? ownData(value) : undefined;
   if (entries !== undefined) {
-    seen.add(value);
+    const again = walk.copied.has(value);
+    walk.copied.add(value);
+    walk.seen.add(value);
     try {
-      result = array ? arraySnapshot(entries, depth, seen) : objectSnapshot(entries, depth, seen);
+      result = array
+        ? arraySnapshot(entries, depth, walk, again)
+        : objectSnapshot(entries, depth, walk, again);
     } finally {
-      seen.delete(value);
+      walk.seen.delete(value);
     }
   }
   return result;
 }
 
 /** Validated primitives or detached own data; only the current path counts as a cycle. */
-function snapshot(value: unknown, depth: number, seen: Set<WeakKey>): Snapshot {
+function snapshot(value: unknown, depth: number, walk: Walk): Snapshot {
   let result: Snapshot = INVALID;
   if (value === null || typeof value === 'string' || typeof value === 'boolean') result = value;
   else if (typeof value === 'number') result = Number.isFinite(value) ? value + 0 : INVALID;
-  else if (typeof value === 'object' && depth < MAX_DEPTH && !seen.has(value))
-    result = containerSnapshot(value, depth, seen);
+  else if (typeof value === 'object' && depth < MAX_DEPTH && !walk.seen.has(value))
+    result = containerSnapshot(value, depth, walk);
   return result;
 }
 
-/** An operation's JSON result in its original key order, or null for no JSON. */
+/**
+ * An operation's JSON result in its original key order, or null for no JSON — and for one whose
+ * copies of what it holds more than once would make more values than a request carries bytes
+ * (`Walk`), as for an array whose holes would.
+ */
 export function operationResult(returned: unknown): Json {
-  const result = snapshot(returned, 0, new Set());
+  const walk: Walk = { copied: new Set(), repeated: MAX_CARRIED_BYTES, seen: new Set() };
+  const result = snapshot(returned, 0, walk);
   return result === INVALID ? null : result;
 }
