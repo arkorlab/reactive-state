@@ -10,10 +10,13 @@ import {
   isIdentifier,
   isImportEqualsDeclaration,
   isInterfaceDeclaration,
+  isModuleBlock,
+  isModuleDeclaration,
   isNamedExports,
   isStringLiteral,
   isTypeAliasDeclaration,
   isVariableStatement,
+  type ModuleDeclaration,
   type Statement,
   SyntaxKind,
 } from 'typescript/ast';
@@ -26,12 +29,33 @@ import { bindingIdentifiers } from './scope.ts';
  * what it may hold where its copy is written — declarations, and nothing that runs as it loads.
  */
 
+/**
+ * The statements that declare, of which a module of hooks is made — a variable, a function, a class,
+ * a type, an enum, a namespace, an import, an export — and the empty one, which runs nothing.
+ */
+const DECLARING: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ClassDeclaration,
+  SyntaxKind.EmptyStatement,
+  SyntaxKind.EnumDeclaration,
+  SyntaxKind.ExportAssignment,
+  SyntaxKind.ExportDeclaration,
+  SyntaxKind.FunctionDeclaration,
+  SyntaxKind.ImportDeclaration,
+  SyntaxKind.ImportEqualsDeclaration,
+  SyntaxKind.InterfaceDeclaration,
+  SyntaxKind.ModuleDeclaration,
+  SyntaxKind.NamespaceExportDeclaration,
+  SyntaxKind.TypeAliasDeclaration,
+  SyntaxKind.VariableStatement,
+]);
+
 /** Refuses what a module of hooks cannot hold where its copy is written: a re-export of a path, an effect. */
 export function checkModuleStatement(statement: Statement, fail: Fail): void {
-  if (isExpressionStatement(statement) && !isStringLiteral(statement.expression)) {
+  const effect = effectOf(statement);
+  if (effect !== undefined) {
     fail(
       'A module of custom hooks declares its hooks and what they use, and runs nothing as it loads: its copy runs in the browser, where an effect would run on its own.',
-      statement,
+      effect,
     );
   }
   if (
@@ -54,6 +78,37 @@ export function checkModuleStatement(statement: Statement, fail: Fail): void {
       statement.moduleSpecifier,
     );
   }
+}
+
+/**
+ * What of `statement` runs as the module loads for what it does, and declares nothing: itself, an
+ * expression — but a directive's text, `'use client'` — or any other statement but a declaration
+ * (`DECLARING`): a condition, a loop, a block, a label, a `throw`; or such a statement of a
+ * namespace's body. None of a declaration, whose initializer makes what it declares.
+ */
+function effectOf(statement: Statement): Statement | undefined {
+  if (isModuleDeclaration(statement)) {
+    for (const each of namespaceBody(statement)) {
+      const effect = effectOf(each);
+      if (effect !== undefined) {
+        return effect;
+      }
+    }
+    return undefined;
+  }
+  if (isExpressionStatement(statement)) {
+    return isStringLiteral(statement.expression) ? undefined : statement;
+  }
+  return DECLARING.has(statement.kind) ? undefined : statement;
+}
+
+/** What a namespace's body holds: its statements, or the namespace within it, `namespace A.B {}`. */
+function namespaceBody(namespace: ModuleDeclaration): readonly Statement[] {
+  const { body } = namespace;
+  if (body !== undefined && isModuleDeclaration(body)) {
+    return [body];
+  }
+  return body !== undefined && isModuleBlock(body) ? body.statements : [];
 }
 
 /** The name a function declaration is exported under, if it is: its own, or `default`. */
