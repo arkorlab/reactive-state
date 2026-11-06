@@ -28,6 +28,8 @@ interface Flattening {
   readonly depth: number;
   readonly array: boolean;
   readonly seen: ReadonlySet<Node>;
+  /** Whether an array around it may change after it is written, and hold more than it writes. */
+  readonly changed?: boolean;
 }
 
 /** Known array layers flatten in order; unresolved lengths keep later possible selected values. */
@@ -72,25 +74,30 @@ function knownFlattenedArrayViews(
     { value: receiver, depth, array: true, materialized: false, seen: new Set() },
   ];
   for (let task = pending.pop(); task !== undefined; task = pending.pop()) {
+    const unchanged = task.changed !== true;
     if (task.value === undefined) {
-      segments.push({ views: [], fixed: true });
+      segments.push({ views: [], fixed: unchanged });
       continue;
     }
     const value = unwrapped(task.value);
     const literal = literalArray(value);
     if (literal !== undefined && !task.seen.has(literal) && (task.array || task.depth > 0)) {
       const seen = new Set(task.seen).add(literal);
+      const changed = !unchanged || !stable(value);
       if (!stable(value))
         segments.push({ views: [{ value, index: undefined, capture }], fixed: false });
       pending.push(
-        ...arrayTasks(literal, task.array ? task.depth : task.depth - 1, seen, task.materialized),
+        ...arrayTasks(literal, task.array ? task.depth : task.depth - 1, seen, {
+          changed,
+          materialized: task.materialized,
+        }),
       );
     } else if (task.array) {
       segments.push({ views: [{ value, index: undefined, capture }], fixed: false });
     } else {
       segments.push({
         views: [{ value, index: undefined, element: true, capture }],
-        fixed: task.depth === 0 || literal !== undefined || definiteScalar(value),
+        fixed: unchanged && (task.depth === 0 || literal !== undefined || definiteScalar(value)),
       });
     }
   }
@@ -137,18 +144,22 @@ export function expandedReturnValues(
   return found;
 }
 
-/** Written literal spreads contribute elements before their containing array's flattening step. */
+/**
+ * Written literal spreads contribute elements before their containing array's flattening step; of
+ * an array that may change after it is written (`changed`), no element's position is fixed.
+ */
 function arrayTasks(
   array: ArrayLiteralExpression,
   depth: number,
   seen: ReadonlySet<Node>,
-  materialized: boolean,
+  around: { readonly changed: boolean; readonly materialized: boolean },
 ): readonly Flattening[] {
+  const { changed, materialized } = around;
   const tasks: Flattening[] = [];
   for (const element of array.elements.toReversed()) {
     if (isOmittedExpression(element)) {
       if (materialized)
-        tasks.push({ value: undefined, array: false, materialized: false, depth, seen });
+        tasks.push({ value: undefined, array: false, materialized: false, depth, seen, changed });
       continue;
     }
     tasks.push({
@@ -157,6 +168,7 @@ function arrayTasks(
       materialized: isSpreadElement(element),
       depth,
       seen,
+      changed,
     });
   }
   return tasks;
