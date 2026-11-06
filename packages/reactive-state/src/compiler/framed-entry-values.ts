@@ -16,7 +16,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
+import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
@@ -55,7 +55,7 @@ export function framedEntryValues(
     const seen = new Set(at.seen).add(value);
     if (isSpreadElement(value)) {
       const spread = framedAppliedArguments(node, value.expression);
-      if (spread === undefined) found.push({ value: value.expression, keys: [key] });
+      if (spread === undefined) found.push(...spreadEntryValues(value.expression));
       else pending.push(...spread.toReversed().map((each) => ({ value: each, seen })));
       continue;
     }
@@ -64,6 +64,11 @@ export function framedEntryValues(
     else found.push(...selected.values);
   }
   return found;
+}
+
+/** Each entry an opaque spread yields may supply its value slot under any key. */
+function spreadEntryValues(iterable: Expression): readonly AssignedFrameSource[] {
+  return iteratedFrameSources(iterable).map((entry) => ({ ...entry, keys: [...entry.keys, '1'] }));
 }
 
 interface EntrySelection {
