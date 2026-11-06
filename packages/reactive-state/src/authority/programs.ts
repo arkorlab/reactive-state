@@ -15,8 +15,11 @@ import {
 const BUILD_ID = /^[\w-]{1,128}$/u;
 /** The longest id a component or a module takes: a path in the application. */
 const MAX_ID_LENGTH = 256;
-/** What no segment of an id holds: a space, a control character, or a backslash. */
-const UNSAFE = /[\s\\]/u;
+/**
+ * What no segment of an id holds: a space, a control character — `\s` takes the ones that are
+ * whitespace alone, `\p{Cc}` every other — or a backslash.
+ */
+const UNSAFE = /[\s\\\p{Cc}]/u;
 
 /** What the engine runs: every component and server operation of one build. */
 export interface Registry {
