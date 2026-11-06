@@ -51,7 +51,10 @@ import {
   sequencePatternMatch,
   sequenceReading,
 } from './local-type-sequence-patterns.ts';
-import { signatureMemberPatternMatch } from './local-type-signature-patterns.ts';
+import {
+  partSignatureMatch,
+  signatureMemberPatternMatch,
+} from './local-type-signature-patterns.ts';
 import { memberName, optionalMember, weakMismatch } from './local-type-weak-objects.ts';
 
 /** Conditional inference from explicitly written local object, reference and sequence patterns. */
@@ -338,13 +341,25 @@ function objectMember(
   return true;
 }
 
-/** Written suppliers win before any implicit Function metadata or inherited Object fallback. */
+/**
+ * Written suppliers win before any implicit Function metadata or inherited Object fallback; a call
+ * or construct requirement is met by the one signature of its kind the sources write.
+ */
 function missingObjectMember(
   sources: readonly TypeReading[],
   pattern: TypeReading,
   member: TypeElement,
   state: Matching,
 ): boolean | undefined {
+  const signature = partSignatureMatch(
+    { sources, unknown: false },
+    { reading: pattern, member },
+    state,
+  );
+  if (signature !== undefined) {
+    state.pending.push(...signature.pairs);
+    return signature.matches;
+  }
   const name = memberName(member);
   if (name === undefined) return undefined;
   const actual = implicitFunctionField(sources, name);
@@ -424,7 +439,10 @@ function intersectionMember(
   state: Matching,
 ): boolean | undefined {
   const name = memberName(member);
-  if (name === undefined) return undefined;
+  if (name === undefined)
+    return source.unknown
+      ? undefined
+      : missingObjectMember([...source.sources, ...source.callables], pattern, member, state);
   const supplied = source.sources.filter((each) => sourceMember(each.type, name) !== null);
   if (supplied.length === 0)
     return source.unknown
@@ -489,7 +507,8 @@ function interfaceMemberMatch(
     return indexed.matches;
   }
   const name = memberName(member);
-  if (name === undefined) return undefined;
+  if (name === undefined)
+    return unknown ? undefined : missingObjectMember(sources, pattern, member, state);
   const shapes = sources.flatMap((source) => {
     const { type } = source;
     return isTypeLiteralNode(type) ? [{ ...source, aliases: new Set<string>(), type }] : [];
