@@ -80,8 +80,9 @@ function siblingOf(
 
 /**
  * A JSON document an application module imports: as Node loads one, where the import says it is
- * JSON (`with { type: 'json' }`); and, where it does not — as TypeScript and the bundlers let an
- * application write it, and Node refuses — as a module of the hooks' own, whose default it is.
+ * JSON (`with { type: 'json' }`), or refuses one, where it names any other attribute; and, where it
+ * names none — as TypeScript and the bundlers let an application write it, and Node refuses — as a
+ * module of the hooks' own, whose default it is.
  */
 function jsonResolution(
   file: string,
@@ -90,6 +91,12 @@ function jsonResolution(
   const url = pathToFileURL(file);
   if (attributes?.['type'] === 'json') {
     return { format: 'json', shortCircuit: true, url: url.href };
+  }
+  // Another `type`, or a key but `type`, is Node's to refuse, as it refuses one of any JSON
+  // document it loads — and as a Durable Object's bundler does: the hooks' module, which Node
+  // checks no attribute of, would take it for none.
+  if (Object.keys(attributes ?? {}).length > 0) {
+    return { shortCircuit: true, url: url.href };
   }
   url.searchParams.set(AS_MODULE, '');
   return { shortCircuit: true, url: url.href };
