@@ -150,10 +150,10 @@ function elementTaken(input: Input, element: BindingElement): Input | undefined 
 /**
  * A binding element reads its member of what its pattern takes apart, as a member read does — but
  * where every input leaves it undefined, and its default, which the scan reads, stands instead. A
- * rest is read as its pattern is (`knownPattern`).
+ * rest copies what its pattern takes apart (`quietRest`).
  */
 function quietElement(element: BindingElement, reading: Reading): boolean {
-  if (element.dotDotDotToken !== undefined) return true;
+  if (element.dotDotDotToken !== undefined) return quietRest(element, reading);
   const outer = patternInput(element.parent, reading);
   const input = outer === undefined ? undefined : elementTaken(outer, element);
   return (
@@ -161,6 +161,27 @@ function quietElement(element: BindingElement, reading: Reading): boolean {
     (input.value === element.initializer ||
       defaultSource(input.value, input.keys, reading) !== undefined)
   );
+}
+
+/**
+ * An object rest reads each own field of what its pattern takes apart, a getter's too: of an
+ * object literal, each getter's return is kept (`returned`), and a getter of no single return is
+ * none of a quiet read; an array literal holds no getter. An array rest of an array literal reads
+ * its elements alone; what is no literal its pattern's own check refuses (`knownPattern`).
+ */
+function quietRest(element: BindingElement, reading: Reading): boolean {
+  if (!isObjectBindingPattern(element.parent)) return true;
+  const outer = patternInput(element.parent, reading);
+  const value = outer === undefined ? undefined : defaultSource(outer.value, outer.keys, reading);
+  if (value === undefined || !isObjectLiteralExpression(value))
+    return value !== undefined && isArrayLiteralExpression(value);
+  for (const property of value.properties) {
+    if (!isGetAccessorDeclaration(property)) continue;
+    const result = fieldResult(property);
+    if (result === undefined) return false;
+    reading.returned.push(result);
+  }
+  return true;
 }
 
 /** A parameter's definite supplied root or its definite selected default. */
