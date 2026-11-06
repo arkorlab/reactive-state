@@ -20,8 +20,16 @@ export function nodeSql(filename: string): SqlDriver {
     mkdirSync(path.dirname(filename), { recursive: true });
   }
   const database = new DatabaseSync(filename);
-  for (const pragma of PRAGMAS) {
-    database.exec(pragma);
+  try {
+    for (const pragma of PRAGMAS) {
+      database.exec(pragma);
+    }
+  } catch (error) {
+    // A file SQLite opens and then refuses to read — one that is no SQLite database — is let go of
+    // as the driver is refused, as the engine lets go of one it refuses, rather than held until the
+    // connection is collected.
+    database.close();
+    throw error;
   }
   let inTransaction = false;
   return {
