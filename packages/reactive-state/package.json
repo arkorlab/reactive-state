@@ -12,6 +12,7 @@
   "type": "module",
   "exports": {
     "./client": "./src/client/index.ts",
+    "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
     "./program": "./src/program.ts",
     "./react": "./src/react/index.tsx",
