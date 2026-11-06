@@ -13,6 +13,7 @@
   "exports": {
     "./framework/react": "./src/framework/react.ts",
     "./program": "./src/program.ts",
+    "./react": "./src/react/index.tsx",
     "./routing": "./src/routing.ts",
     "./store": "./src/runtime/store.ts"
   },
