@@ -101,13 +101,15 @@ function nativePlaces(): ReadonlyMap<unknown, readonly Place[]> {
 
 /**
  * A member captured once before arguments, refusing a known native function outside its canonical
- * place; while `checking`, the function and its arguments handed to `before` before it is called.
+ * place; the function, its receiver and its arguments handed to `before` each time it is called,
+ * which tells as it runs whether it checks them — a call captured in a site's function may run
+ * after it, and one captured outside run in one.
  */
 export function methodOf<T, K extends keyof (MethodObject & NonNullable<T>)>(
   receiver: T,
   key: K,
   checking: boolean,
-  before?: (called: unknown, given: readonly unknown[]) => void,
+  before?: (called: unknown, receiver: unknown, given: readonly unknown[]) => void,
 ): OmitThisParameter<MethodValue<T, K>> {
   const value: unknown = receiver;
   if (value === null || value === undefined) {
@@ -124,9 +126,7 @@ export function methodOf<T, K extends keyof (MethodObject & NonNullable<T>)>(
   }
   const invoke = (...given: readonly unknown[]): unknown => {
     const actual = called as (...args: readonly unknown[]) => unknown;
-    if (checking) {
-      before?.(actual, given);
-    }
+    before?.(actual, receiver, given);
     return Reflect.apply(actual, receiver, given);
   };
   return invoke as OmitThisParameter<MethodValue<T, K>>;

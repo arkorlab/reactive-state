@@ -186,12 +186,18 @@ export function method<T, K extends keyof (MethodObject & NonNullable<T>)>(
   receiver: T,
   key: K,
 ): OmitThisParameter<MethodValue<T, K>> {
-  return methodOf(receiver, key, running(), refuseUnmeasuredSpread);
+  return methodOf(receiver, key, running(), chargeConcat);
 }
 
-/** Spends `steps`; past `VIEW_LIMITS.steps`, throws. */
+/**
+ * Spends `steps` of the call of a site's function in progress; past `VIEW_LIMITS.steps`, throws.
+ * Outside one nothing is spent, and no budget begins that would count what runs after.
+ */
 function spend(steps: number): void {
-  const spent = (budget.spent ?? 0) + steps;
+  if (budget.spent === undefined) {
+    return;
+  }
+  const spent = budget.spent + steps;
   budget.spent = spent;
   if (spent > VIEW_LIMITS.steps) {
     throw new RangeError(
@@ -217,7 +223,7 @@ function measure(value: unknown): void {
   const within = new Set<unknown>();
   const pending: Pending[] = [{ value }];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if ('leaving' in next) {
+    if (isLeaving(next)) {
       within.delete(next.leaving);
       continue;
     }
@@ -268,7 +274,7 @@ function readEntry(
   pending: Pending[],
 ): void {
   const descriptor = Object.getOwnPropertyDescriptor(held, key);
-  if (descriptor !== undefined && 'value' in descriptor) {
+  if (descriptor !== undefined && isData(descriptor)) {
     pending.push({ value: descriptor.value });
   }
 }
@@ -282,9 +288,44 @@ function indexedKey(key: string | symbol, length: number): boolean {
   return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 
+/**
+ * The language's own functions what follows reads a value's entries with, as they were as this
+ * module loaded: one the application's code puts in the place of one later neither answers for the
+ * check before `concat` (`chargeConcat`) nor stops it.
+ */
+const INTRINSIC = Object.freeze({
+  describe: Object.getOwnPropertyDescriptor,
+  floor: Math.floor,
+  hasOwn: Object.hasOwn,
+  isArray: Array.isArray,
+  isProxy: types.isProxy,
+  min: Math.min,
+  prototypeOf: Object.getPrototypeOf,
+  toBoolean: Boolean,
+  toNumber: Number,
+});
+
+/**
+ * Whether `descriptor` is a data entry's: of a `value` of its own, never of one every object
+ * inherits, which, set on `Object.prototype`, would make an accessor's descriptor look like one.
+ */
+function isData(descriptor: PropertyDescriptor): boolean {
+  return INTRINSIC.hasOwn(descriptor, 'value');
+}
+
+/** The value of the data entry `descriptor` is of; nothing of an accessor's, or of none. */
+function dataOf(descriptor: PropertyDescriptor | undefined): unknown {
+  return descriptor !== undefined && isData(descriptor) ? descriptor.value : undefined;
+}
+
+/** Whether `next` is what `measure` leaves, by an entry of its own, never one every object inherits. */
+function isLeaving(next: Pending): next is { readonly leaving: unknown } {
+  return INTRINSIC.hasOwn(next, 'leaving');
+}
+
 /** A Proxy cannot be inspected for size without executing otherwise unused application traps. */
 function refuseProxy(value: unknown): void {
-  if (types.isProxy(value)) {
+  if (INTRINSIC.isProxy(value)) {
     throw new TypeError(
       'A dynamic site made a Proxy intermediate, whose size cannot be measured without invoking application traps: return an ordinary value from the shared helper.',
     );
@@ -397,22 +438,55 @@ function arrayLength(value: Readonly<Record<PropertyKey, unknown>>): number {
 
 /** An own or inherited data member, without invoking accessors or passing a shadowing entry. */
 function storedMember(value: Readonly<Record<PropertyKey, unknown>>, key: PropertyKey): unknown {
-  const descriptor = storedDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  return dataOf(storedDescriptor(value, key));
 }
 
-/** What an own or inherited member is, the first along the prototypes that holds it, of no trap. */
+/**
+ * The language's own prototypes a lookup passes through as no step (`storedDescriptor`): those what
+ * the language makes ends at — an object, an array, a function, a map, a set — each held once in a
+ * chain at most, as no chain holds itself. Any other, the application's or another of the
+ * language's, is a step to pass.
+ */
+const OWN_PROTOTYPES = Object.freeze({
+  array: Array.prototype,
+  function: Function.prototype,
+  map: Map.prototype,
+  object: Object.prototype,
+  set: Set.prototype,
+});
+
+/** Whether `value` is one of `OWN_PROTOTYPES`, told by identity alone. */
+function ownPrototype(value: unknown): boolean {
+  return (
+    value === OWN_PROTOTYPES.object ||
+    value === OWN_PROTOTYPES.array ||
+    value === OWN_PROTOTYPES.function ||
+    value === OWN_PROTOTYPES.map ||
+    value === OWN_PROTOTYPES.set
+  );
+}
+
+/**
+ * What an own or inherited member is, the first along the prototypes that holds it, of no trap.
+ * Each prototype it passes to is a step of the call of a site's function in progress, but for the
+ * language's own (`OWN_PROTOTYPES`): looked up at each member or position, as `measure` and the check
+ * before `concat` look them up, a chain of the application's is walked no further than the steps
+ * allow, however long it is.
+ */
 function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor | undefined {
   for (
     let current: unknown = value;
     current !== null && (typeof current === 'object' || typeof current === 'function');
   ) {
     refuseProxy(current);
-    const descriptor = Object.getOwnPropertyDescriptor(current, key);
+    const descriptor = INTRINSIC.describe(current, key);
     if (descriptor !== undefined) {
       return descriptor;
     }
-    current = Object.getPrototypeOf(current);
+    current = INTRINSIC.prototypeOf(current);
+    if (current !== null && !ownPrototype(current)) {
+      spend(1);
+    }
   }
   return undefined;
 }
@@ -421,45 +495,140 @@ function storedDescriptor(value: unknown, key: PropertyKey): PropertyDescriptor 
 const CONCAT: unknown = Reflect.get(Array.prototype, 'concat');
 
 /**
- * Refuses, before `concat` is called, what it would spread as long as the application's code says
- * as it is read: one an accessor makes spreadable, or one spread whose `length` an accessor answers,
- * or an object `concat` converts. `measure` runs no such code, and so counts what it holds of them
- * as no array's (`arrayLength`), where `concat` would walk each position the code says before a
- * step counts the array it makes. Of what else it spreads, what its stored entries say was counted
- * as it was made; an array spreads as long as it holds.
+ * What `concat` reads by, as this module loaded: the symbols it asks a value of, the language's
+ * `Array` and what answers its `Symbol.species`, and the longest length `ToLength` makes.
  */
-function refuseUnmeasuredSpread(called: unknown, given: readonly unknown[]): void {
-  if (called === CONCAT && given.some((each) => spreadUnmeasured(each))) {
-    throw new TypeError(
-      "A dynamic site gives `concat` what it would spread as long as the application's code says as it is read — what an accessor makes spreadable, or a `length` an accessor answers or that converts — whose size cannot be measured without running that code: return an ordinary value from the shared helper.",
-    );
+const CONCAT_READS = Object.freeze({
+  array: Array,
+  most: Number.MAX_SAFE_INTEGER,
+  species: Symbol.species,
+  speciesOfArray: Reflect.get(INTRINSIC.describe(Array, Symbol.species) ?? {}, 'get') as unknown,
+  spreadable: Symbol.isConcatSpreadable,
+});
+
+/**
+ * Charges, or refuses, before `concat` is called, what it would read and spread, as ECMA-262 has it
+ * read (`Array.prototype.concat`): the array it makes (`ArraySpeciesCreate`), and of each value it is
+ * given, its receiver first, whether it spreads (`IsConcatSpreadable`), how far (`LengthOfArrayLike`)
+ * and each position it reads (`HasProperty`, `Get`). What only the application's code would answer
+ * of them, as it ran, is refused, since no step could count it first. Each length it spreads is
+ * charged, whatever counted the value as it was made: a callable is counted as none of it, and what
+ * was counted shorter may be longer since.
+ */
+function chargeConcat(called: unknown, receiver: unknown, given: readonly unknown[]): void {
+  // As it runs: a call captured in a site's function may run after it, and one captured outside run
+  // in one.
+  if (called !== CONCAT || !running()) {
+    return;
+  }
+  refuseOtherSpecies(receiver);
+  chargeSpread(receiver);
+  eachOf(given, chargeSpread);
+}
+
+/** Calls `each` of each element of `list`, through no method of it nor its iterator. */
+function eachOf<T>(list: readonly T[], each: (item: T) => void): void {
+  // By position: the application's code may have replaced an array's methods, or its iterator.
+  // eslint-disable-next-line @typescript-eslint/prefer-for-of, unicorn/no-for-loop -- see above
+  for (let index = 0; index < list.length; index += 1) {
+    each(list[index] as T);
   }
 }
 
-/** Whether `concat` would read whether `value` spreads, or how far, of the application's code. */
-function spreadUnmeasured(value: unknown): boolean {
-  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
-    return false;
+/** Refuses what `concat` would read of by running the application's code. */
+function refuseConcatCode(): never {
+  throw new TypeError(
+    "A dynamic site gives `concat` what it would read by running the application's code — an accessor of `Symbol.isConcatSpreadable`, of `length` or of a position it spreads, a `length` it converts, or a receiver whose array the application's class or species would make — which no step counts before it runs: return an ordinary value from the shared helper.",
+  );
+}
+
+/**
+ * Refuses a receiver of whose `constructor` `concat` would make its array by the application's code
+ * (`ArraySpeciesCreate`): one an accessor answers, one of any value but the language's `Array` or
+ * none — a class of the application's, whose constructor would run — or the language's `Array`, of
+ * a `Symbol.species` the application's code put on it.
+ */
+function refuseOtherSpecies(receiver: unknown): void {
+  refuseProxy(receiver);
+  const made = INTRINSIC.isArray(receiver) ? storedDescriptor(receiver, 'constructor') : undefined;
+  if (made === undefined) {
+    return;
   }
-  refuseProxy(value);
-  const spreads = Array.isArray(value)
-    ? undefined
-    : storedDescriptor(value, Symbol.isConcatSpreadable);
-  if (spreads === undefined) {
-    return false;
+  if (!isData(made)) {
+    refuseConcatCode();
   }
-  if (!('value' in spreads)) {
-    return true;
+  const by: unknown = made.value;
+  const species = INTRINSIC.describe(CONCAT_READS.array, CONCAT_READS.species);
+  const ownSpecies =
+    species !== undefined &&
+    INTRINSIC.hasOwn(species, 'get') &&
+    species.get === CONCAT_READS.speciesOfArray;
+  if (by !== undefined && (!ownSpecies || by !== CONCAT_READS.array)) {
+    refuseConcatCode();
   }
-  // Held as one element, or spread as long as `length` says: of nothing, none.
-  const spreading = Boolean(spreads.value);
-  const length = spreading ? storedDescriptor(value, 'length') : undefined;
-  if (length === undefined) {
-    return false;
+}
+
+/**
+ * Charges what `concat` would spread of `item`, as long as the `length` it holds says, before it
+ * reads a position: refused where whether it spreads, its length or a position it reads is answered
+ * by the application's code.
+ */
+function chargeSpread(item: unknown): void {
+  if (item === null || (typeof item !== 'object' && typeof item !== 'function')) {
+    return;
   }
-  if (!('value' in length)) {
-    return true;
+  const flag = storedDescriptor(item, CONCAT_READS.spreadable);
+  if (flag !== undefined && !isData(flag)) {
+    refuseConcatCode();
   }
-  const stored: unknown = length.value;
-  return typeof stored === 'function' || (typeof stored === 'object' && stored !== null);
+  const stored = dataOf(flag);
+  const spreads = stored === undefined ? INTRINSIC.isArray(item) : INTRINSIC.toBoolean(stored);
+  if (!spreads) {
+    return;
+  }
+  const length = lengthOf(item);
+  spend(length);
+  refuseReadPositions(item, length);
+}
+
+/**
+ * What `LengthOfArrayLike` answers of `item`, of the `length` it holds or inherits: none of none;
+ * refused of an accessor's, or of an object or a function, which `ToNumber` converts by the
+ * application's code. None of a symbol or a `bigint` either, which no number is: `concat` throws on
+ * one before it spreads anything.
+ */
+function lengthOf(item: WeakKey): number {
+  const entry = storedDescriptor(item, 'length');
+  if (entry === undefined) {
+    return 0;
+  }
+  if (!isData(entry)) {
+    refuseConcatCode();
+  }
+  const stored: unknown = entry.value;
+  if (typeof stored === 'function' || (typeof stored === 'object' && stored !== null)) {
+    refuseConcatCode();
+  }
+  if (typeof stored === 'symbol' || typeof stored === 'bigint') {
+    return 0;
+  }
+  // `ToLength`: an integer, of `NaN` and of what is below one none, and at most 2^53 − 1.
+  const length = INTRINSIC.floor(INTRINSIC.toNumber(stored));
+  return length > 0 ? INTRINSIC.min(length, CONCAT_READS.most) : 0;
+}
+
+/**
+ * Refuses `item` where a position below `length` that `concat` reads of it is an accessor's, which
+ * `Get` would call: one it holds, or, at a position it holds nothing at, the one it inherits there.
+ * Each position is looked up once, of as many as were charged, and a hole's of each prototype in
+ * turn, as `HasProperty` and `Get` look it up, each but the language's own a step
+ * (`storedDescriptor`): not what else its prototypes hold, however much.
+ */
+function refuseReadPositions(item: WeakKey, length: number): void {
+  for (let index = 0; index < length; index += 1) {
+    const entry = storedDescriptor(item, index);
+    if (entry !== undefined && !isData(entry)) {
+      refuseConcatCode();
+    }
+  }
 }
