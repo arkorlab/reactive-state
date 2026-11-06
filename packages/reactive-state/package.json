@@ -11,6 +11,7 @@
   },
   "type": "module",
   "exports": {
+    "./authority": "./src/authority/index.ts",
     "./client": "./src/client/index.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
