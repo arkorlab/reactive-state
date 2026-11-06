@@ -181,14 +181,24 @@ const NUMBER_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => n
 ]);
 
 /**
- * The functions of `Date` that answer a number of what they are given alone: `Date.UTC`, as the
- * language defines it, and `Date.parse`, of text, as the engine reads it — the one the authority
- * and the compile both run, V8 — `NaN` of text it reads no time of.
+ * The time `Date.parse` reads of text as the engine reads it — the one the authority and the
+ * compile both run, V8 — where every time zone reads it alike (`zonelessText`), and `NaN` of text it
+ * reads no time of; none of other text, which it reads in the time zone where it runs.
  */
-const DATE_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => number> = new Map([
-  ['parse', (...given) => Date.parse(String(given[0]))],
-  ['UTC', (...given) => Reflect.apply(Date.UTC, Date, given.map(Number)) as number],
-]);
+function parsedTime(text: string): number | undefined {
+  const time = Date.parse(text);
+  return zonelessText(text) || Number.isNaN(time) ? time : undefined;
+}
+
+/**
+ * The functions of `Date` that answer a number of what they are given alone: `Date.UTC`, as the
+ * language defines it, and `Date.parse`, of text (`parsedTime`).
+ */
+const DATE_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => number | undefined> =
+  new Map([
+    ['parse', (...given) => parsedTime(String(given[0]))],
+    ['UTC', (...given) => Reflect.apply(Date.UTC, Date, given.map(Number)) as number],
+  ]);
 
 /**
  * The number `JSON.parse` makes of text the code writes alone — `Infinity` of `'1e400'` — as the
@@ -367,8 +377,9 @@ function textCall(
 
 /**
  * The number a method of a date answers: of one the code writes, there or through a constant
- * (`timeOf`), as the engine computes it — but of what it reads or sets in the time zone where it
- * runs, `NaN` alone; of another, what a setter answers whatever the date — `NaN` of what is no
+ * (`timeOf`), of a time the same wherever and whenever the code runs (`fixedTime`), as the engine
+ * computes it — but of what it reads or sets in the time zone where it runs, `NaN` alone; of
+ * another, the clock's among them, what a setter answers whatever the date — `NaN` of what is no
  * finite number, `setTime(Infinity)`, or of a time past the dates the language holds, `setTime(9e15)`
  * — but none of what the code writes as no date (`writtenOtherwise`), whose method is its own.
  */
@@ -378,7 +389,7 @@ function dateCall(
   given: readonly Constant[],
   names: Names,
 ): number | undefined {
-  const time = timeOf(target, names);
+  const time = timeOf(target, names, true);
   if (time === undefined) {
     return setsTime(method) && !writtenOtherwise(target, names)
       ? setWhatever(method, given)
@@ -440,18 +451,84 @@ function writtenOtherwise(node: Expression, names: Names): boolean {
   );
 }
 
-/**
- * The time of `new Date(…)` of what the code writes, as the engine both sides run reads it — `NaN`
- * of text of no time, of a number past the dates it holds; none of another.
- */
-function dateTime(made: NewExpression, names: Names): number | undefined {
+/** What `new Date(…)` is given, where it makes the global's of what the code writes alone. */
+function dateGiven(made: NewExpression, names: Names): readonly Constant[] | undefined {
   const given = (made.arguments ?? []).map((argument) =>
     isSpreadElement(argument) ? undefined : constantOperand(argument, names),
   );
-  if (globalOf(unwrapped(made.expression)) !== 'Date' || given.includes(undefined)) {
+  return globalOf(unwrapped(made.expression)) !== 'Date' || given.includes(undefined)
+    ? undefined
+    : (given as readonly Constant[]);
+}
+
+/**
+ * The time of `new Date(…)` of what the code writes, as the engine both sides run reads it — `NaN`
+ * of text of no time, of a number past the dates it holds; none of another. Of no argument, it is
+ * the time the compile reads of the clock, and of parts or text of no offset, the time they make in
+ * the compile's time zone: a date the code makes, and whether it holds a time, all the same, but a
+ * time another run need not hold (`fixedTime`).
+ */
+function dateTime(made: NewExpression, names: Names): number | undefined {
+  const given = dateGiven(made, names);
+  return given === undefined ? undefined : (Reflect.construct(Date, given) as Date).getTime();
+}
+
+/**
+ * The time of `new Date(…)` of what the code writes where it is the same wherever and whenever the
+ * code runs: of a number, and of text every time zone reads alike (`zonelessText`) — `NaN` of other
+ * text of no time, and of parts that make none in any time zone (`timeless`); none of the clock's,
+ * `new Date()`, nor of parts, `new Date(2020, 0, 1)`, or of other text, which it reads in the time
+ * zone where it runs.
+ */
+function fixedTime(made: NewExpression, names: Names): number | undefined {
+  const given = dateGiven(made, names);
+  const [first] = given ?? [];
+  if (given === undefined || first === undefined) {
     return undefined;
   }
-  return (Reflect.construct(Date, given) as Date).getTime();
+  if (given.length > 1) {
+    return timeless(given.map(Number)) ? NaN : undefined;
+  }
+  const time = (Reflect.construct(Date, given) as Date).getTime();
+  return typeof first === 'number' || zonelessText(first) || Number.isNaN(time) ? time : undefined;
+}
+
+/**
+ * Whether the parts of a date, `new Date(year, month, …)`, which it reads in the time zone where it
+ * runs, make it of no time in any: of what is no finite number, or past the dates the language holds
+ * a day either way of them read in UTC (`Date.UTC`), farther than any time zone is from it.
+ */
+function timeless(parts: readonly number[]): boolean {
+  const [year, month, day = 1, ...rest] = parts;
+  const whole = Math.trunc(day);
+  return [whole - 1, whole + 1].every((near) =>
+    Number.isNaN(Reflect.apply(Date.UTC, Date, [year, month, near, ...rest]) as number),
+  );
+}
+
+/** Text in ISO's form of a date alone, `2020-01-01`, which every time zone reads as UTC. */
+const ISO_DATE = /^(?:\d{4}|[+-]\d{6})(?:-\d{2}(?:-\d{2})?)?$/u;
+
+/** The day of text in ISO's form of a day and a time, `2020-01-01` of `2020-01-01T00:00Z`. */
+const ISO_DAY = /^(?:\d{4}|[+-]\d{6})-\d{2}-\d{2}$/u;
+
+/** The time of text in ISO's form of a day and a time of an offset, `00:00Z`, `09:00+09:00`. */
+const ISO_ZONED_TIME = /^\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?(?:Z|[+-]\d{2}:\d{2})$/u;
+
+/**
+ * Whether every time zone reads `text` alike as a date: in ISO's form of a date alone, or of a day
+ * and a time of an offset — but of the year `-000000`, of no form of ISO's, which the engine reads
+ * otherwise, in the time zone where it runs.
+ */
+function zonelessText(text: string): boolean {
+  if (text.startsWith('-000000')) {
+    return false;
+  }
+  const at = text.indexOf('T');
+  return (
+    ISO_DATE.test(text) ||
+    (at !== -1 && ISO_DAY.test(text.slice(0, at)) && ISO_ZONED_TIME.test(text.slice(at + 1)))
+  );
 }
 
 /**
@@ -462,18 +539,21 @@ export function writtenTime(node: Expression, resolve?: Resolve): number | undef
   return timeOf(node, { following: new Set(), resolve });
 }
 
-/** The time of a date the code writes (`writtenTime`), but of a name followed on the way already. */
-function timeOf(node: Expression, names: Names): number | undefined {
+/**
+ * The time of a date the code writes (`writtenTime`), but of a name followed on the way already —
+ * or, `fixed`, where it is the same wherever and whenever the code runs (`fixedTime`).
+ */
+function timeOf(node: Expression, names: Names, fixed = false): number | undefined {
   const value = unwrapped(node);
   if (isNewExpression(value)) {
-    return dateTime(value, names);
+    return fixed ? fixedTime(value, names) : dateTime(value, names);
   }
   if (!isIdentifier(value) || names.following.has(value.text)) {
     return undefined;
   }
   const held = names.resolve?.(value);
   const following = new Set([...names.following, value.text]);
-  return held === undefined ? undefined : timeOf(held, { ...names, following });
+  return held === undefined ? undefined : timeOf(held, { ...names, following }, fixed);
 }
 
 /**
