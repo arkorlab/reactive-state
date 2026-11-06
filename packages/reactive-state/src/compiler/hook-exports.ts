@@ -15,6 +15,7 @@ import {
   isNamedExports,
   isStringLiteral,
   isTypeAliasDeclaration,
+  isTypeAssertion,
   isVariableStatement,
   type ModuleDeclaration,
   type Statement,
@@ -148,7 +149,11 @@ function assignedDefault(statement: Statement): string | undefined {
   if (!isExportAssignment(statement) || statement.isExportEquals) {
     return undefined;
   }
-  const value = unwrapped(statement.expression);
+  let value = unwrapped(statement.expression);
+  // `unwrapped` leaves a cast in angle brackets, `<typeof useThing>useThing`.
+  while (isTypeAssertion(value)) {
+    value = unwrapped(value.expression);
+  }
   return isIdentifier(value) ? value.text : undefined;
 }
 
