@@ -21,6 +21,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import type { Fail } from './errors.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -142,10 +143,26 @@ function listedExports(statement: Statement): readonly (readonly [string, string
   });
 }
 
-/** The names a module exports its functions by, each with the function's own name. */
+/** The name `export default name;` exports as the module's default; none of another statement. */
+function assignedDefault(statement: Statement): string | undefined {
+  if (!isExportAssignment(statement) || statement.isExportEquals) {
+    return undefined;
+  }
+  const value = unwrapped(statement.expression);
+  return isIdentifier(value) ? value.text : undefined;
+}
+
+/**
+ * The names a module exports its functions by, each with the function's own name: of a declaration,
+ * of a list, and of its default by name, `export default useThing;`.
+ */
 export function exportsOf(statements: readonly Statement[]): ReadonlyMap<string, string> {
   const found = new Map<string, string>();
   for (const statement of statements) {
+    const assigned = assignedDefault(statement);
+    if (assigned !== undefined) {
+      found.set('default', assigned);
+    }
     const exported = isFunctionDeclaration(statement) ? exportedAs(statement) : undefined;
     if (
       exported !== undefined &&
