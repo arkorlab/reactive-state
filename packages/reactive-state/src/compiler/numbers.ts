@@ -182,12 +182,23 @@ const NUMBER_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => n
 
 /**
  * The time `Date.parse` reads of text as the engine reads it — the one the authority and the
- * compile both run, V8 — where every time zone reads it alike (`zonelessText`), and `NaN` of text it
- * reads no time of; none of other text, which it reads in the time zone where it runs.
+ * compile both run, V8 — where every time zone reads it alike (`fixedText`); none of other text,
+ * which it reads in the time zone where it runs.
  */
 function parsedTime(text: string): number | undefined {
   const time = Date.parse(text);
-  return zonelessText(text) || Number.isNaN(time) ? time : undefined;
+  return fixedText(text, time) ? time : undefined;
+}
+
+/**
+ * Whether every time zone reads `text` as the time `time` the compile reads of it: text in a form
+ * that names its offset or none (`zonelessText`), or text of no digit, which writes no year, day or
+ * time to read — and `NaN` of it alike. A time zone moves a reading by less than a day, so that
+ * other text of no time here may hold one elsewhere: a time within a day of the dates the language
+ * holds, `+275760-09-13T10:00`, is none in Tokyo and one in Kiritimati.
+ */
+function fixedText(text: string, time: number): boolean {
+  return zonelessText(text) || (Number.isNaN(time) && !/\d/u.test(text));
 }
 
 /**
@@ -475,10 +486,9 @@ function dateTime(made: NewExpression, names: Names): number | undefined {
 
 /**
  * The time of `new Date(…)` of what the code writes where it is the same wherever and whenever the
- * code runs: of a number, and of text every time zone reads alike (`zonelessText`) — `NaN` of other
- * text of no time, and of parts that make none in any time zone (`timeless`); none of the clock's,
- * `new Date()`, nor of parts, `new Date(2020, 0, 1)`, or of other text, which it reads in the time
- * zone where it runs.
+ * code runs: of a number, and of text every time zone reads alike (`fixedText`) — `NaN` of parts
+ * that make none in any time zone (`timeless`); none of the clock's, `new Date()`, nor of parts,
+ * `new Date(2020, 0, 1)`, or of other text, which it reads in the time zone where it runs.
  */
 function fixedTime(made: NewExpression, names: Names): number | undefined {
   const given = dateGiven(made, names);
@@ -490,7 +500,7 @@ function fixedTime(made: NewExpression, names: Names): number | undefined {
     return timeless(given.map(Number)) ? NaN : undefined;
   }
   const time = (Reflect.construct(Date, given) as Date).getTime();
-  return typeof first === 'number' || zonelessText(first) || Number.isNaN(time) ? time : undefined;
+  return typeof first === 'number' || fixedText(first, time) ? time : undefined;
 }
 
 /**
