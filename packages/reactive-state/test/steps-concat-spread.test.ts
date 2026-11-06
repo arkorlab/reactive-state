@@ -33,6 +33,7 @@ function replacing(
 
 /** What `run` answers, or the name of what it throws, while every object inherits `key` of `value`. */
 function inheriting(key: string, value: unknown, run: () => unknown): unknown {
+  const kept = Object.getOwnPropertyDescriptor(Object.prototype, key);
   // eslint-disable-next-line no-extend-native -- what the application's code may do, which this is of
   Object.defineProperty(Object.prototype, key, { configurable: true, value, writable: true });
   try {
@@ -40,7 +41,13 @@ function inheriting(key: string, value: unknown, run: () => unknown): unknown {
   } catch (error) {
     return (error as Error).name;
   } finally {
-    Reflect.deleteProperty(Object.prototype, key);
+    // As `Object.prototype` was: the entry it held put back, or none where it held none.
+    if (kept === undefined) {
+      Reflect.deleteProperty(Object.prototype, key);
+    } else {
+      // eslint-disable-next-line no-extend-native -- the entry it held, put back
+      Object.defineProperty(Object.prototype, key, kept);
+    }
   }
 }
 
