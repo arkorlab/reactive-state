@@ -1,10 +1,13 @@
 import {
+  type BindingElement,
+  type BindingPattern,
   type Expression,
   type ObjectLiteralElementLike,
   type PropertyName,
   type ArrayLiteralExpression,
   isParameterDeclaration,
   isArrayBindingPattern,
+  isBindingElement,
   isArrayLiteralExpression,
   isArrowFunction,
   isElementAccessExpression,
@@ -97,14 +100,66 @@ export function framedConstructorDefaultEvaluation(
   return true;
 }
 
-/** A top-level parameter pattern reads only a shown literal source rather than opaque getters. */
-function knownPattern(parameter: ParameterDeclaration, reading: Reading): boolean {
-  const { parameters, slots } = reading;
-  const source = parameterInput(parameters.indexOf(parameter), parameters, slots);
+/** A parameter's pattern, or one inside it, reads only a shown literal source, not opaque getters. */
+function knownPattern(pattern: BindingPattern, reading: Reading): boolean {
+  const source = patternInput(pattern, reading);
   if (source === undefined) return false;
   const value = defaultSource(source.value, source.keys, reading);
   return (
     value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
+  );
+}
+
+/**
+ * What a parameter's pattern takes apart: the parameter's definite input or default, then, along
+ * each binding element above a nested pattern, what the element takes (`elementTaken`). Undefined
+ * past a rest, a key the compile cannot read, or a pattern of no constructor parameter.
+ */
+function patternInput(pattern: Node, reading: Reading): Input | undefined {
+  const elements: BindingElement[] = [];
+  let top: Node = pattern;
+  while (isBindingElement(top.parent)) {
+    elements.unshift(top.parent);
+    top = top.parent.parent;
+  }
+  const { parameters, slots } = reading;
+  const index = parameters.findIndex((each) => each.name === top);
+  let input = index === -1 ? undefined : parameterInput(index, parameters, slots);
+  for (const element of elements) {
+    input = input === undefined ? undefined : elementTaken(input, element);
+  }
+  return input;
+}
+
+/**
+ * What a binding element takes of what its pattern takes apart: the member of its key — or its own
+ * default, where every input leaves that member undefined. Undefined of a rest, or of a key the
+ * compile cannot read.
+ */
+function elementTaken(input: Input, element: BindingElement): Input | undefined {
+  const owner = element.parent;
+  const key = isArrayBindingPattern(owner)
+    ? String(owner.elements.indexOf(element))
+    : frameMemberName(element);
+  if (key === undefined || element.dotDotDotToken !== undefined) return undefined;
+  return element.initializer !== undefined && framedDefaultTaken([input], [key])
+    ? { keys: [], value: element.initializer }
+    : { ...input, keys: [...input.keys, key] };
+}
+
+/**
+ * A binding element reads its member of what its pattern takes apart, as a member read does — but
+ * where every input leaves it undefined, and its default, which the scan reads, stands instead. A
+ * rest is read as its pattern is (`knownPattern`).
+ */
+function quietElement(element: BindingElement, reading: Reading): boolean {
+  if (element.dotDotDotToken !== undefined) return true;
+  const outer = patternInput(element.parent, reading);
+  const input = outer === undefined ? undefined : elementTaken(outer, element);
+  return (
+    input !== undefined &&
+    (input.value === element.initializer ||
+      defaultSource(input.value, input.keys, reading) !== undefined)
   );
 }
 
@@ -180,13 +235,17 @@ function literalField(
   return result;
 }
 
-/** Each source-written member or top-level pattern reads only a shown ordinary literal. */
+/**
+ * Each source-written member, parameter pattern — nested too — and binding element reads only a
+ * shown ordinary literal.
+ */
 function quietSelection(node: Node, reading: Reading): boolean {
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node))
     return defaultSource(node, [], reading) !== undefined;
-  if (!isObjectBindingPattern(node) && !isArrayBindingPattern(node)) return true;
-  const parameter = reading.parameters.find((each) => each.name === node);
-  return parameter === undefined || knownPattern(parameter, reading);
+  if (isBindingElement(node)) return quietElement(node, reading);
+  return (
+    (!isObjectBindingPattern(node) && !isArrayBindingPattern(node)) || knownPattern(node, reading)
+  );
 }
 
 /** One parameter, member or literal field advances the finite default's original source. */
