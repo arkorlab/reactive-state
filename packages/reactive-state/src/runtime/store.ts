@@ -397,9 +397,13 @@ export class PageStore {
       return false;
     }
     const binding = refusesBinding(failure);
-    this.#remove((pending) =>
-      binding ? pending.target.binding === operation.target.binding : pending === operation,
-    );
+    // Of the binding's operations, those not made yet would be refused alike; one that committed is
+    // shown on top of each frame that does not reflect it until every frame does (`#settle`).
+    this.#remove((pending) => {
+      return binding
+        ? pending.target.binding === operation.target.binding && pending.committedRevision === null
+        : pending === operation;
+    });
     // A refused resend says nothing of a send before it that went unanswered, which may have
     // committed — a write that took its own binding's target away is refused when sent again — so
     // the page says the change may have been made, and renders again to show whether it was.
