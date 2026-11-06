@@ -1,6 +1,8 @@
 import {
   factory,
   SyntaxKind,
+  type ClassDeclaration,
+  type ClassExpression,
   type ConstructorTypeNode,
   type ConstructSignatureDeclaration,
   isConstructSignatureDeclaration,
@@ -11,6 +13,8 @@ import {
   isClassExpression,
   isTypeLiteralNode,
   isTypeQueryNode,
+  type TypeNode,
+  type TypeParameterDeclaration,
 } from 'typescript/ast';
 
 import { heritageReference } from './local-type-class-bases.ts';
@@ -72,16 +76,33 @@ function writtenInstanceReading(at: TypeReading): TypeReading | undefined {
       selected !== undefined &&
       selected !== null &&
       (isClassDeclaration(selected) || isClassExpression(selected))
-    )
+    ) {
+      const { closing, reading } = instanceArguments(at, selected, type.typeArguments);
       return {
-        ...at,
-        type: factory.createExpressionWithTypeArguments(type.exprName, type.typeArguments),
+        ...reading,
+        type: factory.createExpressionWithTypeArguments(type.exprName, closing),
       };
+    }
   }
   const instance = factory.createTypeQueryNode(
     factory.createQualifiedName(type.exprName, factory.createIdentifier('prototype')),
   );
   return prototypeQueryBuiltin(instance) === undefined ? undefined : { ...at, type: instance };
+}
+
+/**
+ * A class query's instance arguments: an instantiation's as written, and otherwise the class's own
+ * parameters, the binders of its construct signature, closed as `closedBinders` closes them.
+ */
+function instanceArguments(
+  at: TypeReading,
+  declaration: ClassDeclaration | ClassExpression,
+  written: readonly TypeNode[] | undefined,
+): ClosedBinders {
+  const parameters = declaration.typeParameters ?? [];
+  return written !== undefined || parameters.length === 0
+    ? { closing: written, reading: at }
+    : closedBinders(at, parameters);
 }
 
 /** Native instance inference closes own binders at constraints or unknown, never defaults. */
@@ -93,10 +114,25 @@ function constructorResultReading(
   if (type === undefined) return undefined;
   const parameters = signature.typeParameters ?? [];
   if (parameters.length === 0) return { ...at, type };
+  return { ...closedBinders(at, parameters).reading, type };
+}
+
+interface ClosedBinders {
+  readonly reading: Omit<TypeReading, 'type'>;
+  /** What each binder closes at, as an argument written in its place. */
+  readonly closing: readonly TypeNode[] | undefined;
+}
+
+/** Each own binder at its constraint, read where all of them are closed, or else at unknown. */
+function closedBinders(
+  at: TypeReading,
+  parameters: readonly TypeParameterDeclaration[],
+): ClosedBinders {
   const bindings = new Map(at.bindings);
-  for (const parameter of parameters) {
+  const closing = parameters.map((parameter) => {
     const constraint = constraintReading(parameter, { ...at, bindings });
     bindings.set(parameter, constraint ?? { ...at, bindings, type: UNKNOWN });
-  }
-  return { ...at, bindings, type };
+    return constraint === undefined ? UNKNOWN : (parameter.constraint ?? UNKNOWN);
+  });
+  return { closing, reading: { ...at, bindings } };
 }
