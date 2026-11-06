@@ -281,7 +281,8 @@ export function arrayMethodOverride(
 /**
  * Prior direct writes and native object mutators share one lexical array identity. A write the
  * block's earlier statements may make otherwise — in a branch, an operand, the read's own
- * statement — or another function may make before the read leaves the methods it names unproven.
+ * statement — or another function may make before the read leaves the methods it names unproven;
+ * a statement's operands run before the write the statement itself makes.
  */
 function ownMethods(receiver: Expression, call: Node): OwnMethods {
   const own: OwnMethods = new Map();
@@ -293,20 +294,28 @@ function ownMethods(receiver: Expression, call: Node): OwnMethods {
   const owner = executionOwner(call);
   for (const before of statement.parent.statements) {
     if (before === statement) break;
-    let definite: Node | undefined;
-    if (isExpressionStatement(before)) {
-      const assignment = ownMethodAssignment(before.expression, root);
-      if (assignment !== undefined) own.set(assignment.key, assignment);
-      callMethodWrites(before.expression, root, own);
-      deletedMethod(before.expression, root, own);
-      if (assignment !== undefined || isCallExpression(before.expression))
-        definite = before.expression;
-    }
-    possibleMethodWrites(before, { root, owner, own, definite, until: before.end });
+    statementMethodWrites(before, root, { owner, own });
   }
   possibleMethodWrites(statement, { root, owner, own, definite: undefined, until: call.end });
   deferredMethodWrites(call, root, own);
   return own;
+}
+
+/** A statement's operands run before the write the statement itself makes, in source order. */
+function statementMethodWrites(
+  before: Node,
+  root: FrameBinding,
+  { owner, own }: { readonly owner: Node; readonly own: OwnMethods },
+): void {
+  const top = isExpressionStatement(before) ? before.expression : undefined;
+  const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
+  const definite = assignment !== undefined || (top !== undefined && isCallExpression(top));
+  const writes = { root, owner, own, definite: definite ? top : undefined, until: before.end };
+  possibleMethodWrites(before, writes);
+  if (top === undefined) return;
+  if (assignment !== undefined) own.set(assignment.key, assignment);
+  callMethodWrites(top, root, own);
+  deletedMethod(top, root, own);
 }
 
 interface MethodWrites {
