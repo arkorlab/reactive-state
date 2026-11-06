@@ -36,6 +36,7 @@ import { arrayRestBinding } from './framed-array-rest.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { constantValue } from './numbers.ts';
 
@@ -287,6 +288,7 @@ function ownMethods(receiver: Expression, call: Node): OwnMethods {
     if (!isExpressionStatement(before)) continue;
     const assignment = ownMethodAssignment(before.expression, root);
     if (assignment !== undefined) own.set(assignment.key, assignment);
+    opaqueMethodAssignment(before.expression, root, own);
     callMethodWrites(before.expression, root, own);
     deletedMethod(before.expression, root, own);
   }
@@ -302,6 +304,16 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods): v
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
+}
+
+/** An opaque key may assign any method its written names allow, the native one included. */
+function opaqueMethodAssignment(node: Expression, root: FrameBinding, own: OwnMethods): void {
+  if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.EqualsToken) return;
+  const member = unwrapped(node.left);
+  if (!isElementAccessExpression(member) || frameMemberName(member) !== undefined) return;
+  if (arrayIdentity(member.expression) !== root) return;
+  const keys = framedKeyNames(member.argumentExpression) ?? OWN_METHODS;
+  for (const key of keys) if (OWN_METHODS.has(key)) own.set(key, { own: false });
 }
 
 /** Native object mutators replace own methods in source order, retaining unknown writes as unknown. */
