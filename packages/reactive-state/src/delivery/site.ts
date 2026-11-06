@@ -377,24 +377,29 @@ export function answeredBy(answer: unknown): string | undefined {
   return typeof deployment === 'string' ? deployment : undefined;
 }
 
-/** One request for a page, read whole: its status, and what it rendered. */
+/**
+ * One request for a page: what it rendered, read whole. A page that does not answer 2xx is an
+ * error naming the status, at once, its body canceled unread: read whole, it would hold the request
+ * until it ended, or until the request's time ran out and failed it as a timeout.
+ */
 async function readPage(
   page: string,
   headers: Readonly<Record<string, string>> | undefined,
   signal: AbortSignal,
-): Promise<{ readonly ok: boolean; readonly status: number; readonly html: string }> {
+): Promise<string> {
   const response = await fetch(page, { cache: 'no-store', headers: { ...headers }, signal });
-  return { html: await response.text(), ok: response.ok, status: response.status };
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`${page}: HTTP ${String(response.status)}`);
+  }
+  return response.text();
 }
 
 /** What `page` shows now, from one request; a page that does not answer 2xx is an error. */
 export async function pageShown(page: string, request: SiteRequest): Promise<Shown> {
-  const { html, ok, status } = await within(request.timeoutMs, request.signal, async (signal) =>
+  const html = await within(request.timeoutMs, request.signal, async (signal) =>
     readPage(page, request.headers, signal),
   );
-  if (!ok) {
-    throw new Error(`${page}: HTTP ${String(status)}`);
-  }
   return shownIn(html);
 }
 
@@ -421,14 +426,12 @@ export async function settle(
     const remaining = Math.max(0, deadline - Date.now());
     const limit = Math.min(remaining, options.requestTimeoutMs ?? remaining);
     try {
-      const { html, ok, status } = await within(limit, signal, async (limited) =>
+      // A page answered with a failure fails the settle as a request that fails does, at once
+      // (`readPage`): asked for again until the time is up, it would hold every delivery after it
+      // that long.
+      const html = await within(limit, signal, async (limited) =>
         readPage(page, options.headers, limited),
       );
-      // A page answered with a failure fails the settle as a request that fails does, at once:
-      // asked for again until the time is up, it would hold every delivery after it that long.
-      if (!ok) {
-        throw new Error(`${page}: HTTP ${String(status)}`);
-      }
       const rendered = shownIn(html);
       shown = oldestShown(rendered, options.records);
       if (shown >= revision) {
