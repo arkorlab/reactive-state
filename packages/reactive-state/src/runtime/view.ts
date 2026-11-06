@@ -563,11 +563,15 @@ export class ViewController<T> {
 
   /**
    * The root is no longer shown, or is shown anew: every wait is let go of, every answer on its way
-   * dropped, and what its parts showed forgotten — a part shown again commits it again.
+   * dropped — what it was sent for asked for again once the root is shown, as for a request lost —
+   * and what its parts showed forgotten — a part shown again commits it again.
    */
   stop(): void {
     this.#started = false;
-    clearTimeout(this.#inFlight?.timer);
+    if (this.#inFlight !== undefined) {
+      clearTimeout(this.#inFlight.timer);
+      this.#restore(this.#inFlight);
+    }
     clearTimeout(this.#retry);
     this.#inFlight = undefined;
     this.#retry = undefined;
