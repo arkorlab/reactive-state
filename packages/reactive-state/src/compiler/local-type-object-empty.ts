@@ -116,6 +116,7 @@ const PRIMITIVES = new Set([
   SyntaxKind.UndefinedKeyword,
   SyntaxKind.VoidKeyword,
 ]);
+const UNDEFINED = factory.createKeywordTypeNode(SyntaxKind.UndefinedKeyword);
 
 /** A required contradictory finite discriminant reduces the intersection before member rejection. */
 export function emptyObjectIntersection(source: Source, resolve: Resolve): boolean | undefined {
@@ -167,7 +168,11 @@ function emptyField(fields: readonly Field[], resolve: Resolve): boolean | undef
   );
 }
 
-/** Original scopes survive each explicit property's finite primitive domain. */
+/**
+ * Original scopes survive each explicit property's finite primitive domain. A field discriminates
+ * only where some supplier's whole domain is units, as TypeScript's literal part must be: a literal
+ * arm beside a wide type, as in `'a' | string`, does not.
+ */
 function fieldDomain(fields: readonly Field[], resolve: Resolve): Domain {
   const readings: TypeReading[] = [];
   const enums: EnumValue[] = [];
@@ -180,7 +185,7 @@ function fieldDomain(fields: readonly Field[], resolve: Resolve): Domain {
     const domain =
       reading === undefined
         ? { ...EMPTY, unknown: true, discriminant: true }
-        : primitiveDomain(reading, resolve);
+        : primitiveDomain(reading, resolve, optionalMember(field.member));
     readings.push(...domain.readings);
     enums.push(...domain.enums);
     symbolSets.push(...domain.symbolSets);
@@ -191,17 +196,21 @@ function fieldDomain(fields: readonly Field[], resolve: Resolve): Domain {
   return { readings, enums, symbolSets, discriminant, never, unknown };
 }
 
-/** Union alternatives stay covariant inside a property before distinct suppliers intersect. */
-function primitiveDomain(at: TypeReading, resolve: Resolve): Domain {
+/**
+ * Union alternatives stay covariant inside a property before distinct suppliers intersect. An
+ * optional property's domain holds `undefined` beside its written type, as TypeScript reads it.
+ */
+function primitiveDomain(at: TypeReading, resolve: Resolve, optional: boolean): Domain {
   const pending: {
     readonly reading: TypeReading;
     readonly ancestors: ReadonlySet<TypeReading['type']>;
   }[] = [{ reading: at, ancestors: new Set() }];
+  if (optional) pending.push({ reading: { ...at, type: UNDEFINED }, ancestors: new Set() });
   const readings: TypeReading[] = [];
   const enums: EnumValue[] = [];
   const symbolSets: Domain['symbolSets'][number][] = [];
   let broadSymbol = false;
-  let discriminant = false;
+  let discriminant = true;
   let unknown = false;
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const reading = resolve(next.reading);
@@ -224,7 +233,7 @@ function primitiveDomain(at: TypeReading, resolve: Resolve): Domain {
     readings.push(...domain.readings);
     enums.push(...domain.enums);
     symbolSets.push(...domain.symbolSets);
-    discriminant ||= domain.discriminant;
+    discriminant &&= domain.discriminant;
     unknown ||= domain.unknown;
   }
   const combined = inferredCandidates(
