@@ -8,6 +8,34 @@ interface Lists {
   readonly children: readonly (readonly unknown[])[];
 }
 
+/** `['a', 'b']`, as a Proxy that says its `length` is `length`, as no array of its own could. */
+function saying(length: unknown): unknown[] {
+  return new Proxy(['a', 'b'], {
+    get: (target, key, receiver): unknown =>
+      key === 'length' ? length : Reflect.get(target, key, receiver),
+  });
+}
+
+/** The list of children an element is rendered of, of `saying(length)`; the name of what it throws. */
+function shown(length: unknown): unknown {
+  try {
+    const { children } = rendered(SCOPE.h('div', null, saying(length))) as Lists;
+    const [kept] = children;
+    return kept;
+  } catch (error) {
+    return (error as Error).name;
+  }
+}
+
+/** What the language's `map` answers of `saying(length)`; the name of what it throws. */
+function mapped(length: unknown): unknown {
+  try {
+    return Array.prototype.map.call(saying(length), (item: unknown) => item);
+  } catch (error) {
+    return (error as Error).name;
+  }
+}
+
 /** A list of children whose own `map` is the application's: what it answers is no child. */
 function overridden(): { readonly list: readonly string[]; readonly calls: () => number } {
   let calls = 0;
@@ -103,5 +131,21 @@ describe('a list of children', () => {
 
     expect(children).toStrictEqual([['a', 'b']]);
     expect(reads).toBe(1);
+  });
+
+  it('is read as long as `map` reads it, of the length `ToLength` makes of what it says', () => {
+    // Past 2^32 - 1, which no array is as long as, `map` throws as it makes the array it answers.
+    const lengths: readonly unknown[] = [1.5, -1, NaN, '2', 2 ** 32];
+
+    expect(lengths.map((length) => shown(length))).toStrictEqual(
+      lengths.map((length) => mapped(length)),
+    );
+    expect(lengths.map((length) => shown(length))).toStrictEqual([
+      ['a'],
+      [],
+      [],
+      ['a', 'b'],
+      'RangeError',
+    ]);
   });
 });

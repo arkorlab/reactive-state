@@ -228,6 +228,15 @@ function isLeaf(value: unknown): value is Child {
 }
 
 /**
+ * What a list says its `length` is, as `map` reads it (`ToLength`): an integer, of `NaN` and of what
+ * is below one none, and at most 2^53 - 1. Only a Proxy says another than an array's own.
+ */
+function lengthOf(stated: number): number {
+  const length = Math.trunc(stated);
+  return length > 0 ? Math.min(length, Number.MAX_SAFE_INTEGER) : 0;
+}
+
+/**
  * What `each` makes of each element of `list`, by its positions — as React reads a list of children
  * — in a frozen array of the language's own: never through a `map` the list holds, nor one of the
  * kind its constructor makes (`Symbol.species`), either of which is the application's code. As many
@@ -236,7 +245,8 @@ function isLeaf(value: unknown): value is Child {
  * one, its prototype not consulted for it.
  */
 function positionally<T>(list: readonly unknown[], each: (item: unknown) => T): readonly T[] {
-  const { length } = list;
+  const length = lengthOf(list.length);
+  // Past 2^32 - 1, which no array is as long as, this throws, as `map` does as it makes its own.
   const items: T[] = [];
   items.length = length;
   for (let index = 0; index < length; index += 1) {
