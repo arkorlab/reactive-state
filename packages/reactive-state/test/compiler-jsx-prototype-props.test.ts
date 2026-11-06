@@ -11,7 +11,11 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * where it sets the props' prototype rather than a prop. Given text, or nothing, it sets none, and
  * the prop is dropped in the browser and by the authority alike. Given a value — in braces, or an
  * element — it may set one: React's `jsx` hands the component what the props inherit, and what the
- * authority renders reads their own fields alone, so the compile refuses it.
+ * authority renders reads their own fields alone, so the compile refuses it. A spread of an object
+ * written with such a `__proto__` is refused too: Next.js's SWC writes that object's fields into the
+ * props' literal, `__proto__` among them, where the authority spreads it, which copies none. A computed
+ * or shorthand `__proto__` is an own field, which both copy, and SWC writes a spread in parentheses as
+ * a spread.
  */
 
 const CASES = [
@@ -38,6 +42,36 @@ const CASES = [
     rendered: '$.h(Child, { proto: { shown: true } })',
     what: 'an object, under another name',
   },
+  {
+    element: '<Child {...{ __proto__: inherited }} />',
+    rendered: 'refused',
+    what: 'a spread object of a written __proto__',
+  },
+  {
+    element: '<Child {...{ "__proto__": inherited }} />',
+    rendered: 'refused',
+    what: 'a spread object of a quoted __proto__',
+  },
+  {
+    element: '<Child shown={1} {...{ __proto__: inherited }} />',
+    rendered: 'refused',
+    what: 'a spread object of a written __proto__ after a prop',
+  },
+  {
+    element: "<Child {...{ ['__proto__']: inherited }} />",
+    rendered: "$.h(Child, { ...{ ['__proto__']: inherited } })",
+    what: 'a spread object of a computed __proto__',
+  },
+  {
+    element: '<Child {...{ __proto__ }} />',
+    rendered: '$.h(Child, { ...{ __proto__ } })',
+    what: 'a spread object of a shorthand __proto__',
+  },
+  {
+    element: '<Child {...({ __proto__: inherited })} />',
+    rendered: '$.h(Child, { ...({ __proto__: inherited }) })',
+    what: 'a spread of a parenthesized object',
+  },
 ] as const;
 
 /** Words of the compile's refusal, which `renderedOf` answers as `refused`. */
@@ -56,7 +90,7 @@ describe('an attribute named __proto__ of what the authority renders', () => {
 
   /** The element `rendered` writes of `element`; `refused` where the compile refuses it so. */
   function renderedOf(element: string): string {
-    const source = `declare const inherited: object;\nexport const element = ${element};\n`;
+    const source = `declare const inherited: object;\ndeclare const __proto__: object;\nexport const element = ${element};\n`;
     using parsed = parseModule(api, 'element.tsx', source);
     const { sourceFile } = parsed;
     let found: Jsx | undefined;
