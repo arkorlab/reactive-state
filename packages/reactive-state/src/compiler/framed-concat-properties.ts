@@ -351,7 +351,7 @@ export function concatValues(
     { value: root as Expression, keys: [key] as readonly string[], seen: new Set<Expression>() },
   ];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (at.seen.has(at.value) || symbolValue(at.value)) continue;
+    if (at.seen.has(at.value) || (at.value !== root && symbolValue(at.value))) continue;
     const seen = new Set(at.seen).add(at.value);
     const source = at.keys.length === 0 ? at.value : (concatSource(at.value, stable) ?? at.value);
     const selected = framedObjectSources(source, at.keys);
@@ -361,7 +361,10 @@ export function concatValues(
   return found;
 }
 
-/** Original symbol data and getter returns cannot be numeric slot values merely because a key is opaque. */
+/**
+ * Original symbol data and getter returns cannot be numeric slot values merely because a key is
+ * opaque. The copied literal itself is no field's value, whatever function or getter holds it.
+ */
 function symbolValue(value: Expression): boolean {
   for (let node: Node = value; !isSourceFile(node); node = node.parent) {
     const parent = node.parent;
