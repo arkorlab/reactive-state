@@ -20,6 +20,7 @@ import {
   concatValues,
   type ConcatStable,
 } from './framed-concat-properties.ts';
+import { framedLiteralPrototypes } from './framed-object-members.ts';
 
 /** Native concat retains source-known spreadable array-like slots without materializing a runtime length. */
 
@@ -72,7 +73,7 @@ export function framedConcatSegment(
 /** Only ordered literal data fields prove hook truthiness and length; opaque metadata stays possible. */
 function spreadMetadata(root: ObjectLiteralExpression, stable: ConcatStable): SpreadMetadata {
   const state: SpreadMetadata = { found: false, spread: false, length: 0, keys: new Set() };
-  for (const field of concatFields(root, stable)) {
+  for (const field of chainFields(root, stable)) {
     if (field === undefined) {
       state.spread = undefined;
       state.length = undefined;
@@ -92,6 +93,36 @@ function spreadMetadata(root: ObjectLiteralExpression, stable: ConcatStable): Sp
     else if (numericKey(key)) state.keys.add(key);
   }
   return state;
+}
+
+/**
+ * Native concat reads its hook, length and slots through a written prototype where the literal's own
+ * fields do not define them: the prototype's fields come first, for the literal's own to replace. A
+ * prototype the compile cannot read, or whose creation is not quiet, stands as one opaque field.
+ */
+function chainFields(
+  root: ObjectLiteralExpression,
+  stable: ConcatStable,
+): ReturnType<typeof concatFields> {
+  const levels = [concatFields(root, stable)];
+  const seen = new Set<Expression>([root]);
+  for (let prototypes = framedLiteralPrototypes(root); prototypes.length > 0;) {
+    const prototype = prototypes.length === 1 ? prototypes[0] : undefined;
+    const value = prototype === undefined ? undefined : concatSource(prototype, stable);
+    if (
+      value === undefined ||
+      !isObjectLiteralExpression(value) ||
+      seen.has(value) ||
+      !concatQuietSource(value, stable)
+    ) {
+      levels.push([undefined]);
+      break;
+    }
+    seen.add(value);
+    levels.push(concatFields(value, stable));
+    prototypes = framedLiteralPrototypes(value);
+  }
+  return levels.toReversed().flat();
 }
 
 /** Unknown positions visit only written numeric keys and one unwritten representative for opaque fields. */
