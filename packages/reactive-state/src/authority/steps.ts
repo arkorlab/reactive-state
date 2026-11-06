@@ -223,7 +223,7 @@ function measure(value: unknown): void {
   const within = new Set<unknown>();
   const pending: Pending[] = [{ value }];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    if ('leaving' in next) {
+    if (isLeaving(next)) {
       within.delete(next.leaving);
       continue;
     }
@@ -274,7 +274,7 @@ function readEntry(
   pending: Pending[],
 ): void {
   const descriptor = Object.getOwnPropertyDescriptor(held, key);
-  if (descriptor !== undefined && 'value' in descriptor) {
+  if (descriptor !== undefined && isData(descriptor)) {
     pending.push({ value: descriptor.value });
   }
 }
@@ -296,6 +296,7 @@ function indexedKey(key: string | symbol, length: number): boolean {
 const INTRINSIC = Object.freeze({
   describe: Object.getOwnPropertyDescriptor,
   floor: Math.floor,
+  hasOwn: Object.hasOwn,
   isArray: Array.isArray,
   isProxy: types.isProxy,
   min: Math.min,
@@ -303,6 +304,24 @@ const INTRINSIC = Object.freeze({
   toBoolean: Boolean,
   toNumber: Number,
 });
+
+/**
+ * Whether `descriptor` is a data entry's: of a `value` of its own, never of one every object
+ * inherits, which, set on `Object.prototype`, would make an accessor's descriptor look like one.
+ */
+function isData(descriptor: PropertyDescriptor): boolean {
+  return INTRINSIC.hasOwn(descriptor, 'value');
+}
+
+/** The value of the data entry `descriptor` is of; nothing of an accessor's, or of none. */
+function dataOf(descriptor: PropertyDescriptor | undefined): unknown {
+  return descriptor !== undefined && isData(descriptor) ? descriptor.value : undefined;
+}
+
+/** Whether `next` is what `measure` leaves, by an entry of its own, never one every object inherits. */
+function isLeaving(next: Pending): next is { readonly leaving: unknown } {
+  return INTRINSIC.hasOwn(next, 'leaving');
+}
 
 /** A Proxy cannot be inspected for size without executing otherwise unused application traps. */
 function refuseProxy(value: unknown): void {
@@ -419,8 +438,7 @@ function arrayLength(value: Readonly<Record<PropertyKey, unknown>>): number {
 
 /** An own or inherited data member, without invoking accessors or passing a shadowing entry. */
 function storedMember(value: Readonly<Record<PropertyKey, unknown>>, key: PropertyKey): unknown {
-  const descriptor = storedDescriptor(value, key);
-  return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
+  return dataOf(storedDescriptor(value, key));
 }
 
 /** What an own or inherited member is, the first along the prototypes that holds it, of no trap. */
@@ -502,15 +520,16 @@ function refuseOtherSpecies(receiver: unknown): void {
   if (made === undefined) {
     return;
   }
-  if (!('value' in made)) {
+  if (!isData(made)) {
     refuseConcatCode();
   }
   const by: unknown = made.value;
   const species = INTRINSIC.describe(CONCAT_READS.array, CONCAT_READS.species);
-  if (
-    by !== undefined &&
-    (by !== CONCAT_READS.array || species?.get !== CONCAT_READS.speciesOfArray)
-  ) {
+  const ownSpecies =
+    species !== undefined &&
+    INTRINSIC.hasOwn(species, 'get') &&
+    species.get === CONCAT_READS.speciesOfArray;
+  if (by !== undefined && (!ownSpecies || by !== CONCAT_READS.array)) {
     refuseConcatCode();
   }
 }
@@ -525,10 +544,10 @@ function chargeSpread(item: unknown): void {
     return;
   }
   const flag = storedDescriptor(item, CONCAT_READS.spreadable);
-  if (flag !== undefined && !('value' in flag)) {
+  if (flag !== undefined && !isData(flag)) {
     refuseConcatCode();
   }
-  const stored: unknown = flag?.value;
+  const stored = dataOf(flag);
   const spreads = stored === undefined ? INTRINSIC.isArray(item) : INTRINSIC.toBoolean(stored);
   if (!spreads) {
     return;
@@ -549,7 +568,7 @@ function lengthOf(item: WeakKey): number {
   if (entry === undefined) {
     return 0;
   }
-  if (!('value' in entry)) {
+  if (!isData(entry)) {
     refuseConcatCode();
   }
   const stored: unknown = entry.value;
@@ -574,7 +593,7 @@ function refuseReadPositions(item: WeakKey, length: number): void {
   const inherits: unknown = INTRINSIC.prototypeOf(item);
   for (let index = 0; index < length; index += 1) {
     const entry = INTRINSIC.describe(item, index) ?? storedDescriptor(inherits, index);
-    if (entry !== undefined && !('value' in entry)) {
+    if (entry !== undefined && !isData(entry)) {
       refuseConcatCode();
     }
   }

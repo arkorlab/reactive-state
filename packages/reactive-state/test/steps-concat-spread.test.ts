@@ -31,6 +31,19 @@ function replacing(
   }
 }
 
+/** What `run` answers, or the name of what it throws, while every object inherits `key` of `value`. */
+function inheriting(key: string, value: unknown, run: () => unknown): unknown {
+  // eslint-disable-next-line no-extend-native -- what the application's code may do, which this is of
+  Object.defineProperty(Object.prototype, key, { configurable: true, value, writable: true });
+  try {
+    return run();
+  } catch (error) {
+    return (error as Error).name;
+  } finally {
+    Reflect.deleteProperty(Object.prototype, key);
+  }
+}
+
 describe('what a dynamic site gives `concat` to spread', () => {
   it('refuses one whose length an accessor answers, before `concat` reads it', () => {
     let reads = 0;
@@ -270,5 +283,70 @@ describe('a call of `concat` is checked as it runs', () => {
     expect(made).toStrictEqual([1]);
     // Counted outside any call, past what one may spend, as nothing counts there.
     expect(counted('x'.repeat(PAST))).toHaveLength(PAST);
+  });
+});
+
+describe('a descriptor’s entries, read as its own, whatever every object inherits', () => {
+  it('make no accessor `concat` reads look as if of a value', () => {
+    const calls = { count: 0 };
+    const length = {
+      [Symbol.isConcatSpreadable]: true,
+      get length() {
+        return counting(calls)().length;
+      },
+    };
+    const position = Object.defineProperty(['x'], 0, { get: counting(calls) });
+    const flag = Object.defineProperty(['x'], Symbol.isConcatSpreadable, {
+      get: () => counting(calls)() === 'a',
+    });
+    const made = Object.defineProperty(['x'], 'constructor', {
+      get: () => {
+        calls.count += 1;
+        return Array;
+      },
+    });
+    withinSteps(() => 0);
+
+    // Each of what every object inherits as `value` passes what the accessor would answer.
+    const answers = [
+      inheriting('value', 1, concatenated(length)),
+      inheriting('value', 'x', concatenated(position)),
+      inheriting('value', true, concatenated(flag)),
+      inheriting('value', Array, () => withinSteps(() => method(made, 'concat')([]))),
+    ];
+
+    expect(answers).toStrictEqual(['TypeError', 'TypeError', 'TypeError', 'TypeError']);
+    expect(calls.count).toBe(0);
+  });
+
+  it('measure no accessor as of the value every object inherits', () => {
+    const entry = {
+      get unused() {
+        return 'a';
+      },
+    };
+    const length = {
+      [Symbol.isConcatSpreadable]: true,
+      get length() {
+        return 1;
+      },
+    };
+    withinSteps(() => 0);
+
+    const answers = [
+      inheriting('value', 'x'.repeat(PAST), () => withinSteps(() => counted(entry))),
+      inheriting('value', PAST, () => withinSteps(() => counted(length))),
+    ];
+
+    expect(answers).toStrictEqual([entry, length]);
+  });
+
+  it('leave what is measured told apart from what is left, though every object inherits `leaving`', () => {
+    const long = 'x'.repeat(PAST);
+    withinSteps(() => 0);
+
+    const answer = inheriting('leaving', 1, () => withinSteps(() => counted({ long })));
+
+    expect(answer).toBe('RangeError');
   });
 });
