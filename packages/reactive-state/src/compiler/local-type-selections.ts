@@ -209,7 +209,11 @@ function restElementReadings(
   });
 }
 
-/** Native array or tuple elements; a structural numeric index does not prove an array receiver. */
+/**
+ * Native array or tuple elements; a structural numeric index does not prove an array receiver. A
+ * tuple's rest supplies its elements in the rest's own environment, through aliases and actual
+ * arguments; from the end, a place no required element after the last rest fixes may hold any.
+ */
 export function arrayElementReadings(
   at: TypeReading,
   operands: Operands,
@@ -218,8 +222,18 @@ export function arrayElementReadings(
   return operands(at).flatMap((source) => {
     if (isExpressionWithTypeArguments(source.type)) return [];
     const element = nativeArrayElement(source.type);
-    const types = element === undefined ? tupleSelection(source.type, index) : [element];
-    return types?.map((type) => ({ ...source, type })) ?? [];
+    if (element !== undefined) return [{ ...source, type: element }];
+    const fromEnd = index !== undefined && index < 0;
+    const offsets = fromEnd ? endSelection(source.type, index) : undefined;
+    if (offsets !== undefined) return offsets.map((type) => ({ ...source, type }));
+    return (
+      writtenTupleReadings(
+        source,
+        fromEnd ? undefined : index,
+        (rest, relative) => restElementReadings(rest, operands, relative),
+        operands,
+      ) ?? []
+    );
   });
 }
 
@@ -255,11 +269,12 @@ export function arrayIterationKeys(
   return [...keys];
 }
 
-/** A finite tuple's native at position, including each possible length of trailing optional fields. */
-function tupleSelection(
-  type: TypeNode,
-  index: number | undefined,
-): readonly TypeNode[] | undefined {
+/**
+ * A finite tuple's native at position from its end, including each possible length of trailing
+ * optional fields. A required element after a tuple's last rest stands at its place from the end,
+ * however long the rest is; from within or before the rest, the written syntax fixes none.
+ */
+function endSelection(type: TypeNode, index: number): readonly TypeNode[] | undefined {
   let each = type;
   while (
     isParenthesizedTypeNode(each) ||
@@ -267,17 +282,13 @@ function tupleSelection(
   )
     each = each.type;
   if (!isTupleTypeNode(each)) return undefined;
-  if (index === undefined) return selectedMemberTypes(each, 'number');
-  if (index >= 0) return selectedMemberTypes(each, [String(index)]);
-  if (
-    each.elements.some((element) => {
-      return (
-        isRestTypeNode(element) ||
-        (isNamedTupleMember(element) && element.dotDotDotToken !== undefined)
-      );
-    })
-  )
-    return selectedMemberTypes(each, 'number');
+  const rest = each.elements.findLastIndex((element) => {
+    return (
+      isRestTypeNode(element) ||
+      (isNamedTupleMember(element) && element.dotDotDotToken !== undefined)
+    );
+  });
+  if (rest !== -1) return restEndSelection(each.elements, rest, index);
   const firstOptional = each.elements.findIndex((element) => {
     return (
       isOptionalTypeNode(element) ||
@@ -291,6 +302,24 @@ function tupleSelection(
     if (offset >= 0) keys.push(String(offset));
   }
   return selectedMemberTypes(each, keys);
+}
+
+/** The required element at a place from the end after the last rest, if every one there is required. */
+function restEndSelection(
+  elements: readonly TypeNode[],
+  rest: number,
+  index: number,
+): readonly TypeNode[] | undefined {
+  const offset = elements.length + index;
+  const selected = elements[offset];
+  const optional = elements.slice(rest + 1).some((element) => {
+    return (
+      isOptionalTypeNode(element) ||
+      (isNamedTupleMember(element) && element.questionToken !== undefined)
+    );
+  });
+  if (selected === undefined || optional || offset <= rest) return undefined;
+  return [isNamedTupleMember(selected) ? selected.type : selected];
 }
 
 /** A native array's written element, including readonly syntax and valid global qualifications. */
