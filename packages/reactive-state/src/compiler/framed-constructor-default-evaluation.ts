@@ -193,7 +193,10 @@ function quietRest(element: BindingElement, reading: Reading): boolean {
   return true;
 }
 
-/** A parameter's definite supplied root or its definite selected default. */
+/**
+ * A parameter's definite supplied root or its definite selected default. A rest parameter has none:
+ * it holds the arguments from its position on, of which the one written there is only the first.
+ */
 function parameterInput(
   index: number,
   parameters: readonly ParameterDeclaration[],
@@ -201,7 +204,7 @@ function parameterInput(
 ): Input | undefined {
   const given = slots[index] ?? [];
   const parameter = parameters[index];
-  if (parameter === undefined) return undefined;
+  if (parameter === undefined || parameter.dotDotDotToken !== undefined) return undefined;
   if (framedDefaultTaken(given))
     return parameter.initializer === undefined
       ? undefined
