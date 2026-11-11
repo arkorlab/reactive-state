@@ -67,10 +67,11 @@ export interface ArrayMethodOverride {
   readonly configurable?: true;
 }
 
-const ACCESSOR_KEYS = new Set(['get', 'set']);
-
 /** The own methods a write names, as far as it shows them. */
 export type OwnMethods = Map<string, ArrayMethodOverride>;
+
+/** What an assignment makes a property: writable and configurable, as a descriptor would say. */
+export const PLAIN_PROPERTY = { writable: true, configurable: true } as const;
 
 /** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
@@ -88,8 +89,7 @@ export function ownMethodAssignment(
     key,
     own: sourceArrayFunction(node.right) || knownNonNative(node.right),
     value: node.right,
-    writable: true,
-    configurable: true,
+    ...PLAIN_PROPERTY,
   };
 }
 
@@ -145,11 +145,12 @@ export function assignMethods(source: Expression, own: OwnMethods): void {
   }
 }
 
-/** A written own method or callable value, with unknown entries kept unproven. */
+/** A written own method or callable value, with unknown entries kept unproven; a plain property. */
 function propertyOverride(property: Node): ArrayMethodOverride {
-  if (isMethodDeclaration(property)) return { own: true, value: property };
+  if (isMethodDeclaration(property)) return { own: true, value: property, ...PLAIN_PROPERTY };
   if (!isPropertyAssignment(property)) return { own: false };
-  return { own: knownNonNative(property.initializer), value: property.initializer };
+  const { initializer } = property;
+  return { own: knownNonNative(initializer), value: initializer, ...PLAIN_PROPERTY };
 }
 
 /** One statically named data descriptor, including restoration to the native implementation. */
@@ -182,6 +183,8 @@ export function descriptorMethods(descriptors: ObjectLiteralExpression, own: Own
     }
   }
 }
+
+const ACCESSOR_KEYS = new Set(['get', 'set']);
 
 /**
  * A written value function proves a custom implementation; getters and unknown values do not. An
