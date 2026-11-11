@@ -24,6 +24,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
+  mayRunAgain,
   selectedMethod,
   type SelectedMethod,
   writtenAfterRead,
@@ -45,7 +46,7 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { constantValue } from './numbers.ts';
 
@@ -382,12 +383,15 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods): 
   }
 }
 
-/** Whether a write runs in another function that may run first, or after the read in its loop. */
+/**
+ * Whether a write runs in another function that may run first, or after the read where the read's
+ * run comes again.
+ */
 function mayPrecedeRead(node: Node, call: Node, root: FrameBinding): boolean {
   const owner = executionOwner(call);
   const writer = executionOwner(node);
   if (writer !== owner) return !unreferencedLocalFunction(writer, owner);
-  return node.pos >= call.end && repeatedFrameRead(node, call, root, owner);
+  return node.pos >= call.end && mayRunAgain(node, call, root, owner);
 }
 
 /** The methods a write to the array may replace, whichever value it writes. */

@@ -180,6 +180,31 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; String(values) && pass < 2; pass++) { values.join = Array.prototype.join; } }`,
     converts: true,
   },
+  {
+    id: 'recursive-iife-selection',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = values.join((values.join = Array.prototype.join, ''))): string { return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'single-iife-selection-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = values.join((values.join = Array.prototype.join, ''))): string { return text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'named-iife-calling-another-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} const other = (pass: number) => pass; return (function read(pass: number, text = values.join((values.join = Array.prototype.join, ''))): string { return text + other(pass); })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursive-iife-own-array-pin',
+    source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursive-iife-later-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = String(values)): string { values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
+    converts: true,
+  },
 ] as const;
 
 describe("writes in a call's arguments, after it selected its method", () => {
