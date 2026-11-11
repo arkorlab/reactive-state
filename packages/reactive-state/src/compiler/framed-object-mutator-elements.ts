@@ -31,6 +31,7 @@ import {
   isVariableDeclaration,
   type Node,
   type ObjectLiteralElementLike,
+  type ObjectLiteralExpression,
   type PropertyName,
   SyntaxKind,
   type VariableStatement,
@@ -231,11 +232,15 @@ function definedMaps(
   return found;
 }
 
+/** No name hidden: the state a read of a source starts from. */
+const NOTHING_HIDDEN: Hidden = { data: new Set(), getters: new Set() };
+
 /** One assign source's values at numeric keys; a getter there answers what it returns. */
 function assignedValues(
   source: Expression,
   index: number | undefined,
   reading: Reading,
+  hidden: Hidden = NOTHING_HIDDEN,
 ): WrittenArrayElement[] {
   if (isOmittedExpression(source)) return [];
   if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slotKey(index)] }];
@@ -246,17 +251,84 @@ function assignedValues(
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
     const opaque = opaqueSource(source, index);
     if (alternatives === undefined || !firstRead(reading.seen.sources, held)) return opaque;
-    return [...opaque, ...alternatives.flatMap((each) => assignedValues(each, index, reading))];
+    return [
+      ...opaque,
+      ...alternatives.flatMap((each) => assignedValues(each, index, reading, hidden)),
+    ];
   }
-  const found: WrittenArrayElement[] = [];
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property))
-      found.push(...assignedValues(property.expression, index, reading));
-    else if (!nameMayBeSlot(property.name, index)) continue;
-    else if (isPropertyAssignment(property)) found.push({ value: property.initializer, keys: [] });
-    else if (isGetAccessorDeclaration(property)) found.push(...returnedValues(property.body));
+  return sourceFields(value, index, reading, hidden);
+}
+
+/** The elements the fields of an assign source install, each as the fields after it leave it. */
+function sourceFields(
+  object: ObjectLiteralExpression,
+  index: number | undefined,
+  reading: Reading,
+  hidden: Hidden,
+): WrittenArrayElement[] {
+  const found: (readonly WrittenArrayElement[])[] = [];
+  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters) };
+  for (const property of object.properties.toReversed()) {
+    const name = sourceName(property);
+    const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
+    if (name === undefined || !taken.has(name))
+      found.push(propertyElements(property, index, reading, later));
+    for (const each of sourceNames(property)) {
+      later.data.add(each);
+      if (!isSetAccessorDeclaration(property)) later.getters.add(each);
+    }
   }
-  return found;
+  return found.toReversed().flat();
+}
+
+/**
+ * The names the fields after one have set: a setter after a getter completes its accessor, and a
+ * setter hides a value written before it; every other field hides both.
+ */
+interface Hidden {
+  readonly data: ReadonlySet<string>;
+  readonly getters: ReadonlySet<string>;
+}
+
+/**
+ * The elements one field of an assign source installs: its value, what its getter returns, and the
+ * own entries of a spread, whose getters were read, so a field after it hides them as values.
+ */
+function propertyElements(
+  property: ObjectLiteralElementLike,
+  index: number | undefined,
+  reading: Reading,
+  later: Hidden,
+): WrittenArrayElement[] {
+  if (isSpreadAssignment(property)) {
+    const copied = { data: later.data, getters: later.data };
+    return assignedValues(property.expression, index, reading, copied);
+  }
+  if (!nameMayBeSlot(property.name, index)) return [];
+  if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+  return isGetAccessorDeclaration(property) ? returnedValues(property.body) : [];
+}
+
+/** The name a field of an assign source sets, none for a spread, a name unread, or a prototype. */
+function sourceName(property: ObjectLiteralElementLike): string | undefined {
+  if (isSpreadAssignment(property)) return undefined;
+  const key = writtenArrayKey(property.name);
+  if (prototypeField(property, key) !== undefined) return undefined;
+  if (key !== undefined || !isComputedPropertyName(property.name)) return key;
+  const names = framedKeyNames(property.name.expression);
+  return names?.length === 1 ? names[0] : undefined;
+}
+
+/** The names a field of an assign source always sets: its own, or those of the literal it spreads. */
+function sourceNames(property: ObjectLiteralElementLike): readonly string[] {
+  if (!isSpreadAssignment(property)) {
+    const name = sourceName(property);
+    return name === undefined ? [] : [name];
+  }
+  const copied = unwrapped(property.expression);
+  return isObjectLiteralExpression(copied)
+    ? copied.properties.flatMap((each) => sourceNames(each))
+    : [];
 }
 
 /**

@@ -987,6 +987,48 @@ const ELEMENTS = [
     elements: ["'safe':"],
   },
   {
+    id: 'assign-later-field-hides-spread-entry',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { ...{ 0: error }, 0: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-later-getter-hides-spread-entry',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { ...{ 0: error }, get 0() { return 'safe'; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-getter-then-setter-keeps-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { return error; }, set 0(value: Error) {} }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-getter-then-setter-hides',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { ...{ get 0() { return error; } }, set 0(value: Error) {} }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'assign-spread-entry-after-field-hides-it',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { 0: error, ...{ 0: 'safe' } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-opaque-spread-keeps-earlier-field-pin',
+    source: `function frames(error: Error, rest: object) { ${VALUES} Object.assign(values, { 0: error, ...rest }); return values; }`,
+    index: undefined,
+    elements: ['error:', 'rest:0', 'rest:array'],
+  },
+  {
+    id: 'assign-computed-later-field-hides',
+    source: `function frames(error: Error) { ${VALUES} const key = 0; Object.assign(values, { 0: error, [key]: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1241,6 +1283,11 @@ const CONVERSIONS = [
     id: 'define-reassigned-function-nullish-getter-converts',
     source: `function frames(error: Error) { const a = ['safe']; function getter(): unknown { return 'safe'; } getter = undefined!; Object.defineProperty(a, 0, { get: getter ?? (() => error) }); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'assign-overwritten-spread-entry-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...{ 0: error }, 0: 'safe' }); return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',
