@@ -74,20 +74,21 @@ export function objectMutatorElements(
 
 /**
  * The call's arguments in order, each spread of a written list, or of a constant list nothing
- * changes, replaced by the entries it stands for; a spread the compile cannot read stays one.
+ * changes, replaced by the entries it stands for; a spread the compile cannot read stays one. A
+ * list is expanded each time it is spread, but never within itself.
  */
 function writtenArguments(call: CallExpression): readonly Expression[] {
+  type Listed = readonly (readonly Expression[])[];
   const written: Expression[] = [];
-  const expanded = new Set<readonly Expression[]>();
-  const pending = call.arguments.toReversed();
+  const pending = call.arguments.toReversed().map((node) => ({ node, within: [] as Listed }));
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const listed = isSpreadElement(each)
-      ? framedAppliedArguments(call, each.expression)
+    const listed = isSpreadElement(each.node)
+      ? framedAppliedArguments(call, each.node.expression)
       : undefined;
-    if (listed === undefined || expanded.has(listed)) written.push(each);
+    if (listed === undefined || each.within.includes(listed)) written.push(each.node);
     else {
-      expanded.add(listed);
-      pending.push(...listed.toReversed());
+      const within = [...each.within, listed];
+      for (const node of listed.toReversed()) pending.push({ node, within });
     }
   }
   return written;

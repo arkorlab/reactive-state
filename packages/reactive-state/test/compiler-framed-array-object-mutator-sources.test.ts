@@ -561,6 +561,18 @@ const ELEMENTS = [
     elements: ["'safe':", 'error:'],
   },
   {
+    id: 'define-repeated-constant-list',
+    source: `function frames(error: Error) { ${VALUES} const empty: never[] = []; Object.defineProperty(values, ...empty, ...empty, 'label', { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-repeated-constant-list-index',
+    source: `function frames(error: Error) { ${VALUES} const empty: never[] = []; Object.defineProperty(values, ...empty, ...empty, 0, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -687,6 +699,11 @@ const CONVERSIONS = [
     id: 'define-overloaded-getter-converts',
     source: `function frames(error: Error) { const a = ['safe']; function getter(): string; function getter(): unknown { return error; } Object.defineProperty(a, 0, { get: getter }); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'define-repeated-constant-list-safe',
+    source: `function frames(error: Error) { const a = ['safe']; const empty: never[] = []; Object.defineProperty(a, ...empty, ...empty, 'label', { value: error }); return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',
