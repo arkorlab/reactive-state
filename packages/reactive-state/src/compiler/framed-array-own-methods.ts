@@ -91,22 +91,44 @@ export function knownNonNative(expression: Expression): boolean {
  * of the chain is written as a whole elsewhere, and may hold another array than it was given.
  */
 export function arrayIdentity(value: Expression): FrameBinding | undefined {
+  const followed = followedIdentity(value);
+  return followed.written ? undefined : followed.root;
+}
+
+/**
+ * Whether a write to a member of `value` may write the array `root`: a name of its chain that is
+ * written as a whole elsewhere may hold any array, and so may its member be one of the array's.
+ */
+export function mayBeArray(value: Expression, root: FrameBinding): boolean {
+  const followed = followedIdentity(value);
+  return followed.written || followed.root === root;
+}
+
+interface FollowedIdentity {
+  readonly root: FrameBinding | undefined;
+  /** Whether a name of the chain is written as a whole. */
+  readonly written: boolean;
+}
+
+/** The chain of lexical aliases a value follows to an array's declaration, and what it passes. */
+function followedIdentity(value: Expression): FollowedIdentity {
   let each = unwrapped(value);
   const rest = arrayRestBinding(each);
-  if (rest !== undefined) return rest;
+  if (rest !== undefined) return { root: rest, written: false };
   const seen = new Set<FrameBinding>();
   let root: FrameBinding | undefined;
+  let written = false;
   while (isIdentifier(each)) {
     const selected = frameBindingOf(each);
-    if (selected === undefined) return undefined;
-    if (selected.keys.length > 0 || seen.has(selected.binding) || reassigned(selected.binding))
-      return undefined;
+    if (selected === undefined || selected.keys.length > 0 || seen.has(selected.binding))
+      return { root: undefined, written };
     root = selected.binding;
+    written ||= reassigned(root);
     seen.add(root);
-    if (root.initializer === undefined) return root;
+    if (root.initializer === undefined) return { root, written };
     each = unwrapped(root.initializer);
   }
-  return isArrayLiteralExpression(each) ? root : undefined;
+  return { root: isArrayLiteralExpression(each) ? root : undefined, written };
 }
 
 const REASSIGNED = new WeakMap<FrameBinding, boolean>();

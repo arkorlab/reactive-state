@@ -36,6 +36,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
   arrayIdentity,
+  mayBeArray,
   knownNonNative,
   OWN_METHODS,
   ownMethodAssignment,
@@ -358,7 +359,7 @@ function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (
     target === undefined ||
-    arrayIdentity(target) !== root ||
+    !mayBeArray(target, root) ||
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
     return;
@@ -413,7 +414,7 @@ function writtenMethods(node: Node, root: FrameBinding): readonly string[] {
 function assignedMethods(target: Expression, root: FrameBinding): readonly string[] {
   const member = unwrapped(target);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
-  if (arrayIdentity(member.expression) !== root) return [];
+  if (!mayBeArray(member.expression, root)) return [];
   const key = frameMemberName(member);
   const opaque = isElementAccessExpression(member)
     ? framedKeyNames(member.argumentExpression)
@@ -427,19 +428,33 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods): v
   if (!isDeleteExpression(node)) return;
   const member = unwrapped(node.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
-  if (arrayIdentity(member.expression) !== root) return;
+  if (!mayBeArray(member.expression, root)) return;
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
 }
 
-/** Native object mutators replace own methods in source order, retaining unknown writes as unknown. */
+/**
+ * Native object mutators replace own methods in source order, retaining unknown writes as unknown.
+ * Through a name that may hold another array they only leave the methods they write unproven.
+ */
 function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
   if (!isCallExpression(node)) return;
   const target = node.arguments[0];
-  if (target === undefined || arrayIdentity(target) !== root) return;
+  if (target === undefined || !mayBeArray(target, root)) return;
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (path === undefined) return;
+  if (arrayIdentity(target) === root) {
+    mutatorWrites(node, path, own);
+    return;
+  }
+  const possible: OwnMethods = new Map();
+  mutatorWrites(node, path, possible);
+  for (const key of possible.keys()) own.set(key, { own: false });
+}
+
+/** The methods one native object mutator writes, as it names them. */
+function mutatorWrites(node: CallExpression, path: string, own: OwnMethods): void {
   switch (path) {
     case 'Object.assign': {
       for (const source of node.arguments.slice(1)) assignMethods(source, own);

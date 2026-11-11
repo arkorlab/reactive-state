@@ -18,7 +18,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { arrayIdentity } from './framed-array-own-methods.ts';
+import { arrayIdentity, mayBeArray } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
@@ -140,7 +140,7 @@ function patternReadsFirst(node: Node, read: Node, root: FrameBinding): boolean 
     const member = unwrapped(target);
     const named =
       (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
-      arrayIdentity(member.expression) === root;
+      mayBeArray(member.expression, root);
     return !named || target.pos >= read.end;
   });
 }

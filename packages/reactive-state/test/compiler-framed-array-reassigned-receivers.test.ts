@@ -58,6 +58,61 @@ const CASES = [
     source: `function frames(error: Error) { let a = [error]; ${SAFE} a.length = 1; return String(a); }`,
     converts: false,
   },
+  {
+    id: 'alias-write-then-reassigned',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; b.join = Array.prototype.join; b = []; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-definition-then-reassigned',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-assignment-then-reassigned',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; Object.assign(b, { join: Array.prototype.join }); b = []; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-deletion-then-reassigned',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; delete b.join; b = []; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-pattern-target-then-reassigned',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; [b.join] = [Array.prototype.join]; b = []; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-assigned-later',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b: any[] = []; b = a; b.join = Array.prototype.join; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-of-reassigned-writes',
+    source: `function frames(error: Error) { let a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; a = []; return String(b); }`,
+    converts: true,
+  },
+  {
+    id: 'unrelated-reassigned-name-write-refused',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let other = [1]; other.join = Array.prototype.join; other = [2]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-never-reassigned-pin',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'unrelated-stable-name-write-pin',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} const other = [1]; other.join = Array.prototype.join; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'whole-write-only-pin',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; b = []; return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('method proofs of an array whose name is written as a whole', () => {
