@@ -9,15 +9,11 @@ import {
   isElementAccessExpression,
   isExpressionStatement,
   isIdentifier,
-  isMethodDeclaration,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
   isSourceFile,
   isSpreadElement,
-  isSpreadAssignment,
   type Node,
-  type ObjectLiteralExpression,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -31,14 +27,18 @@ import {
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
-import { sourceArrayFunction, writtenArrayKey } from './framed-array-functions.ts';
+import { sourceArrayFunction } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
   arrayIdentity,
+  assignMethods,
+  defineMethod,
+  descriptorMethods,
+  forgetMethods,
   mayBeArray,
-  knownNonNative,
   OWN_METHODS,
+  type OwnMethods,
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
@@ -49,7 +49,6 @@ import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
-import { constantValue } from './numbers.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
 
@@ -57,10 +56,6 @@ interface ArrayWords {
   readonly error: (value: Expression, keys?: readonly string[]) => boolean;
   readonly typed: (value: Expression) => boolean;
 }
-
-const ACCESSOR_KEYS = new Set(['get', 'set']);
-
-type OwnMethods = Map<string, ArrayMethodOverride>;
 
 /** Whether a native join or toString call converts an explicitly written error element to text. */
 export function framedArrayText(node: Node, words: ArrayWords): boolean {
@@ -268,7 +263,7 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
   while (!isSourceFile(statement.parent) && !isBlock(statement.parent))
     statement = statement.parent;
   const owner = executionOwner(call);
-  const held = new Set<string>();
+  const held: HeldMethods = new Map();
   for (const before of statement.parent.statements) {
     if (before === statement) break;
     statementMethodWrites(before, root, { owner, own, held });
@@ -299,7 +294,7 @@ function statementMethodWrites(
     owner,
     own,
     held,
-  }: { readonly owner: Node; readonly own: OwnMethods; readonly held: Set<string> },
+  }: { readonly owner: Node; readonly own: OwnMethods; readonly held: HeldMethods },
 ): void {
   const top = isExpressionStatement(before) ? before.expression : undefined;
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
@@ -307,12 +302,16 @@ function statementMethodWrites(
   const writes = { root, owner, own, held, definite: definite ? top : undefined };
   possibleMethodWrites(before, { ...writes, until: before.end });
   if (top === undefined) return;
+  releaseHeld(top, root, held);
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
   holdDefinition(top, root, held);
-  for (const key of held) own.set(key, { own: false });
+  for (const key of held.keys()) own.set(key, { own: false });
 }
+
+/** Whether each key a definition left unproven may be redefined or deleted by a later one. */
+type HeldMethods = Map<string, boolean>;
 
 interface MethodWrites {
   readonly root: FrameBinding;
@@ -320,7 +319,7 @@ interface MethodWrites {
   readonly own: OwnMethods;
   readonly definite: Node | undefined;
   readonly until: number;
-  readonly held?: Set<string>;
+  readonly held?: HeldMethods;
   readonly selected?: SelectedMethod | undefined;
   readonly read?: Node | undefined;
 }
@@ -352,9 +351,30 @@ function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrite
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held);
 }
 
-/** The methods a call that defines properties of the array leaves without a custom function. */
-function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void {
-  if (!isCallExpression(node)) return;
+/**
+ * A definition of the array leaves a method unproven where it is neither a custom function nor a
+ * writable value; the key stays redefinable only where the descriptor says it is configurable.
+ */
+function holdDefinition(node: Node, root: FrameBinding, held: HeldMethods): void {
+  const defined = definedMethods(node, root);
+  if (defined === undefined) return;
+  for (const [key, method] of defined) {
+    if (method.own || method.writable === true) continue;
+    held.set(key, (held.get(key) ?? true) && method.configurable === true);
+  }
+}
+
+/** A definite redefinition or deletion replaces a configurable property, setter and all. */
+function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): void {
+  const replaced = definedMethods(top, root) ?? new Map<string, ArrayMethodOverride>();
+  deletedMethod(top, root, replaced);
+  if (replaced.size >= OWN_METHODS.size) return;
+  for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
+}
+
+/** The methods one call of Object.defineProperty or Object.defineProperties defines on the array. */
+function definedMethods(node: Node, root: FrameBinding): OwnMethods | undefined {
+  if (!isCallExpression(node)) return undefined;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (
@@ -362,10 +382,10 @@ function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void
     !mayBeArray(target, root) ||
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
-    return;
+    return undefined;
   const defined: OwnMethods = new Map();
   callMethodWrites(node, root, defined);
-  for (const [key, method] of defined) if (!method.own) held.add(key);
+  return defined;
 }
 
 /**
@@ -475,87 +495,6 @@ function mutatorWrites(node: CallExpression, path: string, own: OwnMethods): voi
       break;
     }
   }
-}
-
-/** Each source's last explicitly written field wins; an unknown source may restore native methods. */
-function assignMethods(source: Expression, own: OwnMethods): void {
-  const value = unwrapped(source);
-  if (!isObjectLiteralExpression(value)) {
-    forgetMethods(own);
-    return;
-  }
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property)) {
-      forgetMethods(own);
-      continue;
-    }
-    const key = writtenArrayKey(property.name);
-    if (key === undefined) forgetMethods(own);
-    else if (OWN_METHODS.has(key)) {
-      own.set(key, propertyOverride(property));
-    }
-  }
-}
-
-/** A written own method or callable value, with unknown entries kept unproven. */
-function propertyOverride(property: Node): ArrayMethodOverride {
-  if (isMethodDeclaration(property)) return { own: true, value: property };
-  if (!isPropertyAssignment(property)) return { own: false };
-  return { own: knownNonNative(property.initializer), value: property.initializer };
-}
-
-/** One statically named data descriptor, including restoration to the native implementation. */
-function defineMethod(call: CallExpression, own: OwnMethods): void {
-  const keyNode = call.arguments[1];
-  const key = keyNode === undefined ? undefined : constantValue(keyNode);
-  if (typeof key !== 'string') {
-    forgetMethods(own);
-    return;
-  }
-  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2]));
-}
-
-/** Object.defineProperties selects each descriptor by its written property name. */
-function descriptorMethods(descriptors: ObjectLiteralExpression, own: OwnMethods): void {
-  for (const property of descriptors.properties) {
-    if (isSpreadAssignment(property)) {
-      forgetMethods(own);
-      continue;
-    }
-    const key = writtenArrayKey(property.name);
-    if (key === undefined) forgetMethods(own);
-    else if (OWN_METHODS.has(key)) {
-      own.set(
-        key,
-        isPropertyAssignment(property) ? descriptorFunction(property.initializer) : { own: false },
-      );
-    }
-  }
-}
-
-/** A written value function proves a custom implementation; getters and unknown values do not. */
-function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOverride {
-  if (descriptor === undefined) return { own: false };
-  const value = unwrapped(descriptor);
-  if (!isObjectLiteralExpression(value)) return { own: false };
-  let custom: ArrayMethodOverride = { own: false };
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property)) custom = { own: false };
-    else {
-      const key = writtenArrayKey(property.name);
-      if (key === undefined || ACCESSOR_KEYS.has(key)) custom = { own: false };
-      else if (key === 'value')
-        custom = isPropertyAssignment(property)
-          ? { own: knownNonNative(property.initializer), value: property.initializer }
-          : { own: false };
-    }
-  }
-  return custom;
-}
-
-/** An opaque write can replace either method and therefore removes a proof of a custom method. */
-function forgetMethods(own: OwnMethods): void {
-  for (const method of OWN_METHODS) own.set(method, { own: false });
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */
