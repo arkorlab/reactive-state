@@ -7,6 +7,7 @@ import {
   isClassExpression,
   isInterfaceDeclaration,
   isEnumDeclaration,
+  isExpression,
   isFunctionTypeNode,
   isIdentifier,
   isLiteralTypeNode,
@@ -57,7 +58,8 @@ interface EnumInitializer {
   readonly literal: LiteralTypeNode['literal'];
 }
 interface EnumValue {
-  readonly declaration: EnumDeclaration;
+  /** None of a plain literal, which no enum member's type shares, however equal their values. */
+  readonly declaration: EnumDeclaration | undefined;
   readonly value: string | number;
 }
 interface Domain {
@@ -279,9 +281,11 @@ function leafDomain(reading: TypeReading): Domain {
     isFunctionTypeNode(type) ||
     isConstructorTypeNode(type) ||
     objectReference(type);
+  const plain =
+    isLiteralTypeNode(type) && isExpression(type.literal) ? enumLiteral(type.literal) : undefined;
   return {
     readings: [reading],
-    enums: [],
+    enums: plain === undefined ? [] : [{ declaration: undefined, value: plain.identity }],
     symbolSets: [],
     never: false,
     discriminant: discriminant || !closed,
@@ -289,7 +293,10 @@ function leafDomain(reading: TypeReading): Domain {
   };
 }
 
-/** Equal-valued members from distinct enum declarations retain their nominal relation as opaque. */
+/**
+ * Equal-valued members from distinct enum declarations, and a member beside a plain literal of its
+ * value, retain their nominal relation as opaque: TypeScript keeps each enum member's type apart.
+ */
 function conflictingEnums(domain: Domain): boolean {
   return domain.enums.some((left) => {
     return domain.enums.some((right) => {
