@@ -19,6 +19,8 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  */
 const HOLDER = "const methods = { inner: { join() { return 'fixed'; } }, label: 'x' };";
 const TAKEN = 'const values = [error]; values.join = methods.inner.join;';
+const DEEP = "const methods = { a: { b: { join() { return 'fixed'; } }, label: 'x' } };";
+const DEEP_TAKEN = 'const values = [error]; values.join = methods.a.b.join;';
 const KEEP = 'function keep(held: { join: unknown }) { held.join = Array.prototype.join; }';
 
 /** A function of the parameters `error` and `more`, whose body is `body`. */
@@ -59,6 +61,55 @@ const METHODS = [
       `${HOLDER} function read() { ${TAKEN} } function swap() { keep(methods.inner); } ${KEEP} read(); swap();`,
     ),
     custom: false,
+  },
+  {
+    id: 'loop-keeps-a-nested-holder-through-a-pattern',
+    source: framed(
+      `${DEEP} for (const each of [1, 2]) { void each; ${DEEP_TAKEN} const { b: held } = methods.a; held.join = Array.prototype.join; }`,
+    ),
+    custom: false,
+  },
+  {
+    id: 'loop-keeps-a-nested-holder-through-a-computed-key',
+    source: framed(
+      `${DEEP} for (const each of [1, 2]) { void each; ${DEEP_TAKEN} const key = more ? 'b' : 'label'; const { [key]: held } = methods.a; void held; }`,
+    ),
+    custom: false,
+  },
+  {
+    id: 'loop-keeps-the-rest-of-a-holder',
+    source: framed(
+      `${DEEP} for (const each of [1, 2]) { void each; ${DEEP_TAKEN} const { ...rest } = methods.a; void rest; }`,
+    ),
+    custom: false,
+  },
+  {
+    id: 'another-function-keeps-a-nested-holder-through-a-pattern',
+    source: framed(
+      `${DEEP} function read() { ${DEEP_TAKEN} } function swap() { const { b: held } = methods.a; held.join = Array.prototype.join; } read(); swap();`,
+    ),
+    custom: false,
+  },
+  {
+    id: 'loop-takes-a-nested-holder-apart-in-turn-pin',
+    source: framed(
+      `${DEEP} for (const each of [1, 2]) { void each; ${DEEP_TAKEN} const { b: { join } } = methods.a; void join; }`,
+    ),
+    custom: true,
+  },
+  {
+    id: 'loop-takes-a-data-member-through-a-pattern-pin',
+    source: framed(
+      `${DEEP} for (const each of [1, 2]) { void each; ${DEEP_TAKEN} const { label } = methods.a; void label; }`,
+    ),
+    custom: true,
+  },
+  {
+    id: 'loop-takes-a-function-through-a-pattern-with-a-default-pin',
+    source: framed(
+      `${DEEP} for (const each of [1, 2]) { void each; ${DEEP_TAKEN} const { join = Array.prototype.join } = methods.a.b; void join; }`,
+    ),
+    custom: true,
   },
   {
     id: 'loop-hands-a-function-away-pin',
