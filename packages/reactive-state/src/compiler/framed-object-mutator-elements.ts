@@ -36,21 +36,28 @@ import {
   type VariableStatement,
 } from 'typescript/ast';
 
-import { answersLater, isAnswering, overloadsOf } from './answers.ts';
+import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
-import { heldMemberWrites, isConstant } from './framed-held-member-writes.ts';
+import { heldMemberWrites, heldValue, isConstant } from './framed-held-member-writes.ts';
 import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
+import { keyMayBeSlot, nameMayBeSlot, slotKey } from './framed-mutator-keys.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedAssignedValues } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
-const MUTATORS = new Set(['Object.assign', 'Object.defineProperties', 'Object.defineProperty']);
+const PATHS = {
+  assign: 'Object.assign',
+  properties: 'Object.defineProperties',
+  property: 'Object.defineProperty',
+} as const;
+
+const MUTATORS: ReadonlySet<string> = new Set(Object.values(PATHS));
 
 /** The operators that hand over one of their operands. */
 const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
@@ -77,13 +84,45 @@ export function objectMutatorElements(
   const [target, ...rest] = writtenArguments(call);
   if (target === undefined || isSpreadElement(target)) return undefined;
   const reading = freshReading();
-  if (path === 'Object.assign')
-    return { target, elements: rest.flatMap((source) => assignedValues(source, index, reading)) };
+  const mutated = returnedTarget(target);
+  if (path === PATHS.assign)
+    return {
+      target: mutated,
+      elements: rest.flatMap((source) => assignedValues(source, index, reading)),
+    };
   const defined =
-    path === 'Object.defineProperties'
+    path === PATHS.properties
       ? definedMaps(rest, index, reading)
       : definedProperty(rest, index, reading);
-  return { target, elements: defined };
+  return { target: mutated, elements: defined };
+}
+
+/** The natives that hand back the object they were given first. */
+const RETURNS_TARGET: ReadonlySet<string> = new Set([
+  'Object.freeze',
+  'Object.preventExtensions',
+  'Object.seal',
+  'Object.setPrototypeOf',
+  PATHS.assign,
+  PATHS.properties,
+  PATHS.property,
+]);
+
+/**
+ * The object a mutation reaches through the natives that return their first argument:
+ * Object.assign(Object.assign(a, {}), ...) mutates a.
+ */
+function returnedTarget(target: Expression): Expression {
+  let at = target;
+  for (;;) {
+    const inner = unwrapped(at);
+    if (!isCallExpression(inner)) return at;
+    const path = globalPathOf(unwrapped(inner.expression))?.join('.');
+    const [first] = writtenArguments(inner);
+    if (path === undefined || !RETURNS_TARGET.has(path)) return at;
+    if (first === undefined || isSpreadElement(first)) return at;
+    at = first;
+  }
 }
 
 /**
@@ -485,43 +524,6 @@ function variableInitializer(name: Identifier): readonly Expression[] {
   return held === undefined ? [] : [held];
 }
 
-/**
- * What a name holds: a function it declares, or the initializer of a constant it names whole; the
- * names it passes through are given back.
- */
-function heldValue(
-  expression: Expression,
-  names: Identifier[] = [],
-): Expression | FunctionDeclaration {
-  let value = unwrapped(expression);
-  const seen = new Set<Node>();
-  while (isIdentifier(value) && !seen.has(value)) {
-    seen.add(value);
-    names.push(value);
-    const declared = frameDeclarationOf(value);
-    if (declared !== undefined && isFunctionDeclaration(declared))
-      return implementationOf(declared);
-    const selected = frameBindingOf(value);
-    const held =
-      selected?.keys.length === 0 &&
-      isVariableDeclaration(selected.binding) &&
-      isConstant(selected.binding)
-        ? selected.binding.initializer
-        : undefined;
-    if (held === undefined) return value;
-    value = unwrapped(held);
-  }
-  return value;
-}
-
-/** The declaration that has the body among those a function is declared over: its signatures. */
-function implementationOf(declared: FunctionDeclaration): FunctionDeclaration {
-  const written = overloadsOf(declared).find(
-    (each): each is FunctionDeclaration => isFunctionDeclaration(each) && each.body !== undefined,
-  );
-  return written ?? declared;
-}
-
 /** What a getter's body may return: by its flow where that is followed, by each `return` else. */
 function returnedValues(body: Block | undefined): WrittenArrayElement[] {
   if (body === undefined) return [];
@@ -555,70 +557,4 @@ function hasOwnReturns(node: Node): boolean {
 /** A constant declaration, as the object-member readers take it, keeps the body's flow followed. */
 function constantStatement(statement: VariableStatement): boolean {
   return /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile()));
-}
-
-/** The greatest array index: a larger integer names an ordinary property, no element. */
-const ARRAY_INDEX = { last: 4_294_967_294 } as const;
-
-/** Whether a written key may name the slot: its constants and branches decide, an opaque one may. */
-function keyMayBeSlot(key: Expression, index: number | undefined): boolean {
-  if (isOmittedExpression(key) || isSymbolKey(key)) return false;
-  const names = framedKeyNames(key);
-  return (
-    names === undefined || names.length === 0 || names.some((each) => possibleKey(each, index))
-  );
-}
-
-/** The symbols the language gives: the names `Symbol.iterator` and the others read. */
-const WELL_KNOWN_SYMBOLS: ReadonlySet<string> = new Set([
-  'asyncDispose',
-  'asyncIterator',
-  'dispose',
-  'hasInstance',
-  'isConcatSpreadable',
-  'iterator',
-  'match',
-  'matchAll',
-  'replace',
-  'search',
-  'species',
-  'split',
-  'toPrimitive',
-  'toStringTag',
-  'unscopables',
-]);
-
-/**
- * Whether a key is a symbol the program writes: a well-known one, `Symbol.iterator`, or one made
- * by `Symbol(...)` or `Symbol.for(...)`, through a constant that holds it. A symbol names no index;
- * other members of Symbol, `Symbol.length`, `Symbol.keyFor(...)`, read numbers and strings.
- */
-function isSymbolKey(key: Expression): boolean {
-  const value = heldValue(key);
-  if (isCallExpression(value)) {
-    const made = globalPathOf(unwrapped(value.expression))?.join('.');
-    return made === 'Symbol' || made === 'Symbol.for';
-  }
-  const path = globalPathOf(value);
-  return path?.length === 2 && path[0] === 'Symbol' && WELL_KNOWN_SYMBOLS.has(path[1] ?? '');
-}
-
-/** Whether an object field's name may name the slot, a computed one by what its key may be. */
-function nameMayBeSlot(name: PropertyName, index: number | undefined): boolean {
-  return isComputedPropertyName(name)
-    ? keyMayBeSlot(name.expression, index)
-    : possibleKey(writtenArrayKey(name), index);
-}
-
-/** A key that may name the selected array slot: an unknown one, or a canonical index. */
-function possibleKey(key: string | number | undefined, index: number | undefined): boolean {
-  if (key === undefined) return true;
-  const text = String(key);
-  if (!/^(?:0|[1-9]\d*)$/u.test(text) || Number(text) > ARRAY_INDEX.last) return false;
-  return index === undefined || Number(text) === index;
-}
-
-/** The opaque numeric path a source's selected slot takes, the first for an unknown one. */
-function slotKey(index: number | undefined): string {
-  return index === undefined ? '0' : String(index);
 }

@@ -945,6 +945,36 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'assign-chained-target',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(Object.assign(values, {}), { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-chained-target',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(Object.assign(values, {}), 0, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-chained-freeze-target',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(Object.freeze(values), { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-doubly-chained-target',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(Object.defineProperty(Object.assign(values, {}), 'label', { value: 1 }), { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-unknown-call-target-pin',
+    source: `function frames(error: Error, helper: (value: unknown[]) => unknown[]) { ${VALUES} Object.assign(helper(values), { 0: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1188,6 +1218,11 @@ const CONVERSIONS = [
   {
     id: 'define-key-for-key-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { [Symbol.keyFor(Symbol.for('0'))!]: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-chained-target-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(Object.assign(a, {}), { 0: error }); return String(a); }`,
     converts: true,
   },
   {

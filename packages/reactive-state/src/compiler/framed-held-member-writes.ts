@@ -1,5 +1,7 @@
 import {
   type BinaryExpression,
+  type FunctionDeclaration,
+  isFunctionDeclaration,
   type ElementAccessExpression,
   type Expression,
   type Identifier,
@@ -18,8 +20,9 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
+import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 
 /** The assignments to a member of an object a constant holds: a constant does not freeze it. */
@@ -151,4 +154,41 @@ function writesHeld(
 export function isConstant(declaration: Node): boolean {
   const list = declaration.parent;
   return isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
+}
+
+/**
+ * What a name holds: a function it declares, or the initializer of a constant it names whole; the
+ * names it passes through are given back.
+ */
+export function heldValue(
+  expression: Expression,
+  names: Identifier[] = [],
+): Expression | FunctionDeclaration {
+  let value = unwrapped(expression);
+  const seen = new Set<Node>();
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    names.push(value);
+    const declared = frameDeclarationOf(value);
+    if (declared !== undefined && isFunctionDeclaration(declared))
+      return implementationOf(declared);
+    const selected = frameBindingOf(value);
+    const held =
+      selected?.keys.length === 0 &&
+      isVariableDeclaration(selected.binding) &&
+      isConstant(selected.binding)
+        ? selected.binding.initializer
+        : undefined;
+    if (held === undefined) return value;
+    value = unwrapped(held);
+  }
+  return value;
+}
+
+/** The declaration that has the body among those a function is declared over: its signatures. */
+function implementationOf(declared: FunctionDeclaration): FunctionDeclaration {
+  const written = overloadsOf(declared).find(
+    (each): each is FunctionDeclaration => isFunctionDeclaration(each) && each.body !== undefined,
+  );
+  return written ?? declared;
 }
