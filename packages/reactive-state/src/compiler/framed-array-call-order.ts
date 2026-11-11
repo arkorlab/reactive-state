@@ -4,9 +4,11 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
+  isBlock,
   isCallExpression,
   isClassExpression,
   isElementAccessExpression,
+  isExpressionStatement,
   isForInStatement,
   isForOfStatement,
   isFunctionExpression,
@@ -22,9 +24,14 @@ import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { arrayIdentity } from './framed-array-own-methods.ts';
+import { arrayIdentity, ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameDeclarationOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import {
+  continuesBetween,
+  framedPossibleBranch,
+  repeatedFrameRead,
+  repeatingBodies,
+} from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
 
@@ -96,6 +103,43 @@ export function writtenAfterRead(node: Node, read: Node, root: FrameBinding): bo
  */
 export function mayRunAgain(node: Node, read: Node, root: FrameBinding, limit: Node): boolean {
   return repeatedFrameRead(node, read, root, limit) || reenteredRead(read, root, limit);
+}
+
+/**
+ * Whether a write that a loop brings back to the read is followed, in the same pass, by a statement
+ * that assigns the same method outright: one of a block around the write, after it, inside every
+ * loop that brings the write back, with no continue between them. The next read finds what that
+ * statement wrote, and the write comes to nothing.
+ */
+export function overwrittenInPass(
+  write: Node,
+  key: string,
+  read: Node,
+  root: FrameBinding,
+): boolean {
+  const owner = executionOwner(read);
+  if (reenteredRead(read, root, owner)) return false;
+  const bodies = repeatingBodies(write, read, root, owner);
+  if (
+    bodies.length === 0 ||
+    bodies.some((body) => !(write.pos >= body.pos && write.end <= body.end))
+  )
+    return false;
+  for (let at = write; !bodies.includes(at); at = at.parent) {
+    const { parent } = at;
+    if (!isBlock(parent)) continue;
+    const later = parent.statements.find((each) => {
+      return (
+        each.pos >= at.end &&
+        isExpressionStatement(each) &&
+        ownMethodAssignment(each.expression, root)?.key === key &&
+        bodies.every((body) => each.pos >= body.pos && each.end <= body.end) &&
+        !continuesBetween(parent, write.pos, each.pos)
+      );
+    });
+    if (later !== undefined) return true;
+  }
+  return false;
 }
 
 /**

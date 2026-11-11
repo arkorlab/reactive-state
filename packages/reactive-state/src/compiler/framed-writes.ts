@@ -144,6 +144,17 @@ function bindingOwner(declared: Node): Node {
  * reached by no pass, unless the body initializes the binding anew first.
  */
 export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner: Node): boolean {
+  return repeatingBodies(node, name, declared, owner).length > 0;
+}
+
+/** The bodies of the loops around a read that bring a later write back to it, as `repeatedFrameRead` asks. */
+export function repeatingBodies(
+  node: Node,
+  name: Node,
+  declared: Node,
+  owner: Node,
+): readonly Node[] {
+  const bodies: Node[] = [];
   for (let at = name.parent; at !== owner; at = at.parent) {
     const body = loopBody(at);
     if (
@@ -155,9 +166,9 @@ export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner:
       !leavesLoopFirst(node, body) &&
       !initializedWithin(declared, name, body)
     )
-      return true;
+      bodies.push(body);
   }
-  return false;
+  return bodies;
 }
 
 /**
@@ -181,7 +192,7 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
 }
 
 /** Whether a continue lies in the body between two positions, wherever it is nested. */
-function continuesBetween(body: Node, from: number, to: number): boolean {
+export function continuesBetween(body: Node, from: number, to: number): boolean {
   const pending: Node[] = [body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isContinueStatement(node) && node.pos >= from && node.pos < to) return true;

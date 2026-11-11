@@ -352,6 +352,51 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-restoration-then-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-branch-restoration-then-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 0) { values.join = Array.prototype.join; } values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-unknown-write-then-custom-write',
+    source: `function frames(error: Error) { const values = [error]; const choices = [() => 'also fixed', Array.prototype.join]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = choices[pass] as any; values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-custom-then-restoration-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = () => 'fixed'; values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-continue-between-restoration-and-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (pass >= 0) continue; values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-after-the-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; } values.join = () => 'fixed'; }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-in-inner-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; for (let inner = 0; inner < pass; inner++) { values.join = () => 'fixed'; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-update-write-then-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); values.join = Array.prototype.join) { values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-of-another-method-after-restoration-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; values.sort = () => values; } }`,
+    converts: true,
+  },
+  {
     id: 'recursive-iife-own-array-pin',
     source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
     converts: false,
