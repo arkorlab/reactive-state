@@ -67,6 +67,24 @@ const CASES = [
     values: ["'safe':", 'error:'],
   },
   {
+    id: 'computed-key-target-index',
+    source: `function frames(error: Error, name: string, holder: Record<string, unknown>) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: holder[entry[1] as string] } = { field: error })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'computed-key-default-read',
+    source: `function frames(error: Error, name: string) { ${ENTRY} let sink; return Object.fromEntries([entry], ({ [name]: sink = entry[0] } = { field: error })); }`,
+    key: 'other',
+    values: [],
+  },
+  {
+    id: 'computed-key-default-write-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] = 0 } = { field: error })); }`,
+    key: 'message',
+    values: ["'safe':", '0:', 'error:'],
+  },
+  {
     id: 'computed-key-other-tuple-pin',
     source: `function frames(error: Error, name: string) { ${ENTRY} const other: [string, unknown] = ['x', 0]; return Object.fromEntries([entry], ({ [name]: other[1] } = { field: error })); }`,
     key: 'message',

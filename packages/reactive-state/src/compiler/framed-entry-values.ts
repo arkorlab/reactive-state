@@ -270,7 +270,11 @@ function patternChildren(target: Expression): readonly Node[] {
   });
 }
 
-/** The tuple's slots an unrouted target holds, each fed by any field or element of the sources. */
+/**
+ * The tuple's slots an unrouted target holds, each fed by any field or element of the sources. Only
+ * the positions a pattern writes are walked: a default, a computed key, and the receiver and the
+ * index of a member that is not the tuple's are reads.
+ */
 function unroutedWrites(
   child: Node,
   sources: readonly AssignedFrameSource[],
@@ -279,11 +283,11 @@ function unroutedWrites(
   const found: SlotWrite[] = [];
   const pending: Node[] = [child];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const slot = isExpression(node) ? memberSlot(node, aliases) : null;
+    const target = isExpression(node) ? unwrapped(node) : node;
+    const slot = isExpression(target) ? memberSlot(target, aliases) : null;
     if (slot !== null) found.push({ slot, sources: possibleFields(sources) });
-    node.forEachChild((inner) => {
-      pending.push(inner);
-    });
+    else if (isSpreadElement(target)) pending.push(target.expression);
+    else if (isExpression(target)) pending.push(...patternChildren(target));
   }
   return found;
 }
