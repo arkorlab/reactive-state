@@ -6,6 +6,7 @@ import {
   isBlock,
   isCallExpression,
   isDeleteExpression,
+  isExpression,
   isElementAccessExpression,
   isIdentifier,
   isObjectLiteralExpression,
@@ -40,6 +41,7 @@ import {
   OWN_METHODS,
   afterPossibleWrite,
   definiteExpression,
+  evaluatedForSure,
   type OwnMethods,
   ownMethodAssignment,
   possibleOverride,
@@ -335,10 +337,8 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
     if (node.pos >= writes.until) continue;
     const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
     if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
-      unprovenWrites(node, keys, writes);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
+      unprovenWrites(node, keys, writes, evaluatedForSure(node, statement));
+    for (const child of node.getChildren().toReversed()) pending.push(child);
   }
 }
 
@@ -348,9 +348,15 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
  * of the attributes a method had, whether it ran or not, is what stays: a write of the value alone
  * keeps them, a definition that does not name them does too.
  */
-function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
+function unprovenWrites(
+  node: Node,
+  keys: readonly string[],
+  writes: MethodWrites,
+  sure: boolean,
+): void {
   const { selected, read } = writes;
   if (read !== undefined && writtenAfterRead(node, read, writes.root)) return;
+  if (sure && writes.held !== undefined) releaseHeld(node, writes.root, writes.held);
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
   const defined = isDeleteExpression(node)
     ? undefined
@@ -386,10 +392,10 @@ function holdDefinition(
  * A definite redefinition or deletion replaces a configurable property, setter and all: one of the
  * array itself, not of a name that may hold another.
  */
-function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): void {
+function releaseHeld(top: Node, root: FrameBinding, held: HeldMethods): void {
   const replaced =
     definedMethods(top, root, { exact: true }) ?? new Map<string, ArrayMethodOverride>();
-  deletedMethod(top, root, replaced, true);
+  if (isExpression(top)) deletedMethod(top, root, replaced, true);
   if (replaced.size >= OWN_METHODS.size) return;
   for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
 }
