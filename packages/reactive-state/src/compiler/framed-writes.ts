@@ -295,7 +295,7 @@ function pendingFrom(write: Node, scope: Node, target: Node): number {
   for (let at = write; at !== scope && !isSourceFile(at); at = at.parent) {
     const { parent } = at;
     const within = target.pos >= at.pos && target.end <= at.end;
-    if (isTryStatement(parent) && isBlock(at) && parent.finallyBlock === at && !within)
+    if (!within && isTryStatement(parent) && isBlock(at) && parent.finallyBlock === at)
       from = Math.min(from, parent.pos);
   }
   return from;
