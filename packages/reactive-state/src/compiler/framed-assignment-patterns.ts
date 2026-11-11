@@ -200,7 +200,7 @@ function objectSource(
   for (const property of value.properties.toReversed()) {
     const found = isSpreadAssignment(property)
       ? spreadSource(property.expression, key, opaque)
-      : fieldSource(property, key, opaque, own);
+      : fieldSource(property, key, opaque);
     if (found !== undefined && found.length > 0) return found;
   }
   return own ? [] : prototypeSource(value, key, opaque);
@@ -209,7 +209,8 @@ function objectSource(
 /**
  * What the prototype a literal writes selects of a key no own entry names: the entry of a written
  * object or list, none for `null`, and the path for any other prototype, which the compile does not
- * read.
+ * read. A written `__proto__: value` is no own entry, and a read of `__proto__` itself gives the
+ * prototype it sets.
  */
 function prototypeSource(
   value: ObjectLiteralExpression,
@@ -218,6 +219,7 @@ function prototypeSource(
 ): readonly AssignedFrameSource[] {
   const field = value.properties.find((property) => setsPrototype(property));
   if (field === undefined || !isPropertyAssignment(field)) return [];
+  if (key === '__proto__') return [{ value: field.initializer, keys: [] }];
   const prototype = unwrapped(field.initializer);
   if (prototype.kind === SyntaxKind.NullKeyword) return [];
   if (isObjectLiteralExpression(prototype)) return objectSource(prototype, key, opaque);
@@ -229,9 +231,8 @@ function fieldSource(
   property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
   key: string,
   opaque: AssignedFrameSource,
-  own: boolean,
 ): readonly AssignedFrameSource[] | undefined {
-  if (own && setsPrototype(property)) return undefined;
+  if (setsPrototype(property)) return undefined;
   const name = literalKey(property.name);
   if (name === undefined) return [opaque];
   if (name !== key) return undefined;

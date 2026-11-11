@@ -864,6 +864,36 @@ const CASES = [
     key: 'message',
     values: ['error:'],
   },
+  {
+    id: 'named-prototype-key-own-field-over-setter',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { ['__proto__']: error, __proto__: {} })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-own-field-only',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { ['__proto__']: error })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-no-setter-is-object-prototype',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ __proto__: entry[1] } = {})); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'named-prototype-key-setter-after-own-field-of-another-name',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { field: error, __proto__: error })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-own-field-after-setter',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { __proto__: {}, ['__proto__']: error })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
