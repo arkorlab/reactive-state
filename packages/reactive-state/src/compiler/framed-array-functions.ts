@@ -26,6 +26,7 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isReturnStatement,
+  isSetAccessorDeclaration,
   isSpreadElement,
   isSpreadAssignment,
   isStringLiteral,
@@ -198,7 +199,11 @@ function firstReference(
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (node.pos >= reference.pos || isTypeNode(node)) continue;
     if (deferredBefore(node, reference, pending)) continue;
-    if (node.end <= reference.pos && isCallExpression(node) && quietWrittenCall(node)) continue;
+    const rest = quietCallRest(node, reference);
+    if (rest !== undefined) {
+      pending.push(...rest);
+      continue;
+    }
     if (priorEffect(node, reference)) return false;
     if (priorBindingRead(node, reference, binding)) return false;
     node.forEachChild((child) => {
@@ -211,11 +216,28 @@ function firstReference(
   });
 }
 
-/** Other function bodies are deferred, but their computed method names are evaluated now. */
+/**
+ * What a completed quiet call leaves to read: its invoked body is quiet, but a callee that selects
+ * the method from an object literal written in place evaluates that literal's other members first.
+ * `undefined` where the call is not a quiet one.
+ */
+function quietCallRest(node: Node, reference: Identifier): readonly Node[] | undefined {
+  if (node.end > reference.pos || !isCallExpression(node) || !quietWrittenCall(node))
+    return undefined;
+  let root = unwrapped(node.expression);
+  while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
+    root = unwrapped(root.expression);
+  return isObjectLiteralExpression(root) ? [root] : [];
+}
+
+/** Other function bodies, a setter's too, are deferred, but their computed names are evaluated now. */
 function deferredBefore(node: Node, reference: Identifier, pending: Node[]): boolean {
-  if (!isAnswering(node) || node.end >= reference.pos) return false;
+  if (!(isAnswering(node) || isSetAccessorDeclaration(node)) || node.end >= reference.pos)
+    return false;
   if (
-    (isMethodDeclaration(node) || isGetAccessorDeclaration(node)) &&
+    (isMethodDeclaration(node) ||
+      isGetAccessorDeclaration(node) ||
+      isSetAccessorDeclaration(node)) &&
     isComputedPropertyName(node.name)
   )
     pending.push(node.name.expression);
