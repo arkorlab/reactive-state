@@ -28,15 +28,20 @@ import {
   isNoSubstitutionTemplateLiteral,
   type VariableDeclaration,
   isIfStatement,
+  isLabeledStatement,
   isSourceFile,
   isReturnStatement,
   isSetAccessorDeclaration,
   isSpreadElement,
+  isSwitchStatement,
   isThrowStatement,
+  isTryStatement,
   isVariableDeclaration,
   isVariableStatement,
   isWhileStatement,
+  type BreakOrContinueStatement,
   type Node,
+  type Statement,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -172,35 +177,77 @@ export function repeatingBodies(
 }
 
 /**
- * Whether a write in the loop's body is always followed by a break, a return or a throw of a block
- * around it, with no continue between them: the loop never comes round to its next pass after it.
+ * Whether a write in the loop's body is always followed by a statement of a block around it that
+ * leaves the loop, with no jump between them that may skip it: the loop never comes round to its
+ * next pass.
  */
 function leavesLoopFirst(node: Node, body: Node): boolean {
   if (!withinBody(node, body)) return false;
   for (let at = node; at !== body; at = at.parent) {
     const { parent } = at;
     if (!isBlock(parent)) continue;
-    const exit = parent.statements.find((each) => {
-      return (
-        each.pos >= at.end &&
-        (isBreakStatement(each) || isReturnStatement(each) || isThrowStatement(each))
-      );
-    });
-    if (exit !== undefined && !continuesBetween(body, node.pos, exit.pos)) return true;
+    const exit = parent.statements.find(
+      (each) => each.pos >= at.end && leavesBody(each, parent, body),
+    );
+    if (exit !== undefined && !jumpsOver(body, node.pos, exit)) return true;
   }
   return false;
 }
 
-/** Whether a continue lies in the body between two positions, wherever it is nested. */
-export function continuesBetween(body: Node, from: number, to: number): boolean {
-  const pending: Node[] = [body];
+/**
+ * Whether a statement of `block`, a block within the body, leaves the loop whose body it is: a
+ * return or a throw, or a break that no loop or switch within the body takes, where no function and
+ * no try statement, whose catch or finally may go on, lies between.
+ */
+function leavesBody(statement: Statement, block: Node, body: Node): boolean {
+  const breaks = isBreakStatement(statement) && statement.label === undefined;
+  if (!breaks && !isReturnStatement(statement) && !isThrowStatement(statement)) return false;
+  if (block === body) return true;
+  for (let at = block.parent; at !== body; at = at.parent) {
+    if (isAnswering(at) || isConstructorDeclaration(at) || isSetAccessorDeclaration(at))
+      return false;
+    if (isTryStatement(at) || (breaks && (loopBody(at) !== undefined || isSwitchStatement(at))))
+      return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a continue or a break between a position and `target`, in `scope`, lands past `target`:
+ * the loop, switch or labeled statement it leaves or goes round holds `target`, and so leaves it
+ * behind; one that lands before it, out of an inner statement, does not.
+ */
+export function jumpsOver(scope: Node, from: number, target: Node): boolean {
+  const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isContinueStatement(node) && node.pos >= from && node.pos < to) return true;
+    if (
+      (isContinueStatement(node) || isBreakStatement(node)) &&
+      node.pos >= from &&
+      node.pos < target.pos
+    ) {
+      const destination = jumpTarget(node);
+      if (
+        destination === undefined ||
+        (destination.pos <= target.pos && target.end <= destination.end)
+      )
+        return true;
+    }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return false;
+}
+
+/** The loop, switch or labeled statement a break or continue leaves or goes round, if it is found. */
+function jumpTarget(jump: BreakOrContinueStatement): Node | undefined {
+  const breaks = isBreakStatement(jump);
+  for (let at = jump.parent; !isSourceFile(at) && !isAnswering(at); at = at.parent) {
+    if (jump.label === undefined) {
+      if (loopBody(at) !== undefined || (breaks && isSwitchStatement(at))) return at;
+    } else if (isLabeledStatement(at) && at.label.text === jump.label.text) return at;
+  }
+  return undefined;
 }
 
 /** A for initializer and a for-of or for-in iterable run once, before the loop's first pass. */
