@@ -17,6 +17,7 @@ import {
   mergedHeritageDeclarations,
 } from './local-type-aliases.ts';
 import { capturedTypeReading } from './local-type-captured-sequences.ts';
+import { qualifiedClassBinding } from './local-type-class-namespaces.ts';
 import {
   boundTypeBody,
   type GenericDeclaration,
@@ -71,11 +72,19 @@ function argumentReferences(at: ArgumentNode): ArgumentSelection | undefined {
   return argumentBodies(binding, node, reading);
 }
 
-/** The local declaration a reference names, followed through namespaces as `NS.Alias` writes it. */
+/**
+ * The local declaration a reference names, followed through namespaces as `NS.Alias` writes it, and
+ * a class base `NS.Base` as the readers of class heritage follow it.
+ */
 function referencedBinding(
   node: TypeReferenceNode | ExpressionWithTypeArguments,
 ): LocalTypeBinding {
-  const name = isTypeReferenceNode(node) ? node.typeName : node.expression;
+  if (isExpressionWithTypeArguments(node)) {
+    return isIdentifier(node.expression)
+      ? localTypeBinding(node.expression)
+      : qualifiedClassBinding(node.expression);
+  }
+  const name = node.typeName;
   if (isIdentifier(name)) return localTypeBinding(name);
   return isQualifiedName(name) ? qualifiedLocalTypeBinding(name) : undefined;
 }
