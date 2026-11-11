@@ -426,8 +426,9 @@ function heldBindings(first: Identifier, names: readonly Identifier[]): Readonly
   return bindings;
 }
 
-/** Whether a declaration gives a name to what one of the bindings names, whole. */
+/** Whether a constant gives a name to what one of the bindings names, whole; a variable may change. */
 function namesHeld(declaration: VariableDeclaration, bindings: ReadonlySet<unknown>): boolean {
+  if (!isConstant(declaration)) return false;
   const held =
     declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer);
   const selected = held !== undefined && isIdentifier(held) ? frameBindingOf(held) : undefined;
