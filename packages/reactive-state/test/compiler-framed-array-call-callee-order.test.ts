@@ -1292,6 +1292,46 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-the-default-of-a-dropped-generator',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (pass < 1) helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = read(pass + 1)) {} })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-default-of-a-dropped-generator-method',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (pass < 1) ({ *helper(p: any = read(pass + 1)) {} }).helper(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-helper-in-the-default-of-a-dropped-generator',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (pass < 1) helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = other()) {} function other() { return read(pass + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'dropped-generator-with-a-plain-default-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = 1) { read(pass + 1); } })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'generators-whose-defaults-make-each-other-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} if (false) a(); const text = String(values); values.join = Array.prototype.join; return text; function* a(x: any = b()) {} function* b(y: any = a()) {} })(); }`,
+    converts: false,
+  },
+  {
+    id: 'generator-advanced-only-in-unreachable-code-pin',
+    source: `function frames(error: Error) { const values = [error]; function note() {} return (function read(): string { ${SAFE} if (false) helper().next(); note(); const text = String(values); values.join = Array.prototype.join; return text; function* helper() { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'generator-spread-only-in-unreachable-code-pin',
+    source: `function frames(error: Error) { const values = [error]; function note() {} return (function read(): string { ${SAFE} if (false) [...helper()]; note(); const text = String(values); values.join = Array.prototype.join; return text; function* helper() { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'generator-advanced-in-reachable-code',
+    source: `function frames(error: Error) { const values = [error]; function note() {} return (function read(pass: number): string { ${SAFE} if (true) helper(pass).next(); note(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

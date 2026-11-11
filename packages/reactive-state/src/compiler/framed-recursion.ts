@@ -134,19 +134,40 @@ function droppedCall(node: Node): boolean {
   return call !== undefined && isExpressionStatement(call.parent);
 }
 
-/**
- * Whether a node reads a name that only generators have, in a call whose iterator is dropped: the
- * call makes an iterator and runs none of the body.
- */
-function dropsGenerator(node: Node, name: string): boolean {
-  if (!droppedCall(node)) return false;
-  const functions = functionsOf(node.getSourceFile()).byName.get(name) ?? [];
-  return functions.length > 0 && functions.every((each) => isGenerator(each));
+/** Whether the parameters of a function, which run when it is called, read one of the names. */
+function parametersMention(fn: Node, names: ReadonlySet<string>): boolean {
+  const pending: Node[] = [...((fn as { readonly parameters?: readonly Node[] }).parameters ?? [])];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    if (isFunctionCode(node) && !runsInPlace(node)) {
+      pending.push(...definitionParts(node));
+      continue;
+    }
+    const text = referenceText(node);
+    if (text !== undefined && names.has(text) && !written(node)) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /**
- * Whether the iterator of a generator may be advanced: a name of it is used otherwise than in a
- * call whose iterator is dropped.
+ * Whether a node reads a name that only generators have, in a call whose iterator is dropped: the
+ * call makes an iterator, runs the parameters of the generator and none of its body.
+ */
+function dropsGenerator(node: Node, name: string, names: ReadonlySet<string>): boolean {
+  if (!droppedCall(node)) return false;
+  const functions = functionsOf(node.getSourceFile()).byName.get(name) ?? [];
+  return (
+    functions.length > 0 &&
+    functions.every((each) => isGenerator(each) && !parametersMention(each, names))
+  );
+}
+
+/**
+ * Whether the iterator of a generator may be advanced: a name of it is used, where the code may
+ * run, otherwise than in a call whose iterator is dropped.
  */
 function advanced(fn: Node): boolean {
   const names = new Set(namesOf(fn).names);
@@ -154,7 +175,14 @@ function advanced(fn: Node): boolean {
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
     const text = referenceText(node);
-    if (text !== undefined && names.has(text) && !written(node) && !droppedCall(node)) return true;
+    if (
+      text !== undefined &&
+      names.has(text) &&
+      !written(node) &&
+      !droppedCall(node) &&
+      framedPossibleBranch(node)
+    )
+      return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -305,7 +333,7 @@ function mentionsAny(fn: Node, names: ReadonlySet<string>): boolean {
       text !== undefined &&
       names.has(text) &&
       !written(node) &&
-      !dropsGenerator(node, text) &&
+      !dropsGenerator(node, text, names) &&
       runsWithin(node, fn)
     )
       return true;
@@ -504,7 +532,7 @@ function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolea
     text !== undefined &&
     names.has(text) &&
     !written(node) &&
-    !dropsGenerator(node, text) &&
+    !dropsGenerator(node, text, names) &&
     (!isIdentifier(node) || refersToFunction(node, fn)) &&
     runsWithin(node, fn) &&
     !inInstanceInitializer(node, fn)
