@@ -11,12 +11,16 @@ import {
   isConditionalExpression,
   isElementAccessExpression,
   isExpression,
+  isForInStatement,
   isForOfStatement,
+  type Identifier,
   isIdentifier,
   isLiteralTypeNode,
   isObjectBindingPattern,
   isParameterDeclaration,
   isParenthesizedTypeNode,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isSpreadElement,
   isUnionTypeNode,
   isVariableDeclaration,
@@ -388,13 +392,52 @@ function keyAlternatives(value: Expression):
   if (names === undefined) return undefined;
   const sources = binding.binding.initializer === undefined ? [] : [binding.binding.initializer];
   if (isIdentifier(value)) sources.push(...framedAssignedValues(value));
+  const declared =
+    isParameterDeclaration(binding.binding) ||
+    (isIdentifier(value) && changedBeyondSources(value, binding.binding));
   return sources.length === 0
     ? { names }
-    : {
-        values: sources,
-        fallback: names,
-        callerNames: isParameterDeclaration(binding.binding) ? names : [],
-      };
+    : { values: sources, fallback: names, callerNames: declared ? names : [] };
+}
+
+/**
+ * Whether the code changes `binding` where no expression writes the value it takes: a compound
+ * assignment, an update or a `for…in` binding. What it is assigned (`framedAssignedValues`) is
+ * then not all it may be: the names its declared type allows are possible too, beside what is
+ * assigned.
+ */
+function changedBeyondSources(name: Identifier, binding: FrameBinding): boolean {
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    const target = changedTarget(node);
+    const selected =
+      target !== undefined && isIdentifier(target) ? frameBindingOf(target) : undefined;
+    if (selected?.binding === binding && selected.keys.length === 0) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** What a compound assignment, an update or a `for…in` binding changes, where it is written. */
+function changedTarget(node: Node): Expression | undefined {
+  if (isBinaryExpression(node)) {
+    const { kind } = node.operatorToken;
+    const compound =
+      kind >= SyntaxKind.FirstAssignment &&
+      kind <= SyntaxKind.LastAssignment &&
+      !TARGET_WRITES.has(kind);
+    return compound ? unwrapped(node.left) : undefined;
+  }
+  if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node))
+    return node.operator === SyntaxKind.PlusPlusToken ||
+      node.operator === SyntaxKind.MinusMinusToken
+      ? unwrapped(node.operand)
+      : undefined;
+  return isForInStatement(node) && isExpression(node.initializer)
+    ? unwrapped(node.initializer)
+    : undefined;
 }
 
 /** A written literal key or union, without inferring arbitrary string values from their uses. */
