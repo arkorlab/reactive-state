@@ -304,10 +304,10 @@ function statementMethodWrites(
   possibleMethodWrites(before, { ...writes, until: before.end });
   if (top === undefined) return;
   releaseHeld(top, root, held);
+  holdDefinition(top, root, held, own);
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
-  holdDefinition(top, root, held, own);
   for (const [key, configurable] of held)
     own.set(key, configurable ? { own: false, configurable: true } : { own: false });
 }
@@ -347,28 +347,26 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
   const { selected, read } = writes;
   if (read !== undefined && writtenAfterRead(node, read, writes.root)) return;
+  if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
   for (const key of keys)
     if (selected === undefined || !writtenAfterSelection(node, key, selected))
       writes.own.set(key, { own: false });
-  if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held);
 }
 
 /**
  * A definition of the array leaves a method unproven where it is neither a custom function nor a
- * writable value; the key stays redefinable only where the descriptor says it is configurable. A
- * definition the walk has applied carries the attributes it left unsaid over from the method it
- * redefined.
+ * writable value; the key stays redefinable only where the descriptor says it is configurable. The
+ * methods before the definition are what it carries the attributes it left unsaid over from.
  */
 function holdDefinition(
   node: Node,
   root: FrameBinding,
   held: HeldMethods,
-  applied?: OwnMethods,
+  previous: OwnMethods,
 ): void {
-  const defined = definedMethods(node, root);
+  const defined = definedMethods(node, root, { previous });
   if (defined === undefined) return;
-  for (const [key, written] of defined) {
-    const method = applied?.get(key) ?? written;
+  for (const [key, method] of defined) {
     if (method.own || method.writable === true) continue;
     held.set(key, (held.get(key) ?? true) && method.configurable === true);
   }
@@ -379,7 +377,8 @@ function holdDefinition(
  * array itself, not of a name that may hold another.
  */
 function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): void {
-  const replaced = definedMethods(top, root, true) ?? new Map<string, ArrayMethodOverride>();
+  const replaced =
+    definedMethods(top, root, { exact: true }) ?? new Map<string, ArrayMethodOverride>();
   deletedMethod(top, root, replaced, true);
   if (replaced.size >= OWN_METHODS.size) return;
   for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
@@ -387,9 +386,14 @@ function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): vo
 
 /**
  * The methods one call of Object.defineProperty or Object.defineProperties defines on the array, or
- * on what may be it unless `exact` asks for the array itself.
+ * on what may be it unless `exact` asks for the array itself, read against the methods `previous`
+ * holds from before it.
  */
-function definedMethods(node: Node, root: FrameBinding, exact = false): OwnMethods | undefined {
+function definedMethods(
+  node: Node,
+  root: FrameBinding,
+  { previous, exact = false }: { readonly previous?: OwnMethods; readonly exact?: boolean } = {},
+): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
@@ -399,16 +403,18 @@ function definedMethods(node: Node, root: FrameBinding, exact = false): OwnMetho
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
     return undefined;
-  const defined: OwnMethods = new Map();
+  const defined: OwnMethods = new Map(previous);
   callMethodWrites(node, root, defined);
-  return defined;
+  if (previous === undefined) return defined;
+  return new Map([...defined].filter(([key, method]) => previous.get(key) !== method));
 }
 
 /**
  * Another function that may run before the read may write any method at any point before it, and
  * so may a write after it that a loop around the read brings back to it. A method the read's block
  * wrote before the read stays proven against the second, where each loop that brings the write back
- * runs that block again, and so writes the method anew before the read.
+ * runs that block again, and so writes the method anew before the read; and a custom function the
+ * write installs replaces a custom one, which stays custom, though no longer the one it was.
  */
 function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, block: Node): void {
   const owner = executionOwner(call);
@@ -416,13 +422,40 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const keys = writtenMethods(node, root);
     if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node)) {
-      const anew = executionOwner(node) === owner && !mayRunAgain(node, call, root, block);
-      for (const key of keys) if (!anew || own.get(key)?.own !== true) own.set(key, { own: false });
+      const sameRun = executionOwner(node) === owner;
+      replaceProofs(own, keys, {
+        anew: sameRun && !mayRunAgain(node, call, root, block),
+        custom: sameRun ? customInstalled(node, root) : new Set<string>(),
+      });
     }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
+}
+
+/**
+ * A deferred write leaves the methods it names unproven, but for one written anew before the read,
+ * and one that was proven custom where the write installs a custom function.
+ */
+function replaceProofs(
+  own: OwnMethods,
+  keys: readonly string[],
+  { anew, custom }: { readonly anew: boolean; readonly custom: ReadonlySet<string> },
+): void {
+  for (const key of keys) {
+    const proven = own.get(key)?.own === true;
+    if (!anew || !proven) own.set(key, { own: proven && custom.has(key) });
+  }
+}
+
+/** The methods a write installs a custom function for, with the array's own identity. */
+function customInstalled(node: Node, root: FrameBinding): ReadonlySet<string> {
+  const installed: OwnMethods = new Map();
+  const assignment = ownMethodAssignment(node, root);
+  if (assignment !== undefined) installed.set(assignment.key, assignment);
+  if (isCallExpression(node)) callMethodWrites(node, root, installed);
+  return new Set([...installed].filter(([, method]) => method.own).map(([key]) => key));
 }
 
 /**
