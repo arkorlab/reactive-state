@@ -22,6 +22,7 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isSetAccessorDeclaration,
   isSpreadAssignment,
   isStringLiteral,
   isVariableDeclaration,
@@ -353,24 +354,37 @@ function possibleFields(sources: readonly AssignedFrameSource[]): readonly Assig
     const value = unwrapped(source.value);
     if (source.keys.length > 0) return [source];
     if (!isObjectLiteralExpression(value)) return [source, ...iteratedFrameSources(value)];
-    return survivingFields(value, new Set());
+    return survivingFields(value, { data: new Set(), getters: new Set() });
   });
 }
 
 /** The values a written object holds, each field read as the fields after it leave it. */
 function survivingFields(
   object: ObjectLiteralExpression,
-  overwritten: ReadonlySet<string>,
+  overwritten: Overwritten,
 ): AssignedFrameSource[] {
   const found: AssignedFrameSource[] = [];
-  const later = new Set(overwritten);
+  const later = { data: new Set(overwritten.data), getters: new Set(overwritten.getters) };
   for (const property of object.properties.toReversed()) {
     const name = fieldName(property);
-    if (name !== undefined && later.has(name)) continue;
-    found.push(...fieldValues(property, later));
-    for (const each of fieldNames(property)) later.add(each);
+    const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
+    if (name === undefined || !taken.has(name)) found.push(...fieldValues(property, later));
+    for (const each of fieldNames(property)) {
+      later.data.add(each);
+      if (!isSetAccessorDeclaration(property)) later.getters.add(each);
+    }
   }
   return found.toReversed();
+}
+
+/**
+ * The names the fields after one have set. A setter after a getter completes its accessor, and
+ * the getter's results stay; a setter hides a value written before it, and every other field,
+ * a spread among them, hides the getters and the values written before it.
+ */
+interface Overwritten {
+  readonly data: ReadonlySet<string>;
+  readonly getters: ReadonlySet<string>;
 }
 
 /**
@@ -379,7 +393,7 @@ function survivingFields(
  */
 function fieldValues(
   property: ObjectLiteralElementLike,
-  later: ReadonlySet<string>,
+  later: Overwritten,
 ): readonly AssignedFrameSource[] {
   if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))

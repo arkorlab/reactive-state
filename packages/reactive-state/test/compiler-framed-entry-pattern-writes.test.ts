@@ -348,6 +348,36 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'computed-key-getter-then-setter',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { get field(): Error { return error; }, set field(value: Error) {} })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-setter-then-getter',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { set field(value: Error) {}, get field(): Error { return error; } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-spread-getter-setter',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get field(): Error { return error; }, set field(value: Error) {} } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-data-then-setter-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, set field(value: Error) {} })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'computed-key-getter-then-spread-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { get field(): Error { return error; }, ...{ field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
