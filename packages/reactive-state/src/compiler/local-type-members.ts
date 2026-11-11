@@ -19,6 +19,7 @@ import {
   isRestTypeNode,
   isSetAccessorDeclaration,
   isStringLiteral,
+  isTemplateLiteralTypeNode,
   isTupleTypeNode,
   isTypeLiteralNode,
   isTypeOperatorNode,
@@ -30,6 +31,7 @@ import {
   type PropertySignatureDeclaration,
   type SetAccessorDeclaration,
   SyntaxKind,
+  type TemplateLiteralTypeNode,
   type TupleTypeNode,
   type TypeElement,
   type TypeNode,
@@ -163,18 +165,134 @@ function objectMembers(object: TypeLiteralNode, keys: readonly string[]): readon
   return values;
 }
 
-/** The most specific written signature covering a literal property key. */
+/** The written signatures that cover a literal property key, by how they do. */
+interface CoveringSignatures {
+  readonly specific: Set<TypeNode>;
+  readonly possible: Set<TypeNode>;
+  readonly strings: Set<TypeNode>;
+}
+
+/**
+ * The written signatures covering a literal property key: those of a number domain, for a numeric
+ * key, and of a template pattern the key matches, ahead of a `string` signature, which applies
+ * only where no other does; and the values of patterns the reader cannot decide, which stay
+ * possible beside them.
+ */
 function signatureTypes(object: TypeLiteralNode, key: string): readonly TypeNode[] {
+  const { possible, specific, strings } = coveringSignatures(object, key);
+  const values = new Set(specific.size > 0 ? specific : strings);
+  for (const each of possible) values.add(each);
+  return [...values];
+}
+
+/** Each written signature's value, by whether its domain covers the key, may, or is a string. */
+function coveringSignatures(object: TypeLiteralNode, key: string): CoveringSignatures {
   const numeric = key !== '' && String(Number(key)) === key;
-  const numbers: TypeNode[] = [];
-  const strings: TypeNode[] = [];
+  const covering: CoveringSignatures = {
+    possible: new Set(),
+    specific: new Set(),
+    strings: new Set(),
+  };
   for (const member of object.members) {
     if (!isIndexSignatureDeclaration(member)) continue;
-    const domains = indexSignatureDomains(member.parameters[0]?.type);
-    if (domains.has(SyntaxKind.StringKeyword)) strings.push(member.type);
-    if (numeric && domains.has(SyntaxKind.NumberKeyword)) numbers.push(member.type);
+    const written = member.parameters[0]?.type;
+    const domains = indexSignatureDomains(written);
+    if (domains.has(SyntaxKind.StringKeyword)) covering.strings.add(member.type);
+    if (numeric && domains.has(SyntaxKind.NumberKeyword)) covering.specific.add(member.type);
+    if (domains.has(SyntaxKind.TemplateLiteralType)) {
+      addPatterns(covering, member.type, patternsCover(written, key), numeric);
+    }
   }
-  return numbers.length > 0 ? numbers : strings;
+  return covering;
+}
+
+/**
+ * A signature's template patterns, by how they meet a key. Holes alone are a `string` domain, which
+ * gives way to the others. A pattern applies to a string literal and to no number literal, and a
+ * key that reads as a number may be either's: what matches it only may cover it.
+ */
+function addPatterns(
+  covering: CoveringSignatures,
+  value: TypeNode,
+  cover: PatternCover,
+  numeric: boolean,
+): void {
+  if (cover.string) covering.strings.add(value);
+  if (!numeric && cover.matches) covering.specific.add(value);
+  else if (cover.matches || cover.may) covering.possible.add(value);
+}
+
+/** How the template patterns a signature's key type writes meet a literal key. */
+interface PatternCover {
+  /** One of them matches the key. */
+  readonly matches: boolean;
+  /** One the reader does not match — a hole of another type, a pattern named by an alias — may. */
+  readonly may: boolean;
+  /** One is holes alone, which TypeScript reads as the type `string`. */
+  readonly string: boolean;
+}
+
+/** The key domains a signature's written type names without a pattern: `symbol` covers no text. */
+const KEYWORD_DOMAINS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.NumberKeyword,
+  SyntaxKind.StringKeyword,
+  SyntaxKind.SymbolKeyword,
+]);
+
+/** How the template patterns of a signature's key type, through unions and parentheses, meet a key. */
+function patternsCover(type: TypeNode | undefined, key: string): PatternCover {
+  let matches = false;
+  let may = false;
+  let string = false;
+  const pending = type === undefined ? [] : [type];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    if (isParenthesizedTypeNode(at)) {
+      pending.push(at.type);
+    } else if (isUnionTypeNode(at)) {
+      pending.push(...at.types);
+    } else if (isTemplateLiteralTypeNode(at) && holesOnly(at)) {
+      string = true;
+    } else if (isTemplateLiteralTypeNode(at)) {
+      const covers = patternCovers(at, key);
+      matches ||= covers === true;
+      may ||= covers === undefined;
+    } else {
+      may ||= !KEYWORD_DOMAINS.has(at.kind);
+    }
+  }
+  return { matches, may, string };
+}
+
+/** Whether a pattern is `${string}` holes without text, which TypeScript reads as `string`. */
+function holesOnly(pattern: TemplateLiteralTypeNode): boolean {
+  if (pattern.head.text !== '') return false;
+  for (const span of pattern.templateSpans) {
+    if (span.type.kind !== SyntaxKind.StringKeyword || span.literal.text !== '') return false;
+  }
+  return true;
+}
+
+/**
+ * Whether a pattern of `${string}` holes matches a key as TypeScript matches it: the text before
+ * the first hole starts the key and the text after the last ends it, without overlap, and the
+ * text between holes follows in order; of two adjacent holes the first takes a character.
+ * `undefined` for a hole of another type.
+ */
+function patternCovers(pattern: TemplateLiteralTypeNode, key: string): boolean | undefined {
+  const { head, templateSpans } = pattern;
+  if (templateSpans.some((span) => span.type.kind !== SyntaxKind.StringKeyword)) return undefined;
+  const texts = templateSpans.map((span) => span.literal.text);
+  const last = texts.pop() ?? '';
+  const end = key.length - last.length;
+  if (!key.startsWith(head.text) || !key.endsWith(last) || end < head.text.length) return false;
+  let at = head.text.length;
+  for (const text of texts) {
+    const width = Math.max(text.length, 1);
+    const found = text === '' ? at : key.indexOf(text, at);
+    if (found === -1 || found + width > end) return false;
+    at = found + width;
+  }
+  return true;
 }
 
 /** A parenthesized or readonly type's underlying syntax, without following aliases. */
