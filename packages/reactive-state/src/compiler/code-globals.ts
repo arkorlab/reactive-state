@@ -1,4 +1,6 @@
 import {
+  type CallExpression,
+  type Expression,
   type Identifier,
   type ImportDeclaration,
   isArrayLiteralExpression,
@@ -86,6 +88,9 @@ const KEY_READERS: ReadonlySet<string> = new Set([
   'Reflect.get',
   'Reflect.getOwnPropertyDescriptor',
 ]);
+
+/** The methods of a function that call it on what they are given after the `this` they take. */
+const BORROWING: ReadonlySet<string> = new Set(['apply', 'call']);
 
 /** The operators that compare what they are given, which hold neither. */
 const COMPARING: ReadonlySet<SyntaxKind> = new Set([
@@ -401,21 +406,49 @@ function readsConstructor(node: Node): boolean {
 
 /**
  * Whether `node` is a read of the language's that reads a member by the key it is given — of what
- * made what it is given: `Reflect.get(fn, 'constructor')`. A global holder's own read is checked
- * where it is handed on; the same key on another object is that object's ordinary entry.
+ * made what it is given: `Reflect.get(fn, 'constructor')`, borrowed too, `Reflect.get.call(null, fn,
+ * 'constructor')`. A global holder's own read is checked where it is handed on; the same key on
+ * another object is that object's ordinary entry.
  */
 function readsCodeKey(node: Node): boolean {
   if (!isCallExpression(node)) {
     return false;
   }
-  const path = globalPathOf(unwrapped(node.expression))?.join('.');
-  const [, key] = node.arguments;
+  const path = globalPathOf(unwrapped(node.expression));
+  const last = path?.at(-1) ?? '';
+  const borrowing = BORROWING.has(last) ? last : undefined;
+  const reader = (borrowing === undefined ? path : path?.slice(0, -1))?.join('.');
+  const [, key] = givenTo(node, borrowing);
   return (
-    path !== undefined &&
-    KEY_READERS.has(path) &&
+    reader !== undefined &&
+    KEY_READERS.has(reader) &&
     key !== undefined &&
     textOf(unwrapped(key)) === 'constructor'
   );
+}
+
+/**
+ * What a call hands to the function it calls: its arguments; of one borrowed, `call` or `apply`,
+ * what follows the `this` it takes, up to a spread — of `apply`, the elements of the array written
+ * there, up to a spread as well; none of an array the code gives by a name, nor where a spread
+ * comes before the array.
+ */
+function givenTo(call: CallExpression, borrowing: string | undefined): readonly Expression[] {
+  if (borrowing === undefined) {
+    return call.arguments;
+  }
+  if (borrowing === 'call') {
+    return untilSpread(call.arguments).slice(1);
+  }
+  const [, list] = untilSpread(call.arguments);
+  const array = list === undefined ? undefined : unwrapped(list);
+  return array !== undefined && isArrayLiteralExpression(array) ? untilSpread(array.elements) : [];
+}
+
+/** `items` up to the first spread, past which where a value stands is for the code to tell. */
+function untilSpread(items: readonly Expression[]): readonly Expression[] {
+  const spread = items.findIndex((each) => isSpreadElement(each));
+  return spread === -1 ? items : items.slice(0, spread);
 }
 
 /**
