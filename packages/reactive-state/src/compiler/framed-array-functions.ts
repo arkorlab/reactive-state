@@ -89,17 +89,42 @@ export function sourceArrayMethod(receiver: Expression, path: readonly string[])
   return method !== undefined && sourceFunctionValues(method);
 }
 
-/** Whether every possible written value of `start` is a source-written function. */
+/** A value being proved: the values it may be written as, and how many of them are proved. */
+interface Proving {
+  readonly value: FunctionValue;
+  readonly next: readonly FunctionValue[];
+  proved: number;
+}
+
+/**
+ * Whether every possible written value of `start` is a source-written function. Each value is
+ * proved once, however many ways reach it, so aliases that converge cost no more than a chain; a
+ * value reached while it is being proved is a cycle, and gives no proof.
+ */
 function sourceFunctionValues(start: FunctionValue): boolean {
-  const pending: { value: FunctionValue; seen: ReadonlySet<Node> }[] = [
-    { value: start, seen: new Set() },
-  ];
-  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (at.seen.has(at.value)) return false;
-    const values = sourceFunctions(at.value);
-    if (values === undefined) return false;
-    const seen = new Set([...at.seen, at.value]);
-    for (const value of values) pending.push({ value, seen });
+  const proving = new Set<FunctionValue>();
+  const proved = new Set<FunctionValue>();
+  const stack: Proving[] = [];
+  const enter = (value: FunctionValue): boolean => {
+    if (proved.has(value)) return true;
+    if (proving.has(value)) return false;
+    const next = sourceFunctions(value);
+    if (next === undefined) return false;
+    proving.add(value);
+    stack.push({ value, next, proved: 0 });
+    return true;
+  };
+  if (!enter(start)) return false;
+  for (let each = stack.at(-1); each !== undefined; each = stack.at(-1)) {
+    const value = each.next[each.proved];
+    if (value === undefined) {
+      stack.pop();
+      proving.delete(each.value);
+      proved.add(each.value);
+    } else {
+      each.proved += 1;
+      if (!enter(value)) return false;
+    }
   }
   return true;
 }
