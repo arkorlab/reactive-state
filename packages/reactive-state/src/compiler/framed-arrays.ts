@@ -22,7 +22,7 @@ import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
   mayRunAgain,
   overwrittenInPass,
-  recursesBefore,
+  recursesBetween,
   selectedMethod,
   type SelectedMethod,
   writtenAfterRead,
@@ -434,12 +434,18 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
     const keys = writtenMethods(node, root);
     if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node)) {
       const sameRun = executionOwner(node) === owner;
+      const again = sameRun && mayRunAgain(node, call, root, block);
       replaceProofs(
         own,
         sameRun ? keys.filter((key) => !overwrittenInPass(node, key, call, root)) : keys,
         {
-          anew:
-            sameRun && !mayRunAgain(node, call, root, block) && !recursesBefore(call, root, owner),
+          anew: (key) => {
+            return (
+              sameRun &&
+              !again &&
+              !recursesBetween(call, root, owner, own.get(key)?.value?.end ?? block.pos)
+            );
+          },
           custom: sameRun ? customInstalled(node, root) : new Set<string>(),
         },
       );
@@ -457,11 +463,17 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
 function replaceProofs(
   own: OwnMethods,
   keys: readonly string[],
-  { anew, custom }: { readonly anew: boolean; readonly custom: ReadonlySet<string> },
+  {
+    anew,
+    custom,
+  }: {
+    readonly anew: (key: string) => boolean;
+    readonly custom: ReadonlySet<string>;
+  },
 ): void {
   for (const key of keys) {
     const proven = own.get(key)?.own === true;
-    if (!anew || !proven) own.set(key, { own: proven && custom.has(key) });
+    if (!proven || !anew(key)) own.set(key, { own: proven && custom.has(key) });
   }
 }
 

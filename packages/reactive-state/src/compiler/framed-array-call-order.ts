@@ -11,11 +11,14 @@ import {
   isExpressionStatement,
   isForInStatement,
   isForOfStatement,
+  isArrowFunction,
+  isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isTypeNode,
+  isVariableDeclaration,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -147,42 +150,130 @@ export function overwrittenInPass(
 
 /**
  * Whether a function inside `limit` that holds the read calls itself by its name, unless the array
- * is made inside it and each call makes its own. A call that `before` a position asks for lies
- * before it, between a proof the function makes and the read.
+ * is made inside it and each call makes its own.
  */
-function reenteredRead(read: Node, root: FrameBinding, limit: Node, before?: number): boolean {
+function reenteredRead(read: Node, root: FrameBinding, limit: Node): boolean {
   for (let at = read.parent; at !== limit; at = at.parent)
     if (
       isFunctionExpression(at) &&
       at.name !== undefined &&
       !(root.pos >= at.pos && root.end <= at.end) &&
-      namesItself(at, at.name, before)
+      namesItself(at, at.name)
     )
       return true;
   return false;
 }
 
 /**
- * Whether a function inside `limit` that holds the read calls itself before the read: another run
- * of it, between a proof made earlier in the function and the read, writes what it writes after
- * its own read.
+ * Whether a function inside `limit` that holds the read runs itself between the position `from`,
+ * where a proof was made in it, and the read: by its name, or through a function it holds that
+ * calls it, wherever that function is written. Another run of it, there, writes what it writes
+ * after its own read.
  */
-export function recursesBefore(read: Node, root: FrameBinding, limit: Node): boolean {
-  return reenteredRead(read, root, limit, read.pos);
+export function recursesBetween(
+  read: Node,
+  root: FrameBinding,
+  limit: Node,
+  from: number,
+): boolean {
+  for (let at = read.parent; at !== limit; at = at.parent)
+    if (
+      isFunctionExpression(at) &&
+      at.name !== undefined &&
+      !(root.pos >= at.pos && root.end <= at.end) &&
+      runsItselfBetween(at, at.name, from, read.pos)
+    )
+      return true;
+  return false;
+}
+
+/** Whether the function's code names itself, or a helper that does, between two positions. */
+function runsItselfBetween(
+  fn: FunctionExpression,
+  name: Identifier,
+  from: number,
+  to: number,
+): boolean {
+  const names = recursiveNames(fn, name);
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (
+      isIdentifier(node) &&
+      names.has(node.text) &&
+      node.pos >= from &&
+      node.pos < to &&
+      node.parent !== fn &&
+      readsBinding(node) &&
+      (node.text !== name.text || reachesName(node, fn))
+    )
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /**
- * Whether the function's code reads the name it is given, as the name of the function itself,
- * before a position where one is asked for.
+ * The names by which the function runs itself: its own, and those of the functions it holds, a
+ * declaration or a variable given one, whose code names one of them.
  */
-function namesItself(fn: FunctionExpression, name: Identifier, before = Infinity): boolean {
+function recursiveNames(fn: FunctionExpression, name: Identifier): ReadonlySet<string> {
+  const names = new Set([name.text]);
+  const helpers = localHelpers(fn);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [helper, body] of helpers)
+      if (!names.has(helper) && mentionsAny(body, names)) {
+        names.add(helper);
+        grew = true;
+      }
+  }
+  return names;
+}
+
+/** The functions a function holds, each by its name, with its code. */
+function localHelpers(fn: FunctionExpression): ReadonlyMap<string, Node> {
+  const helpers = new Map<string, Node>();
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (node !== fn && isFunctionDeclaration(node) && node.name !== undefined && node.body)
+      helpers.set(node.name.text, node.body);
+    else if (isVariableDeclaration(node) && isIdentifier(node.name) && node.initializer) {
+      const value = unwrapped(node.initializer);
+      if (isArrowFunction(value) || isFunctionExpression(value))
+        helpers.set(node.name.text, value.body);
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return helpers;
+}
+
+/** Whether the code reads one of the names. */
+function mentionsAny(body: Node, names: ReadonlySet<string>): boolean {
+  const pending: Node[] = [body];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (isIdentifier(node) && names.has(node.text) && readsBinding(node)) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** Whether the function's code reads the name it is given, as the name of the function itself. */
+function namesItself(fn: FunctionExpression, name: Identifier): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
     if (
       isIdentifier(node) &&
       node.text === name.text &&
-      node.pos < before &&
       node.parent !== fn &&
       readsBinding(node) &&
       reachesName(node, fn)
