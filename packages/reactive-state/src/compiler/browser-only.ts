@@ -43,7 +43,8 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { freeReads, isTypeOnly, readsBinding } from './scope.ts';
+import { unshadowedReads } from './code-globals.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /**
  * What of a Client Component's code runs in the browser alone, never as the server renders the
@@ -101,7 +102,10 @@ interface ReactNames {
   readonly hooks: ReadonlyMap<string, string>;
   /** The names `react` is imported by whole: `React` of `import * as React`, of `import React`. */
   readonly whole: ReadonlySet<string>;
-  /** The reads of a name no function, block or `catch` around them declares (`freeReads`). */
+  /**
+   * The reads of a name no function, block, `catch` or namespace around them declares
+   * (`unshadowedReads`).
+   */
   readonly free: ReadonlySet<Identifier>;
 }
 
@@ -146,7 +150,7 @@ function reactNamesOf(sourceFile: SourceFile): ReactNames {
     for (const statement of sourceFile.statements) {
       readReact(statement, hooks, whole);
     }
-    names = { free: new Set(freeReads(sourceFile)), hooks, whole };
+    names = { free: unshadowedReads(sourceFile), hooks, whole };
     REACT_NAMES.set(sourceFile, names);
   }
   return names;

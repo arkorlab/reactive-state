@@ -168,7 +168,7 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
 }
 
 /** Each module's reads of a name no declaration where they stand gives (`globalReadsOf`). */
-const GLOBAL_READS = new WeakMap<SourceFile, ReadonlySet<Node>>();
+const GLOBAL_READS = new WeakMap<SourceFile, ReadonlySet<Identifier>>();
 
 /**
  * The global `name` reads where no declaration in scope gives its name, though one elsewhere in the
@@ -191,9 +191,20 @@ function scopedGlobal(name: Identifier): string | undefined {
  * (`freeReads`), nor the module's own (`scopeNames`), nor, in a namespace's body, the namespace's
  * (`namespaceReads`).
  */
-function globalReadsOf(file: SourceFile): ReadonlySet<Node> {
-  const reads = new Set<Node>();
+function globalReadsOf(file: SourceFile): ReadonlySet<Identifier> {
+  const reads = new Set<Identifier>();
   readsIn(file.statements, scopeNames(file.statements, file.statements), reads);
+  return reads;
+}
+
+/**
+ * The reads in `file`'s code of a name no function, block, `catch` or namespace's body around them
+ * declares (`freeReads`, `namespaceReads`): a read of the module's own name — an import's — is one,
+ * where no namespace declares the name again; and a read of a global.
+ */
+export function unshadowedReads(file: SourceFile): ReadonlySet<Identifier> {
+  const reads = new Set<Identifier>();
+  readsIn(file.statements, new Set(), reads);
   return reads;
 }
 
@@ -204,7 +215,7 @@ function globalReadsOf(file: SourceFile): ReadonlySet<Node> {
 function readsIn(
   statements: readonly Statement[],
   names: ReadonlySet<string>,
-  reads: Set<Node>,
+  reads: Set<Identifier>,
 ): void {
   for (const statement of statements) {
     if (isModuleDeclaration(statement)) {
@@ -227,7 +238,7 @@ function readsIn(
 function namespaceReads(
   namespace: ModuleDeclaration,
   names: ReadonlySet<string>,
-  reads: Set<Node>,
+  reads: Set<Identifier>,
 ): void {
   const { body } = namespace;
   if (body !== undefined && isModuleDeclaration(body)) {
