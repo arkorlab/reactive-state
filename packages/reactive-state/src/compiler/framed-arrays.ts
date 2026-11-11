@@ -306,8 +306,9 @@ function statementMethodWrites(
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
-  holdDefinition(top, root, held);
-  for (const key of held.keys()) own.set(key, { own: false });
+  holdDefinition(top, root, held, own);
+  for (const [key, configurable] of held)
+    own.set(key, configurable ? { own: false, configurable: true } : { own: false });
 }
 
 /** Whether each key a definition left unproven may be redefined or deleted by a later one. */
@@ -353,12 +354,20 @@ function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrite
 
 /**
  * A definition of the array leaves a method unproven where it is neither a custom function nor a
- * writable value; the key stays redefinable only where the descriptor says it is configurable.
+ * writable value; the key stays redefinable only where the descriptor says it is configurable. A
+ * definition the walk has applied carries the attributes it left unsaid over from the method it
+ * redefined.
  */
-function holdDefinition(node: Node, root: FrameBinding, held: HeldMethods): void {
+function holdDefinition(
+  node: Node,
+  root: FrameBinding,
+  held: HeldMethods,
+  applied?: OwnMethods,
+): void {
   const defined = definedMethods(node, root);
   if (defined === undefined) return;
-  for (const [key, method] of defined) {
+  for (const [key, written] of defined) {
+    const method = applied?.get(key) ?? written;
     if (method.own || method.writable === true) continue;
     held.set(key, (held.get(key) ?? true) && method.configurable === true);
   }
