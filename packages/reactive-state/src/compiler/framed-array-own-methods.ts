@@ -7,6 +7,7 @@ import {
   isPropertyAccessExpression,
   type MethodDeclaration,
   type Node,
+  type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -123,7 +124,7 @@ function followedIdentity(value: Expression): FollowedIdentity {
     if (selected === undefined || selected.keys.length > 0 || seen.has(selected.binding))
       return { root: undefined, written };
     root = selected.binding;
-    written ||= reassigned(root);
+    written ||= writtenWhole(root.getSourceFile()).has(root);
     seen.add(root);
     if (root.initializer === undefined) return { root, written };
     each = unwrapped(root.initializer);
@@ -131,24 +132,27 @@ function followedIdentity(value: Expression): FollowedIdentity {
   return { root: isArrayLiteralExpression(each) ? root : undefined, written };
 }
 
-const REASSIGNED = new WeakMap<FrameBinding, boolean>();
+const WRITTEN_WHOLE = new WeakMap<SourceFile, ReadonlySet<FrameBinding>>();
 
-/** Whether the file writes a binding as a whole: an assignment, a destructuring target, a loop head. */
-function reassigned(binding: FrameBinding): boolean {
-  const known = REASSIGNED.get(binding);
+/**
+ * The bindings a file writes as a whole — by an assignment, a destructuring target or a loop head —
+ * found in one walk of the file.
+ */
+function writtenWhole(file: SourceFile): ReadonlySet<FrameBinding> {
+  const known = WRITTEN_WHOLE.get(file);
   if (known !== undefined) return known;
-  let found = false;
-  const pending: Node[] = [binding.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined && !found; node = pending.pop()) {
-    found = framedWrittenTargets(node).some((target) => {
+  const found = new Set<FrameBinding>();
+  const pending: Node[] = [file];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    for (const target of framedWrittenTargets(node)) {
       const name = unwrapped(target);
       const selected = isIdentifier(name) ? frameBindingOf(name) : undefined;
-      return selected?.keys.length === 0 && selected.binding === binding;
-    });
+      if (selected?.keys.length === 0) found.add(selected.binding);
+    }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  REASSIGNED.set(binding, found);
+  WRITTEN_WHOLE.set(file, found);
   return found;
 }
