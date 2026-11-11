@@ -44,6 +44,11 @@ const METHODS = [
     custom: false,
   },
   {
+    id: 'getter-reaches-a-setter-through-a-declaration',
+    source: `${HOLDER} const settings = { set replace(value) { methods.join = value; } }; const source = { get x() { settings.replace = Array.prototype.join; return 0; } }; const { x } = source; void x; ${TAKEN}`,
+    custom: false,
+  },
+  {
     id: 'pattern-reading-another-field-is-work-too',
     source: `${GETTER} ${HOLDER} const { x: { y } } = { x: source }; void y; ${TAKEN}`,
     custom: false,
