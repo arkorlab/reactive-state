@@ -38,7 +38,7 @@ import {
   descriptorMethods,
   forgetMethods,
   OWN_METHODS,
-  afterValueWrite,
+  afterPossibleWrite,
   type OwnMethods,
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
@@ -342,17 +342,23 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
 
 /**
  * The methods a write may replace are unproven, unless the write comes after the read or, for the
- * selected method, after the selection; a definition's may stay so for good. A write of the value
- * alone, an assignment or Object.assign, leaves the attributes a method has as they were.
+ * selected method, after the selection; a definition's may stay so for good. What the write leaves
+ * of the attributes a method had, whether it ran or not, is what stays: a write of the value alone
+ * keeps them, a definition that does not name them does too.
  */
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
   const { selected, read } = writes;
   if (read !== undefined && writtenAfterRead(node, read, writes.root)) return;
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
-  const valueOnly = !isDeleteExpression(node) && definedMethods(node, writes.root) === undefined;
-  for (const key of keys)
-    if (selected === undefined || !writtenAfterSelection(node, key, selected))
-      writes.own.set(key, valueOnly ? afterValueWrite(writes.own.get(key)) : { own: false });
+  const defined = isDeleteExpression(node)
+    ? undefined
+    : definedMethods(node, writes.root, writes.own);
+  for (const key of keys) {
+    if (selected !== undefined && writtenAfterSelection(node, key, selected)) continue;
+    const previous = writes.own.get(key);
+    const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
+    writes.own.set(key, afterPossibleWrite(previous, written));
+  }
 }
 
 /**
