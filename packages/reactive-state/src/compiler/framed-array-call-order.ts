@@ -205,7 +205,7 @@ function runsItselfBetween(
       node.pos < to &&
       node.parent !== fn &&
       readsBinding(node) &&
-      (node.text !== name.text || reachesName(node, fn))
+      (node.text === name.text ? reachesName(node, fn) : runsWithin(node, fn))
     )
       return true;
     node.forEachChild((child) => {
@@ -217,15 +217,16 @@ function runsItselfBetween(
 
 /**
  * The names by which the function runs itself: its own, and those of the functions it holds, a
- * declaration or a variable given one, whose code names one of them.
+ * declaration or a variable given one, whose code names one of them. A name that more than one
+ * function of the function holds counts if any of them does.
  */
 function recursiveNames(fn: FunctionExpression, name: Identifier): ReadonlySet<string> {
   const names = new Set([name.text]);
   const helpers = localHelpers(fn);
   for (let grew = true; grew;) {
     grew = false;
-    for (const [helper, body] of helpers)
-      if (!names.has(helper) && mentionsAny(body, names)) {
+    for (const [helper, bodies] of helpers)
+      if (!names.has(helper) && bodies.some((body) => mentionsAny(body, names))) {
         names.add(helper);
         grew = true;
       }
@@ -233,18 +234,20 @@ function recursiveNames(fn: FunctionExpression, name: Identifier): ReadonlySet<s
   return names;
 }
 
-/** The functions a function holds, each by its name, with its code. */
-function localHelpers(fn: FunctionExpression): ReadonlyMap<string, Node> {
-  const helpers = new Map<string, Node>();
+/** The functions a function holds, each name with the code of every function that has it. */
+function localHelpers(fn: FunctionExpression): ReadonlyMap<string, readonly Node[]> {
+  const helpers = new Map<string, Node[]>();
+  const add = (name: string, body: Node): void => {
+    helpers.set(name, [...(helpers.get(name) ?? []), body]);
+  };
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
     if (node !== fn && isFunctionDeclaration(node) && node.name !== undefined && node.body)
-      helpers.set(node.name.text, node.body);
+      add(node.name.text, node.body);
     else if (isVariableDeclaration(node) && isIdentifier(node.name) && node.initializer) {
       const value = unwrapped(node.initializer);
-      if (isArrowFunction(value) || isFunctionExpression(value))
-        helpers.set(node.name.text, value.body);
+      if (isArrowFunction(value) || isFunctionExpression(value)) add(node.name.text, value.body);
     }
     node.forEachChild((child) => {
       pending.push(child);
@@ -292,12 +295,18 @@ function namesItself(fn: FunctionExpression, name: Identifier): boolean {
  * name first, and no arm a written condition rules out holds the read or a function that holds it.
  */
 function reachesName(name: Identifier, fn: FunctionExpression): boolean {
-  if (frameDeclarationOf(name) !== undefined || !framedPossibleBranch(name)) return false;
-  for (let at = name.parent; at !== fn; at = at.parent) {
+  if (frameDeclarationOf(name) !== undefined) return false;
+  for (let at = name.parent; at !== fn; at = at.parent)
     if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === name.text)
       return false;
+  return runsWithin(name, fn);
+}
+
+/** Whether no arm a written condition rules out holds the node, or a function that holds it. */
+function runsWithin(node: Node, fn: FunctionExpression): boolean {
+  if (!framedPossibleBranch(node)) return false;
+  for (let at = node.parent; at !== fn; at = at.parent)
     if (isAnswering(at) && !framedPossibleBranch(at)) return false;
-  }
   return true;
 }
 

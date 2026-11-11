@@ -517,6 +517,31 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-unreachable-helper-call',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { if (pass < 1) again(); ${SAFE} if (false) again(); const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-unreachable-helper-only',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (false) again(); const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-helper-hidden-by-nested-helper-of-the-same-name',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { function unused() { function again() { return 0; } again(); } unused(); ${SAFE} if (pass < 1) again(); const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursive-loop-exit-element-write',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; (function read(pass: number): string { while (String(values)) { values[0] = error; return pass < 1 ? read(pass + 1) : ''; } return ''; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-iife-loop-exit-element-write-pin',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; (function read(pass: number): number { while (String(values)) { values[0] = error; return 1; } return 0; })(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
