@@ -932,6 +932,41 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-class-computed-key',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { class K { static [String(read(pass + 1))] = 1; } } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-instance-computed-key',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { new (class K { [String(read(pass + 1))] = 1; })(); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-static-method-called',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class K { static m() { read(pass + 1); } } if (pass < 1) K.m(); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'uncalled-static-method-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class K { static m() { read(pass + 1); } } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-object-method-computed-name',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; function read(): string { ${SAFE} const o = { [depth++ < 1 ? read() : 'k']() {} }; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-object-getter-computed-name',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; function read(): string { ${SAFE} const o = { get [depth++ < 1 ? read() : 'k']() { return 1; } }; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-class-field-computed-name',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; function read(): string { ${SAFE} class K { [depth++ < 1 ? read() : 'k'] = 1; } const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

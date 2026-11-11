@@ -57,7 +57,8 @@ import { readsBinding } from './scope.ts';
  * method's or its class's; the code that reads one of them, or a name of a function that does, may
  * reach it before it ends. A function that is used otherwise than by a call, passed, stored or
  * compared, may be reached from anywhere, and so may one a getter, a setter or a method that the
- * language calls by itself holds.
+ * language calls by itself holds, and one held where no name gives it: passed to a call, returned,
+ * put in a list. A run that waits or yields lets another call of the function go on in its place.
  */
 
 /** The names a function is called by, and whether it has a name that is worked out. */
@@ -464,12 +465,23 @@ function isDeclarationName(node: Node): boolean {
   return (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) && parent.name === node;
 }
 
+/** The parts of a function that run where it is written: a computed name, and its decorators. */
+function definitionParts(fn: Node): readonly Node[] {
+  const { name, modifiers } = fn as { readonly name?: Node; readonly modifiers?: readonly Node[] };
+  const decorators = modifiers?.filter((each) => each.kind === SyntaxKind.Decorator) ?? [];
+  return name !== undefined && isComputedPropertyName(name) ? [name, ...decorators] : decorators;
+}
+
 /** Whether code that runs in the range reaches what the language may call by itself. */
+
 function runsCodeBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (node !== fn && isAnswering(node)) continue;
+    if (node !== fn && isAnswering(node)) {
+      pending.push(...definitionParts(node));
+      continue;
+    }
     if (node.pos >= from && node.pos < to && !isCodeFree(node) && framedPossibleBranch(node))
       return true;
     node.forEachChild((child) => {
@@ -549,7 +561,11 @@ export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   if (anywhere && runsCodeBetween(fn, from, to)) return true;
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node) || (node !== fn && isNamedFunction(node))) continue;
+    if (isTypeOnly(node)) continue;
+    if (node !== fn && isNamedFunction(node)) {
+      pending.push(...definitionParts(node));
+      continue;
+    }
     if (node.pos >= from && node.pos < to && (isSuspension(node) || callsFunction(node, fn, names)))
       return true;
     node.forEachChild((child) => {
