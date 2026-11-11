@@ -99,6 +99,14 @@ const CASES = [
     what: 'a namespace of a const enum alone',
   },
   {
+    source: `namespace N { export namespace key { export import T = Types.T; } } namespace N { ${READ}; }`,
+    what: 'a namespace of an exported import alias',
+  },
+  {
+    source: `namespace N { export namespace key { import T = Types.T; export const own = 1; } } namespace N { ${READ}; }`,
+    what: 'a namespace of a private import alias beside a value',
+  },
+  {
     source: `namespace N { export const key = 2; } namespace N { if (kind) { var other = 1; } ${READ}; }`,
     what: 'a var of the body of another name',
   },
@@ -109,6 +117,34 @@ const CASES = [
   {
     source: `namespace N { export const key = 2; } namespace N { namespace Inner { if (kind) { var key = 3; } } ${READ}; }`,
     what: 'a var in a block of a nested namespace',
+  },
+  {
+    source: `namespace A { export const key = 2; } namespace A.B { ${READ}; }`,
+    what: 'an export of the outer part of a dotted namespace',
+  },
+  {
+    source: `namespace A.B { ${READ}; } namespace A { export const key = 2; }`,
+    what: 'an export of a later declaration of the outer part',
+  },
+  {
+    source: `namespace A { export const key = 2; } namespace A.B.C { ${READ}; }`,
+    what: 'an export of the outermost of three',
+  },
+  {
+    source: `namespace A.B { export const key = 2; } namespace A.B.C { ${READ}; }`,
+    what: 'an export of the middle of three',
+  },
+  {
+    source: `namespace A.key { export const own = 1; } namespace A.B { ${READ}; }`,
+    what: 'the name of a dotted namespace beside it',
+  },
+  {
+    source: `declare namespace A { const key: number; } namespace A.B { ${READ}; }`,
+    what: 'a member of an ambient outer part',
+  },
+  {
+    source: `namespace Z { export namespace A { export const key = 2; } } namespace Z { export namespace A.B { ${READ}; } }`,
+    what: 'an export of a nested namespace’s outer part',
   },
 ] as const;
 
@@ -138,6 +174,22 @@ const PINS = [
     what: 'a read beside the namespace (pin)',
   },
   {
+    source: `namespace A { const key = 2; } namespace A.B { ${READ}; }`,
+    what: 'a private name of the outer part (pin)',
+  },
+  {
+    source: `namespace A.B { export const key = 2; } namespace A.C { ${READ}; }`,
+    what: 'an export of a sibling inner part (pin)',
+  },
+  {
+    source: `namespace Z { export const key = 2; } namespace A.B { ${READ}; }`,
+    what: 'an export of another namespace beside a dotted one (pin)',
+  },
+  {
+    source: `namespace A { export type key = string; } namespace A.B { ${READ}; }`,
+    what: 'a type the outer part exports (pin)',
+  },
+  {
     source: `namespace M.key { export type T = string; } namespace M { ${READ}; }`,
     what: 'a dotted namespace of types alone (pin)',
   },
@@ -156,6 +208,14 @@ const PINS = [
   {
     source: `namespace N { export namespace key {} } namespace N { ${READ}; }`,
     what: 'an empty namespace (pin)',
+  },
+  {
+    source: `namespace N { export namespace key { import T = Types.T; } } namespace N { ${READ}; }`,
+    what: 'a namespace of a private import alias alone (pin)',
+  },
+  {
+    source: `namespace N { export namespace key { import T = Types.T; export type U = T; } } namespace N { ${READ}; }`,
+    what: 'a namespace of a private import alias and a type (pin)',
   },
 ] as const;
 

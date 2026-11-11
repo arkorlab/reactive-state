@@ -5,6 +5,7 @@ import {
   type EnumMember,
   type Expression,
   type Identifier,
+  type ImportEqualsDeclaration,
   type FunctionDeclaration,
   isArrayBindingPattern,
   isBindingElement,
@@ -47,7 +48,6 @@ import {
   type TypeNode,
   type VariableDeclaration,
   isSignatureDeclaration,
-  type ModuleBlock,
   type ModuleDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
@@ -80,8 +80,8 @@ const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
 /** The names of the members of each enum and of those merged with it (`hasEnumMember`), by the enum. */
 const MEMBERS = new WeakMap<EnumDeclaration, ReadonlySet<string>>();
 
-/** The names the other bodies of a namespace export (`exportedElsewhere`), by the body. */
-const EXPORTED = new WeakMap<ModuleBlock, ReadonlySet<string>>();
+/** The names the namespaces that merge with a namespace export (`exportedElsewhere`), by it. */
+const EXPORTED = new WeakMap<ModuleDeclaration, ReadonlySet<string>>();
 
 /** What each block's statements declare (`declaredBy`), by the node that holds them. */
 const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration | null>>();
@@ -210,7 +210,7 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
       bindingIdentifiers(parameter.name).some((bound) => bound.text === name),
     ) ?? hoistedBinding(node, within, name);
   if (declared !== undefined) return declared;
-  if (isModuleDeclaration(node) && isModuleBlock(within) && exportedElsewhere(within, name)) {
+  if (isModuleDeclaration(node) && exportedElsewhere(node, within, name)) {
     return null;
   }
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name?.text === name
@@ -269,23 +269,76 @@ function seenElsewhere(enumeration: EnumDeclaration): boolean {
 }
 
 /**
- * Whether another body of the namespace that holds `block` exports `name` as a value, as a
- * variable, a function, a class, an enum or a namespace of a value: those of the bodies merge with
- * this one's, so that a bare `name` within it is `N.name`, before any binding around the
- * namespace. The names are gathered once (`EXPORTED`), for every name looked up in the body.
+ * Whether the namespaces that merge with `namespace`, its other declarations, export `name` as a
+ * value — as a variable, a function, a class, an enum or a namespace of a value, or as a dotted
+ * namespace's own name, `B` of `namespace A.B`: they merge with its own, so that a bare `name`
+ * within its body is `N.name`, before any binding around it. The names are gathered once
+ * (`EXPORTED`), for every name looked up in the namespace.
  */
-export function exportedElsewhere(block: ModuleBlock, name: string): boolean {
-  let names = EXPORTED.get(block);
+export function exportedElsewhere(
+  namespace: ModuleDeclaration,
+  within: Node,
+  name: string,
+): boolean {
+  // Of what is within its body, a block or the dotted namespace that is it, and nothing beside.
+  if (!isModuleBlock(within) && !isModuleDeclaration(within)) return false;
+  let names = EXPORTED.get(namespace);
   if (names === undefined) {
-    const own = new Set<Statement>(block.statements);
     names = new Set(
-      namespaceStatements(block).flatMap((statement) =>
-        own.has(statement) ? [] : valueNames(statement),
+      mergedDeclarations(namespace).flatMap((each) =>
+        exposedContents(each).flatMap((statement) => valueNames(statement)),
       ),
     );
-    EXPORTED.set(block, names);
+    EXPORTED.set(namespace, names);
   }
   return names.has(name);
+}
+
+/**
+ * The declarations that merge with `namespace`, itself among them: those of its name among what
+ * its scope holds (`namespaceStatements`) and, for the inner part of a dotted namespace, among what
+ * the declarations that merge with its outer part expose.
+ */
+function mergedDeclarations(namespace: ModuleDeclaration): readonly ModuleDeclaration[] {
+  const { name, parent } = namespace;
+  if (!isIdentifier(name)) return [namespace];
+  let among: readonly Statement[];
+  if (isModuleDeclaration(parent)) {
+    among = mergedDeclarations(parent).flatMap((each) => exposedContents(each));
+  } else if (isModuleBlock(parent)) {
+    among = namespaceStatements(parent);
+  } else {
+    among = statementsOf(parent) ?? [namespace];
+  }
+  return among.flatMap((statement) => {
+    const found =
+      isModuleDeclaration(statement) &&
+      isIdentifier(statement.name) &&
+      statement.name.text === name.text;
+    return found ? [statement] : [];
+  });
+}
+
+/**
+ * What a namespace declaration lets the others that merge with it see: the dotted inner namespace
+ * that is its body, or the statements of its body that are exported, or all of them where it is
+ * ambient but for the imports.
+ */
+function exposedContents(namespace: ModuleDeclaration): readonly Statement[] {
+  const { body } = namespace;
+  if (body === undefined) return [];
+  if (isModuleDeclaration(body)) return [body];
+  return isModuleBlock(body) ? body.statements.filter((statement) => exposed(statement)) : [];
+}
+
+/** Whether a statement of a namespace's body is exported, or is ambient, where all but imports are. */
+function exposed(statement: Statement): boolean {
+  const { modifiers } = statement as { readonly modifiers?: readonly Node[] };
+  return (
+    modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true ||
+    // eslint-disable-next-line no-bitwise -- TypeScript says a declaration is ambient in these flags alone.
+    ((statement.flags & NodeFlags.Ambient) !== 0 && !isImportEqualsDeclaration(statement))
+  );
 }
 
 /** The names of the values a statement declares: variables, functions, classes, enums, namespaces. */
@@ -411,8 +464,9 @@ function valueName(statement: Statement): string | undefined {
 }
 
 /**
- * Whether a namespace holds a value: one of interfaces, type aliases and namespaces of those alone,
- * or of nothing, is erased with the types, and a bare reference passes it to the name around it.
+ * Whether a namespace holds a value: one of interfaces, type aliases, namespaces of those and
+ * `import … =` aliases that are not exported, alone, or of nothing, is erased with the types, and a
+ * bare reference passes it to the name around it.
  */
 function instantiated(namespace: ModuleDeclaration): boolean {
   let { body } = namespace;
@@ -426,10 +480,16 @@ function instantiated(namespace: ModuleDeclaration): boolean {
       return !(
         isInterfaceDeclaration(statement) ||
         isTypeAliasDeclaration(statement) ||
+        (isImportEqualsDeclaration(statement) && !isExported(statement)) ||
         (isModuleDeclaration(statement) && !instantiated(statement))
       );
     })
   );
+}
+
+/** Whether an `import … =` alias is exported, which makes it a member of the namespace. */
+function isExported(alias: ImportEqualsDeclaration): boolean {
+  return alias.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true;
 }
 
 /** A declaration's binding path for one of the identifiers it binds. */

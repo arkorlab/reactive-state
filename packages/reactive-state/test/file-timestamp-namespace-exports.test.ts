@@ -85,6 +85,42 @@ const CASES = [
     source: `namespace N { export namespace field { export const enum E { A } } } namespace N { ${MAKES} }`,
     what: 'a namespace of a const enum alone',
   },
+  {
+    source: `namespace N { export namespace field { export import T = Types.T; } } namespace N { ${MAKES} }`,
+    what: 'a namespace of an exported import alias',
+  },
+  {
+    source: `namespace N { export namespace field { import T = Types.T; export const own = 1; } } namespace N { ${MAKES} }`,
+    what: 'a namespace of a private import alias beside a value',
+  },
+  {
+    source: `namespace A { export const field = 'other'; } namespace A.B { ${MAKES} }`,
+    what: 'an export of the outer part of a dotted namespace',
+  },
+  {
+    source: `namespace A.B { ${MAKES} } namespace A { export const field = 'other'; }`,
+    what: 'an export of a later declaration of the outer part',
+  },
+  {
+    source: `namespace A { export const field = 'other'; } namespace A.B.C { ${MAKES} }`,
+    what: 'an export of the outermost of three',
+  },
+  {
+    source: `namespace A.B { export const field = 'other'; } namespace A.B.C { ${MAKES} }`,
+    what: 'an export of the middle of three',
+  },
+  {
+    source: `namespace A.field { export const own = 1; } namespace A.B { ${MAKES} }`,
+    what: 'the name of a dotted namespace beside it',
+  },
+  {
+    source: `declare namespace A { const field: string; } namespace A.B { ${MAKES} }`,
+    what: 'a member of an ambient outer part',
+  },
+  {
+    source: `namespace Z { export namespace A { export const field = 'other'; } } namespace Z { export namespace A.B { ${MAKES} } }`,
+    what: 'an export of a nested namespace’s outer part',
+  },
 ] as const;
 
 const PINS = [
@@ -113,6 +149,22 @@ const PINS = [
     what: 'a File beside the namespace (pin)',
   },
   {
+    source: `namespace A { const field = 'other'; } namespace A.B { ${MAKES} }`,
+    what: 'a private name of the outer part (pin)',
+  },
+  {
+    source: `namespace A.B { export const field = 'other'; } namespace A.C { ${MAKES} }`,
+    what: 'an export of a sibling inner part (pin)',
+  },
+  {
+    source: `namespace Z { export const field = 'other'; } namespace A.B { ${MAKES} }`,
+    what: 'an export of another namespace beside a dotted one (pin)',
+  },
+  {
+    source: `namespace A { export type field = string; } namespace A.B { ${MAKES} }`,
+    what: 'a type the outer part exports (pin)',
+  },
+  {
     source: `namespace M.field { export type T = string; } namespace M { ${MAKES} }`,
     what: 'a dotted namespace of types alone (pin)',
   },
@@ -131,6 +183,14 @@ const PINS = [
   {
     source: `namespace N { export namespace field {} } namespace N { ${MAKES} }`,
     what: 'an empty namespace (pin)',
+  },
+  {
+    source: `namespace N { export namespace field { import T = Types.T; } } namespace N { ${MAKES} }`,
+    what: 'a namespace of a private import alias alone (pin)',
+  },
+  {
+    source: `namespace N { export namespace field { import T = Types.T; export type U = T; } } namespace N { ${MAKES} }`,
+    what: 'a namespace of a private import alias and a type (pin)',
   },
 ] as const;
 
