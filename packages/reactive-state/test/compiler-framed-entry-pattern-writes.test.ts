@@ -673,6 +673,18 @@ const CASES = [
     values: ["'safe':", '(0, { field: error }):', '0, { field: error }:0', 'error:'],
   },
   {
+    id: 'computed-key-changed-constant-spread-keeps-field',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const base: { field?: string } = { field: 'kept' }; delete base.field; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...base })); }`,
+    key: 'message',
+    values: ["'kept':", 'base:', 'base:0', 'entry:1', 'error:'],
+  },
+  {
+    id: 'computed-key-escaped-constant-spread-keeps-field',
+    source: `function frames(error: Error, name: string, change: (value: object) => void) { ${ENTRY} const base = { field: 'kept' }; change(base); return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...base })); }`,
+    key: 'message',
+    values: ["'kept':", 'base:', 'base:0', 'entry:1', 'error:'],
+  },
+  {
     id: 'computed-key-own-prototype-field-shadows-prototype',
     source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: error, ['__proto__']: 'kept' })); }`,
     key: 'message',

@@ -315,6 +315,37 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
   }
   const copied = writtenValue(property.expression);
   if (copied === undefined || !isObjectLiteralExpression(copied) || seen.has(copied)) return [];
+  if (!isStable(property.expression)) return [];
   seen.add(copied);
   return copied.properties.flatMap((each) => fieldNames(each, seen));
+}
+
+/**
+ * Whether the names a spread's object sets are certain: a written literal is, and so is a constant
+ * that the program only ever spreads. A constant may be given or lose fields where it is named
+ * otherwise, and a spread of it sets those it then has.
+ */
+function isStable(expression: Expression): boolean {
+  const value = unwrapped(expression);
+  if (isObjectLiteralExpression(value)) return true;
+  const held = isIdentifier(value) ? frameBindingOf(value) : undefined;
+  const declaration = held?.keys.length === 0 ? held.binding : undefined;
+  if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+  if (!isIdentifier(declaration.name)) return false;
+  const { text } = declaration.name;
+  const pending: Node[] = [declaration.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (
+      isIdentifier(node) &&
+      node.text === text &&
+      node !== declaration.name &&
+      frameBindingOf(node)?.binding === declaration &&
+      !isSpreadAssignment(node.parent)
+    )
+      return false;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return true;
 }
