@@ -283,7 +283,6 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
     selected,
     read: call,
     definite: undefined,
-    until: call.end,
   });
   deferredMethodWrites(call, root, own, statement.parent);
   return own;
@@ -307,7 +306,7 @@ function statementMethodWrites(
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
   const definite = assignment !== undefined || (top !== undefined && isCallExpression(top));
   const writes = { root, owner, own, held, definite: definite ? top : undefined };
-  possibleMethodWrites(before, { ...writes, until: before.end });
+  possibleMethodWrites(before, writes);
   if (top === undefined) return;
   releaseHeld(top, root, held);
   holdDefinition(top, root, held, own);
@@ -326,25 +325,33 @@ interface MethodWrites {
   readonly owner: Node;
   readonly own: OwnMethods;
   readonly definite: Node | undefined;
-  readonly until: number;
+  /** The read, which what runs after it does not precede; none where the statement runs whole. */
+  readonly read?: Node;
   readonly held?: HeldMethods;
   readonly selected?: SelectedMethod | undefined;
-  readonly read?: Node | undefined;
 }
 
 /**
- * The read's own execution makes these writes in source order, before its later definite proofs:
- * the operands of a call before the call.
+ * The read's own execution makes these writes in the order it runs them, before its later definite
+ * proofs: the operands of a call before the call. What runs after the read, whatever its place in
+ * the source, is left out; what holds the read, a call it is an operand of, still counts.
  */
 function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
+  let done = false;
   const visit = (node: Node): void => {
-    if (node.pos >= writes.until) return;
+    if (done && !holds(node, writes.read)) return;
     for (const child of inRunOrder(node)) visit(child);
     const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
     if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
       unprovenWrites(node, keys, writes, evaluatedForSure(node, statement));
+    if (node === writes.read) done = true;
   };
   visit(statement);
+}
+
+/** Whether a node holds another, by their places in the source. */
+function holds(node: Node, inner: Node | undefined): boolean {
+  return inner !== undefined && node.pos <= inner.pos && inner.end <= node.end;
 }
 
 /**

@@ -672,6 +672,166 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: new (class { field = Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); static other = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); })(), join: () => 'safe' }); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'class-static-block-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-static-block-two-statements-release',
+    source: `function frames(error: Error) { const values = [error]; const unused = class { static { Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-static-block-two-statements-hold',
+    source: `function frames(error: Error) { const values = [error]; const unused = class { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-block-plain-block',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { static { { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-static-block-declaration',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { static { const done = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-static-block-in-argument',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-static-block-branch-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { static { if (flag) Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-block-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { static { for (let at = 0; at < 1; at += 1) Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-block-try-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { static { try { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } catch {} } }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-block-in-method-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = { method() { return class { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }; } }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-block-conditional-class-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = flag ? class { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } : 0; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-computed-name-runs-first',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static y = String(values); [((values.join = Array.prototype.join), 'a')]() {} } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-static-computed-name-runs-first',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static y = String(values); static [((values.join = Array.prototype.join), 'a')] = 1; } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-expression-computed-name-runs-first',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const K = class { static y = String(values); static [((values.join = Array.prototype.join), 'a')] = 1; }; return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-after-heritage-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K extends ((values.join = Array.prototype.join), Object) { static y = String(values); } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-static-field-before-static-write-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static b = ((values.join = Array.prototype.join), 1); } return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'read-in-static-field-after-static-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static { values.join = Array.prototype.join; } static c = String(values); } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-static-field-before-static-block-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static { values.join = Array.prototype.join; } } return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'read-in-static-field-after-static-block',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static { values.join = Array.prototype.join; } static a = String(values); } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-instance-field-after-static-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { x = String(values); static z = ((values.join = Array.prototype.join), 1); } new K(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-instance-field-after-later-statement',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { x = String(values); } values.join = Array.prototype.join; new K(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-expression-instance-field',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const K = class { x = String(values); }; values.join = Array.prototype.join; new K(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-method-after-static-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { m() { return String(values); } static z = ((values.join = Array.prototype.join), 1); } new K().m(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-pattern-key-after-initializer-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { [String(values)]: unused } = ((values.join = Array.prototype.join), {}); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-assignment-pattern-key-after-right-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; let unused: unknown; ({ [String(values)]: unused } = ((values.join = Array.prototype.join), {})); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-pattern-key-before-initializer-write-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { [String(values)]: unused } = {}; (values.join = Array.prototype.join); return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'read-in-argument-before-later-argument-write-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; String(values); Object.assign({}, { first: String(values), second: ((values.join = Array.prototype.join)) }); return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'class-method-decorator-write-runs',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { @((values.join = Array.prototype.join), (target: unknown) => target) method() {} }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-parameter-decorator-write-runs',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method(@((values.join = Array.prototype.join), (target: object, key: string, index: number) => {}) value: unknown) {} }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-property-decorator-write-runs',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { @((values.join = Array.prototype.join), (target: unknown) => target) field = 1; }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-decorator-before-computed-name',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { @((values.join = () => 'safe'), (target: unknown) => target) [((values.join = Array.prototype.join), 'name')]() {} }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-method-body-decorator-free-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method() { return 1; } }; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
