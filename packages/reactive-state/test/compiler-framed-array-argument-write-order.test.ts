@@ -38,6 +38,41 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'earlier-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {} }); Object.assign(values, { ignored: (values.join = Array.prototype.join), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-accessor-assignment',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {} }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-fixed-value',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-definitions',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperties(values, { join: { get: () => Array.prototype.join, set: () => {} } }); Object.assign(values, { join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-opaque-definition',
+    source: `function frames(error: Error, key: string) { const values = [error]; Object.defineProperty(values, key, { get: () => Array.prototype.join, set: () => {} }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-custom-value-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'other-key-accessor-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'toString', { get: () => Array.prototype.toString, set: () => {} }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
     id: 'other-key-definition-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'label', { value: 1 }), join: () => 'safe' }); return String(values); }`,
     converts: false,

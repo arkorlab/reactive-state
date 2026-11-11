@@ -266,9 +266,10 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
   while (!isSourceFile(statement.parent) && !isBlock(statement.parent))
     statement = statement.parent;
   const owner = executionOwner(call);
+  const held = new Set<string>();
   for (const before of statement.parent.statements) {
     if (before === statement) break;
-    statementMethodWrites(before, root, { owner, own });
+    statementMethodWrites(before, root, { owner, own, held });
   }
   const selected = selectedMethod(call, method, root);
   possibleMethodWrites(statement, {
@@ -286,25 +287,29 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
 
 /**
  * A statement's operands run before the write the statement itself makes, in source order. A
- * definition among them leaves its key unproven: the property may be an accessor whose setter the
- * statement's write calls, or one that refuses the write.
+ * definition leaves its key unproven for good where it may leave an accessor or a fixed value: a
+ * later write calls the setter, or is refused, and does not replace the method.
  */
 function statementMethodWrites(
   before: Node,
   root: FrameBinding,
-  { owner, own }: { readonly owner: Node; readonly own: OwnMethods },
+  {
+    owner,
+    own,
+    held,
+  }: { readonly owner: Node; readonly own: OwnMethods; readonly held: Set<string> },
 ): void {
   const top = isExpressionStatement(before) ? before.expression : undefined;
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
   const definite = assignment !== undefined || (top !== undefined && isCallExpression(top));
-  const defined = new Set<string>();
-  const writes = { root, owner, own, defined, definite: definite ? top : undefined };
+  const writes = { root, owner, own, held, definite: definite ? top : undefined };
   possibleMethodWrites(before, { ...writes, until: before.end });
   if (top === undefined) return;
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
-  for (const key of defined) own.set(key, { own: false });
+  holdDefinition(top, root, held);
+  for (const key of held) own.set(key, { own: false });
 }
 
 interface MethodWrites {
@@ -313,7 +318,7 @@ interface MethodWrites {
   readonly own: OwnMethods;
   readonly definite: Node | undefined;
   readonly until: number;
-  readonly defined?: Set<string>;
+  readonly held?: Set<string>;
   readonly selected?: SelectedMethod | undefined;
   readonly read?: Node | undefined;
 }
@@ -334,7 +339,7 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
 
 /**
  * The methods a write may replace are unproven, unless the write comes after the read or, for the
- * selected method, after the selection; a definition's stay so past the statement's own.
+ * selected method, after the selection; a definition's may stay so for good.
  */
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
   const { selected, read } = writes;
@@ -342,19 +347,23 @@ function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrite
   for (const key of keys)
     if (selected === undefined || !writtenAfterSelection(node, key, selected))
       writes.own.set(key, { own: false });
-  if (definesProperties(node, writes.root)) for (const key of keys) writes.defined?.add(key);
+  if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held);
 }
 
-/** A call that defines properties of the array, which may install an accessor or fix a value. */
-function definesProperties(node: Node, root: FrameBinding): boolean {
-  if (!isCallExpression(node)) return false;
+/** The methods a call that defines properties of the array leaves without a custom function. */
+function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void {
+  if (!isCallExpression(node)) return;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
-  return (
-    target !== undefined &&
-    arrayIdentity(target) === root &&
-    (path === 'Object.defineProperty' || path === 'Object.defineProperties')
-  );
+  if (
+    target === undefined ||
+    arrayIdentity(target) !== root ||
+    (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
+  )
+    return;
+  const defined: OwnMethods = new Map();
+  callMethodWrites(node, root, defined);
+  for (const [key, method] of defined) if (!method.own) held.add(key);
 }
 
 /** Another function that may run before the read may write any method at any point before it. */
