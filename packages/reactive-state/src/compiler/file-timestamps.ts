@@ -58,7 +58,7 @@ import { useOf } from './code-globals.ts';
 import { constructorReferences, fileConstructorReference } from './file-constructor-references.ts';
 import { hasEnumMember } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
-import { bindingIdentifiers, hoistedIn, readsBinding } from './scope.ts';
+import { bindingIdentifiers, hoistedIn, isTypeOnly } from './scope.ts';
 
 /** File constructions whose options cannot supply a timestamp independent of the clock. */
 
@@ -279,7 +279,9 @@ function declaredValue(node: Expression, made: NewExpression): Expression {
 
 /**
  * Whether the holder is used only by this File, constant aliases, or non-mutating object spreads —
- * of the reads of its own name alone, before the binding each reads is resolved.
+ * of the reads of its own name alone, before the binding each reads is resolved, and of the runtime
+ * ones (`fileConstructorReference`): a type that names the holder, an export that is erased with the
+ * types, a re-export of another module's name and an export's label read nothing of it.
  */
 function unchanged(
   declaration: VariableDeclaration,
@@ -299,7 +301,7 @@ function unchanged(
   const following = new Set([...seen, declaration]);
   let safe = true;
   const visit = (node: Node): void => {
-    if (!safe) {
+    if (!safe || isTypeOnly(node)) {
       return;
     }
     if (
@@ -307,7 +309,7 @@ function unchanged(
       isIdentifier(declaration.name) &&
       node.text === declaration.name.text &&
       node !== declaration.name &&
-      readsBinding(node) &&
+      fileConstructorReference(node) &&
       localBinding(node) === declaration
     ) {
       const { at, parent } = useOf(node);
