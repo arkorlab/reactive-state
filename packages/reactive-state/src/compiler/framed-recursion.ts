@@ -148,8 +148,8 @@ function isAssignment(node: Node): node is BinaryExpression {
   );
 }
 
-/** Whether nothing keeps a function that is written here: it is called on the spot, or dropped. */
-function keptNowhere(held: Node): boolean {
+/** Whether a function written here is called on the spot: as a callee or a tag, or by `call`. */
+function calledOnTheSpot(held: Node): boolean {
   const { parent: holder } = held;
   const at =
     isPropertyAccessExpression(holder) &&
@@ -160,9 +160,27 @@ function keptNowhere(held: Node): boolean {
   const { parent } = at;
   return (
     ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
-    (isTaggedTemplateExpression(parent) && parent.tag === at) ||
-    isExpressionStatement(parent)
+    (isTaggedTemplateExpression(parent) && parent.tag === at)
   );
+}
+
+/** Whether nothing keeps a function that is written here: it is called on the spot, or dropped. */
+function keptNowhere(held: Node): boolean {
+  return calledOnTheSpot(held) || isExpressionStatement(held.parent);
+}
+
+/** Whether a class is made where it is written, by a `new` on the spot. */
+function madeOnTheSpot(declaration: Node): boolean {
+  return isClassExpression(declaration) && calledOnTheSpot(holderOf(declaration));
+}
+
+/**
+ * Whether a function runs where it is written, as it is called there whatever it is named; and a
+ * constructor, where its class is made there.
+ */
+export function runsInPlace(fn: Node): boolean {
+  if (isConstructorDeclaration(fn)) return madeOnTheSpot(fn.parent);
+  return (isFunctionExpression(fn) || isArrowFunction(fn)) && calledOnTheSpot(holderOf(fn));
 }
 
 /**
@@ -313,13 +331,14 @@ function inInstanceInitializer(node: Node, fn: Node): boolean {
   return false;
 }
 
-/** Whether a node is what the instance field that holds it is given. */
+/** Whether a node is what the instance field that holds it is given, where it is run later. */
 function isInstanceInitializer(holder: Node, node: Node): boolean {
   if (!isPropertyDeclaration(holder)) return false;
   const initializer: Node | undefined = holder.initializer;
   return (
     initializer === node &&
-    holder.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true
+    holder.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true &&
+    !madeOnTheSpot(holder.parent)
   );
 }
 
@@ -563,12 +582,11 @@ export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (node !== fn && isNamedFunction(node)) {
+    if (node !== fn && isNamedFunction(node) && !runsInPlace(node)) {
       pending.push(...definitionParts(node));
       continue;
     }
-    if (node.pos >= from && node.pos < to && (isSuspension(node) || callsFunction(node, fn, names)))
-      return true;
+    if (node.pos >= from && node.pos < to && reenters(node, fn, names)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -576,7 +594,13 @@ export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   return false;
 }
 
+/** Whether a node, where it may run, lets the function run again: it reaches it, or it waits. */
+function reenters(node: Node, fn: Node, names: ReadonlySet<string>): boolean {
+  return isSuspension(node) ? runsWithin(node, fn) : callsFunction(node, fn, names);
+}
+
 /** Whether a node reads a name by which the function is reached, in a place that may run. */
+
 function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolean {
   const text = referenceText(node);
   return (

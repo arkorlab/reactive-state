@@ -982,6 +982,86 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'recursion-through-immediate-named-helper-around-a-loop',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; let seen = ''; (function read(pass: number): string { while ((seen += String(values) + ',')) { values[0] = error; return (function helper() { return pass < 1 ? read(pass + 1) : ''; })(); } return ''; })(0); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-named-helper-called-with-call',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; let seen = ''; (function read(pass: number): string { while ((seen += String(values) + ',')) { values[0] = error; return (function helper() { return pass < 1 ? read(pass + 1) : ''; }).call(null); } return ''; })(0); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-immediate-named-helper',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function helper() { if (pass < 1) read(pass + 1); })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-named-helper-made-with-new',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} new (function helper() { if (pass < 1) read(pass + 1); })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-named-helper-as-a-tag',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function helper(s: any) { if (pass < 1) read(pass + 1); })\`\`; const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-helper-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function helper() { read(pass + 1); }); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'unreachable-wait-pin',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; async function read(): Promise<string> { ${SAFE} if (false) await 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } await Promise.all([read(), read()]); return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'unreachable-yield-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; function* read(): Generator<number, string> { ${SAFE} if (false) yield 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } const a = read(); const b = read(); a.next(); b.next(); return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-constructor-of-a-class-made-on-the-spot',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} new (class { constructor() { if (pass < 1) read(pass + 1); } })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-constructor-of-a-named-class-made-on-the-spot',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} new (class Named { constructor() { if (pass < 1) read(pass + 1); } })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-initializer-of-a-class-made-on-the-spot',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} new (class { x = pass < 1 ? read(pass + 1) : 0; })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-while-an-immediate-async-function-waits',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; const read = (pass: number) => { (async () => { ${SAFE} await 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; })(); }; read(0); read(1); await new Promise((r) => setTimeout(r, 5)); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-function-around-an-immediate-async-function',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; const read = (pass: number): void => { (async () => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; seen += text + ','; })(); }; read(0); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-function-around-an-immediate-generator',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; const read = (pass: number): void => { (function* () { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; seen += text + ','; })().next(); }; read(0); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'immediate-async-function-without-a-wait-pin',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; const read = (pass: number): void => { (async () => { ${SAFE} const text = String(values); values.join = Array.prototype.join; seen += text + ','; })(); }; read(0); read(1); await new Promise((r) => setTimeout(r, 5)); return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'class-never-made-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (class { constructor() { read(pass + 1); } }); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
