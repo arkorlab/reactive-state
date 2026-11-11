@@ -456,10 +456,12 @@ function alternativesOf(
 /**
  * Whether what an expression is written as, through the constants that hold it, is null or
  * undefined: `null`, `void 0`, an `undefined` no declaration shadows; or a written value, which is
- * neither. None where the compile cannot tell.
+ * neither. None where the compile cannot tell, a name that is assigned among them.
  */
 function nullishness(expression: Expression): boolean | undefined {
-  const value = heldValue(expression);
+  const names: Identifier[] = [];
+  const value = heldValue(expression, names);
+  if (names.some((name) => framedAssignedValues(name).length > 0)) return undefined;
   if (isFunctionDeclaration(value)) return false;
   if (isIdentifier(value))
     return value.text === 'undefined' && frameBindingOf(value) === undefined ? true : undefined;

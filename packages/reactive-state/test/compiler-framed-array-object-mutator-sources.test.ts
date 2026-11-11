@@ -975,6 +975,18 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'define-reassigned-function-nullish-getter',
+    source: `function frames(error: Error) { ${VALUES} function getter(): unknown { return 'safe'; } getter = undefined!; Object.defineProperty(values, 0, { get: getter ?? (() => error) }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
+    id: 'define-unassigned-function-nullish-getter-pin',
+    source: `function frames(error: Error) { ${VALUES} function getter(): unknown { return 'safe'; } Object.defineProperty(values, 0, { get: getter ?? (() => error) }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1223,6 +1235,11 @@ const CONVERSIONS = [
   {
     id: 'assign-chained-target-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(Object.assign(a, {}), { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-reassigned-function-nullish-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; function getter(): unknown { return 'safe'; } getter = undefined!; Object.defineProperty(a, 0, { get: getter ?? (() => error) }); return String(a); }`,
     converts: true,
   },
   {
