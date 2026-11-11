@@ -14,6 +14,7 @@ import {
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isOmittedExpression,
   isObjectLiteralExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
@@ -40,7 +41,6 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
 
 /** Native entry construction installs each source-written value under its converted key. */
@@ -163,7 +163,11 @@ function slotWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[]
 
 /** A default is read as the write it is and as the value its pattern falls back to: one source. */
 function sameSource(left: AssignedFrameSource, right: AssignedFrameSource): boolean {
-  return left.value === right.value && left.keys.join('.') === right.keys.join('.');
+  return (
+    left.value === right.value &&
+    left.keys.length === right.keys.length &&
+    left.keys.every((key, at) => key === right.keys[at])
+  );
 }
 
 /**
@@ -228,8 +232,8 @@ interface SlotWrite {
 
 /**
  * The slots a destructuring assignment or a loop head writes on the tuple's bindings, each with the
- * values its pattern hands it. A target the pattern readers do not route, a rest or a computed
- * key, may take any part of what the right side holds.
+ * values its pattern hands it. Where the pattern readers do not route a target, a rest or a
+ * computed key, it keeps its slot and may take any field or element of the sources at its level.
  */
 function patternWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
   const start = patternStart(node);
@@ -240,10 +244,47 @@ function patternWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrit
     const target = unwrapped(at.target);
     const slot = memberSlot(target, aliases);
     if (slot !== null) found.push({ slot, sources: at.sources });
-    else if (!isIdentifier(target)) pending.push(...assignmentPatternTargets(target, at.sources));
+    else if (!isIdentifier(target)) {
+      const routed = assignmentPatternTargets(target, at.sources);
+      pending.push(...routed);
+      const covered = new Set<Node>(routed.map((each) => each.target));
+      for (const child of patternChildren(target))
+        if (!covered.has(child)) found.push(...unroutedWrites(child, at.sources, aliases));
+    }
   }
-  const named = framedWrittenTargets(node).filter((each) => memberSlot(each, aliases) !== null);
-  if (found.length < named.length) found.push({ slot: undefined, sources: patternParts(node) });
+  return found;
+}
+
+/** The targets a pattern or a default names directly, each as the pattern readers route it. */
+function patternChildren(target: Expression): readonly Node[] {
+  if (isBinaryExpression(target)) return [target.left];
+  if (isArrayLiteralExpression(target))
+    return target.elements.filter((each) => !isOmittedExpression(each));
+  if (!isObjectLiteralExpression(target)) return [];
+  return target.properties.flatMap((property) => {
+    if (isPropertyAssignment(property)) return [property.initializer];
+    if (isSpreadAssignment(property)) return [property.expression];
+    return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+      ? [property.name]
+      : [];
+  });
+}
+
+/** The tuple's slots an unrouted target holds, each fed by any field or element of the sources. */
+function unroutedWrites(
+  child: Node,
+  sources: readonly AssignedFrameSource[],
+  aliases: ReadonlySet<FrameBinding>,
+): SlotWrite[] {
+  const found: SlotWrite[] = [];
+  const pending: Node[] = [child];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    const slot = isExpression(node) ? memberSlot(node, aliases) : null;
+    if (slot !== null) found.push({ slot, sources: possibleFields(sources) });
+    node.forEachChild((inner) => {
+      pending.push(inner);
+    });
+  }
   return found;
 }
 
@@ -260,20 +301,19 @@ function patternStart(
     : undefined;
 }
 
-/** What a pattern's right side may hand to any of its targets: its fields or elements, itself. */
-function patternParts(node: Node): readonly AssignedFrameSource[] {
-  const source = isForOfStatement(node) ? node.expression : undefined;
-  const right = isBinaryExpression(node) ? node.right : source;
-  if (right === undefined) return [];
-  const value = unwrapped(right);
-  if (!isObjectLiteralExpression(value))
-    return [{ value, keys: [] }, ...iteratedFrameSources(value)];
-  return value.properties.flatMap((property) => {
-    if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-    if (isSpreadAssignment(property)) return [{ value: property.expression, keys: [] }];
-    return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
-      ? [{ value: property.name, keys: [] }]
-      : [];
+/** What sources may hand an unrouted target: their fields or elements, and themselves. */
+function possibleFields(sources: readonly AssignedFrameSource[]): readonly AssignedFrameSource[] {
+  return sources.flatMap((source) => {
+    const value = unwrapped(source.value);
+    if (source.keys.length > 0) return [source];
+    if (!isObjectLiteralExpression(value)) return [source, ...iteratedFrameSources(value)];
+    return value.properties.flatMap((property) => {
+      if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+      if (isSpreadAssignment(property)) return [{ value: property.expression, keys: [] }];
+      return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+        ? [{ value: property.name, keys: [] }]
+        : [];
+    });
   });
 }
 

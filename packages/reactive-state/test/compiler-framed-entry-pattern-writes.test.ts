@@ -49,6 +49,30 @@ const CASES = [
     values: ["'safe':", 'error:'],
   },
   {
+    id: 'dotted-field-names',
+    source: `function frames(source: { a: { b: Error }; 'a.b': Error }) { ${ENTRY} return Object.fromEntries([entry], ({ 'a.b': entry[1], a: { b: entry[1] } } = source)); }`,
+    key: 'message',
+    values: ["'safe':", 'source:a.b', 'source:a/b'],
+  },
+  {
+    id: 'computed-key-known-slot',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[0] } = { field: 'message', unused: error })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'nested-computed-key',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ outer: { [name]: entry[1] } } = { outer: { field: error } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-other-tuple-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const other: [string, unknown] = ['x', 0]; return Object.fromEntries([entry], ({ [name]: other[1] } = { field: error })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
     id: 'default-pattern-pin',
     source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([entry[1] = error] = [])); }`,
     key: 'message',
@@ -73,7 +97,7 @@ function selectedValues(source: string, key: string): readonly string[] | undefi
   using api = openTypeScript();
   using parsed = parseModule(api, 'entry-pattern-writes.ts', source);
   return framedEntryValues(entriesCall(parsed.sourceFile), key)
-    ?.map((each) => `${each.value.getText()}:${each.keys.join('.')}`)
+    ?.map((each) => `${each.value.getText()}:${each.keys.join('/')}`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
