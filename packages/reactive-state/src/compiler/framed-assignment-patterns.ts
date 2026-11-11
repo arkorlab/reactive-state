@@ -394,6 +394,7 @@ export function assignmentPatternDefault(node: Node): boolean {
     if (
       isArrayLiteralExpression(parent) ||
       isObjectLiteralExpression(parent) ||
+      isSpreadElement(parent) ||
       (isPropertyAssignment(parent) && parent.initializer === at)
     ) {
       at = parent;
