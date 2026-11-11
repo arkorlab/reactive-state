@@ -11,6 +11,7 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
+  type VariableStatement,
 } from 'typescript/ast';
 
 import { answersLater } from './answers.ts';
@@ -123,8 +124,13 @@ function descriptorValues(descriptor: Expression | undefined): WrittenArrayEleme
 
 /** What a getter's body may return, nothing where its flow is not followed. */
 function returnedValues(body: Block | undefined): WrittenArrayElement[] {
-  const values = body === undefined ? undefined : framedFactoryReturns(body, () => false);
+  const values = body === undefined ? undefined : framedFactoryReturns(body, constantStatement);
   return (values ?? []).map((value) => ({ value, keys: [] }));
+}
+
+/** A constant declaration, as the object-member readers take it, keeps the body's flow followed. */
+function constantStatement(statement: VariableStatement): boolean {
+  return /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile()));
 }
 
 /** A key that may name the selected array slot: an unknown one, or a canonical index. */

@@ -51,6 +51,18 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'assign-getter-constant-local',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { const held = error; return held; } }); return values; }`,
+    index: undefined,
+    elements: ['held:'],
+  },
+  {
+    id: 'define-getter-constant-local',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { const held = error; return held; } }); return values; }`,
+    index: undefined,
+    elements: ['held:'],
+  },
+  {
     id: 'define-getter-pin',
     source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { return error; } }); return values; }`,
     index: undefined,
