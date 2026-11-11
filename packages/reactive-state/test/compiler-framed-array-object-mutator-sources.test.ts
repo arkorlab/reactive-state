@@ -663,6 +663,48 @@ const ELEMENTS = [
     elements: ['descriptor:value', "'safe':"],
   },
   {
+    id: 'define-literal-condition-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get: true ? () => 'safe' : () => error }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-self-referential-getter-literal',
+    source: `function frames(error: Error) { ${VALUES} const getter: () => unknown = true ? () => error : getter; Object.defineProperty(values, 0, { get: getter }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-conditional-descriptor',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.defineProperty(values, 0, flag ? { get: () => error } : {}); return values; }`,
+    index: undefined,
+    elements: ['flag ? { get: () => error } : {}:value', 'error:'],
+  },
+  {
+    id: 'define-constant-conditional-descriptor',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const descriptor: PropertyDescriptor = flag ? { get: () => error } : {}; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
+    id: 'define-literal-condition-descriptor',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, true ? { value: error } : { value: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["true ? { value: error } : { value: 'safe' }:value", 'error:'],
+  },
+  {
+    id: 'define-conditional-map',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.defineProperties(values, flag ? { 0: { value: error } } : {}); return values; }`,
+    index: undefined,
+    elements: ['flag ? { 0: { value: error } } : {}:0.value', 'error:'],
+  },
+  {
+    id: 'assign-conditional-source',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.assign(values, flag ? { 0: error } : {}); return values; }`,
+    index: undefined,
+    elements: ['flag ? { 0: error } : {}:0', 'flag ? { 0: error } : {}:array', 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -828,6 +870,16 @@ const CONVERSIONS = [
     id: 'define-reassigned-alias-write-safe',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; let alias = descriptor; alias = {}; alias.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-conditional-descriptor-converts',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; Object.defineProperty(a, 0, flag ? { get: () => error } : {}); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-conditional-source-converts',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; Object.assign(a, flag ? { 0: error } : {}); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',

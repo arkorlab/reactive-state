@@ -48,6 +48,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
+import { framedCondition } from './framed-sources.ts';
 import { framedAssignedValues, framedPossibleBranch } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
@@ -196,7 +197,13 @@ function assignedValues(source: Expression, index: number | undefined): WrittenA
   if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slotKey(index)] }];
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
-  if (!isObjectLiteralExpression(value)) return opaqueSource(source, index);
+  if (!isObjectLiteralExpression(value)) {
+    const alternatives = alternativesOf(value) ?? [];
+    return [
+      ...opaqueSource(source, index),
+      ...alternatives.flatMap((each) => assignedValues(each, index)),
+    ];
+  }
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) found.push(...assignedValues(property.expression, index));
@@ -233,9 +240,9 @@ function definedValues(
   if (!isObjectLiteralExpression(value)) {
     const held = heldValue(value);
     const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
-    return isObjectLiteralExpression(held) && firstRead(reading.seen.maps, held)
-      ? [...opaque, ...definedValues(held, index, reading)]
-      : opaque;
+    const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
+    if (alternatives === undefined || !firstRead(reading.seen.maps, held)) return opaque;
+    return [...opaque, ...alternatives.flatMap((each) => definedValues(each, index, reading))];
   }
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
@@ -268,7 +275,12 @@ function descriptorValues(
   const held = heldValue(value, names);
   const opaque = [{ value: descriptor, keys: ['value'] }];
   const seen = reading.inherited ? reading.seen.full : reading.seen.own;
-  if (!isObjectLiteralExpression(held) || !firstRead(seen, held)) return opaque;
+  if (!isObjectLiteralExpression(held)) {
+    const alternatives = alternativesOf(held);
+    if (alternatives === undefined || !firstRead(seen, held)) return opaque;
+    return [...opaque, ...alternatives.flatMap((each) => descriptorValues(each, reading))];
+  }
+  if (!firstRead(seen, held)) return opaque;
   const entries = held.properties.flatMap((property) => descriptorEntry(property, reading));
   return [...opaque, ...entries, ...descriptorWrites(names)];
 }
@@ -347,7 +359,7 @@ function functionReturns(initializer: Expression, seen = new Set<Node>()): Writt
   const held = heldValue(initializer, names);
   if (seen.has(held)) return [];
   seen.add(held);
-  const alternatives = functionAlternatives(held);
+  const alternatives = alternativesOf(held);
   const returned =
     alternatives === undefined
       ? bodyReturns(held)
@@ -358,11 +370,18 @@ function functionReturns(initializer: Expression, seen = new Set<Node>()): Writt
   return [...returned, ...replaced];
 }
 
-/** The functions a conditional or a logical expression may hand over; none for any other. */
-function functionAlternatives(
+/**
+ * The values a conditional or a logical expression may hand over, the one a written literal
+ * condition takes alone; none for any other expression.
+ */
+function alternativesOf(
   value: Expression | FunctionDeclaration,
 ): readonly Expression[] | undefined {
-  if (isConditionalExpression(value)) return [value.whenTrue, value.whenFalse];
+  if (isConditionalExpression(value)) {
+    const taken = framedCondition(value.condition);
+    if (taken !== undefined) return [taken ? value.whenTrue : value.whenFalse];
+    return [value.whenTrue, value.whenFalse];
+  }
   if (isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind))
     return [value.left, value.right];
   return undefined;
