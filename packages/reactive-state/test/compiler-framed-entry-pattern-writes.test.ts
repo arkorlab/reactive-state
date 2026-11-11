@@ -102,6 +102,36 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'rest-target',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([...entry[1]] = [error])); }`,
+    key: 'message',
+    values: ["'safe':", '[error]:'],
+  },
+  {
+    id: 'object-rest-target',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ ...entry[1] } = { field: error })); }`,
+    key: 'message',
+    values: ["'safe':", '{ field: error }:'],
+  },
+  {
+    id: 'nested-rest-target',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([[...entry[1]]] = [[error]])); }`,
+    key: 'message',
+    values: ["'safe':", '[error]:'],
+  },
+  {
+    id: 'computed-key-rest-target',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: [...entry[1]] } = { field: [error] })); }`,
+    key: 'message',
+    values: ["'safe':", '[error]:'],
+  },
+  {
+    id: 'rest-pattern-elements-pin',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([...[entry[1]]] = [error])); }`,
+    key: 'message',
+    values: ["'safe':", '[error]:', 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

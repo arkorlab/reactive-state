@@ -26,6 +26,8 @@ import {
   isVariableDeclarationList,
   isSpreadElement,
   type Node,
+  type SpreadAssignment,
+  type SpreadElement,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -261,19 +263,28 @@ function patternChildren(target: Expression): readonly Node[] {
   if (isArrayLiteralExpression(target))
     return target.elements.filter((each) => !isOmittedExpression(each));
   if (!isObjectLiteralExpression(target)) return [];
-  return target.properties.flatMap((property) => {
+  return target.properties.flatMap((property): Node[] => {
     if (isPropertyAssignment(property)) return [property.initializer];
-    if (isSpreadAssignment(property)) return [property.expression];
+    if (isSpreadAssignment(property)) return [property];
     return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
       ? [property.name]
       : [];
   });
 }
 
+interface UnroutedTarget {
+  readonly node: Node;
+  readonly sources: readonly AssignedFrameSource[];
+  /** Whether the walk went through a pattern: a rest then collects what an element holds. */
+  readonly nested: boolean;
+}
+
 /**
  * The tuple's slots an unrouted target holds, each fed by any field or element of the sources. Only
- * the positions a pattern writes are walked: a default, a computed key, and the receiver and the
- * index of a member that is not the tuple's are reads.
+ * the positions a pattern writes are walked: a computed key, and the receiver and the index of a
+ * member that is not the tuple's, are reads. A rest target takes a fresh container of what its
+ * level holds, not what the container holds, and a pattern under a rest takes the container's
+ * elements.
  */
 function unroutedWrites(
   child: Node,
@@ -281,15 +292,49 @@ function unroutedWrites(
   aliases: ReadonlySet<FrameBinding>,
 ): SlotWrite[] {
   const found: SlotWrite[] = [];
-  const pending: Node[] = [child];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const target = isExpression(node) ? unwrapped(node) : node;
-    const slot = isExpression(target) ? memberSlot(target, aliases) : null;
-    if (slot !== null) found.push({ slot, sources: possibleFields(sources) });
-    else if (isSpreadElement(target)) pending.push(target.expression);
-    else if (isExpression(target)) pending.push(...patternChildren(target));
+  const pending: UnroutedTarget[] = [{ node: child, sources, nested: false }];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    const step = unroutedStep(at, aliases);
+    if (step.write !== undefined) found.push(step.write);
+    pending.push(...step.next);
   }
   return found;
+}
+
+interface UnroutedStep {
+  readonly write: SlotWrite | undefined;
+  readonly next: readonly UnroutedTarget[];
+}
+
+/** One target of the walk: a write of the tuple's slot, or the targets it goes on to. */
+function unroutedStep(at: UnroutedTarget, aliases: ReadonlySet<FrameBinding>): UnroutedStep {
+  const target = isExpression(at.node) ? unwrapped(at.node) : at.node;
+  if (isSpreadElement(target) || isSpreadAssignment(target)) return restStep(at, target, aliases);
+  const slot = isExpression(target) ? memberSlot(target, aliases) : null;
+  if (slot !== null) return { write: { slot, sources: possibleFields(at.sources) }, next: [] };
+  return { write: undefined, next: isExpression(target) ? unroutedChildren(target, at) : [] };
+}
+
+/** A rest target holds a fresh container of its level; a pattern under it, the container's elements. */
+function restStep(
+  at: UnroutedTarget,
+  rest: SpreadElement | SpreadAssignment,
+  aliases: ReadonlySet<FrameBinding>,
+): UnroutedStep {
+  const target = unwrapped(rest.expression);
+  const slot = memberSlot(target, aliases);
+  if (slot === null) return { write: undefined, next: [{ ...at, node: target, nested: true }] };
+  return {
+    write: { slot, sources: at.nested ? possibleFields(at.sources) : at.sources },
+    next: [],
+  };
+}
+
+/** What a walk of an unrouted target goes on to: the left of a default, or a pattern's targets. */
+function unroutedChildren(target: Expression, at: UnroutedTarget): readonly UnroutedTarget[] {
+  if (isBinaryExpression(target))
+    return [{ node: target.left, sources: at.sources, nested: at.nested }];
+  return patternChildren(target).map((node) => ({ node, sources: at.sources, nested: true }));
 }
 
 /** The pattern a node assigns, with the sources its right side or iterable hands it. */
