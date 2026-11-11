@@ -19,7 +19,6 @@ import {
   isSpreadAssignment,
   type Node,
   type ObjectLiteralExpression,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -42,6 +41,7 @@ import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
+import { framedWrittenTargets } from './framed-written-targets.ts';
 import { constantValue } from './numbers.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
@@ -351,16 +351,11 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods): 
 /** The methods a write to the array may replace, whichever value it writes. */
 function writtenMethods(node: Node, root: FrameBinding): readonly string[] {
   const written: OwnMethods = new Map();
-  if (isBinaryExpression(node) && assignmentOperator(node.operatorToken.kind))
-    for (const key of assignedMethods(node.left, root)) written.set(key, { own: false });
+  for (const target of framedWrittenTargets(node))
+    for (const key of assignedMethods(target, root)) written.set(key, { own: false });
   if (isDeleteExpression(node)) deletedMethod(node, root, written);
   if (isCallExpression(node)) callMethodWrites(node, root, written);
   return [...written.keys()];
-}
-
-/** Simple, compound and logical assignments alike. */
-function assignmentOperator(kind: SyntaxKind): boolean {
-  return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
 }
 
 /** The methods an assignment to the array's member may replace: each its key's names allow. */
