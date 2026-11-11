@@ -127,6 +127,7 @@ export function overwrittenInPass(
     bodies.some((body) => !(write.pos >= body.pos && write.end <= body.end))
   )
     return false;
+  const outermost = bodies.at(-1) ?? write;
   for (let at = write; !bodies.includes(at); at = at.parent) {
     const { parent } = at;
     if (!isBlock(parent)) continue;
@@ -136,7 +137,7 @@ export function overwrittenInPass(
         isExpressionStatement(each) &&
         ownMethodAssignment(each.expression, root)?.key === key &&
         bodies.every((body) => each.pos >= body.pos && each.end <= body.end) &&
-        !jumpsOver(parent, write, each)
+        !jumpsOver(parent, write, each, outermost)
       );
     });
     if (later !== undefined && !resumesWithin(parent, bodies)) return true;

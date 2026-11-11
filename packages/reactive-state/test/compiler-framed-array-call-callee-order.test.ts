@@ -467,6 +467,21 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-iife-return-skips-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { (function once() { values.join = Array.prototype.join; if (pass === 0) return; values.join = () => 'fixed'; })(); } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-iife-return-after-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { (function once() { values.join = Array.prototype.join; values.join = () => 'fixed'; if (pass === 0) return; })(); } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-callback-return-between-writes-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; [1].forEach((each) => { return each; }); values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
