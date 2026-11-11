@@ -89,6 +89,12 @@ const FILLS = [
     empty: true,
   },
   {
+    id: 'fill-beside-an-implements-clause-naming-the-array-pin',
+    source:
+      'const values = [1, 2]; class A implements values {} void A; interface Wide extends values {} values.fill(0, 2);',
+    empty: true,
+  },
+  {
     id: 'fill-beside-an-implements-clause-pin',
     source:
       'interface Shape { size: number } const values = [1, 2]; class A implements Shape { size = 1; } void A; values.fill(0, 2);',
@@ -193,6 +199,12 @@ const ASSIGNED = [
     id: 'overwrite-beside-a-class-without-a-use-pin',
     source:
       'function f(error: Error) { let x: unknown; x = error; const data = { a: 1 }; class K extends Object {} void K; x = data; return x; }',
+    values: ['data'],
+  },
+  {
+    id: 'overwrite-beside-an-implements-clause-naming-the-data-pin',
+    source:
+      'function f(error: Error) { let x: unknown; x = error; const data = { a: 1 }; class K implements data {} void K; x = data; return x; }',
     values: ['data'],
   },
   {
