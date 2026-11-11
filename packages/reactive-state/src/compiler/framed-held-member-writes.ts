@@ -61,6 +61,8 @@ export interface HeldWrite {
   readonly keys: readonly string[];
   /** The names a rest left out of the copy it gives the member. */
   readonly without?: readonly string[] | undefined;
+  /** The member is given a list of entries, an array rest: no getter, and no descriptor. */
+  readonly list?: boolean | undefined;
   /** Where a rest copies its source, whose later changes the copy does not hold. */
   readonly copiedAt?: Node | undefined;
   /** What the member must be for a logical assignment to run its right side. */
@@ -163,12 +165,13 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
   const held = memberWrites(node).filter(({ member }) => writesHeld(member, bindings));
   if (held.length === 0 || !framedPossibleBranch(node)) return [];
   return held.flatMap(({ member, values }) => {
-    return values.map(({ value, keys, without }) => {
+    return values.map(({ value, keys, without, list }) => {
       return {
         key: frameMemberName(member),
         value,
         keys,
         without,
+        list,
         copiedAt: without === undefined ? undefined : node,
         runsIf: runsIf(node),
       };

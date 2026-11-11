@@ -2285,6 +2285,31 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.value = 'x'; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'define-array-rest-is-no-getter',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [...descriptor.get] = [() => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-suffix-is-no-getter',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; [ignored, ...descriptor.get] = [() => 'safe', () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-is-no-descriptor',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; [...maps[0]] = [{ get: () => error }]; Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-keeps-value-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [...descriptor.value] = [error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-rest-keeps-unknown-member',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const key = ['value'][0] as 'value'; [...descriptor[key]] = [error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

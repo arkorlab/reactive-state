@@ -439,7 +439,7 @@ function mapWrites(
   return heldMemberWrites(first, names, reading.at).flatMap((write) => {
     const { key, value, keys, without, copiedAt } = write;
     const hides = key !== undefined && hidden.data.has(key);
-    if (hides || (key !== undefined && !possibleKey(key, index))) return [];
+    if (hides || write.list === true || (key !== undefined && !possibleKey(key, index))) return [];
     const left = { data: new Set(without), getters: new Set(without) };
     const read = copiedAt === undefined ? reading : { ...reading, at: copiedAt, inherited: false };
     return selectedValues(value, keys).flatMap((each) => {
@@ -616,14 +616,13 @@ function descriptorWrites(
 ): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys }) => {
+  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys, list }) => {
     if (key !== undefined && hidden.data.has(key)) return [];
     return selectedValues(value, keys).flatMap((each) => {
       const installed = key === undefined || key === 'value' ? [each] : [];
+      const calls = key === undefined || key === 'get';
       const returned =
-        each.keys.length === 0 && (key === undefined || key === 'get')
-          ? functionReturns(each.value)
-          : [];
+        calls && list !== true && each.keys.length === 0 ? functionReturns(each.value) : [];
       return [...installed, ...returned];
     });
   });

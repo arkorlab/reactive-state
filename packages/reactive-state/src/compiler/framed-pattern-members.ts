@@ -37,6 +37,8 @@ export interface MemberWrite {
 /** A value a member is given: a rest gives a copy of its source without some of its fields. */
 export interface MemberSource extends AssignedFrameSource {
   readonly without?: readonly string[];
+  /** The member is given a list of the source's entries: an array rest, no getter and no descriptor. */
+  readonly list?: boolean;
 }
 
 /**
@@ -145,18 +147,17 @@ export function suffixStart(key: string): number | undefined {
   return key.startsWith(FROM) ? Number(key.slice(FROM.length)) : undefined;
 }
 
+/** The entries of a source from a position on, which an array rest gives its member as a list. */
+function listOf(source: AssignedFrameSource, suffix: number): MemberSource {
+  return { value: source.value, keys: [...source.keys, fromKey(suffix)], list: true };
+}
+
 /** What a target the routing left out takes of the sources. */
 function takenSources(
   sources: readonly AssignedFrameSource[],
   { copy, keys, without, suffix }: Unrouted,
 ): readonly AssignedFrameSource[] {
-  if (copy && suffix !== undefined)
-    return sources.map((source) => {
-      return {
-        value: source.value,
-        keys: [...source.keys, fromKey(suffix)],
-      };
-    });
+  if (copy && suffix !== undefined) return sources.map((source) => listOf(source, suffix));
   if (copy) return sources.map((source): MemberSource => ({ ...source, without }));
   const names = keys ?? [ANY_FIELD];
   return sources.flatMap((source) =>
