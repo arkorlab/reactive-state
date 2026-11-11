@@ -25,6 +25,7 @@ import {
   isModuleDeclaration,
   isNamedExports,
   isNamespaceImport,
+  isNonNullExpression,
   isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAccessExpression,
@@ -259,8 +260,9 @@ function declaresValue(node: Identifier): boolean {
 
 /**
  * Whether `node` is the name of a function or class expression that the constant of that name
- * holds, `const handler = function handler() {}`: within it, it is that value, as the constant's
- * name is — one name, one value.
+ * holds, `const handler = function handler() {}`, past the parentheses, casts and `!` that
+ * `constantBody` reads past: within it, it is that value, as the constant's name is — one name, one
+ * value.
  */
 function namesItsHolder(node: Identifier): boolean {
   const { parent } = node;
@@ -268,7 +270,13 @@ function namesItsHolder(node: Identifier): boolean {
     return false;
   }
   let holder = parent.parent;
-  while (isParenthesizedExpression(holder)) {
+  while (
+    isParenthesizedExpression(holder) ||
+    isAsExpression(holder) ||
+    isSatisfiesExpression(holder) ||
+    isNonNullExpression(holder) ||
+    isTypeAssertion(holder)
+  ) {
     holder = holder.parent;
   }
   return (

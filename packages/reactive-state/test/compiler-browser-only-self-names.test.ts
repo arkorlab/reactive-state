@@ -50,6 +50,66 @@ const CASES = [
   },
   {
     lines: [
+      'const handler = (function handler() {',
+      '  marker();',
+      '}) satisfies () => void;',
+      'export function Widget() {',
+      '  return <button onClick={() => handler()}>fixed</button>;',
+      '}',
+    ],
+    skipped: true,
+    what: 'a function expression of that name, past `satisfies`',
+  },
+  {
+    lines: [
+      'const handler = (function handler() {',
+      '  marker();',
+      '}) as () => void;',
+      'export function Widget() {',
+      '  return <button onClick={() => handler()}>fixed</button>;',
+      '}',
+    ],
+    skipped: true,
+    what: 'a function expression of that name, past a cast',
+  },
+  {
+    lines: [
+      'const handler = (function handler() {',
+      '  marker();',
+      '})!;',
+      'export function Widget() {',
+      '  return <button onClick={() => handler()}>fixed</button>;',
+      '}',
+    ],
+    skipped: true,
+    what: 'a function expression of that name, past a non-null assertion',
+  },
+  {
+    lines: [
+      'const handler = ((function handler() {',
+      '  marker();',
+      '}) as () => void) satisfies () => void;',
+      'export function Widget() {',
+      '  return <button onClick={() => handler()}>fixed</button>;',
+      '}',
+    ],
+    skipped: true,
+    what: 'a function expression of that name, past a cast and `satisfies` in parentheses',
+  },
+  {
+    lines: [
+      'const handler = (function handler() {',
+      '  marker();',
+      '}) satisfies () => void;',
+      'export function Widget() {',
+      '  return <p>{handler()}</p>;',
+      '}',
+    ],
+    skipped: false,
+    what: 'a function expression of that name past `satisfies`, called as the document renders',
+  },
+  {
+    lines: [
       'const handler = function other() {',
       '  marker();',
       '};',
