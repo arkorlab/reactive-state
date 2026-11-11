@@ -6,6 +6,7 @@ import {
   type Identifier,
   isBinaryExpression,
   isCallExpression,
+  isConditionalExpression,
   isElementAccessExpression,
   isExpression,
   isForInStatement,
@@ -83,17 +84,35 @@ function isStatementKind(kind: SyntaxKind): boolean {
   return kind >= SyntaxKind.FirstStatement && kind <= SyntaxKind.LastStatement;
 }
 
+/** The operators that hand over one of their operands. */
+const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
 /**
  * Where the object a descriptor names is read: by the call whose arguments hold the name, after
- * they are all evaluated; by the name itself, where it is spread, which copies it at once.
+ * they are all evaluated; by the name itself, where it is spread, which copies it at once. A spread
+ * of something that holds the name, a list of it, copies the reference only.
  */
 function readAt(use: Identifier): Node {
   for (let at: Node = use.parent; !isSourceFile(at); at = at.parent) {
-    if (isSpreadAssignment(at) || isSpreadElement(at)) return use;
+    if ((isSpreadAssignment(at) || isSpreadElement(at)) && spreads(at.expression, use)) return use;
     if (isCallExpression(at) || isNewExpression(at)) return at;
     if (isFunctionLikeDeclaration(at) || isStatementKind(at.kind)) break;
   }
   return use;
+}
+
+/** Whether what a spread copies may be the object the name stands for, whole. */
+function spreads(copied: Expression, use: Identifier): boolean {
+  const value = unwrapped(copied);
+  if (value === use) return true;
+  if (isConditionalExpression(value))
+    return spreads(value.whenTrue, use) || spreads(value.whenFalse, use);
+  const logical = isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind);
+  return logical && (spreads(value.left, use) || spreads(value.right, use));
 }
 
 /** The values one assignment, or a destructuring one, gives the members of a held object. */

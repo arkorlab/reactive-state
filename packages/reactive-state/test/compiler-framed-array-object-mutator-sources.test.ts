@@ -1808,6 +1808,16 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const list = [{ get: () => error }]; Object.defineProperties(a, { ...list, 0: { value: 'safe' } }); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'define-copy-of-list-reference-then-write',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; Object.defineProperties(a, { ...[descriptor], 1: (descriptor.get = () => error, { value: 'safe' }) }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-copy-of-condition-then-write',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; Object.defineProperties(a, { 0: { ...(flag ? descriptor : {}) }, 1: (descriptor.get = () => error, { value: 'safe' }) }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
