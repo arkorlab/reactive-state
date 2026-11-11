@@ -735,6 +735,12 @@ const ELEMENTS = [
     elements: ["'safe':", 'error:'],
   },
   {
+    id: 'define-let-alias-write',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; let alias = descriptor; alias.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -919,6 +925,11 @@ const CONVERSIONS = [
   {
     id: 'define-getter-reference-after-alias-converts',
     source: `function frames(error: Error, flag: boolean) { const a = ['safe']; function f(): unknown { return 'safe'; } const alias = f; f = () => error; Object.defineProperty(a, 0, { get: flag ? alias : f }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-let-alias-write-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; let alias = descriptor; alias.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
   },
   {

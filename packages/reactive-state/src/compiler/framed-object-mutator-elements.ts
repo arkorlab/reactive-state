@@ -1,8 +1,6 @@
 import {
-  type BinaryExpression,
   type Block,
   type CallExpression,
-  type ElementAccessExpression,
   type Expression,
   type FunctionDeclaration,
   type Identifier,
@@ -14,7 +12,6 @@ import {
   isClassExpression,
   isComputedPropertyName,
   isConditionalExpression,
-  isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -22,7 +19,6 @@ import {
   isMethodDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
-  isPropertyAccessExpression,
   isPropertyAssignment,
   isReturnStatement,
   isShorthandPropertyAssignment,
@@ -30,13 +26,10 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
-  isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
-  type PropertyAccessExpression,
   type PropertyName,
   SyntaxKind,
-  type VariableDeclaration,
   type VariableStatement,
 } from 'typescript/ast';
 
@@ -45,11 +38,12 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
+import { heldMemberWrites, isConstant } from './framed-held-member-writes.ts';
 import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
 import { framedCondition } from './framed-sources.ts';
-import { framedAssignedValues, framedPossibleBranch } from './framed-writes.ts';
+import { framedAssignedValues } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
@@ -410,72 +404,12 @@ function bodyReturns(fn: Expression | FunctionDeclaration): WrittenArrayElement[
 function descriptorWrites(names: readonly Identifier[]): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  const bindings = heldBindings(first, names);
-  const found: WrittenArrayElement[] = [];
-  const pending: Node[] = [first.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    found.push(...heldWrite(node, bindings));
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return found;
-}
-
-/** The values one assignment gives the `value` or the `get` field of a held object. */
-function heldWrite(node: Node, bindings: ReadonlySet<unknown>): WrittenArrayElement[] {
-  if (!isAssignment(node) || !framedPossibleBranch(node)) return [];
-  const member = unwrapped(node.left);
-  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
-  if (!writesHeld(member, bindings)) return [];
-  const key = frameMemberName(member);
-  const found: WrittenArrayElement[] = [];
-  if (key === undefined || key === 'value') found.push({ value: node.right, keys: [] });
-  if (key === undefined || key === 'get') found.push(...functionReturns(node.right));
-  return found;
-}
-
-/** The bindings of the names, and of each constant a program declares as another name of them. */
-function heldBindings(first: Identifier, names: readonly Identifier[]): ReadonlySet<unknown> {
-  const bindings = new Set<unknown>(names.map((name) => frameBindingOf(name)?.binding));
-  const declarations: VariableDeclaration[] = [];
-  const pending: Node[] = [first.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isVariableDeclaration(node) && node.initializer !== undefined) declarations.push(node);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  for (let grown = true; grown;) {
-    const aliases = declarations.filter((each) => !bindings.has(each) && namesHeld(each, bindings));
-    for (const each of aliases) bindings.add(each);
-    grown = aliases.length > 0;
-  }
-  return bindings;
-}
-
-/** Whether a constant gives a name to what one of the bindings names, whole; a variable may change. */
-function namesHeld(declaration: VariableDeclaration, bindings: ReadonlySet<unknown>): boolean {
-  if (!isConstant(declaration)) return false;
-  const held =
-    declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer);
-  const selected = held !== undefined && isIdentifier(held) ? frameBindingOf(held) : undefined;
-  return selected?.keys.length === 0 && bindings.has(selected.binding);
-}
-
-/** A plain assignment, which gives its left the value of its right. */
-function isAssignment(node: Node): node is BinaryExpression {
-  return isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken;
-}
-
-/** Whether a member is one of an object a held constant names, whole. */
-function writesHeld(
-  member: PropertyAccessExpression | ElementAccessExpression,
-  bindings: ReadonlySet<unknown>,
-): boolean {
-  const receiver = unwrapped(member.expression);
-  const selected = isIdentifier(receiver) ? frameBindingOf(receiver) : undefined;
-  return selected?.keys.length === 0 && bindings.has(selected.binding);
+  return heldMemberWrites(first, names).flatMap(({ key, value }) => {
+    const installed = key === undefined || key === 'value' ? [{ value, keys: [] }] : [];
+    return key === undefined || key === 'get'
+      ? [...installed, ...functionReturns(value)]
+      : installed;
+  });
 }
 
 /** The initializer of a variable that is not a constant: what it holds before a write replaces it. */
@@ -524,12 +458,6 @@ function implementationOf(declared: FunctionDeclaration): FunctionDeclaration {
     (each): each is FunctionDeclaration => isFunctionDeclaration(each) && each.body !== undefined,
   );
   return written ?? declared;
-}
-
-/** Whether a variable is declared with `const`, which no later write changes. */
-function isConstant(declaration: Node): boolean {
-  const list = declaration.parent;
-  return isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
 }
 
 /** What a getter's body may return: by its flow where that is followed, by each `return` else. */

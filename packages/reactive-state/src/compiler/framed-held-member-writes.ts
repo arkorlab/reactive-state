@@ -1,0 +1,146 @@
+import {
+  type BinaryExpression,
+  type ElementAccessExpression,
+  type Expression,
+  type Identifier,
+  isBinaryExpression,
+  isElementAccessExpression,
+  isExpression,
+  isForInStatement,
+  isForOfStatement,
+  isIdentifier,
+  isPropertyAccessExpression,
+  isVariableDeclaration,
+  isVariableDeclarationList,
+  type Node,
+  type PropertyAccessExpression,
+  SyntaxKind,
+  type VariableDeclaration,
+} from 'typescript/ast';
+
+import { unwrapped } from './bounded.ts';
+import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
+import { framedPossibleBranch } from './framed-writes.ts';
+
+/** The assignments to a member of an object a constant holds: a constant does not freeze it. */
+
+export interface HeldWrite {
+  /** The member's name, none where it is computed and the compile cannot read it. */
+  readonly key: string | undefined;
+  readonly value: Expression;
+}
+
+/**
+ * The values assigned, anywhere in the program, to a member of what the names hold, or of what a
+ * name that stands for it for good holds: a constant, or a variable no assignment changes.
+ */
+export function heldMemberWrites(
+  first: Identifier,
+  names: readonly Identifier[],
+): readonly HeldWrite[] {
+  const bindings = heldBindings(first, names);
+  const found: HeldWrite[] = [];
+  const pending: Node[] = [first.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    found.push(...heldWrite(node, bindings));
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return found;
+}
+
+/** The value one assignment gives a member of a held object. */
+function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWrite[] {
+  if (!isAssignment(node) || !framedPossibleBranch(node)) return [];
+  const member = unwrapped(node.left);
+  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
+  if (!writesHeld(member, bindings)) return [];
+  return [{ key: frameMemberName(member), value: node.right }];
+}
+
+/** The bindings of the names, and of each name a program gives them for good. */
+function heldBindings(first: Identifier, names: readonly Identifier[]): ReadonlySet<unknown> {
+  const bindings = new Set<unknown>(names.map((name) => frameBindingOf(name)?.binding));
+  const declarations: VariableDeclaration[] = [];
+  const reassigned = new Set<unknown>();
+  const pending: Node[] = [first.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isVariableDeclaration(node) && node.initializer !== undefined) declarations.push(node);
+    for (const each of writtenBindings(node)) reassigned.add(each);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  for (let grown = true; grown;) {
+    const aliases = declarations.filter(
+      (each) => !bindings.has(each) && namesHeld(each, bindings, reassigned),
+    );
+    for (const each of aliases) bindings.add(each);
+    grown = aliases.length > 0;
+  }
+  return bindings;
+}
+
+/** What an assignment or a loop head gives a new value to: the names its target holds, no member. */
+function writtenBindings(node: Node): readonly unknown[] {
+  const target = writeTarget(node);
+  const found: unknown[] = [];
+  const pending: Node[] = target === undefined ? [] : [target];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (isPropertyAccessExpression(each) || isElementAccessExpression(each)) continue;
+    if (isIdentifier(each)) found.push(frameBindingOf(each)?.binding);
+    each.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return found;
+}
+
+/** The target an assignment of any kind, or a for-of or for-in head, gives a new value. */
+function writeTarget(node: Node): Node | undefined {
+  if (isBinaryExpression(node) && isAssignmentKind(node.operatorToken.kind)) return node.left;
+  const head = isForOfStatement(node) || isForInStatement(node);
+  return head && isExpression(node.initializer) ? node.initializer : undefined;
+}
+
+function isAssignmentKind(kind: SyntaxKind): boolean {
+  return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+}
+
+/**
+ * Whether a declaration gives a name to what one of the bindings names, whole, for good: a
+ * constant, or a variable no assignment gives another value.
+ */
+function namesHeld(
+  declaration: VariableDeclaration,
+  bindings: ReadonlySet<unknown>,
+  reassigned: ReadonlySet<unknown>,
+): boolean {
+  if (!isConstant(declaration) && reassigned.has(declaration)) return false;
+  const held =
+    declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer);
+  const selected = held !== undefined && isIdentifier(held) ? frameBindingOf(held) : undefined;
+  return selected?.keys.length === 0 && bindings.has(selected.binding);
+}
+
+/** A plain assignment, which gives its left the value of its right. */
+function isAssignment(node: Node): node is BinaryExpression {
+  return isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken;
+}
+
+/** Whether a member is one of an object a held binding names, whole. */
+function writesHeld(
+  member: PropertyAccessExpression | ElementAccessExpression,
+  bindings: ReadonlySet<unknown>,
+): boolean {
+  const receiver = unwrapped(member.expression);
+  const selected = isIdentifier(receiver) ? frameBindingOf(receiver) : undefined;
+  return selected?.keys.length === 0 && bindings.has(selected.binding);
+}
+
+/** Whether a variable is declared with `const`, which no later write changes. */
+export function isConstant(declaration: Node): boolean {
+  const list = declaration.parent;
+  return isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
+}
