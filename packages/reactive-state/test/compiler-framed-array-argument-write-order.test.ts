@@ -727,6 +727,66 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = flag ? class { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } : 0; values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'read-in-class-computed-name-runs-first',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static y = String(values); [((values.join = Array.prototype.join), 'a')]() {} } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-static-computed-name-runs-first',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static y = String(values); static [((values.join = Array.prototype.join), 'a')] = 1; } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-expression-computed-name-runs-first',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const K = class { static y = String(values); static [((values.join = Array.prototype.join), 'a')] = 1; }; return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-after-heritage-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K extends ((values.join = Array.prototype.join), Object) { static y = String(values); } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-static-field-before-static-write-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static b = ((values.join = Array.prototype.join), 1); } return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'read-in-static-field-after-static-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static { values.join = Array.prototype.join; } static c = String(values); } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-static-field-before-static-block-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static { values.join = Array.prototype.join; } } return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'read-in-static-field-after-static-block',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static { values.join = Array.prototype.join; } static a = String(values); } return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-pattern-key-after-initializer-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { [String(values)]: unused } = ((values.join = Array.prototype.join), {}); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-assignment-pattern-key-after-right-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; let unused: unknown; ({ [String(values)]: unused } = ((values.join = Array.prototype.join), {})); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-pattern-key-before-initializer-write-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { [String(values)]: unused } = {}; (values.join = Array.prototype.join); return values.length; }`,
+    converts: false,
+  },
+  {
+    id: 'read-in-argument-before-later-argument-write-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; String(values); Object.assign({}, { first: String(values), second: ((values.join = Array.prototype.join)) }); return values.length; }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
