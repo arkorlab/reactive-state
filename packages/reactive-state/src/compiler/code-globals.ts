@@ -154,8 +154,7 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
       break;
     }
   }
-  const root =
-    isIdentifier(each) && readsBinding(each) ? (globalOf(each) ?? scopedGlobal(each)) : undefined;
+  const root = globalRootOf(each);
   if (root === undefined) {
     return undefined;
   }
@@ -165,6 +164,16 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
     path.shift();
   }
   return path;
+}
+
+/**
+ * The global `node` names, where it reads a binding and no declaration in scope gives the name
+ * (`globalOf`, `scopedGlobal`); none of another node.
+ */
+function globalRootOf(node: Node): string | undefined {
+  return isIdentifier(node) && readsBinding(node)
+    ? (globalOf(node) ?? scopedGlobal(node))
+    : undefined;
 }
 
 /** Each module's reads of a name no declaration where they stand gives (`globalReadsOf`). */
