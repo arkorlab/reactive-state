@@ -223,6 +223,10 @@ const PINS = [
     what: 'an alias of an interface that a namespace of types alone merges with',
   },
   {
+    source: `namespace A { export namespace Q { export const field = 'other'; } } namespace A { namespace Q { export interface field {} } import field = Q.field; ${MAKES} }`,
+    what: 'an alias through a private namespace of types that shadows an exported one of values',
+  },
+  {
     source: `${TYPES} namespace N { import field = Types.T; } ${MAKES}`,
     what: 'a File beside an alias of an interface named like its key',
   },

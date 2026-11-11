@@ -134,6 +134,41 @@ const CASES = [
     what: 'options beside a namespace of types alone of the same name',
   },
   {
+    clock: true,
+    source: `${OPTIONS} namespace A { export namespace Q { export const T = {}; } } namespace A { namespace Q { export interface T {} } import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through a private namespace of types that shadows an exported one of values',
+  },
+  {
+    clock: true,
+    source: `${OPTIONS} declare namespace A { namespace Q { const T: {}; } } namespace A { namespace Q { export interface T {} } import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through a private namespace of types that shadows an ambient one of values',
+  },
+  {
+    clock: true,
+    source: `${OPTIONS} namespace A { export namespace Q { export interface T {} } } namespace A { import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through an exported namespace of types of another body (pin)',
+  },
+  {
+    clock: false,
+    source: `${OPTIONS} namespace A { export namespace Q { export interface T {} } } namespace A { namespace Q { export const T = {}; } import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through a private namespace of values that shadows an exported one of types (pin)',
+  },
+  {
+    clock: false,
+    source: `${OPTIONS} namespace A { export namespace Q { export const T = {}; } } namespace A { import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through an exported namespace of values of another body (pin)',
+  },
+  {
+    clock: false,
+    source: `${OPTIONS} namespace A { namespace Q { export interface T {} } namespace Q { export const T = {}; } import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through a private namespace that two declarations of one body make (pin)',
+  },
+  {
+    clock: false,
+    source: `${OPTIONS} namespace A { export namespace Q { export const T = {}; } } namespace A { export namespace Q { export interface U {} } import options = Q.T; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias through an exported namespace that merges with that of another body (pin)',
+  },
+  {
     clock: false,
     source: `${TYPES} const F = File; namespace N { import F = Types.T; } new F([], 'x', { lastModified: 0 });`,
     what: 'a File made by an alias of the constructor, beside an alias of an interface of the same name (pin)',

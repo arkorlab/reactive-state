@@ -57,6 +57,18 @@ const CASES = [
     what: 'an exported `declare` constant (pin)',
   },
   {
+    source: `namespace A { export namespace Q { export interface T {} } } namespace A { namespace Q { export const T = 2; } import key = Q.T; ${READ}; }`,
+    what: 'an alias through a private namespace of values that shadows an exported one of types (pin)',
+  },
+  {
+    source: `namespace A { namespace Q { export interface T {} } namespace Q { export const T = 2; } import key = Q.T; ${READ}; }`,
+    what: 'an alias through a private namespace that two declarations of one body make (pin)',
+  },
+  {
+    source: `namespace A { export namespace Q { export const T = 2; } } namespace A { import key = Q.T; ${READ}; }`,
+    what: 'an alias through an exported namespace of values of another body (pin)',
+  },
+  {
     source: `class C {} namespace C { export interface T {} } namespace N { import key = C; ${READ}; }`,
     what: 'an alias of a class that a namespace of types alone merges with',
   },
@@ -266,6 +278,18 @@ const PINS = [
   {
     source: `interface C { a: 1 } namespace C { export interface T {} } namespace N { import key = C; ${READ}; }`,
     what: 'an alias of an interface that a namespace of types alone merges with',
+  },
+  {
+    source: `namespace A { export namespace Q { export const T = 2; } } namespace A { namespace Q { export interface T {} } import key = Q.T; ${READ}; }`,
+    what: 'an alias through a private namespace of types that shadows an exported one of values',
+  },
+  {
+    source: `declare namespace A { namespace Q { const T: number; } } namespace A { namespace Q { export interface T {} } import key = Q.T; ${READ}; }`,
+    what: 'an alias through a private namespace of types that shadows an ambient one of values',
+  },
+  {
+    source: `namespace A { export namespace Q { export interface T {} } } namespace A { import key = Q.T; ${READ}; }`,
+    what: 'an alias through an exported namespace of types of another body (pin)',
   },
   {
     source: `${TYPES} namespace N { import key = Types.T; ${READ}; }`,

@@ -400,7 +400,7 @@ function lexicalDeclarations(from: Node, name: string): readonly Statement[] | u
   let within: Node = from;
   for (let at: Node = from.parent; ; within = at, at = at.parent) {
     let statements: readonly Statement[] | undefined;
-    if (isModuleBlock(at)) statements = bodyStatements(at);
+    if (isModuleBlock(at)) statements = bodyDeclarations(at, name);
     else if (isModuleDeclaration(at)) {
       statements = isModuleDeclaration(within)
         ? mergedDeclarations(at).flatMap((each) => exposedContents(each))
@@ -412,6 +412,21 @@ function lexicalDeclarations(from: Node, name: string): readonly Statement[] | u
     if (found?.some((statement) => isNamespaceLike(statement)) === true) return found;
     if (isSourceFile(at)) return undefined;
   }
+}
+
+/**
+ * What a namespace's body holds under `name`, as the name of a namespace: the declarations of its
+ * own that it keeps private if one of them is a namespace, an enum, an alias or an import — they
+ * shadow what the other bodies export under the name — and else what the bodies export, its own
+ * among them.
+ */
+function bodyDeclarations(block: ModuleBlock, name: string): readonly Statement[] {
+  const named = (statement: Statement): boolean => declaresName(statement, name);
+  const own = block.statements.filter((statement) => named(statement) && !exposed(statement));
+  if (own.some((statement) => isNamespaceLike(statement))) return own;
+  return bodyStatements(block).filter(
+    (statement) => named(statement) && (exposed(statement) || statement.parent !== block),
+  );
 }
 
 /** Whether a statement declares `name`, whatever it is. */
