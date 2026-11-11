@@ -42,6 +42,7 @@ import {
   afterSureWrite,
   definiteExpression,
   evaluatedForSure,
+  inRunOrder,
   type OwnMethods,
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
@@ -336,7 +337,7 @@ interface MethodWrites {
 function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
   const visit = (node: Node): void => {
     if (node.pos >= writes.until) return;
-    node.forEachChild(visit);
+    for (const child of inRunOrder(node)) visit(child);
     const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
     if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
       unprovenWrites(node, keys, writes, evaluatedForSure(node, statement));

@@ -472,6 +472,91 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.assign(values, { ignored: (values.join = Array.prototype.join) }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'optional-chain-base-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })?.length; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-element-access',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })?.[0]; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-later-links',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })?.length.toFixed(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-of-call-argument',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.keys(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }))?.length; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-non-null',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })?.length!; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-link-argument-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.keys(values)?.at(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }).length); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'optional-chain-element-argument-pin',
+    source: `function frames(error: Error, holder?: Record<string, unknown>) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); holder?.[(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'run')]; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'optional-call-argument-pin',
+    source: `function frames(error: Error, callback?: (value: unknown) => void) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); callback?.(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'declaration-key-after-initializer',
+    source: `function frames(error: Error) { const values = [error]; const { [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'k')]: unused } = (Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), {}); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'declaration-key-replaces-initializer-accessor',
+    source: `function frames(error: Error) { const values = [error]; const { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'k')]: unused } = (Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), {}); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'assignment-pattern-key-after-right',
+    source: `function frames(error: Error) { const values = [error]; let unused: unknown; ({ [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'k')]: unused } = (Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), {})); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assignment-pattern-key-replaces-right-accessor',
+    source: `function frames(error: Error) { const values = [error]; let unused: unknown; ({ [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'k')]: unused } = (Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), {})); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'array-pattern-target-after-right',
+    source: `function frames(error: Error) { const values = [error]; const sink: Record<string, unknown> = {}; [sink[(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'k')]] = (Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), [1]); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'array-pattern-target-replaces-right-accessor',
+    source: `function frames(error: Error) { const values = [error]; const sink: Record<string, unknown> = {}; [sink[(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'k')]] = (Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), [1]); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-default-before-nested-pattern',
+    source: `function frames(error: Error) { const values = [error]; const { k: { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'j')]: unused } = (Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), {}) } = { k: undefined }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-default-pattern-key-pin',
+    source: `function frames(error: Error) { const values = [error]; const { k: { [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'j')]: unused } = (Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), {}) } = { k: undefined }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-assignment-default-before-pattern',
+    source: `function frames(error: Error) { const values = [error]; let unused: unknown; ({ k: { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'j')]: unused } = (Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), {}) } = { k: undefined }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
