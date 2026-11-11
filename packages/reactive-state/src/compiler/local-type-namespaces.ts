@@ -62,11 +62,19 @@ export function namespaceStatements(block: ModuleBlock): readonly Statement[] {
     return block.statements;
   }
   const statements = new Set<Statement>(block.statements);
-  const merged = exportedStatements(mergedNamespaces(block.parent));
-  for (const statement of merged) {
+  for (const statement of mergedExports(block.parent)) {
     statements.add(statement);
   }
   return [...statements];
+}
+
+/**
+ * What the bodies of the namespaces that merge with `namespace`, itself among them, export: what a
+ * body of the name sees of the others', and what `namespace A.B {}` sees of `A`'s — it is the only
+ * body `A` has there.
+ */
+export function mergedExports(namespace: ModuleDeclaration): readonly Statement[] {
+  return exportedStatements(mergedNamespaces(namespace));
 }
 
 /** The declarations that merge with `namespace`, through its exported enclosing namespace path. */

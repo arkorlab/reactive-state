@@ -48,7 +48,7 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
-import { namespaceStatements } from './local-type-namespaces.ts';
+import { mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 
 /**
@@ -168,7 +168,7 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
 }
 
 /** Each module's reads of a name no declaration where they stand gives (`globalReadsOf`). */
-const GLOBAL_READS = new WeakMap<SourceFile, ReadonlySet<Node>>();
+const GLOBAL_READS = new WeakMap<SourceFile, ReadonlySet<Identifier>>();
 
 /**
  * The global `name` reads where no declaration in scope gives its name, though one elsewhere in the
@@ -191,9 +191,20 @@ function scopedGlobal(name: Identifier): string | undefined {
  * (`freeReads`), nor the module's own (`scopeNames`), nor, in a namespace's body, the namespace's
  * (`namespaceReads`).
  */
-function globalReadsOf(file: SourceFile): ReadonlySet<Node> {
-  const reads = new Set<Node>();
+function globalReadsOf(file: SourceFile): ReadonlySet<Identifier> {
+  const reads = new Set<Identifier>();
   readsIn(file.statements, scopeNames(file.statements, file.statements), reads);
+  return reads;
+}
+
+/**
+ * The reads in `file`'s code of a name no function, block, `catch` or namespace's body around them
+ * declares (`freeReads`, `namespaceReads`): a read of the module's own name — an import's — is one,
+ * where no namespace declares the name again; and a read of a global.
+ */
+export function unshadowedReads(file: SourceFile): ReadonlySet<Identifier> {
+  const reads = new Set<Identifier>();
+  readsIn(file.statements, new Set(), reads);
   return reads;
 }
 
@@ -204,7 +215,7 @@ function globalReadsOf(file: SourceFile): ReadonlySet<Node> {
 function readsIn(
   statements: readonly Statement[],
   names: ReadonlySet<string>,
-  reads: Set<Node>,
+  reads: Set<Identifier>,
 ): void {
   for (const statement of statements) {
     if (isModuleDeclaration(statement)) {
@@ -221,17 +232,19 @@ function readsIn(
 
 /**
  * Into `reads`, the reads in `namespace`'s body of a name none of `names` is, nor the body gives:
- * what it declares, what the bodies it merges with export (`namespaceStatements`), and the
- * namespace a dotted name declares within another, `B` of `namespace A.B {}`.
+ * what it declares, what the bodies it merges with export (`namespaceStatements`), and of a dotted
+ * name, `namespace A.B {}`, the namespace it declares within another, `B`, and what the bodies of
+ * `A` export, which are all that `A`'s body, this one, sees.
  */
 function namespaceReads(
   namespace: ModuleDeclaration,
   names: ReadonlySet<string>,
-  reads: Set<Node>,
+  reads: Set<Identifier>,
 ): void {
   const { body } = namespace;
   if (body !== undefined && isModuleDeclaration(body)) {
-    namespaceReads(body, widened(names, namesOf(body)), reads);
+    const outer = scopeNames(mergedExports(namespace), []);
+    namespaceReads(body, widened(names, [...namesOf(body), ...outer]), reads);
   } else if (body !== undefined && isModuleBlock(body)) {
     const own = scopeNames(namespaceStatements(body), body.statements);
     readsIn(body.statements, widened(names, own), reads);
