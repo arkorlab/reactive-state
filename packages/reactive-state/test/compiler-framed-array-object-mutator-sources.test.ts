@@ -423,6 +423,60 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'assign-spread-target',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(...[values] as const, { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-list-with-target',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(...[values, { 0: error }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-constant-spread-target',
+    source: `function frames(error: Error) { ${VALUES} const args = [values, { 0: error }]; Object.assign(...args); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-nested-spread-list',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, ...[{}, ...[{ 0: error }]]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-spread-target',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(...[values, 0] as const, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-spread-everything',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(...[values, 0, { value: error }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-maps-spread-target',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(...[values, { 0: { value: error } }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-unresolved-target-pin',
+    source: `function frames(error: Error, args: unknown[]) { ${VALUES} Object.assign(...args, { 0: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'assign-spread-list-hole-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, ...[, { 0: error }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -518,6 +572,16 @@ const CONVERSIONS = [
   {
     id: 'define-descriptor-proto-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { __proto__: { value: error }, configurable: true } as PropertyDescriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-target-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(...[a] as const, { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-spread-target-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(...[a, 0] as const, { value: error }); return String(a); }`,
     converts: true,
   },
   {

@@ -37,14 +37,11 @@ import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
-import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
+import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
 const MUTATORS = new Set(['Object.assign', 'Object.defineProperties', 'Object.defineProperty']);
-
-/** How many arguments a definition reads: the target, the key and the descriptor, or the map. */
-const ARGUMENTS = { property: 3, map: 2 } as const;
 
 export interface MutatorElements {
   readonly target: Expression;
@@ -61,38 +58,54 @@ export function objectMutatorElements(
 ): MutatorElements | undefined {
   const path = globalPathOf(unwrapped(call.expression))?.join('.');
   if (path === undefined || !MUTATORS.has(path)) return undefined;
-  const target = call.arguments[0];
+  const [target, ...rest] = writtenArguments(call);
   if (target === undefined || isSpreadElement(target)) return undefined;
-  if (path === 'Object.assign') {
-    const sources = call.arguments.slice(1);
-    return { target, elements: sources.flatMap((source) => assignedValues(call, source, index)) };
-  }
+  if (path === 'Object.assign')
+    return { target, elements: rest.flatMap((source) => assignedValues(source, index)) };
   const defined =
-    path === 'Object.defineProperties' ? definedMaps(call, index) : definedProperty(call, index);
+    path === 'Object.defineProperties' ? definedMaps(rest, index) : definedProperty(rest, index);
   return { target, elements: defined };
 }
 
 /**
- * Where every argument's position is known, the key and the descriptor are the ones written there;
- * a spread the compile cannot read may stand for any number of them, so the one that follows it
- * may be the key or the descriptor, and what it holds is possible beside that.
+ * The call's arguments in order, each spread of a written list, or of a constant list nothing
+ * changes, replaced by the entries it stands for; a spread the compile cannot read stays one.
  */
-function definedProperty(call: CallExpression, index: number | undefined): WrittenArrayElement[] {
-  const prefix = framedArgumentPrefix(call, call.arguments, ARGUMENTS.property);
-  if (!prefix.unknown) {
-    const [, key, descriptor] = prefix.values;
-    return key !== undefined && keyMayBeSlot(key, index) ? descriptorValues(descriptor) : [];
+function writtenArguments(call: CallExpression): readonly Expression[] {
+  const written: Expression[] = [];
+  const expanded = new Set<readonly Expression[]>();
+  const pending = call.arguments.toReversed();
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const listed = isSpreadElement(each)
+      ? framedAppliedArguments(call, each.expression)
+      : undefined;
+    if (listed === undefined || expanded.has(listed)) written.push(each);
+    else {
+      expanded.add(listed);
+      pending.push(...listed.toReversed());
+    }
   }
-  const args = call.arguments.slice(1);
-  const [first] = args;
-  if (first === undefined) return [];
-  if (!isSpreadElement(first) && !keyMayBeSlot(first, index)) return [];
+  return written;
+}
+
+/**
+ * The key and the descriptor of a definition, after its target. A spread the compile cannot read
+ * may be empty, so the argument that follows it may be the key or the descriptor, and what it
+ * holds is possible beside that.
+ */
+function definedProperty(
+  args: readonly Expression[],
+  index: number | undefined,
+): WrittenArrayElement[] {
+  const [key] = args;
+  if (key === undefined) return [];
+  if (!isSpreadElement(key) && !keyMayBeSlot(key, index)) return [];
   return descriptorCandidates(args);
 }
 
 /**
- * Every argument after an unreadable spread that may take the descriptor's position: a spread may
- * be empty, so each argument up to the second written one may be preceded by the key alone.
+ * Every argument that may take the descriptor's position: a spread may be empty, so each argument
+ * up to the second written one may be preceded by the key alone.
  */
 function descriptorCandidates(args: readonly Expression[]): WrittenArrayElement[] {
   const found: WrittenArrayElement[] = [];
@@ -112,37 +125,23 @@ function descriptorCandidates(args: readonly Expression[]): WrittenArrayElement[
   return found;
 }
 
-/** The descriptor maps that may take the second position: each up to the first written one. */
-function definedMaps(call: CallExpression, index: number | undefined): WrittenArrayElement[] {
-  const prefix = framedArgumentPrefix(call, call.arguments, ARGUMENTS.map);
-  if (!prefix.unknown)
-    return prefix.values[1] === undefined ? [] : definedValues(prefix.values[1], index);
+/** The descriptor maps that may take the position after the target: each up to the first written one. */
+function definedMaps(
+  args: readonly Expression[],
+  index: number | undefined,
+): WrittenArrayElement[] {
   const found: WrittenArrayElement[] = [];
-  for (const map of call.arguments.slice(1)) {
+  for (const map of args) {
     found.push(...definedValues(map, index));
     if (!isSpreadElement(map)) break;
   }
   return found;
 }
 
-/**
- * One assign source's values at numeric keys; a getter there answers what it returns. A spread of
- * a written list is each of its sources; one the compile cannot read holds them at its first key.
- */
-function assignedValues(
-  call: CallExpression,
-  source: Expression,
-  index: number | undefined,
-): WrittenArrayElement[] {
-  const slot = slotKey(index);
-  if (isSpreadElement(source)) {
-    const listed = framedAppliedArguments(call, source.expression);
-    return listed === undefined
-      ? [{ value: source.expression, keys: ['0', slot] }]
-      : listed.flatMap((each) =>
-          isOmittedExpression(each) ? [] : assignedValues(call, each, index),
-        );
-  }
+/** One assign source's values at numeric keys; a getter there answers what it returns. */
+function assignedValues(source: Expression, index: number | undefined): WrittenArrayElement[] {
+  if (isOmittedExpression(source)) return [];
+  if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slotKey(index)] }];
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
   if (!isObjectLiteralExpression(value)) return opaqueSource(source, index);
@@ -167,6 +166,7 @@ function opaqueSource(source: Expression, index: number | undefined): WrittenArr
 
 /** A descriptor map's entries at numeric keys; an opaque map keeps its slot's descriptor. */
 function definedValues(descriptors: Expression, index: number | undefined): WrittenArrayElement[] {
+  if (isOmittedExpression(descriptors)) return [];
   const slot = slotKey(index);
   const value = unwrapped(descriptors);
   if (isSpreadElement(descriptors))
@@ -186,7 +186,7 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
 
 /** A descriptor's written `value` and what its written `get` returns; an opaque one keeps both. */
 function descriptorValues(descriptor: Expression | undefined): WrittenArrayElement[] {
-  if (descriptor === undefined) return [];
+  if (descriptor === undefined || isOmittedExpression(descriptor)) return [];
   if (isSpreadElement(descriptor)) return [{ value: descriptor.expression, keys: ['0', 'value'] }];
   const value = unwrapped(descriptor);
   if (!isObjectLiteralExpression(value)) {
@@ -318,6 +318,7 @@ const ARRAY_INDEX = { last: 4_294_967_294 } as const;
 
 /** Whether a written key may name the slot: its constants and branches decide, an opaque one may. */
 function keyMayBeSlot(key: Expression, index: number | undefined): boolean {
+  if (isOmittedExpression(key)) return false;
   const names = framedKeyNames(key);
   return (
     names === undefined || names.length === 0 || names.some((each) => possibleKey(each, index))
