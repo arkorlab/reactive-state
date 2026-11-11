@@ -30,7 +30,6 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isTypeAssertion,
-  isTypeNode,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -40,7 +39,7 @@ import { useOf } from './code-globals.ts';
 import { frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** A source holder read by a later execution cannot rely on its earlier textual prefix alone. */
 
@@ -64,7 +63,7 @@ export function deferredArrayChange(
   if (!deferred && !repeatedFrameRead(reference, reference, binding, owner)) return false;
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (
       isIdentifier(node) &&
       node !== binding.name &&

@@ -36,7 +36,6 @@ import {
   isStringLiteral,
   isTaggedTemplateExpression,
   isTemplateExpression,
-  isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -63,7 +62,7 @@ import {
   type FrameBinding,
 } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Source identity proofs for custom array text methods. */
 
@@ -204,7 +203,7 @@ function firstReference(
 ): boolean {
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node) || runsAfter(node, reference)) continue;
+    if (isTypeOnly(node) || runsAfter(node, reference)) continue;
     if (deferredBefore(node, reference, pending)) continue;
     const rest = quietCallRest(node, reference);
     if (rest !== undefined) {

@@ -6,7 +6,6 @@ import {
   isIdentifier,
   isExpression,
   isSpreadElement,
-  isTypeNode,
   isVariableDeclaration,
   isVariableStatement,
   type Node,
@@ -20,7 +19,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Native fill contributes no inserted value where written bounds prove an empty range. */
 
@@ -87,7 +86,7 @@ function unexposedLength(context: FillContext): number | undefined {
     return undefined;
   const pending: Node[] = [root.getSourceFile()];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (isTypeNode(at)) continue;
+    if (isTypeOnly(at)) continue;
     if (isIdentifier(at) && lengthExposed(at, context)) return undefined;
     at.forEachChild((child) => {
       pending.push(child);

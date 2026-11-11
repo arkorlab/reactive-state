@@ -11,7 +11,6 @@ import {
   isIdentifier,
   isPropertyAccessExpression,
   isSpreadElement,
-  isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -27,7 +26,7 @@ import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { bindingIdentifiers, readsBinding } from './scope.ts';
+import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
 
 /** What a native call's own work reaches of a tuple it reads: its callee's, its arguments'. */
 
@@ -76,7 +75,7 @@ export function callWorkExposure(
   const pending: Node[] = [...calleeWork(call.expression), ...(call.arguments ?? [])];
   let work = calleeReads(call.expression);
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === read || isTypeNode(node) || afterSpread(node, spread, call, binding)) continue;
+    if (node === read || isTypeOnly(node) || afterSpread(node, spread, call, binding)) continue;
     if (tupleBindingExposure(node, binding, aliases)) return true;
     work ||= applicationWork(node);
     node.forEachChild((child) => {
@@ -211,7 +210,7 @@ export function namedElsewhere(
   const owner = executionOwner(call);
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === call || isTypeNode(node)) continue;
+    if (node === call || isTypeOnly(node)) continue;
     if (
       isIdentifier(node) &&
       node !== binding.name &&
