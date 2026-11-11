@@ -31,7 +31,7 @@ import {
   arrayIdentity,
   knownNonNative,
   OWN_METHODS,
-  afterValueWrite,
+  afterPossibleWrite,
   descriptorFunction,
   ownMethodAssignment,
   PLAIN_PROPERTY,
@@ -326,14 +326,20 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
 }
 
 /**
- * The methods a write may replace are unproven; a definition's may stay so for good. A write of the
- * value alone, an assignment or Object.assign, leaves the attributes a method has as they were.
+ * The methods a write may replace are unproven; a definition's may stay so for good. What the write
+ * leaves of the attributes a method had, whether it ran or not, is what stays: a write of the value
+ * alone keeps them, a definition that does not name them does too.
  */
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
-  const valueOnly = !isDeleteExpression(node) && definedMethods(node, writes.root) === undefined;
-  for (const key of keys)
-    writes.own.set(key, valueOnly ? afterValueWrite(writes.own.get(key)) : { own: false });
+  const defined = isDeleteExpression(node)
+    ? undefined
+    : definedMethods(node, writes.root, writes.own);
+  for (const key of keys) {
+    const previous = writes.own.get(key);
+    const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
+    writes.own.set(key, afterPossibleWrite(previous, written));
+  }
 }
 
 /**
