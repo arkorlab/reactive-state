@@ -640,6 +640,26 @@ const CASES = [
       'source:0',
     ],
   },
+  {
+    id: 'computed-key-constant-spread-hides-field',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const base = { field: 'kept' }; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...base })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'base:', 'base:0'],
+  },
+  {
+    id: 'computed-key-conditional-constant-spread-keeps-field',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} const base = flag ? { field: 'kept' } : {}; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...base })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      'base:',
+      'base:0',
+      'error:',
+      "flag ? { field: 'kept' } : {}:",
+      "flag ? { field: 'kept' } : {}:0",
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

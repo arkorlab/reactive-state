@@ -281,15 +281,16 @@ function fieldName(property: ObjectLiteralElementLike): string | undefined {
 }
 
 /**
- * The names a field of a written object always sets: its own, or those of the literal it spreads.
+ * The names a field of a written object always sets: its own, or those of the literal it spreads,
+ * a constant that holds one included.
  */
-function fieldNames(property: ObjectLiteralElementLike): readonly string[] {
+function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()): readonly string[] {
   if (!isSpreadAssignment(property)) {
     const name = fieldName(property);
     return name === undefined ? [] : [name];
   }
-  const copied = unwrapped(property.expression);
-  return isObjectLiteralExpression(copied)
-    ? copied.properties.flatMap((each) => fieldNames(each))
-    : [];
+  const copied = writtenValue(property.expression);
+  if (copied === undefined || !isObjectLiteralExpression(copied) || seen.has(copied)) return [];
+  seen.add(copied);
+  return copied.properties.flatMap((each) => fieldNames(each, seen));
 }
