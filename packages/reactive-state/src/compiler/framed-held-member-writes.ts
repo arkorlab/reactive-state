@@ -124,9 +124,17 @@ function namesHeld(
   return selected?.keys.length === 0 && bindings.has(selected.binding);
 }
 
-/** A plain assignment, which gives its left the value of its right. */
+/** The assignments that may give their left the value of their right: `=` and the logical ones. */
+const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** An assignment that may give its left the value of its right. */
 function isAssignment(node: Node): node is BinaryExpression {
-  return isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken;
+  return isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind);
 }
 
 /** Whether a member is one of an object a held binding names, whole. */

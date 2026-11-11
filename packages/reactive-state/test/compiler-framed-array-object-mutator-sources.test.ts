@@ -807,6 +807,30 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-constant-getter-logical-assigned',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: undefined }; descriptor.get ??= () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
+    id: 'define-constant-getter-or-assigned',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: undefined }; descriptor.get ||= () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
+    id: 'define-constant-getter-and-assigned',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.get &&= () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-value-added-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { value: 1 }; descriptor.value += error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', '1:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1021,6 +1045,11 @@ const CONVERSIONS = [
     id: 'define-constant-computed-other-field-safe',
     source: `function frames(error: Error) { const a = ['safe']; const key = 'metadata'; const descriptor: PropertyDescriptor = { [key]: error, configurable: true }; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-constant-getter-logical-assigned-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: undefined }; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',
