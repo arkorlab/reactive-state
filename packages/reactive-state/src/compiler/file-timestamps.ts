@@ -56,7 +56,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { constructorReferences, fileConstructorReference } from './file-constructor-references.ts';
-import { hasEnumMember } from './framed-bindings.ts';
+import { exportedElsewhere, hasEnumMember } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, hoistedIn, readsBinding } from './scope.ts';
 
@@ -396,6 +396,9 @@ function localBinding(name: Identifier): Binding {
     const binding = bindingIn(at, name.text);
     if (binding !== undefined) {
       return binding;
+    }
+    if (isModuleBlock(at) && exportedElsewhere(at, name.text)) {
+      return null;
     }
     if (isSourceFile(at)) {
       return hoistedIn([at]).some((declaration) => binds(declaration.name, name.text))

@@ -44,6 +44,7 @@ import {
   type TypeNode,
   type VariableDeclaration,
   isSignatureDeclaration,
+  type ModuleBlock,
   type ModuleDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
@@ -74,6 +75,9 @@ const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
 
 /** The names of the members of each enum and of those merged with it (`hasEnumMember`), by the enum. */
 const MEMBERS = new WeakMap<EnumDeclaration, ReadonlySet<string>>();
+
+/** The names the other bodies of a namespace export (`exportedElsewhere`), by the body. */
+const EXPORTED = new WeakMap<ModuleBlock, ReadonlySet<string>>();
 
 /** What each block's statements declare (`declaredBy`), by the node that holds them. */
 const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration | null>>();
@@ -196,6 +200,7 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
     return node.variableDeclaration;
   const binding = statementBinding(node, name);
   if (binding !== undefined) return binding;
+  if (isModuleBlock(node) && exportedElsewhere(node, name)) return null;
   const parameters = isSignatureDeclaration(node) ? node.parameters : undefined;
   const declared =
     parameters?.find((parameter) =>
@@ -308,8 +313,57 @@ function namespacesNamed(
   });
 }
 
+/**
+ * Whether another body of the namespace that holds `block` exports `name` as a value: those of the
+ * bodies merge with this one's, so that a bare `name` within it is `N.name`, before any binding
+ * around the namespace. The names are gathered once (`EXPORTED`), for every name looked up in the
+ * body.
+ */
+export function exportedElsewhere(block: ModuleBlock, name: string): boolean {
+  let names = EXPORTED.get(block);
+  if (names === undefined) {
+    const namespace = block.parent;
+    const bodies = isModuleDeclaration(namespace) ? mergedNamespaces(namespace) : [];
+    names = new Set(
+      bodies.flatMap((each) => {
+        const { body } = each;
+        return body !== block && body !== undefined && isModuleBlock(body)
+          ? exportedNames(body.statements)
+          : [];
+      }),
+    );
+    EXPORTED.set(block, names);
+  }
+  return names.has(name);
+}
+
+/** The names of the values `statements` export: variables, functions, classes, enums, namespaces. */
+function exportedNames(statements: readonly Statement[]): readonly string[] {
+  return statements.flatMap((statement) => {
+    if (isVariableStatement(statement)) {
+      return isExported(statement)
+        ? statement.declarationList.declarations.flatMap((declaration) =>
+            bindingIdentifiers(declaration.name).map((bound) => bound.text),
+          )
+        : [];
+    }
+    if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
+      return isExported(statement) && statement.name !== undefined ? [statement.name.text] : [];
+    }
+    if (
+      isEnumDeclaration(statement) ||
+      isModuleDeclaration(statement) ||
+      isImportEqualsDeclaration(statement)
+    ) {
+      const name = valueName(statement);
+      return name !== undefined && isExported(statement) ? [name] : [];
+    }
+    return [];
+  });
+}
+
 /** Whether a declaration of a value is exported, as the namespace that holds it merges it. */
-function isExported(declaration: EnumDeclaration | ModuleDeclaration): boolean {
+function isExported(declaration: { readonly modifiers?: readonly Node[] }): boolean {
   return (
     declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
   );
