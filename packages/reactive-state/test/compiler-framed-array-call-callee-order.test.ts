@@ -492,6 +492,16 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'recursion-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-nested-function-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} const again = () => read(pass + 1); if (pass < 1) again(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
