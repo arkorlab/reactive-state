@@ -118,6 +118,41 @@ const CASES = [
     what: 'holes alone, which TypeScript reads as string (pin)',
   },
   {
+    selected: ['string'],
+    source: `{ [key: number]: string; [key: \`\${string}\`]: Error }["1"]`,
+    what: 'holes alone beside a number signature',
+  },
+  {
+    selected: ['string'],
+    source: `{ [key: number]: string; [key: \`\${string}\${string}\`]: Error }[1]`,
+    what: 'several holes alone beside a number signature',
+  },
+  {
+    selected: ['string'],
+    source: `{ [key: \`a\${string}\`]: string; [key: \`\${string}\`]: Error }["ab"]`,
+    what: 'holes alone beside a pattern the key matches',
+  },
+  {
+    selected: ['string | Error', 'string'],
+    source: `{ [key: \`1\${string}\`]: string; [key: string]: string | Error }[1]`,
+    what: 'a number literal beside a pattern, which applies to no number',
+  },
+  {
+    selected: ['string | Error', 'string'],
+    source: `{ [key: \`1\${string}\`]: string; [key: string]: string | Error }["1"]`,
+    what: 'a key a number literal may have written, beside a pattern',
+  },
+  {
+    selected: ['string', 'Error'],
+    source: `{ [key: number]: string; [key: \`1\${string}\`]: Error }[1]`,
+    what: 'a number signature beside a pattern a number literal leaves (pin)',
+  },
+  {
+    selected: ['Error'],
+    source: `{ [key: \`a\${string}\`]: string; [key: \`\${string}\`]: Error }["x"]`,
+    what: 'holes alone beside a pattern the key leaves (pin)',
+  },
+  {
     selected: [],
     source: `{ [key: \`data-\${string}\`]: Error }["other"]`,
     what: 'a key no pattern covers (pin)',

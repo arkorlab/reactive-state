@@ -199,13 +199,37 @@ function coveringSignatures(object: TypeLiteralNode, key: string): CoveringSigna
     const domains = indexSignatureDomains(written);
     if (domains.has(SyntaxKind.StringKeyword)) covering.strings.add(member.type);
     if (numeric && domains.has(SyntaxKind.NumberKeyword)) covering.specific.add(member.type);
-    const covers = domains.has(SyntaxKind.TemplateLiteralType)
-      ? patternsCover(written, key)
-      : false;
-    if (covers === true) covering.specific.add(member.type);
-    else if (covers === undefined) covering.possible.add(member.type);
+    if (domains.has(SyntaxKind.TemplateLiteralType)) {
+      addPatterns(covering, member.type, patternsCover(written, key), numeric);
+    }
   }
   return covering;
+}
+
+/**
+ * A signature's template patterns, by how they meet a key. Holes alone are a `string` domain, which
+ * gives way to the others. A pattern applies to a string literal and to no number literal, and a
+ * key that reads as a number may be either's: what matches it only may cover it.
+ */
+function addPatterns(
+  covering: CoveringSignatures,
+  value: TypeNode,
+  cover: PatternCover,
+  numeric: boolean,
+): void {
+  if (cover.string) covering.strings.add(value);
+  if (!numeric && cover.matches) covering.specific.add(value);
+  else if (cover.matches || cover.may) covering.possible.add(value);
+}
+
+/** How the template patterns a signature's key type writes meet a literal key. */
+interface PatternCover {
+  /** One of them matches the key. */
+  readonly matches: boolean;
+  /** One the reader does not match — a hole of another type, a pattern named by an alias — may. */
+  readonly may: boolean;
+  /** One is holes alone, which TypeScript reads as the type `string`. */
+  readonly string: boolean;
 }
 
 /** The key domains a signature's written type names without a pattern: `symbol` covers no text. */
@@ -215,41 +239,49 @@ const KEYWORD_DOMAINS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.SymbolKeyword,
 ]);
 
-/**
- * Whether the template patterns a signature's key type writes, through unions and parentheses,
- * cover a key: `true` where one matches, `undefined` where one the reader does not match — a hole
- * of another type, or a pattern named through an alias — may, `false` otherwise.
- */
-function patternsCover(type: TypeNode | undefined, key: string): boolean | undefined {
-  let undecided = false;
+/** How the template patterns of a signature's key type, through unions and parentheses, meet a key. */
+function patternsCover(type: TypeNode | undefined, key: string): PatternCover {
+  let matches = false;
+  let may = false;
+  let string = false;
   const pending = type === undefined ? [] : [type];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (isParenthesizedTypeNode(at)) {
       pending.push(at.type);
     } else if (isUnionTypeNode(at)) {
       pending.push(...at.types);
+    } else if (isTemplateLiteralTypeNode(at) && holesOnly(at)) {
+      string = true;
     } else if (isTemplateLiteralTypeNode(at)) {
       const covers = patternCovers(at, key);
-      if (covers === true) return true;
-      undecided ||= covers === undefined;
+      matches ||= covers === true;
+      may ||= covers === undefined;
     } else {
-      undecided ||= !KEYWORD_DOMAINS.has(at.kind);
+      may ||= !KEYWORD_DOMAINS.has(at.kind);
     }
   }
-  return undecided ? undefined : false;
+  return { matches, may, string };
+}
+
+/** Whether a pattern is `${string}` holes without text, which TypeScript reads as `string`. */
+function holesOnly(pattern: TemplateLiteralTypeNode): boolean {
+  if (pattern.head.text !== '') return false;
+  for (const span of pattern.templateSpans) {
+    if (span.type.kind !== SyntaxKind.StringKeyword || span.literal.text !== '') return false;
+  }
+  return true;
 }
 
 /**
  * Whether a pattern of `${string}` holes matches a key as TypeScript matches it: the text before
  * the first hole starts the key and the text after the last ends it, without overlap, and the
- * text between holes follows in order; of two adjacent holes the first takes a character. Holes
- * alone are the type `string`. `undefined` for a hole of another type.
+ * text between holes follows in order; of two adjacent holes the first takes a character.
+ * `undefined` for a hole of another type.
  */
 function patternCovers(pattern: TemplateLiteralTypeNode, key: string): boolean | undefined {
   const { head, templateSpans } = pattern;
   if (templateSpans.some((span) => span.type.kind !== SyntaxKind.StringKeyword)) return undefined;
   const texts = templateSpans.map((span) => span.literal.text);
-  if (head.text === '' && texts.every((text) => text === '')) return true;
   const last = texts.pop() ?? '';
   const end = key.length - last.length;
   if (!key.startsWith(head.text) || !key.endsWith(last) || end < head.text.length) return false;
