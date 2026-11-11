@@ -125,8 +125,9 @@ function exportedAs(fn: FunctionDeclaration): string | undefined {
 }
 
 /**
- * What an `export { … }` of local names exports, by the name each is exported under: none of a type
- * alone, `export type { … }`, `{ type name }`, which exports nothing that runs.
+ * What an `export { … }` of local names exports, by the name each is exported under — a string as
+ * well, `export { useThing as "default" }` — none of a type alone, `export type { … }`, `{ type
+ * name }`, which exports nothing that runs.
  */
 function listedExports(statement: Statement): readonly (readonly [string, string])[] {
   if (
@@ -140,7 +141,8 @@ function listedExports(statement: Statement): readonly (readonly [string, string
   }
   return statement.exportClause.elements.flatMap((element) => {
     const local = element.propertyName ?? element.name;
-    return !element.isTypeOnly && isIdentifier(local) && isIdentifier(element.name)
+    // A name is exported as written, an identifier or a string; the local binding is an identifier.
+    return !element.isTypeOnly && isIdentifier(local)
       ? [[element.name.text, local.text] as const]
       : [];
   });
