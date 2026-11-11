@@ -188,7 +188,11 @@ function signatureTypes(object: TypeLiteralNode, key: string): readonly TypeNode
   return [...values];
 }
 
-/** Each written signature's value, by whether its domain covers the key, may, or is a string. */
+/**
+ * Each written signature's value, by whether its domain covers the key, may, or is a string. A
+ * domain that stays a type reference, a lib alias such as `PropertyKey`, an imported alias or
+ * `Uppercase<string>`, is none whose keys the reader can tell: its value is possible.
+ */
 function coveringSignatures(object: TypeLiteralNode, key: string): CoveringSignatures {
   const numeric = key !== '' && String(Number(key)) === key;
   const covering: CoveringSignatures = {
@@ -202,6 +206,7 @@ function coveringSignatures(object: TypeLiteralNode, key: string): CoveringSigna
     const domains = indexSignatureDomains(written);
     if (domains.has(SyntaxKind.StringKeyword)) covering.strings.add(member.type);
     if (numeric && domains.has(SyntaxKind.NumberKeyword)) covering.specific.add(member.type);
+    if (domains.has(SyntaxKind.TypeReference)) covering.possible.add(member.type);
     if (domains.has(SyntaxKind.TemplateLiteralType)) {
       addPatterns(covering, member.type, patternsCover(written, key), numeric);
     }
