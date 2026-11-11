@@ -150,6 +150,42 @@ const CASES = [
     key: 'message',
     values: ["'safe':", '[]:', '[error]:', 'error:'],
   },
+  {
+    id: 'empty-loop-head',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] of []); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'empty-spread-loop-head',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] of [...[]]); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'empty-string-loop-head',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] of ''); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'hole-loop-head-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] of [,]); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'opaque-loop-head-pin',
+    source: `function frames(error: Error, list: string[]) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] of list); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'listed-loop-head-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] of ['message']); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

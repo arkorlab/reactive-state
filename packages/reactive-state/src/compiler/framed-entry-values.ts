@@ -354,11 +354,24 @@ function patternStart(
 ): { readonly target: Expression; readonly sources: readonly AssignedFrameSource[] } | undefined {
   if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken)
     return { target: node.left, sources: [{ value: node.right, keys: [] }] };
-  if (isForOfStatement(node) && isExpression(node.initializer))
+  if (isForOfStatement(node) && isExpression(node.initializer) && !yieldsNothing(node.expression))
     return { target: node.initializer, sources: iteratedFrameSources(node.expression) };
   return isForInStatement(node) && isExpression(node.initializer)
     ? { target: node.initializer, sources: [] }
     : undefined;
+}
+
+/**
+ * Whether an iterable is written out and yields nothing: an empty list, a spread of one, an empty
+ * string. A loop over it never assigns its head; a hole in a list is an element.
+ */
+function yieldsNothing(iterable: Expression): boolean {
+  const value = unwrapped(iterable);
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text === '';
+  return (
+    isArrayLiteralExpression(value) &&
+    value.elements.every((each) => isSpreadElement(each) && yieldsNothing(each.expression))
+  );
 }
 
 /** What sources may hand an unrouted target: their fields or elements, and themselves. */
