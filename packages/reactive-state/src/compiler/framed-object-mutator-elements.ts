@@ -34,12 +34,15 @@ import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
-import { framedAppliedArguments } from './framed-keys.ts';
+import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { constantValue } from './numbers.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
 const MUTATORS = new Set(['Object.assign', 'Object.defineProperties', 'Object.defineProperty']);
+
+/** How many arguments a definition reads: the target, the key and the descriptor, or the map. */
+const ARGUMENTS = { property: 3, map: 2 } as const;
 
 export interface MutatorElements {
   readonly target: Expression;
@@ -56,28 +59,48 @@ export function objectMutatorElements(
 ): MutatorElements | undefined {
   const path = globalPathOf(unwrapped(call.expression))?.join('.');
   if (path === undefined || !MUTATORS.has(path)) return undefined;
-  const [target, first, second, third] = call.arguments;
+  const target = call.arguments[0];
   if (target === undefined || isSpreadElement(target)) return undefined;
   if (path === 'Object.assign') {
-    const elements = call.arguments
-      .slice(1)
-      .flatMap((source) => assignedValues(call, source, index));
-    return { target, elements };
+    const sources = call.arguments.slice(1);
+    return { target, elements: sources.flatMap((source) => assignedValues(call, source, index)) };
   }
-  if (first === undefined) return { target, elements: [] };
-  if (path === 'Object.defineProperties') {
-    const later =
-      second !== undefined && isSpreadElement(first) ? definedValues(second, index) : [];
-    return { target, elements: [...definedValues(first, index), ...later] };
+  const defined =
+    path === 'Object.defineProperties' ? definedMaps(call, index) : definedProperty(call, index);
+  return { target, elements: defined };
+}
+
+/**
+ * Where every argument's position is known, the key and the descriptor are the ones written there;
+ * a spread the compile cannot read may stand for any number of them, so the one that follows it
+ * may be the key or the descriptor, and what it holds is possible beside that.
+ */
+function definedProperty(call: CallExpression, index: number | undefined): WrittenArrayElement[] {
+  const prefix = framedArgumentPrefix(call, call.arguments, ARGUMENTS.property);
+  if (!prefix.unknown) {
+    const [, key, descriptor] = prefix.values;
+    return key !== undefined && possibleKey(constantValue(key), index)
+      ? descriptorValues(descriptor)
+      : [];
   }
+  const [, first, second, third] = call.arguments;
+  if (first === undefined) return [];
   if (isSpreadElement(first)) {
     const spread = { value: first.expression, keys: ['1', 'value'] };
-    return { target, elements: [spread, ...descriptorValues(second), ...descriptorValues(third)] };
+    return [spread, ...descriptorValues(second), ...descriptorValues(third)];
   }
-  return {
-    target,
-    elements: possibleKey(constantValue(first), index) ? descriptorValues(second) : [],
-  };
+  return possibleKey(constantValue(first), index) ? descriptorValues(second) : [];
+}
+
+/** The descriptor map written at the second position; after an unreadable spread, the next one too. */
+function definedMaps(call: CallExpression, index: number | undefined): WrittenArrayElement[] {
+  const prefix = framedArgumentPrefix(call, call.arguments, ARGUMENTS.map);
+  const [, first, second] = call.arguments;
+  if (!prefix.unknown)
+    return prefix.values[1] === undefined ? [] : definedValues(prefix.values[1], index);
+  if (first === undefined) return [];
+  const later = second !== undefined && isSpreadElement(first) ? definedValues(second, index) : [];
+  return [...definedValues(first, index), ...later];
 }
 
 /**
@@ -133,7 +156,10 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
       found.push({ value: property.expression, keys: [slot, 'value'] });
     else if (isPropertyAssignment(property) && possibleKey(writtenArrayKey(property.name), index))
       found.push(...descriptorValues(property.initializer));
-    else if (isGetAccessorDeclaration(property) && possibleKey(writtenArrayKey(property.name), index))
+    else if (
+      isGetAccessorDeclaration(property) &&
+      possibleKey(writtenArrayKey(property.name), index)
+    )
       found.push(...returnedValues(property.body).flatMap((each) => descriptorValues(each.value)));
   }
   return found;

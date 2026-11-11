@@ -243,6 +243,36 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'define-known-spread-label',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, ...['label'] as const, { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-known-spread-index',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, ...[0] as const, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-known-spread-other-index-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, ...[1] as const, { value: error }); return values; }`,
+    index: 0,
+    elements: [],
+  },
+  {
+    id: 'define-known-spread-descriptor',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, ...[{ value: error }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-known-spread-maps',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, ...[{ 0: { value: error } }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -293,6 +323,11 @@ const CONVERSIONS = [
     id: 'define-map-getter-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { get 0() { return { value: error }; } }); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'define-known-spread-label-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, ...['label'] as const, { value: error }); return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',
