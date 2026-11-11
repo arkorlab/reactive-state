@@ -217,6 +217,10 @@ const PINS = [
     what: 'an exported nested namespace beside a private one (pin)',
   },
   {
+    source: `declare namespace Z { namespace N { const field: string; } export {}; } namespace Z { export namespace N { ${MAKES} } }`,
+    what: 'a nested namespace of an ambient body that exports by `export {}` (pin)',
+  },
+  {
     source: `namespace N { export namespace field { export type T = string; } ${MAKES} }`,
     what: 'a namespace of types alone in the body of the File (pin)',
   },

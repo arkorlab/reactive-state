@@ -48,6 +48,7 @@ import {
   type TypeNode,
   type VariableDeclaration,
   isSignatureDeclaration,
+  type ModuleBlock,
   type ModuleDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
@@ -250,10 +251,7 @@ function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
   const { parent } = enumeration;
   const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
   const merging = isModuleBlock(scope) && exposed(enumeration);
-  const own = new Set<Statement>(statementsOf(scope));
-  const statements = merging
-    ? namespaceStatements(scope).filter((statement) => own.has(statement) || exposed(statement))
-    : statementsOf(scope);
+  const statements = merging ? bodyStatements(scope) : statementsOf(scope);
   return (statements ?? [enumeration]).flatMap((statement) => {
     return isEnumDeclaration(statement) && statement.name.text === enumeration.name.text
       ? [statement]
@@ -301,7 +299,7 @@ function mergedDeclarations(namespace: ModuleDeclaration): readonly ModuleDeclar
   if (isModuleDeclaration(parent)) {
     among = mergedDeclarations(parent).flatMap((each) => exposedContents(each));
   } else if (isModuleBlock(parent) && exposed(namespace)) {
-    among = namespaceStatements(parent);
+    among = bodyStatements(parent);
   } else {
     among = statementsOf(parent) ?? [namespace];
   }
@@ -324,6 +322,16 @@ function exposedContents(namespace: ModuleDeclaration): readonly Statement[] {
   if (body === undefined) return [];
   if (isModuleDeclaration(body)) return [body];
   return isModuleBlock(body) ? body.statements.filter((statement) => exposed(statement)) : [];
+}
+
+/**
+ * What is in scope in a namespace's body: its own statements, and those the other bodies of its
+ * namespace expose, which are members of it (`namespaceStatements`, but for what the context of a
+ * body does not export).
+ */
+function bodyStatements(block: ModuleBlock): readonly Statement[] {
+  const own = new Set<Statement>(block.statements);
+  return namespaceStatements(block).filter((statement) => own.has(statement) || exposed(statement));
 }
 
 /**

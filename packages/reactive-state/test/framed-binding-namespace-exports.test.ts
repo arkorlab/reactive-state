@@ -249,6 +249,10 @@ const PINS = [
     source: `declare namespace Z { namespace N { const key: number; } } namespace Z { namespace N { ${READ}; } }`,
     what: 'a private nested namespace beside an ambient one (pin)',
   },
+  {
+    source: `declare namespace Z { namespace N { const key: number; } export {}; } namespace Z { export namespace N { ${READ}; } }`,
+    what: 'a nested namespace of an ambient body that exports by `export {}` (pin)',
+  },
 ] as const;
 
 describe('a read of a name another body of a namespace exports', () => {

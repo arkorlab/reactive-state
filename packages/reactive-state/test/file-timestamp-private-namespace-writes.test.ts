@@ -9,8 +9,8 @@ import { fileReadsClock, hasFileTimestamp } from '../src/compiler/file-timestamp
  * A write within a namespace that is private to its body reaches the constant around it, not a
  * member of the same name an exported namespace of another body has: `namespace A { export
  * namespace N { export const options = {}; } } namespace A { namespace N { options.lastModified
- * = undefined; } }` changes the options the File is made of, and the File takes the clock. The row
- * marked a pin answers the same before the change as after it.
+ * = undefined; } }` changes the options the File is made of, and the File takes the clock, whether
+ * the other body is ambient and exports by `export {}` or not. The row marked a pin answers the same before the change as after it.
  */
 
 const OPTIONS = 'const options: { lastModified?: number } = { lastModified: 0 };';
@@ -21,6 +21,11 @@ const CASES = [
     clock: true,
     source: `${OPTIONS} namespace A { export namespace N { export const options = {}; } } namespace A { namespace N { options.lastModified = undefined; } } ${MADE}`,
     what: 'a write within a private namespace beside an exported one of the same name',
+  },
+  {
+    clock: true,
+    source: `${OPTIONS} declare namespace A { namespace N { const options: {}; } export {}; } namespace A { export namespace N { options.lastModified = undefined; } } ${MADE}`,
+    what: 'a write within a namespace beside a private one of an ambient body that exports by `export {}`',
   },
   {
     clock: false,
