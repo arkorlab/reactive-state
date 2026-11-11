@@ -72,7 +72,7 @@ const ACCESSOR_KEYS = new Set(['get', 'set']);
 /** The own methods a write names, as far as it shows them. */
 export type OwnMethods = Map<string, ArrayMethodOverride>;
 
-/** One direct assignment to the native method selected by a call. */
+/** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
   node: Node,
   root: FrameBinding,
@@ -88,6 +88,8 @@ export function ownMethodAssignment(
     key,
     own: sourceArrayFunction(node.right) || knownNonNative(node.right),
     value: node.right,
+    writable: true,
+    configurable: true,
   };
 }
 
