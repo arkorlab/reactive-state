@@ -967,6 +967,21 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'property-call-is-a-call-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib.read.call(null); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'property-apply-is-a-call-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib.read.apply(null, []); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'property-bind-is-an-escape-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib.read.bind(null); return read(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
