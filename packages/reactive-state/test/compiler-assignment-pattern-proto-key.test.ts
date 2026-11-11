@@ -21,7 +21,10 @@ import { frameDeclarationOf } from '../src/compiler/framed-bindings.ts';
  * of that name is an own entry, which the read finds before the accessor, wherever it is written.
  * A `null` prototype holds nothing, so a default beside it runs; the object a prototype literal or
  * name gives is the value read, and a number the literal ignores stays a value that is no error.
- * Each row is the sources `assignmentPatternSources` gives `e` from the assignment, as written.
+ * The accessor belongs to `Object.prototype`, so that a chain which ends in `null` without it reads
+ * nothing, `{ __proto__: { __proto__: null } }`, a property named `__proto__` along the chain is the
+ * value read instead, and a chain the reader cannot see stays open. Each row is the sources
+ * `assignmentPatternSources` gives `e` from the assignment, as written.
  */
 const CASES = [
   {
@@ -69,6 +72,87 @@ const CASES = [
     assignment: "({ __proto__: { e } } = { __proto__: { e: new Error('ours') } })",
     sources: ["new Error('ours')"],
     what: 'a pattern of the prototype',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: null } })",
+    sources: ["new Error('ours')"],
+    what: 'a prototype whose own prototype is null, which has no accessor',
+  },
+  {
+    assignment:
+      "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: { __proto__: null } } })",
+    sources: ["new Error('ours')"],
+    what: 'a chain of prototypes that ends in null',
+  },
+  {
+    assignment: '({ __proto__: e } = { __proto__: { __proto__: null } })',
+    sources: [],
+    what: 'a prototype whose own prototype is null',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { ['__proto__']: 0 } })",
+    sources: ['0'],
+    what: 'a prototype with a property of that name, which shadows the accessor',
+  },
+  {
+    assignment:
+      "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: null, ['__proto__']: 0 } })",
+    sources: ['0'],
+    what: 'a prototype with a property of that name, and a null prototype',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: { f: 1 } } })",
+    sources: ['{ __proto__: { f: 1 } }'],
+    what: 'a prototype whose own prototype is an object, which holds the accessor',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: 1 } })",
+    sources: ['{ __proto__: 1 }'],
+    what: 'a prototype whose own prototype is a number, which the literal ignores',
+  },
+  {
+    assignment:
+      "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: new Error('inner') } })",
+    sources: ["{ __proto__: new Error('inner') }"],
+    what: 'a prototype whose own prototype is a construction',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: [] })",
+    sources: ['[]'],
+    what: 'a prototype that is an array',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: base } })",
+    sources: [
+      '{ __proto__: base }',
+      '{ __proto__: { __proto__: base } }.__proto__',
+      "new Error('ours')",
+    ],
+    what: 'a prototype whose own prototype the reader cannot see',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: [] } })",
+    sources: ['{ __proto__: [] }'],
+    what: 'a prototype whose own prototype is an array',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { [String(base)]: 0 } })",
+    sources: [
+      '{ [String(base)]: 0 }',
+      '{ __proto__: { [String(base)]: 0 } }.__proto__',
+      "new Error('ours')",
+    ],
+    what: 'a prototype with a computed name the reader cannot see',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { ...base } })",
+    sources: ['{ ...base }', '{ __proto__: { ...base } }.__proto__', "new Error('ours')"],
+    what: 'a prototype with a spread, which may hold an own property of that name',
+  },
+  {
+    assignment: "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__() {} } })",
+    sources: ['{ __proto__: { __proto__() {} } }.__proto__', "new Error('ours')"],
+    what: 'a prototype with a method of that name, which shadows the accessor',
   },
   {
     assignment: "({ __proto__: e = new Error('ours') } = { __proto__, __proto__: null })",
