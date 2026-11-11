@@ -83,6 +83,41 @@ const CASES = [
     what: 'a key missing the text between two holes',
   },
   {
+    selected: ['string'],
+    source: `{ [key: \`a\${string}\${string}b\`]: Error; [key: string]: string }["ab"]`,
+    what: 'a key without a character for adjacent holes',
+  },
+  {
+    selected: ['string'],
+    source: `{ [key: \`a\${string}\${string}\${string}b\`]: Error; [key: string]: string }["axb"]`,
+    what: 'a key one character short for three adjacent holes',
+  },
+  {
+    selected: ['string'],
+    source: `{ [key: \`a\${string}b\${string}\${string}c\`]: Error; [key: string]: string }["abc"]`,
+    what: 'a key without a character for adjacent holes after a text',
+  },
+  {
+    selected: ['Error'],
+    source: `{ [key: \`a\${string}\${string}b\`]: Error; [key: string]: string }["axb"]`,
+    what: 'a key with a character for adjacent holes (pin)',
+  },
+  {
+    selected: ['Error'],
+    source: `{ [key: \`a\${string}\${string}\${string}b\`]: Error; [key: string]: string }["axyb"]`,
+    what: 'a key with a character for each hole but the last (pin)',
+  },
+  {
+    selected: ['Error'],
+    source: `{ [key: \`a\${string}b\${string}\${string}c\`]: Error; [key: string]: string }["abxc"]`,
+    what: 'a key with a character for adjacent holes after a text (pin)',
+  },
+  {
+    selected: ['Error'],
+    source: `{ [key: \`\${string}\${string}\`]: Error }[""]`,
+    what: 'holes alone, which TypeScript reads as string (pin)',
+  },
+  {
     selected: [],
     source: `{ [key: \`data-\${string}\`]: Error }["other"]`,
     what: 'a key no pattern covers (pin)',

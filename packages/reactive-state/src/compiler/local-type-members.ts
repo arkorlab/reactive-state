@@ -242,20 +242,23 @@ function patternsCover(type: TypeNode | undefined, key: string): boolean | undef
 /**
  * Whether a pattern of `${string}` holes matches a key as TypeScript matches it: the text before
  * the first hole starts the key and the text after the last ends it, without overlap, and the
- * text between holes follows in order. `undefined` for a hole of another type.
+ * text between holes follows in order; of two adjacent holes the first takes a character. Holes
+ * alone are the type `string`. `undefined` for a hole of another type.
  */
 function patternCovers(pattern: TemplateLiteralTypeNode, key: string): boolean | undefined {
   const { head, templateSpans } = pattern;
   if (templateSpans.some((span) => span.type.kind !== SyntaxKind.StringKeyword)) return undefined;
   const texts = templateSpans.map((span) => span.literal.text);
+  if (head.text === '' && texts.every((text) => text === '')) return true;
   const last = texts.pop() ?? '';
   const end = key.length - last.length;
   if (!key.startsWith(head.text) || !key.endsWith(last) || end < head.text.length) return false;
   let at = head.text.length;
   for (const text of texts) {
-    const found = key.indexOf(text, at);
-    if (found === -1 || found + text.length > end) return false;
-    at = found + text.length;
+    const width = Math.max(text.length, 1);
+    const found = text === '' ? at : key.indexOf(text, at);
+    if (found === -1 || found + width > end) return false;
+    at = found + width;
   }
   return true;
 }
