@@ -1,15 +1,17 @@
 import {
   type ArrowFunction,
   type Expression,
+  isArrayLiteralExpression,
   isArrowFunction,
   isBlock,
   isOmittedExpression,
+  isSpreadElement,
 } from 'typescript/ast';
 
 import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import type { ArrayElementView } from './framed-array-rest.ts';
-import { quietAsyncFilterFallback } from './framed-async-filter-fallback.ts';
+import { concatSource } from './framed-concat-properties.ts';
 import { quietCopy, quietElementViews, type QuietCopyCall } from './framed-copy-guards.ts';
 import { filterParameterDefaults } from './framed-filter-parameters.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -20,7 +22,11 @@ import { framedCondition } from './framed-sources.ts';
  * are not shown, any of them may be selected.
  */
 
-/** A written constant predicate keeps or drops every element; other predicates keep each possible. */
+/**
+ * A written constant predicate keeps or drops every element; other predicates keep each possible.
+ * A kept element's result position is its source position only where the source is shown to have
+ * no hole before it; elsewhere any kept element may be at the selected position.
+ */
 export function filteredArrayViews(
   copy: QuietCopyCall,
   index: number | undefined,
@@ -37,16 +43,31 @@ export function filteredArrayViews(
     return [{ ...base, index: undefined }];
   if (!written && !answersLater(predicate)) return [];
   return (
-    compactedViews(copy, predicate, index, stable) ??
-    (written || quietAsyncFilterFallback(copy, predicate, stable)
-      ? [base]
-      : [{ ...base, index: undefined }])
+    compactedViews(copy, predicate, index, stable) ?? [
+      written && holeFreeUpTo(copy.receiver, index, stable) ? base : { ...base, index: undefined },
+    ]
   );
 }
 
 /**
+ * A written literal, or a whole constant alias of one, with no omitted element and no spread up to
+ * the position: a hole after it leaves it where it was, and a spread may add no element at all.
+ */
+function holeFreeUpTo(
+  receiver: Expression,
+  index: number | undefined,
+  stable: (receiver: Expression) => boolean,
+): boolean {
+  const source = concatSource(receiver, stable);
+  if (source === undefined || !isArrayLiteralExpression(source)) return false;
+  const placed = index === undefined ? source.elements : source.elements.slice(0, index + 1);
+  return placed.every((each) => !isOmittedExpression(each) && !isSpreadElement(each));
+}
+
+/**
  * A quiet immediately selected literal source keeps the present elements in their written order;
- * other forms keep the original positions and the written body's truth.
+ * for other forms it answers nothing, and `filteredArrayViews` keeps a position only where no hole
+ * comes before it.
  */
 function compactedViews(
   copy: QuietCopyCall,
