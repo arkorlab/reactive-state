@@ -98,13 +98,23 @@ function selectedEntries(
   const entries = framedEntryValues(value, key);
   if (entries !== undefined) return entries;
   const sources = assignedSources(value);
-  if (sources === undefined) return undefined;
+  return sources === undefined ? undefined : assignedEntries(sources, key);
+}
+
+/** Each source's fields are copied in order; the prototypes and setters they install are retained. */
+function assignedEntries(
+  sources: readonly Expression[],
+  key: string,
+): readonly AssignedFrameSource[] {
   let values: AssignedFrameSource[] = [];
   const inherited: AssignedFrameSource[] = [];
+  let intercepted = false;
   for (const source of sources) {
     const object = unwrapped(source);
     if (isObjectLiteralExpression(object)) {
       inherited.push(...copiedPrototypes(object, key));
+      intercepted ||= ownEntries(object, '__proto__').values.some((each) => !setterFree(each));
+      if (intercepted) inherited.push(...copiedValues(object));
       const selected = ownEntries(object, key);
       if (selected.own) values = selected.values;
       else values.push(...selected.values);
@@ -124,6 +134,48 @@ function copiedPrototypes(
 ): readonly AssignedFrameSource[] {
   const prototypes = ownEntries(object, '__proto__').values;
   return prototypes.map((each) => ({ value: each.value, keys: [...each.keys, key] }));
+}
+
+/**
+ * A prototype that is a literal with no setter, whose written prototypes have none either, runs no
+ * code when a later copy is written to the target; one the compile cannot read may.
+ */
+function setterFree(prototype: AssignedFrameSource): boolean {
+  if (prototype.keys.length > 0) return false;
+  const pending = [prototype.value];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    const object = unwrapped(at);
+    if (
+      !isObjectLiteralExpression(object) ||
+      object.properties.some((each) => isSetAccessorDeclaration(each))
+    )
+      return false;
+    pending.push(...framedLiteralPrototypes(object));
+  }
+  return true;
+}
+
+/**
+ * A setter the target's prototype holds is called with each value copied after it and may store
+ * it under any key: the values of a literal's own entries, other than the `__proto__` entry that
+ * sets a prototype, are possible values of any field.
+ */
+function copiedValues(object: ObjectLiteralExpression): readonly AssignedFrameSource[] {
+  const found: AssignedFrameSource[] = [];
+  const pending = [object];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    for (const property of at.properties) {
+      if (isSpreadAssignment(property)) {
+        const spread = unwrapped(property.expression);
+        if (isObjectLiteralExpression(spread)) pending.push(spread);
+        continue;
+      }
+      const names = memberNames(property.name);
+      if (names?.length === 1 && names[0] === '__proto__') continue;
+      found.push(...entryValues(property).map((value) => ({ value, keys: [] })));
+    }
+  }
+  return found;
 }
 
 /**
