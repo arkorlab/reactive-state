@@ -442,6 +442,16 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-finally-inner-block-break-after-return',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { values.join = Array.prototype.join; return 1; } finally { inner: { break inner; } } } return 0; }`,
+    converts: false,
+  },
+  {
+    id: 'loop-overwrite-in-try-finally-inner-loop-break',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; values.join = () => 'fixed'; } finally { for (;;) { break; } } } }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

@@ -232,15 +232,22 @@ export function resumesWithin(node: Node, limits: readonly Node[]): boolean {
 function resumesAfter(statement: TryStatement, from: Node): boolean {
   if (from === statement.tryBlock && statement.catchClause !== undefined) return true;
   const { finallyBlock } = statement;
-  return finallyBlock !== undefined && from !== finallyBlock && jumpsIn(finallyBlock);
+  return finallyBlock !== undefined && from !== finallyBlock && jumpsOut(finallyBlock);
 }
 
-/** Whether a continue or a break that may run lies in the node, wherever it is nested. */
-function jumpsIn(node: Node): boolean {
-  const pending: Node[] = [node];
+/**
+ * Whether a continue or a break that may run lies in the block and lands outside it, wherever it is
+ * nested: one that only leaves a loop, a switch or a labeled statement within the block goes on
+ * inside it.
+ */
+function jumpsOut(block: Node): boolean {
+  const pending: Node[] = [block];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    if ((isContinueStatement(each) || isBreakStatement(each)) && framedPossibleBranch(each))
-      return true;
+    if ((isContinueStatement(each) || isBreakStatement(each)) && framedPossibleBranch(each)) {
+      const destination = jumpTarget(each);
+      if (destination === undefined || destination.pos < block.pos || destination.end > block.end)
+        return true;
+    }
     each.forEachChild((child) => {
       pending.push(child);
     });
