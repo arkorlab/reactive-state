@@ -7,7 +7,6 @@ import {
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
-  isExpressionStatement,
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
@@ -40,6 +39,7 @@ import {
   mayBeArray,
   OWN_METHODS,
   afterPossibleWrite,
+  definiteExpression,
   type OwnMethods,
   ownMethodAssignment,
   possibleOverride,
@@ -299,7 +299,7 @@ function statementMethodWrites(
     held,
   }: { readonly owner: Node; readonly own: OwnMethods; readonly held: HeldMethods },
 ): void {
-  const top = isExpressionStatement(before) ? before.expression : undefined;
+  const top = definiteExpression(before, root);
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
   const definite = assignment !== undefined || (top !== undefined && isCallExpression(top));
   const writes = { root, owner, own, held, definite: definite ? top : undefined };
