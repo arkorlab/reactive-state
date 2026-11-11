@@ -3,6 +3,7 @@ import {
   type Expression,
   isArrayLiteralExpression,
   isBinaryExpression,
+  isBindingElement,
   isElementAccessExpression,
   isComputedPropertyName,
   isConditionalExpression,
@@ -12,6 +13,7 @@ import {
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isShorthandPropertyAssignment,
   isSpreadAssignment,
   isVariableStatement,
   type MethodDeclaration,
@@ -30,6 +32,7 @@ import {
   writtenArrayKey,
 } from './framed-array-functions.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
+import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 
@@ -134,22 +137,35 @@ function inOptionalChain(node: Node): boolean {
 }
 
 /**
- * Whether an expression runs whenever its statement does: no condition, short-circuit, optional
- * chain, function or inner statement lies between them.
+ * Whether an expression runs whenever its statement does: the statement is an expression or a
+ * declaration, and no condition, short circuit, optional chain, default of a pattern, function or
+ * inner statement lies between them. A loop, a branch or a switch runs its parts on some paths.
  */
 export function evaluatedForSure(node: Node, statement: Node): boolean {
+  if (!isExpressionStatement(statement) && !isVariableStatement(statement)) return false;
   for (let at = node; at !== statement; at = at.parent) {
     if (skipsLink(at, statement)) return false;
   }
   return true;
 }
 
+/** The default a binding element or a shorthand field of a pattern holds: it runs on some values. */
+function patternDefault(node: Node): Node | undefined {
+  if (isBindingElement(node)) return node.initializer;
+  return isShorthandPropertyAssignment(node) ? node.objectAssignmentInitializer : undefined;
+}
+
 /** Whether what holds `at` runs it only on some paths: a branch, a short circuit, a chain, a setter. */
 function skipsLink(at: Node, statement: Node): boolean {
   const { parent } = at;
   if (isConditionalExpression(parent)) return at !== parent.condition;
+  if (patternDefault(parent) === at) return true;
   if (isBinaryExpression(parent) && parent.right === at)
-    return SHORT_CIRCUITS.has(parent.operatorToken.kind) || setsMember(parent);
+    return (
+      SHORT_CIRCUITS.has(parent.operatorToken.kind) ||
+      setsMember(parent) ||
+      assignmentPatternDefault(parent)
+    );
   if (inOptionalChain(parent) || isFunctionLikeDeclaration(parent)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
   return inner && parent !== statement;
