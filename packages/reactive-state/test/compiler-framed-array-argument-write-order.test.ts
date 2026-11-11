@@ -608,6 +608,36 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'class-static-then-computed-key-order',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class { static field = Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-computed-then-static-key-order',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-static-block-after-computed-key',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class { static { Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); } [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-method-key-after-static-initializer',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class { static field = Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'key')]() {} }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-heritage-before-computed-key',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class extends (Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), Object) { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-computed-key-before-heritage-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class extends (Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), Object) { [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
     id: 'object-method-computed-name-runs',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'key')]() {} }; values.join = () => 'safe'; return String(values); }`,
     converts: false,
@@ -635,6 +665,11 @@ const CASES = [
   {
     id: 'arrow-parameter-default-is-deferred-pin',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = (value = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })) => value; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-instance-initializer-after-static',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: new (class { field = Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); static other = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); })(), join: () => 'safe' }); return String(values); }`,
     converts: true,
   },
 ] as const;
