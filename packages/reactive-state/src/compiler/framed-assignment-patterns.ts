@@ -92,7 +92,7 @@ export function iteratedFrameSources(iterable: Expression): readonly AssignedFra
   return sources;
 }
 
-/** Finite required tuple slots remain distinct; opaque iteration retains its existing numeric path. */
+/** Each place of a written tuple remains distinct; opaque iteration retains its existing numeric path. */
 function opaqueIterationSources(value: Expression): readonly AssignedFrameSource[] {
   const selected = frameTypeOf(value);
   const keys =

@@ -144,7 +144,7 @@ export function namesLocalTypeArgument(
 const iterationOperands = (reading: Reading): Reading[] =>
   operandReadings(reading, STANDARD_ERRORS);
 
-/** Literal positions of finite required iteration tuples, retaining each original type environment. */
+/** Literal places of the iteration tuples a type may be, retaining each original type environment. */
 export function localArrayIterationKeys(
   type: TypeNode,
   keys: readonly string[],
