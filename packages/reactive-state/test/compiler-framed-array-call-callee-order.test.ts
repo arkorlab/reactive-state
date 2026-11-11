@@ -727,6 +727,11 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-computed-key',
+    source: `function frames(error: Error) { const values = [error]; const o: any = { read(pass: number): string { ${SAFE} if (pass < 1) o['re' + 'ad'](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } }; return o.read(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
