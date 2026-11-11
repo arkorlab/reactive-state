@@ -44,6 +44,8 @@ export interface HeldWrite {
   /** What is assigned: the value held at the path, or the whole of it where the path is none. */
   readonly value: Expression;
   readonly keys: readonly string[];
+  /** The names a rest left out of the copy it gives the member. */
+  readonly without?: readonly string[] | undefined;
 }
 
 /**
@@ -55,6 +57,7 @@ export interface HeldWrite {
 export function heldMemberWrites(
   first: Identifier,
   names: readonly Identifier[],
+  consumedAt?: Node,
 ): readonly HeldWrite[] {
   const bindings = heldBindings(first, names);
   const declared = frameBindingOf(names.at(-1) ?? first)?.binding;
@@ -62,7 +65,11 @@ export function heldMemberWrites(
   const pending: Node[] = [first.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const written = heldWrite(node, bindings);
-    if (declared !== undefined && written.length > 0 && mayPrecede(node, first, declared))
+    if (
+      declared !== undefined &&
+      written.length > 0 &&
+      mayPrecede(node, first, declared, consumedAt)
+    )
       found.push(...written);
     node.forEachChild((child) => {
       pending.push(child);
@@ -76,11 +83,11 @@ export function heldMemberWrites(
  * in another function that is referenced, which may run first, or in a loop the use is in, whose
  * next turn follows it.
  */
-function mayPrecede(write: Node, use: Identifier, declared: Node): boolean {
+function mayPrecede(write: Node, use: Identifier, declared: Node, consumedAt?: Node): boolean {
   const owner = executionOwner(use);
   const writer = executionOwner(write);
   if (writer !== owner) return !unreferencedLocalFunction(writer, owner);
-  return repeatedFrameRead(write, use, declared, owner) || write.pos < readAt(use).end;
+  return repeatedFrameRead(write, use, declared, owner) || write.pos < readAt(use, consumedAt).end;
 }
 
 function isStatementKind(kind: SyntaxKind): boolean {
@@ -97,15 +104,16 @@ const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
 /**
  * Where the object a descriptor names is read: by the call whose arguments hold the name, after
  * they are all evaluated; by the name itself, where it is spread, which copies it at once. A spread
- * of something that holds the name, a list of it, copies the reference only.
+ * of something that holds the name, a list of it, copies the reference only. A name a constant
+ * holds, in a map or a list, is read where that is consumed.
  */
-function readAt(use: Identifier): Node {
+function readAt(use: Identifier, consumedAt: Node = use): Node {
   for (let at: Node = use.parent; !isSourceFile(at); at = at.parent) {
     if ((isSpreadAssignment(at) || isSpreadElement(at)) && spreads(at.expression, use)) return use;
     if (isCallExpression(at) || isNewExpression(at)) return at;
     if (isFunctionLikeDeclaration(at) || isStatementKind(at.kind)) break;
   }
-  return use;
+  return consumedAt;
 }
 
 /** Whether what a spread copies may be the object the name stands for, whole. */
@@ -122,9 +130,16 @@ function spreads(copied: Expression, use: Identifier): boolean {
 function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWrite[] {
   const held = memberWrites(node).filter(({ member }) => writesHeld(member, bindings));
   if (held.length === 0 || !framedPossibleBranch(node)) return [];
-  return held.flatMap(({ member, values }) =>
-    values.map(({ value, keys }) => ({ key: frameMemberName(member), value, keys })),
-  );
+  return held.flatMap(({ member, values }) => {
+    return values.map(({ value, keys, without }) => {
+      return {
+        key: frameMemberName(member),
+        value,
+        keys,
+        without,
+      };
+    });
+  });
 }
 
 /**

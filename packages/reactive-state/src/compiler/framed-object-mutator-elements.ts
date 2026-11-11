@@ -56,7 +56,7 @@ export function objectMutatorElements(
   const { path } = invoked;
   const [target, ...rest] = invoked.args;
   if (target === undefined || isSpreadElement(target)) return undefined;
-  const reading = freshReading();
+  const reading = freshReading(call);
   const mutated = returnedTarget(target);
   if (path === PATHS.assign)
     return {
@@ -104,6 +104,8 @@ function returnedTarget(target: Expression): Expression {
  * are read once in each way however many times the program names them.
  */
 interface Reading {
+  /** The call that reads the sources, where the descriptors a constant holds are consumed. */
+  readonly at: Node;
   readonly inherited: boolean;
   readonly seen: {
     readonly full: Map<Node, readonly Hidden[]>;
@@ -113,8 +115,9 @@ interface Reading {
   };
 }
 
-function freshReading(): Reading {
+function freshReading(at: Node): Reading {
   return {
+    at,
     inherited: true,
     seen: { full: new Map(), own: new Map(), maps: new Map(), sources: new Map() },
   };
@@ -433,13 +436,14 @@ function mapWrites(
 ): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names).flatMap(({ key, value, keys }) => {
+  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys, without }) => {
     const hides = key !== undefined && hidden.data.has(key);
     if (hides || (key !== undefined && !possibleKey(key, index))) return [];
+    const left = { data: new Set(without), getters: new Set(without) };
     return selectedValues(value, keys).flatMap((each) => {
       return each.keys.length > 0
         ? [{ value: each.value, keys: [...each.keys, 'value'] }]
-        : descriptorValues(each.value, reading);
+        : descriptorValues(each.value, reading, left);
     });
   });
 }
@@ -486,13 +490,13 @@ function descriptorValues(
   const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
   const used = alternatives === undefined ? undefined : readUnder(table, held, hidden);
   if (alternatives === undefined) return opaque;
-  if (used === undefined) return [...opaque, ...descriptorWrites(names, hidden)];
+  if (used === undefined) return [...opaque, ...descriptorWrites(names, hidden, reading)];
   const chosen = alternatives.flatMap((each) => {
     return isObjectLiteralExpression(each)
       ? descriptorFields(each, reading, used)
       : descriptorValues(each, reading, used);
   });
-  return [...opaque, ...chosen, ...descriptorWrites(names, hidden)];
+  return [...opaque, ...chosen, ...descriptorWrites(names, hidden, reading)];
 }
 
 /** The values the fields of a written descriptor give, each as the fields after it leave it. */
@@ -603,10 +607,14 @@ function accessedValues(
  * The values assigned to the `value` and `get` fields of an object a constant holds, or of what it
  * is aliased to: a constant does not keep its fields from changing. An assignment anywhere counts.
  */
-function descriptorWrites(names: readonly Identifier[], hidden: Hidden): WrittenArrayElement[] {
+function descriptorWrites(
+  names: readonly Identifier[],
+  hidden: Hidden,
+  reading: Reading,
+): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names).flatMap(({ key, value, keys }) => {
+  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys }) => {
     if (key !== undefined && hidden.data.has(key)) return [];
     return selectedValues(value, keys).flatMap((each) => {
       const installed = key === undefined || key === 'value' ? [each] : [];

@@ -2066,6 +2066,46 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-held-map-written-after-construction',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const maps = { 0: descriptor }; descriptor.get = () => error; Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-held-map-written-after-use-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const maps = { 0: descriptor }; Object.defineProperties(a, maps); descriptor.get = () => error; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-held-map-copy-before-write-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const maps = { 0: { ...descriptor } }; descriptor.get = () => error; Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-held-list-written-after-construction',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const maps = [descriptor]; descriptor.get = () => error; Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-held-map-alias-written-after-construction',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const alias = descriptor; const maps = { 0: alias }; descriptor.get = () => error; Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-rest-excludes-named-fields',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; ({ get: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-keeps-other-fields',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; ({ value: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-rest-unknown-exclusion-keeps',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; ({ [key]: ignored, ...maps[0] } = { get: () => error }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-key-selects-no-receiver',
     source: `function frames(error: Error, key: 'message' | 'name') { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ [key]: descriptor.value } = error); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
