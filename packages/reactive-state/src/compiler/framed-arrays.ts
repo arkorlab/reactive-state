@@ -364,22 +364,28 @@ function holdDefinition(node: Node, root: FrameBinding, held: HeldMethods): void
   }
 }
 
-/** A definite redefinition or deletion replaces a configurable property, setter and all. */
+/**
+ * A definite redefinition or deletion replaces a configurable property, setter and all: one of the
+ * array itself, not of a name that may hold another.
+ */
 function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): void {
-  const replaced = definedMethods(top, root) ?? new Map<string, ArrayMethodOverride>();
-  deletedMethod(top, root, replaced);
+  const replaced = definedMethods(top, root, true) ?? new Map<string, ArrayMethodOverride>();
+  deletedMethod(top, root, replaced, true);
   if (replaced.size >= OWN_METHODS.size) return;
   for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
 }
 
-/** The methods one call of Object.defineProperty or Object.defineProperties defines on the array. */
-function definedMethods(node: Node, root: FrameBinding): OwnMethods | undefined {
+/**
+ * The methods one call of Object.defineProperty or Object.defineProperties defines on the array, or
+ * on what may be it unless `exact` asks for the array itself.
+ */
+function definedMethods(node: Node, root: FrameBinding, exact = false): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (
     target === undefined ||
-    !mayBeArray(target, root) ||
+    !(exact ? arrayIdentity(target) === root : mayBeArray(target, root)) ||
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
     return undefined;
@@ -443,12 +449,16 @@ function assignedMethods(target: Expression, root: FrameBinding): readonly strin
   return keys.filter((each) => OWN_METHODS.has(each));
 }
 
-/** A completed deletion reveals an inherited method; an opaque key may remove either proof. */
-function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods): void {
+/**
+ * A completed deletion reveals an inherited method; an opaque key may remove either proof. It
+ * deletes from what may be the array unless `exact` asks for the array itself.
+ */
+function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, exact = false): void {
   if (!isDeleteExpression(node)) return;
   const member = unwrapped(node.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
-  if (!mayBeArray(member.expression, root)) return;
+  if (!(exact ? arrayIdentity(member.expression) === root : mayBeArray(member.expression, root)))
+    return;
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });

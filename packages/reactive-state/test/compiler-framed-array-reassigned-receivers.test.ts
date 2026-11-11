@@ -99,6 +99,21 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'alias-redefinition-keeps-accessor-held',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { get() { return Array.prototype.join; }, configurable: true }); let b = [1]; Object.defineProperty(b, 'join', { value: () => 'x' }); b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-deletion-keeps-accessor-held',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { get() { return Array.prototype.join; }, configurable: true }); let b = [1]; delete b.join; b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'redefinition-releases-accessor-pin',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { get() { return Array.prototype.join; }, configurable: true }); Object.defineProperty(a, 'join', { value: Array.prototype.join, writable: true }); ${SAFE} return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'alias-never-reassigned-pin',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; return String(a); }`,
     converts: true,
