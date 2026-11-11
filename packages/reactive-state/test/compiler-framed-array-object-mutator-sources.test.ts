@@ -1241,6 +1241,17 @@ describe('sources built from conditions that spread each other', () => {
   });
 });
 
+describe('a source read under names several overwrites hide', () => {
+  it('keeps the names every one of them hides', () => {
+    const copies = [1, 2, 3, 4, 5, 6]
+      .map((key) => `{ ...source, 0: 'safe', ${key}: 'safe' }`)
+      .join(', ');
+    const source = `function frames(error: Error) { ${VALUES} const source = { get 0() { return error; } }; Object.assign(values, ${copies}); return values; }`;
+
+    expect(writtenElements(source, undefined)).not.toContain('error:');
+  });
+});
+
 describe('elements native object mutators install from unread sources', () => {
   it.each(ELEMENTS)('$id', ({ source, index, elements }) => {
     expect(writtenElements(source, index)).toStrictEqual(elements);
