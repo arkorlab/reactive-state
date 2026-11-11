@@ -39,16 +39,27 @@ export function qualifiedLocalTypeBinding(name: QualifiedName): LocalTypeBinding
     members.unshift(root.right.text);
     root = root.left;
   }
-  let namespaces = lexicalNamespaces(root);
+  return namespaceMemberBinding(lexicalNamespaces(root), members);
+}
+
+/**
+ * The local alias, interface or class `members` name below `namespaces`, member by member through
+ * the exported namespaces: `undefined` where one is not there, `null` where an import or enum is.
+ */
+export function namespaceMemberBinding(
+  namespaces: readonly ModuleDeclaration[] | null | undefined,
+  members: readonly string[],
+): LocalTypeBinding {
+  let below = namespaces;
   for (const [index, member] of members.entries()) {
-    if (namespaces === undefined || namespaces === null) {
-      return namespaces;
+    if (below === undefined || below === null) {
+      return below;
     }
-    const statements = exportedStatements(namespaces);
+    const statements = exportedStatements(below);
     if (index === members.length - 1) {
       return memberTypeBinding(statements, member);
     }
-    namespaces = namespacesIn(statements, member);
+    below = namespacesIn(statements, member);
   }
   return undefined;
 }

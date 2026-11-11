@@ -33,6 +33,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
+  type ModuleDeclaration,
   type Node,
   NodeFlags,
   type Statement,
@@ -161,6 +162,49 @@ export function localClassValueBinding(
     }
     inParameterDecorator = isParameterDeclaration(at) && isDecorator(within);
   }
+}
+
+/**
+ * The namespaces `name` is as a value: the declarations that merge under its nearest value binding,
+ * where that binding is a namespace (a class, function or enum may merge with it). `null` for any
+ * other nearer or only value binding — a constant, a parameter, an import, a class alone — and
+ * `undefined` for no local value binding at all.
+ */
+export function localNamespaceValue(
+  name: Identifier,
+): readonly ModuleDeclaration[] | null | undefined {
+  let within: Node = name;
+  let inParameterDecorator = false;
+  for (let at: Node = name.parent; ; within = at, at = at.parent) {
+    if (ownClassBinding(at, within, name.text, inParameterDecorator) !== undefined) {
+      return null;
+    }
+    const declared = statementsOf(at)?.filter((statement) => bindsValue(statement, name.text));
+    if (declared !== undefined && declared.length > 0) {
+      return mergedNamespaces(declared);
+    }
+    if (isSourceFile(at)) {
+      return undefined;
+    }
+    inParameterDecorator = isParameterDeclaration(at) && isDecorator(within);
+  }
+}
+
+/** The namespaces among the statements one scope binds a value name with, if all of them may merge. */
+function mergedNamespaces(declared: readonly Statement[]): readonly ModuleDeclaration[] | null {
+  const namespaces = declared.filter(isModuleDeclaration);
+  const merges = declared.every((statement) => mergesWithNamespace(statement));
+  return merges && namespaces.length > 0 ? namespaces : null;
+}
+
+/** Whether a declaration of a value name may share it with a namespace: a constant or import may not. */
+function mergesWithNamespace(statement: Statement): boolean {
+  return (
+    isModuleDeclaration(statement) ||
+    isClassDeclaration(statement) ||
+    isFunctionDeclaration(statement) ||
+    isEnumDeclaration(statement)
+  );
 }
 
 /** The class or plain constant identifier one statement binds, never a destructuring projection. */
