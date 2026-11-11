@@ -34,6 +34,7 @@ import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
 import { functionReturns, alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { keyMayBeSlot, nameMayBeSlot, possibleKey, slotKey } from './framed-mutator-keys.ts';
+import { selectedValues } from './framed-selected-sources.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
@@ -432,11 +433,14 @@ function mapWrites(
 ): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names).flatMap(({ key, value }) => {
+  return heldMemberWrites(first, names).flatMap(({ key, value, keys }) => {
     const hides = key !== undefined && hidden.data.has(key);
-    return !hides && (key === undefined || possibleKey(key, index))
-      ? descriptorValues(value, reading)
-      : [];
+    if (hides || (key !== undefined && !possibleKey(key, index))) return [];
+    return selectedValues(value, keys).flatMap((each) => {
+      return each.keys.length > 0
+        ? [{ value: each.value, keys: [...each.keys, 'value'] }]
+        : descriptorValues(each.value, reading);
+    });
   });
 }
 
@@ -602,11 +606,15 @@ function accessedValues(
 function descriptorWrites(names: readonly Identifier[], hidden: Hidden): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names).flatMap(({ key, value }) => {
+  return heldMemberWrites(first, names).flatMap(({ key, value, keys }) => {
     if (key !== undefined && hidden.data.has(key)) return [];
-    const installed = key === undefined || key === 'value' ? [{ value, keys: [] }] : [];
-    return key === undefined || key === 'get'
-      ? [...installed, ...functionReturns(value)]
-      : installed;
+    return selectedValues(value, keys).flatMap((each) => {
+      const installed = key === undefined || key === 'value' ? [each] : [];
+      const returned =
+        each.keys.length === 0 && (key === undefined || key === 'get')
+          ? functionReturns(each.value)
+          : [];
+      return [...installed, ...returned];
+    });
   });
 }

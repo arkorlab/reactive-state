@@ -1315,6 +1315,18 @@ const ELEMENTS = [
     elements: ['descriptor:value'],
   },
   {
+    id: 'define-destructured-typed-path',
+    source: `function frames(error: Error, holder: { item: Error }) { ${VALUES} const descriptor: PropertyDescriptor = {}; ({ item: descriptor.value } = holder); Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'holder:item'],
+  },
+  {
+    id: 'define-destructured-typed-list-path',
+    source: `function frames(error: Error, list: [Error]) { ${VALUES} const descriptor: PropertyDescriptor = {}; [descriptor.value] = list; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'list:0'],
+  },
+  {
     id: 'define-descriptor-write-hidden-by-later-field',
     source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; descriptor.get = () => error; Object.defineProperty(values, 0, { ...descriptor, get: () => 'safe' }); return values; }`,
     index: undefined,
@@ -1766,6 +1778,51 @@ const CONVERSIONS = [
   {
     id: 'define-key-shorthand-safe',
     source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const item = 'safe'; ({ [key]: descriptor.value } = { item }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-held-list-getter',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => error]; [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-held-object-getter',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { f: () => error }; ({ f: descriptor.get } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-held-list-position-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-held-nested-getter',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { x: [() => error] }; ({ x: [descriptor.get] } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-condition-source-getter',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get] = flag ? [() => error] : [() => 'safe']; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-spread-source-getter',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ f: descriptor.get } = { ...{ f: () => error } }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-spread-source-hidden-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ f: descriptor.get } = { ...{ f: () => error }, f: () => 'safe' }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-selected-field-is-no-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ message: descriptor.value } = error); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-selected-element-is-no-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.value] = error as unknown as unknown[]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
   },
   {

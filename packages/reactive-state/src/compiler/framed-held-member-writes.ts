@@ -40,7 +40,9 @@ import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 export interface HeldWrite {
   /** The member's name, none where it is computed and the compile cannot read it. */
   readonly key: string | undefined;
+  /** What is assigned: the value held at the path, or the whole of it where the path is none. */
   readonly value: Expression;
+  readonly keys: readonly string[];
 }
 
 /**
@@ -120,7 +122,7 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
   const held = memberWrites(node).filter(({ member }) => writesHeld(member, bindings));
   if (held.length === 0 || !framedPossibleBranch(node)) return [];
   return held.flatMap(({ member, values }) =>
-    values.map((value) => ({ key: frameMemberName(member), value })),
+    values.map(({ value, keys }) => ({ key: frameMemberName(member), value, keys })),
   );
 }
 
@@ -128,7 +130,9 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
 function memberWrites(node: Node): readonly MemberWrite[] {
   if (!isAssignment(node)) return patternMemberWrites(node);
   const direct = unwrapped(node.left);
-  return isMember(direct) ? [{ member: direct, values: [node.right] }] : patternMemberWrites(node);
+  return isMember(direct)
+    ? [{ member: direct, values: [{ value: node.right, keys: [] }] }]
+    : patternMemberWrites(node);
 }
 
 function isMember(node: Node): node is PropertyAccessExpression | ElementAccessExpression {

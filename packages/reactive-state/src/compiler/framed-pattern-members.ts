@@ -29,7 +29,7 @@ import {
 
 export interface MemberWrite {
   readonly member: PropertyAccessExpression | ElementAccessExpression;
-  readonly values: readonly Expression[];
+  readonly values: readonly AssignedFrameSource[];
 }
 
 /**
@@ -44,7 +44,7 @@ export function patternMemberWrites(node: Node): readonly MemberWrite[] {
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const target = unwrapped(at.target);
     if (isPropertyAccessExpression(target) || isElementAccessExpression(target)) {
-      found.push({ member: target, values: at.sources.map((source) => source.value) });
+      found.push({ member: target, values: at.sources });
       continue;
     }
     const routed = assignmentPatternTargets(target, at.sources);
