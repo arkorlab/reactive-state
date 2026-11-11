@@ -231,10 +231,14 @@ function bindsScopedValue(node: Node, within: Node, name: string): boolean {
   if (!('body' in node) || node.body !== within) {
     return false;
   }
-  // A namespace's `var`s are its own: those of a namespace in the body are not the body's.
-  const code = isModuleBlock(within)
-    ? within.statements.filter((statement) => !isModuleDeclaration(statement))
-    : [within];
+  // A namespace's `var`s are its own: those of a namespace in the body are not the body's, nor are
+  // those of the one a dotted name holds, `namespace A.B {}`, whose body `A` has none of its own.
+  let code: readonly Node[] = [within];
+  if (isModuleBlock(within)) {
+    code = within.statements.filter((statement) => !isModuleDeclaration(statement));
+  } else if (isModuleDeclaration(within)) {
+    code = [];
+  }
   return hoistedIn(code).some((declaration) => bindingNames(declaration.name, name));
 }
 
