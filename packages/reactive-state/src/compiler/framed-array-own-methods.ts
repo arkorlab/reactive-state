@@ -158,7 +158,7 @@ export function defineMethod(call: CallExpression, own: OwnMethods): void {
     forgetMethods(own);
     return;
   }
-  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2]));
+  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2], own.get(key)));
 }
 
 /** Object.defineProperties selects each descriptor by its written property name. */
@@ -173,20 +173,37 @@ export function descriptorMethods(descriptors: ObjectLiteralExpression, own: Own
     else if (OWN_METHODS.has(key)) {
       own.set(
         key,
-        isPropertyAssignment(property) ? descriptorFunction(property.initializer) : { own: false },
+        isPropertyAssignment(property)
+          ? descriptorFunction(property.initializer, own.get(key))
+          : { own: false },
       );
     }
   }
 }
 
-/** A written value function proves a custom implementation; getters and unknown values do not. */
-function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOverride {
+/**
+ * A written value function proves a custom implementation; getters and unknown values do not. An
+ * attribute the descriptor leaves unsaid stays as the property it redefines had it.
+ */
+function descriptorFunction(
+  descriptor: Expression | undefined,
+  previous?: ArrayMethodOverride,
+): ArrayMethodOverride {
   if (descriptor === undefined) return { own: false };
   const value = unwrapped(descriptor);
   if (!isObjectLiteralExpression(value)) return { own: false };
-  const writable = descriptorSays(value, 'writable') ? { writable: true as const } : {};
-  const configurable = descriptorSays(value, 'configurable') ? { configurable: true as const } : {};
-  return { ...descriptorValue(value), ...writable, ...configurable };
+  const writable = attributeKept(descriptorSays(value, 'writable'), previous?.writable);
+  const configurable = attributeKept(descriptorSays(value, 'configurable'), previous?.configurable);
+  return {
+    ...descriptorValue(value),
+    ...(writable && { writable: true as const }),
+    ...(configurable && { configurable: true as const }),
+  };
+}
+
+/** An attribute the descriptor says is true, or leaves unsaid where the property it redefines had it. */
+function attributeKept(says: AttributeSaid, before: true | undefined): boolean {
+  return says === 'true' || (says === 'omitted' && before === true);
 }
 
 /** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
@@ -206,23 +223,28 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
   return custom;
 }
 
+type AttributeSaid = 'omitted' | 'other' | 'true';
+
 /**
- * A descriptor whose last word on an attribute is a literal `true`, with no spread and no key that
- * is not written out; a writable data property is not an accessor.
+ * What a descriptor says of an attribute: a literal `true` as its last word, nothing at all, or
+ * anything else — `false`, a value the compile cannot read, a spread, a key that is not written out.
+ * A writable data property is not an accessor.
  */
 function descriptorSays(
   descriptor: ObjectLiteralExpression,
   attribute: 'configurable' | 'writable',
-): boolean {
-  let says = false;
+): AttributeSaid {
+  let says: AttributeSaid = 'omitted';
   for (const property of descriptor.properties) {
-    if (isSpreadAssignment(property)) return false;
+    if (isSpreadAssignment(property)) return 'other';
     const key = writtenArrayKey(property.name);
-    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return false;
+    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return 'other';
     if (key === attribute)
       says =
         isPropertyAssignment(property) &&
-        unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword;
+        unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword
+          ? 'true'
+          : 'other';
   }
   return says;
 }
