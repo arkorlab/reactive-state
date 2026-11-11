@@ -115,6 +115,8 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
       found.push({ value: property.expression, keys: [slot, 'value'] });
     else if (isPropertyAssignment(property) && possibleKey(writtenArrayKey(property.name), index))
       found.push(...descriptorValues(property.initializer));
+    else if (isGetAccessorDeclaration(property) && possibleKey(writtenArrayKey(property.name), index))
+      found.push(...returnedValues(property.body).flatMap((each) => descriptorValues(each.value)));
   }
   return found;
 }

@@ -195,6 +195,24 @@ const ELEMENTS = [
     elements: ['maps:0.0.value', 'error:'],
   },
   {
+    id: 'define-map-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { value: error }; } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-map-getter-descriptor-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { get: () => error }; } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-map-getter-other-key-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get label() { return { value: error }; } }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -234,6 +252,11 @@ const CONVERSIONS = [
   {
     id: 'define-spread-key-then-descriptor-converts',
     source: `function frames(error: Error, keys: [number]) { const a = ['safe']; Object.defineProperty(a, ...keys, { value: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-map-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { get 0() { return { value: error }; } }); return String(a); }`,
     converts: true,
   },
   {
