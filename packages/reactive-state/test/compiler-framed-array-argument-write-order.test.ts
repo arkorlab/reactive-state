@@ -292,6 +292,26 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); if (flag) Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: false }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'conditional-partial-definition-keeps-writable',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); if (flag) Object.defineProperty(values, 'join', { value: Array.prototype.join }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'conditional-define-properties-keeps-writable',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); if (flag) Object.defineProperties(values, { join: { value: Array.prototype.join } }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'conditional-definition-sets-writable-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join }); if (flag) Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'conditional-opaque-definition-loses-writable-pin',
+    source: `function frames(error: Error, flag: boolean, key: string) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); if (flag) Object.defineProperty(values, key, { value: Array.prototype.join }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
