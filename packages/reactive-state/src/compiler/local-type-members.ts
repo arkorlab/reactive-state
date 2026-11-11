@@ -23,6 +23,7 @@ import {
   isTupleTypeNode,
   isTypeLiteralNode,
   isTypeOperatorNode,
+  isTypeReferenceNode,
   isUnionTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
@@ -40,6 +41,8 @@ import {
 } from 'typescript/ast';
 
 import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
+import { localTypeBinding } from './local-type-aliases.ts';
+import { qualifiedBuiltinName } from './local-type-builtins.ts';
 import { selectedMethodType } from './local-type-callable-members.ts';
 import { indexSignatureDomains } from './local-type-index-domains.ts';
 
@@ -427,10 +430,25 @@ function tupleMembers(tuple: TupleTypeNode, keys: IndexKeys): readonly TypeNode[
     }
     unresolved = true;
     if (typeof keys !== 'string') break;
-    if (isArrayTypeNode(nested)) elements.push(nested.elementType);
+    const rest = arrayElementType(nested);
+    if (rest !== undefined) elements.push(rest);
   }
   if (typeof keys === 'string') return unresolved && elements.length === 0 ? undefined : elements;
   return literalTupleMembers(elements, keys, unresolved);
+}
+
+/**
+ * The element of a written native array: `T[]`, and `Array<T>` or `ReadonlyArray<T>` — qualified
+ * through `globalThis` too — where no declaration of the file hides the name.
+ */
+function arrayElementType(type: TypeNode): TypeNode | undefined {
+  if (isArrayTypeNode(type)) return type.elementType;
+  if (!isTypeReferenceNode(type) || type.typeArguments?.length !== 1) return undefined;
+  const { typeName } = type;
+  let name: string | undefined;
+  if (!isIdentifier(typeName)) name = qualifiedBuiltinName(typeName);
+  else if (localTypeBinding(typeName) === undefined) name = typeName.text;
+  return name === 'Array' || name === 'ReadonlyArray' ? type.typeArguments[0] : undefined;
 }
 
 /** A written fixed or optional tuple element retains its original underlying type. */
