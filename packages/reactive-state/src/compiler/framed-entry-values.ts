@@ -354,14 +354,19 @@ function possibleFields(sources: readonly AssignedFrameSource[]): readonly Assig
     const value = unwrapped(source.value);
     if (source.keys.length > 0) return [source];
     if (!isObjectLiteralExpression(value)) return [source, ...iteratedFrameSources(value)];
-    return survivingFields(value, { data: new Set(), getters: new Set() });
+    return survivingFields(value, { data: new Set(), getters: new Set() }, true);
   });
 }
 
-/** The values a written object holds, each field read as the fields after it leave it. */
+/**
+ * The values a written object holds, each field read as the fields after it leave it. A read of a
+ * field reaches the prototype the object sets as well, behind its own fields; a spread copies the
+ * own fields only, and passes `false`.
+ */
 function survivingFields(
   object: ObjectLiteralExpression,
   overwritten: Overwritten,
+  inherited: boolean,
 ): AssignedFrameSource[] {
   const found: AssignedFrameSource[] = [];
   const later = { data: new Set(overwritten.data), getters: new Set(overwritten.getters) };
@@ -374,7 +379,32 @@ function survivingFields(
       if (!isSetAccessorDeclaration(property)) later.getters.add(each);
     }
   }
-  return found.toReversed();
+  return [...found.toReversed(), ...(inherited ? inheritedValues(object, later) : [])];
+}
+
+/**
+ * What the prototype a written object sets holds: the prototype itself, which the name
+ * `__proto__` reads, and its fields that no field of the object, nor one after it, hides.
+ */
+function inheritedValues(
+  object: ObjectLiteralExpression,
+  later: Overwritten,
+): AssignedFrameSource[] {
+  const proto = object.properties.find((each) => setsPrototype(each));
+  if (proto === undefined || !isPropertyAssignment(proto)) return [];
+  const own = object.properties.flatMap((each) => fieldNames(each));
+  const hidden = { data: withNames(later.data, own), getters: withNames(later.getters, own) };
+  const value = unwrapped(proto.initializer);
+  if (!isObjectLiteralExpression(value))
+    return [...possibleFields([{ value: proto.initializer, keys: [] }])];
+  return [{ value: proto.initializer, keys: [] }, ...survivingFields(value, hidden, true)];
+}
+
+/** The names of a set, and more. */
+function withNames(names: ReadonlySet<string>, more: readonly string[]): Set<string> {
+  const merged = new Set(names);
+  for (const each of more) merged.add(each);
+  return merged;
 }
 
 /**
@@ -396,6 +426,7 @@ function fieldValues(
   property: ObjectLiteralElementLike,
   later: Overwritten,
 ): readonly AssignedFrameSource[] {
+  if (setsPrototype(property)) return [];
   if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
     return [{ value: property.name, keys: [] }];
@@ -404,7 +435,7 @@ function fieldValues(
   if (!isSpreadAssignment(property)) return [];
   const copied = unwrapped(property.expression);
   return isObjectLiteralExpression(copied)
-    ? survivingFields(copied, { data: later.data, getters: later.data })
+    ? survivingFields(copied, { data: later.data, getters: later.data }, false)
     : possibleFields([{ value: property.expression, keys: [] }]);
 }
 
@@ -413,10 +444,17 @@ function fieldValues(
  * written `__proto__: value` sets the prototype and names no field; `['__proto__']` does.
  */
 function fieldName(property: ObjectLiteralElementLike): string | undefined {
-  if (isSpreadAssignment(property)) return undefined;
-  const name = literalKey(property.name);
-  const prototype = isPropertyAssignment(property) && !isComputedPropertyName(property.name);
-  return prototype && name === '__proto__' ? undefined : name;
+  if (isSpreadAssignment(property) || setsPrototype(property)) return undefined;
+  return literalKey(property.name);
+}
+
+/** A written `__proto__: value`, which sets the prototype; `['__proto__']` and a shorthand do not. */
+function setsPrototype(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
+    literalKey(property.name) === '__proto__'
+  );
 }
 
 /** The names a field of a written object always sets: its own, or those of the literal it spreads. */

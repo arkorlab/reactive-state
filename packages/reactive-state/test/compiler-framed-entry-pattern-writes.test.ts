@@ -298,7 +298,7 @@ const CASES = [
     id: 'computed-key-prototype-sets-no-field',
     source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ['__proto__']: error, ...{ __proto__: {} } })); }`,
     key: 'message',
-    values: ["'safe':", '{}:', 'error:'],
+    values: ["'safe':", 'error:'],
   },
   {
     id: 'computed-key-computed-prototype-overwrites',
@@ -419,6 +419,30 @@ const CASES = [
     source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ outer: entry[1] } = { ...{ outer: error } })); }`,
     key: 'message',
     values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-prototype-field',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: { field: error } })); }`,
+    key: 'message',
+    values: ["'safe':", '{ field: error }:', 'error:'],
+  },
+  {
+    id: 'computed-key-prototype-chain',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: { __proto__: { field: error } } })); }`,
+    key: 'message',
+    values: ["'safe':", '{ __proto__: { field: error } }:', '{ field: error }:', 'error:'],
+  },
+  {
+    id: 'computed-key-own-field-over-prototype',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: { field: error }, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '{ field: error }:'],
+  },
+  {
+    id: 'computed-key-spread-prototype-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: { field: error } } })); }`,
+    key: 'message',
+    values: ["'safe':"],
   },
 ] as const;
 
