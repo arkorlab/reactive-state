@@ -1,8 +1,18 @@
-import { type Expression, isCallExpression, isIdentifier, type Node } from 'typescript/ast';
+import {
+  type CallExpression,
+  type Expression,
+  isCallExpression,
+  isIdentifier,
+  type Node,
+} from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
 import { unwrapped } from '../src/compiler/bounded.ts';
-import { framedArrayString, framedArrayText } from '../src/compiler/framed-arrays.ts';
+import {
+  arrayMethodOverride,
+  framedArrayString,
+  framedArrayText,
+} from '../src/compiler/framed-arrays.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
@@ -832,6 +842,46 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method() { return 1; } }; return String(values); }`,
     converts: false,
   },
+  {
+    id: 'class-declaration-static-block-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-static-field-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-computed-name-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'name')]() {} } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-heritage-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused extends ((Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })), Object) {} values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-accessor-then-release',
+    source: `function frames(error: Error) { const values = [error]; class Unused { static { Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-instance-field-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-declaration-method-body-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { method() { return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-declaration-static-in-branch-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); if (flag) { class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
@@ -869,4 +919,42 @@ function convertsError(root: Node): boolean {
     });
   }
   return false;
+}
+
+const LOGICAL = [
+  { id: 'or-assignment', operator: '||=' },
+  { id: 'and-assignment', operator: '&&=' },
+  { id: 'nullish-assignment', operator: '??=' },
+] as const;
+
+describe('what a logical assignment to a method leaves of its attributes', () => {
+  it.each(LOGICAL)('$id claims no attribute: it may assign nothing', ({ operator }) => {
+    using api = openTypeScript();
+    using parsed = parseModule(
+      api,
+      'logical-assignment.ts',
+      `function frames(error: Error) { const values = [error]; values.join ${operator} (() => 'x'); return String(values); }`,
+    );
+    const read = stringCall(parsed.sourceFile);
+
+    expect(arrayMethodOverride(read.arguments[0]!, 'join', read)).toStrictEqual({
+      own: false,
+    });
+  });
+});
+
+function stringCall(root: Node): CallExpression {
+  const pending = [root];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (
+      isCallExpression(node) &&
+      isIdentifier(node.expression) &&
+      node.expression.text === 'String'
+    )
+      return node;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  throw new Error('no String call');
 }

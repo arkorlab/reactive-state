@@ -173,14 +173,30 @@ function readsFirst(link: Node, at: Node): boolean {
   return reads && link.expression === at;
 }
 
+/** Whether a node is `||=`, `&&=` or `??=`, which assigns only where its left says so. */
+function isLogicalAssignment(node: Node): boolean {
+  if (!isBinaryExpression(node)) return false;
+  const kind = node.operatorToken.kind;
+  return (
+    kind === SyntaxKind.AmpersandAmpersandEqualsToken ||
+    kind === SyntaxKind.BarBarEqualsToken ||
+    kind === SyntaxKind.QuestionQuestionEqualsToken
+  );
+}
+
 /**
- * Whether an expression runs whenever its statement does: the statement is an expression or a
- * declaration, and no condition, short circuit, optional chain, default of a pattern, function,
- * instance field or inner statement lies between them. A loop, a branch or a switch runs its parts
- * on some paths.
+ * Whether an expression runs whenever its statement does: the statement is an expression, a
+ * declaration or a class, and no condition, short circuit, optional chain, default of a pattern,
+ * function, instance field or inner statement lies between them. A loop, a branch or a switch runs
+ * its parts on some paths. A logical assignment is itself no sure write: it assigns where its left
+ * says so.
  */
 export function evaluatedForSure(node: Node, statement: Node): boolean {
-  if (!isExpressionStatement(statement) && !isVariableStatement(statement)) return false;
+  const runs =
+    isExpressionStatement(statement) ||
+    isVariableStatement(statement) ||
+    isClassDeclaration(statement);
+  if (!runs || isLogicalAssignment(node)) return false;
   for (let at = node; at !== statement; at = at.parent) {
     if (skipsLink(at, statement)) return false;
   }
