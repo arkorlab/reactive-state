@@ -22,8 +22,9 @@ import {
 
 import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
-import { framedPossibleBranch } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 
 /** The assignments to a member of an object a constant holds: a constant does not freeze it. */
 
@@ -42,15 +43,27 @@ export function heldMemberWrites(
   names: readonly Identifier[],
 ): readonly HeldWrite[] {
   const bindings = heldBindings(first, names);
+  const declared = frameBindingOf(first)?.binding;
   const found: HeldWrite[] = [];
   const pending: Node[] = [first.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    found.push(...heldWrite(node, bindings));
+    const written = heldWrite(node, bindings);
+    if (declared !== undefined && written.length > 0 && mayPrecede(node, first, declared))
+      found.push(...written);
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return found;
+}
+
+/**
+ * Whether a write may run before the descriptor named at `use` is read: it lies before it, in
+ * another function, which may run first, or in a loop the use is in, whose next turn follows it.
+ */
+function mayPrecede(write: Node, use: Identifier, declared: Node): boolean {
+  if (write.end <= use.pos || executionOwner(write) !== executionOwner(use)) return true;
+  return repeatedFrameRead(write, use, declared, executionOwner(use));
 }
 
 /** The value one assignment gives a member of a held object. */

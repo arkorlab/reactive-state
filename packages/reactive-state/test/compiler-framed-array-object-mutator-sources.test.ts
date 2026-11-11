@@ -1107,6 +1107,30 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'define-constant-getter-assigned-after-use-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; Object.defineProperty(values, 0, descriptor); descriptor.get = () => error; return values; }`,
+    index: undefined,
+    elements: ['descriptor:value'],
+  },
+  {
+    id: 'define-constant-getter-assigned-before-use',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; descriptor.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
+    id: 'define-constant-getter-assigned-in-function',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; function change() { descriptor.get = () => error; } change(); Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
+    id: 'define-constant-getter-assigned-later-in-loop',
+    source: `function frames(error: Error, count: number) { ${VALUES} const descriptor: PropertyDescriptor = {}; for (let at = 0; at < count; at += 1) { Object.defineProperty(values, 0, descriptor); descriptor.get = () => error; } return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1376,6 +1400,11 @@ const CONVERSIONS = [
     id: 'assign-call-borrowed-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign.call(null, a, { 0: error }); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'define-constant-getter-assigned-after-use-safe',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; Object.defineProperty(a, 0, descriptor); descriptor.get = () => error; return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',
