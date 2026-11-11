@@ -8,6 +8,7 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isBlock,
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
@@ -217,7 +218,20 @@ function skipsLink(at: Node, statement: Node): boolean {
   if (runsLater(parent, at)) return true;
   if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
-  return inner && parent !== statement;
+  return inner && parent !== statement && !runsStraight(parent);
+}
+
+/**
+ * Whether a statement of a class's static block runs whenever the block does: it is an expression, a
+ * declaration or a plain block, and only plain blocks lie between it and the static block, which
+ * runs, from its first statement to its last, when the class is defined.
+ */
+function runsStraight(statement: Node): boolean {
+  if (!isBlock(statement) && !isExpressionStatement(statement) && !isVariableStatement(statement))
+    return false;
+  let within = statement.parent;
+  while (isBlock(within)) within = within.parent;
+  return isClassStaticBlockDeclaration(within);
 }
 
 /** A pattern and the value it binds: a declaration's or a default's initializer, an assignment's right. */
