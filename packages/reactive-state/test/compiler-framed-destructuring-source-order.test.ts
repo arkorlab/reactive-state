@@ -66,6 +66,21 @@ const METHODS = [
     custom: true,
   },
   {
+    id: 'uncalled-function-in-the-source-pin',
+    source: `${HOLDER} let x: unknown; ({ x = methods.join } = { run: () => { ${REPLACED}; } }); void x;`,
+    custom: true,
+  },
+  {
+    id: 'quiet-call-in-the-source-replaces-the-method',
+    source: `${HOLDER} let x: unknown; ({ x = methods.join } = ({ change: (${REPLACED}), quiet() { return 0; } }).quiet()); void x;`,
+    custom: false,
+  },
+  {
+    id: 'quiet-call-in-the-source-without-work-pin',
+    source: `${HOLDER} let x: unknown; ({ x = methods.join } = ({ quiet() { return 0; } }).quiet()); void x;`,
+    custom: true,
+  },
+  {
     id: 'write-after-the-pattern-pin',
     source: `${HOLDER} let x: unknown; ({ x = methods.join } = {}); void x; ${REPLACED};`,
     custom: true,
