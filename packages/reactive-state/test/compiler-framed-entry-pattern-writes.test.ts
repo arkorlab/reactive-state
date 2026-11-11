@@ -554,6 +554,78 @@ const CASES = [
     key: 'message',
     values: ["'safe':", 'error:'],
   },
+  {
+    id: 'computed-key-self-referential-spread-pin',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} const source: object = { ...(flag ? source : { field: error }) }; return Object.fromEntries([entry], ({ [name]: entry[1] } = source)); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      '(flag ? source : { field: error }):',
+      'error:',
+      'flag ? source : { field: error }:0',
+      'source:',
+      'source:',
+      'source:0',
+      'source:0',
+    ],
+  },
+  {
+    id: 'computed-key-self-referential-prototype-pin',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} const source: object = { __proto__: flag ? source : { field: error } }; return Object.fromEntries([entry], ({ [name]: entry[1] } = source)); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'error:',
+      'flag ? source : { field: error }:',
+      'flag ? source : { field: error }:0',
+      'source:',
+      'source:',
+      'source:0',
+      'source:0',
+    ],
+  },
+  {
+    id: 'computed-key-constant-spread-overwritten',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const base = { field: error }; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...base, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'base:', 'base:0'],
+  },
+  {
+    id: 'computed-key-constant-spread-prototype-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const base = { __proto__: { field: error } }; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...base })); }`,
+    key: 'message',
+    values: ["'safe':", 'base:', 'base:0'],
+  },
+  {
+    id: 'computed-key-conditional-spread-overwritten',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...(flag ? { field: error } : {}), field: 'kept' })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      '(flag ? { field: error } : {}):',
+      'flag ? { field: error } : {}:0',
+    ],
+  },
+  {
+    id: 'computed-key-shadowed-undefined-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const undefined = { field: error }; return Object.fromEntries([entry], ({ [name]: entry[1] } = undefined ?? {})); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'error:',
+      'undefined ?? {}:',
+      'undefined ?? {}:0',
+      'undefined:',
+      'undefined:0',
+    ],
+  },
+  {
+    id: 'computed-key-constant-null-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const empty = null; return Object.fromEntries([entry], ({ [name]: entry[1] } = empty ?? { field: error })); }`,
+    key: 'message',
+    values: ["'safe':", 'empty ?? { field: error }:', 'empty ?? { field: error }:0', 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

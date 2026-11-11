@@ -2,7 +2,6 @@ import {
   type BinaryExpression,
   type Expression,
   isBinaryExpression,
-  isComputedPropertyName,
   isConditionalExpression,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -13,6 +12,7 @@ import {
   isSpreadAssignment,
   isVariableDeclaration,
   isVariableDeclarationList,
+  isVoidExpression,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -26,11 +26,37 @@ import {
   type AssignedFrameSource,
   iteratedFrameSources,
   literalKey,
+  setsPrototype,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedCondition } from './framed-sources.ts';
 
 /** The values a computed key may select from what a destructuring assignment reads. */
+
+/**
+ * What a read of fields goes through. The names the fields after the one being read have set: a
+ * setter after a getter completes its accessor, and the getter's results stay; a setter hides a
+ * value written before it, and every other field, a spread among them, hides the getters and the
+ * values written before it. Whether a prototype counts: a read reaches it, behind the own fields,
+ * and a spread copies the own fields only. And what the read has been to.
+ */
+interface Reading {
+  readonly data: ReadonlySet<string>;
+  readonly getters: ReadonlySet<string>;
+  readonly inherited: boolean;
+  readonly seen: Seen;
+}
+
+/** What each way of reading has read, an object with the names the fields after it had hidden. */
+interface Seen {
+  readonly full: Map<Node, readonly Hiding[]>;
+  readonly own: Map<Node, readonly Hiding[]>;
+}
+
+interface Hiding {
+  readonly data: ReadonlySet<string>;
+  readonly getters: ReadonlySet<string>;
+}
 
 /**
  * What sources may hand an unrouted target: their fields or elements, and themselves. The fields a
@@ -39,35 +65,66 @@ import { framedCondition } from './framed-sources.ts';
  */
 export function possibleFields(
   sources: readonly AssignedFrameSource[],
-  seen = new Set<Node>(),
+): readonly AssignedFrameSource[] {
+  const seen = { full: new Map(), own: new Map() };
+  return fieldsOf(sources, { data: new Set(), getters: new Set(), inherited: true, seen });
+}
+
+/** The fields of the sources: of a written object as it holds them, of the rest as they resolve. */
+function fieldsOf(
+  sources: readonly AssignedFrameSource[],
+  reading: Reading,
 ): readonly AssignedFrameSource[] {
   return sources.flatMap((source) => {
     const value = unwrapped(source.value);
     if (source.keys.length > 0) return [source];
     if (!isObjectLiteralExpression(value))
-      return [source, ...iteratedFrameSources(value), ...resolvedFields(value, seen)];
-    return survivingFields(value, { data: new Set(), getters: new Set() }, true);
+      return [source, ...iteratedFrameSources(value), ...resolvedFields(value, reading)];
+    return survivingFields(value, reading);
   });
+}
+
+/**
+ * Whether the way of reading has not yet read the object under names hidden at least as much: one
+ * read under fewer hidden names reads everything a read under more would, so the second is skipped.
+ */
+function firstRead(reading: Reading, node: Node): boolean {
+  const table = reading.inherited ? reading.seen.full : reading.seen.own;
+  const earlier = table.get(node) ?? [];
+  const covered = earlier.some(
+    (each) => isSubset(each.data, reading.data) && isSubset(each.getters, reading.getters),
+  );
+  if (covered) return false;
+  table.set(node, [...earlier, { data: new Set(reading.data), getters: new Set(reading.getters) }]);
+  return true;
+}
+
+function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {
+  for (const each of small) if (!large.has(each)) return false;
+  return true;
 }
 
 /**
  * The fields of what an expression stands for where it is not a literal: a constant holds an
  * object, a condition or a logical operator hands over one of two. Each is read once.
  */
-function resolvedFields(value: Expression, seen: Set<Node>): readonly AssignedFrameSource[] {
+function resolvedFields(value: Expression, reading: Reading): readonly AssignedFrameSource[] {
+  const initializer = constantInitializer(value);
+  const chosen = initializer === undefined ? choices(value) : [initializer];
+  const fresh = chosen.filter((each) => firstRead(reading, each));
+  return fieldsOf(
+    fresh.map((each) => ({ value: each, keys: [] })),
+    reading,
+  );
+}
+
+/** The initializer of the constant a name stands for whole. */
+function constantInitializer(value: Expression): Expression | undefined {
   const held = isIdentifier(value) ? frameBindingOf(value) : undefined;
   const declaration = held?.keys.length === 0 ? held.binding : undefined;
-  const initializer =
-    declaration !== undefined && isVariableDeclaration(declaration) && isConstant(declaration)
-      ? declaration.initializer
-      : undefined;
-  const chosen = initializer === undefined ? choices(value) : [initializer];
-  const fresh = chosen.filter((each) => !seen.has(each));
-  for (const each of fresh) seen.add(each);
-  return possibleFields(
-    fresh.map((each) => ({ value: each, keys: [] })),
-    seen,
-  );
+  return declaration !== undefined && isVariableDeclaration(declaration) && isConstant(declaration)
+    ? declaration.initializer
+    : undefined;
 }
 
 /** Whether a variable is declared with `const`, which no later write changes. */
@@ -101,11 +158,9 @@ function operands(value: BinaryExpression): readonly Expression[] {
   const { left, right } = value;
   const kind = value.operatorToken.kind;
   if (kind === SyntaxKind.QuestionQuestionToken) {
-    const bare = unwrapped(left);
-    const nullish =
-      bare.kind === SyntaxKind.NullKeyword || (isIdentifier(bare) && bare.text === 'undefined');
-    if (nullish) return [right];
-    return framedCondition(left) === undefined ? [left, right] : [left];
+    const nullish = nullishness(left);
+    if (nullish === undefined) return [left, right];
+    return [nullish ? right : left];
   }
   const truth = framedCondition(left);
   if (truth === undefined) return [left, right];
@@ -114,45 +169,61 @@ function operands(value: BinaryExpression): readonly Expression[] {
 }
 
 /**
+ * Whether what an expression is written as, through the constants that hold it, is null or
+ * undefined: `null`, `void 0`, an `undefined` no declaration shadows; or a written value, which is
+ * neither. None where the compile cannot tell.
+ */
+function nullishness(expression: Expression): boolean | undefined {
+  let value = unwrapped(expression);
+  for (let held = constantInitializer(value); held !== undefined; held = constantInitializer(value))
+    value = unwrapped(held);
+  if (isIdentifier(value))
+    return value.text === 'undefined' && frameBindingOf(value) === undefined ? true : undefined;
+  if (isVoidExpression(value) || value.kind === SyntaxKind.NullKeyword) return true;
+  return framedCondition(value) !== undefined || isObjectLiteralExpression(value)
+    ? false
+    : undefined;
+}
+
+/**
  * The values a written object holds, each field read as the fields after it leave it. A read of a
  * field reaches the prototype the object sets as well, behind its own fields; a spread copies the
- * own fields only, and passes `false`.
+ * own fields only.
  */
-function survivingFields(
-  object: ObjectLiteralExpression,
-  overwritten: Overwritten,
-  inherited: boolean,
-): AssignedFrameSource[] {
+function survivingFields(object: ObjectLiteralExpression, reading: Reading): AssignedFrameSource[] {
   const found: AssignedFrameSource[] = [];
-  const later = { data: new Set(overwritten.data), getters: new Set(overwritten.getters) };
+  const later = { data: new Set(reading.data), getters: new Set(reading.getters) };
   for (const property of object.properties.toReversed()) {
     const name = fieldName(property);
     const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
-    if (name === undefined || !taken.has(name)) found.push(...fieldValues(property, later));
+    if (name === undefined || !taken.has(name))
+      found.push(...fieldValues(property, { ...reading, ...later }));
     for (const each of fieldNames(property)) {
       later.data.add(each);
       if (!isSetAccessorDeclaration(property)) later.getters.add(each);
     }
   }
-  return [...found.toReversed(), ...(inherited ? inheritedValues(object, later) : [])];
+  const inherited = reading.inherited ? inheritedValues(object, { ...reading, ...later }) : [];
+  return [...found.toReversed(), ...inherited];
 }
 
 /**
  * What the prototype a written object sets holds: the prototype itself, which the name
  * `__proto__` reads, and its fields that no field of the object, nor one after it, hides.
  */
-function inheritedValues(
-  object: ObjectLiteralExpression,
-  later: Overwritten,
-): AssignedFrameSource[] {
+function inheritedValues(object: ObjectLiteralExpression, reading: Reading): AssignedFrameSource[] {
   const proto = object.properties.find((each) => setsPrototype(each));
   if (proto === undefined || !isPropertyAssignment(proto)) return [];
   const own = object.properties.flatMap((each) => fieldNames(each));
-  const hidden = { data: withNames(later.data, own), getters: withNames(later.getters, own) };
+  const hidden = {
+    ...reading,
+    data: withNames(reading.data, own),
+    getters: withNames(reading.getters, own),
+  };
   const value = unwrapped(proto.initializer);
   if (!isObjectLiteralExpression(value))
-    return [...possibleFields([{ value: proto.initializer, keys: [] }])];
-  return [{ value: proto.initializer, keys: [] }, ...survivingFields(value, hidden, true)];
+    return [...fieldsOf([{ value: proto.initializer, keys: [] }], hidden)];
+  return [{ value: proto.initializer, keys: [] }, ...survivingFields(value, hidden)];
 }
 
 /** The names of a set, and more. */
@@ -163,23 +234,13 @@ function withNames(names: ReadonlySet<string>, more: readonly string[]): Set<str
 }
 
 /**
- * The names the fields after one have set. A setter after a getter completes its accessor, and
- * the getter's results stay; a setter hides a value written before it, and every other field,
- * a spread among them, hides the getters and the values written before it.
- */
-interface Overwritten {
-  readonly data: ReadonlySet<string>;
-  readonly getters: ReadonlySet<string>;
-}
-
-/**
- * The values one field holds: a getter, what it returns; a spread of a written object, that
- * object's own fields. A spread copies a getter as data, so a field after the spread hides what the
- * getter returned as it hides a value.
+ * The values one field holds: a getter, what it returns; a spread, the own fields of what it
+ * spreads, a written object or a constant that holds one. A spread copies a getter as data, so a
+ * field after the spread hides what the getter returned as it hides a value.
  */
 function fieldValues(
   property: ObjectLiteralElementLike,
-  later: Overwritten,
+  reading: Reading,
 ): readonly AssignedFrameSource[] {
   if (setsPrototype(property)) return [];
   if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
@@ -188,10 +249,8 @@ function fieldValues(
   if (isGetAccessorDeclaration(property))
     return returnedBy(property).map((value) => ({ value, keys: [] }));
   if (!isSpreadAssignment(property)) return [];
-  const copied = unwrapped(property.expression);
-  return isObjectLiteralExpression(copied)
-    ? survivingFields(copied, { data: later.data, getters: later.data }, false)
-    : possibleFields([{ value: property.expression, keys: [] }]);
+  const copied = { ...reading, getters: reading.data, inherited: false };
+  return fieldsOf([{ value: property.expression, keys: [] }], copied);
 }
 
 /**
@@ -201,15 +260,6 @@ function fieldValues(
 function fieldName(property: ObjectLiteralElementLike): string | undefined {
   if (isSpreadAssignment(property) || setsPrototype(property)) return undefined;
   return literalKey(property.name);
-}
-
-/** A written `__proto__: value`, which sets the prototype; `['__proto__']` and a shorthand do not. */
-function setsPrototype(property: ObjectLiteralElementLike): boolean {
-  return (
-    isPropertyAssignment(property) &&
-    !isComputedPropertyName(property.name) &&
-    literalKey(property.name) === '__proto__'
-  );
 }
 
 /** The names a field of a written object always sets: its own, or those of the literal it spreads. */
