@@ -1242,6 +1242,56 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'recursion-through-the-outer-target-of-a-chained-assignment',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = b = (pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return b(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-inner-target-of-a-chained-assignment',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = b = (pass: number): string => { ${SAFE} if (pass < 1) b(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return a(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-outermost-of-three-targets',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = b = c = (pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return c(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-an-outer-target-read-by-another-name',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = b = (pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; const d = a; return d(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-property-target-of-a-chain',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; o.x = b = (pass: number): string => { ${SAFE} if (pass < 1) o.x(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return b(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-chain-in-a-property-value',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; const p = { k: a = (pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } }; return p.k(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-wrapped-chain',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = (b = ((pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }) as any); return b(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-chain-with-a-logical-assignment',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a ||= b = (pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return b(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-chain-given-to-a-call',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; const keep = (f: any) => f; keep(a = (pass: number): string => { ${SAFE} if (pass < 1) a(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }); return a(0); }`,
+    converts: true,
+  },
+  {
+    id: 'chained-assignment-never-read-again-pin',
+    source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = b = (pass: number): string => { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; }; return b(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
