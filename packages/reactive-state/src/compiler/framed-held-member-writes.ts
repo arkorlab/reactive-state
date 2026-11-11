@@ -4,6 +4,20 @@ import {
   type Expression,
   type FunctionDeclaration,
   type Identifier,
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isDeleteExpression,
+  isFunctionExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
+  isObjectLiteralExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isStringLiteral,
+  isVoidExpression,
+  type ObjectLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
@@ -29,6 +43,7 @@ import {
 
 import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
@@ -48,6 +63,8 @@ export interface HeldWrite {
   readonly without?: readonly string[] | undefined;
   /** Where a rest copies its source, whose later changes the copy does not hold. */
   readonly copiedAt?: Node | undefined;
+  /** What the member must be for a logical assignment to run its right side. */
+  readonly runsIf?: 'falsy' | 'nullish' | 'truthy' | undefined;
 }
 
 /**
@@ -63,21 +80,34 @@ export function heldMemberWrites(
 ): readonly HeldWrite[] {
   const bindings = heldBindings(first, names);
   const declared = frameBindingOf(names.at(-1) ?? first)?.binding;
-  const found: HeldWrite[] = [];
+  const found: Written[] = [];
+  const recorded: Written[] = [];
+  const changed: (string | undefined)[] = [];
   const pending: Node[] = [first.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const written = heldWrite(node, bindings);
+    const writes = heldWrite(node, bindings);
+    if (writes.length > 0) recorded.push({ node, writes });
+    changed.push(...otherChanges(node, bindings));
     if (
       declared !== undefined &&
-      written.length > 0 &&
+      writes.length > 0 &&
       mayPrecede(node, first, declared, consumedAt)
     )
-      found.push(...written);
+      found.push({ node, writes });
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return found;
+  const initial = heldValue(first);
+  return found.flatMap(({ node, writes }) =>
+    writes.filter((write) => !skipsRight(write, node, { recorded, changed, initial })),
+  );
+}
+
+/** The writes one node makes, with the node. */
+interface Written {
+  readonly node: Node;
+  readonly writes: readonly HeldWrite[];
 }
 
 /**
@@ -140,9 +170,19 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
         keys,
         without,
         copiedAt: without === undefined ? undefined : node,
+        runsIf: runsIf(node),
       };
     });
   });
+}
+
+/** What the member must be for a logical assignment to run its right side; none for another. */
+function runsIf(node: Node): HeldWrite['runsIf'] {
+  if (!isBinaryExpression(node)) return undefined;
+  const kind = node.operatorToken.kind;
+  if (kind === SyntaxKind.QuestionQuestionEqualsToken) return 'nullish';
+  if (kind === SyntaxKind.BarBarEqualsToken) return 'falsy';
+  return kind === SyntaxKind.AmpersandAmpersandEqualsToken ? 'truthy' : undefined;
 }
 
 /**
@@ -156,6 +196,118 @@ function memberWrites(node: Node): readonly MemberWrite[] {
   return isMember(direct)
     ? [{ member: direct, values: [{ value: node.right, keys: [] }] }]
     : patternMemberWrites(node);
+}
+
+/** The assignments that may give their left the value of their right: `=` and the logical ones. */
+const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/**
+ * The names of the held members a node changes without giving them a value to read: an arithmetic
+ * assignment, an increment, a deletion. None of them is a write the compile follows, and each leaves
+ * what the member held unknown to a logical assignment.
+ */
+function otherChanges(node: Node, bindings: ReadonlySet<unknown>): readonly (string | undefined)[] {
+  let changed: Expression | undefined;
+  const compound =
+    isBinaryExpression(node) &&
+    isAssignmentKind(node.operatorToken.kind) &&
+    !VALUE_WRITES.has(node.operatorToken.kind);
+  if (compound) changed = node.left;
+  else if (isDeleteExpression(node)) changed = node.expression;
+  else if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node))
+    changed =
+      node.operator === SyntaxKind.PlusPlusToken || node.operator === SyntaxKind.MinusMinusToken
+        ? node.operand
+        : undefined;
+  const member = changed === undefined ? undefined : unwrapped(changed);
+  return member !== undefined && isMember(member) && writesHeld(member, bindings)
+    ? [frameMemberName(member)]
+    : [];
+}
+
+/** What a held descriptor holds, and what has changed it, when a logical assignment is asked to run. */
+interface Holding {
+  readonly recorded: readonly Written[];
+  readonly changed: readonly (string | undefined)[];
+  readonly initial: Expression | FunctionDeclaration;
+}
+
+/**
+ * Whether a logical assignment never runs its right side: no other write or change of the member
+ * is made, so the member holds what the constant's literal wrote, and that is a value the
+ * assignment's condition rules out. Anything else leaves the right side possible.
+ */
+function skipsRight(
+  write: HeldWrite,
+  node: Node,
+  { recorded, changed, initial }: Holding,
+): boolean {
+  if (write.runsIf === undefined || write.key === undefined) return false;
+  const others = recorded.some((each) => {
+    return (
+      each.node !== node &&
+      each.writes.some((other) => other.key === undefined || other.key === write.key)
+    );
+  });
+  if (others || changed.some((key) => key === undefined || key === write.key)) return false;
+  const state = isObjectLiteralExpression(initial) ? fieldState(initial, write.key) : undefined;
+  if (state === undefined) return false;
+  if (write.runsIf === 'nullish') return !state.nullish;
+  return write.runsIf === 'falsy' ? state.truthy : !state.truthy;
+}
+
+/** What a written value is as a condition and as a test for null or undefined. */
+interface State {
+  readonly truthy: boolean;
+  readonly nullish: boolean;
+}
+
+const NULLISH: State = { truthy: false, nullish: true };
+const PRESENT: State = { truthy: true, nullish: false };
+
+/** The state of a field an object literal writes: none where a spread, a prototype or a name is unknown. */
+function fieldState(object: ObjectLiteralExpression, key: string): State | undefined {
+  for (const property of object.properties.toReversed()) {
+    if (isSpreadAssignment(property)) return undefined;
+    const name =
+      isPropertyAssignment(property) || isShorthandPropertyAssignment(property)
+        ? propertyKey(property.name)
+        : undefined;
+    if (name === undefined || name === '__proto__') return undefined;
+    if (name !== key) continue;
+    return isPropertyAssignment(property) ? stateOf(property.initializer) : undefined;
+  }
+  return { truthy: false, nullish: true };
+}
+
+/** The name of a field written as an identifier, a string or a number. */
+function propertyKey(name: Node): string | undefined {
+  if (isIdentifier(name) || isStringLiteral(name)) return name.text;
+  return isNumericLiteral(name) ? String(Number(name.text)) : undefined;
+}
+
+/** The state of a value written out: a function, a literal, null, undefined; none for any other. */
+function stateOf(expression: Expression): State | undefined {
+  const value = unwrapped(expression);
+  if (value.kind === SyntaxKind.NullKeyword || isVoidExpression(value)) return NULLISH;
+  if (isIdentifier(value))
+    return globalPathOf(value)?.join('.') === 'undefined' ? NULLISH : undefined;
+  if (value.kind === SyntaxKind.FalseKeyword) return { truthy: false, nullish: false };
+  if (value.kind === SyntaxKind.TrueKeyword) return PRESENT;
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value))
+    return { truthy: value.text !== '', nullish: false };
+  if (isNumericLiteral(value)) return { truthy: Number(value.text) !== 0, nullish: false };
+  const written =
+    isArrowFunction(value) ||
+    isFunctionExpression(value) ||
+    isObjectLiteralExpression(value) ||
+    isArrayLiteralExpression(value);
+  return written ? PRESENT : undefined;
 }
 
 function isMember(node: Node): node is PropertyAccessExpression | ElementAccessExpression {
@@ -226,14 +378,6 @@ function namesHeld(
   const selected = held !== undefined && isIdentifier(held) ? frameBindingOf(held) : undefined;
   return selected?.keys.length === 0 && bindings.has(selected.binding);
 }
-
-/** The assignments that may give their left the value of their right: `=` and the logical ones. */
-const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 /** An assignment that may give its left the value of its right. */
 function isAssignment(node: Node): node is BinaryExpression {
