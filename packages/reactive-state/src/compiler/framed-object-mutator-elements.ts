@@ -73,9 +73,9 @@ export function objectMutatorElements(
   if (path === undefined || !MUTATORS.has(path)) return undefined;
   const [target, ...rest] = writtenArguments(call);
   if (target === undefined || isSpreadElement(target)) return undefined;
-  if (path === 'Object.assign')
-    return { target, elements: rest.flatMap((source) => assignedValues(source, index)) };
   const reading = freshReading();
+  if (path === 'Object.assign')
+    return { target, elements: rest.flatMap((source) => assignedValues(source, index, reading)) };
   const defined =
     path === 'Object.defineProperties'
       ? definedMaps(rest, index, reading)
@@ -94,11 +94,15 @@ interface Reading {
     readonly full: Set<Node>;
     readonly own: Set<Node>;
     readonly maps: Set<Node>;
+    readonly sources: Set<Node>;
   };
 }
 
 function freshReading(): Reading {
-  return { inherited: true, seen: { full: new Set(), own: new Set(), maps: new Set() } };
+  return {
+    inherited: true,
+    seen: { full: new Set(), own: new Set(), maps: new Set(), sources: new Set() },
+  };
 }
 
 /** Whether an object a constant holds is read for the first time in the way the set stands for. */
@@ -186,21 +190,26 @@ function definedMaps(
 }
 
 /** One assign source's values at numeric keys; a getter there answers what it returns. */
-function assignedValues(source: Expression, index: number | undefined): WrittenArrayElement[] {
+function assignedValues(
+  source: Expression,
+  index: number | undefined,
+  reading: Reading,
+): WrittenArrayElement[] {
   if (isOmittedExpression(source)) return [];
   if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slotKey(index)] }];
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
   if (!isObjectLiteralExpression(value)) {
-    const alternatives = alternativesOf(value) ?? [];
-    return [
-      ...opaqueSource(source, index),
-      ...alternatives.flatMap((each) => assignedValues(each, index)),
-    ];
+    const held = heldValue(value);
+    const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
+    const opaque = opaqueSource(source, index);
+    if (alternatives === undefined || !firstRead(reading.seen.sources, held)) return opaque;
+    return [...opaque, ...alternatives.flatMap((each) => assignedValues(each, index, reading))];
   }
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
-    if (isSpreadAssignment(property)) found.push(...assignedValues(property.expression, index));
+    if (isSpreadAssignment(property))
+      found.push(...assignedValues(property.expression, index, reading));
     else if (!nameMayBeSlot(property.name, index)) continue;
     else if (isPropertyAssignment(property)) found.push({ value: property.initializer, keys: [] });
     else if (isGetAccessorDeclaration(property)) found.push(...returnedValues(property.body));

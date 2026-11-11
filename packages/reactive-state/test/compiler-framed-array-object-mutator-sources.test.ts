@@ -741,6 +741,36 @@ const ELEMENTS = [
     elements: ['descriptor:value', "'safe':", 'error:'],
   },
   {
+    id: 'assign-constant-getter-source',
+    source: `function frames(error: Error) { ${VALUES} const source = { get 1(): unknown { return error; } }; Object.assign(values, source); return values; }`,
+    index: undefined,
+    elements: ['source:0', 'source:array', 'error:'],
+  },
+  {
+    id: 'assign-constant-value-source',
+    source: `function frames(error: Error) { ${VALUES} const source = { 0: error }; Object.assign(values, source); return values; }`,
+    index: undefined,
+    elements: ['source:0', 'source:array', 'error:'],
+  },
+  {
+    id: 'assign-constant-conditional-source',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const source = flag ? { 0: error } : {}; Object.assign(values, source); return values; }`,
+    index: undefined,
+    elements: ['source:0', 'source:array', 'error:'],
+  },
+  {
+    id: 'assign-constant-other-key-source-pin',
+    source: `function frames(error: Error) { ${VALUES} const source = { label: error }; Object.assign(values, source); return values; }`,
+    index: undefined,
+    elements: ['source:0', 'source:array'],
+  },
+  {
+    id: 'assign-constant-spread-source',
+    source: `function frames(error: Error) { ${VALUES} const base = { 0: error }; const source = { ...base }; Object.assign(values, source); return values; }`,
+    index: undefined,
+    elements: ['source:0', 'source:array', 'base:0', 'base:array', 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -777,6 +807,20 @@ describe('descriptors built from constants that spread each other', () => {
 
     expect(found).toContain('error:');
     expect(found.length).toBeLessThan(100);
+  });
+});
+
+describe('sources built from constants that spread each other', () => {
+  it('are read in work that grows with the declarations, not with the copies', () => {
+    const levels = Array.from(
+      { length: 40 },
+      (_, at) => `const s${at + 1} = { ...s${at}, ...s${at} };`,
+    ).join(' ');
+    const source = `function frames(error: Error) { ${VALUES} const s0 = { 0: error }; ${levels} Object.assign(values, s40); return values; }`;
+    const found = writtenElements(source, undefined);
+
+    expect(found).toContain('error:');
+    expect(found.length).toBeLessThan(200);
   });
 });
 
@@ -930,6 +974,11 @@ const CONVERSIONS = [
   {
     id: 'define-let-alias-write-converts',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; let alias = descriptor; alias.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-constant-getter-source-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const source = { get 0(): unknown { return error; } }; Object.assign(a, source); return String(a); }`,
     converts: true,
   },
   {
