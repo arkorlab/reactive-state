@@ -117,9 +117,9 @@ function checkStrippable(node: Node, fail: Fail): void {
 
 /**
  * Node refuses as well what it would have to build from a `namespace` or `module` that holds code,
- * from an `import … =` and from an `export =`, wherever they are written: each is TypeScript's,
- * where JavaScript has the module's own forms. A `namespace` of types alone leaves nothing to run,
- * as does a `declare`d one, and Node runs both.
+ * from an `import … =` and from an `export =`: each is TypeScript's, where JavaScript has the
+ * module's own forms. A `namespace` of types alone leaves nothing to run, and a `declare`d one is
+ * erased whole, an `import … =` or an `export =` within it too: Node runs them all.
  */
 function checkModuleSyntax(node: Node, fail: Fail): void {
   if (isModuleDeclaration(node) && !ambient(node) && holdsCode(node)) {
@@ -128,13 +128,13 @@ function checkModuleSyntax(node: Node, fail: Fail): void {
       node,
     );
   }
-  if (isImportEqualsDeclaration(node)) {
+  if (isImportEqualsDeclaration(node) && !ambient(node)) {
     fail(
       "The server part is run with its types stripped, which leaves an `import … =` nothing to run: import the module by name, beside the component's other imports.",
       node,
     );
   }
-  if (isExportAssignment(node) && node.isExportEquals) {
+  if (isExportAssignment(node) && node.isExportEquals && !ambient(node)) {
     fail(
       'The server part is run with its types stripped, which leaves an `export =` nothing to run: export what the module offers by name instead.',
       node,
@@ -142,9 +142,9 @@ function checkModuleSyntax(node: Node, fail: Fail): void {
   }
 }
 
-/** Whether a `declare` is on the declaration or on one around it: ambient code is erased whole. */
-function ambient(declaration: ModuleDeclaration): boolean {
-  for (let at: Node = declaration; !isSourceFile(at); at = at.parent) {
+/** Whether a `declare` is on the node or on a namespace around it: ambient code is erased whole. */
+function ambient(node: Node): boolean {
+  for (let at = node; !isSourceFile(at); at = at.parent) {
     if (isModuleDeclaration(at) && declares(at)) return true;
   }
   return false;

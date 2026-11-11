@@ -119,6 +119,31 @@ const CASES: readonly {
     refusal: undefined,
     what: 'a declared module',
   },
+  {
+    code: 'namespace N { declare namespace M { import A = Y.Z } }',
+    refusal: 'namespace',
+    what: 'a namespace of a declared namespace of an import alias',
+  },
+  {
+    code: 'namespace N { import A = Y.Z }',
+    refusal: 'namespace',
+    what: 'a namespace of an import alias',
+  },
+  {
+    code: 'declare namespace N { import A = Y.Z }',
+    refusal: undefined,
+    what: 'a declared namespace of an import alias',
+  },
+  {
+    code: "declare module 'x' { import A = require('y'); export = A }",
+    refusal: undefined,
+    what: 'a declared module of an import and an export assignment',
+  },
+  {
+    code: 'declare namespace N { namespace M { import A = Y.Z } }',
+    refusal: undefined,
+    what: 'a namespace in a declared namespace, of an import alias',
+  },
   { code: 'enum E { A }', refusal: 'enum', what: 'an enum' },
   {
     code: 'class C { constructor(private z: number) {} }',
