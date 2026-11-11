@@ -12,7 +12,6 @@ import {
   isForInStatement,
   isForOfStatement,
   isForStatement,
-  isFunctionExpression,
   isBlock,
   isBreakStatement,
   isContinueStatement,
@@ -57,7 +56,9 @@ import {
   iteratedAssignmentSources,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { framedPossibleBranch } from './framed-branches.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { isNamedFunction, runsItself } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
 import { readsBinding } from './scope.ts';
 
@@ -170,7 +171,7 @@ export function repeatingBodies(
       withinBody(node, at) &&
       !runsOnce(node, at) &&
       !runsOnce(name, at) &&
-      !leavesLoopFirst(node, body) &&
+      !leavesLoopFirst(node, body, declared) &&
       !initializedWithin(declared, name, body)
     )
       bodies.push(body);
@@ -183,8 +184,8 @@ export function repeatingBodies(
  * leaves the loop, with no jump between them that may skip it: the loop never comes round to its
  * next pass.
  */
-function leavesLoopFirst(node: Node, body: Node): boolean {
-  if (!withinBody(node, body) || runsAgainAround(body)) return false;
+function leavesLoopFirst(node: Node, body: Node, declared: Node): boolean {
+  if (!withinBody(node, body) || runsAgainAround(body, declared)) return false;
   for (let at = node; at !== body; at = at.parent) {
     const { parent } = at;
     if (!isBlock(parent)) continue;
@@ -197,29 +198,18 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
 }
 
 /**
- * Whether a named function expression around the loop names itself, or holds code that does: the
- * run can come again before it ends, and what a write leaves reaches the loop in that run, though
- * the first leaves its loop.
+ * Whether a function around the loop that is called by a name runs itself again, unless the array
+ * is made inside it and each run makes its own: the run can come again before it ends, and what a
+ * write leaves reaches the loop in that run, though the first leaves its loop.
  */
-function runsAgainAround(body: Node): boolean {
-  for (let at = body.parent; !isSourceFile(at); at = at.parent) {
-    if (isFunctionExpression(at) && at.name !== undefined && namesWithin(at, at.name.text))
+function runsAgainAround(body: Node, declared: Node): boolean {
+  for (let at = body.parent; !isSourceFile(at); at = at.parent)
+    if (
+      isNamedFunction(at) &&
+      !(declared.pos >= at.pos && declared.end <= at.end) &&
+      runsItself(at)
+    )
       return true;
-  }
-  return false;
-}
-
-/** Whether the code of the function reads the name, in a helper too. */
-function namesWithin(fn: Node, name: string): boolean {
-  const pending: Node[] = [fn];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (isIdentifier(node) && node.text === name && node.parent !== fn && readsBinding(node))
-      return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
   return false;
 }
 
@@ -453,30 +443,6 @@ function executionOwner(node: Node): Node {
   }
 }
 
-/** The arm a written constant condition rules out; unknown conditions retain both arms. */
-function unselectedBranch(node: Node): Node | undefined {
-  if (isIfStatement(node)) {
-    const condition = framedCondition(node.expression);
-    if (condition === undefined) return undefined;
-    return condition ? node.elseStatement : node.thenStatement;
-  }
-  if (isConditionalExpression(node)) {
-    const condition = framedCondition(node.condition);
-    if (condition === undefined) return undefined;
-    return condition ? node.whenFalse : node.whenTrue;
-  }
-  return undefined;
-}
-
-/** A source-proven unselected if or conditional arm cannot supply a receiver. */
-export function framedPossibleBranch(node: Node): boolean {
-  for (let parent = node.parent, within = node; ; within = parent, parent = parent.parent) {
-    if (isSourceFile(parent) || isAnswering(parent) || isClassStaticBlockDeclaration(parent))
-      return true;
-    if (within === unselectedBranch(parent)) return false;
-  }
-}
-
 /** A closed, same-block data assignment replaces older same-owner values before this read. */
 function dataOverwrite(
   name: Identifier,
@@ -585,3 +551,5 @@ function otherUse(name: Identifier, binding: VariableDeclaration): boolean {
   }
   return false;
 }
+
+export { framedPossibleBranch } from './framed-branches.ts';

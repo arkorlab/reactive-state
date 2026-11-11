@@ -542,6 +542,46 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'loop-exit-with-unreachable-self-call',
+    source: `function frames(error: Error) { const values = [error]; (function read(): void { ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; break; } if (false) read(); })(); }`,
+    converts: false,
+  },
+  {
+    id: 'loop-exit-with-shadowed-name',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; (function read(read = () => 0): number { while (String(values)) { values[0] = error; return read(); } return 0; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-declaration-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-bound-arrow-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; const read = (pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'mutual-recursion-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; function first(pass: number): string { ${SAFE} if (pass < 1) second(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } function second(pass: number): string { return first(pass); } return first(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-after-read-in-declaration-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursive-declaration-loop-exit-element-write',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; function read(pass: number): string { while (String(values)) { values[0] = error; return pass < 1 ? read(pass + 1) : ''; } return ''; } read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'declaration-loop-exit-element-write-pin',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; function read(pass: number): number { while (String(values)) { values[0] = error; return 1; } return 0; } read(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
