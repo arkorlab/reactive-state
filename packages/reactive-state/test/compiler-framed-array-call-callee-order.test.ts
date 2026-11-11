@@ -482,6 +482,16 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'loop-jump-in-sibling-else-branch',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 5) { values.join = Array.prototype.join; } else { continue; } values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-jump-in-later-branch-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (pass > 5) { values.join = Array.prototype.join; } else { continue; } values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

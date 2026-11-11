@@ -272,12 +272,31 @@ export function jumpsOver(scope: Node, write: Node, target: Node, body: Node): b
       node.pos >= from &&
       node.pos < target.pos &&
       framedPossibleBranch(node) &&
+      !inExclusiveArms(write, node) &&
       skips(node, target, body)
     )
       return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
+  }
+  return false;
+}
+
+/**
+ * Whether two nodes lie in the two arms of one if statement or conditional expression: where the
+ * one runs the other does not, so a jump in the second skips nothing after a write in the first.
+ */
+function inExclusiveArms(first: Node, second: Node): boolean {
+  for (let at = first; !isSourceFile(at); at = at.parent) {
+    const { parent } = at;
+    if (parent.pos > second.pos || parent.end < second.end) continue;
+    let other = second;
+    while (other.parent !== parent) other = other.parent;
+    let arms: readonly (Node | undefined)[] = [];
+    if (isIfStatement(parent)) arms = [parent.thenStatement, parent.elseStatement];
+    else if (isConditionalExpression(parent)) arms = [parent.whenTrue, parent.whenFalse];
+    return at !== other && arms.includes(at) && arms.includes(other);
   }
   return false;
 }
