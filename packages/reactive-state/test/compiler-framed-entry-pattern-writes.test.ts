@@ -660,6 +660,18 @@ const CASES = [
       "flag ? { field: 'kept' } : {}:0",
     ],
   },
+  {
+    id: 'computed-key-assignment-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} let source: object = {}; return Object.fromEntries([entry], ({ [name]: entry[1] } = (source = { field: error }))); }`,
+    key: 'message',
+    values: ["'safe':", '(source = { field: error }):', 'error:', 'source = { field: error }:0'],
+  },
+  {
+    id: 'computed-key-comma-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = (0, { field: error }))); }`,
+    key: 'message',
+    values: ["'safe':", '(0, { field: error }):', '0, { field: error }:0', 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

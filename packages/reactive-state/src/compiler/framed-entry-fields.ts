@@ -140,14 +140,27 @@ const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionToken,
 ]);
 
-/** What a conditional or a logical expression may hand over: a written literal condition takes one. */
+/** The assignments that hand over their left where it holds, and their right where not. */
+const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/**
+ * What an expression may hand over: one of the branches of a condition, a written literal condition
+ * taking one; an operand of a logical expression; the result of an assignment or a comma.
+ */
 function choices(value: Expression): readonly Expression[] {
   if (isConditionalExpression(value)) {
     const taken = framedCondition(value.condition);
     if (taken !== undefined) return [taken ? value.whenTrue : value.whenFalse];
     return [value.whenTrue, value.whenFalse];
   }
-  return isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind) ? operands(value) : [];
+  if (!isBinaryExpression(value)) return [];
+  const kind = value.operatorToken.kind;
+  if (kind === SyntaxKind.EqualsToken || kind === SyntaxKind.CommaToken) return [value.right];
+  return LOGICAL.has(kind) || LOGICAL_ASSIGNMENTS.has(kind) ? operands(value) : [];
 }
 
 /**
@@ -157,15 +170,20 @@ function choices(value: Expression): readonly Expression[] {
 function operands(value: BinaryExpression): readonly Expression[] {
   const { left, right } = value;
   const kind = value.operatorToken.kind;
-  if (kind === SyntaxKind.QuestionQuestionToken) {
+  if (
+    kind === SyntaxKind.QuestionQuestionToken ||
+    kind === SyntaxKind.QuestionQuestionEqualsToken
+  ) {
     const nullish = nullishness(left);
     if (nullish === undefined) return [left, right];
     return [nullish ? right : left];
   }
   const truth = framedCondition(left);
   if (truth === undefined) return [left, right];
-  const taken = truth === (kind === SyntaxKind.AmpersandAmpersandToken) ? right : left;
-  return [taken];
+  const and =
+    kind === SyntaxKind.AmpersandAmpersandToken ||
+    kind === SyntaxKind.AmpersandAmpersandEqualsToken;
+  return [truth === and ? right : left];
 }
 
 /**
