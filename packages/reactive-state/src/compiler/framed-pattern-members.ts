@@ -84,6 +84,8 @@ interface Unrouted {
   /** The finite names a computed key may take; none where they are unknown. */
   readonly keys?: readonly string[] | undefined;
   readonly without: readonly string[];
+  /** The position an array rest starts at: it takes the entries from there on. */
+  readonly suffix?: number | undefined;
 }
 
 /**
@@ -93,8 +95,8 @@ interface Unrouted {
  */
 function unroutedChildren(target: Expression): readonly Unrouted[] {
   if (isArrayLiteralExpression(target))
-    return target.elements.flatMap((each) =>
-      isSpreadElement(each) ? [restOf(each.expression, [])] : [],
+    return target.elements.flatMap((each, at) =>
+      isSpreadElement(each) ? [{ ...restOf(each.expression, []), suffix: at }] : [],
     );
   if (!isObjectLiteralExpression(target)) return [];
   const listed: string[] = [];
@@ -131,11 +133,30 @@ function keyNames(name: PropertyName): readonly string[] | undefined {
  */
 export const ANY_FIELD = '\0any';
 
+const FROM = '\0from:';
+
+/** The path key of an array rest's take of the entries of a source from a position on. */
+export function fromKey(position: number): string {
+  return `${FROM}${String(position)}`;
+}
+
+/** The position a path key takes the entries from, none for any other key. */
+export function suffixStart(key: string): number | undefined {
+  return key.startsWith(FROM) ? Number(key.slice(FROM.length)) : undefined;
+}
+
 /** What a target the routing left out takes of the sources. */
 function takenSources(
   sources: readonly AssignedFrameSource[],
-  { copy, keys, without }: Unrouted,
+  { copy, keys, without, suffix }: Unrouted,
 ): readonly AssignedFrameSource[] {
+  if (copy && suffix !== undefined)
+    return sources.map((source) => {
+      return {
+        value: source.value,
+        keys: [...source.keys, fromKey(suffix)],
+      };
+    });
   if (copy) return sources.map((source): MemberSource => ({ ...source, without }));
   const names = keys ?? [ANY_FIELD];
   return sources.flatMap((source) =>

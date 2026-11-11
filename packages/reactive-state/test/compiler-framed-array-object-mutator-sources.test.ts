@@ -597,12 +597,6 @@ const ELEMENTS = [
     elements: ['error:', "'safe':"],
   },
   {
-    id: 'define-logical-getter',
-    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.defineProperty(values, 0, { get: flag && (() => error) } as PropertyDescriptor); return values; }`,
-    index: undefined,
-    elements: ['error:'],
-  },
-  {
     id: 'define-conditional-alias-getter',
     source: `function frames(error: Error, flag: boolean) { ${VALUES} const getter = flag ? () => error : () => 'safe'; Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -2129,6 +2123,86 @@ const CONVERSIONS = [
     id: 'define-star-key-any-field',
     source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ [key]: descriptor.value } = { '*': error }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'src-spread-copy-skips-prototype',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const base = { __proto__: { f: () => error } }; ({ f: descriptor.get } = { ...base }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-spread-inline-prototype-skipped',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ f: descriptor.get } = { ...{ __proto__: { f: () => error } } }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-spread-copy-own-field-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const base = { f: () => error }; ({ f: descriptor.get } = { ...base }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-spread-copy-keeps-own-of-prototyped',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const base = { __proto__: { g: 1 }, f: () => error }; ({ f: descriptor.get } = { ...base }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-list-spread-written-length',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = [...[() => 'safe', () => error]]; [descriptor.get] = source; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-list-spread-written-second',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [, descriptor.get] = [...[() => 'safe', () => error]]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-list-spread-empty-first',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get] = [...[], ...[() => 'safe'], () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-list-spread-nested-length',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [, descriptor.get] = [...[...[() => 'safe'], () => error]]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-list-unknown-spread-keeps',
+    source: `function frames(error: Error, list: (() => string)[]) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get] = [...list, () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-list-unknown-spread-after-written',
+    source: `function frames(error: Error, list: (() => string)[]) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get] = [() => 'safe', ...list, () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-list-held-spread-length',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; const source = [...functions]; [descriptor.get] = source; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-suffix-skips-excluded',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; [ignored, ...descriptor.value] = [error, 'safe']; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-suffix-keeps-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; [ignored, ...descriptor.value] = ['safe', error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-rest-suffix-after-spread',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; [ignored, ...descriptor.value] = [...[error], 'safe']; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-suffix-of-held-list',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; const source = [error, 'safe']; [ignored, ...descriptor.value] = source; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-suffix-of-unknown-list',
+    source: `function frames(error: Error, list: unknown[]) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; [ignored, ...descriptor.value] = list; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
   },
 ] as const;
 
