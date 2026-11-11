@@ -114,6 +114,46 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'var-redeclared-by-loop-head',
+    source: `function frames(error: Error) { var a = [error]; ${SAFE} for (var a of [[error]]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'var-redeclared-with-initializer',
+    source: `function frames(error: Error) { var a = [error]; ${SAFE} var a = [error]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'var-redeclared-by-pattern',
+    source: `function frames(error: Error) { var a = [error]; ${SAFE} var [a] = [[error]]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'var-redeclared-by-for-initializer',
+    source: `function frames(error: Error) { var a = [error]; ${SAFE} for (var a = [error]; false; ); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'var-redeclared-in-nested-block',
+    source: `function frames(error: Error) { var a = [error]; ${SAFE} if (error) { var a = [error]; } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'var-redeclared-without-initializer-pin',
+    source: `function frames(error: Error) { var a = [error]; ${SAFE} var a; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'block-scoped-loop-head-pin',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} for (const a of [[error]]); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'block-scoped-shadow-pin',
+    source: `function frames(error: Error) { const a = [error]; ${SAFE} { const a = [error]; } return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'alias-never-reassigned-pin',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; return String(a); }`,
     converts: true,
