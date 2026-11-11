@@ -6,6 +6,7 @@ import {
   isBlock,
   isCallExpression,
   isDeleteExpression,
+  isExpression,
   isElementAccessExpression,
   isIdentifier,
   isMethodDeclaration,
@@ -32,6 +33,7 @@ import {
   OWN_METHODS,
   afterPossibleWrite,
   definiteExpression,
+  evaluatedForSure,
   descriptorFunction,
   ownMethodAssignment,
   PLAIN_PROPERTY,
@@ -318,10 +320,8 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
     if (node.pos >= writes.until) continue;
     const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
     if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
-      unprovenWrites(node, keys, writes);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
+      unprovenWrites(node, keys, writes, evaluatedForSure(node, statement));
+    for (const child of node.getChildren().toReversed()) pending.push(child);
   }
 }
 
@@ -330,7 +330,13 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
  * leaves of the attributes a method had, whether it ran or not, is what stays: a write of the value
  * alone keeps them, a definition that does not name them does too.
  */
-function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
+function unprovenWrites(
+  node: Node,
+  keys: readonly string[],
+  writes: MethodWrites,
+  sure: boolean,
+): void {
+  if (sure && writes.held !== undefined) releaseHeld(node, writes.root, writes.held);
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
   const defined = isDeleteExpression(node)
     ? undefined
@@ -362,9 +368,9 @@ function holdDefinition(
 }
 
 /** A definite redefinition or deletion replaces a configurable property, setter and all. */
-function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): void {
+function releaseHeld(top: Node, root: FrameBinding, held: HeldMethods): void {
   const replaced = definedMethods(top, root) ?? new Map<string, ArrayMethodOverride>();
-  deletedMethod(top, root, replaced);
+  if (isExpression(top)) deletedMethod(top, root, replaced);
   if (replaced.size >= OWN_METHODS.size) return;
   for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
 }

@@ -338,9 +338,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'initializer-second-declaration-pin',
+    id: 'initializer-second-declaration-replaces-accessor',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const first = 1, replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
-    converts: true,
+    converts: false,
   },
   {
     id: 'destructured-default-after-initializer',
@@ -375,6 +375,31 @@ const CASES = [
   {
     id: 'assigned-to-member-replaces-accessor-pin',
     source: `function frames(error: Error) { const values = [error]; const sink: { result?: unknown } = {}; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); sink.result = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-definitions-release-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), second: Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }) }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-replacement-after-logical-pin',
+    source: `function frames(error: Error) { const values = [error]; String(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }) && Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-replacement-in-conditional-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), second: flag ? Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }) : 0 }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-replacement-in-optional-chain-pin',
+    source: `function frames(error: Error, holder?: { run(value: unknown): unknown }) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), second: holder?.run(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })) }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-accessor-after-replacement-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), second: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }) }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
   {
