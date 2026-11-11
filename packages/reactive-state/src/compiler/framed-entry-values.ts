@@ -245,6 +245,8 @@ interface PatternTarget {
   readonly sources: readonly AssignedFrameSource[];
   /** Set under a rest: the pattern reads the container's elements at offsets the compile cannot tell. */
   readonly loose?: true;
+  /** Under an array rest: the position it starts at, before which the entries are consumed. */
+  readonly from?: number;
 }
 
 /**
@@ -272,7 +274,7 @@ function patternTargets(target: Expression, at: PatternTarget): readonly Pattern
   const covered = new Set<Node>(routed.map((each) => each.target));
   const unrouted = patternChildren(target)
     .filter((child) => !covered.has(child))
-    .flatMap((child) => unroutedTargets(child, at.sources));
+    .flatMap((child) => unroutedTargets(child, at));
   return [...routed, ...unrouted];
 }
 
@@ -298,20 +300,62 @@ function patternChildren(target: Expression): readonly Node[] {
  * under a rest reads the container's elements. The receiver and the index of a member that is not
  * the tuple's, and a computed key itself, are reads.
  */
-function unroutedTargets(
-  child: Node,
-  sources: readonly AssignedFrameSource[],
-): readonly PatternTarget[] {
+function unroutedTargets(child: Node, at: PatternTarget): readonly PatternTarget[] {
+  const { sources } = at;
   if (isSpreadElement(child) || isSpreadAssignment(child)) {
     const target = unwrapped(child.expression);
     const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
-    return [pattern ? { target, sources, loose: true } : { target, sources }];
+    const from = restStart(child);
+    if (pattern) return [{ target, sources, loose: true, ...(from !== undefined && { from }) }];
+    return [{ target, sources: from === undefined ? sources : entriesFrom(sources, from) }];
   }
   if (!isExpression(child)) return [];
-  const selected = possibleFields(sources);
+  const selected = at.from === undefined ? possibleFields(sources) : fieldsFrom(sources, at.from);
   const target = unwrapped(child);
   if (!isBinaryExpression(target)) return [{ target, sources: selected }];
   return [{ target: target.left, sources: [...selected, { value: target.right, keys: [] }] }];
+}
+
+/** The position an array rest starts at in its pattern, after entries it leaves to the others; none from the start. */
+function restStart(rest: Node): number | undefined {
+  const pattern = rest.parent;
+  const at =
+    isSpreadElement(rest) && isArrayLiteralExpression(pattern) ? pattern.elements.indexOf(rest) : 0;
+  return at > 0 ? at : undefined;
+}
+
+/**
+ * The entries of a source from a position on, each as a value: of a written list no spread shifts
+ * before the position, the elements after it; of any other source, the source itself.
+ */
+function entriesFrom(
+  sources: readonly AssignedFrameSource[],
+  from: number,
+): readonly AssignedFrameSource[] {
+  return sources.flatMap((source) => {
+    const value = unwrapped(source.value);
+    const written = source.keys.length === 0 && isArrayLiteralExpression(value);
+    if (!written || value.elements.slice(0, from).some((each) => isSpreadElement(each)))
+      return [source];
+    return value.elements.slice(from).flatMap((each): AssignedFrameSource[] => {
+      if (isOmittedExpression(each)) return [];
+      return isSpreadElement(each)
+        ? [...iteratedFrameSources(each.expression)]
+        : [{ value: each, keys: [] }];
+    });
+  });
+}
+
+/** What a pattern under an array rest may take: the entries from its position, or any field. */
+function fieldsFrom(
+  sources: readonly AssignedFrameSource[],
+  from: number,
+): readonly AssignedFrameSource[] {
+  return sources.flatMap((source) => {
+    const value = unwrapped(source.value);
+    const written = source.keys.length === 0 && isArrayLiteralExpression(value);
+    return written ? entriesFrom([source], from) : possibleFields([source]);
+  });
 }
 
 /** The pattern a node assigns, with the sources its right side or iterable hands it. */

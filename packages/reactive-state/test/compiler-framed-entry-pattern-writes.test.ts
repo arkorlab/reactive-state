@@ -894,6 +894,48 @@ const CASES = [
     key: 'message',
     values: ["'safe':", 'error:'],
   },
+  {
+    id: 'rest-pattern-after-consumed-entry',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[entry[1]]] = [error, 'kept'])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'rest-pattern-after-two-consumed-entries',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, other, ...[entry[1]]] = [error, 'a', 'kept'])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'rest-pattern-from-start-keeps-all',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([...[entry[1]]] = [error, 'kept'])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", "[error, 'kept']:", 'error:'],
+  },
+  {
+    id: 'rest-pattern-after-unknown-spread-keeps-all',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[entry[1]]] = [...list, error, 'kept'])); }`,
+    key: 'message',
+    values: ["'safe':", "[...list, error, 'kept']:"],
+  },
+  {
+    id: 'rest-member-after-consumed-entry',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...entry[1]] = [error, 'kept'])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'rest-member-from-start-keeps-entries',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([...entry[1]] = [error, 'kept'])); }`,
+    key: 'message',
+    values: ["'safe':", "[error, 'kept']:"],
+  },
+  {
+    id: 'rest-pattern-computed-key-after-consumed-entry',
+    source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[{ ['field']: entry[1] }]] = [error, { field: 'kept' }])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
