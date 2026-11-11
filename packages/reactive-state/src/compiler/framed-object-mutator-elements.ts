@@ -1,5 +1,4 @@
 import {
-  type Block,
   type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
@@ -32,7 +31,13 @@ import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignm
 import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
-import { functionReturns, alternativesOf, returnedValues } from './framed-mutator-getters.ts';
+import {
+  accessedValues,
+  alternativesOf,
+  functionReturns,
+  prototypeField,
+  returnedValues,
+} from './framed-mutator-getters.ts';
 import { keyMayBeSlot, nameMayBeSlot, possibleKey, slotKey } from './framed-mutator-keys.ts';
 import { selectedValues } from './framed-selected-sources.ts';
 
@@ -244,18 +249,44 @@ function assignedValues(
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
   if (!isObjectLiteralExpression(value)) {
-    const held = heldValue(value);
+    const names: Identifier[] = [];
+    const held = heldValue(value, names);
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
     const opaque = opaqueSource(source, index);
     const used =
       alternatives === undefined ? undefined : readUnder(reading.seen.sources, held, hidden);
-    if (alternatives === undefined || used === undefined) return opaque;
+    if (alternatives === undefined) return opaque;
+    const written = sourceWrites(names, index, reading, hidden);
+    if (used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
       ...alternatives.flatMap((each) => assignedValues(each, index, reading, used)),
+      ...written,
     ];
   }
   return sourceFields(value, index, reading, hidden);
+}
+
+/**
+ * The elements the writes to the members of an assign source a constant holds install: a constant
+ * does not keep its members from changing, and a write to the key of the slot, or to a key the
+ * compile cannot read, before the place that names it, is possible, unless a field after hides it.
+ * A rest that copied the source into the member gave it a plain object, which installs nothing.
+ */
+function sourceWrites(
+  names: readonly Identifier[],
+  index: number | undefined,
+  reading: Reading,
+  hidden: Hidden,
+): WrittenArrayElement[] {
+  const [first] = names;
+  if (first === undefined) return [];
+  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys, copiedAt }) => {
+    const hides = key !== undefined && hidden.data.has(key);
+    if (copiedAt !== undefined || hides || (key !== undefined && !possibleKey(key, index)))
+      return [];
+    return selectedValues(value, keys, reading.at);
+  });
 }
 
 /** The elements the fields of an assign source install, each as the fields after it leave it. */
@@ -442,7 +473,7 @@ function mapWrites(
     if (hides || write.list === true || (key !== undefined && !possibleKey(key, index))) return [];
     const left = { data: new Set(without), getters: new Set(without) };
     const read = copiedAt === undefined ? reading : { ...reading, at: copiedAt, inherited: false };
-    return selectedValues(value, keys).flatMap((each) => {
+    return selectedValues(value, keys, reading.at).flatMap((each) => {
       return each.keys.length > 0
         ? [{ value: each.value, keys: [...each.keys, 'value'] }]
         : descriptorValues(each.value, read, left);
@@ -586,25 +617,6 @@ function descriptorEntry(
   return isGetAccessorDeclaration(property) ? [...found, ...accessedValues(property, key)] : found;
 }
 
-/** The object a written `__proto__: object` field sets as the prototype, whose fields are inherited. */
-function prototypeField(
-  property: ObjectLiteralElementLike,
-  key: string | undefined,
-): Expression | undefined {
-  const written = key === '__proto__' && isPropertyAssignment(property);
-  return written && !isComputedPropertyName(property.name) ? property.initializer : undefined;
-}
-
-/** A descriptor field written as an accessor: its `value`, or the getter its `get` hands over. */
-function accessedValues(
-  property: ObjectLiteralElementLike & { readonly body?: Block | undefined },
-  key: string | undefined,
-): WrittenArrayElement[] {
-  const returned = returnedValues(property.body);
-  const getters = key === 'value' ? [] : returned.flatMap((each) => functionReturns(each.value));
-  return key === 'get' ? getters : [...returned, ...getters];
-}
-
 /**
  * The values assigned to the `value` and `get` fields of an object a constant holds, or of what it
  * is aliased to: a constant does not keep its fields from changing. An assignment anywhere counts.
@@ -616,14 +628,16 @@ function descriptorWrites(
 ): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys, list }) => {
-    if (key !== undefined && hidden.data.has(key)) return [];
-    return selectedValues(value, keys).flatMap((each) => {
-      const installed = key === undefined || key === 'value' ? [each] : [];
-      const calls = key === undefined || key === 'get';
-      const returned =
-        calls && list !== true && each.keys.length === 0 ? functionReturns(each.value) : [];
-      return [...installed, ...returned];
-    });
-  });
+  return heldMemberWrites(first, names, reading.at).flatMap(
+    ({ key, value, keys, list, copiedAt }) => {
+      if (copiedAt !== undefined || (key !== undefined && hidden.data.has(key))) return [];
+      return selectedValues(value, keys, reading.at).flatMap((each) => {
+        const installed = key === undefined || key === 'value' ? [each] : [];
+        const calls = key === undefined || key === 'get';
+        const returned =
+          calls && list !== true && each.keys.length === 0 ? functionReturns(each.value) : [];
+        return [...installed, ...returned];
+      });
+    },
+  );
 }

@@ -1,6 +1,9 @@
 import {
   type BinaryExpression,
   type Block,
+  isComputedPropertyName,
+  isPropertyAssignment,
+  type ObjectLiteralElementLike,
   type Expression,
   type FunctionDeclaration,
   type Identifier,
@@ -200,4 +203,23 @@ function hasOwnReturns(node: Node): boolean {
 /** A constant declaration, as the object-member readers take it, keeps the body's flow followed. */
 function constantStatement(statement: VariableStatement): boolean {
   return /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile()));
+}
+
+/** The object a written `__proto__: object` field sets as the prototype, whose fields are inherited. */
+export function prototypeField(
+  property: ObjectLiteralElementLike,
+  key: string | undefined,
+): Expression | undefined {
+  const written = key === '__proto__' && isPropertyAssignment(property);
+  return written && !isComputedPropertyName(property.name) ? property.initializer : undefined;
+}
+
+/** A descriptor field written as an accessor: its `value`, or the getter its `get` hands over. */
+export function accessedValues(
+  property: ObjectLiteralElementLike & { readonly body?: Block | undefined },
+  key: string | undefined,
+): WrittenArrayElement[] {
+  const returned = returnedValues(property.body);
+  const getters = key === 'value' ? [] : returned.flatMap((each) => functionReturns(each.value));
+  return key === 'get' ? getters : [...returned, ...getters];
 }

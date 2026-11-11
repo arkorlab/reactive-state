@@ -33,7 +33,7 @@ import {
 import { writtenArrayKey } from './framed-array-functions.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { heldValue } from './framed-held-member-writes.ts';
+import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { ANY_FIELD, suffixStart } from './framed-pattern-members.ts';
 
@@ -67,6 +67,8 @@ interface Reading {
   readonly visited: Visited;
   /** A spread copies the own fields of what it spreads: a prototype it writes is none of them. */
   readonly own: boolean;
+  /** Where the selection is consumed, which the writes to a constant's members must precede. */
+  readonly at: Node | undefined;
 }
 
 /**
@@ -77,8 +79,9 @@ interface Reading {
 export function selectedValues(
   value: Expression,
   keys: readonly string[],
+  at?: Node,
 ): readonly AssignedFrameSource[] {
-  return select(value, keys, { visited: new Map(), own: false });
+  return select(value, keys, { visited: new Map(), own: false, at });
 }
 
 function select(
@@ -98,9 +101,12 @@ function select(
   const alternatives = alternativesOf(held);
   if (alternatives !== undefined)
     return alternatives.flatMap((each) => select(each, keys, reading));
-  if (isArrayLiteralExpression(held))
-    return entryOf(held, keys, { whole, exact: unchanged(names) }, reading);
-  return isObjectLiteralExpression(held) ? fieldOf(held, keys, whole, reading) : whole;
+  if (isArrayLiteralExpression(held)) {
+    const entries = entryOf(held, keys, { whole, exact: unchanged(names) }, reading);
+    return [...entries, ...memberWrites(names, keys, reading)];
+  }
+  if (!isObjectLiteralExpression(held)) return whole;
+  return [...fieldOf(held, keys, whole, reading), ...memberWrites(names, keys, reading)];
 }
 
 /** The operators whose value is the value of their right: a comma, an assignment. */
@@ -119,6 +125,29 @@ function valueOf(expression: Expression, names: Identifier[]): Expression | Func
   )
     held = heldValue(held.right, names);
   return held;
+}
+
+/**
+ * What the writes to the members of the constant the names stand for hand over at the path: a
+ * constant does not keep its members from changing. A write to the key, or to a key the compile
+ * cannot read, before the place that consumes the selection is possible; what a rest copied into
+ * the member is read as the own fields of its source.
+ */
+function memberWrites(
+  names: readonly Identifier[],
+  keys: readonly string[],
+  reading: Reading,
+): readonly AssignedFrameSource[] {
+  const [first] = names;
+  const [key = '', ...rest] = keys;
+  if (first === undefined) return [];
+  return heldMemberWrites(first, names, reading.at).flatMap((write) => {
+    if (write.list === true || !(asksAny(key) || write.key === undefined || write.key === key))
+      return [];
+    const copied =
+      write.copiedAt === undefined ? reading : { ...reading, own: true, at: write.copiedAt };
+    return select(write.value, [...write.keys, ...rest], copied);
+  });
 }
 
 /** What reads below the first step of a path read: the fields of a copy are no copy. */

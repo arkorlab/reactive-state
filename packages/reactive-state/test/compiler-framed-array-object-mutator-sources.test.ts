@@ -1029,6 +1029,12 @@ const ELEMENTS = [
     elements: ["'safe':"],
   },
   {
+    id: 'assign-source-hidden-then-visible',
+    source: `function frames(error: Error) { ${VALUES} const source = { get 1(): unknown { return error; } }; Object.assign(values, { ...source, 1: 'safe' }, source); return values; }`,
+    index: undefined,
+    elements: ['source:0', 'source:array', "'safe':", 'source:0', 'source:array', 'error:'],
+  },
+  {
     id: 'define-map-hidden-then-visible',
     source: `function frames(error: Error, flag: boolean) { ${VALUES} const maps = { get 0() { return { value: error }; } }; Object.defineProperties(values, flag ? { ...maps, 0: { value: 'safe' } } : maps); return values; }`,
     index: undefined,
@@ -2295,8 +2301,53 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-rest-copy-of-error-is-no-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ ...descriptor.value } = error); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-copy-of-list-is-no-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ ...descriptor.value } = [error]); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'define-rest-copy-unknown-member-is-no-error',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const key = ['value'][0] as 'value'; ({ ...descriptor[key] } = { item: error }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-source-populated-after-declaration',
+    source: `function frames(error: Error) { const a = ['safe']; const source: Record<number, unknown> = {}; source[1] = error; Object.assign(a, source); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-source-populated-at-the-slot',
+    source: `function frames(error: Error) { const a = ['safe']; const source: Record<number, unknown> = {}; source[0] = error; Object.assign(a, source); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-source-populated-by-pattern',
+    source: `function frames(error: Error) { const a = ['safe']; const source: Record<number, unknown> = {}; [source[1]] = [error]; Object.assign(a, source); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-source-populated-in-condition-pin',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const source: Record<number, unknown> = {}; if (flag) source[1] = error; Object.assign(a, source); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-source-populated-after-use-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const source: Record<number, unknown> = {}; Object.assign(a, source); source[1] = error; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-source-populated-under-a-name-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const source: Record<string, unknown> = {}; source.label = error; Object.assign(a, source); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-source-copied-into-member-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const source: Record<number, unknown> = {}; ({ ...source[1] } = error); Object.assign(a, source); return String(a); }`,
     converts: false,
   },
   {
@@ -2337,6 +2388,11 @@ const CONVERSIONS = [
   {
     id: 'src-held-list-reversed',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; functions.reverse(); [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-held-list-assigned-entry',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe']; functions[0] = () => error; [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
   },
   {
