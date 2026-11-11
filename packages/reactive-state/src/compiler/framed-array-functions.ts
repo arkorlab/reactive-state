@@ -170,7 +170,8 @@ function methodValue(
 
 /**
  * Whether `property`, a name or text and not a computed one, is `__proto__: value`, which sets the
- * object's prototype and defines no member of it.
+ * object's prototype and defines no member of it: the scan goes past it, to an own member of that
+ * name an entry before it defines.
  */
 function setsPrototype(property: PropertyAssignment): boolean {
   return (
@@ -190,7 +191,8 @@ function literalFunctionMember(
     if (name === undefined) return undefined;
     if (name !== key) continue;
     if (isMethodDeclaration(property)) return property;
-    if (!isPropertyAssignment(property) || setsPrototype(property)) return undefined;
+    if (!isPropertyAssignment(property)) return undefined;
+    if (setsPrototype(property)) continue;
     return property.initializer;
   }
   return undefined;

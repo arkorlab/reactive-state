@@ -44,6 +44,30 @@ const CASES = [
     custom: false,
   },
   {
+    id: 'computed-member-before-a-prototype-entry',
+    source:
+      "const methods = { ['__proto__']: { join() { return 'own'; } }, __proto__: { join() { return 'prototype'; } } }; const taken = methods.__proto__.join;",
+    custom: true,
+  },
+  {
+    id: 'computed-member-after-a-prototype-entry-pin',
+    source:
+      "const methods = { __proto__: { join() { return 'prototype'; } }, ['__proto__']: { join() { return 'own'; } } }; const taken = methods.__proto__.join;",
+    custom: true,
+  },
+  {
+    id: 'native-computed-member-before-a-prototype-entry-pin',
+    source:
+      "const methods = { ['__proto__']: { join: Array.prototype.join }, __proto__: { join() { return 'prototype'; } } }; const taken = methods.__proto__.join;",
+    custom: false,
+  },
+  {
+    id: 'text-prototype-entry-between-computed-members-pin',
+    source:
+      "const methods = { ['__proto__']: { join() { return 'own'; } }, '__proto__': { join() { return 'prototype'; } }, other: 1 }; const taken = methods.__proto__.join;",
+    custom: true,
+  },
+  {
     id: 'computed-prototype-member-pin',
     source:
       "const methods = { ['__proto__']: { join() { return 'custom'; } } }; const taken = methods.__proto__.join;",
