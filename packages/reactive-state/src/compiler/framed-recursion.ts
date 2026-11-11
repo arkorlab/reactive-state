@@ -392,23 +392,53 @@ function runsCodeBetween(fn: Node, from: number, to: number): boolean {
   return false;
 }
 
-/** Whether a node can run no code but its parts': a name, a literal, a statement of its own. */
+/** The kinds of node that run no code but their parts': a name, a literal, a plain statement. */
+const CODE_FREE: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrayLiteralExpression,
+  SyntaxKind.ArrowFunction,
+  SyntaxKind.AsExpression,
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.Block,
+  SyntaxKind.BreakStatement,
+  SyntaxKind.CaseBlock,
+  SyntaxKind.CaseClause,
+  SyntaxKind.CatchClause,
+  SyntaxKind.ConditionalExpression,
+  SyntaxKind.ContinueStatement,
+  SyntaxKind.DefaultClause,
+  SyntaxKind.EmptyStatement,
+  SyntaxKind.ExpressionStatement,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.FunctionExpression,
+  SyntaxKind.Identifier,
+  SyntaxKind.IfStatement,
+  SyntaxKind.LabeledStatement,
+  SyntaxKind.NonNullExpression,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.ObjectLiteralExpression,
+  SyntaxKind.ParenthesizedExpression,
+  SyntaxKind.PropertyAssignment,
+  SyntaxKind.RegularExpressionLiteral,
+  SyntaxKind.ReturnStatement,
+  SyntaxKind.SatisfiesExpression,
+  SyntaxKind.ShorthandPropertyAssignment,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.SwitchStatement,
+  SyntaxKind.ThisKeyword,
+  SyntaxKind.ThrowStatement,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.TryStatement,
+  SyntaxKind.TypeAssertionExpression,
+  SyntaxKind.VariableDeclaration,
+  SyntaxKind.VariableDeclarationList,
+  SyntaxKind.VariableStatement,
+]);
+
+/** Whether a node runs no code but its parts': any other may call a getter, a trap or a method. */
 function isCodeFree(node: Node): boolean {
-  return !(
-    isCallExpression(node) ||
-    isNewExpression(node) ||
-    isTaggedTemplateExpression(node) ||
-    isPropertyAccessExpression(node) ||
-    isElementAccessExpression(node) ||
-    (node.kind >= SyntaxKind.FirstBinaryOperator && node.kind <= SyntaxKind.LastBinaryOperator) ||
-    node.kind === SyntaxKind.TemplateExpression ||
-    node.kind === SyntaxKind.PrefixUnaryExpression ||
-    node.kind === SyntaxKind.PostfixUnaryExpression ||
-    node.kind === SyntaxKind.SpreadElement ||
-    node.kind === SyntaxKind.ForOfStatement ||
-    node.kind === SyntaxKind.AwaitExpression ||
-    node.kind === SyntaxKind.YieldExpression
-  );
+  return CODE_FREE.has(node.kind);
 }
 
 /**
@@ -419,7 +449,7 @@ function isCodeFree(node: Node): boolean {
 export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   if (!isNamedFunction(fn)) return false;
   const { names, anywhere } = reaching(fn);
-  if (anywhere) return runsCodeBetween(fn, from, to);
+  if (anywhere && runsCodeBetween(fn, from, to)) return true;
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;

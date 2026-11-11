@@ -732,6 +732,26 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'recursion-through-getter-by-destructuring',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; function read(): string { ${SAFE} const { x } = read as any; const text = String(values); values.join = Array.prototype.join; return text; } Object.defineProperty(read, 'x', { get() { return n++ === 0 ? read() : 0; } }); return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-getter-by-object-spread',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; function read(): string { ${SAFE} const copy = { ...(read as any) }; const text = String(values); values.join = Array.prototype.join; return text; } Object.defineProperty(read, 'x', { enumerable: true, get() { return n++ === 0 ? read() : 0; } }); return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-key-coercion',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const key = { toString() { return n++ === 0 ? String(read()) : 'k'; } }; function read(): string { ${SAFE} const o = { [key as any]: 1 }; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'escaped-function-with-nothing-between-pin',
+    source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function read(): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
