@@ -3,6 +3,7 @@ import {
   type CallExpression,
   type Expression,
   type FunctionDeclaration,
+  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isBlock,
@@ -38,10 +39,14 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
+import { framedAssignedValues } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
 const MUTATORS = new Set(['Object.assign', 'Object.defineProperties', 'Object.defineProperty']);
+
+/** How many times a getter's name is followed through the functions it may be assigned. */
+const REPLACEMENTS = { depth: 3 } as const;
 
 export interface MutatorElements {
   readonly target: Expression;
@@ -249,20 +254,51 @@ function accessedValues(
   return key === 'get' ? getters : [...returned, ...getters];
 }
 
-/** What a written synchronous function, or a name that holds one, returns as a getter. */
-function functionReturns(initializer: Expression): WrittenArrayElement[] {
-  const fn = heldValue(initializer);
+/**
+ * What a written synchronous function, or a name that holds one, returns as a getter. A name that
+ * is assigned before the getter is read may hold what it is assigned instead.
+ */
+function functionReturns(initializer: Expression, depth = 0): WrittenArrayElement[] {
+  const names: Identifier[] = [];
+  const returned = bodyReturns(heldValue(initializer, names));
+  if (depth >= REPLACEMENTS.depth) return returned;
+  const replaced = names
+    .flatMap((name) => [...variableInitializer(name), ...framedAssignedValues(name)])
+    .flatMap((each) => functionReturns(each, depth + 1));
+  return [...returned, ...replaced];
+}
+
+/** What a written function returns when it is called. */
+function bodyReturns(fn: Expression | FunctionDeclaration): WrittenArrayElement[] {
   if (isFunctionDeclaration(fn)) return answersLater(fn) ? [] : returnedValues(fn.body);
   if ((!isArrowFunction(fn) && !isFunctionExpression(fn)) || answersLater(fn)) return [];
   return isBlock(fn.body) ? returnedValues(fn.body) : [{ value: fn.body, keys: [] }];
 }
 
-/** What a name holds: a function it declares, or the initializer of a constant it names whole. */
-function heldValue(expression: Expression): Expression | FunctionDeclaration {
+/** The initializer of a variable that is not a constant: what it holds before a write replaces it. */
+function variableInitializer(name: Identifier): readonly Expression[] {
+  const selected = frameBindingOf(name);
+  const declaration = selected?.keys.length === 0 ? selected.binding : undefined;
+  const held =
+    declaration !== undefined && isVariableDeclaration(declaration) && !isConstant(declaration)
+      ? declaration.initializer
+      : undefined;
+  return held === undefined ? [] : [held];
+}
+
+/**
+ * What a name holds: a function it declares, or the initializer of a constant it names whole; the
+ * names it passes through are given back.
+ */
+function heldValue(
+  expression: Expression,
+  names: Identifier[] = [],
+): Expression | FunctionDeclaration {
   let value = unwrapped(expression);
   const seen = new Set<Node>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
+    names.push(value);
     const declared = frameDeclarationOf(value);
     if (declared !== undefined && isFunctionDeclaration(declared)) return declared;
     const selected = frameBindingOf(value);

@@ -519,6 +519,30 @@ const ELEMENTS = [
     elements: ['[error]:array'],
   },
   {
+    id: 'define-reassigned-getter-declaration',
+    source: `function frames(error: Error) { ${VALUES} function getter(): unknown { return 'safe'; } getter = () => error; Object.defineProperty(values, 0, { get: getter }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
+    id: 'define-reassigned-getter-variable',
+    source: `function frames(error: Error) { ${VALUES} let getter = () => 'safe'; getter = () => error; Object.defineProperty(values, 0, { get: getter }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
+    id: 'define-getter-declaration-pin',
+    source: `function frames(error: Error) { ${VALUES} function getter(): unknown { return 'safe'; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-getter-reassigned-later-pin',
+    source: `function frames(error: Error) { ${VALUES} function getter(): unknown { return 'safe'; } Object.defineProperty(values, 0, { get: getter }); getter = () => error; return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -634,6 +658,11 @@ const CONVERSIONS = [
   {
     id: 'assign-spread-property-getter-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...{ get 0() { return error; } } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-reassigned-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; function getter(): unknown { return 'safe'; } getter = () => error; Object.defineProperty(a, 0, { get: getter }); return String(a); }`,
     converts: true,
   },
   {
