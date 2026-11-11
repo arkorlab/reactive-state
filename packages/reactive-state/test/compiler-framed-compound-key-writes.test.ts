@@ -51,6 +51,21 @@ const CASES = [
     names: ['a', 'b'],
   },
   {
+    id: 'compound-assignment-keeps-a-source-the-annotation-lacks',
+    source: `let key: 'name' = 'stack' as 'name'; key += ''; ${GET}`,
+    names: ['name', 'stack'],
+  },
+  {
+    id: 'compound-assignment-keeps-the-sources-and-the-declared-names',
+    source: `let key: 'a' | 'b' = 'a'; key = 'c' as 'a'; key += 'x'; ${GET}`,
+    names: ['a', 'b', 'c'],
+  },
+  {
+    id: 'increment-keeps-a-source-the-annotation-lacks',
+    source: `let key: 0 = 1 as 0; key++; ${GET}`,
+    names: ['0', '1'],
+  },
+  {
     id: 'direct-assignment-pin',
     source: `let key: 'sta' | 'stack' = 'sta'; key = 'stack'; ${GET}`,
     names: ['sta', 'stack'],

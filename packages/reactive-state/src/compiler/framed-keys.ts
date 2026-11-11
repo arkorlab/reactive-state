@@ -369,22 +369,21 @@ function keyAlternatives(value: Expression):
   const values = constantKeys(binding.binding);
   if (values !== undefined) return { values, fallback: names };
   if (names === undefined) return undefined;
-  if (isIdentifier(value) && changedBeyondSources(value, binding.binding)) return { names };
   const sources = binding.binding.initializer === undefined ? [] : [binding.binding.initializer];
   if (isIdentifier(value)) sources.push(...framedAssignedValues(value));
+  const declared =
+    isParameterDeclaration(binding.binding) ||
+    (isIdentifier(value) && changedBeyondSources(value, binding.binding));
   return sources.length === 0
     ? { names }
-    : {
-        values: sources,
-        fallback: names,
-        callerNames: isParameterDeclaration(binding.binding) ? names : [],
-      };
+    : { values: sources, fallback: names, callerNames: declared ? names : [] };
 }
 
 /**
  * Whether the code changes `binding` where no expression writes the value it takes: a compound
  * assignment, an update or a `for…in` binding. What it is assigned (`framedAssignedValues`) is
- * then not all it may be, and the names its declared type allows are.
+ * then not all it may be: the names its declared type allows are possible too, beside what is
+ * assigned.
  */
 function changedBeyondSources(name: Identifier, binding: FrameBinding): boolean {
   const pending: Node[] = [name.getSourceFile()];
