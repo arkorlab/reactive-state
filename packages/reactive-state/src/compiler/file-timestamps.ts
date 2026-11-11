@@ -28,6 +28,7 @@ import {
   isModuleDeclaration,
   isNamespaceImport,
   isNewExpression,
+  isNumericLiteral,
   isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAssignment,
@@ -188,15 +189,19 @@ function propertyTimestamp(property: ObjectLiteralElementLike): Timestamp {
   return value !== undefined && isDefined(value, new Set()) ? 'defined' : 'unknown';
 }
 
-/** A literal property name, including a constant computed string key. */
+/**
+ * A literal property name, including a constant computed key. A number is the text the language
+ * makes of it as a key — `1`, `0x10` and `[1 + 1]` are `'1'`, `'16'` and `'2'` — and none of them is
+ * `lastModified`.
+ */
 function keyOf(name: Node): string | undefined {
-  if (isIdentifier(name) || isStringLiteral(name)) {
+  if (isIdentifier(name) || isStringLiteral(name) || isNumericLiteral(name)) {
     return name.text;
   }
   const key = isComputedPropertyName(name)
     ? constantValue(name.expression, constantInitializer)
     : undefined;
-  return typeof key === 'string' ? key : undefined;
+  return key === undefined ? undefined : String(key);
 }
 
 /** A constant's initializer, only where that exact lexical binding is a plain const declaration. */
