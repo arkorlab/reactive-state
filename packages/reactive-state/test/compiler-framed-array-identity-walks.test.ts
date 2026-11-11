@@ -6,7 +6,7 @@ import {
 } from 'typescript/ast';
 import { describe, expect, it, vi } from 'vitest';
 
-import { arrayIdentity } from '../src/compiler/framed-array-own-methods.ts';
+import { arrayIdentity } from '../src/compiler/framed-array-identity.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**

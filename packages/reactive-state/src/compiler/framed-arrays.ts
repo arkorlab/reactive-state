@@ -29,13 +29,12 @@ import {
 } from './framed-array-call-order.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
+import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
-  arrayIdentity,
   callMethodWrites,
   forgetMethods,
-  mayBeArray,
   OWN_METHODS,
   afterAssignment,
   afterPossibleWrite,

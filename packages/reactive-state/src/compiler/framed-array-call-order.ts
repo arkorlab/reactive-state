@@ -17,8 +17,9 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
+import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { arrayIdentity, mayBeArray, ownMethodAssignment } from './framed-array-own-methods.ts';
+import { ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { isNamedFunction, runsItself, runsItselfBetween } from './framed-recursion.ts';
 import { jumpsOver, repeatedFrameRead, repeatingBodies, resumesWithin } from './framed-writes.ts';
