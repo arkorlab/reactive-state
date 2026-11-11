@@ -38,6 +38,8 @@ import {
 import { eagerBody, isAnswering } from './answers.ts';
 import { useOf } from './code-globals.ts';
 import { frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
+import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { repeatedFrameRead } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
 
 /** A source holder read by a later execution cannot rely on its earlier textual prefix alone. */
@@ -47,13 +49,19 @@ interface QuietProof {
   readonly quiet: (call: CallExpression) => boolean;
 }
 
-/** Other execution owners can see writes or escapes appearing anywhere in the holder's source. */
+/**
+ * Other execution owners can see writes or escapes appearing anywhere in the holder's source. So
+ * does a loop around the reference that passes again: its next pass reads what the rest of the
+ * loop, and the functions the loop may run, made of the holder.
+ */
 export function deferredArrayChange(
   reference: Identifier,
   binding: FrameBinding | FunctionDeclaration,
   proof: QuietProof,
 ): boolean {
-  if (executionOwner(reference) === executionOwner(binding)) return false;
+  const owner = executionOwner(reference);
+  const deferred = owner !== executionOwner(binding);
+  if (!deferred && !repeatedFrameRead(reference, reference, binding, owner)) return false;
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
@@ -63,7 +71,8 @@ export function deferredArrayChange(
       node.text === reference.text &&
       readsBinding(node) &&
       frameDeclarationOf(node) === binding &&
-      changedUse(node, isFunctionDeclaration(binding), proof)
+      (deferred || betweenPasses(node, reference, binding, owner)) &&
+      changedUse(node, isFunctionDeclaration(binding), proof, !deferred && node === reference)
     )
       return true;
     node.forEachChild((child) => {
@@ -71,6 +80,23 @@ export function deferredArrayChange(
     });
   }
   return false;
+}
+
+/**
+ * Whether `use` of the holder can come between two passes of the loop around `reference`: one in
+ * the loop's repeated parts, or in another function, unless that is a local declaration nothing
+ * refers to.
+ */
+function betweenPasses(
+  use: Identifier,
+  reference: Identifier,
+  binding: FrameBinding | FunctionDeclaration,
+  owner: Node,
+): boolean {
+  const writer = executionOwner(use);
+  return writer === owner
+    ? repeatedFrameRead(use, reference, binding, owner)
+    : !unreferencedLocalFunction(writer, owner);
 }
 
 /**
@@ -104,8 +130,17 @@ function instanceInitializer(parent: Node, within: Node): boolean {
   );
 }
 
-/** Function declarations need binding writes; mutable objects also lose proof when handed away. */
-function changedUse(name: Identifier, functionBinding: boolean, proof: QuietProof): boolean {
+/**
+ * Function declarations need binding writes; mutable objects also lose proof when handed away. The
+ * `proven` use is the read the proof is of: where a pattern takes the holder apart, it hands it
+ * nowhere.
+ */
+function changedUse(
+  name: Identifier,
+  functionBinding: boolean,
+  proof: QuietProof,
+  proven: boolean,
+): boolean {
   let target: Node = name;
   while (transparent(target.parent)) target = target.parent;
   let member: Expression | undefined;
@@ -118,7 +153,7 @@ function changedUse(name: Identifier, functionBinding: boolean, proof: QuietProo
   }
   if (writtenTarget(target)) return true;
   if (functionBinding) return false;
-  if (member === undefined) return true;
+  if (member === undefined) return !proven;
   if (isCallExpression(target.parent) && target.parent.expression === target)
     return !proof.quiet(target.parent);
   return !proof.member(member);

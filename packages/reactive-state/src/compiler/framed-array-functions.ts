@@ -186,7 +186,10 @@ function constantInitializer(binding: FrameBinding): Expression | undefined {
     : undefined;
 }
 
-/** A mutable holder is not trusted after an earlier read or application effect could change it. */
+/**
+ * A mutable holder is not trusted after an earlier read or application effect could change it, nor,
+ * where a loop reads it again, after the rest of the loop could (`deferredArrayChange`).
+ */
 function firstReference(
   reference: Identifier,
   binding: FrameBinding | FunctionDeclaration,
