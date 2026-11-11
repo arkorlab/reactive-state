@@ -1,8 +1,18 @@
-import { type Expression, isCallExpression, isIdentifier, type Node } from 'typescript/ast';
+import {
+  type CallExpression,
+  type Expression,
+  isCallExpression,
+  isIdentifier,
+  type Node,
+} from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
 import { unwrapped } from '../src/compiler/bounded.ts';
-import { framedArrayString, framedArrayText } from '../src/compiler/framed-arrays.ts';
+import {
+  arrayMethodOverride,
+  framedArrayString,
+  framedArrayText,
+} from '../src/compiler/framed-arrays.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
@@ -909,4 +919,42 @@ function convertsError(root: Node): boolean {
     });
   }
   return false;
+}
+
+const LOGICAL = [
+  { id: 'or-assignment', operator: '||=' },
+  { id: 'and-assignment', operator: '&&=' },
+  { id: 'nullish-assignment', operator: '??=' },
+] as const;
+
+describe('what a logical assignment to a method leaves of its attributes', () => {
+  it.each(LOGICAL)('$id claims no attribute: it may assign nothing', ({ operator }) => {
+    using api = openTypeScript();
+    using parsed = parseModule(
+      api,
+      'logical-assignment.ts',
+      `function frames(error: Error) { const values = [error]; values.join ${operator} (() => 'x'); return String(values); }`,
+    );
+    const read = stringCall(parsed.sourceFile);
+
+    expect(arrayMethodOverride(read.arguments[0]!, 'join', read)).toStrictEqual({
+      own: false,
+    });
+  });
+});
+
+function stringCall(root: Node): CallExpression {
+  const pending = [root];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (
+      isCallExpression(node) &&
+      isIdentifier(node.expression) &&
+      node.expression.text === 'String'
+    )
+      return node;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  throw new Error('no String call');
 }
