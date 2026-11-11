@@ -752,6 +752,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-instance-field-initializer',
+    source: `function frames(error: Error) { const values = [error]; class Holder { held = read(1); } function read(pass: number): string { ${SAFE} if (pass < 1) new Holder(); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-class-heritage',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { class Derived extends (read(pass + 1), Object) {} } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-static-field-initializer',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { class Holder { static held = read(pass + 1); } } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'instance-field-initializer-never-run-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class Holder { held = read(pass + 1); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

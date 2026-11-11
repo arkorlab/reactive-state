@@ -8,6 +8,7 @@ import {
   isComputedPropertyName,
   isConstructorDeclaration,
   isElementAccessExpression,
+  isExpressionWithTypeArguments,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -79,6 +80,11 @@ const IMPLICIT_METHODS: ReadonlySet<string> = new Set([
   'toString',
   'valueOf',
 ]);
+
+/** Whether a node is a type and no value: the expression a class extends is a value. */
+function isTypeOnly(node: Node): boolean {
+  return isTypeNode(node) && !isExpressionWithTypeArguments(node);
+}
 
 /** The text of a property name that is written out, none for a computed one. */
 function keyText(name: PropertyName | undefined): string | undefined {
@@ -243,6 +249,23 @@ function runsWithin(node: Node, fn: Node): boolean {
   return true;
 }
 
+/** Whether a node lies in the initializer of an instance field, which runs when one is made. */
+function inInstanceInitializer(node: Node, fn: Node): boolean {
+  for (let at = node; at !== fn; at = at.parent)
+    if (isInstanceInitializer(at.parent, at)) return true;
+  return false;
+}
+
+/** Whether a node is what the instance field that holds it is given. */
+function isInstanceInitializer(holder: Node, node: Node): boolean {
+  if (!isPropertyDeclaration(holder)) return false;
+  const initializer: Node | undefined = holder.initializer;
+  return (
+    initializer === node &&
+    holder.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true
+  );
+}
+
 /**
  * Whether a name read inside the function resolves to the function: no parameter, no local, and no
  * function or class within it that is named alike takes the name first. A name that is not the
@@ -279,14 +302,10 @@ function functionsOf(file: SourceFile): FileFunctions {
   const implicit: Node[] = [];
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (isNamedFunction(node)) {
-      const { names, computed } = namesOf(node);
-      for (const name of names) byName.set(name, [...(byName.get(name) ?? []), node]);
-      const accessor = isGetAccessorDeclaration(node) || isSetAccessorDeclaration(node);
-      if (computed || accessor || names.some((name) => IMPLICIT_METHODS.has(name)))
-        implicit.push(node);
-    }
+    if (isTypeOnly(node)) continue;
+    for (const name of reachedNames(node).names)
+      byName.set(name, [...(byName.get(name) ?? []), node]);
+    if (isNamedFunction(node) && runsBySelf(node)) implicit.push(node);
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -296,11 +315,24 @@ function functionsOf(file: SourceFile): FileFunctions {
   return found;
 }
 
+/** The names a function or a class is reached by; a class by its own. */
+function reachedNames(node: Node): FunctionNames {
+  if (isClassDeclaration(node) || isClassExpression(node)) return namesOfClass(node);
+  return isNamedFunction(node) ? namesOf(node) : { names: [], computed: false };
+}
+
+/** Whether the language may call a function by itself: an accessor or an implicit method. */
+function runsBySelf(fn: Node): boolean {
+  const { names, computed } = namesOf(fn);
+  const accessor = isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn);
+  return computed || accessor || names.some((name) => IMPLICIT_METHODS.has(name));
+}
+
 /** Whether the code of a function reads one of the names where it may run. */
 function mentionsAny(fn: Node, names: ReadonlySet<string>): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     const text = referenceText(node);
     if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
       return true;
@@ -353,7 +385,7 @@ function reachedByProperty(fn: Node): boolean {
 function escapes(file: SourceFile, names: ReadonlySet<string>): boolean {
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     const text = referenceText(node);
     if (
       text !== undefined &&
@@ -381,7 +413,7 @@ function isDeclarationName(node: Node): boolean {
 function runsCodeBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (node !== fn && isAnswering(node)) continue;
     if (node.pos >= from && node.pos < to && !isCodeFree(node) && framedPossibleBranch(node))
       return true;
@@ -452,21 +484,26 @@ export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   if (anywhere && runsCodeBetween(fn, from, to)) return true;
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    const text = node.pos >= from && node.pos < to ? referenceText(node) : undefined;
-    if (
-      text !== undefined &&
-      names.has(text) &&
-      !written(node) &&
-      (!isIdentifier(node) || refersToFunction(node, fn)) &&
-      runsWithin(node, fn)
-    )
-      return true;
+    if (isTypeOnly(node)) continue;
+    if (node.pos >= from && node.pos < to && callsFunction(node, fn, names)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return false;
+}
+
+/** Whether a node reads a name by which the function is reached, in a place that may run. */
+function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolean {
+  const text = referenceText(node);
+  return (
+    text !== undefined &&
+    names.has(text) &&
+    !written(node) &&
+    (!isIdentifier(node) || refersToFunction(node, fn)) &&
+    runsWithin(node, fn) &&
+    !inInstanceInitializer(node, fn)
+  );
 }
 
 /** Whether the function runs itself again anywhere in its code. */
