@@ -1,8 +1,11 @@
 import {
   type CallExpression,
+  type FunctionExpression,
+  type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
+  isClassExpression,
   isElementAccessExpression,
   isForInStatement,
   isForOfStatement,
@@ -19,7 +22,7 @@ import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { arrayIdentity, mayBeArray } from './framed-array-own-methods.ts';
-import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { frameDeclarationOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
@@ -104,24 +107,42 @@ function reenteredRead(read: Node, root: FrameBinding, limit: Node): boolean {
       isFunctionExpression(at) &&
       at.name !== undefined &&
       !(root.pos >= at.pos && root.end <= at.end) &&
-      namesItself(at, at.name.text)
+      namesItself(at, at.name)
     )
       return true;
   return false;
 }
 
-/** Whether the function's code reads the name it is given, where the name may be its own. */
-function namesItself(fn: Node, name: string): boolean {
+/** Whether the function's code reads the name it is given, as the name of the function itself. */
+function namesItself(fn: FunctionExpression, name: Identifier): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
-    if (isIdentifier(node) && node.text === name && node.parent !== fn && readsBinding(node))
+    if (
+      isIdentifier(node) &&
+      node.text === name.text &&
+      node.parent !== fn &&
+      readsBinding(node) &&
+      reachesName(node, fn)
+    )
       return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return false;
+}
+
+/**
+ * Whether a name read inside the function resolves to the function's own name: no parameter, no
+ * local, and no function or class within it that is named alike takes the name first.
+ */
+function reachesName(name: Identifier, fn: FunctionExpression): boolean {
+  if (frameDeclarationOf(name) !== undefined) return false;
+  for (let at = name.parent; at !== fn; at = at.parent)
+    if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === name.text)
+      return false;
+  return true;
 }
 
 /**
