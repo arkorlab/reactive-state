@@ -6,6 +6,7 @@ import {
   isCallExpression,
   isArrayLiteralExpression,
   isElementAccessExpression,
+  isComputedPropertyName,
   isConditionalExpression,
   isExpression,
   isForInStatement,
@@ -364,7 +365,7 @@ function survivingFields(
   const found: AssignedFrameSource[] = [];
   const later = new Set(overwritten);
   for (const property of object.properties.toReversed()) {
-    const name = isSpreadAssignment(property) ? undefined : literalKey(property.name);
+    const name = fieldName(property);
     if (name !== undefined && later.has(name)) continue;
     found.push(...fieldValues(property, later));
     for (const each of fieldNames(property)) later.add(each);
@@ -387,10 +388,21 @@ function fieldValues(
     : possibleFields([{ value: property.expression, keys: [] }]);
 }
 
+/**
+ * The name a written field sets, none for a spread or a computed one the compile cannot read. A
+ * written `__proto__: value` sets the prototype and names no field; `['__proto__']` does.
+ */
+function fieldName(property: ObjectLiteralElementLike): string | undefined {
+  if (isSpreadAssignment(property)) return undefined;
+  const name = literalKey(property.name);
+  const prototype = isPropertyAssignment(property) && !isComputedPropertyName(property.name);
+  return prototype && name === '__proto__' ? undefined : name;
+}
+
 /** The names a field of a written object always sets: its own, or those of the literal it spreads. */
 function fieldNames(property: ObjectLiteralElementLike): readonly string[] {
   if (!isSpreadAssignment(property)) {
-    const name = literalKey(property.name);
+    const name = fieldName(property);
     return name === undefined ? [] : [name];
   }
   const copied = unwrapped(property.expression);

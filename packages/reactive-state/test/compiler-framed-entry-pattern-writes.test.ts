@@ -294,6 +294,18 @@ const CASES = [
     key: 'message',
     values: ["'safe':", 'error:'],
   },
+  {
+    id: 'computed-key-prototype-sets-no-field',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ['__proto__']: error, ...{ __proto__: {} } })); }`,
+    key: 'message',
+    values: ["'safe':", '{}:', 'error:'],
+  },
+  {
+    id: 'computed-key-computed-prototype-overwrites',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ['__proto__']: error, ...{ ['__proto__']: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
