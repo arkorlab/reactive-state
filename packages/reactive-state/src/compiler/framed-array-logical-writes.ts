@@ -28,13 +28,20 @@ import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
+/** The assignments that test the slot, and so can skip their right side: no other assignment does. */
+const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 /** A logical element assignment can skip its RHS only while its initial stored slot stays known. */
 export function framedLogicalElementSkipped(
   node: BinaryExpression,
   root: FrameBinding,
   sameArray: (value: Expression) => boolean,
 ): boolean {
-  if (node.operatorToken.kind === SyntaxKind.EqualsToken) return false;
+  if (!LOGICAL_ASSIGNMENTS.has(node.operatorToken.kind)) return false;
   const slot = initialSlot(node, root);
   if (slot === undefined || !unchangedBefore(node, root, sameArray)) return false;
   const value = slot.value === undefined ? undefined : logicalInitialValue(slot.value);
