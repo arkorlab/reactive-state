@@ -12,6 +12,7 @@ import {
   isComputedPropertyName,
   isDeleteExpression,
   isElementAccessExpression,
+  isExpression,
   isIdentifier,
   isFunctionExpression,
   isFunctionDeclaration,
@@ -20,6 +21,7 @@ import {
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
@@ -41,6 +43,7 @@ import {
   type Identifier,
   type MethodDeclaration,
   type Node,
+  type ObjectBindingPattern,
   type ObjectLiteralExpression,
   type PropertyName,
   SyntaxKind,
@@ -48,6 +51,7 @@ import {
 
 import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { useOf } from './code-globals.ts';
 import { deferredArrayChange } from './framed-array-mutations.ts';
 import {
   frameBindingOf,
@@ -211,7 +215,7 @@ function firstReference(
     });
   }
   return !deferredArrayChange(reference, binding, {
-    member: (value) => methodValue(value, false) !== undefined,
+    member: quietMember,
     quiet: quietWrittenCall,
   });
 }
@@ -228,6 +232,53 @@ function quietCallRest(node: Node, reference: Identifier): readonly Node[] | und
   while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
     root = unwrapped(root.expression);
   return isObjectLiteralExpression(root) ? [root] : [];
+}
+
+/**
+ * A member read of the holder that hands nothing of it away: a function, or a value that is no
+ * object the holder's literal holds. Such an object read as a value, passed on or kept under a
+ * name, is the holder's own, and what receives it can replace the method it holds; a pattern that
+ * takes it apart only reads its members (`bindsNoHolder`).
+ */
+function quietMember(value: Expression): boolean {
+  const selected = methodValue(value, false);
+  if (selected === undefined) return false;
+  if (isFunctionDeclaration(selected) || isMethodDeclaration(selected)) return true;
+  const member = unwrapped(selected);
+  return !isObjectLiteralExpression(member) || takenApart(value, member);
+}
+
+/** Whether `value` is what an object pattern of a declaration takes apart, keeping no `holder`. */
+function takenApart(value: Expression, holder: ObjectLiteralExpression): boolean {
+  const { at, parent } = useOf(value);
+  return (
+    isExpression(at) &&
+    isVariableDeclaration(parent) &&
+    parent.initializer === at &&
+    isObjectBindingPattern(parent.name) &&
+    bindsNoHolder(parent.name, holder)
+  );
+}
+
+/**
+ * Whether each element of `pattern` binds a member of `holder` that is no object literal, or one
+ * that a pattern takes apart in turn: a name for the object itself, a rest, a key that is not
+ * written or a member that is no literal one keeps it, or may.
+ */
+function bindsNoHolder(pattern: ObjectBindingPattern, holder: ObjectLiteralExpression): boolean {
+  return pattern.elements.every((element) => {
+    const key = element.dotDotDotToken === undefined ? frameMemberName(element) : undefined;
+    const selected = key === undefined ? undefined : literalFunctionMember(holder, key);
+    if (selected === undefined) return false;
+    if (isFunctionDeclaration(selected) || isMethodDeclaration(selected)) return true;
+    const member = unwrapped(selected);
+    if (!isObjectLiteralExpression(member)) return true;
+    return (
+      element.name !== undefined &&
+      isObjectBindingPattern(element.name) &&
+      bindsNoHolder(element.name, member)
+    );
+  });
 }
 
 /** Other function bodies, a setter's too, are deferred, but their computed names are evaluated now. */
