@@ -389,7 +389,8 @@ interface Overwritten {
 
 /**
  * The values one field holds: a getter, what it returns; a spread of a written object, that
- * object's own fields.
+ * object's own fields. A spread copies a getter as data, so a field after the spread hides what the
+ * getter returned as it hides a value.
  */
 function fieldValues(
   property: ObjectLiteralElementLike,
@@ -403,7 +404,7 @@ function fieldValues(
   if (!isSpreadAssignment(property)) return [];
   const copied = unwrapped(property.expression);
   return isObjectLiteralExpression(copied)
-    ? survivingFields(copied, later)
+    ? survivingFields(copied, { data: later.data, getters: later.data })
     : possibleFields([{ value: property.expression, keys: [] }]);
 }
 

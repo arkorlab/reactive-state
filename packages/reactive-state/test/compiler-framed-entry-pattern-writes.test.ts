@@ -378,6 +378,18 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':"],
   },
+  {
+    id: 'computed-key-spread-getter-then-setter-overwrite',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get field(): Error { return error; } }, set field(value: Error) {} })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'computed-key-spread-getter-then-getter-overwrite',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get field(): Error { return error; } }, get field(): string { return 'kept'; } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
