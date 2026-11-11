@@ -244,7 +244,10 @@ function endSelectedSegments(
   return [];
 }
 
-/** Flat mapping skips absent input slots rather than keeping map's output holes. */
+/**
+ * Flat mapping skips absent input slots rather than keeping map's output holes. A position from the
+ * end counts the slots the receiver holds, as one from the start does: the last is the last held.
+ */
 export function flatMappedSourceIndex(
   receiver: Expression,
   index: number | undefined,
@@ -256,5 +259,6 @@ export function flatMappedSourceIndex(
     isOmittedExpression(element) ? [] : [position],
   );
   if (positions.length === 0) return Infinity;
-  return index === undefined ? undefined : (positions[index] ?? Infinity);
+  if (index === undefined) return undefined;
+  return positions[index < 0 ? positions.length + index : index] ?? Infinity;
 }
