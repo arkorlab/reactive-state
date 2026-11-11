@@ -382,6 +382,16 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-try-around-inner-loop-proof-in-try-pin',
+    source: `function frames(error: Error) { const values = [error]; for (let outer = 0; outer < 2; outer++) { try { ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (outer === 0) throw error; values.join = () => 'fixed'; } } catch { /* the outer loop goes on */ } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-try-around-inner-loop-proof-outside-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let outer = 0; outer < 2; outer++) { try { for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (outer === 0) throw error; values.join = () => 'fixed'; } } catch { /* the outer loop goes on */ } } }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
