@@ -48,7 +48,7 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
-import { namespaceStatements } from './local-type-namespaces.ts';
+import { mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 
 /**
@@ -232,8 +232,9 @@ function readsIn(
 
 /**
  * Into `reads`, the reads in `namespace`'s body of a name none of `names` is, nor the body gives:
- * what it declares, what the bodies it merges with export (`namespaceStatements`), and the
- * namespace a dotted name declares within another, `B` of `namespace A.B {}`.
+ * what it declares, what the bodies it merges with export (`namespaceStatements`), and of a dotted
+ * name, `namespace A.B {}`, the namespace it declares within another, `B`, and what the bodies of
+ * `A` export, which are all that `A`'s body, this one, sees.
  */
 function namespaceReads(
   namespace: ModuleDeclaration,
@@ -242,7 +243,8 @@ function namespaceReads(
 ): void {
   const { body } = namespace;
   if (body !== undefined && isModuleDeclaration(body)) {
-    namespaceReads(body, widened(names, namesOf(body)), reads);
+    const outer = scopeNames(mergedExports(namespace), []);
+    namespaceReads(body, widened(names, [...namesOf(body), ...outer]), reads);
   } else if (body !== undefined && isModuleBlock(body)) {
     const own = scopeNames(namespaceStatements(body), body.statements);
     readsIn(body.statements, widened(names, own), reads);
