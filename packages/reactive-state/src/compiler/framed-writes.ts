@@ -190,7 +190,7 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
     const exit = parent.statements.find(
       (each) => each.pos >= at.end && leavesBody(each, parent, body),
     );
-    if (exit !== undefined && !jumpsOver(body, node.pos, exit)) return true;
+    if (exit !== undefined && !jumpsOver(body, node, exit)) return true;
   }
   return false;
 }
@@ -256,12 +256,14 @@ function jumpsOut(block: Node): boolean {
 }
 
 /**
- * Whether a continue or a break between a position and `target`, in `scope`, lands past `target`:
- * the loop, switch or labeled statement it leaves or goes round holds `target`, and so leaves it
+ * Whether a continue or a break between a write and `target`, in `scope`, lands past `target`: the
+ * loop, switch or labeled statement it leaves or goes round holds `target`, and so leaves it
  * behind; one that lands before it, out of an inner statement, does not, nor one in an arm a
- * written condition rules out.
+ * written condition rules out. A write in a finally block is run by the jumps of its try and catch
+ * blocks on their way out, whatever their place before it.
  */
-export function jumpsOver(scope: Node, from: number, target: Node): boolean {
+export function jumpsOver(scope: Node, write: Node, target: Node): boolean {
+  const from = pendingFrom(write, scope);
   const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
@@ -282,6 +284,17 @@ export function jumpsOver(scope: Node, from: number, target: Node): boolean {
     });
   }
   return false;
+}
+
+/** Where the jumps pending when the write runs begin: at the try statement of a finally block. */
+function pendingFrom(write: Node, scope: Node): number {
+  let from = write.pos;
+  for (let at = write; at !== scope && !isSourceFile(at); at = at.parent) {
+    const { parent } = at;
+    if (isTryStatement(parent) && isBlock(at) && parent.finallyBlock === at)
+      from = Math.min(from, parent.pos);
+  }
+  return from;
 }
 
 /** The loop, switch or labeled statement a break or continue leaves or goes round, if it is found. */

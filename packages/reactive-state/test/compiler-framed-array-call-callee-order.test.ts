@@ -452,6 +452,11 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'loop-pending-continue-through-finally-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let guard = 0; while (String(values) === 'fixed' && guard++ < 3) { try { continue; } finally { values.join = Array.prototype.join; } break; } }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
