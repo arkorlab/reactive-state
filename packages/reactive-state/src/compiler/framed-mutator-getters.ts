@@ -13,6 +13,7 @@ import {
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
+  isIfStatement,
   isObjectLiteralExpression,
   isReturnStatement,
   isSetAccessorDeclaration,
@@ -154,17 +155,36 @@ export function returnedValues(body: Block | undefined): WrittenArrayElement[] {
   return values.map((value) => ({ value, keys: [] }));
 }
 
-/** Each value a body writes after `return`, those of its nested functions and classes left out. */
+/**
+ * Each value a body writes after `return`, those of its nested functions and classes left out, and
+ * of the branch a written literal condition does not take.
+ */
 function writtenReturns(body: Block): readonly Expression[] {
   const found: Expression[] = [];
   const pending: Node[] = [body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isReturnStatement(node) && node.expression !== undefined) found.push(node.expression);
-    node.forEachChild((child) => {
+    for (const child of reachableChildren(node)) {
       if (!hasOwnReturns(child)) pending.push(child);
-    });
+    }
   }
   return found;
+}
+
+/** The children of a node that may run: an `if` with a written literal condition runs one branch. */
+function reachableChildren(node: Node): readonly Node[] {
+  if (isIfStatement(node)) {
+    const taken = framedCondition(node.expression);
+    if (taken !== undefined) {
+      const branch = taken ? node.thenStatement : node.elseStatement;
+      return branch === undefined ? [] : [branch];
+    }
+  }
+  const children: Node[] = [];
+  node.forEachChild((child) => {
+    children.push(child);
+  });
+  return children;
 }
 
 /** A nested function, a setter among them, or a class: what it returns is not the getter's. */

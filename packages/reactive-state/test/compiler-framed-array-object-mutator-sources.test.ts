@@ -1768,6 +1768,21 @@ const CONVERSIONS = [
     source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const item = 'safe'; ({ [key]: descriptor.value } = { item }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'getter-dead-branch-return',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { get 0() { let value = 'safe'; value += '!'; if (false) return error; return value; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'getter-live-branch-return',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; Object.assign(a, { get 0() { let value = 'safe'; value += '!'; if (flag) return error; return value; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-else-dead-branch-return',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { get 0() { let value = 'safe'; value += '!'; if (true) { return value; } else { return error; } } }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
