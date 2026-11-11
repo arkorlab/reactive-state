@@ -269,7 +269,11 @@ function ownMethods(receiver: Expression, call: Node): OwnMethods {
   return own;
 }
 
-/** A statement's operands run before the write the statement itself makes, in source order. */
+/**
+ * A statement's operands run before the write the statement itself makes, in source order. A
+ * definition among them leaves its key unproven: the property may be an accessor whose setter the
+ * statement's write calls, or one that refuses the write.
+ */
 function statementMethodWrites(
   before: Node,
   root: FrameBinding,
@@ -278,12 +282,14 @@ function statementMethodWrites(
   const top = isExpressionStatement(before) ? before.expression : undefined;
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
   const definite = assignment !== undefined || (top !== undefined && isCallExpression(top));
-  const writes = { root, owner, own, definite: definite ? top : undefined, until: before.end };
-  possibleMethodWrites(before, writes);
+  const defined = new Set<string>();
+  const writes = { root, owner, own, defined, definite: definite ? top : undefined };
+  possibleMethodWrites(before, { ...writes, until: before.end });
   if (top === undefined) return;
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
+  for (const key of defined) own.set(key, { own: false });
 }
 
 interface MethodWrites {
@@ -292,6 +298,7 @@ interface MethodWrites {
   readonly own: OwnMethods;
   readonly definite: Node | undefined;
   readonly until: number;
+  readonly defined?: Set<string>;
 }
 
 /** The read's own execution makes these writes in source order, before its later definite proofs. */
@@ -301,11 +308,29 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
     if (node.pos >= writes.until) continue;
     const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
     if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
-      for (const key of keys) writes.own.set(key, { own: false });
+      unprovenWrites(node, keys, writes);
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
+}
+
+/** The methods a write may replace are unproven; a definition's stay so past the statement's own. */
+function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
+  for (const key of keys) writes.own.set(key, { own: false });
+  if (definesProperties(node, writes.root)) for (const key of keys) writes.defined?.add(key);
+}
+
+/** A call that defines properties of the array, which may install an accessor or fix a value. */
+function definesProperties(node: Node, root: FrameBinding): boolean {
+  if (!isCallExpression(node)) return false;
+  const target = node.arguments[0];
+  const path = globalPathOf(unwrapped(node.expression))?.join('.');
+  return (
+    target !== undefined &&
+    arrayIdentity(target) === root &&
+    (path === 'Object.defineProperty' || path === 'Object.defineProperties')
+  );
 }
 
 /** Another function that may run before the read may write any method at any point before it. */

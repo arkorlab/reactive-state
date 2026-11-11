@@ -23,6 +23,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'accessor-argument',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {} }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'data-definition-argument',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { value: Array.prototype.join }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'definitions-argument',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperties(values, { join: { get: () => Array.prototype.join, set: () => {} } }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'other-key-definition-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'label', { value: 1 }), join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
     id: 'other-field-argument-pin',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { label: ((${NATIVE}), 1) }); return String(values); }`,
     converts: true,
