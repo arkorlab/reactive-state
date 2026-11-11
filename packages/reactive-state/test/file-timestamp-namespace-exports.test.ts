@@ -46,6 +46,18 @@ const CASES = [
     what: 'an export of a nested namespace’s other body',
   },
   {
+    source: `namespace C { namespace A { export namespace N { export const field = 'other'; } } namespace A { export namespace N { ${MAKES} } } }`,
+    what: 'an export of a nested namespace in the other of two bodies of a namespace its enclosing body keeps private',
+  },
+  {
+    source: `namespace D { namespace C { namespace B { export namespace N { export const field = 'other'; } } namespace B { export namespace N { ${MAKES} } } } }`,
+    what: 'an export of a namespace three levels in, where two enclosing bodies keep theirs private',
+  },
+  {
+    source: `namespace C { namespace A { export namespace N { export const field = 'other'; } } namespace A.N { ${MAKES} } }`,
+    what: 'an export of a nested namespace in a dotted one beside a private body',
+  },
+  {
     source: `namespace M.N { export const field = 'other'; } namespace M.N { ${MAKES} }`,
     what: 'an export of a dotted namespace’s other body',
   },
@@ -223,6 +235,10 @@ const PINS = [
   {
     source: `declare namespace A { namespace B { namespace N { const field: string; } } export {}; } namespace A { export namespace B { export namespace N { ${MAKES} } } }`,
     what: 'a namespace two levels in that an ambient body keeps private (pin)',
+  },
+  {
+    source: `namespace C { namespace A { export namespace N { export const field = 'other'; } } } namespace C { namespace A { export namespace N { ${MAKES} } } }`,
+    what: 'a namespace that two bodies of the outer one each keep private (pin)',
   },
   {
     source: `namespace N { export namespace field { export type T = string; } ${MAKES} }`,

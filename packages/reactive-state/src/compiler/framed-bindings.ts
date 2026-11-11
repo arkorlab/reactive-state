@@ -338,13 +338,15 @@ function bodyStatements(block: ModuleBlock): readonly Statement[] {
 /**
  * Whether a statement of another body is a member of a namespace that `around`, the nodes about
  * the one that looks, are within: the statement is exposed in its body, and so is each namespace
- * of it, in its own enclosing body, up to one that holds the looker too. A namespace that an
- * enclosing body does not export is private to that body (`namespace N` of an ambient body with an
- * `export {}`), with whatever it holds.
+ * of it, in its own enclosing body, up to the body that holds the looker too. Declarations that
+ * share a body merge by their names, whether exported or not (`namespace A` twice in one body);
+ * a namespace that an enclosing body does not export is private to that body (`namespace N` of an
+ * ambient body with an `export {}`), with whatever it holds, to the other bodies of its outer
+ * namespace.
  */
 function shown(statement: Statement, around: ReadonlySet<Node>): boolean {
   let at: Statement = statement;
-  while (!around.has(at)) {
+  while (!around.has(at.parent)) {
     const { parent } = at;
     // The dotted inner namespace of a name is exported by the parser, so only a block's can lack it.
     if (isModuleBlock(parent) && !exposed(at)) return false;

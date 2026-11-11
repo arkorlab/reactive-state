@@ -38,6 +38,10 @@ const CASES = [
     what: 'a member of an enum a namespace’s other body exports',
   },
   {
+    source: `namespace C { namespace A { export namespace N { export enum E { field = 'other' } } } namespace A { export namespace N { export enum E { entry = ${MAKES} } } } }`,
+    what: 'a member of an enum of a nested namespace in the other of two bodies of a namespace its enclosing body keeps private',
+  },
+  {
     source: `function make() { enum E { field = 'other', entry = ${MAKES} } }`,
     what: 'a member of an enum of a function’s body',
   },

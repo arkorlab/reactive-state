@@ -59,6 +59,18 @@ const CASES = [
     what: 'an export of a nested namespace’s other body',
   },
   {
+    source: `namespace C { namespace A { export namespace N { export const key = 2; } } namespace A { export namespace N { ${READ}; } } }`,
+    what: 'an export of a nested namespace in the other of two bodies of a namespace its enclosing body keeps private',
+  },
+  {
+    source: `namespace D { namespace C { namespace B { export namespace N { export const key = 2; } } namespace B { export namespace N { ${READ}; } } } }`,
+    what: 'an export of a namespace three levels in, where two enclosing bodies keep theirs private',
+  },
+  {
+    source: `namespace C { namespace A { export namespace N { export const key = 2; } } namespace A.N { ${READ}; } }`,
+    what: 'an export of a nested namespace in a dotted one beside a private body',
+  },
+  {
     source: `namespace C { namespace A { export namespace N { export const key = 2; } export namespace N { ${READ}; } } }`,
     what: 'an export of a body beside it, in a namespace its enclosing body keeps private (pin)',
   },
@@ -161,6 +173,14 @@ const CASES = [
 ] as const;
 
 const PINS = [
+  {
+    source: `namespace C { namespace A { export namespace N { export const key = 2; } } } namespace C { namespace A { export namespace N { ${READ}; } } }`,
+    what: 'a namespace that two bodies of the outer one each keep private (pin)',
+  },
+  {
+    source: `namespace C { export namespace A { export namespace N { export const key = 2; } } } namespace C { namespace A { export namespace N { ${READ}; } } }`,
+    what: 'a namespace exported by one body of the outer one and private to the other (pin)',
+  },
   {
     source: `namespace N { const key = 2; } namespace N { ${READ}; }`,
     what: 'a name not exported (pin)',

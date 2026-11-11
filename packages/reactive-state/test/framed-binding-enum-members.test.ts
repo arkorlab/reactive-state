@@ -121,12 +121,27 @@ const CASES = [
   },
   {
     source:
+      'namespace C { namespace A { export namespace N { export enum E { key = 2 } } } namespace A { export namespace N { export enum E { entry = value[key] } } } }',
+    what: 'a member of an enum of a nested namespace in the other of two bodies of a namespace its enclosing body keeps private',
+  },
+  {
+    source:
+      'namespace D { namespace C { namespace B { export namespace N { export enum E { key = 2 } } } namespace B { export namespace N { export enum E { entry = value[key] } } } } }',
+    what: 'a member of an enum three levels in, where two enclosing bodies keep theirs private',
+  },
+  {
+    source:
       'namespace C { namespace A { export namespace N { export enum E { key = 2 } } export namespace N { export enum E { entry = value[key] } } } }',
     what: 'a member of an enum of a body beside it, in a namespace its enclosing body keeps private (pin)',
   },
 ] as const;
 
 const PINS = [
+  {
+    source:
+      'namespace C { namespace A { export namespace N { export enum E { key = 2 } } } } namespace C { namespace A { export namespace N { export enum E { entry = value[key] } } } }',
+    what: 'enums of a namespace that two bodies of the outer one each keep private (pin)',
+  },
   { source: 'enum E { other = 2, entry = value[key] }', what: 'a member of another name (pin)' },
   {
     source: 'enum F { key = 2 } enum E { entry = value[key] }',
