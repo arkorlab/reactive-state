@@ -19,7 +19,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { answersLater } from './answers.ts';
+import { answersLater, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
@@ -259,7 +259,11 @@ function selectEntry(
   }
 }
 
-/** Data entries and synchronous getter returns retain their original lexical source expressions. */
+/**
+ * Data entries and synchronous getter returns retain their original lexical source expressions. A
+ * getter whose flow the compile does not follow, a statement it has no rule for between its returns,
+ * may return any `return` it writes: none of them is taken for a value it does not return.
+ */
 function entryValues(node: ObjectLiteralExpression['properties'][number]): readonly Expression[] {
   if (isPropertyAssignment(node)) return [node.initializer];
   if (isShorthandPropertyAssignment(node) && isIdentifier(node.name)) return [node.name];
@@ -267,7 +271,7 @@ function entryValues(node: ObjectLiteralExpression['properties'][number]): reado
   return (
     framedFactoryReturns(node.body, (statement) =>
       /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile())),
-    ) ?? []
+    ) ?? returnedBy(node)
   );
 }
 
