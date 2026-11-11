@@ -63,6 +63,36 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'earlier-writable-value',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'earlier-writable-value-assign',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, enumerable: false }); Object.assign(values, { join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'earlier-writable-definitions',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperties(values, { join: { value: Array.prototype.join, writable: true } }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'earlier-unwritable-value-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: false }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-configurable-value-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-writable-opaque-pin',
+    source: `function frames(error: Error, writable: boolean) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
     id: 'earlier-custom-value-pin',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: () => 'safe' }); return String(values); }`,
     converts: false,

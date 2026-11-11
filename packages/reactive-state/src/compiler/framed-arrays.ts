@@ -18,6 +18,7 @@ import {
   isSpreadAssignment,
   type Node,
   type ObjectLiteralExpression,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -325,7 +326,7 @@ function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrite
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held);
 }
 
-/** The methods a call that defines properties of the array leaves without a custom function. */
+/** The methods a definition of the array leaves without a custom function, nor a writable value. */
 function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void {
   if (!isCallExpression(node)) return;
   const target = node.arguments[0];
@@ -338,7 +339,7 @@ function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void
     return;
   const defined: OwnMethods = new Map();
   callMethodWrites(node, root, defined);
-  for (const [key, method] of defined) if (!method.own) held.add(key);
+  for (const [key, method] of defined) if (!method.own && method.writable !== true) held.add(key);
 }
 
 /** Another function that may run before the read may write any method at any point before it. */
@@ -492,7 +493,22 @@ function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOver
           : { own: false };
     }
   }
-  return custom;
+  return writableData(value) ? { ...custom, writable: true } : custom;
+}
+
+/** A descriptor that writes a plain data property and says `writable: true`, and nothing else. */
+function writableData(descriptor: ObjectLiteralExpression): boolean {
+  let writable = false;
+  for (const property of descriptor.properties) {
+    if (isSpreadAssignment(property)) return false;
+    const key = writtenArrayKey(property.name);
+    if (key === undefined || ACCESSOR_KEYS.has(key)) return false;
+    if (key === 'writable')
+      writable =
+        isPropertyAssignment(property) &&
+        unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword;
+  }
+  return writable;
 }
 
 /** An opaque write can replace either method and therefore removes a proof of a custom method. */
