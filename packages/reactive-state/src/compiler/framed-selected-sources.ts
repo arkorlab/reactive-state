@@ -2,8 +2,17 @@ import {
   type ArrayLiteralExpression,
   type Expression,
   type FunctionDeclaration,
+  type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
+  isCallExpression,
+  isDeleteExpression,
+  isElementAccessExpression,
+  isForOfStatement,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
+  isPropertyAccessExpression,
+  isVariableDeclaration,
   isComputedPropertyName,
   isFunctionDeclaration,
   isGetAccessorDeclaration,
@@ -23,6 +32,7 @@ import {
 
 import { writtenArrayKey } from './framed-array-functions.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { heldValue } from './framed-held-member-writes.ts';
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { ANY_FIELD, suffixStart } from './framed-pattern-members.ts';
@@ -78,7 +88,8 @@ function select(
 ): readonly AssignedFrameSource[] {
   if (keys.length === 0) return [{ value, keys: [] }];
   const whole = [{ value, keys }];
-  const held = valueOf(value);
+  const names: Identifier[] = [];
+  const held = valueOf(value, names);
   if (isFunctionDeclaration(held)) return whole;
   const paths = reading.visited.get(held) ?? new Set<string>();
   const path = `${reading.own ? 'own' : 'all'}\0${keys.join('\0')}`;
@@ -87,7 +98,8 @@ function select(
   const alternatives = alternativesOf(held);
   if (alternatives !== undefined)
     return alternatives.flatMap((each) => select(each, keys, reading));
-  if (isArrayLiteralExpression(held)) return entryOf(held, keys, whole, reading);
+  if (isArrayLiteralExpression(held))
+    return entryOf(held, keys, { whole, exact: unchanged(names) }, reading);
   return isObjectLiteralExpression(held) ? fieldOf(held, keys, whole, reading) : whole;
 }
 
@@ -98,15 +110,84 @@ const VALUE_OF_RIGHT: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /** What an expression is, through the constants that hold it, a comma and an assignment. */
-function valueOf(expression: Expression): Expression | FunctionDeclaration {
-  let held = heldValue(expression);
+function valueOf(expression: Expression, names: Identifier[]): Expression | FunctionDeclaration {
+  let held = heldValue(expression, names);
   while (
     !isFunctionDeclaration(held) &&
     isBinaryExpression(held) &&
     VALUE_OF_RIGHT.has(held.operatorToken.kind)
   )
-    held = heldValue(held.right);
+    held = heldValue(held.right, names);
   return held;
+}
+
+/** What reads below the first step of a path read: the fields of a copy are no copy. */
+function below(reading: Reading): Reading {
+  return reading.own ? { ...reading, own: false } : reading;
+}
+
+/** The methods that change a list, or the order of its entries. */
+const CHANGING = new Set([
+  'copyWithin',
+  'fill',
+  'pop',
+  'push',
+  'reverse',
+  'shift',
+  'sort',
+  'splice',
+  'unshift',
+]);
+
+/** Whether a place that names a list only reads it: spreads it, iterates it, takes an entry of it. */
+function onlyReads(name: Identifier): boolean {
+  const { parent } = name;
+  if (isVariableDeclaration(parent)) return parent.name === name;
+  if (isSpreadElement(parent) || isForOfStatement(parent)) return true;
+  if (isBinaryExpression(parent))
+    return (
+      parent.right === name &&
+      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+      (isArrayLiteralExpression(parent.left) || isObjectLiteralExpression(parent.left))
+    );
+  if (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) return false;
+  const used = parent.parent;
+  if (isCallExpression(used) && used.expression === parent)
+    return isPropertyAccessExpression(parent) && !CHANGING.has(parent.name.text);
+  if (isBinaryExpression(used))
+    return !(used.left === parent && isAssignmentOperator(used.operatorToken.kind));
+  return !(
+    isDeleteExpression(used) ||
+    isPrefixUnaryExpression(used) ||
+    isPostfixUnaryExpression(used)
+  );
+}
+
+function isAssignmentOperator(kind: SyntaxKind): boolean {
+  return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+}
+
+/**
+ * Whether the list the names stand for is what its literal wrote: one name, which nothing but a read
+ * of it mentions. A list that a call, an alias or a change reaches may hold its entries elsewhere.
+ */
+function unchanged(names: readonly Identifier[]): boolean {
+  const [name, ...others] = names;
+  if (name === undefined) return true;
+  if (others.length > 0) return false;
+  const binding = frameBindingOf(name)?.binding;
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isIdentifier(node)) {
+      const mentions = node.text === name.text && frameBindingOf(node)?.binding === binding;
+      if (mentions && !onlyReads(node)) return false;
+      continue;
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return true;
 }
 
 /** How far an index is followed in a list: past it, the key is for no position. */
@@ -136,14 +217,15 @@ function positionsOf(key: string): Positions | undefined {
 function entryOf(
   list: ArrayLiteralExpression,
   keys: readonly string[],
-  whole: readonly AssignedFrameSource[],
+  { whole, exact }: { readonly whole: readonly AssignedFrameSource[]; readonly exact: boolean },
   reading: Reading,
 ): readonly AssignedFrameSource[] {
   const [key = '', ...rest] = keys;
-  const wanted = positionsOf(key);
-  if (wanted === undefined) return whole;
+  const asked = positionsOf(key);
+  if (asked === undefined) return whole;
+  const wanted = exact ? asked : { from: 0, to: Infinity };
   const found: AssignedFrameSource[] = [];
-  place(list, { wanted, rest, found, reading, within: new Set([list]) }, 0);
+  place(list, { wanted, rest, found, reading, done: new Map() }, 0);
   return found;
 }
 
@@ -153,49 +235,68 @@ interface Placing {
   readonly rest: readonly string[];
   readonly found: AssignedFrameSource[];
   readonly reading: Reading;
-  /** The lists the walk is inside, which it does not enter again. */
-  readonly within: Set<Node>;
+  /** Where each list has been walked from, and where that walk ended: a list is walked once from a position. */
+  readonly done: Map<Node, Map<string, number | undefined>>;
 }
 
 /**
  * Walks a list from a position, which is none once a spread the compile cannot read has made the
  * positions unknown, and gives the position after it. An entry at a wanted position, or at an
- * unknown one, is taken.
+ * unknown one, is taken. Where every position from here on is wanted, the positions no longer
+ * matter, and the spreads are read for any entry.
  */
 function place(
   list: ArrayLiteralExpression,
   placing: Placing,
   start: number | undefined,
 ): number | undefined {
+  const walks = placing.done.get(list) ?? new Map<string, number | undefined>();
+  const from = String(start);
+  if (walks.has(from)) return walks.get(from);
+  placing.done.set(list, walks.set(from, start));
   let position = start;
   for (const each of list.elements) {
-    if (position !== undefined && position > placing.wanted.to) return position;
-    if (isSpreadElement(each)) {
-      position = placeSpread(each.expression, placing, position);
-      continue;
-    }
-    const wanted = position === undefined || position >= placing.wanted.from;
-    if (wanted && !isOmittedExpression(each))
-      placing.found.push(...select(each, placing.rest, placing.reading));
-    position = position === undefined ? undefined : position + 1;
+    if (position !== undefined && position > placing.wanted.to) break;
+    position = placeEntry(each, placing, position);
   }
+  walks.set(from, position);
   return position;
 }
 
-/** The entries of a spread: of a written list, at its offsets; of any other, wherever they are. */
+/** One element of a list placed at a position: the position after it. */
+function placeEntry(
+  each: Expression,
+  placing: Placing,
+  position: number | undefined,
+): number | undefined {
+  const { wanted } = placing;
+  const everywhere = wanted.to === Infinity && (position === undefined || position >= wanted.from);
+  if (isSpreadElement(each)) {
+    if (!everywhere) return placeSpread(each.expression, placing, position);
+    readAny(each.expression, placing);
+    return undefined;
+  }
+  if ((position === undefined || position >= wanted.from) && !isOmittedExpression(each))
+    placing.found.push(...select(each, placing.rest, below(placing.reading)));
+  return position === undefined ? undefined : position + 1;
+}
+
+/** The entries of a spread read for any entry: the positions no longer matter. */
+function readAny(copied: Expression, placing: Placing): void {
+  const keys = [ANY_FIELD, ...placing.rest];
+  placing.found.push(...select(copied, keys, below(placing.reading)));
+}
+
+/** The entries of a spread: of a list nothing changes, at its offsets; of any other, wherever. */
 function placeSpread(
   copied: Expression,
   placing: Placing,
   position: number | undefined,
 ): number | undefined {
-  const inner = valueOf(copied);
-  if (isArrayLiteralExpression(inner) && !placing.within.has(inner)) {
-    placing.within.add(inner);
-    const after = place(inner, placing, position);
-    placing.within.delete(inner);
-    return after;
-  }
-  placing.found.push(...select(copied, [ANY_FIELD, ...placing.rest], placing.reading));
+  const names: Identifier[] = [];
+  const inner = valueOf(copied, names);
+  if (isArrayLiteralExpression(inner) && unchanged(names)) return place(inner, placing, position);
+  readAny(copied, placing);
   return undefined;
 }
 
@@ -215,11 +316,12 @@ function fieldValues(
   whole: readonly AssignedFrameSource[],
   reading: Reading,
 ): readonly AssignedFrameSource[] {
-  if (isPropertyAssignment(property)) return select(property.initializer, rest, reading);
+  const deeper = below(reading);
+  if (isPropertyAssignment(property)) return select(property.initializer, rest, deeper);
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
-    return select(property.name, rest, reading);
+    return select(property.name, rest, deeper);
   if (!isGetAccessorDeclaration(property)) return whole;
-  return returnedValues(property.body).flatMap((each) => select(each.value, rest, reading));
+  return returnedValues(property.body).flatMap((each) => select(each.value, rest, deeper));
 }
 
 /** Whether a key is for any field, or for the entries from a position: no field is named. */

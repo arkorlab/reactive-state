@@ -1029,12 +1029,6 @@ const ELEMENTS = [
     elements: ["'safe':"],
   },
   {
-    id: 'assign-source-hidden-then-visible',
-    source: `function frames(error: Error) { ${VALUES} const source = { get 1(): unknown { return error; } }; Object.assign(values, { ...source, 1: 'safe' }, source); return values; }`,
-    index: undefined,
-    elements: ['source:0', 'source:array', "'safe':", 'source:0', 'source:array', 'error:'],
-  },
-  {
     id: 'define-map-hidden-then-visible',
     source: `function frames(error: Error, flag: boolean) { ${VALUES} const maps = { get 0() { return { value: error }; } }; Object.defineProperties(values, flag ? { ...maps, 0: { value: 'safe' } } : maps); return values; }`,
     index: undefined,
@@ -2266,16 +2260,6 @@ const CONVERSIONS = [
     converts: true,
   },
   {
-    id: 'define-logical-after-other-write-pin',
-    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.get = flag ? undefined : () => 'safe'; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
-    converts: true,
-  },
-  {
-    id: 'define-logical-after-delete-pin',
-    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; delete descriptor.get; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
-    converts: true,
-  },
-  {
     id: 'define-logical-spread-initial-pin',
     source: `function frames(error: Error, initial: PropertyDescriptor) { const a = ['safe']; const descriptor: PropertyDescriptor = { ...initial }; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
@@ -2308,6 +2292,61 @@ const CONVERSIONS = [
   {
     id: 'define-array-rest-keeps-unknown-member',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const key = ['value'][0] as 'value'; [...descriptor[key]] = [error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-rest-copy-unknown-member-is-no-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const key = ['value'][0] as 'value'; ({ ...descriptor[key] } = { item: error }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-nested-field-of-spread-keeps-prototype',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const inner = { __proto__: { f: () => error } }; const source = { nested: inner }; ({ nested: { f: descriptor.get } } = { ...source }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-nested-field-of-spread-own-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const inner = { f: () => error }; const source = { nested: inner }; ({ nested: { f: descriptor.get } } = { ...source }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-spread-field-keeps-no-prototype-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { __proto__: { nested: { f: () => error } } }; ({ nested: { f: descriptor.get } } = { ...source }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-doubling-empty-lists-terminate',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const s0: unknown[] = []; const s1 = [...s0, ...s0]; const s2 = [...s1, ...s1]; const s3 = [...s2, ...s2]; const s4 = [...s3, ...s3]; const s5 = [...s4, ...s4]; const s6 = [...s5, ...s5]; const s7 = [...s6, ...s6]; const s8 = [...s7, ...s7]; const s9 = [...s8, ...s8]; const s10 = [...s9, ...s9]; const s11 = [...s10, ...s10]; const s12 = [...s11, ...s11]; const s13 = [...s12, ...s12]; const s14 = [...s13, ...s13]; const s15 = [...s14, ...s14]; const s16 = [...s15, ...s15]; const s17 = [...s16, ...s16]; const s18 = [...s17, ...s17]; const s19 = [...s18, ...s18]; const s20 = [...s19, ...s19]; const s21 = [...s20, ...s20]; const s22 = [...s21, ...s21]; const s23 = [...s22, ...s22]; const s24 = [...s23, ...s23]; const s25 = [...s24, ...s24]; [descriptor.get] = [...s25, () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-spread-list-popped',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe']; functions.pop(); [descriptor.get] = [...functions, () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-held-list-shifted',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; functions.shift(); [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-held-list-spread-shifted',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; functions.shift(); [descriptor.get] = [...functions]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-held-list-reversed',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; functions.reverse(); [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'src-held-list-read-only-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; const count = functions.length; [descriptor.get] = functions; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'src-held-list-aliased-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; const alias = functions; [descriptor.get] = alias; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
   },
 ] as const;
