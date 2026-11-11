@@ -6,9 +6,11 @@ import {
   isElementAccessExpression,
   isExpression,
   isForOfStatement,
+  isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
   type Node,
@@ -84,8 +86,10 @@ function anyField(sources: readonly AssignedFrameSource[]): readonly AssignedFra
     if (isArrayLiteralExpression(value))
       return value.elements.map((element) => ({ value: element, keys: [] }));
     if (!isObjectLiteralExpression(value)) return [source];
-    return value.properties.flatMap((property) => {
+    return value.properties.flatMap((property): AssignedFrameSource[] => {
       if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+      if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+        return [{ value: property.name, keys: [] }];
       return isSpreadAssignment(property) ? [{ value: property.expression, keys: [] }] : [];
     });
   });

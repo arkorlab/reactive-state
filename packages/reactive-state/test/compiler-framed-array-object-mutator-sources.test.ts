@@ -1753,6 +1753,21 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const first: PropertyDescriptor[] = [{ get: () => error }, ...second]; const second: PropertyDescriptor[] = [...first, ...first]; Object.defineProperties(a, [...first, ...second] as unknown as PropertyDescriptorMap); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'define-key-shorthand-getter',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const getter = () => error; ({ [key]: descriptor.get } = { getter }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-shorthand-value',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ [key]: descriptor.value } = { error }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-shorthand-safe',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const item = 'safe'; ({ [key]: descriptor.value } = { item }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
