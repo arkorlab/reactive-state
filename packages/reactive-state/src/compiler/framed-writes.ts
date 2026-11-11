@@ -235,11 +235,12 @@ function resumesAfter(statement: TryStatement, from: Node): boolean {
   return finallyBlock !== undefined && from !== finallyBlock && jumpsIn(finallyBlock);
 }
 
-/** Whether a continue or a break lies in the node, wherever it is nested. */
+/** Whether a continue or a break that may run lies in the node, wherever it is nested. */
 function jumpsIn(node: Node): boolean {
   const pending: Node[] = [node];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    if (isContinueStatement(each) || isBreakStatement(each)) return true;
+    if ((isContinueStatement(each) || isBreakStatement(each)) && framedPossibleBranch(each))
+      return true;
     each.forEachChild((child) => {
       pending.push(child);
     });
@@ -250,7 +251,8 @@ function jumpsIn(node: Node): boolean {
 /**
  * Whether a continue or a break between a position and `target`, in `scope`, lands past `target`:
  * the loop, switch or labeled statement it leaves or goes round holds `target`, and so leaves it
- * behind; one that lands before it, out of an inner statement, does not.
+ * behind; one that lands before it, out of an inner statement, does not, nor one in an arm a
+ * written condition rules out.
  */
 export function jumpsOver(scope: Node, from: number, target: Node): boolean {
   const pending: Node[] = [scope];
@@ -258,7 +260,8 @@ export function jumpsOver(scope: Node, from: number, target: Node): boolean {
     if (
       (isContinueStatement(node) || isBreakStatement(node)) &&
       node.pos >= from &&
-      node.pos < target.pos
+      node.pos < target.pos &&
+      framedPossibleBranch(node)
     ) {
       const destination = jumpTarget(node);
       if (
