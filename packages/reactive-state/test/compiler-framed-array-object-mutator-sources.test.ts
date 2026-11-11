@@ -1225,6 +1225,24 @@ const ELEMENTS = [
     elements: ['descriptors:0.value'],
   },
   {
+    id: 'assign-spread-tuple-sources',
+    source: `function frames(error: Error, pair: [object, object]) { ${VALUES} Object.assign(values, ...pair); return values; }`,
+    index: undefined,
+    elements: ['pair:0.0', 'pair:1.0'],
+  },
+  {
+    id: 'assign-spread-three-tuple-sources',
+    source: `function frames(error: Error, triple: [{ 0: Error }, string, { 0: Error }]) { ${VALUES} Object.assign(values, ...triple); return values; }`,
+    index: undefined,
+    elements: ['triple:0.0', 'triple:1.0', 'triple:2.0'],
+  },
+  {
+    id: 'assign-spread-list-sources-pin',
+    source: `function frames(error: Error, list: object[]) { ${VALUES} Object.assign(values, ...list); return values; }`,
+    index: undefined,
+    elements: ['list:0.0'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,

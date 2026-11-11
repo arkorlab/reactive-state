@@ -27,6 +27,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
+import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
@@ -233,7 +234,8 @@ function assignedValues(
   hidden: Hidden = NOTHING_HIDDEN,
 ): WrittenArrayElement[] {
   if (isOmittedExpression(source)) return [];
-  if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slotKey(index)] }];
+  if (isSpreadElement(source))
+    return iteratedFrameSources(source.expression).map((each) => atSlot(each, index));
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
   if (!isObjectLiteralExpression(value)) {
@@ -334,6 +336,11 @@ function sourceNames(property: ObjectLiteralElementLike): readonly string[] {
   return isObjectLiteralExpression(copied)
     ? copied.properties.flatMap((each) => sourceNames(each))
     : [];
+}
+
+/** What a source holds at the selected slot: the path of the source, then the slot's own. */
+function atSlot(source: AssignedFrameSource, index: number | undefined): WrittenArrayElement {
+  return { value: source.value, keys: [...source.keys, slotKey(index)] };
 }
 
 /**
