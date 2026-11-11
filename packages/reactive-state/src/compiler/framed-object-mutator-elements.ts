@@ -13,6 +13,7 @@ import {
   isSpreadElement,
 } from 'typescript/ast';
 
+import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
@@ -57,15 +58,24 @@ function assignedValues(source: Expression, index: number | undefined): WrittenA
   if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slot] }];
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
-  if (!isObjectLiteralExpression(value)) return [{ value: source, keys: [slot] }];
+  if (!isObjectLiteralExpression(value)) return opaqueSource(source, index);
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
-    if (isSpreadAssignment(property)) found.push({ value: property.expression, keys: [slot] });
+    if (isSpreadAssignment(property)) found.push(...opaqueSource(property.expression, index));
     else if (!possibleKey(writtenArrayKey(property.name), index)) continue;
     else if (isPropertyAssignment(property)) found.push({ value: property.initializer, keys: [] });
     else if (isGetAccessorDeclaration(property)) found.push(...returnedValues(property.body));
   }
   return found;
+}
+
+/**
+ * An opaque source's value at the selected slot; at an unknown one, any element it holds as an
+ * array or a tuple does.
+ */
+function opaqueSource(source: Expression, index: number | undefined): WrittenArrayElement[] {
+  const selected = { value: source, keys: [slotKey(index)] };
+  return index === undefined ? [selected, { value: source, keys: [], array: true }] : [selected];
 }
 
 /** A descriptor map's entries at numeric keys; an opaque map keeps its slot's descriptor. */
@@ -105,7 +115,7 @@ function descriptorValues(descriptor: Expression | undefined): WrittenArrayEleme
       isIdentifier(property.name)
     )
       found.push({ value: property.name, keys: [] });
-    else if (key !== 'value' && isMethodDeclaration(property))
+    else if (key !== 'value' && isMethodDeclaration(property) && !answersLater(property))
       found.push(...returnedValues(property.body));
   }
   return found;
