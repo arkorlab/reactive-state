@@ -21,6 +21,7 @@ import {
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isVariableDeclaration,
@@ -168,8 +169,9 @@ function readsFirst(link: Node, at: Node): boolean {
 
 /**
  * Whether an expression runs whenever its statement does: the statement is an expression or a
- * declaration, and no condition, short circuit, optional chain, default of a pattern, function or
- * inner statement lies between them. A loop, a branch or a switch runs its parts on some paths.
+ * declaration, and no condition, short circuit, optional chain, default of a pattern, function,
+ * instance field or inner statement lies between them. A loop, a branch or a switch runs its parts
+ * on some paths.
  */
 export function evaluatedForSure(node: Node, statement: Node): boolean {
   if (!isExpressionStatement(statement) && !isVariableStatement(statement)) return false;
@@ -177,6 +179,14 @@ export function evaluatedForSure(node: Node, statement: Node): boolean {
     if (skipsLink(at, statement)) return false;
   }
   return true;
+}
+
+/** The initializer of an instance field, which runs when an instance is made. */
+function instanceInitializer(node: Node): Node | undefined {
+  const instance =
+    isPropertyDeclaration(node) &&
+    node.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true;
+  return instance ? node.initializer : undefined;
 }
 
 /** The default a binding element or a shorthand field of a pattern holds: it runs on some values. */
@@ -196,7 +206,7 @@ function skipsLink(at: Node, statement: Node): boolean {
       setsMember(parent) ||
       assignmentPatternDefault(parent)
     );
-  if (isFunctionLikeDeclaration(parent)) return true;
+  if (isFunctionLikeDeclaration(parent) || instanceInitializer(parent) === at) return true;
   if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
   return inner && parent !== statement;
@@ -268,13 +278,16 @@ export function afterSureWrite(written: ArrayMethodOverride | undefined): ArrayM
 
 /**
  * A method an assignment sure to run leaves: unproven, and a writable data property, since an
- * assignment to one that is not throws; it is configurable if it was, or was made by this write.
+ * assignment to one that is not throws; it is configurable if it was, or if the array had no own
+ * property of the name before, which the assignment then creates as one.
  */
 export function afterAssignment(previous: ArrayMethodOverride | undefined): ArrayMethodOverride {
   return {
     own: false,
     writable: true,
-    ...(previous?.configurable === true && { configurable: true as const }),
+    ...((previous === undefined || previous.configurable === true) && {
+      configurable: true as const,
+    }),
   };
 }
 
