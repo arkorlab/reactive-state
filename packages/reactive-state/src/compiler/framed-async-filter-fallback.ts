@@ -16,26 +16,13 @@ import {
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { concatQuietArguments } from './framed-concat-properties.ts';
-import { immediateMember, immediateSelection, type QuietCopyCall } from './framed-copy-guards.ts';
+import { immediateMember, type QuietCopyCall } from './framed-copy-guards.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedMapKey } from './framed-map-keys.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedOriginPrefix } from './framed-origin-prefix.ts';
 
-/** Async falsy predicates keep parameter elements only across quiet immediate native reads. */
-
-/** New parameter fallback cannot cross callback initialization, prior work or saved-result mutation. */
-export function quietAsyncFilterFallback(
-  copy: QuietCopyCall,
-  predicate: ArrowFunction,
-  stable: (receiver: Expression) => boolean,
-): boolean {
-  return (
-    directMethod(copy, 'filter') &&
-    immediateSelection(copy.call) &&
-    quietParameterFallback(copy, predicate, stable)
-  );
-}
+/** Async falsy find predicates keep parameter elements only across quiet immediate native reads. */
 
 /** A direct find or findLast keeps possible parameter elements without claiming an exact endpoint. */
 export function quietAsyncFindFallback(
