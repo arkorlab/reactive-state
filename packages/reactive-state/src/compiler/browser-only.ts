@@ -31,6 +31,7 @@ import {
   isSatisfiesExpression,
   isSourceFile,
   isStringLiteral,
+  isTypeAssertion,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -87,13 +88,27 @@ interface Candidate {
   readonly body: Node;
 }
 
-/** What `node` stands in, past the parentheses and the casts around it. */
+/** What `node` stands in, past the parentheses and the casts around it, in angle brackets too. */
 function holderOf(node: Node): Node {
   let at = node.parent;
-  while (isParenthesizedExpression(at) || isAsExpression(at) || isSatisfiesExpression(at)) {
+  while (
+    isParenthesizedExpression(at) ||
+    isAsExpression(at) ||
+    isSatisfiesExpression(at) ||
+    isTypeAssertion(at)
+  ) {
     at = at.parent;
   }
   return at;
+}
+
+/** `node` past what `unwrapped` strips and the casts in angle brackets it leaves, `<any>useEffect`. */
+function uncast(node: Expression): Expression {
+  let each = unwrapped(node);
+  while (isTypeAssertion(each)) {
+    each = unwrapped(each.expression);
+  }
+  return each;
 }
 
 /** What a file reads React's own hooks by, as `reactNamesOf` reads it once. */
@@ -163,12 +178,12 @@ function reactNamesOf(sourceFile: SourceFile): ReactNames {
  * — none of a function of the file's own, nor of another module's, of the name.
  */
 function namesHook(callee: Expression, names: ReadonlySet<string>): boolean {
-  const named = unwrapped(callee);
+  const named = uncast(callee);
   const react = reactNamesOf(named.getSourceFile());
   if (isIdentifier(named)) {
     return react.free.has(named) && names.has(react.hooks.get(named.text) ?? '');
   }
-  const whole = isPropertyAccessExpression(named) ? unwrapped(named.expression) : undefined;
+  const whole = isPropertyAccessExpression(named) ? uncast(named.expression) : undefined;
   return (
     whole !== undefined &&
     isPropertyAccessExpression(named) &&
@@ -213,7 +228,7 @@ function isHandedToBrowser(node: Node): boolean {
   return (
     isCallExpression(holder) &&
     first !== undefined &&
-    unwrapped(first) === node &&
+    uncast(first) === node &&
     namesHook(holder.expression, EFFECTS)
   );
 }
@@ -290,12 +305,12 @@ function exportedIn(statements: readonly Statement[]): readonly string[] {
 
 /** What runs when a `const` is called: its function, or what `useCallback` is handed of one. */
 function constantBody(initializer: Expression): Node | undefined {
-  const value = unwrapped(initializer);
+  const value = uncast(initializer);
   if (isArrowFunction(value) || isFunctionExpression(value)) {
     return value;
   }
   const [handed] = isCallExpression(value) ? value.arguments : [];
-  const given = handed === undefined ? undefined : unwrapped(handed);
+  const given = handed === undefined ? undefined : uncast(handed);
   return given !== undefined &&
     isCallExpression(value) &&
     namesHook(value.expression, CALLBACKS) &&

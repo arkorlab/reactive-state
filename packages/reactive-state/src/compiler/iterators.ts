@@ -6,6 +6,7 @@ import {
   isNoSubstitutionTemplateLiteral,
   isPropertyAccessExpression,
   isStringLiteral,
+  isTypeAssertion,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -41,6 +42,15 @@ const ITERATOR_MAKERS: ReadonlySet<string> = new Set([
 /** The methods of a function that call it on what they are given first. */
 const BORROWING: ReadonlySet<string> = new Set(['apply', 'call']);
 
+/** `node` past what `unwrapped` strips and the casts in angle brackets it leaves, `<any>items.values`. */
+function uncast(node: Expression): Expression {
+  let each = unwrapped(node);
+  while (isTypeAssertion(each)) {
+    each = unwrapped(each.expression);
+  }
+  return each;
+}
+
 /**
  * Whether `node` is an iterator, where the code makes one: of a method that answers one
  * (`ITERATING`), `items.values()`; of a global's function that makes one (`makesIterator`),
@@ -54,9 +64,9 @@ export function isIterator(
   isGenerator: (call: CallExpression) => boolean,
 ): boolean {
   const seen = new Set<Expression>();
-  for (let value = reach(node); isCallExpression(value) && !seen.has(value);) {
+  for (let value = uncast(reach(node)); isCallExpression(value) && !seen.has(value);) {
     seen.add(value);
-    const callee = unwrapped(value.expression);
+    const callee = uncast(value.expression);
     const path = globalPathOf(callee) ?? borrowedSymbolPath(callee);
     if (path !== undefined) {
       return makesIterator(path);
@@ -72,7 +82,7 @@ export function isIterator(
     ) {
       return isGenerator(value);
     }
-    value = reach(callee.expression);
+    value = uncast(reach(callee.expression));
   }
   return false;
 }
@@ -113,12 +123,12 @@ function borrowedSymbolPath(callee: Expression): readonly string[] | undefined {
   ) {
     return undefined;
   }
-  const method = unwrapped(callee.expression);
+  const method = uncast(callee.expression);
   const symbol = calledName(method);
   if (symbol?.startsWith('Symbol.') !== true || !isElementAccessExpression(method)) {
     return undefined;
   }
-  const of = globalPathOf(unwrapped(method.expression));
+  const of = globalPathOf(uncast(method.expression));
   return of === undefined ? undefined : [...of, symbol, borrowing];
 }
 
@@ -133,7 +143,7 @@ function calledName(callee: Expression): string | undefined {
   if (!isElementAccessExpression(callee)) {
     return undefined;
   }
-  const key = unwrapped(callee.argumentExpression);
+  const key = uncast(callee.argumentExpression);
   if (isStringLiteral(key) || isNoSubstitutionTemplateLiteral(key)) {
     return key.text;
   }
