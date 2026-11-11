@@ -11,6 +11,7 @@ import {
   isExpression,
   isForInStatement,
   isForOfStatement,
+  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
@@ -32,6 +33,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
@@ -371,7 +373,10 @@ function survivingFields(
   return found.toReversed();
 }
 
-/** The values one field holds; a spread of a written object holds that object's own fields. */
+/**
+ * The values one field holds: a getter, what it returns; a spread of a written object, that
+ * object's own fields.
+ */
 function fieldValues(
   property: ObjectLiteralElementLike,
   later: ReadonlySet<string>,
@@ -379,6 +384,8 @@ function fieldValues(
   if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
     return [{ value: property.name, keys: [] }];
+  if (isGetAccessorDeclaration(property))
+    return returnedBy(property).map((value) => ({ value, keys: [] }));
   if (!isSpreadAssignment(property)) return [];
   const copied = unwrapped(property.expression);
   return isObjectLiteralExpression(copied)
