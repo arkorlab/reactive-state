@@ -1,71 +1,39 @@
 import {
-  type BinaryExpression,
   type Block,
   type CallExpression,
   type Expression,
-  type FunctionDeclaration,
   type Identifier,
   isArrayLiteralExpression,
-  isArrowFunction,
-  isBinaryExpression,
-  isBlock,
   isCallExpression,
-  isClassDeclaration,
-  isClassExpression,
   isComputedPropertyName,
-  isConditionalExpression,
-  isFunctionDeclaration,
-  isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
-  isVoidExpression,
   isMethodDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPropertyAssignment,
-  isReturnStatement,
   isShorthandPropertyAssignment,
   isSetAccessorDeclaration,
   isSpreadAssignment,
   isSpreadElement,
-  isVariableDeclaration,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type PropertyName,
-  SyntaxKind,
-  type VariableStatement,
 } from 'typescript/ast';
 
-import { answersLater, isAnswering } from './answers.ts';
+import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameBindingOf } from './framed-bindings.ts';
-import { framedFactoryReturns } from './framed-factory-returns.ts';
-import { heldMemberWrites, heldValue, isConstant } from './framed-held-member-writes.ts';
-import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
+import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
+import { framedKeyNames } from './framed-keys.ts';
+import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
+import { functionReturns, alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { keyMayBeSlot, nameMayBeSlot, slotKey } from './framed-mutator-keys.ts';
-import { framedCondition } from './framed-sources.ts';
-import { framedAssignedValues } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
-
-const PATHS = {
-  assign: 'Object.assign',
-  properties: 'Object.defineProperties',
-  property: 'Object.defineProperty',
-} as const;
-
-const MUTATORS: ReadonlySet<string> = new Set(Object.values(PATHS));
-
-/** The operators that hand over one of their operands. */
-const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandToken,
-  SyntaxKind.BarBarToken,
-  SyntaxKind.QuestionQuestionToken,
-]);
 
 export interface MutatorElements {
   readonly target: Expression;
@@ -80,9 +48,10 @@ export function objectMutatorElements(
   call: CallExpression,
   index: number | undefined,
 ): MutatorElements | undefined {
-  const path = globalPathOf(unwrapped(call.expression))?.join('.');
-  if (path === undefined || !MUTATORS.has(path)) return undefined;
-  const [target, ...rest] = writtenArguments(call);
+  const invoked = mutatorInvocation(call);
+  if (invoked === undefined) return undefined;
+  const { path } = invoked;
+  const [target, ...rest] = invoked.args;
   if (target === undefined || isSpreadElement(target)) return undefined;
   const reading = freshReading();
   const mutated = returnedTarget(target);
@@ -136,15 +105,15 @@ interface Reading {
   readonly seen: {
     readonly full: Set<Node>;
     readonly own: Set<Node>;
-    readonly maps: Set<Node>;
-    readonly sources: Set<Node>;
+    readonly maps: Map<Node, readonly Hidden[]>;
+    readonly sources: Map<Node, readonly Hidden[]>;
   };
 }
 
 function freshReading(): Reading {
   return {
     inherited: true,
-    seen: { full: new Set(), own: new Set(), maps: new Set(), sources: new Set() },
+    seen: { full: new Set(), own: new Set(), maps: new Map(), sources: new Map() },
   };
 }
 
@@ -156,25 +125,22 @@ function firstRead(seen: Set<Node>, held: Node): boolean {
 }
 
 /**
- * The call's arguments in order, each spread of a written list, or of a constant list nothing
- * changes, replaced by the entries it stands for; a spread the compile cannot read stays one. A
- * list is expanded each time it is spread, but never within itself.
+ * Whether an object has not yet been read under names hidden no more than now: a read under fewer
+ * hidden names reads everything a read under more would, so only the later one is skipped.
  */
-function writtenArguments(call: CallExpression): readonly Expression[] {
-  type Listed = readonly (readonly Expression[])[];
-  const written: Expression[] = [];
-  const pending = call.arguments.toReversed().map((node) => ({ node, within: [] as Listed }));
-  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const listed = isSpreadElement(each.node)
-      ? framedAppliedArguments(call, each.node.expression)
-      : undefined;
-    if (listed === undefined || each.within.includes(listed)) written.push(each.node);
-    else {
-      const within = [...each.within, listed];
-      for (const node of listed.toReversed()) pending.push({ node, within });
-    }
-  }
-  return written;
+function firstReadUnder(table: Map<Node, readonly Hidden[]>, held: Node, hidden: Hidden): boolean {
+  const earlier = table.get(held) ?? [];
+  const covered = earlier.some(
+    (each) => isSubset(each.data, hidden.data) && isSubset(each.getters, hidden.getters),
+  );
+  if (covered) return false;
+  table.set(held, [...earlier, { data: new Set(hidden.data), getters: new Set(hidden.getters) }]);
+  return true;
+}
+
+function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {
+  for (const each of small) if (!large.has(each)) return false;
+  return true;
 }
 
 /**
@@ -250,7 +216,8 @@ function assignedValues(
     const held = heldValue(value);
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
     const opaque = opaqueSource(source, index);
-    if (alternatives === undefined || !firstRead(reading.seen.sources, held)) return opaque;
+    if (alternatives === undefined || !firstReadUnder(reading.seen.sources, held, hidden))
+      return opaque;
     return [
       ...opaque,
       ...alternatives.flatMap((each) => assignedValues(each, index, reading, hidden)),
@@ -266,13 +233,26 @@ function sourceFields(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
+  return fieldsAfter(object, hidden, (property, later) =>
+    propertyElements(property, index, reading, later),
+  );
+}
+
+/**
+ * What the fields of a written object read, each as the fields after it leave it: read from the
+ * last, a field is skipped where a later one has set its name.
+ */
+function fieldsAfter(
+  object: ObjectLiteralExpression,
+  hidden: Hidden,
+  read: (property: ObjectLiteralElementLike, later: Hidden) => WrittenArrayElement[],
+): WrittenArrayElement[] {
   const found: (readonly WrittenArrayElement[])[] = [];
   const later = { data: new Set(hidden.data), getters: new Set(hidden.getters) };
   for (const property of object.properties.toReversed()) {
     const name = sourceName(property);
     const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
-    if (name === undefined || !taken.has(name))
-      found.push(propertyElements(property, index, reading, later));
+    if (name === undefined || !taken.has(name)) found.push(read(property, later));
     for (const each of sourceNames(property)) {
       later.data.add(each);
       if (!isSetAccessorDeclaration(property)) later.getters.add(each);
@@ -348,6 +328,7 @@ function definedValues(
   descriptors: Expression,
   index: number | undefined,
   reading: Reading,
+  hidden: Hidden = NOTHING_HIDDEN,
 ): WrittenArrayElement[] {
   if (isOmittedExpression(descriptors)) return [];
   const slot = slotKey(index);
@@ -358,21 +339,37 @@ function definedValues(
     const held = heldValue(value);
     const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
-    if (alternatives === undefined || !firstRead(reading.seen.maps, held)) return opaque;
-    return [...opaque, ...alternatives.flatMap((each) => definedValues(each, index, reading))];
+    if (alternatives === undefined || !firstReadUnder(reading.seen.maps, held, hidden))
+      return opaque;
+    return [
+      ...opaque,
+      ...alternatives.flatMap((each) => definedValues(each, index, reading, hidden)),
+    ];
   }
-  const found: WrittenArrayElement[] = [];
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property))
-      found.push(...definedValues(property.expression, index, reading));
-    else if (isPropertyAssignment(property) && nameMayBeSlot(property.name, index))
-      found.push(...descriptorValues(property.initializer, reading));
-    else if (isGetAccessorDeclaration(property) && nameMayBeSlot(property.name, index))
-      found.push(
-        ...returnedValues(property.body).flatMap((each) => descriptorValues(each.value, reading)),
-      );
-  }
-  return found;
+  return fieldsAfter(value, hidden, (property, later) =>
+    mapElements(property, index, reading, later),
+  );
+}
+
+/**
+ * The descriptors one field of a descriptor map defines: its value, what its getter returns, and
+ * those of a spread, whose getters were read, so a field after it hides them as values.
+ */
+function mapElements(
+  property: ObjectLiteralElementLike,
+  index: number | undefined,
+  reading: Reading,
+  later: Hidden,
+): WrittenArrayElement[] {
+  if (isSpreadAssignment(property))
+    return definedValues(property.expression, index, reading, {
+      data: later.data,
+      getters: later.data,
+    });
+  if (!nameMayBeSlot(property.name, index)) return [];
+  if (isPropertyAssignment(property)) return descriptorValues(property.initializer, reading);
+  if (!isGetAccessorDeclaration(property)) return [];
+  return returnedValues(property.body).flatMap((each) => descriptorValues(each.value, reading));
 }
 
 /**
@@ -481,98 +478,6 @@ function accessedValues(
 }
 
 /**
- * What a written synchronous function, or a name that holds one, returns as a getter. A name that
- * is assigned before the getter is read may hold what it is assigned instead, as it stands where it
- * is named. Each place that names a function is read once, which keeps a name that holds itself
- * from being followed for good.
- */
-function functionReturns(initializer: Expression, seen = new Set<Node>()): WrittenArrayElement[] {
-  if (seen.has(initializer)) return [];
-  seen.add(initializer);
-  const names: Identifier[] = [];
-  const held = heldValue(initializer, names);
-  const alternatives = alternativesOf(held);
-  const returned =
-    alternatives === undefined
-      ? bodyReturns(held)
-      : alternatives.flatMap((each) => functionReturns(each, seen));
-  const replaced = names
-    .flatMap((name) => [...variableInitializer(name), ...framedAssignedValues(name)])
-    .flatMap((each) => functionReturns(each, seen));
-  return distinctElements([...returned, ...replaced]);
-}
-
-/** The elements without the repeats that reading one function from two places makes. */
-function distinctElements(elements: readonly WrittenArrayElement[]): WrittenArrayElement[] {
-  const same = (left: WrittenArrayElement, right: WrittenArrayElement): boolean =>
-    left.value === right.value && left.keys.join('.') === right.keys.join('.');
-  return elements.filter((each, at) => elements.findIndex((other) => same(other, each)) === at);
-}
-
-/**
- * The values a conditional or a logical expression may hand over, the one a written literal
- * condition takes alone; none for any other expression.
- */
-function alternativesOf(
-  value: Expression | FunctionDeclaration,
-): readonly Expression[] | undefined {
-  if (isConditionalExpression(value)) {
-    const taken = framedCondition(value.condition);
-    if (taken !== undefined) return [taken ? value.whenTrue : value.whenFalse];
-    return [value.whenTrue, value.whenFalse];
-  }
-  if (isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind)) return operands(value);
-  return undefined;
-}
-
-/**
- * Whether what an expression is written as, through the constants that hold it, is null or
- * undefined: `null`, `void 0`, an `undefined` no declaration shadows; or a written value, which is
- * neither. None where the compile cannot tell, a name that is assigned among them.
- */
-function nullishness(expression: Expression): boolean | undefined {
-  const names: Identifier[] = [];
-  const value = heldValue(expression, names);
-  if (names.some((name) => framedAssignedValues(name).length > 0)) return undefined;
-  if (isFunctionDeclaration(value)) return false;
-  if (isIdentifier(value))
-    return value.text === 'undefined' && frameBindingOf(value) === undefined ? true : undefined;
-  if (isVoidExpression(value) || value.kind === SyntaxKind.NullKeyword) return true;
-  const written =
-    framedCondition(value) !== undefined ||
-    isObjectLiteralExpression(value) ||
-    isArrayLiteralExpression(value) ||
-    isArrowFunction(value) ||
-    isFunctionExpression(value);
-  return written ? false : undefined;
-}
-
-/**
- * The operands of a logical expression that it may hand over: where the left is a written
- * literal, the short-circuit rule picks the left, which ends it, or the right.
- */
-function operands(value: BinaryExpression): readonly Expression[] {
-  const { left, right } = value;
-  const kind = value.operatorToken.kind;
-  if (kind === SyntaxKind.QuestionQuestionToken) {
-    const nullish = nullishness(left);
-    if (nullish === undefined) return [left, right];
-    return [nullish ? right : left];
-  }
-  const truth = framedCondition(left);
-  if (truth === undefined) return [left, right];
-  const taken = truth === (kind === SyntaxKind.AmpersandAmpersandToken) ? right : left;
-  return [taken];
-}
-
-/** What a written function returns when it is called. */
-function bodyReturns(fn: Expression | FunctionDeclaration): WrittenArrayElement[] {
-  if (isFunctionDeclaration(fn)) return answersLater(fn) ? [] : returnedValues(fn.body);
-  if ((!isArrowFunction(fn) && !isFunctionExpression(fn)) || answersLater(fn)) return [];
-  return isBlock(fn.body) ? returnedValues(fn.body) : [{ value: fn.body, keys: [] }];
-}
-
-/**
  * The values assigned to the `value` and `get` fields of an object a constant holds, or of what it
  * is aliased to: a constant does not keep its fields from changing. An assignment anywhere counts.
  */
@@ -585,50 +490,4 @@ function descriptorWrites(names: readonly Identifier[]): WrittenArrayElement[] {
       ? [...installed, ...functionReturns(value)]
       : installed;
   });
-}
-
-/** The initializer of a variable that is not a constant: what it holds before a write replaces it. */
-function variableInitializer(name: Identifier): readonly Expression[] {
-  const selected = frameBindingOf(name);
-  const declaration = selected?.keys.length === 0 ? selected.binding : undefined;
-  const held =
-    declaration !== undefined && isVariableDeclaration(declaration) && !isConstant(declaration)
-      ? declaration.initializer
-      : undefined;
-  return held === undefined ? [] : [held];
-}
-
-/** What a getter's body may return: by its flow where that is followed, by each `return` else. */
-function returnedValues(body: Block | undefined): WrittenArrayElement[] {
-  if (body === undefined) return [];
-  const values = framedFactoryReturns(body, constantStatement) ?? writtenReturns(body);
-  return values.map((value) => ({ value, keys: [] }));
-}
-
-/** Each value a body writes after `return`, those of its nested functions and classes left out. */
-function writtenReturns(body: Block): readonly Expression[] {
-  const found: Expression[] = [];
-  const pending: Node[] = [body];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isReturnStatement(node) && node.expression !== undefined) found.push(node.expression);
-    node.forEachChild((child) => {
-      if (!hasOwnReturns(child)) pending.push(child);
-    });
-  }
-  return found;
-}
-
-/** A nested function, a setter among them, or a class: what it returns is not the getter's. */
-function hasOwnReturns(node: Node): boolean {
-  return (
-    isAnswering(node) ||
-    isSetAccessorDeclaration(node) ||
-    isClassDeclaration(node) ||
-    isClassExpression(node)
-  );
-}
-
-/** A constant declaration, as the object-member readers take it, keeps the body's flow followed. */
-function constantStatement(statement: VariableStatement): boolean {
-  return /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile()));
 }
