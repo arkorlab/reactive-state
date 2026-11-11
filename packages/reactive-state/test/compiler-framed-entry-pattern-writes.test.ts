@@ -148,7 +148,31 @@ const CASES = [
     id: 'pattern-default-computed-key-pin',
     source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: [entry[1]] = [error] } = { field: [] })); }`,
     key: 'message',
-    values: ["'safe':", '[]:', '[error]:', 'error:'],
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-nested-pattern',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: { x: entry[1] } } = { field: { x: error } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-nested-array',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: [entry[1]] } = { field: [error] })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'two-computed-keys',
+    source: `function frames(error: Error, a: string, b: string) { ${ENTRY} return Object.fromEntries([entry], ({ [a]: { [b]: { x: entry[1] } } } = { f: { g: { x: error } } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-nested-other-field-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: { y: entry[1] } } = { field: { x: error } })); }`,
+    key: 'message',
+    values: ["'safe':"],
   },
   {
     id: 'empty-loop-head',
