@@ -325,7 +325,11 @@ export function localsOf(fn: Answering): Locals {
       node.forEachChild(visit);
     }
   };
-  fn.body?.forEachChild(visit);
+  // The body itself is visited, not only what it holds: a body that is a function or a class, as of
+  // `(a) => (b) => …`, declares nothing of `fn`'s.
+  if (fn.body !== undefined) {
+    visit(fn.body);
+  }
   const locals: Locals = {
     constants: new Map([...constants].filter(([name]) => counts.get(name) === 1)),
     declared: new Set(counts.keys()),
