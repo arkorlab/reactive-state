@@ -31,7 +31,7 @@ import {
   type VariableStatement,
 } from 'typescript/ast';
 
-import { answersLater, isAnswering } from './answers.ts';
+import { answersLater, isAnswering, overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
@@ -300,7 +300,8 @@ function heldValue(
     seen.add(value);
     names.push(value);
     const declared = frameDeclarationOf(value);
-    if (declared !== undefined && isFunctionDeclaration(declared)) return declared;
+    if (declared !== undefined && isFunctionDeclaration(declared))
+      return implementationOf(declared);
     const selected = frameBindingOf(value);
     const held =
       selected?.keys.length === 0 &&
@@ -312,6 +313,14 @@ function heldValue(
     value = unwrapped(held);
   }
   return value;
+}
+
+/** The declaration that has the body among those a function is declared over: its signatures. */
+function implementationOf(declared: FunctionDeclaration): FunctionDeclaration {
+  const written = overloadsOf(declared).find(
+    (each): each is FunctionDeclaration => isFunctionDeclaration(each) && each.body !== undefined,
+  );
+  return written ?? declared;
 }
 
 /** Whether a variable is declared with `const`, which no later write changes. */
