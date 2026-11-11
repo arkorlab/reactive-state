@@ -8,6 +8,7 @@ import {
   isBlock,
   isClassDeclaration,
   isClassExpression,
+  isComputedPropertyName,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -25,6 +26,7 @@ import {
   isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
+  type PropertyName,
   type VariableStatement,
 } from 'typescript/ast';
 
@@ -35,8 +37,7 @@ import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
-import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
-import { constantValue } from './numbers.ts';
+import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
@@ -80,14 +81,12 @@ function definedProperty(call: CallExpression, index: number | undefined): Writt
   const prefix = framedArgumentPrefix(call, call.arguments, ARGUMENTS.property);
   if (!prefix.unknown) {
     const [, key, descriptor] = prefix.values;
-    return key !== undefined && possibleKey(constantValue(key), index)
-      ? descriptorValues(descriptor)
-      : [];
+    return key !== undefined && keyMayBeSlot(key, index) ? descriptorValues(descriptor) : [];
   }
   const args = call.arguments.slice(1);
   const [first] = args;
   if (first === undefined) return [];
-  if (!isSpreadElement(first) && !possibleKey(constantValue(first), index)) return [];
+  if (!isSpreadElement(first) && !keyMayBeSlot(first, index)) return [];
   return descriptorCandidates(args);
 }
 
@@ -150,7 +149,7 @@ function assignedValues(
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) found.push(...opaqueSource(property.expression, index));
-    else if (!possibleKey(writtenArrayKey(property.name), index)) continue;
+    else if (!nameMayBeSlot(property.name, index)) continue;
     else if (isPropertyAssignment(property)) found.push({ value: property.initializer, keys: [] });
     else if (isGetAccessorDeclaration(property)) found.push(...returnedValues(property.body));
   }
@@ -177,12 +176,9 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
   for (const property of value.properties) {
     if (isSpreadAssignment(property))
       found.push({ value: property.expression, keys: [slot, 'value'] });
-    else if (isPropertyAssignment(property) && possibleKey(writtenArrayKey(property.name), index))
+    else if (isPropertyAssignment(property) && nameMayBeSlot(property.name, index))
       found.push(...descriptorValues(property.initializer));
-    else if (
-      isGetAccessorDeclaration(property) &&
-      possibleKey(writtenArrayKey(property.name), index)
-    )
+    else if (isGetAccessorDeclaration(property) && nameMayBeSlot(property.name, index))
       found.push(...returnedValues(property.body).flatMap((each) => descriptorValues(each.value)));
   }
   return found;
@@ -308,6 +304,21 @@ function constantStatement(statement: VariableStatement): boolean {
 
 /** The greatest array index: a larger integer names an ordinary property, no element. */
 const ARRAY_INDEX = { last: 4_294_967_294 } as const;
+
+/** Whether a written key may name the slot: its constants and branches decide, an opaque one may. */
+function keyMayBeSlot(key: Expression, index: number | undefined): boolean {
+  const names = framedKeyNames(key);
+  return (
+    names === undefined || names.length === 0 || names.some((each) => possibleKey(each, index))
+  );
+}
+
+/** Whether an object field's name may name the slot, a computed one by what its key may be. */
+function nameMayBeSlot(name: PropertyName, index: number | undefined): boolean {
+  return isComputedPropertyName(name)
+    ? keyMayBeSlot(name.expression, index)
+    : possibleKey(writtenArrayKey(name), index);
+}
 
 /** A key that may name the selected array slot: an unknown one, or a canonical index. */
 function possibleKey(key: string | number | undefined, index: number | undefined): boolean {

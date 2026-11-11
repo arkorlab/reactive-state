@@ -333,6 +333,66 @@ const ELEMENTS = [
     elements: ['descriptor:value'],
   },
   {
+    id: 'define-constant-label-key',
+    source: `function frames(error: Error) { ${VALUES} const key = 'label'; Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-constant-index-key',
+    source: `function frames(error: Error) { ${VALUES} const key = 0; Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-constant-other-index-key',
+    source: `function frames(error: Error) { ${VALUES} const key = 1; Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: 0,
+    elements: [],
+  },
+  {
+    id: 'define-annotated-names-key',
+    source: `function frames(error: Error, key: 'label' | 'name') { ${VALUES} Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-annotated-index-key',
+    source: `function frames(error: Error, key: 'label' | '0') { ${VALUES} Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-opaque-key-pin',
+    source: `function frames(error: Error, key: string) { ${VALUES} Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-constant-computed-label',
+    source: `function frames(error: Error) { ${VALUES} const key = 'label'; Object.assign(values, { [key]: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'assign-constant-computed-index',
+    source: `function frames(error: Error) { ${VALUES} const key = 0; Object.assign(values, { [key]: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-map-constant-label',
+    source: `function frames(error: Error) { ${VALUES} const key = 'label'; Object.defineProperties(values, { [key]: { value: error } }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-map-constant-index',
+    source: `function frames(error: Error) { ${VALUES} const key = 0; Object.defineProperties(values, { [key]: { value: error } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -408,6 +468,21 @@ const CONVERSIONS = [
   {
     id: 'define-descriptor-spread-getter-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ get: () => error } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-constant-key-safe',
+    source: `function frames(error: Error) { const a = ['safe']; const key = 'label'; Object.defineProperty(a, key, { value: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-constant-computed-key-safe',
+    source: `function frames(error: Error) { const a = ['safe']; const key = 'label'; Object.assign(a, { [key]: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-constant-index-key-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const key = 0; Object.defineProperty(a, key, { value: error }); return String(a); }`,
     converts: true,
   },
   {
