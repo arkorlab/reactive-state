@@ -1173,6 +1173,12 @@ const ELEMENTS = [
     ],
   },
   {
+    id: 'define-copies-before-and-after-write',
+    source: `function frames(error: Error) { ${VALUES} const d: PropertyDescriptor = {}; const before = { ...d }; d.get = () => error; const after = { ...d }; Object.defineProperties(values, { 0: after, 1: before }); return values; }`,
+    index: undefined,
+    elements: ['after:value', 'd:value', 'error:', 'before:value', 'd:value'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1478,6 +1484,11 @@ const CONVERSIONS = [
     id: 'define-descriptor-overwritten-field-safe',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ value: error }, value: 'safe' }); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-copies-before-and-after-write-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const d: PropertyDescriptor = {}; const before = { ...d }; d.get = () => error; const after = { ...d }; Object.defineProperties(a, { 0: after, 1: before }); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',

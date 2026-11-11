@@ -400,7 +400,8 @@ function mapElements(
 
 /**
  * A descriptor's written `value` and what its written `get` returns; an opaque one keeps both. A
- * constant's fields may be assigned, and each value assigned to `value` or `get` is possible.
+ * constant's fields may be assigned, and each value assigned to `value` or `get` before the place
+ * that names it is possible, whether or not the object was read from another place.
  */
 function descriptorValues(
   descriptor: Expression | undefined,
@@ -417,7 +418,8 @@ function descriptorValues(
   const table = reading.inherited ? reading.seen.full : reading.seen.own;
   const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
   const used = alternatives === undefined ? undefined : readUnder(table, held, hidden);
-  if (alternatives === undefined || used === undefined) return opaque;
+  if (alternatives === undefined) return opaque;
+  if (used === undefined) return [...opaque, ...descriptorWrites(names)];
   const chosen = alternatives.flatMap((each) => {
     return isObjectLiteralExpression(each)
       ? descriptorFields(each, reading, used)
