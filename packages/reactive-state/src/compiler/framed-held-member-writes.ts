@@ -44,14 +44,16 @@ export interface HeldWrite {
 
 /**
  * The values assigned, anywhere in the program, to a member of what the names hold, or of what a
- * name that stands for it for good holds: a constant, or a variable no assignment changes.
+ * name that stands for it for good holds: a constant, or a variable no assignment changes. The
+ * object is made where the last name is declared, which a loop that holds that declaration makes
+ * again; an alias declared in the loop does not.
  */
 export function heldMemberWrites(
   first: Identifier,
   names: readonly Identifier[],
 ): readonly HeldWrite[] {
   const bindings = heldBindings(first, names);
-  const declared = frameBindingOf(first)?.binding;
+  const declared = frameBindingOf(names.at(-1) ?? first)?.binding;
   const found: HeldWrite[] = [];
   const pending: Node[] = [first.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {

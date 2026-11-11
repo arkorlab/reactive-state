@@ -1703,6 +1703,21 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const text = String(a); Object.assign(a, { 0: error }); return text; }`,
     converts: false,
   },
+  {
+    id: 'define-descriptor-alias-in-loop-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { configurable: true }; for (let at = 0; at < 2; at += 1) { const alias = descriptor; Object.defineProperty(a, 0, alias); descriptor.get = () => error; } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-alias-declared-in-loop-safe',
+    source: `function frames(error: Error) { const a = ['safe']; for (let at = 0; at < 2; at += 1) { const descriptor: PropertyDescriptor = { configurable: true }; const alias = descriptor; Object.defineProperty(a, 0, alias); descriptor.get = () => error; } return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-alias-chain-in-loop-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { configurable: true }; const first = descriptor; for (let at = 0; at < 2; at += 1) { const second = first; Object.defineProperty(a, 0, second); descriptor.get = () => error; } return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
