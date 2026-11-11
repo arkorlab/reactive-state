@@ -100,6 +100,24 @@ const SPREAD = [
     prefix: { values: ['null', '{}', "'message'"], unknown: false, alternatives: undefined },
   },
   {
+    id: 'reviewed-defaulted-holder',
+    source: `const fallback = { ${GETTER} }; const { missing: holder = fallback } = Reflect; ${TUPLE} holder.get(...tuple);`,
+    callee: 'holder.get',
+    prefix: { values: ['{}'], unknown: true, alternatives: ["new Error('changed')"] },
+  },
+  {
+    id: 'defaulted-holder-in-a-nested-pattern',
+    source: `const fallback = { ${GETTER} }; const { missing: { inner: holder } = { inner: fallback } } = Reflect; ${TUPLE} holder.get(...tuple);`,
+    callee: 'holder.get',
+    prefix: { values: ['{}'], unknown: true, alternatives: ["new Error('changed')"] },
+  },
+  {
+    id: 'renamed-destructured-native-member-pin',
+    source: `const { get: take } = Reflect; ${TUPLE} take.call(null, ...tuple); function later() { return tuple.length; }`,
+    callee: 'take.call',
+    prefix: { values: ['null', '{}', "'message'"], unknown: false, alternatives: undefined },
+  },
+  {
     id: 'mutable-alias-member-read',
     source: `let get = Reflect.get; ${TUPLE} get.call(null, ...tuple); function later() { return tuple.length; }`,
     callee: 'get.call',
