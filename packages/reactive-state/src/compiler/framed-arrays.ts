@@ -40,6 +40,7 @@ import {
   mayBeArray,
   OWN_METHODS,
   afterPossibleWrite,
+  afterSureWrite,
   definiteExpression,
   evaluatedForSure,
   type OwnMethods,
@@ -330,16 +331,19 @@ interface MethodWrites {
   readonly read?: Node | undefined;
 }
 
-/** The read's own execution makes these writes in source order, before its later definite proofs. */
+/**
+ * The read's own execution makes these writes in source order, before its later definite proofs:
+ * the operands of a call before the call.
+ */
 function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
-  const pending: Node[] = [statement];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.pos >= writes.until) continue;
+  const visit = (node: Node): void => {
+    if (node.pos >= writes.until) return;
+    node.forEachChild(visit);
     const keys = node === writes.definite ? [] : writtenMethods(node, writes.root);
     if (keys.length > 0 && executionOwner(node) === writes.owner && framedPossibleBranch(node))
       unprovenWrites(node, keys, writes, evaluatedForSure(node, statement));
-    for (const child of node.getChildren().toReversed()) pending.push(child);
-  }
+  };
+  visit(statement);
 }
 
 /**
@@ -365,7 +369,7 @@ function unprovenWrites(
     if (selected !== undefined && writtenAfterSelection(node, key, selected)) continue;
     const previous = writes.own.get(key);
     const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
-    writes.own.set(key, afterPossibleWrite(previous, written));
+    writes.own.set(key, sure ? afterSureWrite(written) : afterPossibleWrite(previous, written));
   }
 }
 
