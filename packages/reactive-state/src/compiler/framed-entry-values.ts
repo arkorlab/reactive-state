@@ -1,13 +1,19 @@
 import {
+  type BinaryExpression,
   type CallExpression,
   type Expression,
   isBinaryExpression,
   isCallExpression,
   isArrayLiteralExpression,
   isElementAccessExpression,
+  isConditionalExpression,
   isIdentifier,
   isNewExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isStringLiteral,
   isVariableDeclaration,
   isVariableDeclarationList,
   isSpreadElement,
@@ -21,7 +27,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
-import { framedNativeConstructor } from './framed-sources.ts';
+import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
 
@@ -121,11 +127,59 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
     });
     const slot = tupleWrite(node, aliases);
     if (slot === null || !isBinaryExpression(node) || executionOwner(node) !== owner) continue;
+    if (!reachedWrite(node, call)) continue;
     if (slot === undefined || slot === '0') key = true;
     if ((slot === undefined || slot === '1') && VALUE_WRITES.has(node.operatorToken.kind))
       values.push({ value: node.right, keys: [] });
   }
   return { key, values };
+}
+
+/**
+ * A write the call's evaluation may reach: no written literal condition or short-circuit skips it.
+ * A condition that reads a value, a Date's time or a constant's alias, is not trusted here, as the
+ * argument list may change what it reads before it is judged.
+ */
+function reachedWrite(node: Node, call: CallExpression): boolean {
+  for (let at = node; at !== call; at = at.parent) {
+    const { parent } = at;
+    if (isBinaryExpression(parent) && parent.right === at && shortCircuits(parent)) return false;
+    if (isConditionalExpression(parent) && at !== parent.condition) {
+      const condition = literalCondition(parent.condition);
+      if (condition !== undefined && at === (condition ? parent.whenFalse : parent.whenTrue))
+        return false;
+    }
+  }
+  return true;
+}
+
+/** Whether a written literal on the left keeps a logical operator from evaluating its right. */
+function shortCircuits(node: BinaryExpression): boolean {
+  const condition = literalCondition(node.left);
+  const kind = node.operatorToken.kind;
+  return (
+    (kind === SyntaxKind.AmpersandAmpersandToken && condition === false) ||
+    (kind === SyntaxKind.BarBarToken && condition === true)
+  );
+}
+
+/** The truth of a written literal, through parentheses and negations; none of anything else. */
+function literalCondition(expression: Expression): boolean | undefined {
+  let value = unwrapped(expression);
+  let negated = false;
+  while (isPrefixUnaryExpression(value) && value.operator === SyntaxKind.ExclamationToken) {
+    negated = !negated;
+    value = unwrapped(value.operand);
+  }
+  const literal =
+    value.kind === SyntaxKind.TrueKeyword ||
+    value.kind === SyntaxKind.FalseKeyword ||
+    value.kind === SyntaxKind.NullKeyword ||
+    isNumericLiteral(value) ||
+    isStringLiteral(value) ||
+    isNoSubstitutionTemplateLiteral(value);
+  const truth = literal ? framedCondition(value) : undefined;
+  return truth === undefined ? undefined : truth !== negated;
 }
 
 /** The slot an assignment writes on one of the tuple's bindings, none for an opaque key. */
