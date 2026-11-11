@@ -18,6 +18,7 @@ import {
   isPropertyAssignment,
   isReturnStatement,
   isShorthandPropertyAssignment,
+  isSetAccessorDeclaration,
   isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
@@ -262,11 +263,20 @@ function writtenReturns(body: Block): readonly Expression[] {
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isReturnStatement(node) && node.expression !== undefined) found.push(node.expression);
     node.forEachChild((child) => {
-      if (!isAnswering(child) && !isClassDeclaration(child) && !isClassExpression(child))
-        pending.push(child);
+      if (!hasOwnReturns(child)) pending.push(child);
     });
   }
   return found;
+}
+
+/** A nested function, a setter among them, or a class: what it returns is not the getter's. */
+function hasOwnReturns(node: Node): boolean {
+  return (
+    isAnswering(node) ||
+    isSetAccessorDeclaration(node) ||
+    isClassDeclaration(node) ||
+    isClassExpression(node)
+  );
 }
 
 /** A constant declaration, as the object-member readers take it, keeps the body's flow followed. */

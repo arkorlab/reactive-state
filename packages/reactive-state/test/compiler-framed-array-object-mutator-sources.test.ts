@@ -279,6 +279,12 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'assign-getter-nested-setter',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let later = { set field(value: number) { return error; } }; later = later; return 'safe'; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
     id: 'assign-getter-nested-class',
     source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { class Holder { constructor() { return error; } } return 'safe'; } }); return values; }`,
     index: undefined,
@@ -327,6 +333,11 @@ const CONVERSIONS = [
   {
     id: 'define-known-spread-label-safe',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, ...['label'] as const, { value: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-getter-nested-setter-converts',
+    source: `function frames(error: Error) { const a = ['plain']; Object.assign(a, { get 0() { let later = { set field(value: number) { return error; } }; later = later; return 'safe'; } }); return String(a); }`,
     converts: false,
   },
   {
