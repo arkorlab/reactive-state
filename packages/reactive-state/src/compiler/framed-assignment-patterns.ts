@@ -1,7 +1,9 @@
 import {
   type Expression,
   type ArrayLiteralExpression,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  type PropertyAssignment,
   type PropertyName,
   type Identifier,
   isArrayLiteralExpression,
@@ -39,6 +41,17 @@ export interface PatternWork {
   /** Some source holds nothing at the selected position, so that a default written there runs. */
   readonly missing?: boolean;
 }
+
+/** The values a literal's `__proto__:` ignores, as it takes no prototype of them. */
+const NO_PROTOTYPE: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.TrueKeyword,
+]);
 
 /** The sources assigned to one lexical identifier, excluding fresh object and array rest copies. */
 export function assignmentPatternSources(
@@ -198,23 +211,53 @@ function arraySource(
     : [{ value: element, keys: [] }];
 }
 
-/** A surviving literal own entry, without executing getters or unknown spread sources. */
+/**
+ * A surviving literal own entry, without executing getters or unknown spread sources. A key no own
+ * entry holds is read from the prototype the literal's `__proto__:` sets, as a destructuring reads
+ * an inherited property.
+ */
 function objectSource(
   value: ObjectLiteralExpression,
   key: string,
   opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
+  let prototype: Expression | undefined;
   for (const property of value.properties.toReversed()) {
     if (isSpreadAssignment(property)) return [opaque];
     const name = literalKey(property.name);
     if (name === undefined) return [opaque];
-    if (name !== key) continue;
-    if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-    if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
-      return [{ value: property.name, keys: [] }];
-    return [opaque];
+    if (name === key) return ownSource(property, opaque);
+    if (isPrototypeEntry(property)) prototype = property.initializer;
   }
-  return [];
+  return prototype === undefined ? [] : inheritedSource(prototype, key);
+}
+
+/** The value an own entry of the selected key writes, or the entry's literal where it writes none. */
+function ownSource(
+  property: ObjectLiteralElementLike,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+  if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+    return [{ value: property.name, keys: [] }];
+  return [opaque];
+}
+
+/** Whether an entry sets the literal's prototype: `__proto__: value`, named, not computed or shorthand. */
+function isPrototypeEntry(property: Node): property is PropertyAssignment {
+  return (
+    isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
+    literalKey(property.name) === '__proto__'
+  );
+}
+
+/** A key read from a literal prototype: a literal selects it, one that is no object holds none. */
+function inheritedSource(prototype: Expression, key: string): readonly AssignedFrameSource[] {
+  const value = unwrapped(prototype);
+  if (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
+    return selectSource({ value, keys: [] }, key);
+  return NO_PROTOTYPE.has(value.kind) ? [] : [{ value: prototype, keys: [key] }];
 }
 
 /**
