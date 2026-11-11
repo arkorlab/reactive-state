@@ -50,6 +50,22 @@ const CASES = [
     views: ['errors@any'],
   },
   {
+    id: 'empty-spread-before-hole',
+    source: `function frames(error: Error) { const source = [...[], , error]; const kept = source.filter(() => true); ${SAVED} }`,
+    views: ['source@any'],
+  },
+  {
+    id: 'spread-before-position',
+    source: `function frames(error: Error, more: Error[]) { const source = [...more, error]; const kept = source.filter(() => true); touch(); return kept[1]; }`,
+    index: 1,
+    views: ['source@any'],
+  },
+  {
+    id: 'spread-after-position-pin',
+    source: `function frames(error: Error, more: Error[]) { const source = [error, ...more]; const kept = source.filter(() => true); ${SAVED} }`,
+    views: ['source@0'],
+  },
+  {
     id: 'sparse-saved-before-hole-pin',
     source:
       "function frames(error: Error) { const source = [{ stack: 'fixed' }, , error]; const kept = source.filter(() => true); touch(); return kept[0]; }",

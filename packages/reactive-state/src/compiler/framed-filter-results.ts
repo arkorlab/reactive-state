@@ -5,6 +5,7 @@ import {
   isArrowFunction,
   isBlock,
   isOmittedExpression,
+  isSpreadElement,
 } from 'typescript/ast';
 
 import { answersLater } from './answers.ts';
@@ -49,8 +50,8 @@ export function filteredArrayViews(
 }
 
 /**
- * A written literal, or a whole constant alias of one, with no omitted element up to the position:
- * a hole after it leaves it where it was.
+ * A written literal, or a whole constant alias of one, with no omitted element and no spread up to
+ * the position: a hole after it leaves it where it was, and a spread may add no element at all.
  */
 function holeFreeUpTo(
   receiver: Expression,
@@ -60,7 +61,7 @@ function holeFreeUpTo(
   const source = concatSource(receiver, stable);
   if (source === undefined || !isArrayLiteralExpression(source)) return false;
   const placed = index === undefined ? source.elements : source.elements.slice(0, index + 1);
-  return placed.every((each) => !isOmittedExpression(each));
+  return placed.every((each) => !isOmittedExpression(each) && !isSpreadElement(each));
 }
 
 /**
