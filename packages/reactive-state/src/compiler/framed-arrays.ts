@@ -39,6 +39,7 @@ import {
   descriptorMethods,
   forgetMethods,
   OWN_METHODS,
+  afterAssignment,
   afterPossibleWrite,
   afterSureWrite,
   definiteExpression,
@@ -364,11 +365,16 @@ function unprovenWrites(
   const defined = isDeleteExpression(node)
     ? undefined
     : definedMethods(node, writes.root, writes.own);
+  const assigns = sure && !isDeleteExpression(node) && defined === undefined;
   for (const key of keys) {
     if (selected !== undefined && writtenAfterSelection(node, key, selected)) continue;
     const previous = writes.own.get(key);
     const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
-    writes.own.set(key, sure ? afterSureWrite(written) : afterPossibleWrite(previous, written));
+    const kept = sure ? afterSureWrite(written) : afterPossibleWrite(previous, written);
+    writes.own.set(
+      key,
+      assigns && writes.held?.has(key) !== true ? afterAssignment(previous) : kept,
+    );
   }
 }
 

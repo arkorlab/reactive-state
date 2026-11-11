@@ -208,6 +208,18 @@ export function afterSureWrite(written: ArrayMethodOverride | undefined): ArrayM
   };
 }
 
+/**
+ * A method an assignment sure to run leaves: unproven, and a writable data property, since an
+ * assignment to one that is not throws; it is configurable if it was, or was made by this write.
+ */
+export function afterAssignment(previous: ArrayMethodOverride | undefined): ArrayMethodOverride {
+  return {
+    own: false,
+    writable: true,
+    ...(previous?.configurable === true && { configurable: true as const }),
+  };
+}
+
 /** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
   node: Node,
