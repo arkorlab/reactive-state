@@ -831,6 +831,54 @@ const ELEMENTS = [
     elements: ['descriptor:value', '1:'],
   },
   {
+    id: 'assign-short-circuited-source',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, false && { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['false && { 0: error }:0', 'false && { 0: error }:array', 'false:0', 'false:array'],
+  },
+  {
+    id: 'assign-nullish-source',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, null ?? { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['null ?? { 0: error }:0', 'null ?? { 0: error }:array', 'error:'],
+  },
+  {
+    id: 'assign-truthy-and-source',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, true && { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['true && { 0: error }:0', 'true && { 0: error }:array', 'error:'],
+  },
+  {
+    id: 'assign-truthy-or-source',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, true || { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['true || { 0: error }:0', 'true || { 0: error }:array', 'true:0', 'true:array'],
+  },
+  {
+    id: 'assign-non-nullish-source',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, 0 ?? { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['0 ?? { 0: error }:0', '0 ?? { 0: error }:array', '0:0', '0:array'],
+  },
+  {
+    id: 'define-short-circuited-descriptor',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, false && { value: error }); return values; }`,
+    index: undefined,
+    elements: ['false && { value: error }:value', 'false:value'],
+  },
+  {
+    id: 'assign-unknown-and-source-pin',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.assign(values, flag && { 0: error }); return values; }`,
+    index: undefined,
+    elements: [
+      'flag && { 0: error }:0',
+      'flag && { 0: error }:array',
+      'flag:0',
+      'flag:array',
+      'error:',
+    ],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1050,6 +1098,11 @@ const CONVERSIONS = [
     id: 'define-constant-getter-logical-assigned-converts',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: undefined }; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'assign-short-circuited-source-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, false && { 0: error }); return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',

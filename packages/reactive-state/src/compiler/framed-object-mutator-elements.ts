@@ -1,4 +1,5 @@
 import {
+  type BinaryExpression,
   type Block,
   type CallExpression,
   type Expression,
@@ -407,9 +408,28 @@ function alternativesOf(
     if (taken !== undefined) return [taken ? value.whenTrue : value.whenFalse];
     return [value.whenTrue, value.whenFalse];
   }
-  if (isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind))
-    return [value.left, value.right];
+  if (isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind)) return operands(value);
   return undefined;
+}
+
+/**
+ * The operands of a logical expression that it may hand over: where the left is a written
+ * literal, the short-circuit rule picks the left, which ends it, or the right.
+ */
+function operands(value: BinaryExpression): readonly Expression[] {
+  const { left, right } = value;
+  const kind = value.operatorToken.kind;
+  if (kind === SyntaxKind.QuestionQuestionToken) {
+    const bare = unwrapped(left);
+    const nullish =
+      bare.kind === SyntaxKind.NullKeyword || (isIdentifier(bare) && bare.text === 'undefined');
+    if (nullish) return [right];
+    return framedCondition(left) === undefined ? [left, right] : [left];
+  }
+  const truth = framedCondition(left);
+  if (truth === undefined) return [left, right];
+  const taken = truth === (kind === SyntaxKind.AmpersandAmpersandToken) ? right : left;
+  return [taken];
 }
 
 /** What a written function returns when it is called. */
