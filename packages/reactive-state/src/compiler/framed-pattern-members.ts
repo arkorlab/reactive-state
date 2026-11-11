@@ -50,8 +50,9 @@ export function patternMemberWrites(node: Node): readonly MemberWrite[] {
     const routed = assignmentPatternTargets(target, at.sources);
     pending.push(...routed);
     const covered = new Set<Node>(routed.map((each) => each.target));
-    for (const child of unroutedChildren(target)) {
-      if (!covered.has(child)) pending.push({ target: child, sources: anyField(at.sources) });
+    for (const { child, copies } of unroutedChildren(target)) {
+      if (covered.has(child)) continue;
+      pending.push({ target: child, sources: copies ? at.sources : anyField(at.sources) });
     }
   }
   return found;
@@ -68,15 +69,32 @@ function patternStart(
   return undefined;
 }
 
-/** The targets of a pattern a spread or a computed key names: where it takes any field. */
-function unroutedChildren(target: Expression): readonly Expression[] {
+/** A target the routing leaves out, and whether it takes a copy of the source or any field of it. */
+interface Unrouted {
+  readonly child: Expression;
+  readonly copies: boolean;
+}
+
+/**
+ * The targets of a pattern a rest or a computed key names. A rest that is a member takes a copy of
+ * the source whole, no field of it; a computed key, or a rest that is a pattern, takes any field.
+ */
+function unroutedChildren(target: Expression): readonly Unrouted[] {
   if (isArrayLiteralExpression(target))
-    return target.elements.flatMap((each) => (isSpreadElement(each) ? [each.expression] : []));
+    return target.elements.flatMap((each) =>
+      isSpreadElement(each) ? [rest(each.expression)] : [],
+    );
   if (!isObjectLiteralExpression(target)) return [];
-  return target.properties.flatMap((property): Expression[] => {
-    if (isSpreadAssignment(property)) return [property.expression];
-    return isPropertyAssignment(property) ? [property.initializer] : [];
+  return target.properties.flatMap((property): Unrouted[] => {
+    if (isSpreadAssignment(property)) return [rest(property.expression)];
+    return isPropertyAssignment(property) ? [{ child: property.initializer, copies: false }] : [];
   });
+}
+
+/** A rest target: a member takes the copy itself, a pattern the fields of the copy. */
+function rest(child: Expression): Unrouted {
+  const member = unwrapped(child);
+  return { child, copies: isPropertyAccessExpression(member) || isElementAccessExpression(member) };
 }
 
 /** Any field of the sources: the values of a written object, the elements of a written list. */

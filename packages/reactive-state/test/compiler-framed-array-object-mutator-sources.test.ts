@@ -1826,6 +1826,21 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'define-rest-object-is-no-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ ...descriptor.value } = { item: error }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-list-holds-error',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [...descriptor.value] = [error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-rest-object-map-entry',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; ({ ...maps[0] } = { get: () => error }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'getter-dead-branch-return',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { get 0() { let value = 'safe'; value += '!'; if (false) return error; return value; } }); return String(a); }`,
     converts: false,
