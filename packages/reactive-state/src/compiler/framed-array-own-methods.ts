@@ -1,10 +1,14 @@
 import {
+  type BinaryExpression,
   type CallExpression,
   type Expression,
   isArrayLiteralExpression,
   isBinaryExpression,
   isElementAccessExpression,
+  isComputedPropertyName,
+  isConditionalExpression,
   isExpressionStatement,
+  isFunctionLikeDeclaration,
   isIdentifier,
   isMethodDeclaration,
   isObjectLiteralExpression,
@@ -14,6 +18,8 @@ import {
   isVariableStatement,
   type MethodDeclaration,
   type Node,
+  NodeFlags,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
@@ -95,6 +101,63 @@ export function definiteExpression(before: Node, root: FrameBinding): Expression
     isIdentifier(unwrapped(value.left)) &&
     ownMethodAssignment(value, root) === undefined;
   return stored ? value.right : expression;
+}
+
+/** The operators whose right side runs only on some left. */
+const SHORT_CIRCUITS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/**
+ * A descriptor written with `__proto__: object` takes fields from that object, which the compile
+ * leaves unread: it may name an accessor, or any attribute.
+ */
+function setsPrototype(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
+    writtenArrayKey(property.name) === '__proto__'
+  );
+}
+
+/** Whether an assignment gives a member a value, whose setter runs after the right side. */
+function setsMember(node: BinaryExpression): boolean {
+  const kind = node.operatorToken.kind;
+  const assigns = kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+  return assigns && !isIdentifier(unwrapped(node.left));
+}
+
+/** Whether a node is a link of an optional chain, which runs what follows `?.` only on some value. */
+function inOptionalChain(node: Node): boolean {
+  // eslint-disable-next-line no-bitwise -- TypeScript marks the links of an optional chain with this flag.
+  return (node.flags & NodeFlags.OptionalChain) !== 0;
+}
+
+/**
+ * Whether an expression runs whenever its statement does: no condition, short-circuit, optional
+ * chain, function or inner statement lies between them.
+ */
+export function evaluatedForSure(node: Node, statement: Node): boolean {
+  for (let at = node; at !== statement; at = at.parent) {
+    if (skipsLink(at, statement)) return false;
+  }
+  return true;
+}
+
+/** Whether what holds `at` runs it only on some paths: a branch, a short circuit, a chain, a setter. */
+function skipsLink(at: Node, statement: Node): boolean {
+  const { parent } = at;
+  if (isConditionalExpression(parent)) return at !== parent.condition;
+  if (isBinaryExpression(parent) && parent.right === at)
+    return SHORT_CIRCUITS.has(parent.operatorToken.kind) || setsMember(parent);
+  if (inOptionalChain(parent) || isFunctionLikeDeclaration(parent)) return true;
+  const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
+  return inner && parent !== statement;
 }
 
 /** What an assignment makes a property: writable and configurable, as a descriptor would say. */
@@ -262,7 +325,8 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
     if (isSpreadAssignment(property)) custom = { own: false };
     else {
       const key = writtenArrayKey(property.name);
-      if (key === undefined || ACCESSOR_KEYS.has(key)) custom = { own: false };
+      if (key === undefined || ACCESSOR_KEYS.has(key) || setsPrototype(property))
+        custom = { own: false };
       else if (key === 'value')
         custom = isPropertyAssignment(property)
           ? { own: knownNonNative(property.initializer), value: property.initializer }
@@ -287,7 +351,8 @@ function descriptorSays(
   for (const property of descriptor.properties) {
     if (isSpreadAssignment(property)) return 'other';
     const key = writtenArrayKey(property.name);
-    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return 'other';
+    if (key === undefined || setsPrototype(property)) return 'other';
+    if (attribute === 'writable' && ACCESSOR_KEYS.has(key)) return 'other';
     if (key === attribute)
       says =
         isPropertyAssignment(property) &&
