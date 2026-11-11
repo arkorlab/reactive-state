@@ -278,7 +278,8 @@ function descriptorValues(
   if (!isObjectLiteralExpression(held)) {
     const alternatives = alternativesOf(held);
     if (alternatives === undefined || !firstRead(seen, held)) return opaque;
-    return [...opaque, ...alternatives.flatMap((each) => descriptorValues(each, reading))];
+    const chosen = alternatives.flatMap((each) => descriptorValues(each, reading));
+    return [...opaque, ...chosen, ...descriptorWrites(names)];
   }
   if (!firstRead(seen, held)) return opaque;
   const entries = held.properties.flatMap((property) => descriptorEntry(property, reading));

@@ -705,6 +705,24 @@ const ELEMENTS = [
     elements: ['flag ? { 0: error } : {}:0', 'flag ? { 0: error } : {}:array', 'error:'],
   },
   {
+    id: 'define-constant-conditional-descriptor-assigned',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const descriptor: PropertyDescriptor = flag ? { get: () => 'safe' } : {}; descriptor.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-logical-descriptor-assigned',
+    source: `function frames(error: Error, base: PropertyDescriptor) { ${VALUES} const descriptor: PropertyDescriptor = base || { value: 'safe' }; descriptor.value = error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'base:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-conditional-descriptor-other-object-pin',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const descriptor: PropertyDescriptor = flag ? { get: () => 'safe' } : {}; const other: PropertyDescriptor = {}; other.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':"],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -879,6 +897,11 @@ const CONVERSIONS = [
   {
     id: 'assign-conditional-source-converts',
     source: `function frames(error: Error, flag: boolean) { const a = ['safe']; Object.assign(a, flag ? { 0: error } : {}); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-constant-conditional-descriptor-assigned-converts',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = flag ? { get: () => 'safe' } : {}; descriptor.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
   },
   {
