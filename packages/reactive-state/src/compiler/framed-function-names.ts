@@ -182,27 +182,43 @@ export function runsInPlace(fn: Node): boolean {
   return madeInPlace(fn) && !isGenerator(fn);
 }
 
+/** The name a variable or a property gives what it is initialized with; undefined if it is worked out. */
+function initializedName(
+  parent: Node,
+  at: Node,
+): { readonly name: string | undefined } | undefined {
+  if ((parent as { readonly initializer?: Node }).initializer !== at) return undefined;
+  if (isVariableDeclaration(parent) && isIdentifier(parent.name)) return { name: parent.name.text };
+  if (isPropertyAssignment(parent) || isPropertyDeclaration(parent))
+    return { name: keyText(parent.name) };
+  return undefined;
+}
+
 /**
  * The names a function expression or an arrow is given where it is the value of something: a
- * variable, a property, an assignment's target. Held anywhere else, passed, returned, or put in a
- * list, it is reached by a name that is worked out.
+ * variable, a property, an assignment's target, each target of a chain of assignments, as the value
+ * of one goes on to the next. Held anywhere else, passed, returned, or put in a list, it is reached
+ * by a name that is worked out.
  */
 function givenNames(fn: Node): FunctionNames {
-  const at = holderOf(fn);
-  const { parent } = at;
   const names: string[] = [];
   let computed = false;
   const add = (name: string | undefined): void => {
     if (name === undefined) computed = true;
     else names.push(name);
   };
-  const initial = (parent as { readonly initializer?: Node }).initializer === at;
-  if (initial && isVariableDeclaration(parent) && isIdentifier(parent.name)) add(parent.name.text);
-  else if (initial && (isPropertyAssignment(parent) || isPropertyDeclaration(parent)))
-    add(keyText(parent.name));
-  else if (isAssignment(parent) && (parent.right as Node) === at) add(targetName(parent.left));
-  else if (!keptNowhere(fn, at)) computed = true;
-  return { names, computed };
+  for (let at = holderOf(fn); ;) {
+    const { parent } = at;
+    if (isAssignment(parent) && (parent.right as Node) === at) {
+      add(targetName(parent.left));
+      at = holderOf(parent);
+      continue;
+    }
+    const given = initializedName(parent, at);
+    if (given !== undefined) add(given.name);
+    else if (!keptNowhere(fn, at)) computed = true;
+    return { names, computed };
+  }
 }
 
 /** The name an assignment writes: a variable's, or a property's. */
