@@ -290,10 +290,10 @@ function statementMethodWrites(
   possibleMethodWrites(before, { ...writes, until: before.end });
   if (top === undefined) return;
   releaseHeld(top, root, held);
+  holdDefinition(top, root, held, own);
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
-  holdDefinition(top, root, held, own);
   for (const [key, configurable] of held)
     own.set(key, configurable ? { own: false, configurable: true } : { own: false });
 }
@@ -326,26 +326,24 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
 
 /** The methods a write may replace are unproven; a definition's may stay so for good. */
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
+  if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
   for (const key of keys) writes.own.set(key, { own: false });
-  if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held);
 }
 
 /**
  * A definition of the array leaves a method unproven where it is neither a custom function nor a
- * writable value; the key stays redefinable only where the descriptor says it is configurable. A
- * definition the walk has applied carries the attributes it left unsaid over from the method it
- * redefined.
+ * writable value; the key stays redefinable only where the descriptor says it is configurable. The
+ * methods before the definition are what it carries the attributes it left unsaid over from.
  */
 function holdDefinition(
   node: Node,
   root: FrameBinding,
   held: HeldMethods,
-  applied?: OwnMethods,
+  previous: OwnMethods,
 ): void {
-  const defined = definedMethods(node, root);
+  const defined = definedMethods(node, root, previous);
   if (defined === undefined) return;
-  for (const [key, written] of defined) {
-    const method = applied?.get(key) ?? written;
+  for (const [key, method] of defined) {
     if (method.own || method.writable === true) continue;
     held.set(key, (held.get(key) ?? true) && method.configurable === true);
   }
@@ -360,7 +358,11 @@ function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): vo
 }
 
 /** The methods one call of Object.defineProperty or Object.defineProperties defines on the array. */
-function definedMethods(node: Node, root: FrameBinding): OwnMethods | undefined {
+function definedMethods(
+  node: Node,
+  root: FrameBinding,
+  previous?: OwnMethods,
+): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
@@ -370,9 +372,10 @@ function definedMethods(node: Node, root: FrameBinding): OwnMethods | undefined 
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
     return undefined;
-  const defined: OwnMethods = new Map();
+  const defined: OwnMethods = new Map(previous);
   callMethodWrites(node, root, defined);
-  return defined;
+  if (previous === undefined) return defined;
+  return new Map([...defined].filter(([key, method]) => previous.get(key) !== method));
 }
 
 /** Another function that may run before the read may write any method at any point before it. */
