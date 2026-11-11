@@ -4,23 +4,26 @@ import {
   isBinaryExpression,
   isBlock,
   isCallExpression,
+  isConstructorDeclaration,
   isElementAccessExpression,
   isExpressionStatement,
   isForInStatement,
   isForOfStatement,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isSetAccessorDeclaration,
   isSourceFile,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
+import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { arrayIdentity, ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { isNamedFunction, runsItself, runsItselfBetween } from './framed-recursion.ts';
+import { isNamedFunction, runsInPlace, runsItself, runsItselfBetween } from './framed-recursion.ts';
 import { jumpsOver, repeatedFrameRead, repeatingBodies, resumesWithin } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 
@@ -158,13 +161,27 @@ export function recursesBetween(
   );
 }
 
-/** The functions that are called by a name and hold the read, up to `limit`, and not the array. */
+/**
+ * The functions that are called by a name and hold the read, up to `limit`, and not the array. A
+ * `limit` that is a function run where it is written, as an immediate one that waits is, is one
+ * run of the function around it: that function is counted, up to the first that is not run so.
+ */
 function enclosingFunctions(read: Node, root: FrameBinding, limit: Node): readonly Node[] {
   const found: Node[] = [];
+  let past = false;
   for (let at = read.parent; ; at = at.parent) {
     if (isNamedFunction(at) && !(root.pos >= at.pos && root.end <= at.end)) found.push(at);
-    if (at === limit || isSourceFile(at)) return found;
+    if (isSourceFile(at)) return found;
+    if (at === limit) {
+      if (!runsInPlace(at)) return found;
+      past = true;
+    } else if (past && isFunctionBoundary(at) && !runsInPlace(at)) return found;
   }
+}
+
+/** Whether a node holds a body that runs when it is called: a function, a constructor, a setter. */
+function isFunctionBoundary(node: Node): boolean {
+  return isAnswering(node) || isConstructorDeclaration(node) || isSetAccessorDeclaration(node);
 }
 
 /**
