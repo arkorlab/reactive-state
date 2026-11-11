@@ -422,6 +422,26 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-unreachable-continue-before-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (false) continue; values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-unreachable-break-before-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { switch (pass) { default: { values.join = Array.prototype.join; if (false) break; values.join = () => 'fixed'; } } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-finally-unreachable-continue',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; if (pass === 0) throw error; values.join = () => 'fixed'; } finally { if (false) continue; } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-selected-continue-before-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (true) continue; values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
