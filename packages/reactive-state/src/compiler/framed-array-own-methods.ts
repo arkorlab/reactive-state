@@ -256,13 +256,16 @@ export function afterSureWrite(written: ArrayMethodOverride | undefined): ArrayM
 
 /**
  * A method an assignment sure to run leaves: unproven, and a writable data property, since an
- * assignment to one that is not throws; it is configurable if it was, or was made by this write.
+ * assignment to one that is not throws; it is configurable if it was, or if the array had no own
+ * property of the name before, which the assignment then creates as one.
  */
 export function afterAssignment(previous: ArrayMethodOverride | undefined): ArrayMethodOverride {
   return {
     own: false,
     writable: true,
-    ...(previous?.configurable === true && { configurable: true as const }),
+    ...((previous === undefined || previous.configurable === true) && {
+      configurable: true as const,
+    }),
   };
 }
 
