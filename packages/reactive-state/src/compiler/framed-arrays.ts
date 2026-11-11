@@ -45,7 +45,7 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
-import { framedPossibleBranch } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { constantValue } from './numbers.ts';
 
@@ -366,19 +366,28 @@ function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void
   for (const [key, method] of defined) if (!method.own) held.add(key);
 }
 
-/** Another function that may run before the read may write any method at any point before it. */
+/**
+ * Another function that may run before the read may write any method at any point before it, and
+ * so may a write after it that a loop around the read brings back to it.
+ */
 function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods): void {
-  const owner = executionOwner(call);
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const keys = writtenMethods(node, root);
-    const writer = keys.length > 0 ? executionOwner(node) : owner;
-    if (writer !== owner && !unreferencedLocalFunction(writer, owner) && framedPossibleBranch(node))
+    if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node))
       for (const key of keys) own.set(key, { own: false });
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
+}
+
+/** Whether a write runs in another function that may run first, or after the read in its loop. */
+function mayPrecedeRead(node: Node, call: Node, root: FrameBinding): boolean {
+  const owner = executionOwner(call);
+  const writer = executionOwner(node);
+  if (writer !== owner) return !unreferencedLocalFunction(writer, owner);
+  return node.pos >= call.end && repeatedFrameRead(node, call, root, owner);
 }
 
 /** The methods a write to the array may replace, whichever value it writes. */

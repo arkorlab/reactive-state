@@ -121,6 +121,31 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'loop-condition-revisit',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-body-later-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2; pass++) { String(values); values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-update-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2; values.join = Array.prototype.join) String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'loop-made-array-pin',
+    source: `function frames(error: Error) { for (let pass = 0; pass < 2; pass++) { const values = [error]; ${SAFE} String(values); values.join = Array.prototype.join; } }`,
+    converts: false,
+  },
+  {
+    id: 'later-statement-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} String(values); values.join = Array.prototype.join; }`,
+    converts: false,
+  },
+  {
     id: 'repeated-assignment-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2; pass++) values.join = String(values) as any; }`,
     converts: true,
