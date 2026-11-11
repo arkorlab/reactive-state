@@ -101,6 +101,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'later-target-default',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} [values.join, text = String(values)] = [Array.prototype.join, undefined]; }`,
+    converts: true,
+  },
+  {
+    id: 'later-computed-key',
+    source: `function frames(error: Error, text: { [key: string]: unknown }) { const values = [error]; ${SAFE} ({ restore: values.join, [String(values)]: text.field } = { restore: Array.prototype.join }); }`,
+    converts: true,
+  },
+  {
+    id: 'earlier-default-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} [text = String(values), values.join] = [undefined, Array.prototype.join]; }`,
+    converts: false,
+  },
+  {
+    id: 'other-array-target-pin',
+    source: `function frames(error: Error) { const values = [error]; const other = [1]; ${SAFE} [other.join, text = String(values)] = [Array.prototype.join, undefined]; }`,
+    converts: false,
+  },
+  {
     id: 'repeated-assignment-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2; pass++) values.join = String(values) as any; }`,
     converts: true,
