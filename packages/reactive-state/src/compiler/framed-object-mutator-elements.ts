@@ -103,8 +103,8 @@ function returnedTarget(target: Expression): Expression {
 interface Reading {
   readonly inherited: boolean;
   readonly seen: {
-    readonly full: Set<Node>;
-    readonly own: Set<Node>;
+    readonly full: Map<Node, readonly Hidden[]>;
+    readonly own: Map<Node, readonly Hidden[]>;
     readonly maps: Map<Node, readonly Hidden[]>;
     readonly sources: Map<Node, readonly Hidden[]>;
   };
@@ -113,15 +113,8 @@ interface Reading {
 function freshReading(): Reading {
   return {
     inherited: true,
-    seen: { full: new Set(), own: new Set(), maps: new Map(), sources: new Map() },
+    seen: { full: new Map(), own: new Map(), maps: new Map(), sources: new Map() },
   };
-}
-
-/** Whether an object a constant holds is read for the first time in the way the set stands for. */
-function firstRead(seen: Set<Node>, held: Node): boolean {
-  if (seen.has(held)) return false;
-  seen.add(held);
-  return true;
 }
 
 /** No name hidden: the state a read of a source starts from. */
@@ -390,25 +383,36 @@ function mapElements(
 function descriptorValues(
   descriptor: Expression | undefined,
   reading: Reading,
+  hidden: Hidden = NOTHING_HIDDEN,
 ): WrittenArrayElement[] {
   if (descriptor === undefined || isOmittedExpression(descriptor)) return [];
   if (isSpreadElement(descriptor)) return [{ value: descriptor.expression, keys: ['0', 'value'] }];
   const value = unwrapped(descriptor);
-  if (isObjectLiteralExpression(value))
-    return value.properties.flatMap((property) => descriptorEntry(property, reading));
+  if (isObjectLiteralExpression(value)) return descriptorFields(value, reading, hidden);
   const names: Identifier[] = [];
   const held = heldValue(value, names);
   const opaque = [{ value: descriptor, keys: ['value'] }];
-  const seen = reading.inherited ? reading.seen.full : reading.seen.own;
-  if (!isObjectLiteralExpression(held)) {
-    const alternatives = alternativesOf(held);
-    if (alternatives === undefined || !firstRead(seen, held)) return opaque;
-    const chosen = alternatives.flatMap((each) => descriptorValues(each, reading));
-    return [...opaque, ...chosen, ...descriptorWrites(names)];
-  }
-  if (!firstRead(seen, held)) return opaque;
-  const entries = held.properties.flatMap((property) => descriptorEntry(property, reading));
-  return [...opaque, ...entries, ...descriptorWrites(names)];
+  const table = reading.inherited ? reading.seen.full : reading.seen.own;
+  const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
+  const used = alternatives === undefined ? undefined : readUnder(table, held, hidden);
+  if (alternatives === undefined || used === undefined) return opaque;
+  const chosen = alternatives.flatMap((each) => {
+    return isObjectLiteralExpression(each)
+      ? descriptorFields(each, reading, used)
+      : descriptorValues(each, reading, used);
+  });
+  return [...opaque, ...chosen, ...descriptorWrites(names)];
+}
+
+/** The values the fields of a written descriptor give, each as the fields after it leave it. */
+function descriptorFields(
+  object: ObjectLiteralExpression,
+  reading: Reading,
+  hidden: Hidden,
+): WrittenArrayElement[] {
+  return fieldsAfter(object, hidden, (property, later) =>
+    descriptorEntry(property, reading, later),
+  );
 }
 
 /**
@@ -428,13 +432,28 @@ function descriptorKey(name: PropertyName): string | undefined {
 function copiedFields(
   property: ObjectLiteralElementLike,
   reading: Reading,
+  later: Hidden,
 ): WrittenArrayElement[] | undefined {
-  if (isSpreadAssignment(property))
-    return descriptorValues(property.expression, { ...reading, inherited: false });
+  if (isSpreadAssignment(property)) {
+    const copied = { data: later.data, getters: later.data };
+    return descriptorValues(property.expression, { ...reading, inherited: false }, copied);
+  }
   const prototype = reading.inherited
     ? prototypeField(property, writtenArrayKey(property.name))
     : undefined;
-  return prototype === undefined ? undefined : descriptorValues(prototype, reading);
+  if (prototype === undefined) return undefined;
+  const own = isObjectLiteralExpression(property.parent)
+    ? property.parent.properties.flatMap((each) => sourceNames(each))
+    : [];
+  const shadowed = { data: withNames(later.data, own), getters: withNames(later.getters, own) };
+  return descriptorValues(prototype, reading, shadowed);
+}
+
+/** The names of a set, and more. */
+function withNames(names: ReadonlySet<string>, more: readonly string[]): Set<string> {
+  const merged = new Set(names);
+  for (const each of more) merged.add(each);
+  return merged;
 }
 
 /**
@@ -445,8 +464,9 @@ function copiedFields(
 function descriptorEntry(
   property: ObjectLiteralElementLike,
   reading: Reading,
+  later: Hidden,
 ): WrittenArrayElement[] {
-  const copied = copiedFields(property, reading);
+  const copied = copiedFields(property, reading, later);
   if (copied !== undefined) return copied;
   if (isSpreadAssignment(property)) return [];
   const key = descriptorKey(property.name);

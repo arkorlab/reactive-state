@@ -408,7 +408,7 @@ const ELEMENTS = [
     id: 'define-descriptor-proto-own-value',
     source: `function frames(error: Error, other: string) { ${VALUES} Object.defineProperty(values, 0, { __proto__: { value: error }, value: other } as PropertyDescriptor); return values; }`,
     index: undefined,
-    elements: ['error:', 'other:'],
+    elements: ['other:'],
   },
   {
     id: 'define-descriptor-computed-proto-pin',
@@ -1131,6 +1131,48 @@ const ELEMENTS = [
     elements: ['descriptor:value', 'error:'],
   },
   {
+    id: 'define-descriptor-later-field-hides-spread-field',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ value: error }, value: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-descriptor-later-value-hides-spread-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ get: () => error }, get: () => 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-descriptor-field-after-hides-spread',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { value: error, ...{ value: 'safe' } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-descriptor-own-field-hides-prototype',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { value: 'safe', __proto__: { value: error } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-descriptor-prototype-keeps-other-field',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { value: 'safe', __proto__: { get: () => error } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-descriptor-hidden-then-visible',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const base = { value: error }; Object.defineProperty(values, 0, flag ? { ...base, value: 'safe' } : base); return values; }`,
+    index: undefined,
+    elements: [
+      "flag ? { ...base, value: 'safe' } : base:value",
+      'base:value',
+      "'safe':",
+      'base:value',
+      'error:',
+    ],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1419,6 +1461,11 @@ const CONVERSIONS = [
   {
     id: 'define-constant-getter-assigned-after-use-safe',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; Object.defineProperty(a, 0, descriptor); descriptor.get = () => error; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-overwritten-field-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ value: error }, value: 'safe' }); return String(a); }`,
     converts: false,
   },
   {
