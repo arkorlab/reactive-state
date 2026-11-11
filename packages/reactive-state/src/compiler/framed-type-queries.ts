@@ -1,5 +1,6 @@
 import {
   type Identifier,
+  isComputedPropertyName,
   isIdentifier,
   isParenthesizedTypeNode,
   isSourceFile,
@@ -39,9 +40,12 @@ export function namesType(type: TypeNode | undefined, names: ReadonlySet<string>
  * type is the whole's.
  */
 export function parameterOf(name: Identifier): ParameterDeclaration | undefined {
-  for (let at: Node = name.parent; !isSourceFile(at); at = at.parent) {
-    // A node of no function holds no parameters, though it may hold a field of the name.
-    const parameters = isSignatureDeclaration(at) ? at.parameters : [];
+  let within: Node = name;
+  for (let at: Node = name.parent; !isSourceFile(at); within = at, at = at.parent) {
+    // A node of no function holds no parameters, though it may hold a field of the name; nor does
+    // a method's computed name, which runs where the method is defined, outside them.
+    const parameters =
+      isSignatureDeclaration(at) && !isComputedPropertyName(within) ? at.parameters : [];
     const parameter = parameters.find((each) =>
       bindingIdentifiers(each.name).some((bound) => bound.text === name.text),
     );
