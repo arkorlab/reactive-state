@@ -303,6 +303,36 @@ const ELEMENTS = [
     elements: ['maps:0.0.value', 'a:'],
   },
   {
+    id: 'define-descriptor-spread-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ get: () => error } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-descriptor-spread-value',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ value: error } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-descriptor-nested-spread',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ ...{ get: () => error } } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-descriptor-spread-other-field',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ enumerable: error } }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-descriptor-spread-opaque-pin',
+    source: `function frames(descriptor: PropertyDescriptor) { ${VALUES} Object.defineProperty(values, 0, { ...descriptor }); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -373,6 +403,11 @@ const CONVERSIONS = [
   {
     id: 'define-explicit-key-spread-converts',
     source: `function frames(error: Error, descriptors: PropertyDescriptor[]) { const a = ['safe']; Object.defineProperty(a, 0, ...descriptors, { value: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-spread-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ get: () => error } }); return String(a); }`,
     converts: true,
   },
   {

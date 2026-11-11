@@ -203,9 +203,9 @@ function descriptorValues(descriptor: Expression | undefined): WrittenArrayEleme
   return value.properties.flatMap((property) => descriptorEntry(property));
 }
 
-/** One field of a written descriptor: its `value`, what its `get` returns, a spread's both. */
+/** One field of a written descriptor: its `value`, what its `get` returns, a spread's own fields. */
 function descriptorEntry(property: ObjectLiteralElementLike): WrittenArrayElement[] {
-  if (isSpreadAssignment(property)) return [{ value: property.expression, keys: ['value'] }];
+  if (isSpreadAssignment(property)) return descriptorValues(property.expression);
   const key = writtenArrayKey(property.name);
   if (key !== undefined && key !== 'value' && key !== 'get') return [];
   const found: WrittenArrayElement[] = [];
