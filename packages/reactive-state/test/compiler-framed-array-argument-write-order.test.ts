@@ -377,6 +377,16 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; const sink: { result?: unknown } = {}; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); sink.result = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'prototype-descriptor-accessor-nested',
+    source: `function frames(error: Error) { const values = [error]; values.join = Array.prototype.join; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { __proto__: { get: () => Array.prototype.join, set: () => {} } } as PropertyDescriptor), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'prototype-descriptor-definition',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { __proto__: { value: () => 'safe' } } as PropertyDescriptor); return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

@@ -3,6 +3,7 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isElementAccessExpression,
+  isComputedPropertyName,
   isExpressionStatement,
   isIdentifier,
   isObjectLiteralExpression,
@@ -12,6 +13,7 @@ import {
   isVariableStatement,
   type MethodDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
@@ -90,6 +92,18 @@ export function definiteExpression(before: Node, root: FrameBinding): Expression
     isIdentifier(unwrapped(value.left)) &&
     ownMethodAssignment(value, root) === undefined;
   return stored ? value.right : expression;
+}
+
+/**
+ * A descriptor written with `__proto__: object` takes fields from that object, which the compile
+ * leaves unread: it may name an accessor, or any attribute.
+ */
+function setsPrototype(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
+    writtenArrayKey(property.name) === '__proto__'
+  );
 }
 
 /** What an assignment makes a property: writable and configurable, as a descriptor would say. */
@@ -198,7 +212,8 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
     if (isSpreadAssignment(property)) custom = { own: false };
     else {
       const key = writtenArrayKey(property.name);
-      if (key === undefined || ACCESSOR_KEYS.has(key)) custom = { own: false };
+      if (key === undefined || ACCESSOR_KEYS.has(key) || setsPrototype(property))
+        custom = { own: false };
       else if (key === 'value')
         custom = isPropertyAssignment(property)
           ? { own: knownNonNative(property.initializer), value: property.initializer }
@@ -223,7 +238,8 @@ function descriptorSays(
   for (const property of descriptor.properties) {
     if (isSpreadAssignment(property)) return 'other';
     const key = writtenArrayKey(property.name);
-    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return 'other';
+    if (key === undefined || setsPrototype(property)) return 'other';
+    if (attribute === 'writable' && ACCESSOR_KEYS.has(key)) return 'other';
     if (key === attribute)
       says =
         isPropertyAssignment(property) &&
