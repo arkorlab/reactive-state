@@ -365,17 +365,28 @@ function unprovenWrites(
   const defined = isDeleteExpression(node)
     ? undefined
     : definedMethods(node, writes.root, writes.own);
-  const assigns = sure && !isDeleteExpression(node) && defined === undefined;
-  for (const key of keys) {
-    if (selected !== undefined && writtenAfterSelection(node, key, selected)) continue;
-    const previous = writes.own.get(key);
-    const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
-    const kept = sure ? afterSureWrite(written) : afterPossibleWrite(previous, written);
-    writes.own.set(
-      key,
-      assigns && writes.held?.has(key) !== true ? afterAssignment(previous) : kept,
-    );
-  }
+  const deleting = isDeleteExpression(node);
+  const how = { sure, assigns: sure && !deleting && defined === undefined, deleting, defined };
+  for (const key of keys)
+    if (selected === undefined || !writtenAfterSelection(node, key, selected))
+      writes.own.set(key, afterWrite(key, how, writes));
+}
+
+/** What a write that may run leaves of a method it names, as its kind and its certainty say. */
+function afterWrite(
+  key: string,
+  how: {
+    readonly sure: boolean;
+    readonly assigns: boolean;
+    readonly deleting: boolean;
+    readonly defined: OwnMethods | undefined;
+  },
+  writes: MethodWrites,
+): ArrayMethodOverride {
+  const previous = writes.own.get(key);
+  if (how.assigns && writes.held?.has(key) !== true) return afterAssignment(previous);
+  const written = how.deleting ? undefined : (how.defined ?? writes.own).get(key);
+  return how.sure ? afterSureWrite(written) : afterPossibleWrite(previous, written);
 }
 
 /**
