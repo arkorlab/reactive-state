@@ -6,10 +6,12 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
+  isBinaryExpression,
   isBlock,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
+  isConditionalExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -28,6 +30,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type PropertyName,
+  SyntaxKind,
   type VariableStatement,
 } from 'typescript/ast';
 
@@ -44,6 +47,13 @@ import { framedAssignedValues, } from './framed-writes.ts';
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
 const MUTATORS = new Set(['Object.assign', 'Object.defineProperties', 'Object.defineProperty']);
+
+/** The operators that hand over one of their operands. */
+const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
 
 /** How many times a getter's name is followed through the functions it may be assigned. */
 const REPLACEMENTS = { depth: 3 } as const;
@@ -329,12 +339,27 @@ function accessedValues(
  */
 function functionReturns(initializer: Expression, depth = 0): WrittenArrayElement[] {
   const names: Identifier[] = [];
-  const returned = bodyReturns(heldValue(initializer, names));
+  const held = heldValue(initializer, names);
+  const alternatives = functionAlternatives(held);
+  const returned =
+    alternatives === undefined
+      ? bodyReturns(held)
+      : alternatives.flatMap((each) => functionReturns(each, depth));
   if (depth >= REPLACEMENTS.depth) return returned;
   const replaced = names
     .flatMap((name) => [...variableInitializer(name), ...framedAssignedValues(name)])
     .flatMap((each) => functionReturns(each, depth + 1));
   return [...returned, ...replaced];
+}
+
+/** The functions a conditional or a logical expression may hand over; none for any other. */
+function functionAlternatives(
+  value: Expression | FunctionDeclaration,
+): readonly Expression[] | undefined {
+  if (isConditionalExpression(value)) return [value.whenTrue, value.whenFalse];
+  if (isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind))
+    return [value.left, value.right];
+  return undefined;
 }
 
 /** What a written function returns when it is called. */

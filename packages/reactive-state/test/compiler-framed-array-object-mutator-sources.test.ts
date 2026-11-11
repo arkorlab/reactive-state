@@ -591,6 +591,24 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-conditional-getter',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.defineProperty(values, 0, { get: flag ? () => error : () => 'safe' }); return values; }`,
+    index: undefined,
+    elements: ['error:', "'safe':"],
+  },
+  {
+    id: 'define-logical-getter',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} Object.defineProperty(values, 0, { get: flag && (() => error) } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-conditional-alias-getter',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const getter = flag ? () => error : () => 'safe'; Object.defineProperty(values, 0, { get: getter }); return values; }`,
+    index: undefined,
+    elements: ['error:', "'safe':"],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -741,6 +759,11 @@ const CONVERSIONS = [
     id: 'define-descriptor-spread-prototype-safe',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ __proto__: { value: error } } } as PropertyDescriptor); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-conditional-getter-converts',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; Object.defineProperty(a, 0, { get: flag ? () => error : () => 'safe' }); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',
