@@ -9,6 +9,7 @@ import {
   isObjectBindingPattern,
   isPropertyAccessExpression,
   isStringLiteral,
+  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
   type Node,
@@ -126,7 +127,13 @@ function takenKey(element: BindingElement): string | undefined {
   return element.dotDotDotToken === undefined ? patternKey(element) : undefined;
 }
 
-/** The text `node` writes, a string; none of another node. */
+/** The text `node` writes, a string, past a cast in angle brackets; none of another node. */
 function keyOf(node: Node): string | undefined {
-  return isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
+  let written = node;
+  while (isTypeAssertion(written)) {
+    written = unwrapped(written.expression);
+  }
+  return isStringLiteral(written) || isNoSubstitutionTemplateLiteral(written)
+    ? written.text
+    : undefined;
 }
