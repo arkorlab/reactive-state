@@ -136,7 +136,7 @@ export function overwrittenInPass(
         isExpressionStatement(each) &&
         ownMethodAssignment(each.expression, root)?.key === key &&
         bodies.every((body) => each.pos >= body.pos && each.end <= body.end) &&
-        !jumpsOver(parent, write.pos, each)
+        !jumpsOver(parent, write, each)
       );
     });
     if (later !== undefined && !resumesWithin(parent, bodies)) return true;

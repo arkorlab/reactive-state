@@ -362,6 +362,21 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; const assigned = Object.assign(values, { join: () => 'safe' }); return String(values); }`,
     converts: false,
   },
+  {
+    id: 'assigned-to-setter-result-after-call',
+    source: `function frames(error: Error) { const values = [error]; const sink = { set result(value: unknown[]) { value.join = Array.prototype.join; } }; sink.result = Object.assign(values, { join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assigned-to-element-result-after-call',
+    source: `function frames(error: Error) { const values = [error]; const sink = { set result(value: unknown[]) { value.join = Array.prototype.join; } }; sink['result'] = Object.assign(values, { join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assigned-to-member-replaces-accessor-pin',
+    source: `function frames(error: Error) { const values = [error]; const sink: { result?: unknown } = {}; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); sink.result = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
