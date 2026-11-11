@@ -63,6 +63,66 @@ const ELEMENTS = [
     elements: ['held:'],
   },
   {
+    id: 'define-arrow-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get: () => error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-function-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get: function () { return error; } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-async-arrow-getter-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get: async () => error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'assign-getter-mutable-local',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let held = error; held = error; return held; } }); return values; }`,
+    index: undefined,
+    elements: ['held:'],
+  },
+  {
+    id: 'assign-getter-try',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { try { return error; } finally { touch(); } } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-getter-call-first',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { touch(); return error; } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-getter-nested-function',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let later = () => { return error; }; later = later; return 'safe'; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-last-index-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { '4294967294': error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-past-last-index',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { '4294967295': error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-past-last-index',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 4294967296, { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
     id: 'define-getter-pin',
     source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { return error; } }); return values; }`,
     index: undefined,
@@ -90,6 +150,16 @@ const CONVERSIONS = [
   {
     id: 'tuple-source',
     source: `function frames(pair: [string, Error]) { const a = ['safe']; Object.assign(a, pair); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'past-last-index',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { '4294967295': error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'arrow-getter',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { get: () => error }); return String(a); }`,
     converts: true,
   },
   {
