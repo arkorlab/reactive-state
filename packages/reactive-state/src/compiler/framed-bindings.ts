@@ -72,6 +72,9 @@ const RESOLVING_KEYS = new WeakSet<Node>();
 /** The vars each function body, static block or source file holds, by the node that holds them. */
 const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
 
+/** The names of the members of each enum and of those merged with it (`hasEnumMember`), by the enum. */
+const MEMBERS = new WeakMap<EnumDeclaration, ReadonlySet<string>>();
+
 /** What each block's statements declare (`declaredBy`), by the node that holds them. */
 const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration | null>>();
 
@@ -206,14 +209,25 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
 
 /**
  * Whether an enum, or one merged with it, has a member named `name`: within their initializers the
- * bare name is that member, before any binding around them.
+ * bare name is that member, before any binding around them. The names are gathered once
+ * (`MEMBERS`), for every name looked up within the enum.
  */
 export function hasEnumMember(enumeration: EnumDeclaration, name: string): boolean {
-  const memberNamed = (member: EnumMember): boolean =>
-    (isIdentifier(member.name) || isStringLiteral(member.name)) && member.name.text === name;
-  return mergedEnums(enumeration).some((each) =>
-    each.members.some((member) => memberNamed(member)),
-  );
+  let names = MEMBERS.get(enumeration);
+  if (names === undefined) {
+    names = new Set(
+      mergedEnums(enumeration).flatMap((each) =>
+        each.members.flatMap((member) => memberText(member)),
+      ),
+    );
+    MEMBERS.set(enumeration, names);
+  }
+  return names.has(name);
+}
+
+/** The name a member gives by an identifier or by text; none of another. */
+function memberText(member: EnumMember): readonly string[] {
+  return isIdentifier(member.name) || isStringLiteral(member.name) ? [member.name.text] : [];
 }
 
 /**
