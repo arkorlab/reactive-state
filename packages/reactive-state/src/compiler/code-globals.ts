@@ -403,23 +403,25 @@ function readsCodeKey(node: Node): boolean {
 
 /**
  * What a call hands to the function it calls: its arguments; of one borrowed, `call` or `apply`,
- * what follows the `this` it takes — of `apply`, the elements of the array written there, up to a
- * spread; none of an array the code gives by a name.
+ * what follows the `this` it takes, up to a spread — of `apply`, the elements of the array written
+ * there; none of an array the code gives by a name.
  */
 function givenTo(call: CallExpression, borrowing: string | undefined): readonly Expression[] {
   if (borrowing === undefined) {
     return call.arguments;
   }
   if (borrowing === 'call') {
-    return call.arguments.slice(1);
+    return untilSpread(call.arguments).slice(1);
   }
   const [, list] = call.arguments;
   const array = list === undefined ? undefined : unwrapped(list);
-  if (array === undefined || !isArrayLiteralExpression(array)) {
-    return [];
-  }
-  const spread = array.elements.findIndex((element) => isSpreadElement(element));
-  return spread === -1 ? array.elements : array.elements.slice(0, spread);
+  return array !== undefined && isArrayLiteralExpression(array) ? untilSpread(array.elements) : [];
+}
+
+/** `items` up to the first spread, past which where a value stands is for the code to tell. */
+function untilSpread(items: readonly Expression[]): readonly Expression[] {
+  const spread = items.findIndex((each) => isSpreadElement(each));
+  return spread === -1 ? items : items.slice(0, spread);
 }
 
 /**

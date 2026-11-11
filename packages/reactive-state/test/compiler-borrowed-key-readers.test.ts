@@ -78,6 +78,26 @@ const CASES = [
     source: "return reader.get.call(null, run, 'constructor');",
     what: 'a function of the module',
   },
+  {
+    reads: [],
+    source: "return Reflect.get.call(null, ...[run, 'name'] as const, 'constructor');",
+    what: "`'constructor'` as the receiver, after a spread of the arguments",
+  },
+  {
+    reads: [],
+    source: "return Reflect.get.call(null, ...rest, 'constructor');",
+    what: 'a key past a spread of an array it is given by a name',
+  },
+  {
+    reads: [],
+    source: "return Reflect.get.call(...args, run, 'constructor');",
+    what: 'a `this` that a spread may be',
+  },
+  {
+    reads: ["Reflect.get.call(null, run, 'constructor', ...rest)"],
+    source: "return Reflect.get.call(null, run, 'constructor', ...rest)(text)();",
+    what: 'a key before a spread',
+  },
 ] as const;
 
 describe('a key reader of the language borrowed through call or apply', () => {
