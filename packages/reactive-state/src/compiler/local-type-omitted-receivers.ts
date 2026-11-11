@@ -43,7 +43,12 @@ export function omittedReceiverReadings(
   const original = { ...at, type: argument };
   const readings = operands(original);
   if (readings.some((reading) => keepsOriginalReceiver(reading, operands))) return readings;
-  return readings.flatMap((reading) => omittedCallable(reading, operands, original));
+  // An arm whose receiver cannot be removed keeps its own type beside the others, rather than
+  // leaving them alone to stand for the whole operand; a lone such arm still reads as no type.
+  return readings.flatMap((reading) => {
+    const omitted = omittedCallable(reading, operands, original);
+    return omitted.length === 0 && readings.length > 1 ? [reading] : omitted;
+  });
 }
 
 /** A noncallable or receiver-free operand keeps its type; a known receiver leaves a signature. */
