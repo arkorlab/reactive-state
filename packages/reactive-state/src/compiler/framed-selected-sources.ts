@@ -44,19 +44,22 @@ import { ANY_FIELD, suffixStart } from './framed-pattern-members.ts';
  * - a `const`, and the constants that name it; a comma and an assignment, by their right; a
  *   condition, `&&`, `||` and `??`, by each branch, or by the one a written literal condition takes;
  * - a list literal: the element at an index, none for a hole; the entries of a spread of a written
- *   list or a constant that holds one, at the offsets their lengths give; a position a spread the
- *   compile cannot read may shift, and the suffix an array rest takes, by any entry that may be there;
+ *   list, or of a constant that holds one nothing but a read mentions, at the offsets their lengths
+ *   give; a position a spread the compile cannot read, or a list a call, an alias or a change
+ *   reaches, may shift, and the suffix an array rest takes, by any entry that may be there;
  * - an object literal: the last field that names the key, a shorthand, what a getter returns, a
- *   spread by the own fields of what it copies, and for a key no own field names, the prototype the
- *   literal writes; a setter hands over nothing and replaces the data before it, not a getter; a
- *   name the compile cannot read may be the key.
+ *   spread by the own fields of what it copies (the values of those fields are read as references,
+ *   with their prototypes), and for a key no own field names, the prototype the literal writes; a
+ *   setter hands over nothing and replaces the data before it, not a getter; a name the compile
+ *   cannot read may be the key;
+ * - the assignments and patterns that write a member of a constant before the selection is consumed.
  *
  * Kept whole, with the path for the type a parameter declares: a call, `new` and any other result of
  * a function; the member of a source (`source.field`, `source[0]`); a variable that is assigned, or
  * an alias a pattern makes; a method, which is a function and no value here; a class instance, a
- * proxy; a list or an object a native function builds or an array method changes; an entry of a
- * constant that is assigned after it is declared. A source that is kept whole is one the compile
- * does not follow, not one it takes to be safe.
+ * proxy; a list or an object a native function builds; the entries an array method adds
+ * (`push`, `unshift`, `splice`) or a native mutator writes to a constant. A source that is kept whole
+ * is one the compile does not follow, not one it takes to be safe.
  */
 
 /** What a selection has read already: each object, for each path it was asked at. */
