@@ -3,6 +3,7 @@ import {
   type Expression,
   type Identifier,
   type ImportDeclaration,
+  type ImportEqualsDeclaration,
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
@@ -308,18 +309,50 @@ function namesOf(statement: Statement): readonly string[] {
   if (isImportDeclaration(statement)) {
     return importedNames(statement);
   }
+  if (isModuleDeclaration(statement)) {
+    return isIdentifier(statement.name) && holdsValues(statement) ? [statement.name.text] : [];
+  }
   if (
     isFunctionDeclaration(statement) ||
     isClassDeclaration(statement) ||
     isEnumDeclaration(statement) ||
-    isImportEqualsDeclaration(statement) ||
-    isModuleDeclaration(statement)
+    isImportEqualsDeclaration(statement)
   ) {
     return statement.name !== undefined && isIdentifier(statement.name)
       ? [statement.name.text]
       : [];
   }
   return [];
+}
+
+/** Whether an alias is exported, `export import alias = …`, which makes the namespace emit. */
+function isExported(alias: ImportEqualsDeclaration): boolean {
+  return alias.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
+}
+
+/**
+ * Whether a namespace declares a value, as TypeScript emits it: one of types alone — interfaces,
+ * aliases, namespaces of them, an alias it does not export, an empty body — emits none, and the
+ * name it shares with a value around it is that value's.
+ */
+function holdsValues(namespace: ModuleDeclaration): boolean {
+  let { body } = namespace;
+  while (body !== undefined && isModuleDeclaration(body)) {
+    ({ body } = body);
+  }
+  return (
+    body !== undefined &&
+    isModuleBlock(body) &&
+    body.statements.some((statement) => {
+      return !(
+        isInterfaceDeclaration(statement) ||
+        isTypeAliasDeclaration(statement) ||
+        (isExportDeclaration(statement) && statement.isTypeOnly) ||
+        (isImportEqualsDeclaration(statement) && !isExported(statement)) ||
+        (isModuleDeclaration(statement) && !holdsValues(statement))
+      );
+    })
+  );
 }
 
 /** The names an import gives a value: none of an import of a type alone, `import type`, `{ type T }`. */
@@ -358,6 +391,20 @@ export function useOf(node: Node): { readonly at: Node; readonly parent: Node } 
     at = at.parent;
   }
   return { at, parent: at.parent };
+}
+
+/**
+ * The reads in `node` of a name no declaration inside it gives: none a function's, a block's or a
+ * `catch`'s (`freeReads`), nor, where `node` is a namespace, its body's or a nested one's
+ * (`namespaceReads`) — what reads a constant of the module, where nothing inside declares it again.
+ */
+export function unshadowedReadsIn(node: Node): readonly Identifier[] {
+  if (!isModuleDeclaration(node)) {
+    return freeReads(node);
+  }
+  const reads = new Set<Identifier>();
+  namespaceReads(node, new Set(), reads);
+  return [...reads];
 }
 
 /**
