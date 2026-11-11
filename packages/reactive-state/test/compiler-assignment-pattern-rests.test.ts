@@ -22,8 +22,11 @@ import { frameDeclarationOf } from '../src/compiler/framed-bindings.ts';
  * first, and an object pattern on the rest reads the positions it names, `[...{ 0: e }]`. The rest's
  * other properties are the fresh array's, not the sources': its `length` is a number, so that a
  * default beside it never runs, and a name no element holds is `undefined`, so that its default
- * does, `[a, ...{ foo: e = new Error() }] = [0]`. Each row is the sources `assignmentPatternSources`
- * gives `e` from the assignment, as written; a rest written as a name holds no element.
+ * does, `[a, ...{ foo: e = new Error() }] = [0]`. What the array inherits, `constructor` or
+ * `toString`, is present as `length` is, and a pattern written on such a value still reads its
+ * properties, `[...{ length: { foo: e = new Error() } }]`. Each row is the sources
+ * `assignmentPatternSources` gives `e` from the assignment, as written; a rest written as a name
+ * holds no element.
  */
 const CASES = [
   {
@@ -118,6 +121,46 @@ const CASES = [
     what: 'a name that is no canonical position',
   },
   {
+    assignment: "[...{ constructor: e = new Error('fallback') }] = []",
+    sources: [],
+    what: 'a name the array inherits, beside a default',
+  },
+  {
+    assignment: "[a, ...{ toString: e = new Error('fallback') }] = [0]",
+    sources: [],
+    what: 'a name the array inherits, after a position',
+  },
+  {
+    assignment: "[...{ hasOwnProperty: e = new Error('fallback') }] = []",
+    sources: [],
+    what: 'a name every object inherits',
+  },
+  {
+    assignment: "[...{ __proto__: e = new Error('fallback') }] = []",
+    sources: [],
+    what: 'the prototype of the rest',
+  },
+  {
+    assignment: "[...{ charAt: e = new Error('fallback') }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'a name only text inherits',
+  },
+  {
+    assignment: "[...{ length: { foo: e = new Error('fallback') } }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'a pattern read from the length of the rest',
+  },
+  {
+    assignment: "[...{ toString: { foo: e = new Error('fallback') } }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'a pattern read from a name the array inherits',
+  },
+  {
+    assignment: "[...{ constructor: e }] = [new Error('ours')]",
+    sources: [],
+    what: 'a name the array inherits, not an element of the sources',
+  },
+  {
     assignment: "[...{ foo: e }] = [new Error('ours')]",
     sources: [],
     what: 'a name no element holds, without a default',
@@ -136,6 +179,28 @@ const CASES = [
     assignment: "[e, ...[a]] = [new Error('ours'), 0]",
     sources: ["new Error('ours')"],
     what: 'a position before the rest',
+  },
+] as const;
+
+/** A name written as a shorthand beside a default, which binds the variable of that name. */
+const SHORTHANDS = [
+  {
+    assignment: "[...{ length = new Error('fallback') }] = []",
+    name: 'length',
+    sources: [],
+    what: 'a shorthand name of the length of the rest',
+  },
+  {
+    assignment: "[...{ constructor = new Error('fallback') }] = []",
+    name: 'constructor',
+    sources: [],
+    what: 'a shorthand name the array inherits',
+  },
+  {
+    assignment: "[...{ foo = new Error('fallback') }] = []",
+    name: 'foo',
+    sources: ["new Error('fallback')"],
+    what: 'a shorthand name no element holds',
   },
 ] as const;
 
@@ -162,6 +227,16 @@ const ELEMENTS = [
     what: 'a name no element holds as an element default',
   },
   {
+    assignment: "[...{ constructor: values[0] = new Error('fallback') }] = []",
+    sources: [],
+    what: 'a name the array inherits as an element default',
+  },
+  {
+    assignment: "[...{ length: { foo: values[0] = new Error('fallback') } }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'a pattern read from the length of the rest as an element default',
+  },
+  {
     assignment: "[...values] = [new Error('ours')]",
     sources: [],
     what: 'the array itself as the rest',
@@ -179,15 +254,18 @@ describe('an assignment pattern whose rest holds a pattern', () => {
     api[Symbol.dispose]();
   });
 
-  /** The assignment `assignment` writes in a function, and the `e` the function returns. */
-  function written(assignment: string): {
+  /** The assignment `assignment` writes in a function, and the `variable` the function returns. */
+  function written(
+    assignment: string,
+    variable = 'e',
+  ): {
     readonly assigned: BinaryExpression;
     readonly read: Identifier;
     readonly dispose: () => void;
   } {
     const parsed = api.createSourceFile(
       'pattern-rests.ts',
-      `function frames() { let e: unknown = 0; let a: unknown = 0; const values: unknown[] = [0]; ${assignment}; return e; }\n`,
+      `function frames() { let ${variable}: unknown = 0; let a: unknown = 0; const values: unknown[] = [0]; ${assignment}; return ${variable}; }\n`,
     );
     let assigned: BinaryExpression | undefined;
     let read: Identifier | undefined;
@@ -218,6 +296,21 @@ describe('an assignment pattern whose rest holds a pattern', () => {
     try {
       const declared = frameDeclarationOf(read);
       if (declared === undefined) throw new Error(`No declaration of e in ${assignment}.`);
+      const found = assignmentPatternSources(assigned.left, assigned.right, read, declared);
+
+      expect(
+        found.map((source) => [source.value.getText(), ...source.keys].join('.')),
+      ).toStrictEqual(sources);
+    } finally {
+      dispose();
+    }
+  });
+
+  it.each(SHORTHANDS)('assigns $what', ({ assignment, name, sources }) => {
+    const { assigned, read, dispose } = written(assignment, name);
+    try {
+      const declared = frameDeclarationOf(read);
+      if (declared === undefined) throw new Error(`No declaration of ${name} in ${assignment}.`);
       const found = assignmentPatternSources(assigned.left, assigned.right, read, declared);
 
       expect(

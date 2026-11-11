@@ -3,8 +3,10 @@ import {
   type ArrayLiteralExpression,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  type BinaryExpression,
   type PropertyAssignment,
   type PropertyName,
+  type ShorthandPropertyAssignment,
   type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
@@ -52,6 +54,11 @@ const NO_PROTOTYPE: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.StringLiteral,
   SyntaxKind.TrueKeyword,
 ]);
+
+/** The names a fresh array holds that are no element: its own `length`, and what its prototypes supply. */
+const ARRAY_PROPERTIES: ReadonlySet<string> = new Set(
+  [Array.prototype, Object.prototype].flatMap((prototype) => Object.getOwnPropertyNames(prototype)),
+);
 
 /** The sources assigned to one lexical identifier, excluding fresh object and array rest copies. */
 export function assignmentPatternSources(
@@ -132,7 +139,7 @@ export function assignmentPatternTargets(
   missing = false,
   offset?: number,
 ): readonly PatternWork[] {
-  if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken)
+  if (isDefault(target))
     return [{ target: target.left, sources: defaultSources(sources, target.right, missing) }];
   if (isObjectLiteralExpression(target)) return objectTargets(target.properties, sources, offset);
   if (!isArrayLiteralExpression(target)) return [];
@@ -167,6 +174,11 @@ function restTargets(
     : [];
 }
 
+/** Whether a target is written with a default: `target = fallback`. */
+function isDefault(target: Expression): target is BinaryExpression {
+  return isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken;
+}
+
 /** Named object entries and their selected defaults; methods and rest copies bind no error identity. */
 function objectTargets(
   properties: readonly Node[],
@@ -177,36 +189,62 @@ function objectTargets(
   for (const property of properties) {
     if (!isPropertyAssignment(property) && !isShorthandPropertyAssignment(property)) continue;
     const written = literalKey(property.name);
-    const selected = written === undefined ? undefined : entrySelection(written, sources, offset);
-    if (selected === undefined) continue;
-    const { values, missing } = selected;
-    if (isPropertyAssignment(property))
-      targets.push({ target: property.initializer, sources: values, missing });
-    else if (isIdentifier(property.name))
-      targets.push({
-        target: property.name,
-        sources:
-          property.objectAssignmentInitializer === undefined
-            ? values
-            : defaultSources(values, property.objectAssignmentInitializer, missing),
-      });
+    if (written === undefined) continue;
+    const target = entryTarget(property, entrySelection(written, sources, offset));
+    if (target !== undefined) targets.push(target);
   }
   return targets;
 }
 
+/** What an entry of an object pattern selected: its sources, and whether it holds a present value. */
+interface EntrySelection {
+  readonly values: readonly AssignedFrameSource[];
+  readonly missing: boolean;
+  /** A value of the array itself, which binds no error identity and is never replaced by a default. */
+  readonly present: boolean;
+}
+
+/**
+ * The target an entry assigns. A value the array itself holds is present, so that a default written
+ * beside it never runs, though a pattern written there reads its properties, as of any other value.
+ */
+function entryTarget(
+  property: PropertyAssignment | ShorthandPropertyAssignment,
+  { values, missing, present }: EntrySelection,
+): PatternWork | undefined {
+  if (isPropertyAssignment(property)) {
+    const target = unwrapped(property.initializer);
+    return {
+      target: present && isDefault(target) ? target.left : property.initializer,
+      sources: values,
+      missing,
+    };
+  }
+  if (!isIdentifier(property.name)) return undefined;
+  return {
+    target: property.name,
+    sources:
+      present || property.objectAssignmentInitializer === undefined
+        ? values
+        : defaultSources(values, property.objectAssignmentInitializer, missing),
+  };
+}
+
 /**
  * What an entry of an object pattern selects. A rest's pattern reads a fresh array: a position of
- * it is the sources' place shifted to where the rest starts, its `length` is always a number, which
- * binds no error identity, and any other name holds nothing, so that its default runs.
+ * it is the sources' place shifted to where the rest starts, a name its own or its prototypes give
+ * it, as `length` or `constructor`, is a present value that is no error, and any other name holds
+ * nothing, so that its default runs.
  */
 function entrySelection(
   name: string,
   sources: readonly AssignedFrameSource[],
   offset: number | undefined,
-): { readonly values: readonly AssignedFrameSource[]; readonly missing: boolean } | undefined {
-  if (offset === undefined) return selection(sources, name);
-  if (/^(?:0|[1-9]\d*)$/u.test(name)) return selection(sources, String(Number(name) + offset));
-  return name === 'length' ? undefined : { values: [], missing: true };
+): EntrySelection {
+  if (offset === undefined) return { ...selection(sources, name), present: false };
+  if (/^(?:0|[1-9]\d*)$/u.test(name))
+    return { ...selection(sources, String(Number(name) + offset)), present: false };
+  return { values: [], missing: !ARRAY_PROPERTIES.has(name), present: ARRAY_PROPERTIES.has(name) };
 }
 
 /** The sources selected at one key, and whether some source holds nothing there. */
