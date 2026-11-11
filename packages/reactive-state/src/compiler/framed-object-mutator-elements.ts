@@ -2,9 +2,13 @@ import {
   type Block,
   type CallExpression,
   type Expression,
+  type FunctionDeclaration,
   isArrayLiteralExpression,
   isArrowFunction,
   isBlock,
+  isClassDeclaration,
+  isClassExpression,
+  isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -15,6 +19,8 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
+  isVariableDeclaration,
+  isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
   type VariableStatement,
@@ -25,6 +31,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { constantValue } from './numbers.ts';
 
@@ -105,7 +112,13 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
 function descriptorValues(descriptor: Expression | undefined): WrittenArrayElement[] {
   if (descriptor === undefined) return [];
   const value = unwrapped(descriptor);
-  if (!isObjectLiteralExpression(value)) return [{ value: descriptor, keys: ['value'] }];
+  if (!isObjectLiteralExpression(value)) {
+    const held = heldValue(value);
+    const opaque = [{ value: descriptor, keys: ['value'] }];
+    return isObjectLiteralExpression(held)
+      ? [...opaque, ...held.properties.flatMap((property) => descriptorEntry(property))]
+      : opaque;
+  }
   return value.properties.flatMap((property) => descriptorEntry(property));
 }
 
@@ -127,14 +140,51 @@ function descriptorEntry(property: ObjectLiteralElementLike): WrittenArrayElemen
     found.push(...returnedValues(property.body));
   if (key !== 'value' && isPropertyAssignment(property))
     found.push(...functionReturns(property.initializer));
-  return found;
+  if (key !== 'value' && isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+    found.push(...functionReturns(property.name));
+  return isGetAccessorDeclaration(property) ? [...found, ...accessedValues(property, key)] : found;
 }
 
-/** What a written synchronous function, a `get: () => …` of a descriptor, returns. */
+/** A descriptor field written as an accessor: its `value`, or the getter its `get` hands over. */
+function accessedValues(
+  property: ObjectLiteralElementLike & { readonly body?: Block | undefined },
+  key: string | undefined,
+): WrittenArrayElement[] {
+  const returned = returnedValues(property.body);
+  const getters = key === 'value' ? [] : returned.flatMap((each) => functionReturns(each.value));
+  return key === 'get' ? getters : [...returned, ...getters];
+}
+
+/** What a written synchronous function, or a name that holds one, returns as a getter. */
 function functionReturns(initializer: Expression): WrittenArrayElement[] {
-  const fn = unwrapped(initializer);
+  const fn = heldValue(initializer);
+  if (isFunctionDeclaration(fn)) return answersLater(fn) ? [] : returnedValues(fn.body);
   if ((!isArrowFunction(fn) && !isFunctionExpression(fn)) || answersLater(fn)) return [];
   return isBlock(fn.body) ? returnedValues(fn.body) : [{ value: fn.body, keys: [] }];
+}
+
+/** What a name holds: a function it declares, or the initializer of a constant, through aliases. */
+function heldValue(expression: Expression): Expression | FunctionDeclaration {
+  let value = unwrapped(expression);
+  const seen = new Set<Node>();
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const declared = frameDeclarationOf(value);
+    if (declared !== undefined && isFunctionDeclaration(declared)) return declared;
+    const held =
+      declared !== undefined && isVariableDeclaration(declared) && isConstant(declared)
+        ? declared.initializer
+        : undefined;
+    if (held === undefined) return value;
+    value = unwrapped(held);
+  }
+  return value;
+}
+
+/** Whether a variable is declared with `const`, which no later write changes. */
+function isConstant(declaration: Node): boolean {
+  const list = declaration.parent;
+  return isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
 }
 
 /** What a getter's body may return: by its flow where that is followed, by each `return` else. */
@@ -144,14 +194,15 @@ function returnedValues(body: Block | undefined): WrittenArrayElement[] {
   return values.map((value) => ({ value, keys: [] }));
 }
 
-/** Each value a body writes after `return`, those of its nested functions left out. */
+/** Each value a body writes after `return`, those of its nested functions and classes left out. */
 function writtenReturns(body: Block): readonly Expression[] {
   const found: Expression[] = [];
   const pending: Node[] = [body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isReturnStatement(node) && node.expression !== undefined) found.push(node.expression);
     node.forEachChild((child) => {
-      if (!isAnswering(child)) pending.push(child);
+      if (!isAnswering(child) && !isClassDeclaration(child) && !isClassExpression(child))
+        pending.push(child);
     });
   }
   return found;
