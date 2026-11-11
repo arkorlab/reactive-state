@@ -260,7 +260,7 @@ function ownMethods(receiver: Expression, call: Node): OwnMethods {
   while (!isSourceFile(statement.parent) && !isBlock(statement.parent))
     statement = statement.parent;
   const owner = executionOwner(call);
-  const held = new Set<string>();
+  const held: HeldMethods = new Map();
   for (const before of statement.parent.statements) {
     if (before === statement) break;
     statementMethodWrites(before, root, { owner, own, held });
@@ -282,7 +282,7 @@ function statementMethodWrites(
     owner,
     own,
     held,
-  }: { readonly owner: Node; readonly own: OwnMethods; readonly held: Set<string> },
+  }: { readonly owner: Node; readonly own: OwnMethods; readonly held: HeldMethods },
 ): void {
   const top = isExpressionStatement(before) ? before.expression : undefined;
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
@@ -290,12 +290,16 @@ function statementMethodWrites(
   const writes = { root, owner, own, held, definite: definite ? top : undefined };
   possibleMethodWrites(before, { ...writes, until: before.end });
   if (top === undefined) return;
+  releaseHeld(top, root, held);
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
   deletedMethod(top, root, own);
   holdDefinition(top, root, held);
-  for (const key of held) own.set(key, { own: false });
+  for (const key of held.keys()) own.set(key, { own: false });
 }
+
+/** Whether each key a definition left unproven may be redefined or deleted by a later one. */
+type HeldMethods = Map<string, boolean>;
 
 interface MethodWrites {
   readonly root: FrameBinding;
@@ -303,7 +307,7 @@ interface MethodWrites {
   readonly own: OwnMethods;
   readonly definite: Node | undefined;
   readonly until: number;
-  readonly held?: Set<string>;
+  readonly held?: HeldMethods;
 }
 
 /** The read's own execution makes these writes in source order, before its later definite proofs. */
@@ -326,9 +330,30 @@ function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrite
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held);
 }
 
-/** The methods a definition of the array leaves without a custom function, nor a writable value. */
-function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void {
-  if (!isCallExpression(node)) return;
+/**
+ * A definition of the array leaves a method unproven where it is neither a custom function nor a
+ * writable value; the key stays redefinable only where the descriptor says it is configurable.
+ */
+function holdDefinition(node: Node, root: FrameBinding, held: HeldMethods): void {
+  const defined = definedMethods(node, root);
+  if (defined === undefined) return;
+  for (const [key, method] of defined) {
+    if (method.own || method.writable === true) continue;
+    held.set(key, (held.get(key) ?? true) && method.configurable === true);
+  }
+}
+
+/** A definite redefinition or deletion replaces a configurable property, setter and all. */
+function releaseHeld(top: Expression, root: FrameBinding, held: HeldMethods): void {
+  const replaced = definedMethods(top, root) ?? new Map<string, ArrayMethodOverride>();
+  deletedMethod(top, root, replaced);
+  if (replaced.size >= OWN_METHODS.size) return;
+  for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
+}
+
+/** The methods one call of Object.defineProperty or Object.defineProperties defines on the array. */
+function definedMethods(node: Node, root: FrameBinding): OwnMethods | undefined {
+  if (!isCallExpression(node)) return undefined;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (
@@ -336,10 +361,10 @@ function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void
     arrayIdentity(target) !== root ||
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
-    return;
+    return undefined;
   const defined: OwnMethods = new Map();
   callMethodWrites(node, root, defined);
-  for (const [key, method] of defined) if (!method.own && method.writable !== true) held.add(key);
+  return defined;
 }
 
 /** Another function that may run before the read may write any method at any point before it. */
@@ -481,6 +506,13 @@ function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOver
   if (descriptor === undefined) return { own: false };
   const value = unwrapped(descriptor);
   if (!isObjectLiteralExpression(value)) return { own: false };
+  const writable = descriptorSays(value, 'writable') ? { writable: true as const } : {};
+  const configurable = descriptorSays(value, 'configurable') ? { configurable: true as const } : {};
+  return { ...descriptorValue(value), ...writable, ...configurable };
+}
+
+/** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
+function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
   let custom: ArrayMethodOverride = { own: false };
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) custom = { own: false };
@@ -493,22 +525,28 @@ function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOver
           : { own: false };
     }
   }
-  return writableData(value) ? { ...custom, writable: true } : custom;
+  return custom;
 }
 
-/** A descriptor that writes a plain data property and says `writable: true`, and nothing else. */
-function writableData(descriptor: ObjectLiteralExpression): boolean {
-  let writable = false;
+/**
+ * A descriptor whose last word on an attribute is a literal `true`, with no spread and no key that
+ * is not written out; a writable data property is not an accessor.
+ */
+function descriptorSays(
+  descriptor: ObjectLiteralExpression,
+  attribute: 'configurable' | 'writable',
+): boolean {
+  let says = false;
   for (const property of descriptor.properties) {
     if (isSpreadAssignment(property)) return false;
     const key = writtenArrayKey(property.name);
-    if (key === undefined || ACCESSOR_KEYS.has(key)) return false;
-    if (key === 'writable')
-      writable =
+    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return false;
+    if (key === attribute)
+      says =
         isPropertyAssignment(property) &&
         unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword;
   }
-  return writable;
+  return says;
 }
 
 /** An opaque write can replace either method and therefore removes a proof of a custom method. */
