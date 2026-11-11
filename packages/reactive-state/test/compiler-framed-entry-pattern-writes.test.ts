@@ -210,6 +210,30 @@ const CASES = [
     key: 'message',
     values: ['error:'],
   },
+  {
+    id: 'computed-key-spread-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ field: error } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-nested-spread-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ ...{ field: error } }, other: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-spread-array-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...[error] })); }`,
+    key: 'message',
+    values: ["'safe':", '[error]:', 'error:'],
+  },
+  {
+    id: 'computed-key-spread-opaque-pin',
+    source: `function frames(error: Error, name: string, record: Record<string, unknown>) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...record })); }`,
+    key: 'message',
+    values: ["'safe':", 'record:', 'record:0'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

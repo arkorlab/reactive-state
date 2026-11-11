@@ -334,7 +334,10 @@ function yieldsNothing(iterable: Expression): boolean {
   );
 }
 
-/** What sources may hand an unrouted target: their fields or elements, and themselves. */
+/**
+ * What sources may hand an unrouted target: their fields or elements, and themselves. The fields a
+ * written spread copies into an object literal are the object's own.
+ */
 function possibleFields(sources: readonly AssignedFrameSource[]): readonly AssignedFrameSource[] {
   return sources.flatMap((source) => {
     const value = unwrapped(source.value);
@@ -342,7 +345,8 @@ function possibleFields(sources: readonly AssignedFrameSource[]): readonly Assig
     if (!isObjectLiteralExpression(value)) return [source, ...iteratedFrameSources(value)];
     return value.properties.flatMap((property) => {
       if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-      if (isSpreadAssignment(property)) return [{ value: property.expression, keys: [] }];
+      if (isSpreadAssignment(property))
+        return possibleFields([{ value: property.expression, keys: [] }]);
       return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
         ? [{ value: property.name, keys: [] }]
         : [];
