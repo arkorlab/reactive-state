@@ -122,19 +122,25 @@ function copiedPrototypes(
   object: ObjectLiteralExpression,
   key: string,
 ): readonly AssignedFrameSource[] {
-  const prototypes = ownEntries(object, '__proto__', true).values;
+  const prototypes = ownEntries(object, '__proto__').values;
   return prototypes.map((each) => ({ value: each.value, keys: [...each.keys, key] }));
 }
 
 /**
  * A member a literal's own fields do not define is read from the prototype its written `__proto__`
- * entry sets, getters included; a computed or shorthand `__proto__` defines a field instead.
+ * entry sets, getters included; a computed or shorthand `__proto__` defines a field instead. The
+ * member `__proto__` is the prototype's own field of that name where it has one, and otherwise the
+ * `Object.prototype` getter, which answers the literal's prototype itself: both stay possible.
  */
 function inheritedEntries(
   object: ObjectLiteralExpression,
   key: string,
 ): readonly AssignedFrameSource[] {
-  return framedLiteralPrototypes(object).map((value) => ({ value, keys: [key] }));
+  const prototypes = framedLiteralPrototypes(object);
+  return [
+    ...prototypes.map((value) => ({ value, keys: [key] })),
+    ...(key === '__proto__' ? prototypes.map((value) => ({ value, keys: [] })) : []),
+  ];
 }
 
 /** The prototypes a literal's written `__proto__` entries set, other than `null`. */
@@ -175,10 +181,10 @@ interface EntryReading {
 }
 
 /**
- * Literal spreads copy data values; a setter pairs only with a getter on the same receiver. A copy
- * takes no written `__proto__`, which sets the literal's prototype rather than an entry.
+ * Literal spreads copy data values; a setter pairs only with a getter on the same receiver. A written
+ * `__proto__` sets the literal's prototype rather than an entry: it is no own field to read or copy.
  */
-function ownEntries(object: ObjectLiteralExpression, key: string, copied = false): EntryReading {
+function ownEntries(object: ObjectLiteralExpression, key: string): EntryReading {
   const pending: EntryReading[] = [entryReading(object)];
   while (pending.length > 0) {
     const at = pending.at(-1);
@@ -190,7 +196,7 @@ function ownEntries(object: ObjectLiteralExpression, key: string, copied = false
       continue;
     }
     if (spreadEntry(property, at, key, pending)) continue;
-    if (copied && isPropertyAssignment(property) && prototypeName(property.name)) continue;
+    if (isPropertyAssignment(property) && prototypeName(property.name)) continue;
     selectEntry(at, property, key);
   }
   return entryReading(object);
