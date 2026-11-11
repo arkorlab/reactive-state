@@ -54,6 +54,22 @@ const CASES = [
   },
   {
     lines: [
+      'namespace Types {',
+      '  export type T = string;',
+      '}',
+      'namespace Inner {',
+      '  namespace Function {',
+      '    import T = Types.T;',
+      '  }',
+      '  export const made = (text: string) => Function(text)();',
+      '}',
+      ...UNRELATED,
+    ],
+    reads: ['8:Function'],
+    what: 'a namespace of an alias it does not export',
+  },
+  {
+    lines: [
       'namespace Inner {',
       '  namespace Function {',
       '    export const own = 1;',

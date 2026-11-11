@@ -1,6 +1,7 @@
 import {
   type Identifier,
   type ImportDeclaration,
+  type ImportEqualsDeclaration,
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
@@ -293,10 +294,15 @@ function namesOf(statement: Statement): readonly string[] {
   return [];
 }
 
+/** Whether an alias is exported, `export import alias = …`, which makes the namespace emit. */
+function isExported(alias: ImportEqualsDeclaration): boolean {
+  return alias.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
+}
+
 /**
  * Whether a namespace declares a value, as TypeScript emits it: one of types alone — interfaces,
- * aliases, namespaces of them, an empty body — emits none, and the name it shares with a value
- * around it is that value's.
+ * aliases, namespaces of them, an alias it does not export, an empty body — emits none, and the
+ * name it shares with a value around it is that value's.
  */
 function holdsValues(namespace: ModuleDeclaration): boolean {
   let { body } = namespace;
@@ -311,6 +317,7 @@ function holdsValues(namespace: ModuleDeclaration): boolean {
         isInterfaceDeclaration(statement) ||
         isTypeAliasDeclaration(statement) ||
         (isExportDeclaration(statement) && statement.isTypeOnly) ||
+        (isImportEqualsDeclaration(statement) && !isExported(statement)) ||
         (isModuleDeclaration(statement) && !holdsValues(statement))
       );
     })
