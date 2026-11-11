@@ -28,6 +28,7 @@ import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
   selectedMethod,
   type SelectedMethod,
+  writtenAfterRead,
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
@@ -276,6 +277,7 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
     owner,
     own,
     selected,
+    read: call,
     definite: undefined,
     until: call.end,
   });
@@ -314,6 +316,7 @@ interface MethodWrites {
   readonly until: number;
   readonly defined?: Set<string>;
   readonly selected?: SelectedMethod | undefined;
+  readonly read?: Node | undefined;
 }
 
 /** The read's own execution makes these writes in source order, before its later definite proofs. */
@@ -330,9 +333,13 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
   }
 }
 
-/** The methods a write may replace are unproven; a definition's stay so past the statement's own. */
+/**
+ * The methods a write may replace are unproven, unless the write comes after the read or, for the
+ * selected method, after the selection; a definition's stay so past the statement's own.
+ */
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
-  const { selected } = writes;
+  const { selected, read } = writes;
+  if (read !== undefined && writtenAfterRead(node, read, writes.root)) return;
   for (const key of keys)
     if (selected === undefined || !writtenAfterSelection(node, key, selected))
       writes.own.set(key, { own: false });

@@ -18,7 +18,9 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 /**
  * A call selects its method before it evaluates its arguments (ECMA-262, call evaluation): a write
  * of that method in the arguments is made after the selection, and what the call runs is the method
- * written before it. What the method itself then reads, and a call's own repeats, still see it.
+ * written before it. An assignment evaluates its right side before it writes, and a loop its
+ * iterable before its head does: a read in either comes before the write. What the method itself
+ * then reads, and a call's own repeats, still see it.
  */
 const SAFE = "values.join = () => 'fixed';";
 
@@ -76,6 +78,36 @@ const CASES = [
   {
     id: 'captured-array-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} function read() { return values.join(delete values.join); } return read() + read(); }`,
+    converts: true,
+  },
+  {
+    id: 'assignment-operand',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} values.join = String(values) as any; }`,
+    converts: false,
+  },
+  {
+    id: 'array-pattern-operand',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} [values.join] = [String(values) as any]; }`,
+    converts: false,
+  },
+  {
+    id: 'object-pattern-operand',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} ({ restore: values.join } = { restore: String(values) as any }); }`,
+    converts: false,
+  },
+  {
+    id: 'loop-iterable-operand',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (values.join of [String(values) as any]); }`,
+    converts: false,
+  },
+  {
+    id: 'repeated-assignment-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2; pass++) values.join = String(values) as any; }`,
+    converts: true,
+  },
+  {
+    id: 'captured-assignment-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} function read() { values.join = String(values) as any; } read(); read(); }`,
     converts: true,
   },
 ] as const;

@@ -2,6 +2,8 @@ import {
   type CallExpression,
   isCallExpression,
   isElementAccessExpression,
+  isForInStatement,
+  isForOfStatement,
   isPropertyAccessExpression,
   type Node,
 } from 'typescript/ast';
@@ -46,4 +48,21 @@ export function writtenAfterSelection(node: Node, key: string, selected: Selecte
   const { call, root } = selected;
   const within = call.arguments.some((each) => node.pos >= each.pos && node.end <= each.end);
   return within && !repeatedFrameRead(node, call, root, executionOwner(call));
+}
+
+/**
+ * Whether a write holds the read among its own operands, which run before it writes: an
+ * assignment's right side, a mutator's arguments, a loop's iterable before its head is written. A
+ * loop's body comes after the head, and a write of another run, or one a loop around the read
+ * brings back, comes before the read.
+ */
+export function writtenAfterRead(node: Node, read: Node, root: FrameBinding): boolean {
+  if (node === read || node.pos > read.pos || node.end < read.end) return false;
+  if (
+    (isForOfStatement(node) || isForInStatement(node)) &&
+    (read.pos < node.expression.pos || read.end > node.expression.end)
+  )
+    return false;
+  const owner = executionOwner(read);
+  return executionOwner(root) === owner && !repeatedFrameRead(node, read, root, owner);
 }
