@@ -68,6 +68,34 @@ const CASES: readonly {
     what: 'two rests, the first of errors',
   },
   {
+    declarations: 'type Values = [string, ...(string[] | [...Error[], string])];',
+    type: 'Values',
+    selection: { index: 1 },
+    names: true,
+    what: 'a rest of a union, one of whose tuples has a rest and a member',
+  },
+  {
+    declarations: 'type Values = [string, ...(string[] | [...Error[], string])];',
+    type: 'Values',
+    selection: { index: 2 },
+    names: true,
+    what: 'a place far into a rest of such a union',
+  },
+  {
+    declarations: 'type Values = [string, ...(string[] | [...string[], string])];',
+    type: 'Values',
+    selection: { index: 1 },
+    names: false,
+    what: 'a rest of a union of data',
+  },
+  {
+    declarations: 'type Values = [string, ...(string[] | [Error, string])];',
+    type: 'Values',
+    selection: { index: 1 },
+    names: true,
+    what: 'a rest of a union of an array and a finite tuple',
+  },
+  {
     declarations: 'type Values = [string, string, ...Error[], string];',
     type: 'Values',
     selection: { index: 1 },
@@ -141,6 +169,18 @@ const MEMBERS: readonly {
     key: '0',
     names: false,
     what: 'a member before the rest',
+  },
+  {
+    declarations: 'type Values = [string, ...(string[] | [...Error[], string])];',
+    key: '1',
+    names: true,
+    what: 'a rest of a union, one of whose tuples has a rest and a member',
+  },
+  {
+    declarations: 'type Values = [string, ...(string[] | [...string[], string])];',
+    key: '1',
+    names: false,
+    what: 'a rest of a union of data',
   },
   {
     declarations: 'type Values = [string, ...Error[]];',

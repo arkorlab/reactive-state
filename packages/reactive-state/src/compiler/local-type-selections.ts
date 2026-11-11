@@ -183,7 +183,10 @@ export function indexedMemberReadings(
   return members.map((type) => ({ ...object, type }));
 }
 
-/** Native rest arrays and finite tuple positions keep their operand's original argument environment. */
+/**
+ * Native rest arrays and finite tuple positions keep their operand's original argument environment;
+ * a tuple among a rest's alternatives is read as any other tuple, a place after its own rest included.
+ */
 function restElementReadings(
   at: TypeReading,
   operands: Operands,
@@ -193,14 +196,7 @@ function restElementReadings(
     if (isExpressionWithTypeArguments(source.type)) return [];
     const element = nativeArrayElement(source.type);
     if (element !== undefined) return [{ ...source, type: element }];
-    return (
-      writtenTupleReadings(
-        source,
-        index,
-        (rest, relative) => restElementReadings(rest, operands, relative),
-        operands,
-      ) ?? []
-    );
+    return tupleReadings(source, index, operands) ?? [];
   });
 }
 
