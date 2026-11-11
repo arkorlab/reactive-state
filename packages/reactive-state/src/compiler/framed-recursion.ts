@@ -1,15 +1,36 @@
 import {
   type Identifier,
   isArrowFunction,
+  isBinaryExpression,
+  isCallExpression,
+  isClassDeclaration,
   isClassExpression,
+  isComputedPropertyName,
+  isConstructorDeclaration,
+  isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
+  isMethodDeclaration,
+  isNewExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isParenthesizedExpression,
+  isPrivateIdentifier,
+  isPropertyAccessExpression,
+  isPropertyAssignment,
+  isPropertyDeclaration,
+  isSetAccessorDeclaration,
+  isShorthandPropertyAssignment,
+  isStringLiteral,
+  isTaggedTemplateExpression,
   isTypeNode,
   isVariableDeclaration,
   type Node,
+  type PropertyName,
   type SourceFile,
+  SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
@@ -20,28 +41,68 @@ import { framedPossibleBranch } from './framed-branches.ts';
 import { readsBinding } from './scope.ts';
 
 /**
- * Where a function can run itself again: the code of a function that is called by a name, a
- * declaration, a named expression or the variable an arrow or an expression is given to, or by a
- * function it holds or another that names it, may reach it before it ends.
+ * Where a function can run itself again. A function is reached by the names it is given: its
+ * declaration's, its expression's, the variable or the property it is the value of, and its
+ * method's or its class's; the code that reads one of them, or a name of a function that does, may
+ * reach it before it ends. A function that is used otherwise than by a call, passed, stored or
+ * compared, may be reached from anywhere, and so may one a getter, a setter or a method that the
+ * language calls by itself holds.
  */
 
-/** A function that has a name to be called by, with the name. */
-export type NamedFunction = Node & { readonly body?: Node };
+/** The names a function is called by, and whether it has a name that is worked out. */
+interface FunctionNames {
+  readonly names: readonly string[];
+  readonly computed: boolean;
+}
 
-/** The name a function is called by: its own, or the variable it is given to. */
-function nameOf(fn: Node): Identifier | undefined {
-  if ((isFunctionDeclaration(fn) || isFunctionExpression(fn)) && fn.name !== undefined)
-    return fn.name;
-  const bound = boundVariable(fn);
-  return bound !== undefined && isIdentifier(bound.name) ? bound.name : undefined;
+/** The methods the language calls where nothing names them: a coercion, an iteration, a trap. */
+const IMPLICIT_METHODS: ReadonlySet<string> = new Set([
+  'apply',
+  'construct',
+  'defineProperty',
+  'deleteProperty',
+  'get',
+  'getOwnPropertyDescriptor',
+  'getPrototypeOf',
+  'has',
+  'isExtensible',
+  'next',
+  'ownKeys',
+  'preventExtensions',
+  'return',
+  'set',
+  'setPrototypeOf',
+  'then',
+  'throw',
+  'toJSON',
+  'toLocaleString',
+  'toString',
+  'valueOf',
+]);
+
+/** The text of a property name that is written out, none for a computed one. */
+function keyText(name: PropertyName | undefined): string | undefined {
+  if (name === undefined || isComputedPropertyName(name)) return undefined;
+  return isIdentifier(name) ||
+    isPrivateIdentifier(name) ||
+    isStringLiteral(name) ||
+    isNumericLiteral(name) ||
+    isNoSubstitutionTemplateLiteral(name)
+    ? name.text
+    : undefined;
+}
+
+/** The node that holds a function expression or an arrow, past parentheses. */
+function holderOf(fn: Node): Node {
+  let at = fn;
+  while (isParenthesizedExpression(at.parent)) at = at.parent;
+  return at;
 }
 
 /** The variable an arrow or a function expression is the value of. */
 function boundVariable(fn: Node): VariableDeclaration | undefined {
   if (!isArrowFunction(fn) && !isFunctionExpression(fn)) return undefined;
-  let at: Node = fn;
-  while (isParenthesizedExpression(at.parent)) at = at.parent;
-  const { parent } = at;
+  const { parent } = holderOf(fn);
   return isVariableDeclaration(parent) &&
     parent.initializer !== undefined &&
     unwrapped(parent.initializer) === fn
@@ -49,33 +110,310 @@ function boundVariable(fn: Node): VariableDeclaration | undefined {
     : undefined;
 }
 
-/** Whether a node is a function that is called by a name. */
+/** The names a function expression or an arrow is given where it is the value of something. */
+function givenNames(fn: Node): FunctionNames {
+  const at = holderOf(fn);
+  const { parent } = at;
+  const names: string[] = [];
+  let computed = false;
+  const add = (name: string | undefined): void => {
+    if (name === undefined) computed = true;
+    else names.push(name);
+  };
+  const initial = (parent as { readonly initializer?: Node }).initializer === at;
+  if (initial && isVariableDeclaration(parent) && isIdentifier(parent.name)) add(parent.name.text);
+  else if (initial && (isPropertyAssignment(parent) || isPropertyDeclaration(parent)))
+    add(keyText(parent.name));
+  else if (
+    isBinaryExpression(parent) &&
+    (parent.right as Node) === at &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken
+  )
+    add(targetName(parent.left));
+  return { names, computed };
+}
+
+/** The name an assignment writes: a variable's, or a property's. */
+function targetName(left: Node): string | undefined {
+  const target = unwrapped(left as never) as Node;
+  if (isIdentifier(target)) return target.text;
+  if (isPropertyAccessExpression(target)) return target.name.text;
+  if (
+    isElementAccessExpression(target) &&
+    (isStringLiteral(target.argumentExpression) ||
+      isNoSubstitutionTemplateLiteral(target.argumentExpression))
+  )
+    return target.argumentExpression.text;
+  return undefined;
+}
+
+/** The class a constructor belongs to, by the names it has. */
+function namesOfClass(declaration: Node): FunctionNames {
+  const names: string[] = [];
+  if ((isClassDeclaration(declaration) || isClassExpression(declaration)) && declaration.name)
+    names.push(declaration.name.text);
+  if (isClassExpression(declaration)) names.push(...givenNames(declaration).names);
+  return { names, computed: false };
+}
+
+/** The names a function is reached by. */
+function namesOf(fn: Node): FunctionNames {
+  if (isFunctionDeclaration(fn)) return { names: fn.name ? [fn.name.text] : [], computed: false };
+  if (isMethodDeclaration(fn) || isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn)) {
+    const key = keyText(fn.name);
+    return key === undefined ? { names: [], computed: true } : { names: [key], computed: false };
+  }
+  if (isConstructorDeclaration(fn)) return namesOfClass(fn.parent);
+  if (!isFunctionExpression(fn) && !isArrowFunction(fn)) return { names: [], computed: false };
+  const given = givenNames(fn);
+  const own = isFunctionExpression(fn) && fn.name ? [fn.name.text] : [];
+  return { names: [...own, ...given.names], computed: given.computed };
+}
+
+/** Whether a node is a function whose code can be reached again by a name. */
 export function isNamedFunction(node: Node): boolean {
+  if (
+    !isFunctionDeclaration(node) &&
+    !isFunctionExpression(node) &&
+    !isArrowFunction(node) &&
+    !isMethodDeclaration(node) &&
+    !isGetAccessorDeclaration(node) &&
+    !isSetAccessorDeclaration(node) &&
+    !isConstructorDeclaration(node)
+  )
+    return false;
+  const { names, computed } = namesOf(node);
+  return computed || names.length > 0;
+}
+
+/** The name a node reads, if it reads one: a variable, or a property by its name. */
+function referenceText(node: Node): string | undefined {
+  if (isIdentifier(node)) {
+    const { parent } = node;
+    if (isPropertyAccessExpression(parent) && parent.name === node) return node.text;
+    if (!isShorthandPropertyAssignment(parent) && (parent as { name?: Node }).name === node)
+      return undefined;
+    return readsBinding(node) ? node.text : undefined;
+  }
+  return isStringLiteral(node) &&
+    isElementAccessExpression(node.parent) &&
+    node.parent.argumentExpression === node
+    ? node.text
+    : undefined;
+}
+
+/** Whether a node, the name of a reference, is what a call, a construction or a tag calls. */
+function called(node: Node): boolean {
+  let at = node;
+  let { parent } = at;
+  if (isPropertyAccessExpression(parent) && parent.expression === at) {
+    const via = parent.name.text;
+    if (via !== 'call' && via !== 'apply') return false;
+    at = parent;
+    parent = at.parent;
+  } else if (isPropertyAccessExpression(parent) && parent.name === at) {
+    at = parent;
+    parent = at.parent;
+  }
+  while (isParenthesizedExpression(parent)) {
+    at = parent;
+    parent = at.parent;
+  }
   return (
-    (isFunctionDeclaration(node) || isFunctionExpression(node) || isArrowFunction(node)) &&
-    nameOf(node) !== undefined
+    ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
+    (isTaggedTemplateExpression(parent) && parent.tag === at)
+  );
+}
+
+/** Whether a reference is a name that is written to, and not read. */
+function written(node: Node): boolean {
+  const { parent } = node;
+  return (
+    isBinaryExpression(parent) &&
+    parent.left === node &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken
+  );
+}
+
+/** Whether no arm a written condition rules out holds the node, or a function that holds it. */
+function runsWithin(node: Node, fn: Node): boolean {
+  if (!framedPossibleBranch(node)) return false;
+  for (let at = node.parent; at !== fn; at = at.parent)
+    if (isAnswering(at) && !framedPossibleBranch(at)) return false;
+  return true;
+}
+
+/**
+ * Whether a name read inside the function resolves to the function: no parameter, no local, and no
+ * function or class within it that is named alike takes the name first. A name that is not the
+ * function's own or its variable's is taken for the function's wherever it is read.
+ */
+function refersToFunction(name: Identifier, fn: Node): boolean {
+  const declared = frameDeclarationOf(name);
+  if (isFunctionExpression(fn) && fn.name?.text === name.text) {
+    if (declared !== undefined) return false;
+  } else if (isFunctionDeclaration(fn) && fn.name?.text === name.text) {
+    if (declared !== fn) return false;
+  } else if (boundVariable(fn)?.name.getText() === name.text && declared !== boundVariable(fn)) {
+    return false;
+  }
+  for (let at = name.parent; at !== fn; at = at.parent)
+    if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === name.text)
+      return false;
+  return true;
+}
+
+/** The functions of the file with the names they are reached by, and the code of each. */
+interface FileFunctions {
+  readonly byName: ReadonlyMap<string, readonly Node[]>;
+  readonly implicit: readonly Node[];
+}
+
+const FUNCTIONS = new WeakMap<SourceFile, FileFunctions>();
+
+/** The functions of a file by name, and those the language may call by itself. */
+function functionsOf(file: SourceFile): FileFunctions {
+  const known = FUNCTIONS.get(file);
+  if (known !== undefined) return known;
+  const byName = new Map<string, Node[]>();
+  const implicit: Node[] = [];
+  const pending: Node[] = [file];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (isNamedFunction(node)) {
+      const { names, computed } = namesOf(node);
+      for (const name of names) byName.set(name, [...(byName.get(name) ?? []), node]);
+      const accessor = isGetAccessorDeclaration(node) || isSetAccessorDeclaration(node);
+      if (computed || accessor || names.some((name) => IMPLICIT_METHODS.has(name)))
+        implicit.push(node);
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  const found = { byName, implicit };
+  FUNCTIONS.set(file, found);
+  return found;
+}
+
+/** Whether the code of a function reads one of the names where it may run. */
+function mentionsAny(fn: Node, names: ReadonlySet<string>): boolean {
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    const text = referenceText(node);
+    if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/**
+ * The names by which a function is reached again, and whether it may be reached from anywhere: its
+ * own, and those of the functions of the file that read one of them; and a function that is used
+ * otherwise than by a call, or one the language calls by itself that reads one.
+ */
+function reaching(fn: Node): { readonly names: ReadonlySet<string>; readonly anywhere: boolean } {
+  const names = new Set(namesOf(fn).names);
+  const { byName, implicit } = functionsOf(fn.getSourceFile());
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const [name, functions] of byName)
+      if (!names.has(name) && functions.some((each) => mentionsAny(each, names))) {
+        names.add(name);
+        grew = true;
+      }
+  }
+  const anywhere =
+    namesOf(fn).computed ||
+    implicit.some((each) => mentionsAny(each, names)) ||
+    escapes(fn.getSourceFile(), names);
+  return { names, anywhere };
+}
+
+/** Whether the file uses one of the names otherwise than by calling it or giving it a value. */
+function escapes(file: SourceFile, names: ReadonlySet<string>): boolean {
+  const pending: Node[] = [file];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    const text = referenceText(node);
+    if (
+      text !== undefined &&
+      names.has(text) &&
+      !written(node) &&
+      !called(node) &&
+      !isDeclarationName(node) &&
+      framedPossibleBranch(node)
+    )
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** Whether a node names what a declaration declares, in a property of a literal or a class. */
+function isDeclarationName(node: Node): boolean {
+  const { parent } = node;
+  return (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) && parent.name === node;
+}
+
+/** Whether code that runs in the range reaches what the language may call by itself. */
+function runsCodeBetween(fn: Node, from: number, to: number): boolean {
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (node !== fn && isAnswering(node)) continue;
+    if (node.pos >= from && node.pos < to && !isCodeFree(node) && framedPossibleBranch(node))
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** Whether a node can run no code but its parts': a name, a literal, a statement of its own. */
+function isCodeFree(node: Node): boolean {
+  return !(
+    isCallExpression(node) ||
+    isNewExpression(node) ||
+    isTaggedTemplateExpression(node) ||
+    isPropertyAccessExpression(node) ||
+    isElementAccessExpression(node) ||
+    (node.kind >= SyntaxKind.FirstBinaryOperator && node.kind <= SyntaxKind.LastBinaryOperator) ||
+    node.kind === SyntaxKind.TemplateExpression ||
+    node.kind === SyntaxKind.PrefixUnaryExpression ||
+    node.kind === SyntaxKind.PostfixUnaryExpression ||
+    node.kind === SyntaxKind.SpreadElement ||
+    node.kind === SyntaxKind.ForOfStatement ||
+    node.kind === SyntaxKind.AwaitExpression ||
+    node.kind === SyntaxKind.YieldExpression
   );
 }
 
 /**
- * Whether the function runs itself again between two positions: by its name, or through a function
- * that names it, wherever that function is written, or a name reached through it in turn.
+ * Whether the function runs itself again between two positions: its names, or those of a function
+ * that reads one of them, are read there where the code may run; and where the function may be
+ * reached from anywhere, whenever code runs there at all.
  */
 export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
-  const name = nameOf(fn);
-  if (name === undefined) return false;
-  const names = recursiveNames(fn, name);
+  if (!isNamedFunction(fn)) return false;
+  const { names, anywhere } = reaching(fn);
+  if (anywhere) return runsCodeBetween(fn, from, to);
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
+    const text = node.pos >= from && node.pos < to ? referenceText(node) : undefined;
     if (
-      node !== name &&
-      node.pos >= from &&
-      node.pos < to &&
-      isIdentifier(node) &&
-      names.has(node.text) &&
-      readsBinding(node) &&
-      (node.text !== name.text || refersToFunction(node, fn)) &&
+      text !== undefined &&
+      names.has(text) &&
+      !written(node) &&
+      (!isIdentifier(node) || refersToFunction(node, fn)) &&
       runsWithin(node, fn)
     )
       return true;
@@ -89,83 +427,4 @@ export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
 /** Whether the function runs itself again anywhere in its code. */
 export function runsItself(fn: Node): boolean {
   return runsItselfBetween(fn, -Infinity, Infinity);
-}
-
-/**
- * The names by which the function runs itself: its own, and those of the functions of the file,
- * a declaration or a variable given one, whose code names one of them. A name that more than one
- * function has counts if any of them does.
- */
-function recursiveNames(fn: Node, name: Identifier): ReadonlySet<string> {
-  const names = new Set([name.text]);
-  const helpers = functionsByName(fn.getSourceFile());
-  for (let grew = true; grew;) {
-    grew = false;
-    for (const [helper, bodies] of helpers)
-      if (!names.has(helper) && bodies.some((body) => mentionsAny(body, names))) {
-        names.add(helper);
-        grew = true;
-      }
-  }
-  return names;
-}
-
-const FUNCTIONS = new WeakMap<SourceFile, ReadonlyMap<string, readonly Node[]>>();
-
-/** The functions of a file, each name with the code of every function that has it. */
-function functionsByName(file: SourceFile): ReadonlyMap<string, readonly Node[]> {
-  const known = FUNCTIONS.get(file);
-  if (known !== undefined) return known;
-  const found = new Map<string, Node[]>();
-  const pending: Node[] = [file];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (isNamedFunction(node)) {
-      const name = nameOf(node);
-      const { body } = node as NamedFunction;
-      if (name !== undefined && body !== undefined)
-        found.set(name.text, [...(found.get(name.text) ?? []), body]);
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  FUNCTIONS.set(file, found);
-  return found;
-}
-
-/** Whether the code reads one of the names. */
-function mentionsAny(body: Node, names: ReadonlySet<string>): boolean {
-  const pending: Node[] = [body];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (isIdentifier(node) && names.has(node.text) && readsBinding(node)) return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
-}
-
-/**
- * Whether a name read inside the function resolves to the function: no parameter, no local, and no
- * function or class within it that is named alike takes the name first.
- */
-function refersToFunction(name: Identifier, fn: Node): boolean {
-  const declared = frameDeclarationOf(name);
-  const own = isFunctionExpression(fn) && fn.name !== undefined;
-  const self = isFunctionDeclaration(fn) ? fn : boundVariable(fn);
-  if (own ? declared !== undefined : declared !== self) return false;
-  for (let at = name.parent; at !== fn; at = at.parent)
-    if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === name.text)
-      return false;
-  return true;
-}
-
-/** Whether no arm a written condition rules out holds the node, or a function that holds it. */
-function runsWithin(node: Node, fn: Node): boolean {
-  if (!framedPossibleBranch(node)) return false;
-  for (let at = node.parent; at !== fn; at = at.parent)
-    if (isAnswering(at) && !framedPossibleBranch(at)) return false;
-  return true;
 }

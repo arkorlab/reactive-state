@@ -582,6 +582,151 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-variable-of-another-name',
+    source: `function frames(error: Error) { const values = [error]; const read = function inner(pass: number) { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-assigned-function',
+    source: `function frames(error: Error) { const values = [error]; let read; read = function (pass: number) { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-assigned-arrow',
+    source: `function frames(error: Error) { const values = [error]; let read; read = (pass: number) => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-property-function',
+    source: `function frames(error: Error) { const values = [error]; const o = { read: function (pass: number) { ${SAFE} if (pass < 1) o.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } }; return o.read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-object-method',
+    source: `function frames(error: Error) { const values = [error]; const o = { read(pass: number) { ${SAFE} if (pass < 1) this.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } }; return o.read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-class-method',
+    source: `function frames(error: Error) { const values = [error]; class C { read(pass: number) { ${SAFE} if (pass < 1) this.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } } return new C().read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-class-field-arrow',
+    source: `function frames(error: Error) { const values = [error]; class C { read = (pass: number) => { ${SAFE} if (pass < 1) this.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; } return new C().read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-static-method',
+    source: `function frames(error: Error) { const values = [error]; class C { static read(pass: number) { ${SAFE} if (pass < 1) C.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } } return C.read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-getter',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const o = { get x() { ${SAFE} if (n++ < 1) o.x; const text = String(values); values.join = Array.prototype.join; return text; } }; return o.x; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-call-method',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} if (pass < 1) read.call(null, pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-apply-method',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} if (pass < 1) read.apply(null, [pass + 1]); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-new',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} if (pass < 1) new read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-tagged-template',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; function read() { ${SAFE} if (n++ < 1) read\`\`; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-optional-call',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} if (pass < 1) read?.(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-alias-before-proof',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { const r = read; ${SAFE} if (pass < 1) r(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-bound-function',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { const r = read.bind(null); ${SAFE} if (pass < 1) r(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-function-in-array',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { const fns = [read]; ${SAFE} if (pass < 1) fns[0](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-escaped-function',
+    source: `function frames(error: Error) { const values = [error]; const handlers = []; function read(pass: number) { ${SAFE} if (pass < 1) handlers[0](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } handlers.push(read); return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-getter-helper',
+    source: `function frames(error: Error) { const values = [error]; const o = { get again() { return read(1); } }; function read(pass: number) { ${SAFE} if (pass < 1) o.again; const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-value-of-helper',
+    source: `function frames(error: Error) { const values = [error]; const o = { valueOf() { return read(1); } }; function read(pass: number) { ${SAFE} if (pass < 1) +o; const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-to-primitive-helper',
+    source: `function frames(error: Error) { const values = [error]; const o = { [Symbol.toPrimitive]() { return read(1); } }; function read(pass: number) { ${SAFE} if (pass < 1) +o; const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-iterator-helper',
+    source: `function frames(error: Error) { const values = [error]; const o = { [Symbol.iterator]() { read(1); return [][Symbol.iterator](); } }; function read(pass: number) { ${SAFE} if (pass < 1) for (const x of o) {} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-to-string-helper',
+    source: `function frames(error: Error) { const values = [error]; const o = { toString() { return String(read(1)); } }; function read(pass: number) { ${SAFE} if (pass < 1) \`\${o}\`; const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-only-in-unreachable-call-of-helper',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} again(); const text = String(values); values.join = Array.prototype.join; return text; } function again() { if (false) read(1); } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-constructor',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; class C { constructor(pass: number) { ${SAFE} if (pass < 1) new C(pass + 1); seen += String(values); values.join = Array.prototype.join; } } new C(0); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-setter',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const o = { set x(v) { ${SAFE} if (n++ < 1) o.x = 1; const text = String(values); values.join = Array.prototype.join; } }; o.x = 0; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-after-read-in-declaration-again-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} const text = String(values); values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'declaration-calling-its-parameter-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number, again: (next: number) => string): string { ${SAFE} if (pass < 1) again(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0, () => 'x'); }`,
+    converts: false,
+  },
+  {
+    id: 'declaration-calling-an-inner-function-of-its-name-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { function read(inner: number) { return inner; } read(1); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
