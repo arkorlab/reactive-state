@@ -52,6 +52,7 @@ import {
 import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
+import { destructuredFirst } from './destructuring-order.ts';
 import { deferredArrayChange } from './framed-array-mutations.ts';
 import {
   frameBindingOf,
@@ -201,7 +202,7 @@ function firstReference(
 ): boolean {
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.pos >= reference.pos || isTypeNode(node)) continue;
+    if (isTypeNode(node) || runsAfter(node, reference)) continue;
     if (deferredBefore(node, reference, pending)) continue;
     const rest = quietCallRest(node, reference);
     if (rest !== undefined) {
@@ -221,12 +222,26 @@ function firstReference(
 }
 
 /**
+ * Whether `node` has run where `reference` is read: it is written before it, or lies in what a
+ * pattern around the reference destructures, which runs first, before the pattern's defaults and
+ * computed keys, though it is written after them.
+ */
+function completed(node: Node, reference: Identifier): boolean {
+  return node.end <= reference.pos || destructuredFirst(node, reference);
+}
+
+/** Whether `node` is written after `reference` and runs after it too. */
+function runsAfter(node: Node, reference: Identifier): boolean {
+  return node.pos >= reference.pos && !destructuredFirst(node, reference);
+}
+
+/**
  * What a completed quiet call leaves to read: its invoked body is quiet, but a callee that selects
  * the method from an object literal written in place evaluates that literal's other members first.
  * `undefined` where the call is not a quiet one.
  */
 function quietCallRest(node: Node, reference: Identifier): readonly Node[] | undefined {
-  if (node.end > reference.pos || !isCallExpression(node) || !quietWrittenCall(node))
+  if (!completed(node, reference) || !isCallExpression(node) || !quietWrittenCall(node))
     return undefined;
   let root = unwrapped(node.expression);
   while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
@@ -283,7 +298,7 @@ function bindsNoHolder(pattern: ObjectBindingPattern, holder: ObjectLiteralExpre
 
 /** Other function bodies, a setter's too, are deferred, but their computed names are evaluated now. */
 function deferredBefore(node: Node, reference: Identifier, pending: Node[]): boolean {
-  if (!(isAnswering(node) || isSetAccessorDeclaration(node)) || node.end >= reference.pos)
+  if (!(isAnswering(node) || isSetAccessorDeclaration(node)) || !completed(node, reference))
     return false;
   if (
     (isMethodDeclaration(node) ||
@@ -312,15 +327,15 @@ function priorBindingRead(
 
 /** Completed earlier work can call a later-written hoisted mutator before a method is captured. */
 function priorEffect(node: Node, reference: Identifier): boolean {
-  if (node.end > reference.pos) return false;
+  if (!completed(node, reference)) return false;
   if (isComputedPropertyName(node)) return constantValue(node.expression) === undefined;
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
     const { parent } = node;
-    return !(
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === node &&
-      parent.end > reference.pos
+    return (
+      !isBinaryExpression(parent) ||
+      parent.operatorToken.kind !== SyntaxKind.EqualsToken ||
+      parent.left !== node ||
+      completed(parent, reference)
     );
   }
   return (
