@@ -14,6 +14,8 @@ import { fileReadsClock, hasFileTimestamp } from '../src/compiler/file-timestamp
  */
 
 const BEFORE = "const field = 'lastModified';";
+const TYPES =
+  "namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V = 'other'; export namespace NV { export const x = 1; } }";
 const MAKES = "new File([], 'x', { [field]: 0 });";
 
 const CASES = [
@@ -32,6 +34,22 @@ const CASES = [
   {
     source: `namespace N { export namespace field { export const own = 1; } } namespace N { ${MAKES} }`,
     what: 'a namespace',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.V; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of a constant (pin)',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.NV; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of a namespace of values (pin)',
+  },
+  {
+    source: `namespace N { export import field = Foreign.T; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of what the file does not declare (pin)',
+  },
+  {
+    source: `namespace N { export declare const field: string; } namespace N { ${MAKES} }`,
+    what: 'an exported `declare` constant (pin)',
   },
   {
     source: `namespace N { ${MAKES} } namespace N { export const field = 'other'; }`,
@@ -159,6 +177,38 @@ const PINS = [
   {
     source: `namespace N { export type field = string; } namespace N { ${MAKES} }`,
     what: 'a type alias, which has no value (pin)',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.T; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of an interface, which has no value',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.U; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of a type alias',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.NI; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of a namespace of types alone',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.Q.T; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of a type that a namespace within a namespace holds',
+  },
+  {
+    source: `${TYPES} namespace N { import field = Types.T; ${MAKES} }`,
+    what: 'an alias of an interface in the same body',
+  },
+  {
+    source: `namespace N { declare const field: string; ${MAKES} }`,
+    what: 'a `declare` constant that its namespace does not export',
+  },
+  {
+    source: `namespace N { declare var field: string; ${MAKES} }`,
+    what: 'a `declare` var that its namespace does not export',
+  },
+  {
+    source: `namespace N { declare function field(): void; ${MAKES} }`,
+    what: 'a `declare` function that its namespace does not export',
   },
   {
     source: `namespace N { export const field = 'other'; } ${MAKES}`,

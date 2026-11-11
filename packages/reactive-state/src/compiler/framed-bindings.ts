@@ -1,23 +1,16 @@
 import {
   type BindingElement,
   type ClassDeclaration,
-  type EnumDeclaration,
-  type EnumMember,
   type Expression,
   type Identifier,
-  type ImportEqualsDeclaration,
   type FunctionDeclaration,
   isArrayBindingPattern,
   isBindingElement,
-  isBlock,
   isCallExpression,
-  isCaseBlock,
-  isCaseClause,
   isCatchClause,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
-  isDefaultClause,
   isElementAccessExpression,
   isEnumDeclaration,
   isIdentifier,
@@ -26,9 +19,6 @@ import {
   isForInStatement,
   isForOfStatement,
   isForStatement,
-  isImportEqualsDeclaration,
-  isInterfaceDeclaration,
-  isModuleBlock,
   isModuleDeclaration,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
@@ -37,24 +27,25 @@ import {
   isPropertyAccessExpression,
   isSourceFile,
   isStringLiteral,
-  isTypeAliasDeclaration,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
   type Node,
-  NodeFlags,
   type ParameterDeclaration,
   type Statement,
   type TypeNode,
   type VariableDeclaration,
   isSignatureDeclaration,
-  type ModuleBlock,
-  type ModuleDeclaration,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { namespaceStatements } from './local-type-namespaces.ts';
+import {
+  erased,
+  exportedElsewhere,
+  hasEnumMember,
+  statementsOf,
+  valueName,
+} from './namespace-merges.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, hoistedIn, isBlockScoped } from './scope.ts';
 
@@ -77,12 +68,6 @@ const RESOLVING_KEYS = new WeakSet<Node>();
 
 /** The vars each function body, static block or source file holds, by the node that holds them. */
 const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
-
-/** The names of the members of each enum and of those merged with it (`hasEnumMember`), by the enum. */
-const MEMBERS = new WeakMap<EnumDeclaration, ReadonlySet<string>>();
-
-/** The names the namespaces that merge with a namespace export (`exportedElsewhere`), by it. */
-const EXPORTED = new WeakMap<ModuleDeclaration, ReadonlySet<string>>();
 
 /** What each block's statements declare (`declaredBy`), by the node that holds them. */
 const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration | null>>();
@@ -211,7 +196,7 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
       bindingIdentifiers(parameter.name).some((bound) => bound.text === name),
     ) ?? hoistedBinding(node, within, name);
   if (declared !== undefined) return declared;
-  if (isModuleDeclaration(node) && exportedElsewhere(node, within, name)) {
+  if (isModuleDeclaration(node) && exportedElsewhere(node, within, name) !== undefined) {
     return null;
   }
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name?.text === name
@@ -220,189 +205,11 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
 }
 
 /**
- * Whether an enum, or one merged with it, has a member named `name`: within their initializers the
- * bare name is that member, before any binding around them. The names are gathered once
- * (`MEMBERS`), for every name looked up within the enum.
- */
-export function hasEnumMember(enumeration: EnumDeclaration, name: string): boolean {
-  let names = MEMBERS.get(enumeration);
-  if (names === undefined) {
-    names = new Set(
-      mergedEnums(enumeration).flatMap((each) =>
-        each.members.flatMap((member) => memberText(member)),
-      ),
-    );
-    MEMBERS.set(enumeration, names);
-  }
-  return names.has(name);
-}
-
-/** The name a member gives by an identifier or by text; none of another. */
-function memberText(member: EnumMember): readonly string[] {
-  return isIdentifier(member.name) || isStringLiteral(member.name) ? [member.name.text] : [];
-}
-
-/**
- * The enums that merge with `enumeration`, itself among them: those of its name in its scope and,
- * where the other bodies of its namespace see it, exported or ambient, those they export
- * (`namespaceStatements`); one that is private to its body merges with its own scope's alone.
- */
-function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
-  const { parent } = enumeration;
-  const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
-  const merging = isModuleBlock(scope) && exposed(enumeration);
-  const statements = merging ? bodyStatements(scope) : statementsOf(scope);
-  return (statements ?? [enumeration]).flatMap((statement) => {
-    return isEnumDeclaration(statement) && statement.name.text === enumeration.name.text
-      ? [statement]
-      : [];
-  });
-}
-
-/**
- * Whether the namespaces that merge with `namespace`, its other declarations, export `name` as a
- * value — as a variable, a function, a class, an enum or a namespace of a value, or as a dotted
- * namespace's own name, `B` of `namespace A.B`: they merge with its own, so that a bare `name`
- * within its body is `N.name`, before any binding around it. The names are gathered once
- * (`EXPORTED`), for every name looked up in the namespace.
- */
-export function exportedElsewhere(
-  namespace: ModuleDeclaration,
-  within: Node,
-  name: string,
-): boolean {
-  // Of what is within its body, a block or the dotted namespace that is it, and nothing beside.
-  if (!isModuleBlock(within) && !isModuleDeclaration(within)) return false;
-  let names = EXPORTED.get(namespace);
-  if (names === undefined) {
-    names = new Set(
-      mergedDeclarations(namespace).flatMap((each) =>
-        exposedContents(each).flatMap((statement) => valueNames(statement)),
-      ),
-    );
-    EXPORTED.set(namespace, names);
-  }
-  return names.has(name);
-}
-
-/**
- * The declarations that merge with `namespace`, itself among them: those of its name among what
- * its scope holds — among what the other bodies of the namespace around it export too
- * (`namespaceStatements`), where it is exported or ambient; one that is private stays in its
- * body — and, for the inner part of a dotted namespace, among what the declarations that merge with
- * its outer part expose.
- */
-function mergedDeclarations(namespace: ModuleDeclaration): readonly ModuleDeclaration[] {
-  const { name, parent } = namespace;
-  if (!isIdentifier(name)) return [namespace];
-  let among: readonly Statement[];
-  if (isModuleDeclaration(parent)) {
-    among = mergedDeclarations(parent).flatMap((each) => exposedContents(each));
-  } else if (isModuleBlock(parent) && exposed(namespace)) {
-    among = bodyStatements(parent);
-  } else {
-    among = statementsOf(parent) ?? [namespace];
-  }
-  return among.flatMap((statement) => {
-    const found =
-      isModuleDeclaration(statement) &&
-      isIdentifier(statement.name) &&
-      statement.name.text === name.text;
-    return found ? [statement] : [];
-  });
-}
-
-/**
- * What a namespace declaration lets the others that merge with it see: the dotted inner namespace
- * that is its body, or the statements of its body that are exported, or all of them where it is
- * ambient but for the imports.
- */
-function exposedContents(namespace: ModuleDeclaration): readonly Statement[] {
-  const { body } = namespace;
-  if (body === undefined) return [];
-  if (isModuleDeclaration(body)) return [body];
-  return isModuleBlock(body) ? body.statements.filter((statement) => exposed(statement)) : [];
-}
-
-/**
- * What is in scope in a namespace's body: its own statements, and those the other bodies of its
- * namespace expose, which are members of it (`namespaceStatements`, but for what the context of a
- * body does not export, nor for what is within a namespace that an enclosing body keeps private).
- */
-function bodyStatements(block: ModuleBlock): readonly Statement[] {
-  const around = new Set<Node>();
-  for (let at: Node = block; !isSourceFile(at); at = at.parent) around.add(at);
-  return namespaceStatements(block).filter((statement) => shown(statement, around));
-}
-
-/**
- * Whether a statement of another body is a member of a namespace that `around`, the nodes about
- * the one that looks, are within: the statement is exposed in its body, and so is each namespace
- * of it, in its own enclosing body, up to the body that holds the looker too. Declarations that
- * share a body merge by their names, whether exported or not (`namespace A` twice in one body);
- * a namespace that an enclosing body does not export is private to that body (`namespace N` of an
- * ambient body with an `export {}`), with whatever it holds, to the other bodies of its outer
- * namespace.
- */
-function shown(statement: Statement, around: ReadonlySet<Node>): boolean {
-  let at: Statement = statement;
-  while (!around.has(at.parent)) {
-    const { parent } = at;
-    // The dotted inner namespace of a name is exported by the parser, so only a block's can lack it.
-    if (isModuleBlock(parent) && !exposed(at)) return false;
-    const holder = isModuleBlock(parent) ? parent.parent : parent;
-    if (!isModuleDeclaration(holder)) return true;
-    at = holder;
-  }
-  return true;
-}
-
-/**
- * Whether a statement of a namespace's body is a member of the namespace: it is exported, or the
- * namespace is ambient with no export declaration, where every statement is but an `import … =`
- * alias (`ExportContext`, which TypeScript sets of the namespace, not of each statement: a `declare`
- * statement in a body that is not ambient is private).
- */
-function exposed(statement: Statement): boolean {
-  const { modifiers } = statement as { readonly modifiers?: readonly Node[] };
-  if (modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true) {
-    return true;
-  }
-  const holder = isModuleBlock(statement.parent) ? statement.parent.parent : undefined;
-  return (
-    holder !== undefined &&
-    isModuleDeclaration(holder) &&
-    // eslint-disable-next-line no-bitwise -- TypeScript says an export context in these flags alone.
-    (holder.flags & NodeFlags.ExportContext) !== 0 &&
-    !isImportEqualsDeclaration(statement)
-  );
-}
-
-/** The names of the values a statement declares: variables, functions, classes, enums, namespaces. */
-function valueNames(statement: Statement): readonly string[] {
-  if (isVariableStatement(statement)) {
-    return statement.declarationList.declarations.flatMap((declaration) =>
-      bindingIdentifiers(declaration.name).map((bound) => bound.text),
-    );
-  }
-  if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
-    return statement.name === undefined ? [] : [statement.name.text];
-  }
-  const name = valueName(statement);
-  return name === undefined ? [] : [name];
-}
-
-/** Ordinary and namespace blocks keep their statements; a switch's clauses share one scope. */
-function statementsOf(node: Node): readonly Statement[] | undefined {
-  if (isCaseBlock(node)) return node.clauses.flatMap((clause) => clause.statements);
-  return isBlock(node) || isModuleBlock(node) || isSourceFile(node) ? node.statements : undefined;
-}
-
-/**
  * A function, static block or source file owns its nested vars; nested functions and classes do
- * not. Each scope's are gathered once (`HOISTED`), for every name looked up in it.
+ * not, and a namespace's are its own; nor does a `declare var` of a namespace's body bind a value.
+ * Each scope's are gathered once (`HOISTED`), for every name looked up in it.
  */
-function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | undefined {
+export function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | undefined {
   let root: Node;
   if (isSourceFile(node)) root = node;
   else if ('body' in node && node.body === within) root = within;
@@ -410,13 +217,19 @@ function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | 
   let declarations = HOISTED.get(root);
   if (declarations === undefined) {
     declarations = hoistedIn(isSourceFile(root) ? root.statements : [root]).filter(
-      (declaration) => !ownedByNamespace(declaration, root),
+      (declaration) => !ownedByNamespace(declaration, root) && !erasedVar(declaration),
     );
     HOISTED.set(root, declarations);
   }
   return declarations.find((declaration) =>
     bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
   );
+}
+
+/** Whether the var is of a `declare` statement of a body that exports none of it. */
+function erasedVar(declaration: VariableDeclaration): boolean {
+  const statement = declaration.parent.parent;
+  return isVariableStatement(statement) && erased(statement);
 }
 
 /** Whether a namespace within `root` holds the var: a namespace's own vars are those of its body. */
@@ -462,71 +275,30 @@ function declaredBy(
   statements: readonly Statement[],
 ): ReadonlyMap<string, FrameDeclaration | null> {
   const declared = new Map<string, FrameDeclaration | null>();
-  const add = (name: string, declaration: FrameDeclaration | null): void => {
-    if (!declared.has(name)) declared.set(name, declaration);
-  };
   for (const statement of statements) {
-    if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
-      if (statement.name !== undefined) add(statement.name.text, statement);
-      continue;
-    }
-    const opaque = valueName(statement);
-    if (opaque !== undefined) {
-      add(opaque, null);
-      continue;
-    }
-    if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) continue;
-    for (const declaration of statement.declarationList.declarations) {
-      for (const bound of bindingIdentifiers(declaration.name)) add(bound.text, declaration);
+    for (const [name, declaration] of declarationsOf(statement)) {
+      if (!declared.has(name)) declared.set(name, declaration);
     }
   }
   return declared;
 }
 
-/**
- * The name an enum, a namespace or an `import … =` alias of a value gives; none of another
- * statement, of a module the code names by text (`declare module 'x'`), of a namespace of types
- * alone, or of an alias of a type.
- */
-function valueName(statement: Statement): string | undefined {
-  if (isEnumDeclaration(statement)) return statement.name.text;
-  if (isModuleDeclaration(statement)) {
-    return isIdentifier(statement.name) && instantiated(statement)
-      ? statement.name.text
-      : undefined;
+/** What one statement of a block declares, by name; a `declare` its body does not export, none. */
+function declarationsOf(
+  statement: Statement,
+): readonly (readonly [string, FrameDeclaration | null])[] {
+  if (erased(statement)) return [];
+  if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
+    return statement.name === undefined ? [] : [[statement.name.text, statement]];
   }
-  return isImportEqualsDeclaration(statement) && !statement.isTypeOnly
-    ? statement.name.text
-    : undefined;
-}
-
-/**
- * Whether a namespace holds a value: one of interfaces, type aliases, namespaces of those and
- * `import … =` aliases that are not exported, alone, or of nothing, is erased with the types, and a
- * bare reference passes it to the name around it.
- */
-export function instantiated(namespace: ModuleDeclaration): boolean {
-  let { body } = namespace;
-  while (body !== undefined && isModuleDeclaration(body)) {
-    ({ body } = body);
-  }
-  if (body === undefined) return true;
-  return (
-    !isModuleBlock(body) ||
-    body.statements.some((statement) => {
-      return !(
-        isInterfaceDeclaration(statement) ||
-        isTypeAliasDeclaration(statement) ||
-        (isImportEqualsDeclaration(statement) && !isExported(statement)) ||
-        (isModuleDeclaration(statement) && !instantiated(statement))
-      );
-    })
-  );
-}
-
-/** Whether an `import … =` alias is exported, which makes it a member of the namespace. */
-function isExported(alias: ImportEqualsDeclaration): boolean {
-  return alias.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true;
+  const opaque = valueName(statement);
+  if (opaque !== undefined) return [[opaque, null]];
+  if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) return [];
+  return statement.declarationList.declarations.flatMap((declaration) => {
+    return bindingIdentifiers(declaration.name).map(
+      (bound): readonly [string, FrameDeclaration] => [bound.text, declaration],
+    );
+  });
 }
 
 /** A declaration's binding path for one of the identifiers it binds. */

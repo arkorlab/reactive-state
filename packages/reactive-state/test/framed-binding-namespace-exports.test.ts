@@ -19,6 +19,8 @@ import { frameDeclarationOf, frameMemberName } from '../src/compiler/framed-bind
  */
 
 const READ = 'value[key]';
+const TYPES =
+  'namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V = 2; export namespace NV { export const x = 1; } } ';
 
 const CASES = [
   { source: `namespace N { export const key = 2; } namespace N { ${READ}; }`, what: 'a const' },
@@ -37,6 +39,22 @@ const CASES = [
   {
     source: `namespace N { export import key = Other.key; } namespace N { ${READ}; }`,
     what: 'an import alias',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.V; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a constant (pin)',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.NV; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a namespace of values (pin)',
+  },
+  {
+    source: `namespace Types { export interface T {} export const T = 2; } namespace N { export import key = Types.T; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a name that an interface and a constant share (pin)',
+  },
+  {
+    source: `namespace N { export declare const key: number; } namespace N { ${READ}; }`,
+    what: 'an exported `declare` constant (pin)',
   },
   {
     source: `namespace N { export const a = 1, key = 2; } namespace N { ${READ}; }`,
@@ -200,6 +218,50 @@ const PINS = [
   {
     source: `namespace N { export type key = string; } namespace N { ${READ}; }`,
     what: 'a type alias, which has no value (pin)',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.T; } namespace N { ${READ}; }`,
+    what: 'an exported alias of an interface, which has no value',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.U; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a type alias',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.NI; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a namespace of types alone',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.Q.T; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a type that a namespace within a namespace holds',
+  },
+  {
+    source: `${TYPES} namespace N { import key = Types.T; ${READ}; }`,
+    what: 'an alias of an interface in the same body',
+  },
+  {
+    source: `${TYPES} namespace N { import mid = Types; export import key = mid.T; } namespace N { ${READ}; }`,
+    what: 'an exported alias of an alias of an interface',
+  },
+  {
+    source: `namespace N { declare const key: number; ${READ}; }`,
+    what: 'a `declare` constant that its namespace does not export',
+  },
+  {
+    source: `namespace A { namespace B { declare const key: number; ${READ}; } }`,
+    what: 'a `declare` constant of a namespace within a namespace',
+  },
+  {
+    source: `namespace N { declare var key: number; ${READ}; }`,
+    what: 'a `declare` var that its namespace does not export',
+  },
+  {
+    source: `namespace N { declare function key(): void; ${READ}; }`,
+    what: 'a `declare` function that its namespace does not export',
+  },
+  {
+    source: `namespace N { declare namespace key { const x: number; } ${READ}; }`,
+    what: 'a `declare` namespace that its namespace does not export',
   },
   {
     source: `namespace N { export const key = 2; } ${READ};`,
