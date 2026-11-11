@@ -9,16 +9,11 @@ import {
   isElementAccessExpression,
   isExpressionStatement,
   isIdentifier,
-  isMethodDeclaration,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
   isSourceFile,
   isSpreadElement,
-  isSpreadAssignment,
   type Node,
-  type ObjectLiteralExpression,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -32,13 +27,17 @@ import {
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
-import { sourceArrayFunction, writtenArrayKey } from './framed-array-functions.ts';
+import { sourceArrayFunction } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
   arrayIdentity,
-  knownNonNative,
+  assignMethods,
+  defineMethod,
+  descriptorMethods,
+  forgetMethods,
   OWN_METHODS,
+  type OwnMethods,
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
@@ -49,7 +48,6 @@ import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
-import { constantValue } from './numbers.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
 
@@ -57,10 +55,6 @@ interface ArrayWords {
   readonly error: (value: Expression, keys?: readonly string[]) => boolean;
   readonly typed: (value: Expression) => boolean;
 }
-
-const ACCESSOR_KEYS = new Set(['get', 'set']);
-
-type OwnMethods = Map<string, ArrayMethodOverride>;
 
 /** Whether a native join or toString call converts an explicitly written error element to text. */
 export function framedArrayText(node: Node, words: ArrayWords): boolean {
@@ -486,115 +480,6 @@ function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods)
       break;
     }
   }
-}
-
-/** Each source's last explicitly written field wins; an unknown source may restore native methods. */
-function assignMethods(source: Expression, own: OwnMethods): void {
-  const value = unwrapped(source);
-  if (!isObjectLiteralExpression(value)) {
-    forgetMethods(own);
-    return;
-  }
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property)) {
-      forgetMethods(own);
-      continue;
-    }
-    const key = writtenArrayKey(property.name);
-    if (key === undefined) forgetMethods(own);
-    else if (OWN_METHODS.has(key)) {
-      own.set(key, propertyOverride(property));
-    }
-  }
-}
-
-/** A written own method or callable value, with unknown entries kept unproven. */
-function propertyOverride(property: Node): ArrayMethodOverride {
-  if (isMethodDeclaration(property)) return { own: true, value: property };
-  if (!isPropertyAssignment(property)) return { own: false };
-  return { own: knownNonNative(property.initializer), value: property.initializer };
-}
-
-/** One statically named data descriptor, including restoration to the native implementation. */
-function defineMethod(call: CallExpression, own: OwnMethods): void {
-  const keyNode = call.arguments[1];
-  const key = keyNode === undefined ? undefined : constantValue(keyNode);
-  if (typeof key !== 'string') {
-    forgetMethods(own);
-    return;
-  }
-  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2]));
-}
-
-/** Object.defineProperties selects each descriptor by its written property name. */
-function descriptorMethods(descriptors: ObjectLiteralExpression, own: OwnMethods): void {
-  for (const property of descriptors.properties) {
-    if (isSpreadAssignment(property)) {
-      forgetMethods(own);
-      continue;
-    }
-    const key = writtenArrayKey(property.name);
-    if (key === undefined) forgetMethods(own);
-    else if (OWN_METHODS.has(key)) {
-      own.set(
-        key,
-        isPropertyAssignment(property) ? descriptorFunction(property.initializer) : { own: false },
-      );
-    }
-  }
-}
-
-/** A written value function proves a custom implementation; getters and unknown values do not. */
-function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOverride {
-  if (descriptor === undefined) return { own: false };
-  const value = unwrapped(descriptor);
-  if (!isObjectLiteralExpression(value)) return { own: false };
-  const writable = descriptorSays(value, 'writable') ? { writable: true as const } : {};
-  const configurable = descriptorSays(value, 'configurable') ? { configurable: true as const } : {};
-  return { ...descriptorValue(value), ...writable, ...configurable };
-}
-
-/** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
-function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
-  let custom: ArrayMethodOverride = { own: false };
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property)) custom = { own: false };
-    else {
-      const key = writtenArrayKey(property.name);
-      if (key === undefined || ACCESSOR_KEYS.has(key)) custom = { own: false };
-      else if (key === 'value')
-        custom = isPropertyAssignment(property)
-          ? { own: knownNonNative(property.initializer), value: property.initializer }
-          : { own: false };
-    }
-  }
-  return custom;
-}
-
-/**
- * A descriptor whose last word on an attribute is a literal `true`, with no spread and no key that
- * is not written out; a writable data property is not an accessor.
- */
-function descriptorSays(
-  descriptor: ObjectLiteralExpression,
-  attribute: 'configurable' | 'writable',
-): boolean {
-  let says = false;
-  for (const property of descriptor.properties) {
-    if (isSpreadAssignment(property)) return false;
-    const key = writtenArrayKey(property.name);
-    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return false;
-    if (key === attribute)
-      says =
-        isPropertyAssignment(property) &&
-        unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword;
-  }
-  return says;
-}
-
-/** An opaque write can replace either method and therefore removes a proof of a custom method. */
-function forgetMethods(own: OwnMethods): void {
-  for (const method of OWN_METHODS) own.set(method, { own: false });
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */
