@@ -6,6 +6,7 @@ import {
   isExportAssignment,
   isExportDeclaration,
   isExpressionStatement,
+  isExternalModuleReference,
   isFunctionDeclaration,
   isIdentifier,
   isImportEqualsDeclaration,
@@ -61,7 +62,8 @@ export function checkModuleStatement(statement: Statement, fail: Fail): void {
     );
   }
   if (
-    isImportEqualsDeclaration(statement) ||
+    (isImportEqualsDeclaration(statement) &&
+      isExternalModuleReference(statement.moduleReference)) ||
     (isExportAssignment(statement) && statement.isExportEquals)
   ) {
     fail(
