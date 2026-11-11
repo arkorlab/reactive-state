@@ -149,6 +149,16 @@ const PINS = [
   },
   {
     source:
+      'namespace N { declare enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
+    what: 'an enum declared in a body that is not ambient (pin)',
+  },
+  {
+    source:
+      'declare namespace N { export {}; enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
+    what: 'an enum of an ambient namespace that exports by `export {}` (pin)',
+  },
+  {
+    source:
       'namespace M { export namespace N { export enum E { key = 2 } } } namespace M { namespace N { export enum E { entry = value[key] } } }',
     what: 'a nested namespace one body exports and the other does not (pin)',
   },

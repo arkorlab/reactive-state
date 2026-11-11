@@ -118,6 +118,10 @@ const CASES = [
     what: 'a member of an ambient outer part',
   },
   {
+    source: `declare namespace Z { namespace N { const field: string; } } namespace Z { export namespace N { ${MAKES} } }`,
+    what: 'a member of an ambient nested namespace an exported one merges with',
+  },
+  {
     source: `namespace Z { export namespace A { export const field = 'other'; } } namespace Z { export namespace A.B { ${MAKES} } }`,
     what: 'an export of a nested namespace’s outer part',
   },
@@ -191,6 +195,38 @@ const PINS = [
   {
     source: `namespace N { export namespace field { import T = Types.T; export type U = T; } } namespace N { ${MAKES} }`,
     what: 'a namespace of a private import alias and a type (pin)',
+  },
+  {
+    source: `namespace N { declare const field: string; } namespace N { ${MAKES} }`,
+    what: 'a declared const of a body that is not ambient (pin)',
+  },
+  {
+    source: `namespace N { declare function field(): void; } namespace N { ${MAKES} }`,
+    what: 'a declared function of a body that is not ambient (pin)',
+  },
+  {
+    source: `declare namespace N { const field: string; export {}; } namespace N { ${MAKES} }`,
+    what: 'a member of an ambient namespace that exports by `export {}` (pin)',
+  },
+  {
+    source: `namespace Z { export namespace N { export const field = 'other'; } } namespace Z { namespace N { ${MAKES} } }`,
+    what: 'a private nested namespace beside an exported one (pin)',
+  },
+  {
+    source: `namespace Z { namespace N { export const field = 'other'; } } namespace Z { export namespace N { ${MAKES} } }`,
+    what: 'an exported nested namespace beside a private one (pin)',
+  },
+  {
+    source: `namespace N { export namespace field { export type T = string; } ${MAKES} }`,
+    what: 'a namespace of types alone in the body of the File (pin)',
+  },
+  {
+    source: `namespace N { namespace field { export type T = string; } ${MAKES} }`,
+    what: 'a private namespace of types alone in the body of the File (pin)',
+  },
+  {
+    source: `declare module 'field' {} ${MAKES}`,
+    what: 'a module the code names by text (pin)',
   },
 ] as const;
 

@@ -143,6 +143,10 @@ const CASES = [
     what: 'a member of an ambient outer part',
   },
   {
+    source: `declare namespace Z { namespace N { const key: number; } } namespace Z { export namespace N { ${READ}; } }`,
+    what: 'a member of an ambient nested namespace an exported one merges with',
+  },
+  {
     source: `namespace Z { export namespace A { export const key = 2; } } namespace Z { export namespace A.B { ${READ}; } }`,
     what: 'an export of a nested namespace’s outer part',
   },
@@ -216,6 +220,34 @@ const PINS = [
   {
     source: `namespace N { export namespace key { import T = Types.T; export type U = T; } } namespace N { ${READ}; }`,
     what: 'a namespace of a private import alias and a type (pin)',
+  },
+  {
+    source: `namespace N { declare const key: number; } namespace N { ${READ}; }`,
+    what: 'a declared const of a body that is not ambient (pin)',
+  },
+  {
+    source: `namespace N { declare function key(): void; } namespace N { ${READ}; }`,
+    what: 'a declared function of a body that is not ambient (pin)',
+  },
+  {
+    source: `namespace N { declare class key {} } namespace N { ${READ}; }`,
+    what: 'a declared class of a body that is not ambient (pin)',
+  },
+  {
+    source: `declare namespace N { const key: number; export {}; } namespace N { ${READ}; }`,
+    what: 'a member of an ambient namespace that exports by `export {}` (pin)',
+  },
+  {
+    source: `namespace Z { export namespace N { export const key = 2; } } namespace Z { namespace N { ${READ}; } }`,
+    what: 'a private nested namespace beside an exported one (pin)',
+  },
+  {
+    source: `namespace Z { namespace N { export const key = 2; } } namespace Z { export namespace N { ${READ}; } }`,
+    what: 'an exported nested namespace beside a private one (pin)',
+  },
+  {
+    source: `declare namespace Z { namespace N { const key: number; } } namespace Z { namespace N { ${READ}; } }`,
+    what: 'a private nested namespace beside an ambient one (pin)',
   },
 ] as const;
 

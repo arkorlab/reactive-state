@@ -2,6 +2,7 @@ import {
   type BindingName,
   type Expression,
   type Identifier,
+  type ImportDeclaration,
   isArrayLiteralExpression,
   isArrowFunction,
   isBigIntLiteral,
@@ -56,7 +57,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { constructorReferences, fileConstructorReference } from './file-constructor-references.ts';
-import { exportedElsewhere, hasEnumMember } from './framed-bindings.ts';
+import { exportedElsewhere, hasEnumMember, instantiated } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, hoistedIn, readsBinding } from './scope.ts';
 
@@ -476,30 +477,43 @@ function statementBinding(statement: Statement, name: string): Binding {
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.find((each) => binds(each.name, name));
   }
+  return declaresOpaquely(statement, name) ? null : undefined;
+}
+
+/** Whether a statement that is no variable binds the name to a value that the lookup leaves opaque. */
+function declaresOpaquely(statement: Statement, name: string): boolean {
   if (isImportDeclaration(statement)) {
-    const clause = statement.importClause;
-    if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
-      return undefined;
-    }
-    const named = clause.namedBindings;
-    const bound =
-      clause.name?.text === name ||
-      (named !== undefined &&
-        (isNamespaceImport(named)
-          ? named.name.text === name
-          : named.elements.some((each) => !each.isTypeOnly && each.name.text === name)));
-    return bound ? null : undefined;
+    return importBinds(statement, name);
   }
   if (isImportEqualsDeclaration(statement)) {
-    return statement.name.text === name ? null : undefined;
+    return statement.name.text === name;
   }
-  return (isClassDeclaration(statement) ||
-    isFunctionDeclaration(statement) ||
-    isEnumDeclaration(statement) ||
-    isModuleDeclaration(statement)) &&
+  if (isModuleDeclaration(statement)) {
+    // A namespace of types alone is erased, and binds no value.
+    return isIdentifier(statement.name) && statement.name.text === name && instantiated(statement);
+  }
+  return (
+    (isClassDeclaration(statement) ||
+      isFunctionDeclaration(statement) ||
+      isEnumDeclaration(statement)) &&
     statement.name?.text === name
-    ? null
-    : undefined;
+  );
+}
+
+/** Whether an import binds the name, but for a type: `import type`, `{ type T }`. */
+function importBinds(statement: ImportDeclaration, name: string): boolean {
+  const clause = statement.importClause;
+  if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
+    return false;
+  }
+  const named = clause.namedBindings;
+  return (
+    clause.name?.text === name ||
+    (named !== undefined &&
+      (isNamespaceImport(named)
+        ? named.name.text === name
+        : named.elements.some((each) => !each.isTypeOnly && each.name.text === name)))
+  );
 }
 
 /** Whether a plain name or destructuring pattern binds the name read. */

@@ -249,23 +249,16 @@ function memberText(member: EnumMember): readonly string[] {
 function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
   const { parent } = enumeration;
   const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
-  const merging = isModuleBlock(scope) && seenElsewhere(enumeration);
-  const statements = merging ? namespaceStatements(scope) : statementsOf(scope);
+  const merging = isModuleBlock(scope) && exposed(enumeration);
+  const own = new Set<Statement>(statementsOf(scope));
+  const statements = merging
+    ? namespaceStatements(scope).filter((statement) => own.has(statement) || exposed(statement))
+    : statementsOf(scope);
   return (statements ?? [enumeration]).flatMap((statement) => {
     return isEnumDeclaration(statement) && statement.name.text === enumeration.name.text
       ? [statement]
       : [];
   });
-}
-
-/** Whether the other bodies of a namespace see an enum: it is exported, or ambient, where all are. */
-function seenElsewhere(enumeration: EnumDeclaration): boolean {
-  return (
-    enumeration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) ===
-      true ||
-    // eslint-disable-next-line no-bitwise -- TypeScript says a declaration is ambient in these flags alone.
-    (enumeration.flags & NodeFlags.Ambient) !== 0
-  );
 }
 
 /**
@@ -296,8 +289,10 @@ export function exportedElsewhere(
 
 /**
  * The declarations that merge with `namespace`, itself among them: those of its name among what
- * its scope holds (`namespaceStatements`) and, for the inner part of a dotted namespace, among what
- * the declarations that merge with its outer part expose.
+ * its scope holds — among what the other bodies of the namespace around it export too
+ * (`namespaceStatements`), where it is exported or ambient; one that is private stays in its
+ * body — and, for the inner part of a dotted namespace, among what the declarations that merge with
+ * its outer part expose.
  */
 function mergedDeclarations(namespace: ModuleDeclaration): readonly ModuleDeclaration[] {
   const { name, parent } = namespace;
@@ -305,7 +300,7 @@ function mergedDeclarations(namespace: ModuleDeclaration): readonly ModuleDeclar
   let among: readonly Statement[];
   if (isModuleDeclaration(parent)) {
     among = mergedDeclarations(parent).flatMap((each) => exposedContents(each));
-  } else if (isModuleBlock(parent)) {
+  } else if (isModuleBlock(parent) && exposed(namespace)) {
     among = namespaceStatements(parent);
   } else {
     among = statementsOf(parent) ?? [namespace];
@@ -331,13 +326,24 @@ function exposedContents(namespace: ModuleDeclaration): readonly Statement[] {
   return isModuleBlock(body) ? body.statements.filter((statement) => exposed(statement)) : [];
 }
 
-/** Whether a statement of a namespace's body is exported, or is ambient, where all but imports are. */
+/**
+ * Whether a statement of a namespace's body is a member of the namespace: it is exported, or the
+ * namespace is ambient with no export declaration, where every statement is but an `import … =`
+ * alias (`ExportContext`, which TypeScript sets of the namespace, not of each statement: a `declare`
+ * statement in a body that is not ambient is private).
+ */
 function exposed(statement: Statement): boolean {
   const { modifiers } = statement as { readonly modifiers?: readonly Node[] };
+  if (modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true) {
+    return true;
+  }
+  const holder = isModuleBlock(statement.parent) ? statement.parent.parent : undefined;
   return (
-    modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true ||
-    // eslint-disable-next-line no-bitwise -- TypeScript says a declaration is ambient in these flags alone.
-    ((statement.flags & NodeFlags.Ambient) !== 0 && !isImportEqualsDeclaration(statement))
+    holder !== undefined &&
+    isModuleDeclaration(holder) &&
+    // eslint-disable-next-line no-bitwise -- TypeScript says an export context in these flags alone.
+    (holder.flags & NodeFlags.ExportContext) !== 0 &&
+    !isImportEqualsDeclaration(statement)
   );
 }
 
@@ -468,7 +474,7 @@ function valueName(statement: Statement): string | undefined {
  * `import … =` aliases that are not exported, alone, or of nothing, is erased with the types, and a
  * bare reference passes it to the name around it.
  */
-function instantiated(namespace: ModuleDeclaration): boolean {
+export function instantiated(namespace: ModuleDeclaration): boolean {
   let { body } = namespace;
   while (body !== undefined && isModuleDeclaration(body)) {
     ({ body } = body);
