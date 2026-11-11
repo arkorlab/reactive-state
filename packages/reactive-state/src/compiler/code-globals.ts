@@ -483,7 +483,7 @@ interface ReaderCall {
 
 /** The reader a call calls, the call of a function `bind` made of it, or one borrowed. */
 function readerCall(call: CallExpression): ReaderCall {
-  const callee = unwrapped(call.expression);
+  const callee = calledOf(call.expression);
   if (isCallExpression(callee)) {
     return boundCall(call, callee);
   }
@@ -494,6 +494,23 @@ function readerCall(call: CallExpression): ReaderCall {
     given: givenTo(call, borrowing),
     reader: (borrowing === undefined ? path : path?.slice(0, -1))?.join('.'),
   };
+}
+
+/**
+ * What a call calls, past the parentheses, the casts and a comma's first operands around it — `(0,
+ * Reflect.get.bind(null, fn))`, `(<any>Reflect.get.bind(null, fn))`, which `unwrapped` leaves.
+ */
+function calledOf(expression: Expression): Expression {
+  let each = unwrapped(expression);
+  for (;;) {
+    if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
+      each = unwrapped(each.right);
+    } else if (isTypeAssertion(each)) {
+      each = unwrapped(each.expression);
+    } else {
+      return each;
+    }
+  }
 }
 
 /**

@@ -45,6 +45,26 @@ const CASES = [
     what: 'a reader bound to a key and held',
   },
   {
+    reads: ["(0, Reflect.get.bind(null, run))('constructor')"],
+    source: "return (0, Reflect.get.bind(null, run))('constructor')(text)();",
+    what: 'a bound reader past a comma, called',
+  },
+  {
+    reads: ["(<any>Reflect.get.bind(null, run))('constructor')"],
+    source: "return (<any>Reflect.get.bind(null, run))('constructor')(text)();",
+    what: 'a bound reader in a cast in angle brackets, called',
+  },
+  {
+    reads: ["(0, <any>Reflect.get.bind(null))(run, 'constructor')"],
+    source: "return (0, <any>Reflect.get.bind(null))(run, 'constructor')(text)();",
+    what: 'a bound reader in a cast past a comma, called',
+  },
+  {
+    reads: ["Reflect.get.bind(null, run, 'constructor')"],
+    source: "return (0, Reflect.get.bind(null, run, 'constructor') as any)()(text)();",
+    what: 'a reader bound to a key, past a comma and a cast, called',
+  },
+  {
     reads: ["Object.getOwnPropertyDescriptor.bind(Object, run, 'constructor')"],
     source: "return Object.getOwnPropertyDescriptor.bind(Object, run, 'constructor')();",
     what: '`Object.getOwnPropertyDescriptor` bound',
@@ -108,6 +128,16 @@ const CASES = [
     reads: [],
     source: "return Reflect.get.bind(null, run)(...rest, 'constructor');",
     what: 'a key past a spread of what the call is given',
+  },
+  {
+    reads: [],
+    source: "return (0, Reflect.get.bind(null, run))('name');",
+    what: 'another key, given to a bound reader past a comma',
+  },
+  {
+    reads: [],
+    source: "return (<any>Reflect.get.bind(null, ...rest))('constructor');",
+    what: 'a bound reader past a spread, in a cast',
   },
   {
     reads: [],
