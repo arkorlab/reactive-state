@@ -185,8 +185,19 @@ export function exportsOf(statements: readonly Statement[]): ReadonlyMap<string,
   return found;
 }
 
-/** The names a top-level statement of a module declares. */
+/**
+ * The names a top-level statement of a module declares: of a namespace, its name — none of a module
+ * declared by its text, `declare module 'x'`, nor of a global's augmentation, `declare global`.
+ */
 export function declaredAtTop(statement: Statement): readonly Identifier[] {
+  if (isModuleDeclaration(statement)) {
+    const { name } = statement;
+    // `declare global` is a `module` of the name `global`.
+    if (!isIdentifier(name)) {
+      return [];
+    }
+    return statement.keyword === SyntaxKind.ModuleKeyword && name.text === 'global' ? [] : [name];
+  }
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.flatMap((declaration) =>
       bindingIdentifiers(declaration.name),
