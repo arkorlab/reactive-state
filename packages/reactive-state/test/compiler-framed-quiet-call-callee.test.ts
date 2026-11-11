@@ -93,6 +93,41 @@ const METHODS = [
     custom: true,
   },
   {
+    id: 'unused-setter-in-callee-literal',
+    source: `${HOLDER} ({ set replace(value) { methods.join = value; }, quiet() { return 0; } }).quiet(); ${TAKEN}`,
+    custom: true,
+  },
+  {
+    id: 'unused-setter-of-another-object',
+    source: `${HOLDER} const settings = { set replace(value) { methods.join = value; } }; void settings; ${TAKEN}`,
+    custom: true,
+  },
+  {
+    id: 'setter-computed-name-in-callee-literal-pin',
+    source: `${HOLDER} ({ set [(${REPLACED}, 'x')](value) { void value; }, quiet() { return 0; } }).quiet(); ${TAKEN}`,
+    custom: false,
+  },
+  {
+    id: 'setter-called-by-an-assignment-pin',
+    source: `${HOLDER} const settings = { set replace(value) { methods.join = value; } }; settings.replace = Array.prototype.join; ${TAKEN}`,
+    custom: false,
+  },
+  {
+    id: 'setter-called-through-a-call-pin',
+    source: `${HOLDER} const settings = { set replace(value) { methods.join = value; } }; Object.assign(settings, { replace: Array.prototype.join }); ${TAKEN}`,
+    custom: false,
+  },
+  {
+    id: 'setter-called-by-a-loop-target-pin',
+    source: `${HOLDER} const settings = { set replace(value) { methods.join = value; } }; for (settings.replace of [Array.prototype.join]) { void settings; } ${TAKEN}`,
+    custom: false,
+  },
+  {
+    id: 'setter-of-a-method-read-in-another-function-pin',
+    source: `${HOLDER} const settings = { set replace(value) { methods.join = value; } }; void settings; function read() { return methods.join; }`,
+    custom: false,
+  },
+  {
     id: 'callee-literal-after-the-read-pin',
     source: `${HOLDER} ${TAKEN} ({ change: (${REPLACED}), quiet() { return 0; } }).quiet();`,
     custom: true,
