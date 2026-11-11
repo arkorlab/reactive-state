@@ -1179,6 +1179,28 @@ const ELEMENTS = [
     elements: ['after:value', 'd:value', 'error:', 'before:value', 'd:value'],
   },
   {
+    id: 'define-constant-getter-assigned-in-unused-function-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; function unused() { descriptor.get = () => error; } Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value'],
+  },
+  {
+    id: 'define-map-descriptor-assigned-in-later-field',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; Object.defineProperties(values, { 0: descriptor, 1: (descriptor.get = () => error, { value: 'safe' }) }); return values; }`,
+    index: undefined,
+    elements: [
+      'descriptor:value',
+      'error:',
+      "(descriptor.get = () => error, { value: 'safe' }):value",
+    ],
+  },
+  {
+    id: 'define-descriptor-assigned-in-later-argument',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = {}; Object.defineProperty(values, 0, descriptor, (descriptor.get = () => error)); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1489,6 +1511,16 @@ const CONVERSIONS = [
     id: 'define-copies-before-and-after-write-converts',
     source: `function frames(error: Error) { const a = ['safe']; const d: PropertyDescriptor = {}; const before = { ...d }; d.get = () => error; const after = { ...d }; Object.defineProperties(a, { 0: after, 1: before }); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'define-map-descriptor-assigned-in-later-field-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; Object.defineProperties(a, { 0: descriptor, 1: (descriptor.get = () => error, { value: 'safe' }) }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-assigned-in-unused-function-safe',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; function unused() { descriptor.get = () => error; } Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',

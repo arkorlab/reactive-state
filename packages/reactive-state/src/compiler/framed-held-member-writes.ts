@@ -1,17 +1,21 @@
 import {
   type BinaryExpression,
-  type FunctionDeclaration,
-  isFunctionDeclaration,
   type ElementAccessExpression,
   type Expression,
+  type FunctionDeclaration,
   type Identifier,
   isBinaryExpression,
+  isCallExpression,
   isElementAccessExpression,
   isExpression,
   isForInStatement,
   isForOfStatement,
+  isFunctionDeclaration,
+  isFunctionLikeDeclaration,
   isIdentifier,
+  isNewExpression,
   isPropertyAccessExpression,
+  isSourceFile,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -24,6 +28,7 @@ import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
+import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 
 /** The assignments to a member of an object a constant holds: a constant does not freeze it. */
@@ -58,12 +63,31 @@ export function heldMemberWrites(
 }
 
 /**
- * Whether a write may run before the descriptor named at `use` is read: it lies before it, in
- * another function, which may run first, or in a loop the use is in, whose next turn follows it.
+ * Whether a write may run before the descriptor named at `use` is read: it lies before the read,
+ * in another function that is referenced, which may run first, or in a loop the use is in, whose
+ * next turn follows it.
  */
 function mayPrecede(write: Node, use: Identifier, declared: Node): boolean {
-  if (write.end <= use.pos || executionOwner(write) !== executionOwner(use)) return true;
-  return repeatedFrameRead(write, use, declared, executionOwner(use));
+  const owner = executionOwner(use);
+  const writer = executionOwner(write);
+  if (writer !== owner) return !unreferencedLocalFunction(writer, owner);
+  return repeatedFrameRead(write, use, declared, owner) || write.pos < readAt(use).end;
+}
+
+function isStatementKind(kind: SyntaxKind): boolean {
+  return kind >= SyntaxKind.FirstStatement && kind <= SyntaxKind.LastStatement;
+}
+
+/**
+ * Where the object a descriptor names is read: by the call whose arguments hold the name, after
+ * they are all evaluated; by the name itself, where it is only copied.
+ */
+function readAt(use: Identifier): Node {
+  for (let at: Node = use.parent; !isSourceFile(at); at = at.parent) {
+    if (isCallExpression(at) || isNewExpression(at)) return at;
+    if (isFunctionLikeDeclaration(at) || isStatementKind(at.kind)) break;
+  }
+  return use;
 }
 
 /** The value one assignment gives a member of a held object. */
