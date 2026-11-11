@@ -22,6 +22,7 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isStringLiteral,
+  isVoidExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isSpreadElement,
@@ -30,6 +31,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
@@ -320,9 +322,28 @@ function patternStart(
     return { target: node.left, sources: [{ value: node.right, keys: [] }] };
   if (isForOfStatement(node) && isExpression(node.initializer) && !yieldsNothing(node.expression))
     return { target: node.initializer, sources: iteratedFrameSources(node.expression) };
-  return isForInStatement(node) && isExpression(node.initializer)
+  const head = isForInStatement(node) && isExpression(node.initializer);
+  return head && !enumeratesNothing(node.expression)
     ? { target: node.initializer, sources: [] }
     : undefined;
+}
+
+/**
+ * Whether what a `for ... in` walks is written out and has no key to give its head: null, undefined,
+ * an empty string, a list of holes, an object that holds no field and spreads only such things. A
+ * prototype it writes may hold enumerable keys; a hole in a list is not a key.
+ */
+function enumeratesNothing(walked: Expression): boolean {
+  const value = unwrapped(walked);
+  if (value.kind === SyntaxKind.NullKeyword || isVoidExpression(value)) return true;
+  if (isIdentifier(value)) return globalPathOf(value)?.join('.') === 'undefined';
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text === '';
+  if (isArrayLiteralExpression(value))
+    return value.elements.every((each) => isOmittedExpression(each));
+  return (
+    isObjectLiteralExpression(value) &&
+    value.properties.every((each) => isSpreadAssignment(each) && enumeratesNothing(each.expression))
+  );
 }
 
 /**

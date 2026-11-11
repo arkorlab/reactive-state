@@ -768,6 +768,102 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'for-in-empty-object-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in {}); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-empty-list-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in []); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-list-of-holes-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in [, ,]); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-empty-string-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in ''); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-null-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in null); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-undefined-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in undefined); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-void-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in void 0); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-spread-of-nothing-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in { ...{}, ...null }); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-spread-of-empty-list-head',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in { ...[] }); })()); }`,
+    key: 'message',
+    values: [],
+  },
+  {
+    id: 'for-in-object-field-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in { a: 1 }); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'for-in-object-getter-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in { get a() { return 1; } }); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'for-in-inherited-field-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in { __proto__: { a: 1 } }); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'for-in-non-empty-string-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in 'ab'); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'for-in-list-element-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in [1]); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'for-in-spread-of-field-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in { ...{ a: 1 } }); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
+  {
+    id: 'for-in-unknown-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['other', error]; return Object.fromEntries([entry], (() => { for (entry[0] in flag ? {} : { a: 1 }); })()); }`,
+    key: 'message',
+    values: ['error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
