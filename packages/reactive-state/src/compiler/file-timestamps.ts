@@ -56,6 +56,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { constructorReferences, fileConstructorReference } from './file-constructor-references.ts';
+import { hasEnumMember } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, hoistedIn, readsBinding } from './scope.ts';
 
@@ -422,6 +423,9 @@ function bindingIn(node: Node, name: string): Binding {
 /** The bindings a catch, loop or function introduces around the reference. */
 function ownBinding(node: Node, within: Node, name: string, parameterDecorator: boolean): Binding {
   if ((isClassExpression(node) || isFunctionExpression(node)) && node.name?.text === name) {
+    return null;
+  }
+  if (isEnumDeclaration(node) && hasEnumMember(node, name)) {
     return null;
   }
   if (isCatchClause(node) && node.variableDeclaration !== undefined) {
