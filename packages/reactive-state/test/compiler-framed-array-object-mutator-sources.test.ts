@@ -1184,6 +1184,21 @@ describe('sources built from constants that spread each other', () => {
   });
 });
 
+describe('sources built from conditions that spread each other', () => {
+  it('are read in work that does not grow with the paths through them', () => {
+    const levels = Array.from(
+      { length: 30 },
+      (_, at) =>
+        `const s${at + 1} = flag ? { ...s${at}, ${2 * at + 3}: 'safe' } : { ...s${at}, ${2 * at + 4}: 'safe' };`,
+    ).join(' ');
+    const source = `function frames(error: Error, flag: boolean) { ${VALUES} const s0 = { 0: error }; ${levels} Object.assign(values, s30); return values; }`;
+    const found = writtenElements(source, undefined);
+
+    expect(found).toContain('error:');
+    expect(found.length).toBeLessThan(2000);
+  });
+});
+
 describe('elements native object mutators install from unread sources', () => {
   it.each(ELEMENTS)('$id', ({ source, index, elements }) => {
     expect(writtenElements(source, index)).toStrictEqual(elements);

@@ -124,18 +124,30 @@ function firstRead(seen: Set<Node>, held: Node): boolean {
   return true;
 }
 
+/** No name hidden: the state a read of a source starts from. */
+const NOTHING_HIDDEN: Hidden = { data: new Set(), getters: new Set() };
+
+/** How many reads of one object are kept apart: past it, one read under nothing hidden covers all. */
+const READS = { kept: 4 } as const;
+
 /**
- * Whether an object has not yet been read under names hidden no more than now: a read under fewer
- * hidden names reads everything a read under more would, so only the later one is skipped.
+ * The names to read an object under, none where it has already been read under names hidden no
+ * more than now: a read under fewer hidden names reads everything a read under more would. Past a
+ * few reads kept apart the object is read once under nothing hidden, which covers every other.
  */
-function firstReadUnder(table: Map<Node, readonly Hidden[]>, held: Node, hidden: Hidden): boolean {
+function readUnder(
+  table: Map<Node, readonly Hidden[]>,
+  held: Node,
+  hidden: Hidden,
+): Hidden | undefined {
   const earlier = table.get(held) ?? [];
   const covered = earlier.some(
     (each) => isSubset(each.data, hidden.data) && isSubset(each.getters, hidden.getters),
   );
-  if (covered) return false;
-  table.set(held, [...earlier, { data: new Set(hidden.data), getters: new Set(hidden.getters) }]);
-  return true;
+  if (covered) return undefined;
+  const used = earlier.length >= READS.kept ? NOTHING_HIDDEN : hidden;
+  table.set(held, [...earlier, { data: new Set(used.data), getters: new Set(used.getters) }]);
+  return used;
 }
 
 function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {
@@ -198,9 +210,6 @@ function definedMaps(
   return found;
 }
 
-/** No name hidden: the state a read of a source starts from. */
-const NOTHING_HIDDEN: Hidden = { data: new Set(), getters: new Set() };
-
 /** One assign source's values at numeric keys; a getter there answers what it returns. */
 function assignedValues(
   source: Expression,
@@ -216,11 +225,12 @@ function assignedValues(
     const held = heldValue(value);
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
     const opaque = opaqueSource(source, index);
-    if (alternatives === undefined || !firstReadUnder(reading.seen.sources, held, hidden))
-      return opaque;
+    const used =
+      alternatives === undefined ? undefined : readUnder(reading.seen.sources, held, hidden);
+    if (alternatives === undefined || used === undefined) return opaque;
     return [
       ...opaque,
-      ...alternatives.flatMap((each) => assignedValues(each, index, reading, hidden)),
+      ...alternatives.flatMap((each) => assignedValues(each, index, reading, used)),
     ];
   }
   return sourceFields(value, index, reading, hidden);
@@ -339,11 +349,12 @@ function definedValues(
     const held = heldValue(value);
     const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
-    if (alternatives === undefined || !firstReadUnder(reading.seen.maps, held, hidden))
-      return opaque;
+    const used =
+      alternatives === undefined ? undefined : readUnder(reading.seen.maps, held, hidden);
+    if (alternatives === undefined || used === undefined) return opaque;
     return [
       ...opaque,
-      ...alternatives.flatMap((each) => definedValues(each, index, reading, hidden)),
+      ...alternatives.flatMap((each) => definedValues(each, index, reading, used)),
     ];
   }
   return fieldsAfter(value, hidden, (property, later) =>
