@@ -245,9 +245,13 @@ function survivingFields(object: ObjectLiteralExpression, reading: Reading): Ass
 
 /**
  * What the prototype a written object sets holds: the prototype itself, which the name
- * `__proto__` reads, and its fields that no field of the object, nor one after it, hides.
+ * `__proto__` reads unless an own field of that name shadows the accessor, and its fields that no
+ * field of the object, nor one after it, hides.
  */
-function inheritedValues(object: ObjectLiteralExpression, reading: Reading): AssignedFrameSource[] {
+function inheritedValues(
+  object: ObjectLiteralExpression,
+  reading: Reading,
+): readonly AssignedFrameSource[] {
   const proto = object.properties.find((each) => setsPrototype(each));
   if (proto === undefined || !isPropertyAssignment(proto)) return [];
   const own = object.properties.flatMap((each) => fieldNames(each));
@@ -257,9 +261,11 @@ function inheritedValues(object: ObjectLiteralExpression, reading: Reading): Ass
     getters: withNames(reading.getters, own),
   };
   const value = unwrapped(proto.initializer);
-  if (!isObjectLiteralExpression(value))
-    return [...fieldsOf([{ value: proto.initializer, keys: [] }], hidden)];
-  return [{ value: proto.initializer, keys: [] }, ...survivingFields(value, hidden)];
+  const container = { value: proto.initializer, keys: [] };
+  const read = isObjectLiteralExpression(value)
+    ? [container, ...survivingFields(value, hidden)]
+    : fieldsOf([container], hidden);
+  return hidden.data.has('__proto__') ? read.filter((each) => each !== container) : read;
 }
 
 /** The names of a set, and more. */

@@ -672,6 +672,18 @@ const CASES = [
     key: 'message',
     values: ["'safe':", '(0, { field: error }):', '0, { field: error }:0', 'error:'],
   },
+  {
+    id: 'computed-key-own-prototype-field-shadows-prototype',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: error, ['__proto__']: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:0'],
+  },
+  {
+    id: 'computed-key-own-prototype-field-keeps-inherited-fields',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: { field: error }, ['__proto__']: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
