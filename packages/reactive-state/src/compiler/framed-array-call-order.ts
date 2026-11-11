@@ -18,12 +18,13 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { arrayIdentity } from './framed-array-own-methods.ts';
 import { frameDeclarationOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
 
@@ -134,14 +135,17 @@ function namesItself(fn: FunctionExpression, name: Identifier): boolean {
 }
 
 /**
- * Whether a name read inside the function resolves to the function's own name: no parameter, no
- * local, and no function or class within it that is named alike takes the name first.
+ * Whether a name read inside the function resolves to the function's own name, and the read may
+ * run: no parameter, no local, and no function or class within it that is named alike takes the
+ * name first, and no arm a written condition rules out holds the read or a function that holds it.
  */
 function reachesName(name: Identifier, fn: FunctionExpression): boolean {
-  if (frameDeclarationOf(name) !== undefined) return false;
-  for (let at = name.parent; at !== fn; at = at.parent)
+  if (frameDeclarationOf(name) !== undefined || !framedPossibleBranch(name)) return false;
+  for (let at = name.parent; at !== fn; at = at.parent) {
     if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === name.text)
       return false;
+    if (isAnswering(at) && !framedPossibleBranch(at)) return false;
+  }
   return true;
 }
 

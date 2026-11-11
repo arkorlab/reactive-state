@@ -231,6 +231,31 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'unreachable-self-reference',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)): string { values.join = Array.prototype.join; if (false) read(); return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'unreachable-conditional-self-reference',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)): string { values.join = Array.prototype.join; return false ? read() : text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'unreachable-nested-function-self-reference',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)): string { values.join = Array.prototype.join; if (false) { (() => read())(); } return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'selected-branch-self-reference',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = String(values)): string { values.join = Array.prototype.join; if (true) { return pass < 1 ? text + read(pass + 1) : text; } return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'unreachable-self-reference-selection',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = values.join((values.join = Array.prototype.join, ''))): string { if (false) read(); return text; })(); }`,
+    converts: false,
+  },
+  {
     id: 'recursive-iife-own-array-pin',
     source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
     converts: false,
