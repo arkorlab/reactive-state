@@ -723,6 +723,18 @@ const ELEMENTS = [
     elements: ['descriptor:value', "'safe':"],
   },
   {
+    id: 'define-getter-reference-after-alias',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} function f(): unknown { return 'safe'; } const alias = f; f = () => error; Object.defineProperty(values, 0, { get: flag ? alias : f }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
+    id: 'define-getter-references-assigned-between',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} function f(): unknown { return 'safe'; } f = () => error; const alias = f; Object.defineProperty(values, 0, { get: flag ? alias : f }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -902,6 +914,11 @@ const CONVERSIONS = [
   {
     id: 'define-constant-conditional-descriptor-assigned-converts',
     source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = flag ? { get: () => 'safe' } : {}; descriptor.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-getter-reference-after-alias-converts',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; function f(): unknown { return 'safe'; } const alias = f; f = () => error; Object.defineProperty(a, 0, { get: flag ? alias : f }); return String(a); }`,
     converts: true,
   },
   {

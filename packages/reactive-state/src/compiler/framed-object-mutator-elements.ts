@@ -352,14 +352,15 @@ function accessedValues(
 
 /**
  * What a written synchronous function, or a name that holds one, returns as a getter. A name that
- * is assigned before the getter is read may hold what it is assigned instead. Each function is
- * read once, which keeps a name that holds itself from being followed for good.
+ * is assigned before the getter is read may hold what it is assigned instead, as it stands where it
+ * is named. Each place that names a function is read once, which keeps a name that holds itself
+ * from being followed for good.
  */
 function functionReturns(initializer: Expression, seen = new Set<Node>()): WrittenArrayElement[] {
+  if (seen.has(initializer)) return [];
+  seen.add(initializer);
   const names: Identifier[] = [];
   const held = heldValue(initializer, names);
-  if (seen.has(held)) return [];
-  seen.add(held);
   const alternatives = alternativesOf(held);
   const returned =
     alternatives === undefined
@@ -368,7 +369,14 @@ function functionReturns(initializer: Expression, seen = new Set<Node>()): Writt
   const replaced = names
     .flatMap((name) => [...variableInitializer(name), ...framedAssignedValues(name)])
     .flatMap((each) => functionReturns(each, seen));
-  return [...returned, ...replaced];
+  return distinctElements([...returned, ...replaced]);
+}
+
+/** The elements without the repeats that reading one function from two places makes. */
+function distinctElements(elements: readonly WrittenArrayElement[]): WrittenArrayElement[] {
+  const same = (left: WrittenArrayElement, right: WrittenArrayElement): boolean =>
+    left.value === right.value && left.keys.join('.') === right.keys.join('.');
+  return elements.filter((each, at) => elements.findIndex((other) => same(other, each)) === at);
 }
 
 /**
