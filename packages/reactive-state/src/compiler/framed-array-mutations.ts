@@ -20,6 +20,7 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isPropertyDeclaration,
   isPropertyAssignment,
   isSatisfiesExpression,
   isSetAccessorDeclaration,
@@ -71,10 +72,14 @@ export function deferredArrayChange(
   return false;
 }
 
-/** A function body is deferred; its computed name and synchronous immediate invocation are not. */
+/**
+ * A function body is deferred; its computed name and synchronous immediate invocation are not. The
+ * initializer of an instance field is deferred as well: it runs when an instance is made.
+ */
 export function executionOwner(node: Node): Node {
   for (let parent = node.parent, within: Node = node; ; within = parent, parent = parent.parent) {
     if (isSourceFile(parent)) return parent;
+    if (instanceInitializer(parent) === within) return parent;
     if (
       !isAnswering(parent) &&
       !isConstructorDeclaration(parent) &&
@@ -86,6 +91,14 @@ export function executionOwner(node: Node): Node {
     const { parent: use } = useOf(parent);
     if (!isCallExpression(use) || eagerBody(use) !== parent.body) return parent;
   }
+}
+
+/** The initializer of an instance field, which runs when an instance is made. */
+export function instanceInitializer(node: Node): Node | undefined {
+  const instance =
+    isPropertyDeclaration(node) &&
+    node.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true;
+  return instance ? node.initializer : undefined;
 }
 
 /** Function declarations need binding writes; mutable objects also lose proof when handed away. */

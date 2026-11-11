@@ -9,9 +9,12 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isBlock,
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
+  isConstructorDeclaration,
+  isDecorator,
   isCallExpression,
   isElementAccessExpression,
   isComputedPropertyName,
@@ -49,6 +52,7 @@ import {
   writtenArrayKey,
 } from './framed-array-functions.ts';
 import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
+import { instanceInitializer } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
@@ -193,14 +197,6 @@ function runsLater(parent: Node, at: Node): boolean {
   return instanceInitializer(parent) === at;
 }
 
-/** The initializer of an instance field, which runs when an instance is made. */
-function instanceInitializer(node: Node): Node | undefined {
-  const instance =
-    isPropertyDeclaration(node) &&
-    node.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true;
-  return instance ? node.initializer : undefined;
-}
-
 /** The default a binding element or a shorthand field of a pattern holds: it runs on some values. */
 function patternDefault(node: Node): Node | undefined {
   if (isBindingElement(node)) return node.initializer;
@@ -221,7 +217,20 @@ function skipsLink(at: Node, statement: Node): boolean {
   if (runsLater(parent, at)) return true;
   if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
-  return inner && parent !== statement;
+  return inner && parent !== statement && !runsStraight(parent);
+}
+
+/**
+ * Whether a statement of a class's static block runs whenever the block does: it is an expression, a
+ * declaration or a plain block, and only plain blocks lie between it and the static block, which
+ * runs, from its first statement to its last, when the class is defined.
+ */
+function runsStraight(statement: Node): boolean {
+  if (!isBlock(statement) && !isExpressionStatement(statement) && !isVariableStatement(statement))
+    return false;
+  let within = statement.parent;
+  while (isBlock(within)) within = within.parent;
+  return isClassStaticBlockDeclaration(within);
 }
 
 /** A pattern and the value it binds: a declaration's or a default's initializer, an assignment's right. */
@@ -262,6 +271,15 @@ function isStaticMember(member: Node): boolean {
   );
 }
 
+/** The decorators of a member: they run with its name, in the order of the members. */
+function decoratorsOf(member: Node): readonly Node[] {
+  const decorated =
+    isNamedMember(member) ||
+    isClassStaticBlockDeclaration(member) ||
+    isConstructorDeclaration(member);
+  return (decorated ? (member.modifiers ?? []) : []).filter((each) => isDecorator(each));
+}
+
 /**
  * What a class runs, in order: what it extends, the computed names of its members in their order,
  * then its static initializers and blocks in theirs, and last the initializers of instances, which
@@ -272,9 +290,12 @@ function membersInRunOrder(
   children: readonly Node[],
 ): readonly Node[] {
   const members = new Set<Node>(node.members);
-  const names = node.members.flatMap((member): Node[] =>
-    isNamedMember(member) && isComputedPropertyName(member.name) ? [member.name] : [],
-  );
+  const names = node.members.flatMap((member): Node[] => {
+    return [
+      ...decoratorsOf(member),
+      ...(isNamedMember(member) && isComputedPropertyName(member.name) ? [member.name] : []),
+    ];
+  });
   const initializers = (wanted: boolean): Node[] => {
     return node.members.flatMap((member): Node[] => {
       if (isStaticMember(member) !== wanted) return [];

@@ -24,7 +24,7 @@ import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { isNamedFunction, runsInPlace, runsItself, runsItselfBetween } from './framed-recursion.ts';
+import { isNamedFunction, madeInPlace, runsItself, runsItselfBetween } from './framed-recursion.ts';
 import { jumpsOver, repeatedFrameRead, repeatingBodies, resumesWithin } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 
@@ -174,9 +174,9 @@ function enclosingFunctions(read: Node, root: FrameBinding, limit: Node): readon
     if (isNamedFunction(at) && !(root.pos >= at.pos && root.end <= at.end)) found.push(at);
     if (isSourceFile(at)) return found;
     if (at === limit) {
-      if (!runsInPlace(at)) return found;
+      if (!madeInPlace(at)) return found;
       past = true;
-    } else if (past && isFunctionBoundary(at) && !runsInPlace(at)) return found;
+    } else if (past && isFunctionBoundary(at) && !madeInPlace(at)) return found;
   }
 }
 
