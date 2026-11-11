@@ -909,6 +909,30 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'define-nullish-constant-getter',
+    source: `function frames(error: Error) { ${VALUES} const empty = null; Object.defineProperty(values, 0, { get: empty ?? (() => error) }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-shadowed-undefined-getter',
+    source: `function frames(error: Error) { ${VALUES} const undefined = () => error; Object.defineProperty(values, 0, { get: undefined ?? (() => 'safe') }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-present-constant-getter',
+    source: `function frames(error: Error) { ${VALUES} const present = () => 'safe'; Object.defineProperty(values, 0, { get: present ?? (() => error) }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-nullish-constant-source',
+    source: `function frames(error: Error) { ${VALUES} const empty = null; Object.assign(values, empty ?? { 0: error }); return values; }`,
+    index: undefined,
+    elements: ['empty ?? { 0: error }:0', 'empty ?? { 0: error }:array', 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1143,6 +1167,11 @@ const CONVERSIONS = [
     id: 'assign-symbol-computed-key-safe',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { [Symbol.iterator]: error }); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-nullish-constant-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const empty = null; Object.defineProperty(a, 0, { get: empty ?? (() => error) }); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',

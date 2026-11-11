@@ -18,6 +18,7 @@ import {
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
+  isVoidExpression,
   isMethodDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
@@ -414,6 +415,26 @@ function alternativesOf(
 }
 
 /**
+ * Whether what an expression is written as, through the constants that hold it, is null or
+ * undefined: `null`, `void 0`, an `undefined` no declaration shadows; or a written value, which is
+ * neither. None where the compile cannot tell.
+ */
+function nullishness(expression: Expression): boolean | undefined {
+  const value = heldValue(expression);
+  if (isFunctionDeclaration(value)) return false;
+  if (isIdentifier(value))
+    return value.text === 'undefined' && frameBindingOf(value) === undefined ? true : undefined;
+  if (isVoidExpression(value) || value.kind === SyntaxKind.NullKeyword) return true;
+  const written =
+    framedCondition(value) !== undefined ||
+    isObjectLiteralExpression(value) ||
+    isArrayLiteralExpression(value) ||
+    isArrowFunction(value) ||
+    isFunctionExpression(value);
+  return written ? false : undefined;
+}
+
+/**
  * The operands of a logical expression that it may hand over: where the left is a written
  * literal, the short-circuit rule picks the left, which ends it, or the right.
  */
@@ -421,11 +442,9 @@ function operands(value: BinaryExpression): readonly Expression[] {
   const { left, right } = value;
   const kind = value.operatorToken.kind;
   if (kind === SyntaxKind.QuestionQuestionToken) {
-    const bare = unwrapped(left);
-    const nullish =
-      bare.kind === SyntaxKind.NullKeyword || (isIdentifier(bare) && bare.text === 'undefined');
-    if (nullish) return [right];
-    return framedCondition(left) === undefined ? [left, right] : [left];
+    const nullish = nullishness(left);
+    if (nullish === undefined) return [left, right];
+    return [nullish ? right : left];
   }
   const truth = framedCondition(left);
   if (truth === undefined) return [left, right];
