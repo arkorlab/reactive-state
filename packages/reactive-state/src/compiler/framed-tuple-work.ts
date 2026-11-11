@@ -1,6 +1,7 @@
 import {
   type CallExpression,
   type Identifier,
+  isBindingElement,
   isClassDeclaration,
   isClassExpression,
   isElementAccessExpression,
@@ -26,7 +27,7 @@ import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { readsBinding } from './scope.ts';
+import { bindingIdentifiers, readsBinding } from './scope.ts';
 
 /** What a native call's own work reaches of a tuple it reads: its callee's, its arguments'. */
 
@@ -146,14 +147,27 @@ function constantOrigin(read: Expression, seen: Set<FrameBinding>): Expression |
   let root = unwrapped(read);
   while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
     root = unwrapped(root.expression);
-  const selected = isIdentifier(root) ? frameBindingOf(root) : undefined;
+  if (!isIdentifier(root)) return undefined;
+  const selected = frameBindingOf(root);
   if (selected === undefined || seen.has(selected.binding)) return undefined;
   seen.add(selected.binding);
   const { binding } = selected;
   return isVariableDeclarationList(binding.parent) &&
-    /^const\s/u.test(binding.parent.getText(binding.getSourceFile()))
+    /^const\s/u.test(binding.parent.getText(binding.getSourceFile())) &&
+    !defaulted(binding, root)
     ? binding.initializer
     : undefined;
+}
+
+/**
+ * Whether a pattern of `binding` gives `name`, or a pattern that holds it, a default: a member the
+ * initializer lacks is the default's, which the initializer does not name.
+ */
+function defaulted(binding: FrameBinding, name: Identifier): boolean {
+  const bound = bindingIdentifiers(binding.name).find((each) => each.text === name.text);
+  for (let at = bound?.parent; at !== undefined && isBindingElement(at); at = at.parent.parent)
+    if (at.initializer !== undefined) return true;
+  return false;
 }
 
 /**
