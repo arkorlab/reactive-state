@@ -24,6 +24,7 @@ import {
   isImportEqualsDeclaration,
   isInferTypeNode,
   isInterfaceDeclaration,
+  isMappedTypeNode,
   isModuleBlock,
   isModuleDeclaration,
   isNamespaceImport,
@@ -276,7 +277,8 @@ function statementsOf(node: Node): readonly Statement[] | undefined {
 
 /**
  * The class name or type parameter `node` binds. A class expression's name includes its decorator;
- * member type parameters exclude computed names, member decorators and parameter decorators.
+ * member type parameters exclude computed names, member decorators and parameter decorators; a
+ * mapped type's parameter is the type's own throughout.
  */
 function ownTypeBinding(
   node: Node,
@@ -292,6 +294,10 @@ function ownTypeBinding(
   }
   if (inParameterDecorator || isComputedPropertyName(within) || isDecorator(within)) {
     return undefined;
+  }
+  // A mapped type keeps its one parameter in `typeParameter`, not in a list: `{ [Item in K]: Item }`.
+  if (isMappedTypeNode(node)) {
+    return node.typeParameter.name.text === name ? node.typeParameter : undefined;
   }
   const parameters =
     'typeParameters' in node
