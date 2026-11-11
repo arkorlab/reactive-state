@@ -90,8 +90,11 @@ const KEY_READERS: ReadonlySet<string> = new Set([
   'Reflect.getOwnPropertyDescriptor',
 ]);
 
-/** The methods of a function that call it on what they are given after the `this` they take. */
-const BORROWING: ReadonlySet<string> = new Set(['apply', 'call']);
+/**
+ * The methods of a function that call it, or `bind` it for a call, on what they are given after the
+ * `this` they take.
+ */
+const BORROWING: ReadonlySet<string> = new Set(['apply', 'bind', 'call']);
 
 /** The operators that compare what they are given, which hold neither. */
 const COMPARING: ReadonlySet<SyntaxKind> = new Set([
@@ -454,18 +457,16 @@ function readsConstructor(node: Node): boolean {
 /**
  * Whether `node` is a read of the language's that reads a member by the key it is given — of what
  * made what it is given: `Reflect.get(fn, 'constructor')`, borrowed too, `Reflect.get.call(null, fn,
- * 'constructor')`. A global holder's own read is checked where it is handed on; the same key on
+ * 'constructor')`, and bound, `Reflect.get.bind(null, fn, 'constructor')`, `Reflect.get.bind(null,
+ * fn)('constructor')`. A global holder's own read is checked where it is handed on; the same key on
  * another object is that object's ordinary entry.
  */
 function readsCodeKey(node: Node): boolean {
   if (!isCallExpression(node)) {
     return false;
   }
-  const path = globalPathOf(unwrapped(node.expression));
-  const last = path?.at(-1) ?? '';
-  const borrowing = BORROWING.has(last) ? last : undefined;
-  const reader = (borrowing === undefined ? path : path?.slice(0, -1))?.join('.');
-  const [, key] = givenTo(node, borrowing);
+  const { given, reader } = readerCall(node);
+  const key = given[1];
   return (
     reader !== undefined &&
     KEY_READERS.has(reader) &&
@@ -474,17 +475,54 @@ function readsCodeKey(node: Node): boolean {
   );
 }
 
+/** A call's reader of the language, by the names its global goes by, and what it is given. */
+interface ReaderCall {
+  readonly reader: string | undefined;
+  readonly given: readonly Expression[];
+}
+
+/** The reader a call calls, the call of a function `bind` made of it, or one borrowed. */
+function readerCall(call: CallExpression): ReaderCall {
+  const callee = unwrapped(call.expression);
+  if (isCallExpression(callee)) {
+    return boundCall(call, callee);
+  }
+  const path = globalPathOf(callee);
+  const last = path?.at(-1) ?? '';
+  const borrowing = BORROWING.has(last) ? last : undefined;
+  return {
+    given: givenTo(call, borrowing),
+    reader: (borrowing === undefined ? path : path?.slice(0, -1))?.join('.'),
+  };
+}
+
+/**
+ * What a call of a bound reader, `Reflect.get.bind(null, fn)('constructor')`, is given: what `bind`
+ * was given after its `this`, then what the call is, each up to a spread, past which where a value
+ * stands is for the code to tell. A key `bind` is given is read at `bind`, not again at the call.
+ */
+function boundCall(call: CallExpression, bound: CallExpression): ReaderCall {
+  const path = globalPathOf(unwrapped(bound.expression));
+  const kept = untilSpread(bound.arguments);
+  const given = kept.slice(1);
+  if (path?.at(-1) !== 'bind' || kept.length < bound.arguments.length || given.length > 1) {
+    return { given: [], reader: undefined };
+  }
+  return { given: [...given, ...untilSpread(call.arguments)], reader: path.slice(0, -1).join('.') };
+}
+
 /**
  * What a call hands to the function it calls: its arguments; of one borrowed, `call` or `apply`,
  * what follows the `this` it takes, up to a spread — of `apply`, the elements of the array written
  * there, past the casts around it, up to a spread as well; none of an array the code gives by a
- * name, nor where a spread comes before the array.
+ * name, nor where a spread comes before the array. Of `bind`, what it keeps for the call, as `call`
+ * is given it.
  */
 function givenTo(call: CallExpression, borrowing: string | undefined): readonly Expression[] {
   if (borrowing === undefined) {
     return call.arguments;
   }
-  if (borrowing === 'call') {
+  if (borrowing !== 'apply') {
     return untilSpread(call.arguments).slice(1);
   }
   const [, list] = untilSpread(call.arguments);
