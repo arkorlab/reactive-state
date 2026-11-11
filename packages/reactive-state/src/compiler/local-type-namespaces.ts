@@ -141,7 +141,20 @@ function lexicalNamespaces(name: Identifier): readonly ModuleDeclaration[] | nul
 
 /** The declarations of one lexical scope, including all clauses of a switch. */
 function statementsOf(node: Node): readonly Statement[] | undefined {
-  return isModuleBlock(node) ? namespaceStatements(node) : directStatementsOf(node);
+  return isModuleBlock(node)
+    ? namespaceStatements(node)
+    : (dottedStatements(node) ?? directStatementsOf(node));
+}
+
+/**
+ * What the outer namespace of a dotted name holds for the one within it: `A` of `namespace A.B {}`
+ * has no body but `B`, and what the bodies of `A` export is in scope there (`mergedExports`); none
+ * of another node.
+ */
+export function dottedStatements(node: Node): readonly Statement[] | undefined {
+  return isModuleDeclaration(node) && node.body !== undefined && isModuleDeclaration(node.body)
+    ? mergedExports(node)
+    : undefined;
 }
 
 /** The declarations written directly in one lexical scope. */
