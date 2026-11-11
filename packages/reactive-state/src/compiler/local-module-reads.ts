@@ -16,9 +16,13 @@ import {
   type Node,
 } from 'typescript/ast';
 
-import { freeReads, isBlockScoped } from './scope.ts';
+import { unshadowedReadsIn } from './code-globals.ts';
+import { isBlockScoped } from './scope.ts';
 
-/** Reads of a constant or parameter, excluding names its nested lexical scopes declare anew. */
+/**
+ * Reads of a constant or parameter, excluding names its nested lexical scopes declare anew — a
+ * namespace's body among them.
+ */
 export function readsOf(declared: Identifier, owner: Node): (node: Node) => node is Identifier {
   const reads = moduleReads(declared, owner);
   return (node): node is Identifier => {
@@ -39,7 +43,7 @@ function moduleReads(name: Identifier, owner: Node): ReadonlySet<Identifier> | u
   }
   const reads = new Set<Identifier>();
   scope.forEachChild((child) => {
-    for (const read of freeReads(child)) {
+    for (const read of unshadowedReadsIn(child)) {
       reads.add(read);
     }
   });

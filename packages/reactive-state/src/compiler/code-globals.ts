@@ -330,6 +330,20 @@ export function useOf(node: Node): { readonly at: Node; readonly parent: Node } 
 }
 
 /**
+ * The reads in `node` of a name no declaration inside it gives: none a function's, a block's or a
+ * `catch`'s (`freeReads`), nor, where `node` is a namespace, its body's or a nested one's
+ * (`namespaceReads`) — what reads a constant of the module, where nothing inside declares it again.
+ */
+export function unshadowedReadsIn(node: Node): readonly Identifier[] {
+  if (!isModuleDeclaration(node)) {
+    return freeReads(node);
+  }
+  const reads = new Set<Identifier>();
+  namespaceReads(node, new Set(), reads);
+  return [...reads];
+}
+
+/**
  * Whether `node`, what holds what makes code of text (`HOLDERS`), is held or handed on where it
  * stands — but read a member of by a name, `globalThis.crypto`, tested, `typeof process`, compared,
  * or asked of a name, `'x' in globalThis` — so that what the code reaches of it, it reaches by a key
