@@ -66,6 +66,42 @@ const CASES = [
     source: `namespace N { export const key = 2; } namespace N { function read() { ${READ}; } }`,
     what: 'a read in a function of the body',
   },
+  {
+    source: `namespace M.key { export const own = 1; } namespace M { ${READ}; }`,
+    what: 'a dotted namespace’s own name',
+  },
+  {
+    source: `namespace A.B.key { export const own = 1; } namespace A.B { ${READ}; }`,
+    what: 'a namespace dotted three deep’s own name',
+  },
+  {
+    source: `declare namespace N { const key: number; } namespace N { ${READ}; }`,
+    what: 'a member of an ambient namespace, exported with no word',
+  },
+  {
+    source: `declare namespace N { function key(): number; } namespace N { ${READ}; }`,
+    what: 'a function of an ambient namespace',
+  },
+  {
+    source: `declare namespace M { namespace N { const key: number; } } namespace M { export namespace N { ${READ}; } }`,
+    what: 'a member of an ambient namespace nested in one merged',
+  },
+  {
+    source: `declare namespace M.N { const key: number; } namespace M.N { ${READ}; }`,
+    what: 'a member of a dotted ambient namespace',
+  },
+  {
+    source: `namespace N { export namespace key { export const own = 1; } } namespace N { ${READ}; }`,
+    what: 'a namespace of a value',
+  },
+  {
+    source: `namespace N { export namespace key { export const enum E { A } } } namespace N { ${READ}; }`,
+    what: 'a namespace of a const enum alone',
+  },
+  {
+    source: `namespace N { export const key = 2; } namespace N { if (kind) { var other = 1; } ${READ}; }`,
+    what: 'a var of the body of another name',
+  },
 ] as const;
 
 const PINS = [
@@ -94,8 +130,24 @@ const PINS = [
     what: 'a read beside the namespace (pin)',
   },
   {
-    source: `namespace M { export namespace N { export const key = 2; } } namespace M { namespace N { ${READ}; } }`,
-    what: 'a nested namespace the other body does not export (pin)',
+    source: `namespace M.key { export type T = string; } namespace M { ${READ}; }`,
+    what: 'a dotted namespace of types alone (pin)',
+  },
+  {
+    source: `declare namespace N { type key = string; } namespace N { ${READ}; }`,
+    what: 'a type of an ambient namespace (pin)',
+  },
+  {
+    source: `namespace N { export namespace key { export type T = string; } } namespace N { ${READ}; }`,
+    what: 'a namespace of types alone (pin)',
+  },
+  {
+    source: `namespace N { export namespace key { export namespace inner { export interface I {} } } } namespace N { ${READ}; }`,
+    what: 'a namespace of namespaces of types alone (pin)',
+  },
+  {
+    source: `namespace N { export namespace key {} } namespace N { ${READ}; }`,
+    what: 'an empty namespace (pin)',
   },
 ] as const;
 
@@ -117,7 +169,7 @@ describe('a read of a name another body of a namespace exports', () => {
   } {
     using parsed = api.createSourceFile(
       'framed-bindings.ts',
-      `declare const value: unknown[]; const key = 1; ${source}`,
+      `declare const value: unknown[]; declare const kind: boolean; const key = 1; ${source}`,
     );
     let read: ElementAccessExpression | undefined;
     const find = (node: Node): void => {
@@ -142,5 +194,12 @@ describe('a read of a name another body of a namespace exports', () => {
 
   it.each(PINS)('$what', ({ source }) => {
     expect(readOf(source)).toStrictEqual({ declared: true, member: '1' });
+  });
+
+  it('reads a var of the body, before what another body exports, as its declaration', () => {
+    const source = `namespace N { export const key = 2; } namespace N { if (kind) { var key = 1; } ${READ}; }`;
+
+    // The var is no constant, so no key is told of it, but it is the name's declaration.
+    expect(readOf(source)).toStrictEqual({ declared: true, member: undefined });
   });
 });

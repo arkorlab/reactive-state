@@ -26,6 +26,7 @@ import {
   isForOfStatement,
   isForStatement,
   isImportEqualsDeclaration,
+  isInterfaceDeclaration,
   isModuleBlock,
   isModuleDeclaration,
   isNoSubstitutionTemplateLiteral,
@@ -35,6 +36,7 @@ import {
   isPropertyAccessExpression,
   isSourceFile,
   isStringLiteral,
+  isTypeAliasDeclaration,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -46,10 +48,10 @@ import {
   isSignatureDeclaration,
   type ModuleBlock,
   type ModuleDeclaration,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { namespaceStatements } from './local-type-namespaces.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, hoistedIn, isBlockScoped } from './scope.ts';
 
@@ -200,13 +202,15 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
     return node.variableDeclaration;
   const binding = statementBinding(node, name);
   if (binding !== undefined) return binding;
-  if (isModuleBlock(node) && exportedElsewhere(node, name)) return null;
   const parameters = isSignatureDeclaration(node) ? node.parameters : undefined;
   const declared =
     parameters?.find((parameter) =>
       bindingIdentifiers(parameter.name).some((bound) => bound.text === name),
     ) ?? hoistedBinding(node, within, name);
   if (declared !== undefined) return declared;
+  if (isModuleDeclaration(node) && isModuleBlock(within) && exportedElsewhere(within, name)) {
+    return null;
+  }
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name?.text === name
     ? null
     : undefined;
@@ -237,136 +241,51 @@ function memberText(member: EnumMember): readonly string[] {
 
 /**
  * The enums that merge with `enumeration`, itself among them: those of its name in its scope and,
- * where it is exported, the exported ones of the other bodies of the namespace that holds it.
+ * in a namespace's body, those the namespace's other bodies export (`namespaceStatements`).
  */
 function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
   const { parent } = enumeration;
   const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
-  const { text } = enumeration.name;
-  const namespace = scope.parent;
-  if (!isModuleBlock(scope) || !isModuleDeclaration(namespace) || !isExported(enumeration)) {
-    return enumsNamed(statementsOf(scope) ?? [enumeration], text, false);
-  }
-  return mergedNamespaces(namespace).flatMap((each) => {
-    const { body } = each;
-    return body !== undefined && isModuleBlock(body)
-      ? enumsNamed(body.statements, text, body !== scope)
+  const statements = isModuleBlock(scope) ? namespaceStatements(scope) : statementsOf(scope);
+  return (statements ?? [enumeration]).flatMap((statement) => {
+    return isEnumDeclaration(statement) && statement.name.text === enumeration.name.text
+      ? [statement]
       : [];
   });
 }
 
 /**
- * The namespaces that merge with `namespace`, itself among them: those of its name in its scope and,
- * where it is exported — the tree has a dotted one, `namespace M.N`, export the `N` of the `M` that
- * holds it — the exported ones among what the other declarations of the namespace that holds it
- * hold, which merge with it in turn.
- */
-function mergedNamespaces(namespace: ModuleDeclaration): readonly ModuleDeclaration[] {
-  const { name, parent } = namespace;
-  if (!isIdentifier(name)) return [namespace];
-  const holder = isModuleBlock(parent) ? parent.parent : parent;
-  if (!isModuleDeclaration(holder) || !isExported(namespace)) {
-    return namespacesNamed(statementsOf(parent) ?? [namespace], name.text, false);
-  }
-  return mergedNamespaces(holder).flatMap((around) =>
-    namespacesWithin(around, name.text, around !== holder),
-  );
-}
-
-/** What the namespace `around` holds named `name`: its dotted one, or those its body exports. */
-function namespacesWithin(
-  around: ModuleDeclaration,
-  name: string,
-  exported: boolean,
-): ModuleDeclaration[] {
-  const { body } = around;
-  if (body === undefined) return [];
-  if (isModuleDeclaration(body))
-    return isIdentifier(body.name) && body.name.text === name ? [body] : [];
-  return isModuleBlock(body) ? namespacesNamed(body.statements, name, exported) : [];
-}
-
-/** The enums of `statements` named `name`: those exported alone, where `exported` is asked. */
-function enumsNamed(
-  statements: readonly Statement[],
-  name: string,
-  exported: boolean,
-): EnumDeclaration[] {
-  return statements.flatMap((statement) => {
-    const found = isEnumDeclaration(statement) && statement.name.text === name;
-    return found && (!exported || isExported(statement)) ? [statement] : [];
-  });
-}
-
-/** The namespaces of `statements` named `name`: those exported alone, where `exported` is asked. */
-function namespacesNamed(
-  statements: readonly Statement[],
-  name: string,
-  exported: boolean,
-): ModuleDeclaration[] {
-  return statements.flatMap((statement) => {
-    const found =
-      isModuleDeclaration(statement) &&
-      isIdentifier(statement.name) &&
-      statement.name.text === name;
-    return found && (!exported || isExported(statement)) ? [statement] : [];
-  });
-}
-
-/**
- * Whether another body of the namespace that holds `block` exports `name` as a value: those of the
- * bodies merge with this one's, so that a bare `name` within it is `N.name`, before any binding
- * around the namespace. The names are gathered once (`EXPORTED`), for every name looked up in the
- * body.
+ * Whether another body of the namespace that holds `block` exports `name` as a value, as a
+ * variable, a function, a class, an enum or a namespace of a value: those of the bodies merge with
+ * this one's, so that a bare `name` within it is `N.name`, before any binding around the
+ * namespace. The names are gathered once (`EXPORTED`), for every name looked up in the body.
  */
 export function exportedElsewhere(block: ModuleBlock, name: string): boolean {
   let names = EXPORTED.get(block);
   if (names === undefined) {
-    const namespace = block.parent;
-    const bodies = isModuleDeclaration(namespace) ? mergedNamespaces(namespace) : [];
+    const own = new Set<Statement>(block.statements);
     names = new Set(
-      bodies.flatMap((each) => {
-        const { body } = each;
-        return body !== block && body !== undefined && isModuleBlock(body)
-          ? exportedNames(body.statements)
-          : [];
-      }),
+      namespaceStatements(block).flatMap((statement) =>
+        own.has(statement) ? [] : valueNames(statement),
+      ),
     );
     EXPORTED.set(block, names);
   }
   return names.has(name);
 }
 
-/** The names of the values `statements` export: variables, functions, classes, enums, namespaces. */
-function exportedNames(statements: readonly Statement[]): readonly string[] {
-  return statements.flatMap((statement) => {
-    if (isVariableStatement(statement)) {
-      return isExported(statement)
-        ? statement.declarationList.declarations.flatMap((declaration) =>
-            bindingIdentifiers(declaration.name).map((bound) => bound.text),
-          )
-        : [];
-    }
-    if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
-      return isExported(statement) && statement.name !== undefined ? [statement.name.text] : [];
-    }
-    if (
-      isEnumDeclaration(statement) ||
-      isModuleDeclaration(statement) ||
-      isImportEqualsDeclaration(statement)
-    ) {
-      const name = valueName(statement);
-      return name !== undefined && isExported(statement) ? [name] : [];
-    }
-    return [];
-  });
-}
-
-/** Whether a declaration of a value is exported, as the namespace that holds it merges it. */
-function isExported(declaration: { readonly modifiers?: readonly Node[] }): boolean {
-  return (
-    declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
-  );
+/** The names of the values a statement declares: variables, functions, classes, enums, namespaces. */
+function valueNames(statement: Statement): readonly string[] {
+  if (isVariableStatement(statement)) {
+    return statement.declarationList.declarations.flatMap((declaration) =>
+      bindingIdentifiers(declaration.name).map((bound) => bound.text),
+    );
+  }
+  if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
+    return statement.name === undefined ? [] : [statement.name.text];
+  }
+  const name = valueName(statement);
+  return name === undefined ? [] : [name];
 }
 
 /** Ordinary and namespace blocks keep their statements; a switch's clauses share one scope. */
@@ -452,16 +371,41 @@ function declaredBy(
 
 /**
  * The name an enum, a namespace or an `import … =` alias of a value gives; none of another
- * statement, of a module the code names by text (`declare module 'x'`), or of an alias of a type.
+ * statement, of a module the code names by text (`declare module 'x'`), of a namespace of types
+ * alone, or of an alias of a type.
  */
 function valueName(statement: Statement): string | undefined {
   if (isEnumDeclaration(statement)) return statement.name.text;
   if (isModuleDeclaration(statement)) {
-    return isIdentifier(statement.name) ? statement.name.text : undefined;
+    return isIdentifier(statement.name) && instantiated(statement)
+      ? statement.name.text
+      : undefined;
   }
   return isImportEqualsDeclaration(statement) && !statement.isTypeOnly
     ? statement.name.text
     : undefined;
+}
+
+/**
+ * Whether a namespace holds a value: one of interfaces, type aliases and namespaces of those alone,
+ * or of nothing, is erased with the types, and a bare reference passes it to the name around it.
+ */
+function instantiated(namespace: ModuleDeclaration): boolean {
+  let { body } = namespace;
+  while (body !== undefined && isModuleDeclaration(body)) {
+    ({ body } = body);
+  }
+  if (body === undefined) return true;
+  return (
+    !isModuleBlock(body) ||
+    body.statements.some((statement) => {
+      return !(
+        isInterfaceDeclaration(statement) ||
+        isTypeAliasDeclaration(statement) ||
+        (isModuleDeclaration(statement) && !instantiated(statement))
+      );
+    })
+  );
 }
 
 /** A declaration's binding path for one of the identifiers it binds. */

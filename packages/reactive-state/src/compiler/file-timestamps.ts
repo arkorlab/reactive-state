@@ -397,7 +397,7 @@ function localBinding(name: Identifier): Binding {
     if (binding !== undefined) {
       return binding;
     }
-    if (isModuleBlock(at) && exportedElsewhere(at, name.text)) {
+    if (isModuleDeclaration(at) && isModuleBlock(within) && exportedElsewhere(within, name.text)) {
       return null;
     }
     if (isSourceFile(at)) {

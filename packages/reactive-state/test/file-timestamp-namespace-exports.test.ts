@@ -53,6 +53,38 @@ const CASES = [
     source: `namespace N { export const field = 'other'; } namespace N { function make() { ${MAKES} } }`,
     what: 'a File made in a function of the body',
   },
+  {
+    source: `namespace M.field { export const own = 1; } namespace M { ${MAKES} }`,
+    what: 'a dotted namespace’s own name',
+  },
+  {
+    source: `namespace A.B.field { export const own = 1; } namespace A.B { ${MAKES} }`,
+    what: 'a namespace dotted three deep’s own name',
+  },
+  {
+    source: `declare namespace N { const field: string; } namespace N { ${MAKES} }`,
+    what: 'a member of an ambient namespace, exported with no word',
+  },
+  {
+    source: `declare namespace N { function field(): string; } namespace N { ${MAKES} }`,
+    what: 'a function of an ambient namespace',
+  },
+  {
+    source: `declare namespace M { namespace N { const field: string; } } namespace M { export namespace N { ${MAKES} } }`,
+    what: 'a member of an ambient namespace nested in one merged',
+  },
+  {
+    source: `declare namespace M.N { const field: string; } namespace M.N { ${MAKES} }`,
+    what: 'a member of a dotted ambient namespace',
+  },
+  {
+    source: `namespace N { export namespace field { export const own = 1; } } namespace N { ${MAKES} }`,
+    what: 'a namespace of a value',
+  },
+  {
+    source: `namespace N { export namespace field { export const enum E { A } } } namespace N { ${MAKES} }`,
+    what: 'a namespace of a const enum alone',
+  },
 ] as const;
 
 const PINS = [
@@ -79,6 +111,26 @@ const PINS = [
   {
     source: `namespace N { export const field = 'other'; } ${MAKES}`,
     what: 'a File beside the namespace (pin)',
+  },
+  {
+    source: `namespace M.field { export type T = string; } namespace M { ${MAKES} }`,
+    what: 'a dotted namespace of types alone (pin)',
+  },
+  {
+    source: `declare namespace N { type field = string; } namespace N { ${MAKES} }`,
+    what: 'a type of an ambient namespace (pin)',
+  },
+  {
+    source: `namespace N { export namespace field { export type T = string; } } namespace N { ${MAKES} }`,
+    what: 'a namespace of types alone (pin)',
+  },
+  {
+    source: `namespace N { export namespace field { export namespace inner { export interface I {} } } } namespace N { ${MAKES} }`,
+    what: 'a namespace of namespaces of types alone (pin)',
+  },
+  {
+    source: `namespace N { export namespace field {} } namespace N { ${MAKES} }`,
+    what: 'an empty namespace (pin)',
   },
 ] as const;
 
