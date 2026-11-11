@@ -214,22 +214,38 @@ function arraySource(
 /**
  * A surviving literal own entry, without executing getters or unknown spread sources. A key no own
  * entry holds is read from the prototype the literal's `__proto__:` sets, as a destructuring reads
- * an inherited property.
+ * an inherited property. That entry is no own property, so the key `__proto__` itself reads the
+ * prototype it sets, through the accessor every object inherits, unless an own entry named so
+ * shadows the accessor.
  */
 function objectSource(
   value: ObjectLiteralExpression,
   key: string,
   opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
-  let prototype: Expression | undefined;
+  let prototype: PropertyAssignment | undefined;
   for (const property of value.properties.toReversed()) {
     if (isSpreadAssignment(property)) return [opaque];
     const name = literalKey(property.name);
     if (name === undefined) return [opaque];
-    if (name === key) return ownSource(property, opaque);
-    if (isPrototypeEntry(property)) prototype = property.initializer;
+    if (isPrototypeEntry(property)) prototype = property;
+    else if (name === key) return ownSource(property, opaque);
   }
-  return prototype === undefined ? [] : inheritedSource(prototype, key);
+  if (prototype === undefined) return [];
+  return key === '__proto__'
+    ? heldPrototype(prototype.initializer)
+    : inheritedSource(prototype.initializer, key);
+}
+
+/**
+ * The prototype a literal sets is the value its `__proto__` reads, and `null` has no accessor to read
+ * it by, so that nothing is read. A primitive is ignored by the literal, which leaves `Object.prototype`
+ * as the value, and stands for it as a present value that is no error.
+ */
+function heldPrototype(prototype: Expression): readonly AssignedFrameSource[] {
+  return unwrapped(prototype).kind === SyntaxKind.NullKeyword
+    ? []
+    : [{ value: prototype, keys: [] }];
 }
 
 /** The value an own entry of the selected key writes, or the entry's literal where it writes none. */
