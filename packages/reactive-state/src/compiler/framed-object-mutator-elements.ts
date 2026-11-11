@@ -54,16 +54,22 @@ export function objectMutatorElements(
 ): MutatorElements | undefined {
   const path = globalPathOf(unwrapped(call.expression))?.join('.');
   if (path === undefined || !MUTATORS.has(path)) return undefined;
-  const [target, first, second] = call.arguments;
+  const [target, first, second, third] = call.arguments;
   if (target === undefined || isSpreadElement(target)) return undefined;
   if (path === 'Object.assign') {
     const elements = call.arguments.slice(1).flatMap((source) => assignedValues(source, index));
     return { target, elements };
   }
   if (first === undefined) return { target, elements: [] };
-  if (path === 'Object.defineProperties') return { target, elements: definedValues(first, index) };
-  if (isSpreadElement(first))
-    return { target, elements: [{ value: first.expression, keys: ['1', 'value'] }] };
+  if (path === 'Object.defineProperties') {
+    const later =
+      second !== undefined && isSpreadElement(first) ? definedValues(second, index) : [];
+    return { target, elements: [...definedValues(first, index), ...later] };
+  }
+  if (isSpreadElement(first)) {
+    const spread = { value: first.expression, keys: ['1', 'value'] };
+    return { target, elements: [spread, ...descriptorValues(second), ...descriptorValues(third)] };
+  }
   return {
     target,
     elements: possibleKey(constantValue(first), index) ? descriptorValues(second) : [],

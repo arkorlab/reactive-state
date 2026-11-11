@@ -183,6 +183,18 @@ const ELEMENTS = [
     elements: ['rest:1.value'],
   },
   {
+    id: 'define-spread-key-then-descriptor',
+    source: `function frames(error: Error, keys: [number]) { ${VALUES} Object.defineProperty(values, ...keys, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['keys:1.value', 'error:'],
+  },
+  {
+    id: 'define-spread-maps-then-map',
+    source: `function frames(error: Error, maps: PropertyDescriptorMap[]) { ${VALUES} Object.defineProperties(values, ...maps, { 0: { value: error } }); return values; }`,
+    index: undefined,
+    elements: ['maps:0.0.value', 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -217,6 +229,11 @@ const CONVERSIONS = [
   {
     id: 'define-property-pin',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { value: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-spread-key-then-descriptor-converts',
+    source: `function frames(error: Error, keys: [number]) { const a = ['safe']; Object.defineProperty(a, ...keys, { value: error }); return String(a); }`,
     converts: true,
   },
   {
