@@ -444,6 +444,68 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'computed-key-constant-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const source = { field: error }; return Object.fromEntries([entry], ({ [name]: entry[1] } = source)); }`,
+    key: 'message',
+    values: ["'safe':", 'error:', 'source:', 'source:0'],
+  },
+  {
+    id: 'computed-key-conditional-source',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = flag ? { field: error } : {})); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'error:',
+      'flag ? { field: error } : {}:',
+      'flag ? { field: error } : {}:0',
+    ],
+  },
+  {
+    id: 'computed-key-constant-conditional-source',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} const source = flag ? { field: error } : {}; return Object.fromEntries([entry], ({ [name]: entry[1] } = source)); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'error:',
+      'flag ? { field: error } : {}:',
+      'flag ? { field: error } : {}:0',
+      'source:',
+      'source:0',
+    ],
+  },
+  {
+    id: 'computed-key-literal-condition-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = true ? { field: 'kept' } : { field: error })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      "true ? { field: 'kept' } : { field: error }:",
+      "true ? { field: 'kept' } : { field: error }:0",
+    ],
+  },
+  {
+    id: 'computed-key-constant-spread-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const base = { field: error }; const source = { ...base }; return Object.fromEntries([entry], ({ [name]: entry[1] } = source)); }`,
+    key: 'message',
+    values: ["'safe':", 'base:', 'base:0', 'error:', 'source:', 'source:0'],
+  },
+  {
+    id: 'computed-key-self-referential-source-pin',
+    source: `function frames(error: Error, name: string, flag: boolean) { ${ENTRY} const source: object = flag ? { field: error } : source; return Object.fromEntries([entry], ({ [name]: entry[1] } = source)); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'error:',
+      'flag ? { field: error } : source:',
+      'flag ? { field: error } : source:0',
+      'source:',
+      'source:',
+      'source:0',
+      'source:0',
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
