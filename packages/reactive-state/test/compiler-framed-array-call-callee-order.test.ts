@@ -155,6 +155,31 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; ${SAFE} function read() { values.join = String(values) as any; } read(); read(); }`,
     converts: true,
   },
+  {
+    id: 'iterable-read-runs-once',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (const text of [String(values), 'other']) { values.join = Array.prototype.join; } }`,
+    converts: false,
+  },
+  {
+    id: 'for-initializer-read-runs-once',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let text = String(values), pass = 0; pass < 2; pass++) { values.join = Array.prototype.join; } }`,
+    converts: false,
+  },
+  {
+    id: 'for-in-expression-read-runs-once',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (const key in { [String(values)]: 1, other: 2 }) { values.join = Array.prototype.join; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-body-read-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (const text of ['one', 'two']) { String(values); values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-condition-read-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; String(values) && pass < 2; pass++) { values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
 ] as const;
 
 describe("writes in a call's arguments, after it selected its method", () => {

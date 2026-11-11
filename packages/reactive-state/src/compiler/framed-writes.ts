@@ -136,7 +136,8 @@ function bindingOwner(declared: Node): Node {
 /**
  * A later write in a repeatable loop around a read can reach that read on the next pass where the
  * write lies in the loop's body, condition, update or iteration binding rather than a for
- * initializer or iterable that runs once, unless the body initializes the binding anew first.
+ * initializer or iterable that runs once, and so does the read: one in a part that runs once is
+ * reached by no pass, unless the body initializes the binding anew first.
  */
 export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner: Node): boolean {
   for (let at = name.parent; at !== owner; at = at.parent) {
@@ -146,6 +147,7 @@ export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner:
       canRepeat(at) &&
       withinBody(node, at) &&
       !runsOnce(node, at) &&
+      !runsOnce(name, at) &&
       !initializedWithin(declared, name, body)
     )
       return true;
