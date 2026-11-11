@@ -6,16 +6,13 @@ import {
   isElementAccessExpression,
   isExpression,
   isForOfStatement,
-  isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
-  isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
   type Node,
   type PropertyAccessExpression,
-  type SpreadAssignment,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -101,31 +98,11 @@ function rest(child: Expression): Unrouted {
 /** The path key of a pattern's take of any field of a source: a computed key it cannot read. */
 export const ANY_FIELD = '*';
 
-/** What one entry of a written object or list holds: its value, or any field of what it spreads. */
-function fieldSource(entry: Expression | SpreadAssignment): AssignedFrameSource {
-  return isSpreadElement(entry) || isSpreadAssignment(entry)
-    ? { value: entry.expression, keys: [ANY_FIELD] }
-    : { value: entry, keys: [] };
-}
-
 /**
- * Any field of the sources: the values of a written object, the elements of a written list; any
- * other source, a constant that holds one among them, keeps the path of its any field.
+ * Any field of the sources, left to the reader that follows a path: the values a written object or
+ * list holds, spreads and getters among them, and those of the constant, the condition or the
+ * parameter that stands for one.
  */
 function anyField(sources: readonly AssignedFrameSource[]): readonly AssignedFrameSource[] {
-  return sources.flatMap((source) => {
-    const value = unwrapped(source.value);
-    const written = isArrayLiteralExpression(value) || isObjectLiteralExpression(value);
-    if (!written || source.keys.length > 0)
-      return [{ value: source.value, keys: [...source.keys, ANY_FIELD] }];
-    if (isArrayLiteralExpression(value))
-      return value.elements.map((element) => fieldSource(element));
-    if (!isObjectLiteralExpression(value)) return [source];
-    return value.properties.flatMap((property): AssignedFrameSource[] => {
-      if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-      if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
-        return [{ value: property.name, keys: [] }];
-      return isSpreadAssignment(property) ? [fieldSource(property)] : [];
-    });
-  });
+  return sources.map((source) => ({ value: source.value, keys: [...source.keys, ANY_FIELD] }));
 }
