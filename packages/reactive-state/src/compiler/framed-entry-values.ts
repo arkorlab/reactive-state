@@ -36,6 +36,7 @@ import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type AssignedFrameSource,
+  assignmentPatternDefault,
   assignmentPatternTargets,
   iteratedFrameSources,
 } from './framed-assignment-patterns.ts';
@@ -154,10 +155,13 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
   };
 }
 
-/** The slots a node writes on the tuple's bindings, with the values it hands them. */
+/**
+ * The slots a node writes on the tuple's bindings, with the values it hands them. A default whose
+ * left is a pattern is no assignment of its own: the enclosing pattern evaluates it, or not.
+ */
 function slotWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
   const slot = tupleWrite(node, aliases);
-  if (slot === null) return patternWrites(node, aliases);
+  if (slot === null) return assignmentPatternDefault(node) ? [] : patternWrites(node, aliases);
   if (isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind))
     return [{ slot, sources: [{ value: node.right, keys: [] }] }];
   return [{ slot, sources: [] }];
@@ -282,9 +286,9 @@ interface UnroutedTarget {
 /**
  * The tuple's slots an unrouted target holds, each fed by any field or element of the sources. Only
  * the positions a pattern writes are walked: a computed key, and the receiver and the index of a
- * member that is not the tuple's, are reads. A rest target takes a fresh container of what its
- * level holds, not what the container holds, and a pattern under a rest takes the container's
- * elements.
+ * member that is not the tuple's, are reads. A default adds its right side to the sources, as the
+ * target may fall back to it; a rest target takes a fresh container of what its level holds, not
+ * what the container holds, and a pattern under a rest takes the container's elements.
  */
 function unroutedWrites(
   child: Node,
@@ -330,10 +334,17 @@ function restStep(
   };
 }
 
-/** What a walk of an unrouted target goes on to: the left of a default, or a pattern's targets. */
+/**
+ * What a walk of an unrouted target goes on to: the left of a default, or a pattern's targets. A
+ * default of a tuple's own member is a write of its own, and no source of the pattern it is in.
+ */
 function unroutedChildren(target: Expression, at: UnroutedTarget): readonly UnroutedTarget[] {
-  if (isBinaryExpression(target))
-    return [{ node: target.left, sources: at.sources, nested: at.nested }];
+  if (isBinaryExpression(target)) {
+    const left = unwrapped(target.left);
+    const falls = isArrayLiteralExpression(left) || isObjectLiteralExpression(left);
+    const sources = falls ? [...at.sources, { value: target.right, keys: [] }] : at.sources;
+    return [{ node: target.left, sources, nested: at.nested }];
+  }
   return patternChildren(target).map((node) => ({ node, sources: at.sources, nested: true }));
 }
 

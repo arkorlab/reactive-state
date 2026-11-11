@@ -132,6 +132,24 @@ const CASES = [
     key: 'message',
     values: ["'safe':", '[error]:', 'error:'],
   },
+  {
+    id: 'pattern-default-not-evaluated',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([{ x: entry[1] } = { x: error }] = [{ x: 'kept' }])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'pattern-default-evaluated-pin',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([{ x: entry[1] } = { x: error }] = [])); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'pattern-default-computed-key-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: [entry[1]] = [error] } = { field: [] })); }`,
+    key: 'message',
+    values: ["'safe':", '[]:', '[error]:', 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
