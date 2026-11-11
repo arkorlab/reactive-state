@@ -16,7 +16,7 @@ import {
   type Statement,
 } from 'typescript/ast';
 
-import { namespaceStatements } from './local-type-namespaces.ts';
+import { dottedStatements, namespaceStatements } from './local-type-namespaces.ts';
 
 /** Built-in type names qualified through the unshadowed global namespace. */
 
@@ -51,7 +51,10 @@ export function namespaceBound(name: Identifier): boolean {
   }
 }
 
-/** The declarations of one lexical scope, including merged namespace bodies and switch clauses. */
+/**
+ * The declarations of one lexical scope, including merged namespace bodies and switch clauses, and
+ * what the outer namespace of a dotted name exports.
+ */
 function statementsOf(node: Node): readonly Statement[] | undefined {
   if (isModuleBlock(node)) {
     return namespaceStatements(node);
@@ -59,7 +62,7 @@ function statementsOf(node: Node): readonly Statement[] | undefined {
   if (isCaseBlock(node)) {
     return node.clauses.flatMap((clause) => clause.statements);
   }
-  return isBlock(node) || isSourceFile(node) ? node.statements : undefined;
+  return isBlock(node) || isSourceFile(node) ? node.statements : dottedStatements(node);
 }
 
 /** Whether a declaration occupies the namespace space, without treating values or types as one. */
