@@ -22,7 +22,6 @@ import {
   isParenthesizedTypeNode,
   isPropertyAccessExpression,
   isSpreadElement,
-  isTypeNode,
   isUnionTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
@@ -48,7 +47,7 @@ import {
 import { framedCondition } from './framed-sources.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Finite written property keys, and a binding's receiver before its final computed key. */
 
@@ -302,7 +301,7 @@ function callWorkExposure(
   const pending: Node[] = [...calleeWork(call.expression), ...(call.arguments ?? [])];
   let work = false;
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === read || isTypeNode(node) || (spread !== undefined && node.pos >= spread.pos))
+    if (node === read || isTypeOnly(node) || (spread !== undefined && node.pos >= spread.pos))
       continue;
     if (tupleBindingExposure(node, binding, aliases)) return true;
     work ||= applicationWork(node);
@@ -350,7 +349,7 @@ function namedElsewhere(binding: FrameBinding, call: CallExpression | NewExpress
   const owner = executionOwner(call);
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === call || isTypeNode(node)) continue;
+    if (node === call || isTypeOnly(node)) continue;
     if (
       isIdentifier(node) &&
       node !== binding.name &&

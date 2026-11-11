@@ -20,7 +20,6 @@ import {
   isPropertyAssignment,
   isPropertyDeclaration,
   isVariableDeclarationList,
-  isTypeNode,
   isNumericLiteral,
   isStringLiteral,
   isNoSubstitutionTemplateLiteral,
@@ -48,7 +47,7 @@ import {
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedCondition } from './framed-sources.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Source-visible assignments that can supply a local receiver at its lexical read. */
 
@@ -343,7 +342,7 @@ function primitiveData(value: Expression): boolean {
 function otherUse(name: Identifier, binding: VariableDeclaration): boolean {
   const pending: Node[] = [name.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (
       node !== name &&
       node !== binding.name &&

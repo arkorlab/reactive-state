@@ -10,7 +10,6 @@ import {
   isObjectLiteralExpression,
   isOmittedExpression,
   isSpreadElement,
-  isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVoidExpression,
@@ -27,7 +26,7 @@ import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** A logical element assignment can skip its RHS only while its initial stored slot stays known. */
 export function framedLogicalElementSkipped(
@@ -76,7 +75,7 @@ function unchangedBefore(
 ): boolean {
   const pending: Node[] = [read.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (
       isIdentifier(node) &&
       (!isVariableDeclaration(node.parent) || node.parent.name !== node) &&
