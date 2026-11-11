@@ -368,7 +368,7 @@ function definedValues(
   const value = unwrapped(descriptors);
   if (isSpreadElement(descriptors))
     return [{ value: descriptors.expression, keys: ['0', slot, 'value'] }];
-  if (isArrayLiteralExpression(value)) return listedDescriptors(value, index, reading);
+  if (isArrayLiteralExpression(value)) return listedDescriptors(value, index, reading, hidden);
   if (!isObjectLiteralExpression(value)) {
     const names: Identifier[] = [];
     const held = heldValue(value, names);
@@ -394,12 +394,14 @@ function definedValues(
 /**
  * The descriptors of a map written as a list: the entry at the slot's position, or, where a
  * spread may shift the positions or the slot is unknown, each entry. A spread hands over each
- * entry of what it spreads, read as a list of descriptors in turn.
+ * entry of what it spreads, read as a list of descriptors in turn. A field after the list that
+ * names a position hides the entry there.
  */
 function listedDescriptors(
   list: ArrayLiteralExpression,
   index: number | undefined,
   reading: Reading,
+  hidden: Hidden,
 ): WrittenArrayElement[] {
   let shifted = false;
   return list.elements.flatMap((element, at) => {
@@ -411,7 +413,9 @@ function listedDescriptors(
       ];
     }
     if (isOmittedExpression(element)) return [];
-    return shifted || index === undefined || at === index ? descriptorValues(element, reading) : [];
+    const hides = !shifted && hidden.data.has(String(at));
+    const wanted = shifted || index === undefined || at === index;
+    return wanted && !hides ? descriptorValues(element, reading) : [];
   });
 }
 

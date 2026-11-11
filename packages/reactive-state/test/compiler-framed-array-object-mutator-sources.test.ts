@@ -1783,6 +1783,31 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { get 0() { let value = 'safe'; value += '!'; if (true) { return value; } else { return error; } } }); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'define-map-spread-list-hidden-by-later-field',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { ...[{ get: () => error }], 0: { value: 'safe' } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-map-spread-list-before-field-keeps',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { 0: { value: 'safe' }, ...[{ get: () => error }] }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-map-spread-list-other-field-keeps',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { ...[{ get: () => error }], 1: { value: 'safe' } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-map-spread-list-second-entry-hidden',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { ...[{ value: 'safe' }, { get: () => error }], 1: { value: 'safe' } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-map-spread-constant-list-hidden',
+    source: `function frames(error: Error) { const a = ['safe']; const list = [{ get: () => error }]; Object.defineProperties(a, { ...list, 0: { value: 'safe' } }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
