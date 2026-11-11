@@ -24,7 +24,10 @@ import { frameDeclarationOf } from '../src/compiler/framed-bindings.ts';
  * default beside it never runs, and a name no element holds is `undefined`, so that its default
  * does, `[a, ...{ foo: e = new Error() }] = [0]`. What the array inherits, `constructor` or
  * `toString`, is present as `length` is, and a pattern written on such a value still reads its
- * properties, `[...{ length: { foo: e = new Error() } }]`. Each row is the sources
+ * properties, `[...{ length: { foo: e = new Error() } }]`: a number has `toString` and not `foo`, a
+ * function its `name`, and the array's prototype is an array. Each of these values is read as the
+ * host holds it, and a pattern written on one that is `undefined`, a number or a function, none of
+ * them iterable or an object, throws and assigns nothing. Each row is the sources
  * `assignmentPatternSources` gives `e` from the assignment, as written; a rest written as a name
  * holds no element.
  */
@@ -156,6 +159,81 @@ const CASES = [
     what: 'a pattern read from a name the array inherits',
   },
   {
+    assignment: "[...{ constructor: { name: e = new Error('fallback') } }] = []",
+    sources: [],
+    what: 'a pattern read from a built-in function, whose name is present',
+  },
+  {
+    assignment: "[...{ length: { toString: e = new Error('fallback') } }] = []",
+    sources: [],
+    what: 'a pattern read from the length, whose number inherits a method',
+  },
+  {
+    assignment: "[a, ...{ toString: { name: e = new Error('fallback') } }] = [0]",
+    sources: [],
+    what: 'a pattern read from an inherited method, after a position',
+  },
+  {
+    assignment: "[...{ constructor: { isArray: { name: e = new Error('fallback') } } }] = []",
+    sources: [],
+    what: 'a pattern within a pattern read from a built-in',
+  },
+  {
+    assignment: "[...{ toString: { caller: e = new Error('fallback') } }] = []",
+    sources: [],
+    what: 'a pattern read from a built-in function whose property throws',
+  },
+  {
+    assignment: "[...{ __proto__: { length: e = new Error('fallback') } }] = []",
+    sources: [],
+    what: 'a pattern read from the prototype of the rest',
+  },
+  {
+    assignment: "[...{ __proto__: [e = new Error('fallback')] }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'an array pattern read from the prototype of the rest, itself an array',
+  },
+  {
+    assignment: "[...{ __proto__: [...[e = new Error('fallback')]] }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'a rest pattern read from the prototype of the rest',
+  },
+  {
+    assignment: "[...{ __proto__: [, e = new Error('fallback')] }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'an array pattern with a hole read from the prototype of the rest',
+  },
+  {
+    assignment: "[...{ constructor: { name: [a, a, a, a, a, e = new Error('fallback')] } }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'an array pattern read from text a built-in holds, past its end',
+  },
+  {
+    assignment: "[...{ length: [e = new Error('fallback')] }] = []",
+    sources: [],
+    what: 'an array pattern read from the length, which a number does not allow',
+  },
+  {
+    assignment: "[...{ toString: [e = new Error('fallback')] }] = []",
+    sources: [],
+    what: 'an array pattern read from a function, which does not allow it',
+  },
+  {
+    assignment: "[...{ foo: [e = new Error('fallback')] }] = []",
+    sources: [],
+    what: 'an array pattern read from a name no element holds',
+  },
+  {
+    assignment: "[...{ foo: { bar: e = new Error('fallback') } }] = []",
+    sources: [],
+    what: 'an object pattern read from a name no element holds',
+  },
+  {
+    assignment: "[...{ foo: { bar: e = new Error('fallback') } = {} }] = []",
+    sources: ["new Error('fallback')"],
+    what: 'an object pattern read from a name no element holds, beside a default',
+  },
+  {
     assignment: "[...{ constructor: e }] = [new Error('ours')]",
     sources: [],
     what: 'a name the array inherits, not an element of the sources',
@@ -202,6 +280,18 @@ const SHORTHANDS = [
     sources: ["new Error('fallback')"],
     what: 'a shorthand name no element holds',
   },
+  {
+    assignment: "[...{ length: { toString = new Error('fallback') } }] = []",
+    name: 'toString',
+    sources: [],
+    what: 'a shorthand name a number inherits',
+  },
+  {
+    assignment: "[...{ length: { foo = new Error('fallback') } }] = []",
+    name: 'foo',
+    sources: ["new Error('fallback')"],
+    what: 'a shorthand name a number lacks',
+  },
 ] as const;
 
 /** An element of `values` written by a pattern's rest, selected as `arrayPatternSources` does. */
@@ -230,6 +320,11 @@ const ELEMENTS = [
     assignment: "[...{ constructor: values[0] = new Error('fallback') }] = []",
     sources: [],
     what: 'a name the array inherits as an element default',
+  },
+  {
+    assignment: "[...{ constructor: { name: values[0] = new Error('fallback') } }] = []",
+    sources: [],
+    what: 'a pattern read from a built-in function as an element default',
   },
   {
     assignment: "[...{ length: { foo: values[0] = new Error('fallback') } }] = []",
