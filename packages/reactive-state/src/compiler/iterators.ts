@@ -42,6 +42,13 @@ const ITERATOR_MAKERS: ReadonlySet<string> = new Set([
 /** The methods of a function that call it on what they are given first. */
 const BORROWING: ReadonlySet<string> = new Set(['apply', 'call']);
 
+/** The functions of a global that answer an array, by the names of the methods that answer an iterator. */
+const ANSWERING_ARRAYS: ReadonlySet<string> = new Set([
+  'Object.entries',
+  'Object.keys',
+  'Object.values',
+]);
+
 /** `node` past what `unwrapped` strips and the casts in angle brackets it leaves, `<any>items.values`. */
 function uncast(node: Expression): Expression {
   let each = unwrapped(node);
@@ -68,8 +75,9 @@ export function isIterator(
     seen.add(value);
     const callee = uncast(value.expression);
     const path = globalPathOf(callee) ?? borrowedSymbolPath(callee);
-    if (path !== undefined) {
-      return makesIterator(path);
+    const made = path === undefined ? undefined : makesIterator(path);
+    if (made !== undefined) {
+      return made;
     }
     const name = calledName(callee);
     if (name !== undefined && ITERATING.has(name)) {
@@ -92,21 +100,25 @@ export function isIterator(
  * one (`ITERATOR_MAKERS`), or of a method of a prototype that answers one (`ITERATING`) — or of
  * `Iterator.prototype`'s, another (`ITERATOR_HELPERS`) — by its name or a symbol's
  * (`borrowedSymbolPath`), called on the prototype, or on what `call` or `apply` is given first,
- * `Array.prototype.values.call(items)`. Any other function of a global
- * answers what it is: `Object.keys(…)`, an array.
+ * `Array.prototype.values.call(items)`; none of a function that answers an array, `Object.keys(…)`
+ * (`ANSWERING_ARRAYS`); `undefined` of any other path, which the name of the method tells, as of
+ * `items.values()` — `process.argv.values()` calls a method of a value a global holds.
  */
-function makesIterator(path: readonly string[]): boolean {
+function makesIterator(path: readonly string[]): boolean | undefined {
   const called = BORROWING.has(path.at(-1) ?? '') ? path.slice(0, -1) : path;
   if (ITERATOR_MAKERS.has(called.join('.'))) {
     return true;
   }
   const [root, prototype, method, ...more] = called;
-  return (
+  if (
     prototype === 'prototype' &&
     method !== undefined &&
     more.length === 0 &&
     (ITERATING.has(method) || (root === 'Iterator' && ITERATOR_HELPERS.has(method)))
-  );
+  ) {
+    return true;
+  }
+  return ANSWERING_ARRAYS.has(called.join('.')) ? false : undefined;
 }
 
 /**
