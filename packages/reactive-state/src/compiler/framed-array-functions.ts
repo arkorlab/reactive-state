@@ -28,6 +28,7 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isReturnStatement,
+  isSetAccessorDeclaration,
   isSpreadElement,
   isSpreadAssignment,
   isStringLiteral,
@@ -256,11 +257,14 @@ function takenApart(value: Expression): boolean {
   );
 }
 
-/** Other function bodies are deferred, but their computed method names are evaluated now. */
+/** Other function bodies, a setter's too, are deferred, but their computed names are evaluated now. */
 function deferredBefore(node: Node, reference: Identifier, pending: Node[]): boolean {
-  if (!isAnswering(node) || node.end >= reference.pos) return false;
+  if (!(isAnswering(node) || isSetAccessorDeclaration(node)) || node.end >= reference.pos)
+    return false;
   if (
-    (isMethodDeclaration(node) || isGetAccessorDeclaration(node)) &&
+    (isMethodDeclaration(node) ||
+      isGetAccessorDeclaration(node) ||
+      isSetAccessorDeclaration(node)) &&
     isComputedPropertyName(node.name)
   )
     pending.push(node.name.expression);
