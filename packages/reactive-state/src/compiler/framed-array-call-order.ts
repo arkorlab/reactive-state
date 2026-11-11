@@ -15,6 +15,7 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isTryStatement,
   isTypeNode,
   type Node,
   SyntaxKind,
@@ -27,7 +28,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { arrayIdentity, mayBeArray, ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameDeclarationOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import {
-  continuesBetween,
+  jumpsOver,
   framedPossibleBranch,
   repeatedFrameRead,
   repeatingBodies,
@@ -108,8 +109,9 @@ export function mayRunAgain(node: Node, read: Node, root: FrameBinding, limit: N
 /**
  * Whether a write that a loop brings back to the read is followed, in the same pass, by a statement
  * that assigns the same method outright: one of a block around the write, after it, inside every
- * loop that brings the write back, with no continue between them. The next read finds what that
- * statement wrote, and the write comes to nothing.
+ * loop that brings the write back, that nothing may skip. No continue or break between them lands past it, and
+ * no try statement within the loop holds the statement, whose catch may go on past it. The next read
+ * finds what that statement wrote, and the write comes to nothing.
  */
 export function overwrittenInPass(
   write: Node,
@@ -134,11 +136,17 @@ export function overwrittenInPass(
         isExpressionStatement(each) &&
         ownMethodAssignment(each.expression, root)?.key === key &&
         bodies.every((body) => each.pos >= body.pos && each.end <= body.end) &&
-        !continuesBetween(parent, write.pos, each.pos)
+        !jumpsOver(parent, write.pos, each)
       );
     });
-    if (later !== undefined) return true;
+    if (later !== undefined && !triedWithin(parent, bodies)) return true;
   }
+  return false;
+}
+
+/** Whether a try statement lies between the block and the innermost body of the loops. */
+function triedWithin(block: Node, bodies: readonly Node[]): boolean {
+  for (let at = block; !bodies.includes(at); at = at.parent) if (isTryStatement(at)) return true;
   return false;
 }
 

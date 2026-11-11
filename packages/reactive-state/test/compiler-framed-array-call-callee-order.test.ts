@@ -327,6 +327,61 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'loop-inner-loop-break',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { for (const text of ['one', 'two']) { values.join = Array.prototype.join; break; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-switch-break',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { switch (pass++) { default: values.join = Array.prototype.join; break; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-caught-throw',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { values.join = Array.prototype.join; throw error; } catch { /* the loop goes on */ } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-try-finally-return',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { values.join = Array.prototype.join; return 1; } finally { continue; } } return 0; }`,
+    converts: true,
+  },
+  {
+    id: 'loop-inner-loop-break-then-break',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { for (const text of ['one', 'two']) { values.join = Array.prototype.join; break; } break; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-break-in-selected-branch-after-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { if (error) { values.join = Array.prototype.join; break; } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-labeled-break-of-inner-block',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { stop: { values.join = Array.prototype.join; break stop; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-labeled-break-of-inner-block-element-write',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; for (let pass = 0; pass < 2 && String(values); pass++) { inner: { values[0] = error; break inner; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-skipped-custom-write-after-caught-throw',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; if (pass === 0) throw error; values.join = () => 'fixed'; } catch { /* skipped */ } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-labeled-break-skips-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { skip: { values.join = Array.prototype.join; if (pass === 0) break skip; values.join = () => 'fixed'; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-switch-break-skips-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { switch (pass) { default: { values.join = Array.prototype.join; if (pass === 0) break; values.join = () => 'fixed'; } } } }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
