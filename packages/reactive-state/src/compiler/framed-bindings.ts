@@ -14,13 +14,16 @@ import {
   isClassExpression,
   isComputedPropertyName,
   isElementAccessExpression,
+  isEnumDeclaration,
   isIdentifier,
   isFunctionDeclaration,
   isFunctionExpression,
   isForInStatement,
   isForOfStatement,
   isForStatement,
+  isImportEqualsDeclaration,
   isModuleBlock,
+  isModuleDeclaration,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectBindingPattern,
@@ -64,7 +67,7 @@ const RESOLVING_KEYS = new WeakSet<Node>();
 const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
 
 /** What each block's statements declare (`declaredBy`), by the node that holds them. */
-const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration>>();
+const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration | null>>();
 
 /** The stable member name recorded after a framed read is classified, including coercion calls. */
 export function framedInputName(node: Node): string {
@@ -98,7 +101,10 @@ export function frameBindingOf(name: Identifier): FrameSelection | undefined {
     : undefined;
 }
 
-/** The nearest written value declaration, with unsupported own expression names kept opaque. */
+/**
+ * The nearest written value declaration, with unsupported own expression names, and the enums,
+ * namespaces and import aliases of a scope, kept opaque.
+ */
 export function frameDeclarationOf(name: Identifier): FrameDeclaration | undefined {
   let within: Node = name;
   for (let at: Node = name.parent; ; within = at, at = at.parent) {
@@ -229,10 +235,11 @@ function loopBinding(node: Node, name: string): FrameBinding | undefined {
 
 /**
  * The variable a block declares, with named functions and classes stopping outer lookup: the first
- * of its statements to declare the name. Each block's are gathered once (`DECLARED`), for every name
- * looked up in it.
+ * of its statements to declare the name, or `null` where an enum, a namespace or an import alias
+ * does, which stops it with no declaration to answer. Each block's are gathered once (`DECLARED`),
+ * for every name looked up in it.
  */
-function statementBinding(node: Node, name: string): FrameDeclaration | undefined {
+function statementBinding(node: Node, name: string): FrameDeclaration | null | undefined {
   let declared = DECLARED.get(node);
   if (declared === undefined) {
     declared = declaredBy(statementsOf(node) ?? []);
@@ -241,15 +248,26 @@ function statementBinding(node: Node, name: string): FrameDeclaration | undefine
   return declared.get(name);
 }
 
-/** The functions, classes and block-scoped variables statements declare, the first of each name. */
-function declaredBy(statements: readonly Statement[]): ReadonlyMap<string, FrameDeclaration> {
-  const declared = new Map<string, FrameDeclaration>();
-  const add = (name: string, declaration: FrameDeclaration): void => {
+/**
+ * The functions, classes and block-scoped variables statements declare, the first of each name; and
+ * `null` for each name an enum, a namespace or an import alias gives a value (`valueName`), whose
+ * declaration no caller follows, but which an outer binding of the name does not reach.
+ */
+function declaredBy(
+  statements: readonly Statement[],
+): ReadonlyMap<string, FrameDeclaration | null> {
+  const declared = new Map<string, FrameDeclaration | null>();
+  const add = (name: string, declaration: FrameDeclaration | null): void => {
     if (!declared.has(name)) declared.set(name, declaration);
   };
   for (const statement of statements) {
     if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
       if (statement.name !== undefined) add(statement.name.text, statement);
+      continue;
+    }
+    const opaque = valueName(statement);
+    if (opaque !== undefined) {
+      add(opaque, null);
       continue;
     }
     if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) continue;
@@ -258,6 +276,20 @@ function declaredBy(statements: readonly Statement[]): ReadonlyMap<string, Frame
     }
   }
   return declared;
+}
+
+/**
+ * The name an enum, a namespace or an `import … =` alias of a value gives; none of another
+ * statement, of a module the code names by text (`declare module 'x'`), or of an alias of a type.
+ */
+function valueName(statement: Statement): string | undefined {
+  if (isEnumDeclaration(statement)) return statement.name.text;
+  if (isModuleDeclaration(statement)) {
+    return isIdentifier(statement.name) ? statement.name.text : undefined;
+  }
+  return isImportEqualsDeclaration(statement) && !statement.isTypeOnly
+    ? statement.name.text
+    : undefined;
 }
 
 /** A declaration's binding path for one of the identifiers it binds. */
