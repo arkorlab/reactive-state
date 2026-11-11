@@ -9,6 +9,7 @@ import {
   isSpreadElement,
   isTypeNode,
   isVariableDeclaration,
+  isVariableDeclarationList,
   isVariableStatement,
   type Expression,
   type NewExpression,
@@ -52,11 +53,12 @@ export const APPLICATION_WORK: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
- * The call's own work before it reads `read`'s entries: its callee's, past the member path that
- * selects its function, and its arguments' — every one, as a call reads a list it is given once it
- * runs, or those before a spread, which reads its entries where it stands. A use of the tuple there
- * exposes it; other work runs the application's code, which reaches the tuple only through a
- * function of the module's that names it (`namedElsewhere`).
+ * The call's own work before it reads `read`'s entries: its callee's — the keys and the base past
+ * the member path that selects its function, and that member's own read (`calleeReads`) — and its
+ * arguments' — every one, as a call reads a list it is given once it runs, or those before a spread,
+ * which reads its entries where it stands. A use of the tuple there exposes it; other work runs the
+ * application's code, which reaches the tuple only through a function of the module's that names it
+ * (`namedElsewhere`).
  */
 export function callWorkExposure(
   binding: FrameBinding,
@@ -67,7 +69,7 @@ export function callWorkExposure(
   const { parent } = read;
   const spread = isSpreadElement(parent) && within(parent, call) ? parent : undefined;
   const pending: Node[] = [...calleeWork(call.expression), ...(call.arguments ?? [])];
-  let work = false;
+  let work = calleeReads(call.expression);
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (node === read || isTypeNode(node) || (spread !== undefined && node.pos >= spread.pos))
       continue;
@@ -90,6 +92,47 @@ function calleeWork(callee: Expression): readonly Node[] {
   }
   if (!isIdentifier(each)) work.push(each);
   return work;
+}
+
+/**
+ * Whether the callee's own member read can run the application's code, as a getter of the holder it
+ * reads from does: any member read but one `builtInRead` finds the language's.
+ */
+function calleeReads(callee: Expression): boolean {
+  const read = unwrapped(callee);
+  return (
+    (isPropertyAccessExpression(read) || isElementAccessExpression(read)) && !builtInRead(read)
+  );
+}
+
+/**
+ * Whether `read` selects a member of one of the language's own globals, `Reflect.get.apply`, or of
+ * a constant that names one or a member of one, `const get = Reflect.get; get.apply`.
+ */
+function builtInRead(read: Expression): boolean {
+  const seen = new Set<FrameBinding>();
+  for (
+    let each: Expression | undefined = read;
+    each !== undefined;
+    each = constantOrigin(each, seen)
+  )
+    if (BUILT_INS.has(globalPathOf(each)?.[0] ?? '')) return true;
+  return false;
+}
+
+/** The initializer of the constant a member path starts from, `seen` once each. */
+function constantOrigin(read: Expression, seen: Set<FrameBinding>): Expression | undefined {
+  let root = unwrapped(read);
+  while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
+    root = unwrapped(root.expression);
+  const selected = isIdentifier(root) ? frameBindingOf(root) : undefined;
+  if (selected === undefined || seen.has(selected.binding)) return undefined;
+  seen.add(selected.binding);
+  const { binding } = selected;
+  return isVariableDeclarationList(binding.parent) &&
+    /^const\s/u.test(binding.parent.getText(binding.getSourceFile()))
+    ? binding.initializer
+    : undefined;
 }
 
 /**
