@@ -412,6 +412,46 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { __proto__: { value: () => 'safe' } } as PropertyDescriptor); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'nested-replacement-in-binding-default-pin',
+    source: `function frames(error: Error, holder: { x?: unknown }) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const { x = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }) } = holder; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-replacement-in-assignment-default-pin',
+    source: `function frames(error: Error, holder: { x?: unknown }) { const values = [error]; let x: unknown; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); ({ x = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }) } = holder); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-replacement-in-array-default-pin',
+    source: `function frames(error: Error, holder: unknown[]) { const values = [error]; let x: unknown; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); [x = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })] = holder; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-replacement-in-loop-head-pin',
+    source: `function frames(error: Error, lists: unknown[][]) { const values = [error]; let x: unknown; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); for ([x = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })] of lists) { } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-replacement-in-for-increment-pin',
+    source: `function frames(error: Error, count: number) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); for (let at = 0; at < count; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })) { at += 1; } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-operand-definition-runs-first',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true, ignored: Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }) }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-sure-definition-sets-writable',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }) }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-conditional-definition-sets-writable-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.assign(values, { ignored: flag ? Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }) : 0 }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
