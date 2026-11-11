@@ -457,6 +457,16 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-finally-break-cancels-pending-continue',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { continue; } finally { values.join = Array.prototype.join; break; } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-catch-between-write-and-return-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { try { values.join = Array.prototype.join; if (pass++ === 0) throw error; return 1; } catch { /* the loop goes on */ } } return 0; }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

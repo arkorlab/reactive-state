@@ -260,10 +260,10 @@ function jumpsOut(block: Node): boolean {
  * loop, switch or labeled statement it leaves or goes round holds `target`, and so leaves it
  * behind; one that lands before it, out of an inner statement, does not, nor one in an arm a
  * written condition rules out. A write in a finally block is run by the jumps of its try and catch
- * blocks on their way out, whatever their place before it.
+ * blocks on their way out, whatever their place before it, unless `target` lies in the block too.
  */
 export function jumpsOver(scope: Node, write: Node, target: Node): boolean {
-  const from = pendingFrom(write, scope);
+  const from = pendingFrom(write, scope, target);
   const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
@@ -286,12 +286,16 @@ export function jumpsOver(scope: Node, write: Node, target: Node): boolean {
   return false;
 }
 
-/** Where the jumps pending when the write runs begin: at the try statement of a finally block. */
-function pendingFrom(write: Node, scope: Node): number {
+/**
+ * Where the jumps pending when the write runs begin: at the try statement of a finally block, but
+ * for a `target` in that block, which the jumps run through and which may replace them.
+ */
+function pendingFrom(write: Node, scope: Node, target: Node): number {
   let from = write.pos;
   for (let at = write; at !== scope && !isSourceFile(at); at = at.parent) {
     const { parent } = at;
-    if (isTryStatement(parent) && isBlock(at) && parent.finallyBlock === at)
+    const within = target.pos >= at.pos && target.end <= at.end;
+    if (!within && isTryStatement(parent) && isBlock(at) && parent.finallyBlock === at)
       from = Math.min(from, parent.pos);
   }
   return from;
