@@ -6,8 +6,11 @@ import {
   isElementAccessExpression,
   isForInStatement,
   isForOfStatement,
+  isFunctionExpression,
+  isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isTypeNode,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -19,6 +22,7 @@ import { arrayIdentity } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
+import { readsBinding } from './scope.ts';
 
 /** The call that selects a method of the array before it evaluates its arguments. */
 export interface SelectedMethod {
@@ -30,7 +34,8 @@ export interface SelectedMethod {
 /**
  * A direct call of the method on the array selects it before its arguments run (ECMA-262, call
  * evaluation: the callee's value is taken first), where the array was made in the same run: a call
- * of the array's elsewhere may come again, and its arguments' writes then come before it.
+ * of the array's elsewhere, or in a function that calls itself, may come again, and its arguments'
+ * writes then come before it.
  */
 export function selectedMethod(
   call: Node,
@@ -42,7 +47,10 @@ export function selectedMethod(
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
   if (frameMemberName(member) !== method || arrayIdentity(member.expression) !== root)
     return undefined;
-  return executionOwner(root) === executionOwner(call) ? { key: method, call, root } : undefined;
+  const owner = executionOwner(call);
+  return executionOwner(root) === owner && !reenteredRead(call, root, owner)
+    ? { key: method, call, root }
+    : undefined;
 }
 
 /**
@@ -73,7 +81,47 @@ export function writtenAfterRead(node: Node, read: Node, root: FrameBinding): bo
     return false;
   if (!patternReadsFirst(node, read, root)) return false;
   const owner = executionOwner(read);
-  return executionOwner(root) === owner && !repeatedFrameRead(node, read, root, owner);
+  return executionOwner(root) === owner && !mayRunAgain(node, read, root, owner);
+}
+
+/**
+ * Whether a write of `node` may come before the read again within the run around it: a loop brings
+ * it back, or a named function that calls itself runs the read once more after it. A function that
+ * is called where it is written is read as part of the run around it, and each call of it is a run
+ * of its own. Only the loops and functions inside `limit` are counted.
+ */
+export function mayRunAgain(node: Node, read: Node, root: FrameBinding, limit: Node): boolean {
+  return repeatedFrameRead(node, read, root, limit) || reenteredRead(read, root, limit);
+}
+
+/**
+ * Whether a function inside `limit` that holds the read calls itself by its name, unless the array
+ * is made inside it and each call makes its own.
+ */
+function reenteredRead(read: Node, root: FrameBinding, limit: Node): boolean {
+  for (let at = read.parent; at !== limit; at = at.parent)
+    if (
+      isFunctionExpression(at) &&
+      at.name !== undefined &&
+      !(root.pos >= at.pos && root.end <= at.end) &&
+      namesItself(at, at.name.text)
+    )
+      return true;
+  return false;
+}
+
+/** Whether the function's code reads the name it is given, where the name may be its own. */
+function namesItself(fn: Node, name: string): boolean {
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (isIdentifier(node) && node.text === name && node.parent !== fn && readsBinding(node))
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /**
