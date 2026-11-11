@@ -768,6 +768,26 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'read-in-instance-field-after-static-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { x = String(values); static z = ((values.join = Array.prototype.join), 1); } new K(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-instance-field-after-later-statement',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { x = String(values); } values.join = Array.prototype.join; new K(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-class-expression-instance-field',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const K = class { x = String(values); }; values.join = Array.prototype.join; new K(); return values.length; }`,
+    converts: true,
+  },
+  {
+    id: 'read-in-method-after-static-write',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { m() { return String(values); } static z = ((values.join = Array.prototype.join), 1); } new K().m(); return values.length; }`,
+    converts: true,
+  },
+  {
     id: 'read-in-pattern-key-after-initializer-write',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { [String(values)]: unused } = ((values.join = Array.prototype.join), {}); return values.length; }`,
     converts: true,

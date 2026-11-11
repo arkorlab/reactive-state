@@ -48,6 +48,7 @@ import {
   writtenArrayFunction,
   writtenArrayKey,
 } from './framed-array-functions.ts';
+import { instanceInitializer } from './framed-array-mutations.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
@@ -188,14 +189,6 @@ export function evaluatedForSure(node: Node, statement: Node): boolean {
 function runsLater(parent: Node, at: Node): boolean {
   if (isFunctionLikeDeclaration(parent)) return !isComputedPropertyName(at);
   return instanceInitializer(parent) === at;
-}
-
-/** The initializer of an instance field, which runs when an instance is made. */
-function instanceInitializer(node: Node): Node | undefined {
-  const instance =
-    isPropertyDeclaration(node) &&
-    node.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true;
-  return instance ? node.initializer : undefined;
 }
 
 /** The default a binding element or a shorthand field of a pattern holds: it runs on some values. */
