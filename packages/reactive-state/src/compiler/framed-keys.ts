@@ -10,22 +10,17 @@ import {
   isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
-  isExportAssignment,
-  isExportSpecifier,
   isExpression,
   isForOfStatement,
-  type Identifier,
   isIdentifier,
   isLiteralTypeNode,
   isObjectBindingPattern,
   isParameterDeclaration,
   isParenthesizedTypeNode,
-  isPropertyAccessExpression,
   isSpreadElement,
   isUnionTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
-  isVariableStatement,
   type NewExpression,
   type Node,
   SyntaxKind,
@@ -33,8 +28,6 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { BUILT_INS } from './built-ins.ts';
-import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
@@ -45,9 +38,15 @@ import {
   type FrameSelection,
 } from './framed-bindings.ts';
 import { framedCondition } from './framed-sources.ts';
+import {
+  APPLICATION_WORK,
+  callWorkExposure,
+  extendsWork,
+  namedElsewhere,
+  tupleBindingExposure,
+} from './framed-tuple-work.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Finite written property keys, and a binding's receiver before its final computed key. */
 
@@ -56,32 +55,6 @@ const TARGET_WRITES: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BarBarEqualsToken,
   SyntaxKind.EqualsToken,
   SyntaxKind.QuestionQuestionEqualsToken,
-]);
-
-/**
- * Evaluation, besides a member read, that can run the application's code or let it run: a call, a
- * conversion, a computed key, a wait, and the getters and iteration of a spread, a pattern or a loop.
- */
-const APPLICATION_WORK: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.ArrayBindingPattern,
-  SyntaxKind.AwaitExpression,
-  SyntaxKind.BinaryExpression,
-  SyntaxKind.CallExpression,
-  SyntaxKind.ComputedPropertyName,
-  SyntaxKind.Decorator,
-  SyntaxKind.DeleteExpression,
-  SyntaxKind.ForInStatement,
-  SyntaxKind.ForOfStatement,
-  SyntaxKind.JsxSpreadAttribute,
-  SyntaxKind.NewExpression,
-  SyntaxKind.ObjectBindingPattern,
-  SyntaxKind.PostfixUnaryExpression,
-  SyntaxKind.PrefixUnaryExpression,
-  SyntaxKind.SpreadAssignment,
-  SyntaxKind.SpreadElement,
-  SyntaxKind.TaggedTemplateExpression,
-  SyntaxKind.TemplateExpression,
-  SyntaxKind.YieldExpression,
 ]);
 
 /** Work before the call that exposes a tuple wherever it stands: a call, a construction, a read. */
@@ -283,98 +256,6 @@ function arrayExposed(
   );
 }
 
-/**
- * The call's own work before it reads `read`'s entries: its callee's, past the member path that
- * selects its function, and its arguments' — every one, as a call reads a list it is given once it
- * runs, or those before a spread, which reads its entries where it stands. A use of the tuple there
- * exposes it; other work runs the application's code, which reaches the tuple only through a
- * function of the module's that names it (`namedElsewhere`).
- */
-function callWorkExposure(
-  binding: FrameBinding,
-  call: CallExpression | NewExpression,
-  aliases: ReadonlySet<FrameBinding>,
-  read: Expression,
-): boolean {
-  const { parent } = read;
-  const spread = isSpreadElement(parent) && within(parent, call) ? parent : undefined;
-  const pending: Node[] = [...calleeWork(call.expression), ...(call.arguments ?? [])];
-  let work = false;
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === read || isTypeOnly(node) || (spread !== undefined && node.pos >= spread.pos))
-      continue;
-    if (tupleBindingExposure(node, binding, aliases)) return true;
-    work ||= applicationWork(node);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return work && namedElsewhere(binding, call);
-}
-
-/** What a callee evaluates past the member path that selects its function: keys, a base not a name. */
-function calleeWork(callee: Expression): readonly Node[] {
-  const work: Node[] = [];
-  let each = unwrapped(callee);
-  while (isPropertyAccessExpression(each) || isElementAccessExpression(each)) {
-    if (isElementAccessExpression(each)) work.push(each.argumentExpression);
-    each = unwrapped(each.expression);
-  }
-  if (!isIdentifier(each)) work.push(each);
-  return work;
-}
-
-/**
- * Evaluation that can run the application's code: a call, a construction, a conversion, a wait, a
- * member read — but a member of the language's own globals, such as the native function an argument
- * names.
- */
-function applicationWork(node: Node): boolean {
-  if (isPropertyAccessExpression(node) || isElementAccessExpression(node))
-    return !BUILT_INS.has(globalPathOf(node)?.[0] ?? '');
-  return APPLICATION_WORK.has(node.kind);
-}
-
-/**
- * Whether code that work may run reaches the tuple: a function of the module's that names it outside
- * the call, or another module's, where the module exports it.
- */
-function namedElsewhere(binding: FrameBinding, call: CallExpression | NewExpression): boolean {
-  const statement = binding.parent.parent;
-  if (
-    isVariableStatement(statement) &&
-    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
-  )
-    return true;
-  const owner = executionOwner(call);
-  const pending: Node[] = [binding.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === call || isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      node !== binding.name &&
-      readsBinding(node) &&
-      frameBindingOf(node)?.binding === binding &&
-      (executionOwner(node) !== owner || exportedName(node))
-    )
-      return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
-}
-
-/** Whether `name` is exported where it stands: `export { name }`, `export default name`. */
-function exportedName(name: Identifier): boolean {
-  return isExportSpecifier(name.parent) || isExportAssignment(name.parent);
-}
-
-/** Whether `node` is written within `call`. */
-function within(node: Node, call: CallExpression | NewExpression): boolean {
-  return node.pos >= call.pos && node.end <= call.end;
-}
-
 /** A deferred read also sees later uses that can replace a captured tuple's entries. */
 function deferredTupleExposure(
   binding: FrameBinding,
@@ -404,25 +285,12 @@ function arrayExposure(
   aliases: ReadonlySet<FrameBinding>,
   reached: () => boolean,
 ): boolean {
-  if (PRIOR_WORK.has(node.kind) || (APPLICATION_WORK.has(node.kind) && reached())) return true;
-  return tupleBindingExposure(node, binding, aliases);
-}
-
-/** Only a whole constant alias can retain a tuple without exposing its mutable entries. */
-function tupleBindingExposure(
-  node: Node,
-  binding: FrameBinding,
-  aliases: ReadonlySet<FrameBinding>,
-): boolean {
   if (
-    !isIdentifier(node) ||
-    node === binding.name ||
-    !readsBinding(node) ||
-    frameBindingOf(node)?.binding !== binding
+    PRIOR_WORK.has(node.kind) ||
+    ((APPLICATION_WORK.has(node.kind) || extendsWork(node)) && reached())
   )
-    return false;
-  const owner = node.parent;
-  return !isVariableDeclaration(owner) || owner.initializer !== node || !aliases.has(owner);
+    return true;
+  return tupleBindingExposure(node, binding, aliases);
 }
 
 /** A computed object's key expression, without giving its target binding's name to the key. */
