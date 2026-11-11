@@ -44,7 +44,7 @@ import {
   isSignatureDeclaration,
 } from 'typescript/ast';
 
-import { namespaceStatements } from './local-type-namespaces.ts';
+import { dottedStatements, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, hoistedIn } from './scope.ts';
 
 /** Local type declarations a reference names, with each nearer binding taking precedence. */
@@ -272,7 +272,7 @@ function statementsOf(node: Node): readonly Statement[] | undefined {
   if (isModuleBlock(node)) {
     return namespaceStatements(node);
   }
-  return isBlock(node) || isSourceFile(node) ? node.statements : undefined;
+  return isBlock(node) || isSourceFile(node) ? node.statements : dottedStatements(node);
 }
 
 /**
