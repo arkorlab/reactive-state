@@ -12,6 +12,7 @@ import {
   isForInStatement,
   isForOfStatement,
   isForStatement,
+  isFunctionExpression,
   isBlock,
   isBreakStatement,
   isContinueStatement,
@@ -183,7 +184,7 @@ export function repeatingBodies(
  * next pass.
  */
 function leavesLoopFirst(node: Node, body: Node): boolean {
-  if (!withinBody(node, body)) return false;
+  if (!withinBody(node, body) || runsAgainAround(body)) return false;
   for (let at = node; at !== body; at = at.parent) {
     const { parent } = at;
     if (!isBlock(parent)) continue;
@@ -191,6 +192,33 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
       (each) => each.pos >= at.end && leavesBody(each, parent, body),
     );
     if (exit !== undefined && !jumpsOver(body, node, exit, body)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a named function expression around the loop names itself, or holds code that does: the
+ * run can come again before it ends, and what a write leaves reaches the loop in that run, though
+ * the first leaves its loop.
+ */
+function runsAgainAround(body: Node): boolean {
+  for (let at = body.parent; !isSourceFile(at); at = at.parent) {
+    if (isFunctionExpression(at) && at.name !== undefined && namesWithin(at, at.name.text))
+      return true;
+  }
+  return false;
+}
+
+/** Whether the code of the function reads the name, in a helper too. */
+function namesWithin(fn: Node, name: string): boolean {
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (isIdentifier(node) && node.text === name && node.parent !== fn && readsBinding(node))
+      return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
   }
   return false;
 }
