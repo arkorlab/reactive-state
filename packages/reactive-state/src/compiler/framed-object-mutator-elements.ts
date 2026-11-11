@@ -9,6 +9,7 @@ import {
   isArrowFunction,
   isBinaryExpression,
   isBlock,
+  isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
@@ -542,11 +543,21 @@ const ARRAY_INDEX = { last: 4_294_967_294 } as const;
 
 /** Whether a written key may name the slot: its constants and branches decide, an opaque one may. */
 function keyMayBeSlot(key: Expression, index: number | undefined): boolean {
-  if (isOmittedExpression(key)) return false;
+  if (isOmittedExpression(key) || isSymbolKey(key)) return false;
   const names = framedKeyNames(key);
   return (
     names === undefined || names.length === 0 || names.some((each) => possibleKey(each, index))
   );
+}
+
+/**
+ * Whether a key is a symbol the program writes: a well-known one, `Symbol.iterator`, or one made
+ * by `Symbol(...)` or `Symbol.for(...)`, through a constant that holds it. A symbol names no index.
+ */
+function isSymbolKey(key: Expression): boolean {
+  const value = heldValue(key);
+  const path = globalPathOf(isCallExpression(value) ? unwrapped(value.expression) : value);
+  return path?.[0] === 'Symbol';
 }
 
 /** Whether an object field's name may name the slot, a computed one by what its key may be. */

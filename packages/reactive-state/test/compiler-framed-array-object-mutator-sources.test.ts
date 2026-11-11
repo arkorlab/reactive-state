@@ -879,6 +879,36 @@ const ELEMENTS = [
     ],
   },
   {
+    id: 'define-symbol-key',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, Symbol.iterator, { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-symbol-call-key',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, Symbol('label'), { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-constant-symbol-key',
+    source: `function frames(error: Error) { ${VALUES} const key = Symbol('label'); Object.defineProperty(values, key, { value: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'assign-symbol-computed-key',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { [Symbol.iterator]: error }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-map-symbol-key',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { [Symbol.iterator]: { value: error } }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1102,6 +1132,16 @@ const CONVERSIONS = [
   {
     id: 'assign-short-circuited-source-safe',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, false && { 0: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-symbol-key-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, Symbol.iterator, { value: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-symbol-computed-key-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { [Symbol.iterator]: error }); return String(a); }`,
     converts: false,
   },
   {
