@@ -80,6 +80,25 @@ const ACCESSOR_KEYS = new Set(['get', 'set']);
 /** The own methods a write names, as far as it shows them. */
 export type OwnMethods = Map<string, ArrayMethodOverride>;
 
+/**
+ * What a write that may be of another array leaves of a method: its value unproven, and an attribute
+ * only where the method had it before and the write gives it, as it stands whether or not the write
+ * was of this array. A method nothing wrote before has both, as a plain assignment makes them.
+ */
+export function possibleOverride(
+  written: ArrayMethodOverride,
+  before: ArrayMethodOverride | undefined,
+): ArrayMethodOverride {
+  const writable = written.writable === true && (before === undefined || before.writable === true);
+  const configurable =
+    written.configurable === true && (before === undefined || before.configurable === true);
+  return {
+    own: false,
+    ...(writable && { writable: true as const }),
+    ...(configurable && { configurable: true as const }),
+  };
+}
+
 /** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
   node: Node,

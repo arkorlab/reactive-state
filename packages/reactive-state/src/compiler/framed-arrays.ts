@@ -40,6 +40,7 @@ import {
   OWN_METHODS,
   type OwnMethods,
   ownMethodAssignment,
+  possibleOverride,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
@@ -475,7 +476,8 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
 
 /**
  * Native object mutators replace own methods in source order, retaining unknown writes as unknown.
- * Through a name that may hold another array they only leave the methods they write unproven.
+ * Through a name that may hold another array they only leave the methods they write unproven, with
+ * the attributes a definition gives them that hold either way.
  */
 function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
   if (!isCallExpression(node)) return;
@@ -489,7 +491,7 @@ function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods)
   }
   const possible: OwnMethods = new Map();
   mutatorWrites(node, path, possible);
-  for (const key of possible.keys()) own.set(key, { own: false });
+  for (const [key, written] of possible) own.set(key, possibleOverride(written, own.get(key)));
 }
 
 /** The methods one native object mutator writes, as it names them. */

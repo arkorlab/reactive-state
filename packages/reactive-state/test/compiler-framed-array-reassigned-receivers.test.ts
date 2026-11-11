@@ -154,6 +154,36 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'alias-writable-definition-keeps-later-proof',
+    source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join, writable: true, configurable: true }); b = []; ${SAFE} return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'alias-configurable-accessor-released-by-definition',
+    source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperty(b, 'join', { get() { return Array.prototype.join; }, configurable: true }); b = []; Object.defineProperty(a, 'join', { value: () => 'safe', writable: true }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'alias-writable-descriptors-keep-later-proof',
+    source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperties(b, { join: { value: Array.prototype.join, writable: true } }); b = []; ${SAFE} return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'alias-accessor-stays-held-pin',
+    source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperty(b, 'join', { get() { return Array.prototype.join; } }); b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-partial-definition-stays-held-pin',
+    source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-writable-over-fixed-value-stays-held-pin',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { value: Array.prototype.join }); let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join, writable: true, configurable: true }); b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'alias-never-reassigned-pin',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; return String(a); }`,
     converts: true,
