@@ -1332,6 +1332,31 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'dead-default-of-a-dropped-generator-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = false ? read() : 1) { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'dead-default-in-the-other-arm-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = true ? 1 : read()) { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'dead-default-of-a-dropped-generator-method-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} ({ *helper(p: any = false ? read() : 1) { read(); } }).helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'live-default-of-a-dropped-generator',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = pass < 1 ? read(pass + 1) : 1) {} })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'live-default-in-a-constant-arm',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = true ? (pass < 1 ? read(pass + 1) : 1) : 2) {} })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

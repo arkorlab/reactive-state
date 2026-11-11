@@ -134,7 +134,10 @@ function droppedCall(node: Node): boolean {
   return call !== undefined && isExpressionStatement(call.parent);
 }
 
-/** Whether the parameters of a function, which run when it is called, read one of the names. */
+/**
+ * Whether the parameters of a function, which run when it is called, read one of the names where
+ * the code may run.
+ */
 function parametersMention(fn: Node, names: ReadonlySet<string>): boolean {
   const pending: Node[] = [...((fn as { readonly parameters?: readonly Node[] }).parameters ?? [])];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -144,7 +147,8 @@ function parametersMention(fn: Node, names: ReadonlySet<string>): boolean {
       continue;
     }
     const text = referenceText(node);
-    if (text !== undefined && names.has(text) && !written(node)) return true;
+    if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
+      return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
