@@ -31,7 +31,7 @@ import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
 import { functionReturns, alternativesOf, returnedValues } from './framed-mutator-getters.ts';
-import { keyMayBeSlot, nameMayBeSlot, slotKey } from './framed-mutator-keys.ts';
+import { keyMayBeSlot, nameMayBeSlot, possibleKey, slotKey } from './framed-mutator-keys.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
@@ -361,19 +361,39 @@ function definedValues(
   if (isSpreadElement(descriptors))
     return [{ value: descriptors.expression, keys: ['0', slot, 'value'] }];
   if (!isObjectLiteralExpression(value)) {
-    const held = heldValue(value);
+    const names: Identifier[] = [];
+    const held = heldValue(value, names);
     const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
     const used =
       alternatives === undefined ? undefined : readUnder(reading.seen.maps, held, hidden);
-    if (alternatives === undefined || used === undefined) return opaque;
+    if (alternatives === undefined) return opaque;
+    const written = mapWrites(names, index, reading);
+    if (used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
       ...alternatives.flatMap((each) => definedValues(each, index, reading, used)),
+      ...written,
     ];
   }
   return fieldsAfter(value, hidden, (property, later) =>
     mapElements(property, index, reading, later),
+  );
+}
+
+/**
+ * The descriptors assigned to the entries of a map a constant holds before the place that names it:
+ * a constant does not keep its entries from changing, and the entry of the slot is possible.
+ */
+function mapWrites(
+  names: readonly Identifier[],
+  index: number | undefined,
+  reading: Reading,
+): WrittenArrayElement[] {
+  const [first] = names;
+  if (first === undefined) return [];
+  return heldMemberWrites(first, names).flatMap(({ key, value }) =>
+    key === undefined || possibleKey(key, index) ? descriptorValues(value, reading) : [],
   );
 }
 

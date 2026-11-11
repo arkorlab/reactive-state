@@ -1201,6 +1201,30 @@ const ELEMENTS = [
     elements: ['descriptor:value', 'error:'],
   },
   {
+    id: 'define-map-assigned-after-declaration',
+    source: `function frames(error: Error) { ${VALUES} const descriptors: PropertyDescriptorMap = {}; descriptors[0] = { get: () => error }; Object.defineProperties(values, descriptors); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value', 'error:'],
+  },
+  {
+    id: 'define-map-assigned-by-name',
+    source: `function frames(error: Error) { ${VALUES} const descriptors: PropertyDescriptorMap = {}; descriptors['0'] = { value: error }; Object.defineProperties(values, descriptors); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value', 'error:'],
+  },
+  {
+    id: 'define-map-other-key-assigned-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptors: PropertyDescriptorMap = {}; descriptors.label = { get: () => error }; Object.defineProperties(values, descriptors); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value'],
+  },
+  {
+    id: 'define-map-assigned-after-use-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptors: PropertyDescriptorMap = {}; Object.defineProperties(values, descriptors); descriptors[0] = { get: () => error }; return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1521,6 +1545,11 @@ const CONVERSIONS = [
     id: 'define-descriptor-assigned-in-unused-function-safe',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; function unused() { descriptor.get = () => error; } Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-map-assigned-after-declaration-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptors: PropertyDescriptorMap = {}; descriptors[0] = { get: () => error }; Object.defineProperties(a, descriptors); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',
