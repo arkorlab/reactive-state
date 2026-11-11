@@ -96,7 +96,11 @@ function unexposedLength(context: FillContext): number | undefined {
   return array.elements.length;
 }
 
-/** Earlier uses, argument effects and possible other-owner reads can change the captured length. */
+/**
+ * Earlier uses, argument effects and possible other-owner reads can change the captured length: a
+ * use in what a destructuring pattern destructures runs before a fill in the pattern's defaults,
+ * though it is written after it.
+ */
 function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (!readsBinding(name) || context.identity(name) !== context.root) return false;
   const selected = frameBindingOf(name);
@@ -105,6 +109,7 @@ function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (executionOwner(name) !== owner) return true;
   if (
     (name.pos > context.call.end || destructuredFirst(context.call, name)) &&
+    !destructuredFirst(name, context.call) &&
     !repeatedFrameRead(name, context.call, context.root, owner)
   )
     return false;
