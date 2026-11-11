@@ -25,6 +25,11 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
+import {
+  selectedMethod,
+  type SelectedMethod,
+  writtenAfterSelection,
+} from './framed-array-call-order.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction, writtenArrayKey } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
@@ -233,7 +238,7 @@ function elementErrors(
 
 /** A prior own method assignment replaces the native method; toString delegates to join as well. */
 function arrayMethodOverridden(receiver: Expression, method: string, call: Node): boolean {
-  const own = ownMethods(receiver, call);
+  const own = ownMethods(receiver, call, method);
   return own.get(method)?.own === true || (method === 'toString' && own.get('join')?.own === true);
 }
 
@@ -243,16 +248,17 @@ export function arrayMethodOverride(
   method: string,
   call: Node,
 ): ArrayMethodOverride | undefined {
-  return ownMethods(receiver, call).get(method);
+  return ownMethods(receiver, call, method).get(method);
 }
 
 /**
  * Prior direct writes and native object mutators share one lexical array identity. A write the
  * block's earlier statements may make otherwise — in a branch, an operand, the read's own
  * statement — or another function may make before the read leaves the methods it names unproven;
- * a statement's operands run before the write the statement itself makes.
+ * a statement's operands run before the write the statement itself makes, and a call's arguments
+ * after the call selected its method.
  */
-function ownMethods(receiver: Expression, call: Node): OwnMethods {
+function ownMethods(receiver: Expression, call: Node, method?: string): OwnMethods {
   const own: OwnMethods = new Map();
   const root = arrayIdentity(receiver);
   if (root === undefined) return own;
@@ -264,7 +270,15 @@ function ownMethods(receiver: Expression, call: Node): OwnMethods {
     if (before === statement) break;
     statementMethodWrites(before, root, { owner, own });
   }
-  possibleMethodWrites(statement, { root, owner, own, definite: undefined, until: call.end });
+  const selected = selectedMethod(call, method, root);
+  possibleMethodWrites(statement, {
+    root,
+    owner,
+    own,
+    selected,
+    definite: undefined,
+    until: call.end,
+  });
   deferredMethodWrites(call, root, own);
   return own;
 }
@@ -299,6 +313,7 @@ interface MethodWrites {
   readonly definite: Node | undefined;
   readonly until: number;
   readonly defined?: Set<string>;
+  readonly selected?: SelectedMethod | undefined;
 }
 
 /** The read's own execution makes these writes in source order, before its later definite proofs. */
@@ -317,7 +332,10 @@ function possibleMethodWrites(statement: Node, writes: MethodWrites): void {
 
 /** The methods a write may replace are unproven; a definition's stay so past the statement's own. */
 function unprovenWrites(node: Node, keys: readonly string[], writes: MethodWrites): void {
-  for (const key of keys) writes.own.set(key, { own: false });
+  const { selected } = writes;
+  for (const key of keys)
+    if (selected === undefined || !writtenAfterSelection(node, key, selected))
+      writes.own.set(key, { own: false });
   if (definesProperties(node, writes.root)) for (const key of keys) writes.defined?.add(key);
 }
 
