@@ -196,18 +196,20 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
 
 /**
  * Whether a statement of `block`, a block within the body, leaves the loop whose body it is: a
- * return or a throw, or a break that no loop or switch within the body takes, where no function and
+ * return or a throw, or a break whose loop, switch or label holds the loop, where no function and
  * no try statement, whose catch or finally may go on, lies between.
  */
 function leavesBody(statement: Statement, block: Node, body: Node): boolean {
-  const breaks = isBreakStatement(statement) && statement.label === undefined;
-  if (!breaks && !isReturnStatement(statement) && !isThrowStatement(statement)) return false;
+  if (isBreakStatement(statement)) {
+    const target = jumpTarget(statement);
+    const loop = body.parent;
+    if (target === undefined || target.pos > loop.pos || loop.end > target.end) return false;
+  } else if (!isReturnStatement(statement) && !isThrowStatement(statement)) return false;
   if (block === body) return true;
   for (let at = block.parent; at !== body; at = at.parent) {
     if (isAnswering(at) || isConstructorDeclaration(at) || isSetAccessorDeclaration(at))
       return false;
-    if (isTryStatement(at) || (breaks && (loopBody(at) !== undefined || isSwitchStatement(at))))
-      return false;
+    if (isTryStatement(at)) return false;
   }
   return true;
 }
