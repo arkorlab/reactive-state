@@ -27,6 +27,26 @@ const CASES = [
     values: ["'safe':"],
   },
   {
+    id: 'date-condition',
+    source: `function frames(error: Error) { const date = new Date(0); ${ENTRY} return Object.fromEntries([entry], date.setTime(1), date.getTime() && (entry[1] = error)); }`,
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'date-conditional',
+    source: `function frames(error: Error) { const date = new Date(0); ${ENTRY} return Object.fromEntries([entry], date.setTime(1), date.getTime() ? (entry[1] = error) : 0); }`,
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'constant-alias',
+    source: `function frames(error: Error) { const never = false; ${ENTRY} return Object.fromEntries([entry], never && (entry[1] = error)); }`,
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'negated-literal-pin',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], !true && (entry[1] = error)); }`,
+    values: ["'safe':"],
+  },
+  {
     id: 'opaque-condition-pin',
     source: `function frames(error: Error, flag: boolean) { ${ENTRY} return Object.fromEntries([entry], flag && (entry[1] = error)); }`,
     values: ["'safe':", 'error:'],
