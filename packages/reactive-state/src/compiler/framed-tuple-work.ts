@@ -26,6 +26,7 @@ import { BUILT_INS } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { bindingIdentifiers, readsBinding } from './scope.ts';
 
 /** What a native call's own work reaches of a tuple it reads: its callee's, its arguments'. */
@@ -75,8 +76,7 @@ export function callWorkExposure(
   const pending: Node[] = [...calleeWork(call.expression), ...(call.arguments ?? [])];
   let work = calleeReads(call.expression);
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node === read || isTypeNode(node) || (spread !== undefined && node.pos >= spread.pos))
-      continue;
+    if (node === read || isTypeNode(node) || afterSpread(node, spread, call, binding)) continue;
     if (tupleBindingExposure(node, binding, aliases)) return true;
     work ||= applicationWork(node);
     node.forEachChild((child) => {
@@ -84,6 +84,24 @@ export function callWorkExposure(
     });
   }
   return work && namedElsewhere(binding, call);
+}
+
+/**
+ * Whether `node`, the call's work after the `spread` that reads the tuple, comes too late for that
+ * read. Where the call passes again, the next pass reads what that work left.
+ */
+function afterSpread(
+  node: Node,
+  spread: Node | undefined,
+  call: CallExpression | NewExpression,
+  binding: FrameBinding,
+): boolean {
+  if (spread === undefined || node.pos < spread.pos) return false;
+  return (
+    node.pos < spread.end ||
+    !framedPossibleBranch(node) ||
+    !repeatedFrameRead(node, call, binding, executionOwner(call))
+  );
 }
 
 /** What a callee evaluates past the member path that selects its function: keys, a base not a name. */
