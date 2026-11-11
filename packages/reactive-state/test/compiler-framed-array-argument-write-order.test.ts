@@ -832,6 +832,46 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method() { return 1; } }; return String(values); }`,
     converts: false,
   },
+  {
+    id: 'class-declaration-static-block-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { static { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-static-field-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-computed-name-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'name')]() {} } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-heritage-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused extends ((Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })), Object) {} values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-accessor-then-release',
+    source: `function frames(error: Error) { const values = [error]; class Unused { static { Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-declaration-instance-field-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-declaration-method-body-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { method() { return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-declaration-static-in-branch-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); if (flag) { class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

@@ -170,13 +170,17 @@ function readsFirst(link: Node, at: Node): boolean {
 }
 
 /**
- * Whether an expression runs whenever its statement does: the statement is an expression or a
- * declaration, and no condition, short circuit, optional chain, default of a pattern, function,
+ * Whether an expression runs whenever its statement does: the statement is an expression, a
+ * declaration or a class, and no condition, short circuit, optional chain, default of a pattern, function,
  * instance field or inner statement lies between them. A loop, a branch or a switch runs its parts
  * on some paths.
  */
 export function evaluatedForSure(node: Node, statement: Node): boolean {
-  if (!isExpressionStatement(statement) && !isVariableStatement(statement)) return false;
+  const runs =
+    isExpressionStatement(statement) ||
+    isVariableStatement(statement) ||
+    isClassDeclaration(statement);
+  if (!runs) return false;
   for (let at = node; at !== statement; at = at.parent) {
     if (skipsLink(at, statement)) return false;
   }
