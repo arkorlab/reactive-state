@@ -1,4 +1,7 @@
 import {
+  type BinaryExpression,
+  isAsExpression,
+  isAwaitExpression,
   type Identifier,
   isArrowFunction,
   isBinaryExpression,
@@ -10,11 +13,15 @@ import {
   isElementAccessExpression,
   isExpressionWithTypeArguments,
   isFunctionDeclaration,
+  isForOfStatement,
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
+  isExpressionStatement,
+  isMetaProperty,
   isMethodDeclaration,
   isNewExpression,
+  isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isParenthesizedExpression,
@@ -22,12 +29,15 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
+  isSatisfiesExpression,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isStringLiteral,
   isTaggedTemplateExpression,
+  isTypeAssertion,
   isTypeNode,
   isVariableDeclaration,
+  isYieldExpression,
   type Node,
   type PropertyName,
   type SourceFile,
@@ -47,7 +57,8 @@ import { readsBinding } from './scope.ts';
  * method's or its class's; the code that reads one of them, or a name of a function that does, may
  * reach it before it ends. A function that is used otherwise than by a call, passed, stored or
  * compared, may be reached from anywhere, and so may one a getter, a setter or a method that the
- * language calls by itself holds.
+ * language calls by itself holds, and one held where no name gives it: passed to a call, returned,
+ * put in a list. A run that waits or yields lets another call of the function go on in its place.
  */
 
 /** The names a function is called by, and whether it has a name that is worked out. */
@@ -98,25 +109,67 @@ function keyText(name: PropertyName | undefined): string | undefined {
     : undefined;
 }
 
-/** The node that holds a function expression or an arrow, past parentheses. */
+/** Whether a node only gives its operand a type: a parenthesis, `as`, `satisfies`, `!`, `<T>`. */
+function isWrapper(node: Node): node is Node & { readonly expression: Node } {
+  return (
+    isParenthesizedExpression(node) ||
+    isAsExpression(node) ||
+    isSatisfiesExpression(node) ||
+    isNonNullExpression(node) ||
+    isTypeAssertion(node)
+  );
+}
+
+/** The node that holds a function expression or an arrow, past parentheses and type wrappers. */
 function holderOf(fn: Node): Node {
   let at = fn;
-  while (isParenthesizedExpression(at.parent)) at = at.parent;
+  while (isWrapper(at.parent) && at.parent.expression === at) at = at.parent;
   return at;
 }
 
 /** The variable an arrow or a function expression is the value of. */
 function boundVariable(fn: Node): VariableDeclaration | undefined {
   if (!isArrowFunction(fn) && !isFunctionExpression(fn)) return undefined;
-  const { parent } = holderOf(fn);
-  return isVariableDeclaration(parent) &&
-    parent.initializer !== undefined &&
-    unwrapped(parent.initializer) === fn
+  const at = holderOf(fn);
+  const { parent } = at;
+  return isVariableDeclaration(parent) && (parent.initializer as Node | undefined) === at
     ? parent
     : undefined;
 }
 
-/** The names a function expression or an arrow is given where it is the value of something. */
+/** Whether a node is an assignment that gives a value, plain or by a condition. */
+function isAssignment(node: Node): node is BinaryExpression {
+  return (
+    isBinaryExpression(node) &&
+    (node.operatorToken.kind === SyntaxKind.EqualsToken ||
+      node.operatorToken.kind === SyntaxKind.BarBarEqualsToken ||
+      node.operatorToken.kind === SyntaxKind.AmpersandAmpersandEqualsToken ||
+      node.operatorToken.kind === SyntaxKind.QuestionQuestionEqualsToken)
+  );
+}
+
+/** Whether nothing keeps a function that is written here: it is called on the spot, or dropped. */
+function keptNowhere(held: Node): boolean {
+  const { parent: holder } = held;
+  const at =
+    isPropertyAccessExpression(holder) &&
+    holder.expression === held &&
+    (holder.name.text === 'call' || holder.name.text === 'apply')
+      ? holder
+      : held;
+  const { parent } = at;
+  return (
+    ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
+    (isTaggedTemplateExpression(parent) && parent.tag === at) ||
+    isExpressionStatement(parent)
+  );
+}
+
+/**
+ * The names a function expression or an arrow is given where it is the value of something: a
+ * variable, a property, an assignment's target. Held anywhere else, passed, returned, or put in a
+ * list, it is reached by a name that is worked out.
+ */
 function givenNames(fn: Node): FunctionNames {
   const at = holderOf(fn);
   const { parent } = at;
@@ -130,12 +183,8 @@ function givenNames(fn: Node): FunctionNames {
   if (initial && isVariableDeclaration(parent) && isIdentifier(parent.name)) add(parent.name.text);
   else if (initial && (isPropertyAssignment(parent) || isPropertyDeclaration(parent)))
     add(keyText(parent.name));
-  else if (
-    isBinaryExpression(parent) &&
-    (parent.right as Node) === at &&
-    parent.operatorToken.kind === SyntaxKind.EqualsToken
-  )
-    add(targetName(parent.left));
+  else if (isAssignment(parent) && (parent.right as Node) === at) add(targetName(parent.left));
+  else if (!keptNowhere(at)) computed = true;
   return { names, computed };
 }
 
@@ -153,18 +202,26 @@ function targetName(left: Node): string | undefined {
   return undefined;
 }
 
-/** The class a constructor belongs to, by the names it has. */
+/**
+ * The class a constructor belongs to, by the names it has: its own, those it is given, and the
+ * name of the property every instance reads it by.
+ */
 function namesOfClass(declaration: Node): FunctionNames {
-  const names: string[] = [];
+  const names = ['constructor'];
   if ((isClassDeclaration(declaration) || isClassExpression(declaration)) && declaration.name)
     names.push(declaration.name.text);
-  if (isClassExpression(declaration)) names.push(...givenNames(declaration).names);
-  return { names, computed: false };
+  if (!isClassExpression(declaration)) return { names, computed: false };
+  const given = givenNames(declaration);
+  return { names: [...names, ...given.names], computed: given.computed };
 }
 
-/** The names a function is reached by. */
+/**
+ * The names a function is reached by. One that can be made, a declaration or an expression of
+ * `function`, is reached by `constructor` too, which an instance and `new.target` read it by.
+ */
 function namesOf(fn: Node): FunctionNames {
-  if (isFunctionDeclaration(fn)) return { names: fn.name ? [fn.name.text] : [], computed: false };
+  if (isFunctionDeclaration(fn))
+    return { names: fn.name ? [fn.name.text, 'constructor'] : [], computed: false };
   if (isMethodDeclaration(fn) || isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn)) {
     const key = keyText(fn.name);
     return key === undefined ? { names: [], computed: true } : { names: [key], computed: false };
@@ -173,7 +230,9 @@ function namesOf(fn: Node): FunctionNames {
   if (!isFunctionExpression(fn) && !isArrowFunction(fn)) return { names: [], computed: false };
   const given = givenNames(fn);
   const own = isFunctionExpression(fn) && fn.name ? [fn.name.text] : [];
-  return { names: [...own, ...given.names], computed: given.computed };
+  const names = [...own, ...given.names];
+  if (isFunctionExpression(fn) && names.length > 0) names.push('constructor');
+  return { names, computed: given.computed };
 }
 
 /** Whether a node is a function whose code can be reached again by a name. */
@@ -194,6 +253,8 @@ export function isNamedFunction(node: Node): boolean {
 
 /** The name a node reads, if it reads one: a variable, or a property by its name. */
 function referenceText(node: Node): string | undefined {
+  if (isMetaProperty(node))
+    return node.keywordToken === SyntaxKind.NewKeyword ? 'constructor' : undefined;
   if (isIdentifier(node)) {
     const { parent } = node;
     if (isPropertyAccessExpression(parent) && parent.name === node) return node.text;
@@ -210,21 +271,16 @@ function referenceText(node: Node): string | undefined {
 
 /** Whether a node, the name of a reference, is what a call, a construction or a tag calls. */
 function called(node: Node): boolean {
-  let at = node;
-  let { parent } = at;
-  if (isPropertyAccessExpression(parent) && parent.expression === at) {
-    const via = parent.name.text;
+  let at = holderOf(node);
+  if (isPropertyAccessExpression(at.parent) && at.parent.expression === at) {
+    const via = at.parent.name.text;
     if (via !== 'call' && via !== 'apply') return false;
-    at = parent;
-    parent = at.parent;
-  } else if (isPropertyAccessExpression(parent) && parent.name === at) {
-    at = parent;
-    parent = at.parent;
+    at = at.parent;
+  } else if (isPropertyAccessExpression(at.parent) && at.parent.name === at) {
+    at = at.parent;
   }
-  while (isParenthesizedExpression(parent)) {
-    at = parent;
-    parent = at.parent;
-  }
+  at = holderOf(at);
+  const { parent } = at;
   return (
     ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
     (isTaggedTemplateExpression(parent) && parent.tag === at)
@@ -409,12 +465,23 @@ function isDeclarationName(node: Node): boolean {
   return (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) && parent.name === node;
 }
 
+/** The parts of a function that run where it is written: a computed name, and its decorators. */
+function definitionParts(fn: Node): readonly Node[] {
+  const { name, modifiers } = fn as { readonly name?: Node; readonly modifiers?: readonly Node[] };
+  const decorators = modifiers?.filter((each) => each.kind === SyntaxKind.Decorator) ?? [];
+  return name !== undefined && isComputedPropertyName(name) ? [name, ...decorators] : decorators;
+}
+
 /** Whether code that runs in the range reaches what the language may call by itself. */
+
 function runsCodeBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (node !== fn && isAnswering(node)) continue;
+    if (node !== fn && isAnswering(node)) {
+      pending.push(...definitionParts(node));
+      continue;
+    }
     if (node.pos >= from && node.pos < to && !isCodeFree(node) && framedPossibleBranch(node))
       return true;
     node.forEachChild((child) => {
@@ -473,10 +540,20 @@ function isCodeFree(node: Node): boolean {
   return CODE_FREE.has(node.kind);
 }
 
+/** Whether a node suspends the function that runs it, which lets another run of it begin. */
+function isSuspension(node: Node): boolean {
+  return (
+    isAwaitExpression(node) ||
+    isYieldExpression(node) ||
+    (isForOfStatement(node) && node.awaitModifier !== undefined)
+  );
+}
+
 /**
  * Whether the function runs itself again between two positions: its names, or those of a function
- * that reads one of them, are read there where the code may run; and where the function may be
- * reached from anywhere, whenever code runs there at all.
+ * that reads one of them, are read there where the code may run; where the function may be reached
+ * from anywhere, whenever code runs there at all; and where it waits or yields, which lets a run
+ * that another call began go on in its place.
  */
 export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   if (!isNamedFunction(fn)) return false;
@@ -485,7 +562,12 @@ export function runsItselfBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (node.pos >= from && node.pos < to && callsFunction(node, fn, names)) return true;
+    if (node !== fn && isNamedFunction(node)) {
+      pending.push(...definitionParts(node));
+      continue;
+    }
+    if (node.pos >= from && node.pos < to && (isSuspension(node) || callsFunction(node, fn, names)))
+      return true;
     node.forEachChild((child) => {
       pending.push(child);
     });

@@ -772,6 +772,201 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-satisfies-holder',
+    source: `function frames(error: Error) { const values = [error]; const read = ((pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }) satisfies (pass: number) => string; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-as-holder',
+    source: `function frames(error: Error) { const values = [error]; const read = ((pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }) as (pass: number) => string; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-non-null-holder',
+    source: `function frames(error: Error) { const values = [error]; const read = (function (pass: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })!; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-angle-assertion-holder',
+    source: `function frames(error: Error) { const values = [error]; const read = <(pass: number) => string>((pass) => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }); return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-wrapped-assignment',
+    source: `function frames(error: Error) { const values = [error]; let read: any; read = ((pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }) satisfies Function; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-wrapped-property',
+    source: `function frames(error: Error) { const values = [error]; const o = { read: ((pass: number): string => { ${SAFE} if (pass < 1) o.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }) satisfies Function }; return o.read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-wrapped-field',
+    source: `function frames(error: Error) { const values = [error]; class C { read = ((pass: number): string => { ${SAFE} if (pass < 1) this.read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }) satisfies Function; } return new C().read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-wrapped-class-expression',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; const C = (class { constructor(pass: number) { ${SAFE} if (pass < 1) new C(pass + 1); const text = String(values); values.join = Array.prototype.join; last = text; } }) satisfies Function; new C(0); return last; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-function-given-to-a-call',
+    source: `function frames(error: Error) { const values = [error]; const wrap = (f: any) => f; const read = wrap((pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }); return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-named-function-given-to-a-call',
+    source: `function frames(error: Error) { const values = [error]; const wrap = (f: any) => f; const read = wrap(function inner(pass: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }); return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-function-in-a-list',
+    source: `function frames(error: Error) { const values = [error]; const fns: any[] = [(pass: number): string => { ${SAFE} if (pass < 1) fns[0](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }]; return fns[0](0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-function-in-a-condition',
+    source: `function frames(error: Error) { const values = [error]; const read: any = true ? (pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } : null; return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-function-a-call-returns',
+    source: `function frames(error: Error) { const values = [error]; const make = () => (pass: number): string => { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }; const read = make(); return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-class-given-to-a-call',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; const wrap = (c: any) => c; const C = wrap(class { constructor(pass: number) { ${SAFE} if (pass < 1) new C(pass + 1); const text = String(values); values.join = Array.prototype.join; last = text; } }); new C(0); return last; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-new-target',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; class C { constructor(pass: number) { ${SAFE} if (pass < 1) new (new.target)(pass + 1); const text = String(values); values.join = Array.prototype.join; last = text; } } new C(0); return last; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-constructor-property',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; class C { constructor(pass: number) { ${SAFE} if (pass < 1) new (this.constructor as any)(pass + 1); const text = String(values); values.join = Array.prototype.join; last = text; } } new C(0); return last; }`,
+    converts: true,
+  },
+  {
+    id: 'uncalled-nested-function-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} function unused() { read(); } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'uncalled-nested-arrow-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} const unused = () => { read(); }; const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'uncalled-nested-method-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} const o = { go() { read(); } }; const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'uncalled-nested-class-method-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} class K { go() { read(); } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-function-called-between',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number) { ${SAFE} function helper() { read(pass + 1); } if (pass < 1) helper(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'hoisted-nested-function-called-between',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number) { ${SAFE} if (pass < 1) helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { read(pass + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-function-given-to-a-call-called-between',
+    source: `function frames(error: Error) { const values = [error]; const wrap = (f: any) => f; return (function read(pass: number): string { const helper = wrap(() => read(pass + 1)); ${SAFE} if (pass < 1) helper(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'stored-callback-between-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} const later: any[] = []; later.push(() => { read(); }); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-satisfies-holder-around-a-loop',
+    source: `function frames(error: Error) { const values: unknown[] = ['fixed']; let seen = ''; const read = ((pass: number): string => { while ((seen += String(values) + ',')) { values[0] = error; return pass < 1 ? read(pass + 1) : ''; } return ''; }) satisfies (pass: number) => string; read(0); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-while-waiting',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; async function read(pass: number): Promise<string> { ${SAFE} await 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } await Promise.all([read(0), read(1)]); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-while-waiting-in-an-arrow',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; const read = async (pass: number): Promise<string> => { ${SAFE} await 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; }; await Promise.all([read(0), read(1)]); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-while-yielding',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; function* read(pass: number): Generator<number, string> { ${SAFE} yield 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } const a = read(0); const b = read(1); a.next(); b.next(); a.next(); b.next(); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-while-waiting-in-an-argument',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; async function read(pass: number): Promise<string> { ${SAFE} const text = String(values, await 0); values.join = Array.prototype.join; seen += text + ','; return text; } await Promise.all([read(0), read(1)]); return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'async-without-a-wait-pin',
+    source: `async function frames(error: Error) { const values = [error]; let seen = ''; async function read(pass: number): Promise<string> { ${SAFE} const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } await Promise.all([read(0), read(1)]); return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-in-a-later-argument',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} const text = String(values, pass < 1 ? read(pass + 1) : 0); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-in-an-earlier-argument-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} const text = String(pass < 1 ? read(pass + 1) : 0, values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-class-computed-key',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { class K { static [String(read(pass + 1))] = 1; } } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-instance-computed-key',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { new (class K { [String(read(pass + 1))] = 1; })(); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-static-method-called',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class K { static m() { read(pass + 1); } } if (pass < 1) K.m(); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'uncalled-static-method-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class K { static m() { read(pass + 1); } } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-object-method-computed-name',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; function read(): string { ${SAFE} const o = { [depth++ < 1 ? read() : 'k']() {} }; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-object-getter-computed-name',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; function read(): string { ${SAFE} const o = { get [depth++ < 1 ? read() : 'k']() { return 1; } }; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-class-field-computed-name',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; function read(): string { ${SAFE} class K { [depth++ < 1 ? read() : 'k'] = 1; } const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
