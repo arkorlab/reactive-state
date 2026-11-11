@@ -19,6 +19,8 @@ import {
   isSpreadAssignment,
   isVoidExpression,
   type Node,
+  type ObjectLiteralElementLike,
+  type SpreadAssignment,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -185,28 +187,39 @@ function arraySource(
 
 /**
  * A surviving literal own entry, without executing getters or unknown spread sources. A spread of a
- * written object has the entries that object writes, and is passed over where it has none of the key.
+ * written object has the entries that object writes, and is passed over where it has none of the
+ * key; what it copies is its own entries, and a prototype it sets is none of them.
  */
 function objectSource(
   value: ObjectLiteralExpression,
   key: string,
   opaque: AssignedFrameSource,
+  own = false,
 ): readonly AssignedFrameSource[] {
   for (const property of value.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      const found = spreadSource(property.expression, key, opaque);
-      if (found.length === 0) continue;
-      return found;
-    }
-    const name = literalKey(property.name);
-    if (name === undefined) return [opaque];
-    if (name !== key) continue;
-    if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-    if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
-      return [{ value: property.name, keys: [] }];
-    return [opaque];
+    const found = isSpreadAssignment(property)
+      ? spreadSource(property.expression, key, opaque)
+      : fieldSource(property, key, opaque, own);
+    if (found !== undefined && found.length > 0) return found;
   }
   return [];
+}
+
+/** What one field selects: its value for its key, the path for one that is unknown, else none. */
+function fieldSource(
+  property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
+  key: string,
+  opaque: AssignedFrameSource,
+  own: boolean,
+): readonly AssignedFrameSource[] | undefined {
+  if (own && setsPrototype(property)) return undefined;
+  const name = literalKey(property.name);
+  if (name === undefined) return [opaque];
+  if (name !== key) return undefined;
+  if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+  if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+    return [{ value: property.name, keys: [] }];
+  return [opaque];
 }
 
 /** What a spread selects: the entry a written object has, none where it has none, else the path. */
@@ -216,7 +229,16 @@ function spreadSource(
   opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
   const value = unwrapped(copied);
-  return isObjectLiteralExpression(value) ? objectSource(value, key, opaque) : [opaque];
+  return isObjectLiteralExpression(value) ? objectSource(value, key, opaque, true) : [opaque];
+}
+
+/** A written `__proto__: value`, which sets the prototype; `['__proto__']` and a shorthand do not. */
+export function setsPrototype(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
+    literalKey(property.name) === '__proto__'
+  );
 }
 
 /** A missing or possibly undefined selection may take its written fallback. */

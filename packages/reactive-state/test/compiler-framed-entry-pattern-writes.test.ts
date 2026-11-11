@@ -536,6 +536,24 @@ const CASES = [
       'true:0',
     ],
   },
+  {
+    id: 'named-prototype-key-through-spread',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ __proto__: entry[1] } = { ['__proto__']: error, ...{ __proto__: {} } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-computed-prototype-key-through-spread',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ ['__proto__']: entry[1] } = { ['__proto__']: error, ...{ __proto__: {} } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-direct-pin',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ __proto__: entry[1] } = { __proto__: error })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
