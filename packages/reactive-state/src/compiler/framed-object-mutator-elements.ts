@@ -203,6 +203,8 @@ function descriptorValues(descriptor: Expression | undefined): WrittenArrayEleme
 function descriptorEntry(property: ObjectLiteralElementLike): WrittenArrayElement[] {
   if (isSpreadAssignment(property)) return descriptorValues(property.expression);
   const key = writtenArrayKey(property.name);
+  const prototype = prototypeField(property, key);
+  if (prototype !== undefined) return descriptorValues(prototype);
   if (key !== undefined && key !== 'value' && key !== 'get') return [];
   const found: WrittenArrayElement[] = [];
   if (key !== 'get' && isPropertyAssignment(property))
@@ -220,6 +222,15 @@ function descriptorEntry(property: ObjectLiteralElementLike): WrittenArrayElemen
   if (key !== 'value' && isShorthandPropertyAssignment(property) && isIdentifier(property.name))
     found.push(...functionReturns(property.name));
   return isGetAccessorDeclaration(property) ? [...found, ...accessedValues(property, key)] : found;
+}
+
+/** The object a written `__proto__: object` field sets as the prototype, whose fields are inherited. */
+function prototypeField(
+  property: ObjectLiteralElementLike,
+  key: string | undefined,
+): Expression | undefined {
+  const written = key === '__proto__' && isPropertyAssignment(property);
+  return written && !isComputedPropertyName(property.name) ? property.initializer : undefined;
 }
 
 /** A descriptor field written as an accessor: its `value`, or the getter its `get` hands over. */

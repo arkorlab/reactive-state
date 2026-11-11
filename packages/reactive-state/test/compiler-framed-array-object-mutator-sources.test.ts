@@ -393,6 +393,36 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-descriptor-proto',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { __proto__: { value: error }, configurable: true } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-descriptor-proto-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { __proto__: { get: () => error } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-descriptor-proto-own-value',
+    source: `function frames(error: Error, other: string) { ${VALUES} Object.defineProperty(values, 0, { __proto__: { value: error }, value: other } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:', 'other:'],
+  },
+  {
+    id: 'define-descriptor-computed-proto-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ['__proto__']: { value: error } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-map-descriptor-proto',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { 0: { __proto__: { value: error } } as PropertyDescriptor }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -483,6 +513,11 @@ const CONVERSIONS = [
   {
     id: 'define-constant-index-key-converts',
     source: `function frames(error: Error) { const a = ['safe']; const key = 0; Object.defineProperty(a, key, { value: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-proto-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { __proto__: { value: error }, configurable: true } as PropertyDescriptor); return String(a); }`,
     converts: true,
   },
   {
