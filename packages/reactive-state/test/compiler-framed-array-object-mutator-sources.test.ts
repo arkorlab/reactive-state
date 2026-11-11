@@ -2266,6 +2266,16 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-logical-after-other-write-pin',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.get = flag ? undefined : () => 'safe'; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-after-delete-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; delete descriptor.get; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-logical-spread-initial-pin',
     source: `function frames(error: Error, initial: PropertyDescriptor) { const a = ['safe']; const descriptor: PropertyDescriptor = { ...initial }; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
@@ -2404,6 +2414,26 @@ const CONVERSIONS = [
     id: 'src-held-list-aliased-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; const alias = functions; [descriptor.get] = alias; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'define-logical-after-assign-call',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; Object.assign(descriptor, { get: undefined }); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-after-define-call',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; Object.defineProperty(descriptor, 'get', { value: undefined }); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-after-function-call',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const clear = (value: PropertyDescriptor) => { value.get = undefined; }; clear(descriptor); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-copied-to-assign-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const copy = Object.assign({}, descriptor); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
   },
 ] as const;
 

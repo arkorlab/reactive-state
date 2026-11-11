@@ -48,6 +48,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { mutatorInvocation } from './framed-mutator-calls.ts';
 import { type MemberWrite, patternMemberWrites } from './framed-pattern-members.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 
@@ -85,11 +86,13 @@ export function heldMemberWrites(
   const found: Written[] = [];
   const recorded: Written[] = [];
   const changed: (string | undefined)[] = [];
+  let handed = false;
   const pending: Node[] = [first.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const writes = heldWrite(node, bindings);
     if (writes.length > 0) recorded.push({ node, writes });
     changed.push(...otherChanges(node, bindings));
+    handed ||= handedToChange(node, bindings);
     if (
       declared !== undefined &&
       writes.length > 0 &&
@@ -102,7 +105,7 @@ export function heldMemberWrites(
   }
   const initial = heldValue(first);
   return found.flatMap(({ node, writes }) =>
-    writes.filter((write) => !skipsRight(write, node, { recorded, changed, initial })),
+    writes.filter((write) => !skipsRight(write, node, { recorded, changed, initial, handed })),
   );
 }
 
@@ -233,11 +236,27 @@ function otherChanges(node: Node, bindings: ReadonlySet<unknown>): readonly (str
     : [];
 }
 
+/**
+ * Whether a node is a held object handed to a call that may change it: an argument of a call that is
+ * no native mutator, or the target of one. The descriptor an `Object.defineProperty` takes, and a
+ * source an `Object.assign` copies, are only read.
+ */
+function handedToChange(node: Node, bindings: ReadonlySet<unknown>): boolean {
+  if (!isIdentifier(node) || !bindings.has(frameBindingOf(node)?.binding)) return false;
+  const call = isSpreadElement(node.parent) ? node.parent.parent : node.parent;
+  const isArgument = isCallExpression(call) || isNewExpression(call);
+  if (!isArgument) return false;
+  const invoked = isCallExpression(call) ? mutatorInvocation(call) : undefined;
+  return invoked === undefined || unwrapped(invoked.args[0] ?? node) === node;
+}
+
 /** What a held descriptor holds, and what has changed it, when a logical assignment is asked to run. */
 interface Holding {
   readonly recorded: readonly Written[];
   readonly changed: readonly (string | undefined)[];
   readonly initial: Expression | FunctionDeclaration;
+  /** Whether the object is handed to a call that may change it. */
+  readonly handed: boolean;
 }
 
 /**
@@ -248,9 +267,9 @@ interface Holding {
 function skipsRight(
   write: HeldWrite,
   node: Node,
-  { recorded, changed, initial }: Holding,
+  { recorded, changed, initial, handed }: Holding,
 ): boolean {
-  if (write.runsIf === undefined || write.key === undefined) return false;
+  if (handed || write.runsIf === undefined || write.key === undefined) return false;
   const others = recorded.some((each) => {
     return (
       each.node !== node &&
