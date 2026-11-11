@@ -19,6 +19,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { heldValue } from './framed-held-member-writes.ts';
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
+import { ANY_FIELD } from './framed-pattern-members.ts';
 
 /** What a destructuring picks out of a source: the path it followed, read where the compile can. */
 
@@ -33,7 +34,7 @@ export function selectedValues(
   seen: ReadonlySet<Node> = new Set(),
 ): readonly AssignedFrameSource[] {
   if (keys.length === 0) return [{ value, keys: [] }];
-  const whole = [{ value, keys }];
+  const whole = [{ value, keys: keys.filter((each) => each !== ANY_FIELD) }];
   const held = heldValue(value);
   if (isFunctionDeclaration(held) || seen.has(held)) return whole;
   const alternatives = alternativesOf(held);
@@ -54,6 +55,7 @@ function entryOf(
   seen: ReadonlySet<Node>,
 ): readonly AssignedFrameSource[] {
   const [key = '', ...rest] = keys;
+  if (key === ANY_FIELD) return list.elements.flatMap((each) => anyEntry(each, keys, seen));
   const index = Number(key);
   if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key) return whole;
   if (list.elements.slice(0, index + 1).some((element) => isSpreadElement(element))) return whole;
@@ -61,6 +63,17 @@ function entryOf(
   return element === undefined || isOmittedExpression(element)
     ? []
     : selectedValues(element, rest, seen);
+}
+
+/** What one element of a list holds at any field: a spread's, or the element's own. */
+function anyEntry(
+  element: Expression,
+  keys: readonly string[],
+  seen: ReadonlySet<Node>,
+): readonly AssignedFrameSource[] {
+  if (isOmittedExpression(element)) return [];
+  if (isSpreadElement(element)) return selectedValues(element.expression, keys, seen);
+  return selectedValues(element, keys.slice(1), seen);
 }
 
 /**
@@ -81,7 +94,7 @@ function fieldOf(
       continue;
     }
     const name = writtenArrayKey(property.name);
-    if (name !== undefined && name !== key) continue;
+    if (key !== ANY_FIELD && name !== undefined && name !== key) continue;
     if (isPropertyAssignment(property))
       found.push(...selectedValues(property.initializer, rest, seen));
     else if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
@@ -91,7 +104,7 @@ function fieldOf(
         ...returnedValues(property.body).flatMap((each) => selectedValues(each.value, rest, seen)),
       );
     else found.push(...whole);
-    if (name !== undefined) break;
+    if (name !== undefined && key !== ANY_FIELD) break;
   }
   return found;
 }

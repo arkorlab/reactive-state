@@ -1910,6 +1910,46 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; Object.defineProperties(a, { 0: { ...(flag ? descriptor : {}) }, 1: (descriptor.get = () => error, { value: 'safe' }) }); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'define-key-held-list-getter',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => 'safe', () => error]; ({ [key]: descriptor.get } = functions); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-held-object-getter',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { f: () => error }; ({ [key]: descriptor.get } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-condition-getter',
+    source: `function frames(error: Error, key: string, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ [key]: descriptor.get } = flag ? { f: () => error } : {}); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-spread-source-getter',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { ...{ f: () => error } }; ({ [key]: descriptor.get } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-held-safe-pin',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { f: () => 'safe' }; ({ [key]: descriptor.get } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-key-literal-spread-getter',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ [key]: descriptor.get } = { ...{ f: () => error } }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-list-spread-getter',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const functions = [() => error]; ({ [key]: descriptor.get } = [...functions]); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-literal-spread-safe-pin',
+    source: `function frames(error: Error, key: string) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ [key]: descriptor.get } = { ...{ f: () => 'safe' } }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
