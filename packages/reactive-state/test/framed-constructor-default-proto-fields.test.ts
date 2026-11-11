@@ -18,8 +18,9 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * prototype and makes no own field, so a read of `__proto__` through it is the inherited accessor's:
  * what a getter of the prototype returns, the application's code. Such a read is no shown ordinary
  * field, as the default's own checks have it. A key the literal does write, beside a prototype it
- * sets, is read as before, and so is an own `__proto__` a getter or a shorthand makes. The rows
- * marked a pin answer the same before the change as after it.
+ * sets, is read as before, and so is an own `__proto__` a getter or a shorthand makes, whichever
+ * comes first: it stands before the prototype's inherited one. The rows marked a pin answer the
+ * same before the change as after it.
  */
 
 /** A constructor whose default reads a member of its first argument. */
@@ -110,6 +111,60 @@ const CASES = [
     quiet: false,
     source: PATTERN,
     what: 'an unknown prototype a parameter pattern takes by its key',
+  },
+  {
+    made: 'new Failure({ __proto__: null, get __proto__() { return 0; } })',
+    quiet: true,
+    source: PROTO,
+    what: 'an own getter after a prototype',
+  },
+  {
+    made: 'new Failure({ get __proto__() { return 0; }, __proto__: null })',
+    quiet: true,
+    source: PROTO,
+    what: 'an own getter before a prototype',
+  },
+  {
+    made: 'new Failure({ __proto__: null, __proto__ })',
+    quiet: true,
+    source: PROTO,
+    what: 'an own shorthand after a prototype',
+  },
+  {
+    made: 'new Failure({ __proto__, __proto__: null })',
+    quiet: true,
+    source: PROTO,
+    what: 'an own shorthand before a prototype',
+  },
+  {
+    made: 'new Failure({ __proto__: null, get __proto__() { return 0; } })',
+    quiet: true,
+    source: ELEMENT,
+    what: 'an own getter beside a prototype, read by an element key',
+  },
+  {
+    made: 'new Failure({ message: error }, { __proto__: null, get __proto__() { return 0; } })',
+    quiet: true,
+    source: PATTERN,
+    what: 'an own getter beside a prototype, taken by a parameter pattern',
+  },
+  {
+    made: 'new Failure({ __proto__: null, get __proto__() { return mutate(); } })',
+    quiet: false,
+    source: PROTO,
+    what: 'an own getter of a call beside a prototype (pin)',
+  },
+  {
+    made: 'new Failure({ __proto__: null, ["__proto__"]: 0 })',
+    quiet: false,
+    source: PROTO,
+    what: 'a computed key beside a prototype (pin)',
+  },
+  {
+    made: 'new Failure({ ...holder, __proto__: null })',
+    quiet: false,
+    source: PROTO,
+    what: 'a spread beside a prototype (pin)',
   },
 ] as const;
 
