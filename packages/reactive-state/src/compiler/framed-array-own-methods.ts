@@ -1,11 +1,17 @@
 import {
+  type AccessorDeclaration,
   type BinaryExpression,
   type CallExpression,
+  type ClassDeclaration,
+  type ClassExpression,
   type Expression,
   isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isClassDeclaration,
+  isClassExpression,
+  isClassStaticBlockDeclaration,
   isCallExpression,
   isElementAccessExpression,
   isComputedPropertyName,
@@ -13,7 +19,9 @@ import {
   isExpressionStatement,
   isFunctionLikeDeclaration,
   isIdentifier,
+  isSetAccessorDeclaration,
   isMethodDeclaration,
+  isGetAccessorDeclaration,
   isNonNullExpression,
   isObjectBindingPattern,
   isObjectLiteralExpression,
@@ -25,6 +33,7 @@ import {
   isVariableDeclaration,
   isVariableStatement,
   type MethodDeclaration,
+  type PropertyDeclaration,
   type Node,
   NodeFlags,
   type ObjectLiteralElementLike,
@@ -174,6 +183,16 @@ export function evaluatedForSure(node: Node, statement: Node): boolean {
   return true;
 }
 
+/**
+ * Whether a node lies in what runs later: the body and the parameters of a function, which run when
+ * it is called, and the initializer of an instance field, which runs when an instance is made. The
+ * computed name of a member runs when the object or the class is defined.
+ */
+function runsLater(parent: Node, at: Node): boolean {
+  if (isFunctionLikeDeclaration(parent)) return !isComputedPropertyName(at);
+  return instanceInitializer(parent) === at;
+}
+
 /** The initializer of an instance field, which runs when an instance is made. */
 function instanceInitializer(node: Node): Node | undefined {
   const instance =
@@ -199,7 +218,7 @@ function skipsLink(at: Node, statement: Node): boolean {
       setsMember(parent) ||
       assignmentPatternDefault(parent)
     );
-  if (isFunctionLikeDeclaration(parent) || instanceInitializer(parent) === at) return true;
+  if (runsLater(parent, at)) return true;
   if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
   return inner && parent !== statement;
@@ -221,6 +240,58 @@ function boundPattern(node: Node): { readonly pattern: Node; readonly value: Nod
     : undefined;
 }
 
+/** A member of a class that has a name, which may be computed. */
+type NamedMember = MethodDeclaration | PropertyDeclaration | AccessorDeclaration;
+
+/** Whether a node is a member of a class that has a name. */
+function isNamedMember(member: Node): member is NamedMember {
+  return (
+    isPropertyDeclaration(member) ||
+    isMethodDeclaration(member) ||
+    isGetAccessorDeclaration(member) ||
+    isSetAccessorDeclaration(member)
+  );
+}
+
+/** Whether a member runs with the class: a static block, or a static field's initializer. */
+function isStaticMember(member: Node): boolean {
+  return (
+    isClassStaticBlockDeclaration(member) ||
+    (isPropertyDeclaration(member) &&
+      member.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true)
+  );
+}
+
+/**
+ * What a class runs, in order: what it extends, the computed names of its members in their order,
+ * then its static initializers and blocks in theirs, and last the initializers of instances, which
+ * run once the class is made. The methods and the constructor run when they are called.
+ */
+function membersInRunOrder(
+  node: ClassDeclaration | ClassExpression,
+  children: readonly Node[],
+): readonly Node[] {
+  const members = new Set<Node>(node.members);
+  const names = node.members.flatMap((member): Node[] =>
+    isNamedMember(member) && isComputedPropertyName(member.name) ? [member.name] : [],
+  );
+  const initializers = (wanted: boolean): Node[] => {
+    return node.members.flatMap((member): Node[] => {
+      if (isStaticMember(member) !== wanted) return [];
+      if (isClassStaticBlockDeclaration(member)) return [member];
+      return isPropertyDeclaration(member) && member.initializer !== undefined
+        ? [member.initializer]
+        : [];
+    });
+  };
+  return [
+    ...children.filter((child) => !members.has(child)),
+    ...names,
+    ...initializers(true),
+    ...initializers(false),
+  ];
+}
+
 /**
  * The children of a node in the order they run. A pattern binds what its value evaluated to, so the
  * value runs before the keys and targets the pattern names.
@@ -230,6 +301,7 @@ export function inRunOrder(node: Node): readonly Node[] {
   node.forEachChild((child) => {
     children.push(child);
   });
+  if (isClassExpression(node) || isClassDeclaration(node)) return membersInRunOrder(node, children);
   const bound = boundPattern(node);
   if (bound === undefined) return children;
   const rest = children.filter((child) => child !== bound.value);
