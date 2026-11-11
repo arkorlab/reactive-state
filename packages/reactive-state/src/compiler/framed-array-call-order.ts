@@ -205,7 +205,7 @@ function runsItselfBetween(
       node.pos < to &&
       node.parent !== fn &&
       readsBinding(node) &&
-      (node.text !== name.text || reachesName(node, fn))
+      (node.text === name.text ? reachesName(node, fn) : runsWithin(node, fn))
     )
       return true;
     node.forEachChild((child) => {
@@ -292,12 +292,18 @@ function namesItself(fn: FunctionExpression, name: Identifier): boolean {
  * name first, and no arm a written condition rules out holds the read or a function that holds it.
  */
 function reachesName(name: Identifier, fn: FunctionExpression): boolean {
-  if (frameDeclarationOf(name) !== undefined || !framedPossibleBranch(name)) return false;
-  for (let at = name.parent; at !== fn; at = at.parent) {
+  if (frameDeclarationOf(name) !== undefined) return false;
+  for (let at = name.parent; at !== fn; at = at.parent)
     if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === name.text)
       return false;
+  return runsWithin(name, fn);
+}
+
+/** Whether no arm a written condition rules out holds the node, or a function that holds it. */
+function runsWithin(node: Node, fn: FunctionExpression): boolean {
+  if (!framedPossibleBranch(node)) return false;
+  for (let at = node.parent; at !== fn; at = at.parent)
     if (isAnswering(at) && !framedPossibleBranch(at)) return false;
-  }
   return true;
 }
 
