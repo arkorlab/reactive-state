@@ -289,6 +289,19 @@ function descriptorValues(
   return [...opaque, ...entries, ...descriptorWrites(names)];
 }
 
+/**
+ * The name a descriptor's field is written under, a computed one resolved by what its constants
+ * and annotations allow. A name that may be `value` or `get` and may be another is none known.
+ */
+function descriptorKey(name: PropertyName): string | undefined {
+  const key = writtenArrayKey(name);
+  if (key !== undefined || !isComputedPropertyName(name)) return key;
+  const names = framedKeyNames(name.expression);
+  if (names === undefined || names.length === 0) return undefined;
+  const reads = names.some((each) => each === 'value' || each === 'get');
+  return !reads || names.length === 1 ? names[0] : undefined;
+}
+
 /** The fields a spread copies, or those a written prototype gives a descriptor to inherit. */
 function copiedFields(
   property: ObjectLiteralElementLike,
@@ -314,7 +327,7 @@ function descriptorEntry(
   const copied = copiedFields(property, reading);
   if (copied !== undefined) return copied;
   if (isSpreadAssignment(property)) return [];
-  const key = writtenArrayKey(property.name);
+  const key = descriptorKey(property.name);
   if (key !== undefined && key !== 'value' && key !== 'get') return [];
   const found: WrittenArrayElement[] = [];
   if (key !== 'get' && isPropertyAssignment(property))

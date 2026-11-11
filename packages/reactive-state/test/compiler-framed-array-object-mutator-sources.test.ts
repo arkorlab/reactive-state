@@ -771,6 +771,42 @@ const ELEMENTS = [
     elements: ['source:0', 'source:array', 'base:0', 'base:array', 'error:'],
   },
   {
+    id: 'define-constant-computed-other-field',
+    source: `function frames(error: Error) { ${VALUES} const key = 'metadata'; const descriptor: PropertyDescriptor = { [key]: error, configurable: true }; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value'],
+  },
+  {
+    id: 'define-inline-constant-computed-other-field',
+    source: `function frames(error: Error) { ${VALUES} const key = 'metadata'; Object.defineProperty(values, 0, { [key]: error } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-constant-computed-value-field',
+    source: `function frames(error: Error) { ${VALUES} const key = 'value'; Object.defineProperty(values, 0, { [key]: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-annotated-computed-other-fields',
+    source: `function frames(error: Error, key: 'metadata' | 'other') { ${VALUES} Object.defineProperty(values, 0, { [key]: error } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-annotated-computed-value-or-other-field',
+    source: `function frames(error: Error, key: 'value' | 'metadata') { ${VALUES} Object.defineProperty(values, 0, { [key]: error } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-opaque-computed-field-pin',
+    source: `function frames(error: Error, key: string) { ${VALUES} Object.defineProperty(values, 0, { [key]: error } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -980,6 +1016,11 @@ const CONVERSIONS = [
     id: 'assign-constant-getter-source-converts',
     source: `function frames(error: Error) { const a = ['safe']; const source = { get 0(): unknown { return error; } }; Object.assign(a, source); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'define-constant-computed-other-field-safe',
+    source: `function frames(error: Error) { const a = ['safe']; const key = 'metadata'; const descriptor: PropertyDescriptor = { [key]: error, configurable: true }; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
   },
   {
     id: 'tuple-source',
