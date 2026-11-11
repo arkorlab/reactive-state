@@ -143,8 +143,9 @@ function reenteredRead(read: Node, root: FrameBinding, limit: Node): boolean {
 
 /**
  * Whether a function that holds the read runs itself between the position `from`, where a proof was
- * made in it, and the read: by its name, or through a function that calls it, wherever that
- * function is written. Another run of it, there, writes what it writes after its own read.
+ * made in it, and the end of the read, whose operands run before it reads: by its name, or through
+ * a function that calls it, wherever that function is written, or while it waits. Another run of
+ * it, there, writes what it writes after its own read.
  */
 export function recursesBetween(
   read: Node,
@@ -152,7 +153,9 @@ export function recursesBetween(
   limit: Node,
   from: number,
 ): boolean {
-  return enclosingFunctions(read, root, limit).some((fn) => runsItselfBetween(fn, from, read.pos));
+  return enclosingFunctions(read, root, limit).some(
+    (fn) => runsItselfBetween(fn, from, read.pos) || runsItselfBetween(fn, read.pos + 1, read.end),
+  );
 }
 
 /** The functions that are called by a name and hold the read, up to `limit`, and not the array. */
