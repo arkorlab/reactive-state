@@ -156,6 +156,21 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-override-before-each-read',
+    source: `function frames(error: Error) { const values = [error]; for (let pass = 0; pass < 2; pass++) { ${SAFE} String(values); values.join = Array.prototype.join; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-override-before-condition-revisit-pin',
+    source: `function frames(error: Error) { const values = [error]; for (let pass = 0; pass < 2; pass++) { ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-branch-write-before-read-pin',
+    source: `function frames(error: Error) { const values = [error]; for (let pass = 0; pass < 2; pass++) { ${SAFE} if (pass > 0) values.join = Array.prototype.join; String(values); } }`,
+    converts: true,
+  },
+  {
     id: 'iterable-read-runs-once',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (const text of [String(values), 'other']) { values.join = Array.prototype.join; } }`,
     converts: false,
@@ -204,6 +219,11 @@ const CASES = [
     id: 'recursive-iife-later-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = String(values)): string { values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
     converts: true,
+  },
+  {
+    id: 'recursive-iife-override-before-each-read-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
+    converts: false,
   },
 ] as const;
 

@@ -282,7 +282,7 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
     definite: undefined,
     until: call.end,
   });
-  deferredMethodWrites(call, root, own);
+  deferredMethodWrites(call, root, own, statement.parent);
   return own;
 }
 
@@ -369,14 +369,19 @@ function holdDefinition(node: Node, root: FrameBinding, held: Set<string>): void
 
 /**
  * Another function that may run before the read may write any method at any point before it, and
- * so may a write after it that a loop around the read brings back to it.
+ * so may a write after it that a loop around the read brings back to it. A method the read's block
+ * wrote before the read stays proven against the second, where each loop that brings the write back
+ * runs that block again, and so writes the method anew before the read.
  */
-function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods): void {
+function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, block: Node): void {
+  const owner = executionOwner(call);
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const keys = writtenMethods(node, root);
-    if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node))
-      for (const key of keys) own.set(key, { own: false });
+    if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node)) {
+      const anew = executionOwner(node) === owner && !mayRunAgain(node, call, root, block);
+      for (const key of keys) if (!anew || own.get(key)?.own !== true) own.set(key, { own: false });
+    }
     node.forEachChild((child) => {
       pending.push(child);
     });
