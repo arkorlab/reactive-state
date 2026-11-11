@@ -54,10 +54,15 @@ export type Resolve = (name: Identifier) => Expression | undefined;
 /** A value the code writes of numbers and text alone. */
 export type Constant = number | string;
 
-/** How names are read: what `resolve` answers they hold, but those followed on the way already. */
+/**
+ * How names are read: what `resolve` answers they hold, but those followed on the way already; and
+ * what each constant they name has computed to, by the expression it holds (`memo`), so that one
+ * several others read is computed once.
+ */
 interface Names {
   readonly resolve: Resolve | undefined;
   readonly following: ReadonlySet<string>;
+  readonly memo: Map<Expression, Constant | undefined>;
 }
 
 /**
@@ -66,7 +71,7 @@ interface Names {
  * holds (`+bad` of `const bad = 'x'`, `1 / zero`); none where it reads anything else.
  */
 export function constantNumber(node: Expression, resolve?: Resolve): number | undefined {
-  return numberOf(node, { following: new Set(), resolve });
+  return numberOf(node, { following: new Set(), memo: new Map(), resolve });
 }
 
 /**
@@ -74,7 +79,7 @@ export function constantNumber(node: Expression, resolve?: Resolve): number | un
  * names it reads as what `resolve` answers they hold; none of anything else.
  */
 export function constantValue(node: Expression, resolve?: Resolve): Constant | undefined {
-  return constantOperand(node, { following: new Set(), resolve });
+  return constantOperand(node, { following: new Set(), memo: new Map(), resolve });
 }
 
 function numberOf(node: Expression, names: Names): number | undefined {
@@ -159,10 +164,16 @@ function nameOperand(name: Identifier, names: Names): Constant | undefined {
   const global = NUMBER_GLOBALS.get(globalOf(name) ?? '');
   const held =
     global !== undefined || names.following.has(name.text) ? undefined : names.resolve?.(name);
-  const following = new Set([...names.following, name.text]);
-  return (
-    global ?? (held === undefined ? undefined : constantOperand(held, { ...names, following }))
-  );
+  return global ?? (held === undefined ? undefined : heldOperand(held, name, names));
+}
+
+/** What the constant `held`, which the name `name` reads, computes to: once, whoever reads it. */
+function heldOperand(held: Expression, name: Identifier, names: Names): Constant | undefined {
+  if (!names.memo.has(held)) {
+    const following = new Set([...names.following, name.text]);
+    names.memo.set(held, constantOperand(held, { ...names, following }));
+  }
+  return names.memo.get(held);
 }
 
 /** The language's functions that answer a number of what they are given alone, by their names. */
@@ -593,7 +604,7 @@ function zonelessText(text: string): boolean {
  * — as `dateTime` reads it, the names it reads as what `resolve` answers they hold; none of another.
  */
 export function writtenTime(node: Expression, resolve?: Resolve): number | undefined {
-  return timeOf(node, { following: new Set(), resolve });
+  return timeOf(node, { following: new Set(), memo: new Map(), resolve });
 }
 
 /** The time of a date the code writes (`writtenTime`), but of a name followed on the way already. */
