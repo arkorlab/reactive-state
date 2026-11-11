@@ -506,6 +506,36 @@ const CASES = [
       'source:0',
     ],
   },
+  {
+    id: 'computed-key-short-circuited-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = false && { field: error })); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'false && { field: error }:',
+      'false && { field: error }:0',
+      'false:',
+      'false:0',
+    ],
+  },
+  {
+    id: 'computed-key-nullish-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = null ?? { field: error })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:', 'null ?? { field: error }:', 'null ?? { field: error }:0'],
+  },
+  {
+    id: 'computed-key-truthy-or-source',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = true || { field: error })); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'true || { field: error }:',
+      'true || { field: error }:0',
+      'true:',
+      'true:0',
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
