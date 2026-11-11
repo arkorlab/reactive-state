@@ -1,6 +1,7 @@
 import {
   type BinaryExpression,
   type Expression,
+  isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
@@ -12,11 +13,13 @@ import {
   isFunctionLikeDeclaration,
   isIdentifier,
   isNonNullExpression,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  isVariableDeclaration,
   isVariableStatement,
   type MethodDeclaration,
   type Node,
@@ -185,6 +188,38 @@ function skipsLink(at: Node, statement: Node): boolean {
   if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
   return inner && parent !== statement;
+}
+
+/** A pattern and the value it binds: a declaration's or a default's initializer, an assignment's right. */
+function boundPattern(node: Node): { readonly pattern: Node; readonly value: Node } | undefined {
+  if (isVariableDeclaration(node) || isBindingElement(node)) {
+    const { name, initializer } = node;
+    const binds =
+      name !== undefined && (isObjectBindingPattern(name) || isArrayBindingPattern(name));
+    return binds && initializer !== undefined ? { pattern: name, value: initializer } : undefined;
+  }
+  if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.EqualsToken)
+    return undefined;
+  const { left } = node;
+  return isObjectLiteralExpression(left) || isArrayLiteralExpression(left)
+    ? { pattern: left, value: node.right }
+    : undefined;
+}
+
+/**
+ * The children of a node in the order they run. A pattern binds what its value evaluated to, so the
+ * value runs before the keys and targets the pattern names.
+ */
+export function inRunOrder(node: Node): readonly Node[] {
+  const children: Node[] = [];
+  node.forEachChild((child) => {
+    children.push(child);
+  });
+  const bound = boundPattern(node);
+  if (bound === undefined) return children;
+  const rest = children.filter((child) => child !== bound.value);
+  rest.splice(rest.indexOf(bound.pattern), 0, bound.value);
+  return rest;
 }
 
 /** What an assignment makes a property: writable and configurable, as a descriptor would say. */
