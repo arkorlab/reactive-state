@@ -269,17 +269,18 @@ function referenceText(node: Node): string | undefined {
     : undefined;
 }
 
-/** Whether a node, the name of a reference, is what a call, a construction or a tag calls. */
+/**
+ * Whether a node, the name of a reference, is what a call, a construction or a tag calls: the name
+ * itself, a property's, or either of them through `call` or `apply`.
+ */
 function called(node: Node): boolean {
   let at = holderOf(node);
+  if (isPropertyAccessExpression(at.parent) && at.parent.name === at) at = holderOf(at.parent);
   if (isPropertyAccessExpression(at.parent) && at.parent.expression === at) {
     const via = at.parent.name.text;
     if (via !== 'call' && via !== 'apply') return false;
-    at = at.parent;
-  } else if (isPropertyAccessExpression(at.parent) && at.parent.name === at) {
-    at = at.parent;
+    at = holderOf(at.parent);
   }
-  at = holderOf(at);
   const { parent } = at;
   return (
     ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
