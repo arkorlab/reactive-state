@@ -135,12 +135,7 @@ export function memberReadings(
           return members.map((member) => ({ ...member, aliases: new Set<string>() }));
         if (isExpressionWithTypeArguments(source.type)) return [];
         if (/^(?:0|[1-9]\d*)$/u.test(key)) {
-          const tuple = writtenTupleReadings(
-            source,
-            Number(key),
-            (rest, index) => restElementReadings(rest, operands, index),
-            operands,
-          );
+          const tuple = tupleReadings(source, Number(key), operands);
           if (tuple !== undefined)
             return tuple.map((member) => ({ ...member, aliases: new Set<string>() }));
         }
@@ -226,15 +221,57 @@ export function arrayElementReadings(
     const fromEnd = index !== undefined && index < 0;
     const offsets = fromEnd ? endSelection(source.type, index) : undefined;
     if (offsets !== undefined) return offsets.map((type) => ({ ...source, type }));
-    return (
-      writtenTupleReadings(
-        source,
-        fromEnd ? undefined : index,
-        (rest, relative) => restElementReadings(rest, operands, relative),
-        operands,
-      ) ?? []
-    );
+    return tupleReadings(source, fromEnd ? undefined : index, operands) ?? [];
   });
+}
+
+/**
+ * The elements a written tuple may hold at `index`, or every one. A rest the reader cannot expand,
+ * an array's, with a member after it, leaves each place from its own on uncertain: it may hold an
+ * element of the rest or one of the members after, as far along as the rest runs. Every element
+ * stands there then, as one does where the rest ends the tuple. None where the type is no tuple.
+ */
+function tupleReadings(
+  source: TypeReading,
+  index: number | undefined,
+  operands: Operands,
+): readonly TypeReading[] | undefined {
+  const select = (rest: TypeReading, relative: number | undefined) =>
+    restElementReadings(rest, operands, relative);
+  let opaque = 0;
+  let selected = 0;
+  const exact = writtenTupleReadings(
+    source,
+    index,
+    (rest, relative) => {
+      selected += 1;
+      return select(rest, relative);
+    },
+    (rest) => {
+      const readings = operands(rest);
+      if (!expandedRest(readings)) opaque += 1;
+      return readings;
+    },
+  );
+  if (exact === undefined || index === undefined || opaque === selected) return exact;
+  return writtenTupleReadings(source, undefined, select, operands);
+}
+
+/** Whether a rest is wholly written tuples, which a tuple's selection expands member by member. */
+function expandedRest(readings: readonly TypeReading[]): boolean {
+  return (
+    readings.length > 0 &&
+    readings.every((reading) => {
+      let { type } = reading;
+      if (isExpressionWithTypeArguments(type)) return false;
+      while (
+        isParenthesizedTypeNode(type) ||
+        (isTypeOperatorNode(type) && type.operator === SyntaxKind.ReadonlyKeyword)
+      )
+        type = type.type;
+      return isTupleTypeNode(type);
+    })
+  );
 }
 
 /** Every position of a finite required tuple may be produced by source iteration. */
