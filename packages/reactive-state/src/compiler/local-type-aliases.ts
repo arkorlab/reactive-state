@@ -44,7 +44,7 @@ import {
   isSignatureDeclaration,
 } from 'typescript/ast';
 
-import { dottedStatements, namespaceStatements } from './local-type-namespaces.ts';
+import { dottedStatements, holdsValues, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, hoistedIn } from './scope.ts';
 
 /** Local type declarations a reference names, with each nearer binding taking precedence. */
@@ -238,7 +238,10 @@ function bindsScopedValue(node: Node, within: Node, name: string): boolean {
   return hoistedIn(code).some((declaration) => bindingNames(declaration.name, name));
 }
 
-/** Whether `statement` declares or imports a value of `name`, even if its shape is unknown. */
+/**
+ * Whether `statement` declares or imports a value of `name`, even if its shape is unknown — but a
+ * namespace of types alone, which emits none.
+ */
 function bindsValue(statement: Statement, name: string): boolean {
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.some((declaration) =>
@@ -252,7 +255,7 @@ function bindsValue(statement: Statement, name: string): boolean {
     return statement.name.text === name;
   }
   if (isModuleDeclaration(statement)) {
-    return isIdentifier(statement.name) && statement.name.text === name;
+    return isIdentifier(statement.name) && statement.name.text === name && holdsValues(statement);
   }
   return (
     (isClassDeclaration(statement) ||

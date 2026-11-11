@@ -5,6 +5,7 @@ import {
   isCaseBlock,
   isClassDeclaration,
   isEnumDeclaration,
+  isExportDeclaration,
   isIdentifier,
   isImportDeclaration,
   isImportEqualsDeclaration,
@@ -15,6 +16,7 @@ import {
   isQualifiedName,
   isSourceFile,
   isTypeAliasDeclaration,
+  type ImportEqualsDeclaration,
   type ModuleBlock,
   type ModuleDeclaration,
   type Node,
@@ -274,5 +276,35 @@ function importsName(statement: Statement, name: string): boolean {
     (isNamespaceImport(named)
       ? named.name.text === name
       : named.elements.some((element) => element.name.text === name))
+  );
+}
+
+/** Whether an alias is exported, `export import alias = …`, which makes the namespace emit. */
+function isExported(alias: ImportEqualsDeclaration): boolean {
+  return alias.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
+}
+
+/**
+ * Whether a namespace declares a value, as TypeScript emits it: one of types alone — interfaces,
+ * aliases, namespaces of them, an alias it does not export, an empty body — emits none, and the
+ * name it shares with a value around it is that value's.
+ */
+export function holdsValues(namespace: ModuleDeclaration): boolean {
+  let { body } = namespace;
+  while (body !== undefined && isModuleDeclaration(body)) {
+    ({ body } = body);
+  }
+  return (
+    body !== undefined &&
+    isModuleBlock(body) &&
+    body.statements.some((statement) => {
+      return !(
+        isInterfaceDeclaration(statement) ||
+        isTypeAliasDeclaration(statement) ||
+        (isExportDeclaration(statement) && statement.isTypeOnly) ||
+        (isImportEqualsDeclaration(statement) && !isExported(statement)) ||
+        (isModuleDeclaration(statement) && !holdsValues(statement))
+      );
+    })
   );
 }
