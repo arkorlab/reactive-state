@@ -174,15 +174,33 @@ function operands(value: BinaryExpression): readonly Expression[] {
  * neither. None where the compile cannot tell.
  */
 function nullishness(expression: Expression): boolean | undefined {
-  let value = unwrapped(expression);
-  for (let held = constantInitializer(value); held !== undefined; held = constantInitializer(value))
-    value = unwrapped(held);
+  const value = writtenValue(expression);
+  if (value === undefined) return undefined;
   if (isIdentifier(value))
     return value.text === 'undefined' && frameBindingOf(value) === undefined ? true : undefined;
   if (isVoidExpression(value) || value.kind === SyntaxKind.NullKeyword) return true;
   return framedCondition(value) !== undefined || isObjectLiteralExpression(value)
     ? false
     : undefined;
+}
+
+/**
+ * What an expression is written as, through the constants that hold it; none where a constant
+ * holds itself, however many names the chain passes through.
+ */
+function writtenValue(expression: Expression): Expression | undefined {
+  const seen = new Set<Node>();
+  let value = unwrapped(expression);
+  for (
+    let held = constantInitializer(value);
+    held !== undefined;
+    held = constantInitializer(value)
+  ) {
+    if (seen.has(held)) return undefined;
+    seen.add(held);
+    value = unwrapped(held);
+  }
+  return value;
 }
 
 /**
@@ -262,7 +280,9 @@ function fieldName(property: ObjectLiteralElementLike): string | undefined {
   return literalKey(property.name);
 }
 
-/** The names a field of a written object always sets: its own, or those of the literal it spreads. */
+/**
+ * The names a field of a written object always sets: its own, or those of the literal it spreads.
+ */
 function fieldNames(property: ObjectLiteralElementLike): readonly string[] {
   if (!isSpreadAssignment(property)) {
     const name = fieldName(property);

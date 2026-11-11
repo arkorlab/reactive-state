@@ -626,6 +626,20 @@ const CASES = [
     key: 'message',
     values: ["'safe':", 'empty ?? { field: error }:', 'empty ?? { field: error }:0', 'error:'],
   },
+  {
+    id: 'computed-key-alias-of-itself-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const source: object = source; return Object.fromEntries([entry], ({ [name]: entry[1] } = source ?? {})); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      'source ?? {}:',
+      'source ?? {}:0',
+      'source:',
+      'source:',
+      'source:0',
+      'source:0',
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
