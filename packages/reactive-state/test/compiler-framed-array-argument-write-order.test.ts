@@ -582,6 +582,31 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.assign(values, { ignored: flag ? (values.join = Array.prototype.join) : 0 }); Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {} }); Object.defineProperty(values, 'join', { value: () => 'safe' }); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'class-field-initializer-is-deferred',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-private-field-initializer-is-deferred',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { #field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-field-initializer-runs',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); }, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-computed-key-runs',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-method-body-is-deferred',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { method() { return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
