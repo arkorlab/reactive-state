@@ -1,6 +1,8 @@
 import {
   type BindingElement,
   type ClassDeclaration,
+  type EnumDeclaration,
+  type EnumMember,
   type Expression,
   type Identifier,
   type FunctionDeclaration,
@@ -9,10 +11,12 @@ import {
   isBlock,
   isCallExpression,
   isCaseBlock,
+  isCaseClause,
   isCatchClause,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
+  isDefaultClause,
   isElementAccessExpression,
   isEnumDeclaration,
   isIdentifier,
@@ -40,6 +44,8 @@ import {
   type TypeNode,
   type VariableDeclaration,
   isSignatureDeclaration,
+  type ModuleDeclaration,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -178,6 +184,7 @@ function resolvedKey(node: Expression): string | undefined {
 function localBinding(node: Node, within: Node, name: string): FrameDeclaration | null | undefined {
   const loop = loopBinding(node, name);
   if (loop !== undefined) return loop;
+  if (isEnumDeclaration(node) && hasMember(node, name)) return null;
   if (
     isCatchClause(node) &&
     node.variableDeclaration !== undefined &&
@@ -195,6 +202,103 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name?.text === name
     ? null
     : undefined;
+}
+
+/**
+ * Whether an enum, or one merged with it, has a member named `name`: within their initializers the
+ * bare name is that member, before any binding around them.
+ */
+function hasMember(enumeration: EnumDeclaration, name: string): boolean {
+  const memberNamed = (member: EnumMember): boolean =>
+    (isIdentifier(member.name) || isStringLiteral(member.name)) && member.name.text === name;
+  return mergedEnums(enumeration).some((each) =>
+    each.members.some((member) => memberNamed(member)),
+  );
+}
+
+/**
+ * The enums that merge with `enumeration`, itself among them: those of its name in its scope and,
+ * where it is exported, the exported ones of the other bodies of the namespace that holds it.
+ */
+function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
+  const { parent } = enumeration;
+  const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
+  const { text } = enumeration.name;
+  const namespace = scope.parent;
+  if (!isModuleBlock(scope) || !isModuleDeclaration(namespace) || !isExported(enumeration)) {
+    return enumsNamed(statementsOf(scope) ?? [enumeration], text, false);
+  }
+  return mergedNamespaces(namespace).flatMap((each) => {
+    const { body } = each;
+    return body !== undefined && isModuleBlock(body)
+      ? enumsNamed(body.statements, text, body !== scope)
+      : [];
+  });
+}
+
+/**
+ * The namespaces that merge with `namespace`, itself among them: those of its name in its scope and,
+ * where it is exported — the tree has a dotted one, `namespace M.N`, export the `N` of the `M` that
+ * holds it — the exported ones among what the other declarations of the namespace that holds it
+ * hold, which merge with it in turn.
+ */
+function mergedNamespaces(namespace: ModuleDeclaration): readonly ModuleDeclaration[] {
+  const { name, parent } = namespace;
+  if (!isIdentifier(name)) return [namespace];
+  const holder = isModuleBlock(parent) ? parent.parent : parent;
+  if (!isModuleDeclaration(holder) || !isExported(namespace)) {
+    return namespacesNamed(statementsOf(parent) ?? [namespace], name.text, false);
+  }
+  return mergedNamespaces(holder).flatMap((around) =>
+    namespacesWithin(around, name.text, around !== holder),
+  );
+}
+
+/** What the namespace `around` holds named `name`: its dotted one, or those its body exports. */
+function namespacesWithin(
+  around: ModuleDeclaration,
+  name: string,
+  exported: boolean,
+): ModuleDeclaration[] {
+  const { body } = around;
+  if (body === undefined) return [];
+  if (isModuleDeclaration(body))
+    return isIdentifier(body.name) && body.name.text === name ? [body] : [];
+  return isModuleBlock(body) ? namespacesNamed(body.statements, name, exported) : [];
+}
+
+/** The enums of `statements` named `name`: those exported alone, where `exported` is asked. */
+function enumsNamed(
+  statements: readonly Statement[],
+  name: string,
+  exported: boolean,
+): EnumDeclaration[] {
+  return statements.flatMap((statement) => {
+    const found = isEnumDeclaration(statement) && statement.name.text === name;
+    return found && (!exported || isExported(statement)) ? [statement] : [];
+  });
+}
+
+/** The namespaces of `statements` named `name`: those exported alone, where `exported` is asked. */
+function namespacesNamed(
+  statements: readonly Statement[],
+  name: string,
+  exported: boolean,
+): ModuleDeclaration[] {
+  return statements.flatMap((statement) => {
+    const found =
+      isModuleDeclaration(statement) &&
+      isIdentifier(statement.name) &&
+      statement.name.text === name;
+    return found && (!exported || isExported(statement)) ? [statement] : [];
+  });
+}
+
+/** Whether a declaration of a value is exported, as the namespace that holds it merges it. */
+function isExported(declaration: EnumDeclaration | ModuleDeclaration): boolean {
+  return (
+    declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
+  );
 }
 
 /** Ordinary and namespace blocks keep their statements; a switch's clauses share one scope. */
