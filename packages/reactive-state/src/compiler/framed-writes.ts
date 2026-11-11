@@ -42,6 +42,7 @@ import {
   type BreakOrContinueStatement,
   type Node,
   type Statement,
+  type TryStatement,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -152,7 +153,7 @@ export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner:
   return repeatingBodies(node, name, declared, owner).length > 0;
 }
 
-/** The bodies of the loops around a read that bring a later write back to it, as `repeatedFrameRead` asks. */
+/** The bodies of the loops around a read that bring a later write back to it, as it asks. */
 export function repeatingBodies(
   node: Node,
   name: Node,
@@ -196,20 +197,54 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
 
 /**
  * Whether a statement of `block`, a block within the body, leaves the loop whose body it is: a
- * return or a throw, or a break that no loop or switch within the body takes, where no function and
- * no try statement, whose catch or finally may go on, lies between.
+ * return or a throw, or a break whose loop, switch or label holds the loop, where no function lies
+ * between and no try statement goes on after it.
  */
 function leavesBody(statement: Statement, block: Node, body: Node): boolean {
-  const breaks = isBreakStatement(statement) && statement.label === undefined;
-  if (!breaks && !isReturnStatement(statement) && !isThrowStatement(statement)) return false;
-  if (block === body) return true;
-  for (let at = block.parent; at !== body; at = at.parent) {
+  if (isBreakStatement(statement)) {
+    const target = jumpTarget(statement);
+    const loop = body.parent;
+    if (target === undefined || target.pos > loop.pos || loop.end > target.end) return false;
+  } else if (!isReturnStatement(statement) && !isThrowStatement(statement)) return false;
+  for (let at = block.parent, from = block; from !== body; from = at, at = at.parent) {
     if (isAnswering(at) || isConstructorDeclaration(at) || isSetAccessorDeclaration(at))
       return false;
-    if (isTryStatement(at) || (breaks && (loopBody(at) !== undefined || isSwitchStatement(at))))
-      return false;
+    if (isTryStatement(at) && resumesAfter(at, from)) return false;
   }
   return true;
+}
+
+/**
+ * Whether a try statement between `node` and the first of the `limits` that it lies in may go on
+ * after what happens in `node`, as `resumesAfter` asks.
+ */
+export function resumesWithin(node: Node, limits: readonly Node[]): boolean {
+  for (let at = node.parent, from = node; !limits.includes(from); from = at, at = at.parent)
+    if (isTryStatement(at) && resumesAfter(at, from)) return true;
+  return false;
+}
+
+/**
+ * Whether a try statement goes on after an exception, or a jump, in the part `from` of it: a catch
+ * takes what its try block throws, and a finally with a continue or a break of its own may resume
+ * the loop whatever happened; a finally alone only lets the exception, or the exit, go on.
+ */
+function resumesAfter(statement: TryStatement, from: Node): boolean {
+  if (from === statement.tryBlock && statement.catchClause !== undefined) return true;
+  const { finallyBlock } = statement;
+  return finallyBlock !== undefined && from !== finallyBlock && jumpsIn(finallyBlock);
+}
+
+/** Whether a continue or a break lies in the node, wherever it is nested. */
+function jumpsIn(node: Node): boolean {
+  const pending: Node[] = [node];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (isContinueStatement(each) || isBreakStatement(each)) return true;
+    each.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /**

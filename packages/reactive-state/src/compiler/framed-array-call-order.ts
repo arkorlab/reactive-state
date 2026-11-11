@@ -15,7 +15,6 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isTryStatement,
   isTypeNode,
   type Node,
   SyntaxKind,
@@ -32,6 +31,7 @@ import {
   framedPossibleBranch,
   repeatedFrameRead,
   repeatingBodies,
+  resumesWithin,
 } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
@@ -109,9 +109,9 @@ export function mayRunAgain(node: Node, read: Node, root: FrameBinding, limit: N
 /**
  * Whether a write that a loop brings back to the read is followed, in the same pass, by a statement
  * that assigns the same method outright: one of a block around the write, after it, inside every
- * loop that brings the write back, that nothing may skip. No continue or break between them lands past it, and
- * no try statement within the loop holds the statement, whose catch may go on past it. The next read
- * finds what that statement wrote, and the write comes to nothing.
+ * loop that brings the write back, that nothing may skip. No continue or break between them lands
+ * past it, and no try statement within the loop goes on past it, after an exception or a finally's
+ * jump. The next read finds what that statement wrote, and the write comes to nothing.
  */
 export function overwrittenInPass(
   write: Node,
@@ -139,14 +139,8 @@ export function overwrittenInPass(
         !jumpsOver(parent, write.pos, each)
       );
     });
-    if (later !== undefined && !triedWithin(parent, bodies)) return true;
+    if (later !== undefined && !resumesWithin(parent, bodies)) return true;
   }
-  return false;
-}
-
-/** Whether a try statement lies between the block and the innermost body of the loops. */
-function triedWithin(block: Node, bodies: readonly Node[]): boolean {
-  for (let at = block; !bodies.includes(at); at = at.parent) if (isTryStatement(at)) return true;
   return false;
 }
 

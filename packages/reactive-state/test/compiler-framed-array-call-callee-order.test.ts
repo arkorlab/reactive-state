@@ -392,6 +392,36 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-labeled-break-of-the-loop',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} outer: while (String(values) === 'fixed') { values.join = Array.prototype.join; break outer; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-labeled-break-of-an-outer-loop',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} outer: while (String(values) === 'fixed') { for (const text of ['one', 'two']) { values.join = Array.prototype.join; break outer; } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-finally-return-after-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { values.join = Array.prototype.join; return 1; } finally { /* nothing */ } } return 0; }`,
+    converts: false,
+  },
+  {
+    id: 'loop-overwrite-in-try-finally',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; values.join = () => 'fixed'; } finally { /* nothing */ } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-finally-continue-skips-overwrite-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; if (pass === 0) throw error; values.join = () => 'fixed'; } finally { continue; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-outer-catch-skips-overwrite-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { try { values.join = Array.prototype.join; if (pass === 0) throw error; values.join = () => 'fixed'; } finally { /* nothing */ } } catch { /* the loop goes on */ } } }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
