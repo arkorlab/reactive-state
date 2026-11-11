@@ -159,16 +159,14 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
 }
 
 /**
- * The slots a node writes on the tuple's bindings, with the values it hands them. A default whose
- * left is a pattern is no assignment of its own: the enclosing pattern, or the loop head that holds
- * it, evaluates it, or not.
+ * The slots a node writes on the tuple's bindings, with the values it hands them. A default inside
+ * a pattern is no assignment of its own, whatever its left is: the enclosing pattern, or the loop
+ * head that holds it, evaluates it or not, and routes its right side where it does.
  */
 function slotWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
+  if (assignmentPatternDefault(node) || loopHeadDefault(node)) return [];
   const slot = tupleWrite(node, aliases);
-  if (slot === null) {
-    const held = assignmentPatternDefault(node) || loopHeadDefault(node);
-    return held ? [] : patternWrites(node, aliases);
-  }
+  if (slot === null) return patternWrites(node, aliases);
   if (isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind))
     return [{ slot, sources: [{ value: node.right, keys: [] }] }];
   return [{ slot, sources: [] }];

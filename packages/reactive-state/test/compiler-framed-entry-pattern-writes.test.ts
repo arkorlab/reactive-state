@@ -306,6 +306,24 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':"],
   },
+  {
+    id: 'member-default-not-evaluated',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ([entry[1] = error] = ['kept'])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'object-member-default-not-evaluated',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ x: entry[1] = error } = { x: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'loop-head-member-default-not-evaluated',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], (() => { for ([entry[1] = error] of [['kept']]); })()); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
