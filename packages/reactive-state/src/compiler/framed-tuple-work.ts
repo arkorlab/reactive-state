@@ -201,12 +201,7 @@ export function namedElsewhere(
   binding: FrameBinding,
   call: CallExpression | NewExpression,
 ): boolean {
-  const statement = binding.parent.parent;
-  if (
-    isVariableStatement(statement) &&
-    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
-  )
-    return true;
+  if (exportedDeclaration(binding)) return true;
   const owner = executionOwner(call);
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -224,6 +219,15 @@ export function namedElsewhere(
     });
   }
   return false;
+}
+
+/** Whether `binding` is exported where it is declared: `export const tuple = …`. */
+export function exportedDeclaration(binding: FrameBinding): boolean {
+  const statement = binding.parent.parent;
+  return (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
+  );
 }
 
 /** Whether `name` is exported where it stands: `export { name }`, `export default name`. */
