@@ -393,7 +393,8 @@ function definedValues(
 
 /**
  * The descriptors of a map written as a list: the entry at the slot's position, or, where a
- * spread may shift the positions or the slot is unknown, each entry.
+ * spread may shift the positions or the slot is unknown, each entry. A spread hands over each
+ * entry of what it spreads, read as a list of descriptors in turn.
  */
 function listedDescriptors(
   list: ArrayLiteralExpression,
@@ -404,7 +405,10 @@ function listedDescriptors(
   return list.elements.flatMap((element, at) => {
     if (isSpreadElement(element)) {
       shifted = true;
-      return [{ value: element.expression, keys: [slotKey(index), 'value'] }];
+      return [
+        { value: element.expression, keys: [slotKey(index), 'value'] },
+        ...definedValues(element.expression, undefined, reading),
+      ];
     }
     if (isOmittedExpression(element)) return [];
     return shifted || index === undefined || at === index ? descriptorValues(element, reading) : [];

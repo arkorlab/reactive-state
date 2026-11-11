@@ -1718,6 +1718,41 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { configurable: true }; const first = descriptor; for (let at = 0; at < 2; at += 1) { const second = first; Object.defineProperty(a, 0, second); descriptor.get = () => error; } return String(a); }`,
     converts: true,
   },
+  {
+    id: 'define-array-map-spread-literal-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, [{ value: 'a' }, ...[{ get: () => error }]] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-map-spread-first-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, [...[{ get: () => error }]] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-map-spread-constant-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const maps = [{ get: () => error }]; Object.defineProperties(a, [...maps] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-map-spread-tuple-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: [PropertyDescriptor, PropertyDescriptor] = [{ value: 'a' }, { get: () => error }]; Object.defineProperties(a, [...maps] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-map-spread-assigned-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptor[] = []; maps[0] = { get: () => error }; Object.defineProperties(a, [...maps] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-map-spread-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, [...[{ value: 'safe' }]] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-map-spread-cycle-terminates',
+    source: `function frames(error: Error) { const a = ['safe']; const first: PropertyDescriptor[] = [{ get: () => error }, ...second]; const second: PropertyDescriptor[] = [...first, ...first]; Object.defineProperties(a, [...first, ...second] as unknown as PropertyDescriptorMap); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
