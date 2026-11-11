@@ -40,6 +40,7 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
+  isTypeOfExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -63,7 +64,10 @@ import { bindingIdentifiers, hoistedIn, readsBinding } from './scope.ts';
 type Timestamp = 'absent' | 'defined' | 'unknown';
 type Binding = VariableDeclaration | null | undefined;
 
-/** Whether a global File reference can escape construction with a timestamp shown defined. */
+/**
+ * Whether a global File reference can escape construction with a timestamp shown defined. A
+ * reference only tested, `typeof File` or `value instanceof File`, constructs nothing.
+ */
 export function fileReferenceReadsClock(reference: Identifier): boolean {
   if (!fileConstructorReference(reference)) return false;
   const pending = [reference];
@@ -75,26 +79,51 @@ export function fileReferenceReadsClock(reference: Identifier): boolean {
       if (!hasFileTimestamp(parent)) return true;
       continue;
     }
-    if (
-      !isVariableDeclaration(parent) ||
-      parent.initializer !== expression ||
-      !isConstant(parent)
-    ) {
-      return true;
-    }
-    const statement = parent.parent.parent;
-    if (
-      isVariableStatement(statement) &&
-      statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
-    ) {
-      return true;
-    }
-    if (!seen.has(parent)) {
-      seen.add(parent);
-      pending.push(...constructorReferences(parent, localBinding));
-    }
+    if (isTested(parent, expression)) continue;
+    const aliased = aliasReads(parent, expression, seen);
+    if (aliased === undefined) return true;
+    pending.push(...aliased);
   }
   return false;
+}
+
+/**
+ * Whether `parent` only tests what `at` is: the operand of `typeof`, or the right of `instanceof`,
+ * which reads the constructor's `Symbol.hasInstance` and prototype and calls it never. The left of
+ * `instanceof` is handed to the right side's `Symbol.hasInstance`, which may construct it.
+ */
+function isTested(parent: Node, at: Expression): boolean {
+  return (
+    isTypeOfExpression(parent) ||
+    (isBinaryExpression(parent) &&
+      parent.operatorToken.kind === SyntaxKind.InstanceOfKeyword &&
+      parent.right === at)
+  );
+}
+
+/**
+ * What a read of a File reference, `expression` within `parent`, leaves to follow: the reads of the
+ * constant it initializes, unless they were followed already. `undefined` where it stands in
+ * anything else, or in a constant that is exported, which hands the reference on.
+ */
+function aliasReads(
+  parent: Node,
+  expression: Expression,
+  seen: Set<VariableDeclaration>,
+): readonly Identifier[] | undefined {
+  if (!isVariableDeclaration(parent) || parent.initializer !== expression || !isConstant(parent)) {
+    return undefined;
+  }
+  const statement = parent.parent.parent;
+  if (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
+  ) {
+    return undefined;
+  }
+  if (seen.has(parent)) return [];
+  seen.add(parent);
+  return constructorReferences(parent, localBinding);
 }
 
 /** Whether a global File, or a constant alias of it, may take its timestamp from the clock. */
