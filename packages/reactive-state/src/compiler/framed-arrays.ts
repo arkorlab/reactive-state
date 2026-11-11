@@ -510,7 +510,8 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
 /**
  * Native object mutators replace own methods in source order, retaining unknown writes as unknown.
  * Through a name that may hold another array they only leave the methods they write unproven, with
- * the attributes a definition gives them that hold either way.
+ * the attributes a definition gives them that hold either way, read against the methods as they
+ * stood, since a definition that leaves an attribute unsaid keeps it.
  */
 function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
   if (!isCallExpression(node)) return;
@@ -522,9 +523,10 @@ function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods)
     mutatorWrites(node, path, own);
     return;
   }
-  const possible: OwnMethods = new Map();
+  const possible: OwnMethods = new Map(own);
   mutatorWrites(node, path, possible);
-  for (const [key, written] of possible) own.set(key, possibleOverride(written, own.get(key)));
+  for (const [key, written] of possible)
+    if (written !== own.get(key)) own.set(key, possibleOverride(written, own.get(key)));
 }
 
 /** The methods one native object mutator writes, as it names them. */

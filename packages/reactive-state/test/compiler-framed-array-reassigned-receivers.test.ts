@@ -184,6 +184,31 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'alias-partial-definition-keeps-attributes',
+    source: `function frames(error: Error) { const a = [error]; a.join = () => 'first'; let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; ${SAFE} return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'alias-partial-definition-keeps-attributes-of-descriptors',
+    source: `function frames(error: Error) { const a = [error]; a.join = () => 'first'; let b = a; Object.defineProperties(b, { join: { value: Array.prototype.join } }); b = []; ${SAFE} return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'alias-partial-definition-after-definition-keeps-attributes',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { value: () => 'first', writable: true, configurable: true }); let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; ${SAFE} return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'alias-partial-definition-of-fixed-value-pin',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { value: () => 'first' }); let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-partial-accessor-definition-pin',
+    source: `function frames(error: Error) { const a = [error]; a.join = () => 'first'; let b = a; Object.defineProperty(b, 'join', { get() { return Array.prototype.join; } }); b = []; ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'alias-never-reassigned-pin',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; return String(a); }`,
     converts: true,
