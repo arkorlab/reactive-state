@@ -436,14 +436,16 @@ function mapWrites(
 ): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys, without }) => {
+  return heldMemberWrites(first, names, reading.at).flatMap((write) => {
+    const { key, value, keys, without, copiedAt } = write;
     const hides = key !== undefined && hidden.data.has(key);
     if (hides || (key !== undefined && !possibleKey(key, index))) return [];
     const left = { data: new Set(without), getters: new Set(without) };
+    const read = copiedAt === undefined ? reading : { ...reading, at: copiedAt, inherited: false };
     return selectedValues(value, keys).flatMap((each) => {
       return each.keys.length > 0
         ? [{ value: each.value, keys: [...each.keys, 'value'] }]
-        : descriptorValues(each.value, reading, left);
+        : descriptorValues(each.value, read, left);
     });
   });
 }

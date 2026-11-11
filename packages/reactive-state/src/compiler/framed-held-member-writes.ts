@@ -46,6 +46,8 @@ export interface HeldWrite {
   readonly keys: readonly string[];
   /** The names a rest left out of the copy it gives the member. */
   readonly without?: readonly string[] | undefined;
+  /** Where a rest copies its source, whose later changes the copy does not hold. */
+  readonly copiedAt?: Node | undefined;
 }
 
 /**
@@ -137,6 +139,7 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
         value,
         keys,
         without,
+        copiedAt: without === undefined ? undefined : node,
       };
     });
   });

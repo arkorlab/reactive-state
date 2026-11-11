@@ -2145,6 +2145,26 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-rest-copy-before-later-write',
+    source: `function frames(error: Error) { const a = ['safe']; const source: PropertyDescriptor = {}; const maps: PropertyDescriptorMap = {}; ({ ...maps[0] } = source); source.get = () => error; Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-copy-after-earlier-write-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const source: PropertyDescriptor = {}; const maps: PropertyDescriptorMap = {}; source.get = () => error; ({ ...maps[0] } = source); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-rest-copy-own-fields-only',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; ({ ...maps[0] } = { __proto__: { get: () => error }, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-copy-held-prototype-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const source = { __proto__: { get: () => error } }; ({ ...maps[0] } = source); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'src-list-spread-written-length',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = [...[() => 'safe', () => error]]; [descriptor.get] = source; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
