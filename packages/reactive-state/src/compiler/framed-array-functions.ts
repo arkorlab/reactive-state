@@ -12,6 +12,7 @@ import {
   isComputedPropertyName,
   isDeleteExpression,
   isElementAccessExpression,
+  isExpression,
   isIdentifier,
   isFunctionExpression,
   isFunctionDeclaration,
@@ -20,6 +21,7 @@ import {
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
@@ -47,6 +49,7 @@ import {
 
 import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { useOf } from './code-globals.ts';
 import { deferredArrayChange } from './framed-array-mutations.ts';
 import {
   frameBindingOf,
@@ -210,7 +213,7 @@ function firstReference(
     });
   }
   return !deferredArrayChange(reference, binding, {
-    member: (value) => methodValue(value, false) !== undefined,
+    member: quietMember,
     quiet: quietWrittenCall,
   });
 }
@@ -227,6 +230,30 @@ function quietCallRest(node: Node, reference: Identifier): readonly Node[] | und
   while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
     root = unwrapped(root.expression);
   return isObjectLiteralExpression(root) ? [root] : [];
+}
+
+/**
+ * A member read of the holder that hands nothing of it away: a function, or a value that is no
+ * object the holder's literal holds. Such an object read as a value, passed on or kept under a
+ * name, is the holder's own, and what receives it can replace the method it holds; a pattern that
+ * takes it apart only reads its members.
+ */
+function quietMember(value: Expression): boolean {
+  const selected = methodValue(value, false);
+  if (selected === undefined) return false;
+  if (isFunctionDeclaration(selected) || isMethodDeclaration(selected)) return true;
+  return !isObjectLiteralExpression(unwrapped(selected)) || takenApart(value);
+}
+
+/** Whether `value` is what an object pattern of a declaration takes apart. */
+function takenApart(value: Expression): boolean {
+  const { at, parent } = useOf(value);
+  return (
+    isExpression(at) &&
+    isVariableDeclaration(parent) &&
+    parent.initializer === at &&
+    isObjectBindingPattern(parent.name)
+  );
 }
 
 /** Other function bodies are deferred, but their computed method names are evaluated now. */
