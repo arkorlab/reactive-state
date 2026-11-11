@@ -257,6 +257,25 @@ function declaresValue(node: Identifier): boolean {
   );
 }
 
+/**
+ * Whether `node` is the name of a function or class expression that the constant of that name
+ * holds, `const handler = function handler() {}`: within it, it is that value, as the constant's
+ * name is — one name, one value.
+ */
+function namesItsHolder(node: Identifier): boolean {
+  const { parent } = node;
+  if (!(isFunctionExpression(parent) || isClassExpression(parent)) || parent.name !== node) {
+    return false;
+  }
+  let holder = parent.parent;
+  while (isParenthesizedExpression(holder)) {
+    holder = holder.parent;
+  }
+  return (
+    isVariableDeclaration(holder) && isIdentifier(holder.name) && holder.name.text === node.text
+  );
+}
+
 /** Whether `statement` is exported: `export`, `export default`. */
 function isExported(statement: FunctionDeclaration | VariableStatement): boolean {
   return statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
@@ -356,7 +375,9 @@ function namesOf(sourceFile: SourceFile): Names {
       names.candidates.push(candidate);
     }
     if (isIdentifier(node) && declaresValue(node)) {
-      names.declared.set(node.text, (names.declared.get(node.text) ?? 0) + 1);
+      if (!namesItsHolder(node)) {
+        names.declared.set(node.text, (names.declared.get(node.text) ?? 0) + 1);
+      }
     } else if (isIdentifier(node) && readsBinding(node)) {
       names.reads.set(node.text, [...(names.reads.get(node.text) ?? []), node]);
     }
