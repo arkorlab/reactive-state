@@ -4,13 +4,19 @@ import {
   isClassDeclaration,
   isDecorator,
   isEnumDeclaration,
+  isExportAssignment,
   isFunctionDeclaration,
   isIdentifier,
+  isImportEqualsDeclaration,
   isInterfaceDeclaration,
   isMetaProperty,
+  isModuleBlock,
+  isModuleDeclaration,
   isParameterDeclaration,
+  isSourceFile,
   isTypeAliasDeclaration,
   isVariableStatement,
+  type ModuleDeclaration,
   type Node,
   type Statement,
   SyntaxKind,
@@ -65,6 +71,7 @@ export function prefixDeclarations(prefix: readonly Statement[]): readonly Ident
  */
 export function checkServerNode(node: Node, declared: ReadonlySet<string>, fail: Fail): void {
   checkStrippable(node, fail);
+  checkModuleSyntax(node, fail);
   checkRunTimeImport(node, declared, fail);
 }
 
@@ -106,6 +113,72 @@ function checkStrippable(node: Node, fail: Fail): void {
       node,
     );
   }
+}
+
+/**
+ * Node refuses as well what it would have to build from a `namespace` or `module` that holds code,
+ * from an `import … =` and from an `export =`, wherever they are written: each is TypeScript's,
+ * where JavaScript has the module's own forms. A `namespace` of types alone leaves nothing to run,
+ * as does a `declare`d one, and Node runs both.
+ */
+function checkModuleSyntax(node: Node, fail: Fail): void {
+  if (isModuleDeclaration(node) && !ambient(node) && holdsCode(node)) {
+    fail(
+      'The server part is run with its types stripped, which leaves a `namespace` that holds more than types nothing to run: declare an object of constants instead.',
+      node,
+    );
+  }
+  if (isImportEqualsDeclaration(node)) {
+    fail(
+      "The server part is run with its types stripped, which leaves an `import … =` nothing to run: import the module by name, beside the component's other imports.",
+      node,
+    );
+  }
+  if (isExportAssignment(node) && node.isExportEquals) {
+    fail(
+      'The server part is run with its types stripped, which leaves an `export =` nothing to run: export what the module offers by name instead.',
+      node,
+    );
+  }
+}
+
+/** Whether a `declare` is on the declaration or on one around it: ambient code is erased whole. */
+function ambient(declaration: ModuleDeclaration): boolean {
+  for (let at: Node = declaration; !isSourceFile(at); at = at.parent) {
+    if (isModuleDeclaration(at) && declares(at)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a namespace holds anything but `interface`s, type aliases and namespaces of those, as
+ * `namespace A.B` is a namespace of one. Any other statement is code to Node, a `declare`d value
+ * and an `import` among them, and a `declare`d namespace within is read for what it holds.
+ */
+function holdsCode(declaration: ModuleDeclaration): boolean {
+  const pending: ModuleDeclaration[] = [declaration];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const { body } = each;
+    if (body === undefined) continue;
+    if (isModuleDeclaration(body)) {
+      pending.push(body);
+      continue;
+    }
+    if (!isModuleBlock(body)) return true;
+    for (const statement of body.statements) {
+      if (isInterfaceDeclaration(statement) || isTypeAliasDeclaration(statement)) continue;
+      if (!isModuleDeclaration(statement)) return true;
+      pending.push(statement);
+    }
+  }
+  return false;
+}
+
+/** Whether a declaration is a `declare`d one on its own. */
+function declares(declaration: ModuleDeclaration): boolean {
+  return (
+    declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.DeclareKeyword) === true
+  );
 }
 
 /** The names CommonJS gives each of its modules, which an ES module has none of. */
