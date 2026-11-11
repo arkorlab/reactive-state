@@ -36,10 +36,10 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf, } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
-import { framedAssignedValues } from './framed-writes.ts';
+import { framedAssignedValues, } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
@@ -67,9 +67,37 @@ export function objectMutatorElements(
   if (target === undefined || isSpreadElement(target)) return undefined;
   if (path === 'Object.assign')
     return { target, elements: rest.flatMap((source) => assignedValues(source, index)) };
+  const reading = freshReading();
   const defined =
-    path === 'Object.defineProperties' ? definedMaps(rest, index) : definedProperty(rest, index);
+    path === 'Object.defineProperties'
+      ? definedMaps(rest, index, reading)
+      : definedProperty(rest, index, reading);
   return { target, elements: defined };
+}
+
+/**
+ * What a read of descriptors goes through: whether a descriptor's inherited fields count, as they
+ * do for a descriptor and not for what a spread copies, and the objects a constant holds, which
+ * are read once in each way however many times the program names them.
+ */
+interface Reading {
+  readonly inherited: boolean;
+  readonly seen: {
+    readonly full: Set<Node>;
+    readonly own: Set<Node>;
+    readonly maps: Set<Node>;
+  };
+}
+
+function freshReading(): Reading {
+  return { inherited: true, seen: { full: new Set(), own: new Set(), maps: new Set() } };
+}
+
+/** Whether an object a constant holds is read for the first time in the way the set stands for. */
+function firstRead(seen: Set<Node>, held: Node): boolean {
+  if (seen.has(held)) return false;
+  seen.add(held);
+  return true;
 }
 
 /**
@@ -102,18 +130,22 @@ function writtenArguments(call: CallExpression): readonly Expression[] {
 function definedProperty(
   args: readonly Expression[],
   index: number | undefined,
+  reading: Reading,
 ): WrittenArrayElement[] {
   const [key] = args;
   if (key === undefined) return [];
   if (!isSpreadElement(key) && !keyMayBeSlot(key, index)) return [];
-  return descriptorCandidates(args);
+  return descriptorCandidates(args, reading);
 }
 
 /**
  * Every argument that may take the descriptor's position: a spread may be empty, so each argument
  * up to the second written one may be preceded by the key alone.
  */
-function descriptorCandidates(args: readonly Expression[]): WrittenArrayElement[] {
+function descriptorCandidates(
+  args: readonly Expression[],
+  reading: Reading,
+): WrittenArrayElement[] {
   const found: WrittenArrayElement[] = [];
   let written = 0;
   let spread = false;
@@ -124,7 +156,7 @@ function descriptorCandidates(args: readonly Expression[]): WrittenArrayElement[
       found.push({ value: argument.expression, keys });
       spread = true;
     } else {
-      if (spread || written === 1) found.push(...descriptorValues(argument));
+      if (spread || written === 1) found.push(...descriptorValues(argument, reading));
       written += 1;
     }
   }
@@ -135,10 +167,11 @@ function descriptorCandidates(args: readonly Expression[]): WrittenArrayElement[
 function definedMaps(
   args: readonly Expression[],
   index: number | undefined,
+  reading: Reading,
 ): WrittenArrayElement[] {
   const found: WrittenArrayElement[] = [];
   for (const map of args) {
-    found.push(...definedValues(map, index));
+    found.push(...definedValues(map, index, reading));
     if (!isSpreadElement(map)) break;
   }
   return found;
@@ -174,7 +207,11 @@ function opaqueSource(source: Expression, index: number | undefined): WrittenArr
  * A descriptor map's entries at numeric keys, those of a spread or a constant it names read as
  * written; an opaque map keeps its slot's descriptor.
  */
-function definedValues(descriptors: Expression, index: number | undefined): WrittenArrayElement[] {
+function definedValues(
+  descriptors: Expression,
+  index: number | undefined,
+  reading: Reading,
+): WrittenArrayElement[] {
   if (isOmittedExpression(descriptors)) return [];
   const slot = slotKey(index);
   const value = unwrapped(descriptors);
@@ -183,40 +220,71 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
   if (!isObjectLiteralExpression(value)) {
     const held = heldValue(value);
     const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
-    return isObjectLiteralExpression(held) ? [...opaque, ...definedValues(held, index)] : opaque;
+    return isObjectLiteralExpression(held) && firstRead(reading.seen.maps, held)
+      ? [...opaque, ...definedValues(held, index, reading)]
+      : opaque;
   }
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
-    if (isSpreadAssignment(property)) found.push(...definedValues(property.expression, index));
+    if (isSpreadAssignment(property))
+      found.push(...definedValues(property.expression, index, reading));
     else if (isPropertyAssignment(property) && nameMayBeSlot(property.name, index))
-      found.push(...descriptorValues(property.initializer));
+      found.push(...descriptorValues(property.initializer, reading));
     else if (isGetAccessorDeclaration(property) && nameMayBeSlot(property.name, index))
-      found.push(...returnedValues(property.body).flatMap((each) => descriptorValues(each.value)));
+      found.push(
+        ...returnedValues(property.body).flatMap((each) => descriptorValues(each.value, reading)),
+      );
   }
   return found;
 }
 
-/** A descriptor's written `value` and what its written `get` returns; an opaque one keeps both. */
-function descriptorValues(descriptor: Expression | undefined): WrittenArrayElement[] {
+/**
+ * A descriptor's written `value` and what its written `get` returns; an opaque one keeps both. A
+ * constant's fields may be assigned, and each value assigned to `value` or `get` is possible.
+ */
+function descriptorValues(
+  descriptor: Expression | undefined,
+  reading: Reading,
+): WrittenArrayElement[] {
   if (descriptor === undefined || isOmittedExpression(descriptor)) return [];
   if (isSpreadElement(descriptor)) return [{ value: descriptor.expression, keys: ['0', 'value'] }];
   const value = unwrapped(descriptor);
-  if (!isObjectLiteralExpression(value)) {
-    const held = heldValue(value);
-    const opaque = [{ value: descriptor, keys: ['value'] }];
-    return isObjectLiteralExpression(held)
-      ? [...opaque, ...held.properties.flatMap((property) => descriptorEntry(property))]
-      : opaque;
-  }
-  return value.properties.flatMap((property) => descriptorEntry(property));
+  if (isObjectLiteralExpression(value))
+    return value.properties.flatMap((property) => descriptorEntry(property, reading));
+  const held = heldValue(value);
+  const opaque = [{ value: descriptor, keys: ['value'] }];
+  const seen = reading.inherited ? reading.seen.full : reading.seen.own;
+  if (!isObjectLiteralExpression(held) || !firstRead(seen, held)) return opaque;
+  const entries = held.properties.flatMap((property) => descriptorEntry(property, reading));
+  return [...opaque, ...entries];
 }
 
-/** One field of a written descriptor: its `value`, what its `get` returns, a spread's own fields. */
-function descriptorEntry(property: ObjectLiteralElementLike): WrittenArrayElement[] {
-  if (isSpreadAssignment(property)) return descriptorValues(property.expression);
+/** The fields a spread copies, or those a written prototype gives a descriptor to inherit. */
+function copiedFields(
+  property: ObjectLiteralElementLike,
+  reading: Reading,
+): WrittenArrayElement[] | undefined {
+  if (isSpreadAssignment(property))
+    return descriptorValues(property.expression, { ...reading, inherited: false });
+  const prototype = reading.inherited
+    ? prototypeField(property, writtenArrayKey(property.name))
+    : undefined;
+  return prototype === undefined ? undefined : descriptorValues(prototype, reading);
+}
+
+/**
+ * One field of a written descriptor: its `value`, what its `get` returns, the own fields of a
+ * spread, the fields of a prototype. A spread copies own fields only, so what it holds inherited
+ * from its prototype is lost.
+ */
+function descriptorEntry(
+  property: ObjectLiteralElementLike,
+  reading: Reading,
+): WrittenArrayElement[] {
+  const copied = copiedFields(property, reading);
+  if (copied !== undefined) return copied;
+  if (isSpreadAssignment(property)) return [];
   const key = writtenArrayKey(property.name);
-  const prototype = prototypeField(property, key);
-  if (prototype !== undefined) return descriptorValues(prototype);
   if (key !== undefined && key !== 'value' && key !== 'get') return [];
   const found: WrittenArrayElement[] = [];
   if (key !== 'get' && isPropertyAssignment(property))

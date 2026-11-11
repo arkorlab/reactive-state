@@ -573,6 +573,24 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-descriptor-spread-prototype-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ __proto__: { value: error } } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-descriptor-spread-prototype-getter-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { ...{ __proto__: { get: () => error } } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
+    id: 'define-descriptor-prototype-of-spread',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { __proto__: { ...{ value: error } } } as PropertyDescriptor); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -597,6 +615,20 @@ const ELEMENTS = [
     elements: ['error:'],
   },
 ] as const;
+
+describe('descriptors built from constants that spread each other', () => {
+  it('are read in work that grows with the declarations, not with the copies', () => {
+    const levels = Array.from(
+      { length: 40 },
+      (_, at) => `const d${at + 1} = { ...d${at}, ...d${at} };`,
+    ).join(' ');
+    const source = `function frames(error: Error) { ${VALUES} const d0 = { value: error }; ${levels} Object.defineProperty(values, 0, d40); return values; }`;
+    const found = writtenElements(source, undefined);
+
+    expect(found).toContain('error:');
+    expect(found.length).toBeLessThan(100);
+  });
+});
 
 describe('elements native object mutators install from unread sources', () => {
   it.each(ELEMENTS)('$id', ({ source, index, elements }) => {
@@ -703,6 +735,11 @@ const CONVERSIONS = [
   {
     id: 'define-repeated-constant-list-safe',
     source: `function frames(error: Error) { const a = ['safe']; const empty: never[] = []; Object.defineProperty(a, ...empty, ...empty, 'label', { value: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-spread-prototype-safe',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ __proto__: { value: error } } } as PropertyDescriptor); return String(a); }`,
     converts: false,
   },
   {
