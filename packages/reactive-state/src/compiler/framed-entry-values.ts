@@ -5,9 +5,16 @@ import {
   isCallExpression,
   isArrayLiteralExpression,
   isElementAccessExpression,
+  isExpression,
+  isForInStatement,
+  isForOfStatement,
   isIdentifier,
   isNewExpression,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
   isVariableDeclaration,
   isVariableDeclarationList,
   isSpreadElement,
@@ -18,11 +25,16 @@ import {
 import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
+import {
+  type AssignedFrameSource,
+  assignmentPatternTargets,
+  iteratedFrameSources,
+} from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
 
 /** Native entry construction installs each source-written value under its converted key. */
@@ -119,13 +131,32 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
     node.forEachChild((child) => {
       pending.push(child);
     });
-    const slot = tupleWrite(node, aliases);
-    if (slot === null || !isBinaryExpression(node) || executionOwner(node) !== owner) continue;
-    if (slot === undefined || slot === '0') key = true;
-    if ((slot === undefined || slot === '1') && VALUE_WRITES.has(node.operatorToken.kind))
-      values.push({ value: node.right, keys: [] });
+    if (executionOwner(node) !== owner) continue;
+    for (const write of slotWrites(node, aliases)) {
+      if (write.slot === undefined || write.slot === '0') key = true;
+      if (write.slot === undefined || write.slot === '1') values.push(...write.sources);
+    }
   }
-  return { key, values };
+  return {
+    key,
+    values: values.filter(
+      (each, at) => values.findIndex((other) => sameSource(other, each)) === at,
+    ),
+  };
+}
+
+/** The slots a node writes on the tuple's bindings, with the values it hands them. */
+function slotWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
+  const slot = tupleWrite(node, aliases);
+  if (slot === null) return patternWrites(node, aliases);
+  if (isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind))
+    return [{ slot, sources: [{ value: node.right, keys: [] }] }];
+  return [{ slot, sources: [] }];
+}
+
+/** A default is read as the write it is and as the value its pattern falls back to: one source. */
+function sameSource(left: AssignedFrameSource, right: AssignedFrameSource): boolean {
+  return left.value === right.value && left.keys.join('.') === right.keys.join('.');
 }
 
 /** The slot an assignment writes on one of the tuple's bindings, none for an opaque key. */
@@ -133,7 +164,71 @@ function tupleWrite(node: Node, aliases: ReadonlySet<FrameBinding>): string | un
   if (!isBinaryExpression(node)) return null;
   const kind = node.operatorToken.kind;
   if (kind < SyntaxKind.FirstAssignment || kind > SyntaxKind.LastAssignment) return null;
-  const member = unwrapped(node.left);
+  return memberSlot(node.left, aliases);
+}
+
+interface SlotWrite {
+  readonly slot: string | undefined;
+  readonly sources: readonly AssignedFrameSource[];
+}
+
+/**
+ * The slots a destructuring assignment or a loop head writes on the tuple's bindings, each with the
+ * values its pattern hands it. A target the pattern readers do not route, a rest or a computed
+ * key, may take any part of what the right side holds.
+ */
+function patternWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
+  const start = patternStart(node);
+  if (start === undefined) return [];
+  const found: SlotWrite[] = [];
+  const pending = [start];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    const target = unwrapped(at.target);
+    const slot = memberSlot(target, aliases);
+    if (slot !== null) found.push({ slot, sources: at.sources });
+    else if (!isIdentifier(target)) pending.push(...assignmentPatternTargets(target, at.sources));
+  }
+  const named = framedWrittenTargets(node).filter((each) => memberSlot(each, aliases) !== null);
+  if (found.length < named.length) found.push({ slot: undefined, sources: patternParts(node) });
+  return found;
+}
+
+/** The pattern a node assigns, with the sources its right side or iterable hands it. */
+function patternStart(
+  node: Node,
+): { readonly target: Expression; readonly sources: readonly AssignedFrameSource[] } | undefined {
+  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken)
+    return { target: node.left, sources: [{ value: node.right, keys: [] }] };
+  if (isForOfStatement(node) && isExpression(node.initializer))
+    return { target: node.initializer, sources: iteratedFrameSources(node.expression) };
+  return isForInStatement(node) && isExpression(node.initializer)
+    ? { target: node.initializer, sources: [] }
+    : undefined;
+}
+
+/** What a pattern's right side may hand to any of its targets: its fields or elements, itself. */
+function patternParts(node: Node): readonly AssignedFrameSource[] {
+  const source = isForOfStatement(node) ? node.expression : undefined;
+  const right = isBinaryExpression(node) ? node.right : source;
+  if (right === undefined) return [];
+  const value = unwrapped(right);
+  if (!isObjectLiteralExpression(value))
+    return [{ value, keys: [] }, ...iteratedFrameSources(value)];
+  return value.properties.flatMap((property) => {
+    if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+    if (isSpreadAssignment(property)) return [{ value: property.expression, keys: [] }];
+    return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+      ? [{ value: property.name, keys: [] }]
+      : [];
+  });
+}
+
+/** The slot a written target names on one of the tuple's bindings; none for another target. */
+function memberSlot(
+  target: Expression,
+  aliases: ReadonlySet<FrameBinding>,
+): string | undefined | null {
+  const member = unwrapped(target);
   if (!isElementAccessExpression(member) && !isPropertyAccessExpression(member)) return null;
   const receiver = unwrapped(member.expression);
   const selected = isIdentifier(receiver) ? frameBindingOf(receiver) : undefined;
