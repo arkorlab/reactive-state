@@ -1,6 +1,8 @@
 import {
+  type BinaryExpression,
   type Block,
   type CallExpression,
+  type ElementAccessExpression,
   type Expression,
   type FunctionDeclaration,
   type Identifier,
@@ -12,6 +14,7 @@ import {
   isClassExpression,
   isComputedPropertyName,
   isConditionalExpression,
+  isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -19,6 +22,7 @@ import {
   isMethodDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isPropertyAccessExpression,
   isPropertyAssignment,
   isReturnStatement,
   isShorthandPropertyAssignment,
@@ -29,8 +33,10 @@ import {
   isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
+  type PropertyAccessExpression,
   type PropertyName,
   SyntaxKind,
+  type VariableDeclaration,
   type VariableStatement,
 } from 'typescript/ast';
 
@@ -39,10 +45,10 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameBindingOf, frameDeclarationOf, } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { framedAppliedArguments, framedKeyNames } from './framed-keys.ts';
-import { framedAssignedValues, } from './framed-writes.ts';
+import { framedAssignedValues, framedPossibleBranch } from './framed-writes.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
@@ -261,12 +267,13 @@ function descriptorValues(
   const value = unwrapped(descriptor);
   if (isObjectLiteralExpression(value))
     return value.properties.flatMap((property) => descriptorEntry(property, reading));
-  const held = heldValue(value);
+  const names: Identifier[] = [];
+  const held = heldValue(value, names);
   const opaque = [{ value: descriptor, keys: ['value'] }];
   const seen = reading.inherited ? reading.seen.full : reading.seen.own;
   if (!isObjectLiteralExpression(held) || !firstRead(seen, held)) return opaque;
   const entries = held.properties.flatMap((property) => descriptorEntry(property, reading));
-  return [...opaque, ...entries];
+  return [...opaque, ...entries, ...descriptorWrites(names)];
 }
 
 /** The fields a spread copies, or those a written prototype gives a descriptor to inherit. */
@@ -367,6 +374,80 @@ function bodyReturns(fn: Expression | FunctionDeclaration): WrittenArrayElement[
   if (isFunctionDeclaration(fn)) return answersLater(fn) ? [] : returnedValues(fn.body);
   if ((!isArrowFunction(fn) && !isFunctionExpression(fn)) || answersLater(fn)) return [];
   return isBlock(fn.body) ? returnedValues(fn.body) : [{ value: fn.body, keys: [] }];
+}
+
+/**
+ * The values assigned to the `value` and `get` fields of an object a constant holds, or of what it
+ * is aliased to: a constant does not keep its fields from changing. An assignment anywhere counts.
+ */
+function descriptorWrites(names: readonly Identifier[]): WrittenArrayElement[] {
+  const [first] = names;
+  if (first === undefined) return [];
+  const bindings = heldBindings(first, names);
+  const found: WrittenArrayElement[] = [];
+  const pending: Node[] = [first.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    found.push(...heldWrite(node, bindings));
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return found;
+}
+
+/** The values one assignment gives the `value` or the `get` field of a held object. */
+function heldWrite(node: Node, bindings: ReadonlySet<unknown>): WrittenArrayElement[] {
+  if (!isAssignment(node) || !framedPossibleBranch(node)) return [];
+  const member = unwrapped(node.left);
+  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
+  if (!writesHeld(member, bindings)) return [];
+  const key = frameMemberName(member);
+  const found: WrittenArrayElement[] = [];
+  if (key === undefined || key === 'value') found.push({ value: node.right, keys: [] });
+  if (key === undefined || key === 'get') found.push(...functionReturns(node.right));
+  return found;
+}
+
+/** The bindings of the names, and of each constant a program declares as another name of them. */
+function heldBindings(first: Identifier, names: readonly Identifier[]): ReadonlySet<unknown> {
+  const bindings = new Set<unknown>(names.map((name) => frameBindingOf(name)?.binding));
+  const declarations: VariableDeclaration[] = [];
+  const pending: Node[] = [first.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isVariableDeclaration(node) && node.initializer !== undefined) declarations.push(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  for (let grown = true; grown;) {
+    const aliases = declarations.filter((each) => !bindings.has(each) && namesHeld(each, bindings));
+    for (const each of aliases) bindings.add(each);
+    grown = aliases.length > 0;
+  }
+  return bindings;
+}
+
+/** Whether a declaration gives a name to what one of the bindings names, whole. */
+function namesHeld(declaration: VariableDeclaration, bindings: ReadonlySet<unknown>): boolean {
+  const held =
+    declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer);
+  const selected = held !== undefined && isIdentifier(held) ? frameBindingOf(held) : undefined;
+  return selected?.keys.length === 0 && bindings.has(selected.binding);
+}
+
+/** A plain assignment, which gives its left the value of its right. */
+function isAssignment(node: Node): node is BinaryExpression {
+  return isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken;
+}
+
+/** Whether a member is one of an object a held constant names, whole. */
+function writesHeld(
+  member: PropertyAccessExpression | ElementAccessExpression,
+  bindings: ReadonlySet<unknown>,
+): boolean {
+  const receiver = unwrapped(member.expression);
+  const selected = isIdentifier(receiver) ? frameBindingOf(receiver) : undefined;
+  return selected?.keys.length === 0 && bindings.has(selected.binding);
 }
 
 /** The initializer of a variable that is not a constant: what it holds before a write replaces it. */

@@ -609,6 +609,42 @@ const ELEMENTS = [
     elements: ['error:', "'safe':"],
   },
   {
+    id: 'define-constant-getter-assigned',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-value-assigned',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { value: 'safe' }; descriptor.value = error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-getter-assigned-through-alias',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; const alias = descriptor; alias.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-getter-assigned-by-name',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor['get'] = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':", 'error:'],
+  },
+  {
+    id: 'define-constant-other-field-assigned-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.enumerable = error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':"],
+  },
+  {
+    id: 'define-constant-other-object-assigned-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptor: PropertyDescriptor = { get: () => 'safe' }; const other: PropertyDescriptor = {}; other.get = () => error; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value', "'safe':"],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -763,6 +799,11 @@ const CONVERSIONS = [
   {
     id: 'define-conditional-getter-converts',
     source: `function frames(error: Error, flag: boolean) { const a = ['safe']; Object.defineProperty(a, 0, { get: flag ? () => error : () => 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-constant-getter-assigned-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; descriptor.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
   },
   {
