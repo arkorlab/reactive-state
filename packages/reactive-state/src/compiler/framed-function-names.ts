@@ -143,7 +143,7 @@ function callOnTheSpot(held: Node): Node | undefined {
 }
 
 /** Whether a function is a generator: a call makes its iterator, and its body runs as that goes on. */
-function isGenerator(fn: Node): boolean {
+export function isGenerator(fn: Node): boolean {
   return (
     (isFunctionDeclaration(fn) || isFunctionExpression(fn) || isMethodDeclaration(fn)) &&
     fn.asteriskToken !== undefined

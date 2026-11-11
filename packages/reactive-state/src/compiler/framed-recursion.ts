@@ -13,6 +13,7 @@ import {
   isForOfStatement,
   isFunctionExpression,
   isGetAccessorDeclaration,
+  isExpressionStatement,
   isIdentifier,
   isMetaProperty,
   isMethodDeclaration,
@@ -40,6 +41,7 @@ import {
   holderOf,
   boundVariable,
   isFunctionCode,
+  isGenerator,
   isNamedFunction,
   IMPLICIT_METHODS,
   madeOnTheSpot,
@@ -62,8 +64,9 @@ export { isNamedFunction, madeInPlace } from './framed-function-names.ts';
  *   as far as that goes in the file.
  * - From anywhere. A function whose name is worked out, one that is a method, an accessor or a
  *   property's value, one the language calls by itself, one held where no name gives it (passed to
- *   a call, returned, put in a list), and one a name is used for otherwise than to call it may be
- *   reached by any code that runs, wherever it is written.
+ *   a call, returned, put in a list), a generator whose iterator is used otherwise than dropped,
+ *   and one a name is used for otherwise than to call it may be reached by any code that runs,
+ *   wherever it is written.
  * - By waiting. A run that waits or yields lets another call of the function go on in its place.
  *
  * Counted as run where it is written: the code of the function itself, the body of one that is
@@ -102,22 +105,61 @@ function referenceText(node: Node): string | undefined {
 }
 
 /**
- * Whether a node, the name of a reference, is what a call, a construction or a tag calls: the name
+ * The call, construction or tag that a node, the name of a reference, is what it calls: the name
  * itself, a property's, or either of them through `call` or `apply`.
  */
-function called(node: Node): boolean {
+function callOf(node: Node): Node | undefined {
   let at = holderOf(node);
   if (isPropertyAccessExpression(at.parent) && at.parent.name === at) at = holderOf(at.parent);
   if (isPropertyAccessExpression(at.parent) && at.parent.expression === at) {
     const via = at.parent.name.text;
-    if (via !== 'call' && via !== 'apply') return false;
+    if (via !== 'call' && via !== 'apply') return undefined;
     at = holderOf(at.parent);
   }
   const { parent } = at;
-  return (
-    ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
+  return ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
     (isTaggedTemplateExpression(parent) && parent.tag === at)
-  );
+    ? parent
+    : undefined;
+}
+
+/** Whether a node, the name of a reference, is what a call, a construction or a tag calls. */
+function called(node: Node): boolean {
+  return callOf(node) !== undefined;
+}
+
+/** Whether a node, the name of a reference, is what a call calls whose result is dropped. */
+function droppedCall(node: Node): boolean {
+  const call = callOf(node);
+  return call !== undefined && isExpressionStatement(call.parent);
+}
+
+/**
+ * Whether a node reads a name that only generators have, in a call whose iterator is dropped: the
+ * call makes an iterator and runs none of the body.
+ */
+function dropsGenerator(node: Node, name: string): boolean {
+  if (!droppedCall(node)) return false;
+  const functions = functionsOf(node.getSourceFile()).byName.get(name) ?? [];
+  return functions.length > 0 && functions.every((each) => isGenerator(each));
+}
+
+/**
+ * Whether the iterator of a generator may be advanced: a name of it is used otherwise than in a
+ * call whose iterator is dropped.
+ */
+function advanced(fn: Node): boolean {
+  const names = new Set(namesOf(fn).names);
+  const pending: Node[] = [fn.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    const text = referenceText(node);
+    if (text !== undefined && names.has(text) && !written(node) && !droppedCall(node)) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /**
@@ -233,11 +275,19 @@ function reachedNames(node: Node): FunctionNames {
   return isNamedFunction(node) ? namesOf(node) : { names: [], computed: false };
 }
 
-/** Whether the language may call a function by itself: an accessor or an implicit method. */
+/**
+ * Whether the language may call a function by itself: an accessor, an implicit method, or a
+ * generator whose iterator may be advanced.
+ */
 function runsBySelf(fn: Node): boolean {
   const { names, computed } = namesOf(fn);
   const accessor = isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn);
-  return computed || accessor || names.some((name) => IMPLICIT_METHODS.has(name));
+  return (
+    computed ||
+    accessor ||
+    names.some((name) => IMPLICIT_METHODS.has(name)) ||
+    (isGenerator(fn) && advanced(fn))
+  );
 }
 
 /** Whether the code of a function reads one of the names where it may run. */
@@ -251,7 +301,13 @@ function mentionsAny(fn: Node, names: ReadonlySet<string>): boolean {
     }
     if (deferredInitializer(node, fn)) continue;
     const text = referenceText(node);
-    if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
+    if (
+      text !== undefined &&
+      names.has(text) &&
+      !written(node) &&
+      !dropsGenerator(node, text) &&
+      runsWithin(node, fn)
+    )
       return true;
     node.forEachChild((child) => {
       pending.push(child);
@@ -448,6 +504,7 @@ function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolea
     text !== undefined &&
     names.has(text) &&
     !written(node) &&
+    !dropsGenerator(node, text) &&
     (!isIdentifier(node) || refersToFunction(node, fn)) &&
     runsWithin(node, fn) &&
     !inInstanceInitializer(node, fn)

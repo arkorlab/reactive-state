@@ -1192,6 +1192,56 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'named-generator-made-and-dropped-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper() { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'generator-method-made-and-dropped-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} ({ *helper() { read(); } }).helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'generator-made-and-dropped-in-a-helper-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} g(); const text = String(values); values.join = Array.prototype.join; return text; function g() { helper(); } function* helper() { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'generator-made-before-the-proof-and-advanced-between',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { const it = helper(pass); ${SAFE} it.next(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-generator-advanced-on-the-spot',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(pass).next(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-generator-kept-then-advanced',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} const it = helper(pass); it.next(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-generator-iterated',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} for (const x of helper(pass)) {} const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-generator-spread',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} [...helper(pass)]; const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'named-generator-delegated-to',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} [...outer(pass)]; const text = String(values); values.join = Array.prototype.join; return text; function* outer(p: number) { yield* helper(p); } function* helper(p: number) { if (p < 1) read(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'plain-method-sharing-a-generators-name',
+    source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) plain.helper(pass); const text = String(values); values.join = Array.prototype.join; return text; } const gens = { *helper() { read(1); } }; const plain = { helper(p: number) { read(p + 1); } }; return read(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
