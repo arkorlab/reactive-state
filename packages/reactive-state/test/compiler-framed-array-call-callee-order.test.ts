@@ -211,6 +211,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'shadowed-name-iife-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(read = () => '', text = String(values)) { values.join = Array.prototype.join; return text + read(); })(); }`,
+    converts: false,
+  },
+  {
+    id: 'shadowed-by-local-iife-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)) { values.join = Array.prototype.join; const read = () => ''; return text + read(); })(); }`,
+    converts: false,
+  },
+  {
+    id: 'inner-function-of-same-name-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)) { values.join = Array.prototype.join; return text + (function read(pass: number): string { return pass > 0 ? read(pass - 1) : ''; })(1); })(); }`,
+    converts: false,
+  },
+  {
+    id: 'recursive-iife-in-body-reference',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = String(values)): string { values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
+    converts: true,
+  },
+  {
     id: 'recursive-iife-own-array-pin',
     source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
     converts: false,
