@@ -25,6 +25,7 @@ import {
   isModuleDeclaration,
   isNamedExports,
   isNamespaceImport,
+  isNonNullExpression,
   isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAccessExpression,
@@ -88,13 +89,14 @@ interface Candidate {
   readonly body: Node;
 }
 
-/** What `node` stands in, past the parentheses and the casts around it, in angle brackets too. */
+/** What `node` stands in, past the parentheses, the casts, in angle brackets too, and the `!` around it. */
 function holderOf(node: Node): Node {
   let at = node.parent;
   while (
     isParenthesizedExpression(at) ||
     isAsExpression(at) ||
     isSatisfiesExpression(at) ||
+    isNonNullExpression(at) ||
     isTypeAssertion(at)
   ) {
     at = at.parent;
