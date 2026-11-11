@@ -33,7 +33,7 @@ export interface AssignedFrameSource {
   readonly keys: readonly string[];
 }
 
-interface PatternWork {
+export interface PatternWork {
   readonly target: Expression;
   readonly sources: readonly AssignedFrameSource[];
   /** Some source holds nothing at the selected position, so that a default written there runs. */

@@ -14,9 +14,13 @@ import {
   assignmentPatternDefault,
   assignmentPatternTargets,
   iteratedFrameSources,
+  type PatternWork,
 } from './framed-assignment-patterns.ts';
 
-/** Pattern and iteration assignments keep the selected value of each written array element. */
+/**
+ * Pattern and iteration assignments keep the selected value of each written array element, and the
+ * default of an element some iterated value holds nothing at.
+ */
 export function arrayPatternSources(
   node: Node,
   matches: (target: Expression) => boolean,
@@ -32,12 +36,12 @@ export function arrayPatternSources(
     sources = iteratedFrameSources(node.expression);
   } else return [];
   const result: AssignedFrameSource[] = [];
-  const pending = [{ target, sources }];
+  const pending: PatternWork[] = [{ target, sources }];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const value = unwrapped(at.target);
     if (isElementAccessExpression(value)) {
       if (matches(value)) result.push(...at.sources);
-    } else pending.push(...assignmentPatternTargets(value, at.sources));
+    } else pending.push(...assignmentPatternTargets(value, at.sources, at.missing));
   }
   return result;
 }
