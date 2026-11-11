@@ -19,6 +19,7 @@ import {
   isRestTypeNode,
   isSetAccessorDeclaration,
   isStringLiteral,
+  isTemplateLiteralTypeNode,
   isTupleTypeNode,
   isTypeLiteralNode,
   isTypeOperatorNode,
@@ -30,6 +31,7 @@ import {
   type PropertySignatureDeclaration,
   type SetAccessorDeclaration,
   SyntaxKind,
+  type TemplateLiteralTypeNode,
   type TupleTypeNode,
   type TypeElement,
   type TypeNode,
@@ -163,18 +165,99 @@ function objectMembers(object: TypeLiteralNode, keys: readonly string[]): readon
   return values;
 }
 
-/** The most specific written signature covering a literal property key. */
+/** The written signatures that cover a literal property key, by how they do. */
+interface CoveringSignatures {
+  readonly specific: Set<TypeNode>;
+  readonly possible: Set<TypeNode>;
+  readonly strings: Set<TypeNode>;
+}
+
+/**
+ * The written signatures covering a literal property key: those of a number domain, for a numeric
+ * key, and of a template pattern the key matches, ahead of a `string` signature, which applies
+ * only where no other does; and the values of patterns the reader cannot decide, which stay
+ * possible beside them.
+ */
 function signatureTypes(object: TypeLiteralNode, key: string): readonly TypeNode[] {
+  const { possible, specific, strings } = coveringSignatures(object, key);
+  const values = new Set(specific.size > 0 ? specific : strings);
+  for (const each of possible) values.add(each);
+  return [...values];
+}
+
+/** Each written signature's value, by whether its domain covers the key, may, or is a string. */
+function coveringSignatures(object: TypeLiteralNode, key: string): CoveringSignatures {
   const numeric = key !== '' && String(Number(key)) === key;
-  const numbers: TypeNode[] = [];
-  const strings: TypeNode[] = [];
+  const covering: CoveringSignatures = {
+    possible: new Set(),
+    specific: new Set(),
+    strings: new Set(),
+  };
   for (const member of object.members) {
     if (!isIndexSignatureDeclaration(member)) continue;
-    const domains = indexSignatureDomains(member.parameters[0]?.type);
-    if (domains.has(SyntaxKind.StringKeyword)) strings.push(member.type);
-    if (numeric && domains.has(SyntaxKind.NumberKeyword)) numbers.push(member.type);
+    const written = member.parameters[0]?.type;
+    const domains = indexSignatureDomains(written);
+    if (domains.has(SyntaxKind.StringKeyword)) covering.strings.add(member.type);
+    if (numeric && domains.has(SyntaxKind.NumberKeyword)) covering.specific.add(member.type);
+    const covers = domains.has(SyntaxKind.TemplateLiteralType)
+      ? patternsCover(written, key)
+      : false;
+    if (covers === true) covering.specific.add(member.type);
+    else if (covers === undefined) covering.possible.add(member.type);
   }
-  return numbers.length > 0 ? numbers : strings;
+  return covering;
+}
+
+/** The key domains a signature's written type names without a pattern: `symbol` covers no text. */
+const KEYWORD_DOMAINS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.NumberKeyword,
+  SyntaxKind.StringKeyword,
+  SyntaxKind.SymbolKeyword,
+]);
+
+/**
+ * Whether the template patterns a signature's key type writes, through unions and parentheses,
+ * cover a key: `true` where one matches, `undefined` where one the reader does not match — a hole
+ * of another type, or a pattern named through an alias — may, `false` otherwise.
+ */
+function patternsCover(type: TypeNode | undefined, key: string): boolean | undefined {
+  let undecided = false;
+  const pending = type === undefined ? [] : [type];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    if (isParenthesizedTypeNode(at)) {
+      pending.push(at.type);
+    } else if (isUnionTypeNode(at)) {
+      pending.push(...at.types);
+    } else if (isTemplateLiteralTypeNode(at)) {
+      const covers = patternCovers(at, key);
+      if (covers === true) return true;
+      undecided ||= covers === undefined;
+    } else {
+      undecided ||= !KEYWORD_DOMAINS.has(at.kind);
+    }
+  }
+  return undecided ? undefined : false;
+}
+
+/**
+ * Whether a pattern of `${string}` holes matches a key as TypeScript matches it: the text before
+ * the first hole starts the key and the text after the last ends it, without overlap, and the
+ * text between holes follows in order. `undefined` for a hole of another type.
+ */
+function patternCovers(pattern: TemplateLiteralTypeNode, key: string): boolean | undefined {
+  const { head, templateSpans } = pattern;
+  if (templateSpans.some((span) => span.type.kind !== SyntaxKind.StringKeyword)) return undefined;
+  const texts = templateSpans.map((span) => span.literal.text);
+  const last = texts.pop() ?? '';
+  const end = key.length - last.length;
+  if (!key.startsWith(head.text) || !key.endsWith(last) || end < head.text.length) return false;
+  let at = head.text.length;
+  for (const text of texts) {
+    const found = key.indexOf(text, at);
+    if (found === -1 || found + text.length > end) return false;
+    at = found + text.length;
+  }
+  return true;
 }
 
 /** A parenthesized or readonly type's underlying syntax, without following aliases. */
