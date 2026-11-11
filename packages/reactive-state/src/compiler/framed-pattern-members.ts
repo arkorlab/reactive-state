@@ -27,7 +27,17 @@ import {
 } from './framed-assignment-patterns.ts';
 import { framedKeyNames } from './framed-keys.ts';
 
-/** The members a destructuring assignment or a loop head writes, with the values it hands them. */
+/**
+ * The members a destructuring assignment or a loop head writes, with the values it hands them.
+ *
+ * Routed: a named key or a position, to the value a written source holds there; a default, by the
+ * values that may be missing; a nested pattern; a computed key with finite names, to those fields.
+ * Handed whole, to be followed by `selectedValues`: the path a pattern selects of a source it does
+ * not read here, a computed key the compile cannot read (any field), an object rest (a copy that
+ * leaves out the names its pattern lists), an array rest (the entries from its position).
+ * Not followed: a write a call makes to a member (`Object.assign(descriptor, ...)`), an array
+ * method, a member of an alias a pattern makes.
+ */
 
 export interface MemberWrite {
   readonly member: PropertyAccessExpression | ElementAccessExpression;
