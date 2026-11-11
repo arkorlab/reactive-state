@@ -8,7 +8,8 @@ import { frameMemberName } from '../src/compiler/framed-bindings.ts';
  * A constant a block gives again, `{ const key = alias; … }`, is read as the constant it is where it
  * is read and as the one around it where the code means that one: the key a computed read is
  * recorded as is what the language computes of it, or none. A constant computed once, whoever
- * reads it, keeps that: what it computes to in one read is what it computes to in the next.
+ * reads it, keeps that: what it computes to in one read is what it computes to in the next, and
+ * what it computes to is the same whichever constant is read before it.
  */
 
 const OUTSIDE = 'const key = 1; const alias = key + 1; const other = 5;';
@@ -82,6 +83,25 @@ const COMPUTED = [
   },
 ] as const;
 
+/**
+ * A setter an object the code writes owns, `key.setTime(Infinity)`, answers what the code writes of
+ * it, `0` — no `NaN` a date's would — wherever its receiver is read through a name a block gives
+ * again: the outer `key` is the object, and so is the one a read of `computed` means.
+ */
+const OWN_SETTER = {
+  computed: '0',
+  given: 'const key = computed;',
+  outside: 'const key = { setTime() { return 0; } }; const computed = key.setTime(Infinity);',
+  reads: [
+    'key',
+    'computed',
+    'Math.max(key, computed)',
+    'Math.max(computed, key)',
+    'key + computed',
+    'computed + key',
+  ],
+} as const;
+
 describe('the key a read of constants a block gives again is recorded as', () => {
   let api: API;
 
@@ -94,10 +114,10 @@ describe('the key a read of constants a block gives again is recorded as', () =>
   });
 
   /** The member `value[read]` is recorded as, of `read` in a block that declares `given`. */
-  function recordedOf(given: string, read: string): string | undefined {
+  function recordedOf(given: string, read: string, outside = OUTSIDE): string | undefined {
     using parsed = api.createSourceFile(
       'numbers.ts',
-      `declare const value: Record<string, unknown>; ${OUTSIDE} { ${given} value[${read}]; }`,
+      `declare const value: Record<string, unknown>; ${outside} { ${given} value[${read}]; }`,
     );
     let element: ElementAccessExpression | undefined;
     const find = (node: Node): void => {
@@ -120,5 +140,11 @@ describe('the key a read of constants a block gives again is recorded as', () =>
 
     expect(another).toStrictEqual([]);
     expect(told).toBe(true);
+  });
+
+  it.each(OWN_SETTER.reads)('is the setter’s own, or none: %s', (read) => {
+    const member = recordedOf(OWN_SETTER.given, read, OWN_SETTER.outside);
+
+    expect(member === undefined || member === OWN_SETTER.computed).toBe(true);
   });
 });
