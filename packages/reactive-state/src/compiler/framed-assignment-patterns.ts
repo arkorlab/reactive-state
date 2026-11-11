@@ -183,14 +183,21 @@ function arraySource(
     : [{ value: element, keys: [] }];
 }
 
-/** A surviving literal own entry, without executing getters or unknown spread sources. */
+/**
+ * A surviving literal own entry, without executing getters or unknown spread sources. A spread of a
+ * written object has the entries that object writes, and is passed over where it has none of the key.
+ */
 function objectSource(
   value: ObjectLiteralExpression,
   key: string,
   opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
   for (const property of value.properties.toReversed()) {
-    if (isSpreadAssignment(property)) return [opaque];
+    if (isSpreadAssignment(property)) {
+      const found = spreadSource(property.expression, key, opaque);
+      if (found.length === 0) continue;
+      return found;
+    }
     const name = literalKey(property.name);
     if (name === undefined) return [opaque];
     if (name !== key) continue;
@@ -200,6 +207,16 @@ function objectSource(
     return [opaque];
   }
   return [];
+}
+
+/** What a spread selects: the entry a written object has, none where it has none, else the path. */
+function spreadSource(
+  copied: Expression,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const value = unwrapped(copied);
+  return isObjectLiteralExpression(value) ? objectSource(value, key, opaque) : [opaque];
 }
 
 /** A missing or possibly undefined selection may take its written fallback. */

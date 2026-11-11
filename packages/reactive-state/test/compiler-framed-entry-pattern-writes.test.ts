@@ -390,6 +390,36 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':"],
   },
+  {
+    id: 'nested-computed-key-through-spread',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ outer: { [name]: entry[1] } } = { ...{ outer: { field: error } } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'nested-computed-key-through-spread-overwritten',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ outer: { [name]: entry[1] } } = { ...{ outer: { field: error } }, outer: { field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'nested-computed-key-through-spread-first',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ outer: { [name]: entry[1] } } = { outer: { field: error }, ...{ other: 1 } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'nested-computed-key-through-opaque-spread-pin',
+    source: `function frames(error: Error, name: string, record: Record<string, unknown>) { ${ENTRY} return Object.fromEntries([entry], ({ outer: { [name]: entry[1] } } = { ...record })); }`,
+    key: 'message',
+    values: ["'safe':", '{ ...record }:outer'],
+  },
+  {
+    id: 'named-key-through-spread',
+    source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ outer: entry[1] } = { ...{ outer: error } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
