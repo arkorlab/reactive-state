@@ -81,6 +81,15 @@ export type OwnMethods = Map<string, ArrayMethodOverride>;
 /** What an assignment makes a property: writable and configurable, as a descriptor would say. */
 export const PLAIN_PROPERTY = { writable: true, configurable: true } as const;
 
+/** A method a write may have replaced: unproven, but with the attributes it had, which a write of its value keeps. */
+export function afterValueWrite(previous: ArrayMethodOverride | undefined): ArrayMethodOverride {
+  return {
+    own: false,
+    ...(previous?.writable === true && { writable: true as const }),
+    ...(previous?.configurable === true && { configurable: true as const }),
+  };
+}
+
 /**
  * What a write that may be of another array leaves of a method: its value unproven, and an attribute
  * only where the method had it before and the write gives it, as it stands whether or not the write
