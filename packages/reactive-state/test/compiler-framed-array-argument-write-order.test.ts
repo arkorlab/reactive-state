@@ -312,6 +312,36 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean, key: string) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); if (flag) Object.defineProperty(values, key, { value: Array.prototype.join }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'initializer-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'initializer-deletes-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const removed = delete values.join; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'assigned-result-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; let replaced: unknown; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'initializer-nonconfigurable-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {} }); const replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'initializer-in-branch-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); if (flag) { const replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'initializer-second-declaration-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const first = 1, replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

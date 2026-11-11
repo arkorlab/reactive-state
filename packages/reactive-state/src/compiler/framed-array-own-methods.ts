@@ -4,12 +4,14 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isElementAccessExpression,
+  isExpressionStatement,
   isIdentifier,
   isMethodDeclaration,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isSpreadAssignment,
+  isVariableStatement,
   type MethodDeclaration,
   type Node,
   type ObjectLiteralExpression,
@@ -69,6 +71,27 @@ export interface ArrayMethodOverride {
 
 /** The own methods a write names, as far as it shows them. */
 export type OwnMethods = Map<string, ArrayMethodOverride>;
+
+/**
+ * The expression a statement of the block evaluates for certain and may write the array's methods
+ * with: an expression statement's, the one declaration's initializer, or the right of an assignment
+ * that is no write of a method, whose own write is the call or the deletion it holds.
+ */
+export function definiteExpression(before: Node, root: FrameBinding): Expression | undefined {
+  let expression: Expression | undefined;
+  if (isExpressionStatement(before)) expression = before.expression;
+  else if (isVariableStatement(before)) {
+    const [only, ...rest] = before.declarationList.declarations;
+    expression = rest.length === 0 ? only?.initializer : undefined;
+  }
+  const value = expression === undefined ? undefined : unwrapped(expression);
+  const stored =
+    value !== undefined &&
+    isBinaryExpression(value) &&
+    value.operatorToken.kind === SyntaxKind.EqualsToken &&
+    ownMethodAssignment(value, root) === undefined;
+  return stored ? value.right : expression;
+}
 
 /** What an assignment makes a property: writable and configurable, as a descriptor would say. */
 export const PLAIN_PROPERTY = { writable: true, configurable: true } as const;
