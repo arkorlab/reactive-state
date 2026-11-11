@@ -15,7 +15,7 @@ import { fileReadsClock, hasFileTimestamp } from '../src/compiler/file-timestamp
 
 const BEFORE = "const field = 'lastModified';";
 const TYPES =
-  "namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V = 'other'; export namespace NV { export const x = 1; } }";
+  "namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V = 'other'; export namespace NV { export const x = 1; } export class C {} export namespace C { export interface T {} } }";
 const MAKES = "new File([], 'x', { [field]: 0 });";
 
 const CASES = [
@@ -50,6 +50,26 @@ const CASES = [
   {
     source: `namespace N { export declare const field: string; } namespace N { ${MAKES} }`,
     what: 'an exported `declare` constant (pin)',
+  },
+  {
+    source: `class C {} namespace C { export interface T {} } namespace N { import field = C; ${MAKES} }`,
+    what: 'an alias of a class that a namespace of types alone merges with',
+  },
+  {
+    source: `function C() {} namespace C { export interface T {} } namespace N { import field = C; ${MAKES} }`,
+    what: 'an alias of a function that a namespace of types alone merges with',
+  },
+  {
+    source: `${TYPES} namespace N { export import field = Types.C; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of a class that a namespace of types alone merges with',
+  },
+  {
+    source: `enum E { a = 1 } namespace N { export import field = E.a; } namespace N { ${MAKES} }`,
+    what: 'an exported alias of an enum member, which TypeScript emits no reference of (pin)',
+  },
+  {
+    source: `enum E { a = 1 } namespace N { import field = E.a; ${MAKES} }`,
+    what: 'an alias of an enum member in the same body (pin)',
   },
   {
     source: `namespace N { ${MAKES} } namespace N { export const field = 'other'; }`,
@@ -193,6 +213,22 @@ const PINS = [
   {
     source: `${TYPES} namespace N { export import field = Types.Q.T; } namespace N { ${MAKES} }`,
     what: 'an exported alias of a type that a namespace within a namespace holds',
+  },
+  {
+    source: `class Q {} namespace Q { export interface T {} } namespace N { import field = Q.T; ${MAKES} }`,
+    what: 'an alias of a type that a namespace merged with a class holds',
+  },
+  {
+    source: `interface C { a: 1 } namespace C { export interface T {} } namespace N { import field = C; ${MAKES} }`,
+    what: 'an alias of an interface that a namespace of types alone merges with',
+  },
+  {
+    source: `${TYPES} namespace N { import field = Types.T; } ${MAKES}`,
+    what: 'a File beside an alias of an interface named like its key',
+  },
+  {
+    source: `namespace N { namespace field { export interface J {} } } ${MAKES}`,
+    what: 'a File beside a namespace of types alone named like its key',
   },
   {
     source: `${TYPES} namespace N { import field = Types.T; ${MAKES} }`,

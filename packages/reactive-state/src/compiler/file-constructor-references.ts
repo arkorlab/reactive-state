@@ -4,6 +4,8 @@ import {
   isExportSpecifier,
   isIdentifier,
   isImportDeclaration,
+  isImportEqualsDeclaration,
+  isModuleDeclaration,
   isSourceFile,
   type Node,
   NodeFlags,
@@ -16,11 +18,20 @@ import { isTypeOnly, readsBinding } from './scope.ts';
 
 type BindingOf = (name: Identifier) => VariableDeclaration | null | undefined;
 
-/** Whether a name reads a runtime constructor binding rather than an import or export label. */
+/**
+ * Whether a name reads a runtime constructor binding rather than an import or export label, or the
+ * name a namespace or an `import … =` alias declares, which binds the name or, of types alone, none.
+ */
 export function fileConstructorReference(reference: Identifier): boolean {
   if (!readsBinding(reference)) return false;
   const { parent } = reference;
   if (isExportSpecifier(parent) && (parent.propertyName ?? parent.name) !== reference) return false;
+  if (
+    (isModuleDeclaration(parent) || isImportEqualsDeclaration(parent)) &&
+    parent.name === reference
+  ) {
+    return false;
+  }
   for (let at: Node = reference; ; at = at.parent) {
     if (ignoredTree(at)) return false;
     if (isSourceFile(at)) return true;

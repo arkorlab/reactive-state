@@ -20,7 +20,7 @@ import { fileReadsClock, hasFileTimestamp } from '../src/compiler/file-timestamp
 const OPTIONS = 'const options: { lastModified?: number } = { lastModified: 0 };';
 const MADE = "new File([], 'x', options);";
 const TYPES =
-  'namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V: { lastModified?: number } = {}; export namespace NV { export const x = 1; } }';
+  'namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V: { lastModified?: number } = {}; export namespace NV { export const x = 1; } export class C {} export namespace C { export interface T {} } }';
 
 const CASES = [
   {
@@ -107,6 +107,41 @@ const CASES = [
     clock: false,
     source: `${TYPES} ${OPTIONS} namespace N { export import options = Types.V; } namespace N { options.lastModified = undefined; } ${MADE}`,
     what: 'a write to an exported alias of a constant (pin)',
+  },
+  {
+    clock: false,
+    source: `class C {} namespace C { export interface T {} } ${OPTIONS} namespace N { import options = C; options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an alias of a class that a namespace of types alone merges with',
+  },
+  {
+    clock: true,
+    source: `enum E { a = 1 } ${OPTIONS} namespace N { export import options = E.a; } namespace N { options.lastModified = undefined; } ${MADE}`,
+    what: 'a write to an exported alias of an enum member, which TypeScript emits no reference of (pin)',
+  },
+  {
+    clock: false,
+    source: `${TYPES} ${OPTIONS} namespace N { import options = Types.T; } ${MADE}`,
+    what: 'options beside an alias of an interface of the same name',
+  },
+  {
+    clock: false,
+    source: `${TYPES} ${OPTIONS} namespace N { export import options = Types.T; } ${MADE}`,
+    what: 'options beside an exported alias of an interface of the same name',
+  },
+  {
+    clock: false,
+    source: `${OPTIONS} namespace N { namespace options { export interface J {} } } ${MADE}`,
+    what: 'options beside a namespace of types alone of the same name',
+  },
+  {
+    clock: false,
+    source: `${TYPES} const F = File; namespace N { import F = Types.T; } new F([], 'x', { lastModified: 0 });`,
+    what: 'a File made by an alias of the constructor, beside an alias of an interface of the same name (pin)',
+  },
+  {
+    clock: false,
+    source: `${TYPES} const F = File; namespace N { import F = Types.V; } new F([], 'x', { lastModified: 0 });`,
+    what: 'a File made by an alias of the constructor, beside an alias of a constant of the same name (pin)',
   },
   {
     clock: false,

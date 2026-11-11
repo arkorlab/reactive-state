@@ -295,8 +295,9 @@ function isExported(alias: ImportEqualsDeclaration): boolean {
  * What the alias `import X = Q` is. A name `Q` that a variable, a function, a class, an enum or a
  * namespace of values gives, or a module the code requires, is a value; an interface, a type alias
  * or a namespace of types alone is a type, which a bare reference passes by to the name around it.
- * What the file does not declare — an import, a global — is unknown. Each is told once
- * (`MEANINGS`).
+ * What the file does not declare — an import, a global — is unknown, as is an enum member:
+ * TypeScript emits no member for an exported alias of one, so what a bare name reaches is not what
+ * the alias says. Each is told once (`MEANINGS`).
  */
 export function aliasMeaning(alias: ImportEqualsDeclaration): Meaning {
   let meaning = MEANINGS.get(alias);
@@ -364,7 +365,10 @@ function entityTargets(
   return targets;
 }
 
-/** The namespaces that `targets` are, through the aliases among them; none if one is not known. */
+/**
+ * The namespaces that `targets` are, through the aliases among them; none if one is not known. The
+ * declarations beside a namespace that merge with it, a class or a function, have none of their own.
+ */
 function namespacesOf(
   targets: readonly Statement[],
   following: readonly Statement[],
@@ -379,17 +383,18 @@ function namespacesOf(
       const inner = behind === undefined ? undefined : namespacesOf(behind, [...following, target]);
       if (inner === undefined) return undefined;
       namespaces.push(...inner);
-    } else {
+    } else if (isImportEqualsDeclaration(target) || isImportDeclaration(target)) {
       return undefined;
     }
+    // A class, a function, an enum or a type that a namespace merges with has no namespace to add.
   }
   return namespaces;
 }
 
 /**
- * The declarations of `name` as a namespace — a namespace, an enum, an alias or an import — in the
- * nearest scope around `from` that has one, among what the scope holds and the other bodies of its
- * namespace export.
+ * The declarations of `name` in the nearest scope around `from` that has a namespace, an enum, an
+ * alias or an import of it, among what the scope holds and the other bodies of its namespace
+ * export: all of them, a class or a function that a namespace merges with too.
  */
 function lexicalDeclarations(from: Node, name: string): readonly Statement[] | undefined {
   let within: Node = from;
@@ -402,10 +407,9 @@ function lexicalDeclarations(from: Node, name: string): readonly Statement[] | u
         : undefined;
     } else statements = statementsOf(at);
     const found = statements?.filter(
-      (statement) =>
-        statement !== from && declaresName(statement, name) && isNamespaceLike(statement),
+      (statement) => statement !== from && declaresName(statement, name),
     );
-    if (found !== undefined && found.length > 0) return found;
+    if (found?.some((statement) => isNamespaceLike(statement)) === true) return found;
     if (isSourceFile(at)) return undefined;
   }
 }

@@ -20,7 +20,7 @@ import { frameDeclarationOf, frameMemberName } from '../src/compiler/framed-bind
 
 const READ = 'value[key]';
 const TYPES =
-  'namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V = 2; export namespace NV { export const x = 1; } } ';
+  'namespace Types { export interface T {} export type U = string; export namespace NI { export interface J {} } export namespace Q { export interface T {} } export const V = 2; export namespace NV { export const x = 1; } export class C {} export namespace C { export interface T {} } } ';
 
 const CASES = [
   { source: `namespace N { export const key = 2; } namespace N { ${READ}; }`, what: 'a const' },
@@ -55,6 +55,30 @@ const CASES = [
   {
     source: `namespace N { export declare const key: number; } namespace N { ${READ}; }`,
     what: 'an exported `declare` constant (pin)',
+  },
+  {
+    source: `class C {} namespace C { export interface T {} } namespace N { import key = C; ${READ}; }`,
+    what: 'an alias of a class that a namespace of types alone merges with',
+  },
+  {
+    source: `function C() {} namespace C { export interface T {} } namespace N { import key = C; ${READ}; }`,
+    what: 'an alias of a function that a namespace of types alone merges with',
+  },
+  {
+    source: `${TYPES} namespace N { export import key = Types.C; } namespace N { ${READ}; }`,
+    what: 'an exported alias of a class that a namespace of types alone merges with',
+  },
+  {
+    source: `enum C { a } namespace C { export interface T {} } namespace N { import key = C; ${READ}; }`,
+    what: 'an alias of an enum that a namespace of types alone merges with (pin)',
+  },
+  {
+    source: `enum E { a = 1 } namespace N { export import key = E.a; } namespace N { ${READ}; }`,
+    what: 'an exported alias of an enum member, which TypeScript emits no reference of (pin)',
+  },
+  {
+    source: `enum E { a = 1 } namespace N { import key = E.a; ${READ}; }`,
+    what: 'an alias of an enum member in the same body (pin)',
   },
   {
     source: `namespace N { export const a = 1, key = 2; } namespace N { ${READ}; }`,
@@ -234,6 +258,14 @@ const PINS = [
   {
     source: `${TYPES} namespace N { export import key = Types.Q.T; } namespace N { ${READ}; }`,
     what: 'an exported alias of a type that a namespace within a namespace holds',
+  },
+  {
+    source: `class Q {} namespace Q { export interface T {} } namespace N { import key = Q.T; ${READ}; }`,
+    what: 'an alias of a type that a namespace merged with a class holds',
+  },
+  {
+    source: `interface C { a: 1 } namespace C { export interface T {} } namespace N { import key = C; ${READ}; }`,
+    what: 'an alias of an interface that a namespace of types alone merges with',
   },
   {
     source: `${TYPES} namespace N { import key = Types.T; ${READ}; }`,
