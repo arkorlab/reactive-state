@@ -40,6 +40,7 @@ import {
   assignmentPatternTargets,
   iteratedFrameSources,
   literalKey,
+  loopHeadDefault,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
@@ -158,11 +159,15 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
 
 /**
  * The slots a node writes on the tuple's bindings, with the values it hands them. A default whose
- * left is a pattern is no assignment of its own: the enclosing pattern evaluates it, or not.
+ * left is a pattern is no assignment of its own: the enclosing pattern, or the loop head that holds
+ * it, evaluates it, or not.
  */
 function slotWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
   const slot = tupleWrite(node, aliases);
-  if (slot === null) return assignmentPatternDefault(node) ? [] : patternWrites(node, aliases);
+  if (slot === null) {
+    const held = assignmentPatternDefault(node) || loopHeadDefault(node);
+    return held ? [] : patternWrites(node, aliases);
+  }
   if (isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind))
     return [{ slot, sources: [{ value: node.right, keys: [] }] }];
   return [{ slot, sources: [] }];

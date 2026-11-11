@@ -9,6 +9,8 @@ import {
   isComputedPropertyName,
   isIdentifier,
   isExpression,
+  isForInStatement,
+  isForOfStatement,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPropertyAssignment,
@@ -243,23 +245,34 @@ export function literalKey(name: PropertyName): string | undefined {
   return value === undefined ? undefined : String(value);
 }
 
-/** A default inside an enclosing assignment pattern is evaluated by that pattern's selected value. */
-export function assignmentPatternDefault(node: Node): boolean {
+/** The outermost array or object literal a node is written in, through property initializers. */
+function patternRoot(node: Node): Node {
   let at = node;
   for (;;) {
     const parent = at.parent;
-    if (
+    const within =
       isArrayLiteralExpression(parent) ||
       isObjectLiteralExpression(parent) ||
-      (isPropertyAssignment(parent) && parent.initializer === at)
-    ) {
-      at = parent;
-      continue;
-    }
-    return (
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === at
-    );
+      (isPropertyAssignment(parent) && parent.initializer === at);
+    if (!within) return at;
+    at = parent;
   }
+}
+
+/** A default inside an enclosing assignment pattern is evaluated by that pattern's selected value. */
+export function assignmentPatternDefault(node: Node): boolean {
+  const root = patternRoot(node);
+  const parent = root.parent;
+  return (
+    isBinaryExpression(parent) &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+    parent.left === root
+  );
+}
+
+/** A default inside a pattern a loop head holds is evaluated by the head's selected value. */
+export function loopHeadDefault(node: Node): boolean {
+  const root = patternRoot(node);
+  const parent = root.parent;
+  return (isForOfStatement(parent) || isForInStatement(parent)) && parent.initializer === root;
 }
