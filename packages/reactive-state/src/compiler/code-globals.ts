@@ -277,18 +277,44 @@ function namesOf(statement: Statement): readonly string[] {
   if (isImportDeclaration(statement)) {
     return importedNames(statement);
   }
+  if (isModuleDeclaration(statement)) {
+    return isIdentifier(statement.name) && holdsValues(statement) ? [statement.name.text] : [];
+  }
   if (
     isFunctionDeclaration(statement) ||
     isClassDeclaration(statement) ||
     isEnumDeclaration(statement) ||
-    isImportEqualsDeclaration(statement) ||
-    isModuleDeclaration(statement)
+    isImportEqualsDeclaration(statement)
   ) {
     return statement.name !== undefined && isIdentifier(statement.name)
       ? [statement.name.text]
       : [];
   }
   return [];
+}
+
+/**
+ * Whether a namespace declares a value, as TypeScript emits it: one of types alone — interfaces,
+ * aliases, namespaces of them, an empty body — emits none, and the name it shares with a value
+ * around it is that value's.
+ */
+function holdsValues(namespace: ModuleDeclaration): boolean {
+  let { body } = namespace;
+  while (body !== undefined && isModuleDeclaration(body)) {
+    ({ body } = body);
+  }
+  return (
+    body !== undefined &&
+    isModuleBlock(body) &&
+    body.statements.some((statement) => {
+      return !(
+        isInterfaceDeclaration(statement) ||
+        isTypeAliasDeclaration(statement) ||
+        (isExportDeclaration(statement) && statement.isTypeOnly) ||
+        (isModuleDeclaration(statement) && !holdsValues(statement))
+      );
+    })
+  );
 }
 
 /** The names an import gives a value: none of an import of a type alone, `import type`, `{ type T }`. */
