@@ -308,12 +308,17 @@ interface KeyWork {
   readonly fallback: readonly string[] | undefined;
 }
 
-/** Written conditional alternatives, constants and literal key annotations keep their finite names. */
+/**
+ * Written conditional alternatives, constants and literal key annotations keep their finite names.
+ * A value is followed once under each declared bound, whichever way it is reached, so that aliases
+ * that converge cost no more than a chain.
+ */
 export function framedKeyNames(key: Expression): readonly string[] | undefined {
   const names = new Set<string>();
+  const followed = new Map<Node, Set<string>>();
   const pending: KeyWork[] = [{ node: key, seen: new Set(), fallback: undefined }];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const step = keyStep(each);
+    const step = keyStep(each, followed);
     if (step === undefined) return undefined;
     for (const name of step.names) names.add(name);
     pending.push(...step.next);
@@ -321,12 +326,28 @@ export function framedKeyNames(key: Expression): readonly string[] | undefined {
   return [...names];
 }
 
+/** Whether `value` was followed already under the declared names `fallback`; it is marked followed. */
+function wasFollowed(
+  value: Node,
+  fallback: readonly string[] | undefined,
+  followed: Map<Node, Set<string>>,
+): boolean {
+  const bound = JSON.stringify(fallback ?? null);
+  const known = followed.get(value) ?? new Set<string>();
+  followed.set(value, known);
+  if (known.has(bound)) return true;
+  known.add(bound);
+  return false;
+}
+
 /** A source-proven value takes precedence over a literal annotation; opaque values keep its bound. */
 function keyStep(
   each: KeyWork,
+  followed: Map<Node, Set<string>>,
 ): { readonly names: readonly string[]; readonly next: readonly KeyWork[] } | undefined {
   const value = unwrapped(each.node);
   if (each.seen.has(value)) return undefined;
+  if (wasFollowed(value, each.fallback, followed)) return { names: [], next: [] };
   const seen = new Set(each.seen).add(value);
   if (isConditionalExpression(value)) {
     const condition = framedCondition(value.condition);
