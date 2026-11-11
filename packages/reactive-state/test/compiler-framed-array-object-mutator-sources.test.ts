@@ -159,6 +159,30 @@ const ELEMENTS = [
     elements: ['descriptor:value', 'error:'],
   },
   {
+    id: 'define-destructured-descriptor',
+    source: `function frames(error: Error) { ${VALUES} const { descriptor } = { descriptor: { value: 'safe' }, get: () => error }; Object.defineProperty(values, 0, descriptor); return values; }`,
+    index: undefined,
+    elements: ['descriptor:value'],
+  },
+  {
+    id: 'define-spread-maps',
+    source: `function frames(maps: PropertyDescriptorMap[]) { ${VALUES} Object.defineProperties(values, ...maps); return values; }`,
+    index: undefined,
+    elements: ['maps:0.0.value'],
+  },
+  {
+    id: 'define-spread-descriptor',
+    source: `function frames(rest: [PropertyDescriptor]) { ${VALUES} Object.defineProperty(values, 0, ...rest); return values; }`,
+    index: undefined,
+    elements: ['rest:0.value'],
+  },
+  {
+    id: 'define-spread-key',
+    source: `function frames(rest: [PropertyKey, PropertyDescriptor]) { ${VALUES} Object.defineProperty(values, ...rest); return values; }`,
+    index: undefined,
+    elements: ['rest:1.value'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,

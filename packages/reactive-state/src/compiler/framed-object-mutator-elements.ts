@@ -31,7 +31,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { constantValue } from './numbers.ts';
 
@@ -62,8 +62,12 @@ export function objectMutatorElements(
   }
   if (first === undefined) return { target, elements: [] };
   if (path === 'Object.defineProperties') return { target, elements: definedValues(first, index) };
-  const key = isSpreadElement(first) ? undefined : constantValue(first);
-  return { target, elements: possibleKey(key, index) ? descriptorValues(second) : [] };
+  if (isSpreadElement(first))
+    return { target, elements: [{ value: first.expression, keys: ['1', 'value'] }] };
+  return {
+    target,
+    elements: possibleKey(constantValue(first), index) ? descriptorValues(second) : [],
+  };
 }
 
 /** One assign source's values at numeric keys; a getter there answers what it returns. */
@@ -96,8 +100,9 @@ function opaqueSource(source: Expression, index: number | undefined): WrittenArr
 function definedValues(descriptors: Expression, index: number | undefined): WrittenArrayElement[] {
   const slot = slotKey(index);
   const value = unwrapped(descriptors);
-  if (isSpreadElement(descriptors) || !isObjectLiteralExpression(value))
-    return [{ value: descriptors, keys: [slot, 'value'] }];
+  if (isSpreadElement(descriptors))
+    return [{ value: descriptors.expression, keys: ['0', slot, 'value'] }];
+  if (!isObjectLiteralExpression(value)) return [{ value: descriptors, keys: [slot, 'value'] }];
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
     if (isSpreadAssignment(property))
@@ -111,6 +116,7 @@ function definedValues(descriptors: Expression, index: number | undefined): Writ
 /** A descriptor's written `value` and what its written `get` returns; an opaque one keeps both. */
 function descriptorValues(descriptor: Expression | undefined): WrittenArrayElement[] {
   if (descriptor === undefined) return [];
+  if (isSpreadElement(descriptor)) return [{ value: descriptor.expression, keys: ['0', 'value'] }];
   const value = unwrapped(descriptor);
   if (!isObjectLiteralExpression(value)) {
     const held = heldValue(value);
@@ -163,7 +169,7 @@ function functionReturns(initializer: Expression): WrittenArrayElement[] {
   return isBlock(fn.body) ? returnedValues(fn.body) : [{ value: fn.body, keys: [] }];
 }
 
-/** What a name holds: a function it declares, or the initializer of a constant, through aliases. */
+/** What a name holds: a function it declares, or the initializer of a constant it names whole. */
 function heldValue(expression: Expression): Expression | FunctionDeclaration {
   let value = unwrapped(expression);
   const seen = new Set<Node>();
@@ -171,9 +177,12 @@ function heldValue(expression: Expression): Expression | FunctionDeclaration {
     seen.add(value);
     const declared = frameDeclarationOf(value);
     if (declared !== undefined && isFunctionDeclaration(declared)) return declared;
+    const selected = frameBindingOf(value);
     const held =
-      declared !== undefined && isVariableDeclaration(declared) && isConstant(declared)
-        ? declared.initializer
+      selected?.keys.length === 0 &&
+      isVariableDeclaration(selected.binding) &&
+      isConstant(selected.binding)
+        ? selected.binding.initializer
         : undefined;
     if (held === undefined) return value;
     value = unwrapped(held);
