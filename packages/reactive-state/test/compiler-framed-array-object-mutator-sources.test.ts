@@ -645,6 +645,18 @@ const ELEMENTS = [
     elements: ['descriptor:value', "'safe':"],
   },
   {
+    id: 'define-self-referential-getter',
+    source: `function frames(error: Error) { ${VALUES} const getter: () => unknown = true ? () => 'safe' : getter; Object.defineProperty(values, 0, { get: getter }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-mutually-referential-getters',
+    source: `function frames(error: Error, flag: boolean) { ${VALUES} const first: () => unknown = flag ? () => 'safe' : second; const second: () => unknown = flag ? first : () => error; Object.defineProperty(values, 0, { get: first }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", 'error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,

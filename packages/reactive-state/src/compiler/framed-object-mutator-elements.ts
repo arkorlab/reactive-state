@@ -61,9 +61,6 @@ const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionToken,
 ]);
 
-/** How many times a getter's name is followed through the functions it may be assigned. */
-const REPLACEMENTS = { depth: 3 } as const;
-
 export interface MutatorElements {
   readonly target: Expression;
   readonly elements: readonly WrittenArrayElement[];
@@ -342,20 +339,22 @@ function accessedValues(
 
 /**
  * What a written synchronous function, or a name that holds one, returns as a getter. A name that
- * is assigned before the getter is read may hold what it is assigned instead.
+ * is assigned before the getter is read may hold what it is assigned instead. Each function is
+ * read once, which keeps a name that holds itself from being followed for good.
  */
-function functionReturns(initializer: Expression, depth = 0): WrittenArrayElement[] {
+function functionReturns(initializer: Expression, seen = new Set<Node>()): WrittenArrayElement[] {
   const names: Identifier[] = [];
   const held = heldValue(initializer, names);
+  if (seen.has(held)) return [];
+  seen.add(held);
   const alternatives = functionAlternatives(held);
   const returned =
     alternatives === undefined
       ? bodyReturns(held)
-      : alternatives.flatMap((each) => functionReturns(each, depth));
-  if (depth >= REPLACEMENTS.depth) return returned;
+      : alternatives.flatMap((each) => functionReturns(each, seen));
   const replaced = names
     .flatMap((name) => [...variableInitializer(name), ...framedAssignedValues(name)])
-    .flatMap((each) => functionReturns(each, depth + 1));
+    .flatMap((each) => functionReturns(each, seen));
   return [...returned, ...replaced];
 }
 
