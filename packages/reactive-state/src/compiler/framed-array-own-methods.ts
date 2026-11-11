@@ -70,8 +70,9 @@ export interface ArrayMethodOverride {
 /**
  * The expression a statement of the block evaluates for certain and may write the array's methods
  * with: an expression statement's, the initializer of the one declaration of a plain name, or the
- * right of an assignment to a plain target that is no write of a method, whose own write is the call
- * or the deletion it holds. A pattern's defaults run after the expression, and are no part of it.
+ * right of an assignment to a plain name that is no write of a method, whose own write is the call
+ * or the deletion it holds. What runs after the expression, a pattern's defaults and the setter of a
+ * property assigned, is no part of it.
  */
 export function definiteExpression(before: Node, root: FrameBinding): Expression | undefined {
   let expression: Expression | undefined;
@@ -86,8 +87,7 @@ export function definiteExpression(before: Node, root: FrameBinding): Expression
     value !== undefined &&
     isBinaryExpression(value) &&
     value.operatorToken.kind === SyntaxKind.EqualsToken &&
-    !isArrayLiteralExpression(value.left) &&
-    !isObjectLiteralExpression(value.left) &&
+    isIdentifier(unwrapped(value.left)) &&
     ownMethodAssignment(value, root) === undefined;
   return stored ? value.right : expression;
 }
