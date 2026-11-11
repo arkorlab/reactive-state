@@ -129,8 +129,9 @@ export function readsCodeGlobal(node: Node): boolean {
 /**
  * The names a read of a global goes by, the global first — `crypto`, `subtle` of `crypto.subtle`,
  * of `globalThis.crypto.subtle` too, the global object read past — by its name or by text in
- * brackets, past a comma's first operands, `(0, Reflect.get)`; none of what reads no global, or by
- * a key the code computes. A name is the global's
+ * brackets, past a comma's first operands, `(0, Reflect.get)`, and a cast in angle brackets, which
+ * `unwrapped` leaves, `(<any>globalThis).eval`; none of what reads no global, or by a key the code
+ * computes. A name is the global's
  * where no declaration in scope gives it, though one elsewhere in the module does (`scopedGlobal`).
  */
 export function globalPathOf(node: Node): readonly string[] | undefined {
@@ -150,6 +151,9 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
     } else if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
       // A comma's value is its last operand: `(0, Reflect.get)` is `Reflect.get`.
       each = unwrapped(each.right);
+    } else if (isTypeAssertion(each)) {
+      // `unwrapped` leaves a cast in angle brackets: `(<any>globalThis).eval` is `globalThis.eval`.
+      each = unwrapped(each.expression);
     } else {
       break;
     }
@@ -437,9 +441,15 @@ export function patternKey(node: Node): string | undefined {
   return textOf(isComputedPropertyName(key) ? unwrapped(key.expression) : key);
 }
 
-/** The text `node` writes, a string; none of another node. */
+/** The text `node` writes, a string, past a cast in angle brackets; none of another node. */
 function textOf(node: Node): string | undefined {
-  return isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
+  let written = node;
+  while (isTypeAssertion(written)) {
+    written = unwrapped(written.expression);
+  }
+  return isStringLiteral(written) || isNoSubstitutionTemplateLiteral(written)
+    ? written.text
+    : undefined;
 }
 
 /**
