@@ -12,6 +12,8 @@ import {
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
+  isConstructorDeclaration,
+  isDecorator,
   isCallExpression,
   isElementAccessExpression,
   isComputedPropertyName,
@@ -265,6 +267,15 @@ function isStaticMember(member: Node): boolean {
   );
 }
 
+/** The decorators of a member: they run with its name, in the order of the members. */
+function decoratorsOf(member: Node): readonly Node[] {
+  const decorated =
+    isNamedMember(member) ||
+    isClassStaticBlockDeclaration(member) ||
+    isConstructorDeclaration(member);
+  return (decorated ? (member.modifiers ?? []) : []).filter((each) => isDecorator(each));
+}
+
 /**
  * What a class runs, in order: what it extends, the computed names of its members in their order,
  * then its static initializers and blocks in theirs, and last the initializers of instances, which
@@ -275,9 +286,12 @@ function membersInRunOrder(
   children: readonly Node[],
 ): readonly Node[] {
   const members = new Set<Node>(node.members);
-  const names = node.members.flatMap((member): Node[] =>
-    isNamedMember(member) && isComputedPropertyName(member.name) ? [member.name] : [],
-  );
+  const names = node.members.flatMap((member): Node[] => {
+    return [
+      ...decoratorsOf(member),
+      ...(isNamedMember(member) && isComputedPropertyName(member.name) ? [member.name] : []),
+    ];
+  });
   const initializers = (wanted: boolean): Node[] => {
     return node.members.flatMap((member): Node[] => {
       if (isStaticMember(member) !== wanted) return [];

@@ -807,6 +807,31 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; String(values); Object.assign({}, { first: String(values), second: ((values.join = Array.prototype.join)) }); return values.length; }`,
     converts: false,
   },
+  {
+    id: 'class-method-decorator-write-runs',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { @((values.join = Array.prototype.join), (target: unknown) => target) method() {} }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-parameter-decorator-write-runs',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method(@((values.join = Array.prototype.join), (target: object, key: string, index: number) => {}) value: unknown) {} }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-property-decorator-write-runs',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { @((values.join = Array.prototype.join), (target: unknown) => target) field = 1; }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-decorator-before-computed-name',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { @((values.join = () => 'safe'), (target: unknown) => target) [((values.join = Array.prototype.join), 'name')]() {} }; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'class-method-body-decorator-free-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method() { return 1; } }; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
