@@ -44,7 +44,6 @@ import {
   type TypeNode,
   type VariableDeclaration,
   isSignatureDeclaration,
-  type ModuleBlock,
   type ModuleDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
@@ -229,26 +228,43 @@ function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
   if (!isModuleBlock(scope) || !isModuleDeclaration(namespace) || !isExported(enumeration)) {
     return enumsNamed(statementsOf(scope) ?? [enumeration], text, false);
   }
-  return mergedBodies(namespace).flatMap((body) =>
-    enumsNamed(body.statements, text, body !== scope),
-  );
+  return mergedNamespaces(namespace).flatMap((each) => {
+    const { body } = each;
+    return body !== undefined && isModuleBlock(body)
+      ? enumsNamed(body.statements, text, body !== scope)
+      : [];
+  });
 }
 
 /**
- * The bodies of the namespaces that merge with `namespace`, itself among them: those of its name in
- * its scope and, where it is exported, the exported ones of the other bodies of the namespace that
- * holds it, which merge with it in turn.
+ * The namespaces that merge with `namespace`, itself among them: those of its name in its scope and,
+ * where it is exported — the tree has a dotted one, `namespace M.N`, export the `N` of the `M` that
+ * holds it — the exported ones among what the other declarations of the namespace that holds it
+ * hold, which merge with it in turn.
  */
-function mergedBodies(namespace: ModuleDeclaration): readonly ModuleBlock[] {
-  const { body, name, parent } = namespace;
-  if (body === undefined || !isIdentifier(name) || !isModuleBlock(body)) return [];
-  const outer = isModuleBlock(parent) ? parent.parent : undefined;
-  if (outer === undefined || !isModuleDeclaration(outer) || !isExported(namespace)) {
-    return bodiesNamed(statementsOf(parent) ?? [namespace], name.text, false);
+function mergedNamespaces(namespace: ModuleDeclaration): readonly ModuleDeclaration[] {
+  const { name, parent } = namespace;
+  if (!isIdentifier(name)) return [namespace];
+  const holder = isModuleBlock(parent) ? parent.parent : parent;
+  if (!isModuleDeclaration(holder) || !isExported(namespace)) {
+    return namespacesNamed(statementsOf(parent) ?? [namespace], name.text, false);
   }
-  return mergedBodies(outer).flatMap((around) =>
-    bodiesNamed(around.statements, name.text, around !== parent),
+  return mergedNamespaces(holder).flatMap((around) =>
+    namespacesWithin(around, name.text, around !== holder),
   );
+}
+
+/** What the namespace `around` holds named `name`: its dotted one, or those its body exports. */
+function namespacesWithin(
+  around: ModuleDeclaration,
+  name: string,
+  exported: boolean,
+): ModuleDeclaration[] {
+  const { body } = around;
+  if (body === undefined) return [];
+  if (isModuleDeclaration(body))
+    return isIdentifier(body.name) && body.name.text === name ? [body] : [];
+  return isModuleBlock(body) ? namespacesNamed(body.statements, name, exported) : [];
 }
 
 /** The enums of `statements` named `name`: those exported alone, where `exported` is asked. */
@@ -263,20 +279,18 @@ function enumsNamed(
   });
 }
 
-/** The bodies of the namespaces of `statements` named `name`: those exported alone, if asked. */
-function bodiesNamed(
+/** The namespaces of `statements` named `name`: those exported alone, where `exported` is asked. */
+function namespacesNamed(
   statements: readonly Statement[],
   name: string,
   exported: boolean,
-): ModuleBlock[] {
+): ModuleDeclaration[] {
   return statements.flatMap((statement) => {
     const found =
       isModuleDeclaration(statement) &&
       isIdentifier(statement.name) &&
-      statement.name.text === name &&
-      statement.body !== undefined &&
-      isModuleBlock(statement.body);
-    return found && (!exported || isExported(statement)) ? [statement.body] : [];
+      statement.name.text === name;
+    return found && (!exported || isExported(statement)) ? [statement] : [];
   });
 }
 

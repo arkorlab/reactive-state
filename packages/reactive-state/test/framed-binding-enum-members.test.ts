@@ -79,6 +79,26 @@ const CASES = [
       'namespace M { export namespace N { export enum E { key = 2 } } export namespace N { export enum E { entry = value[key] } } }',
     what: 'a member of an enum of a nested namespace declared again',
   },
+  {
+    source:
+      'namespace M.N { export enum E { key = 2 } } namespace M.N { export enum E { entry = value[key] } }',
+    what: 'a member of an enum of a dotted namespace declared again',
+  },
+  {
+    source:
+      'namespace M.N { export enum E { key = 2 } } namespace M { export namespace N { export enum E { entry = value[key] } } }',
+    what: 'a member of an enum of a nested namespace a dotted one merges with',
+  },
+  {
+    source:
+      'namespace M { export namespace N { export enum E { key = 2 } } } namespace M.N { export enum E { entry = value[key] } }',
+    what: 'a member of an enum of a dotted namespace a nested one merges with',
+  },
+  {
+    source:
+      'namespace A.B.C { export enum E { key = 2 } } namespace A.B.C { export enum E { entry = value[key] } }',
+    what: 'a member of an enum of a namespace dotted three deep',
+  },
 ] as const;
 
 const PINS = [
@@ -111,6 +131,25 @@ const PINS = [
     source:
       'namespace M { export namespace N { export enum E { key = 2 } } } namespace M { namespace N { export enum E { entry = value[key] } } }',
     what: 'a nested namespace one body exports and the other does not (pin)',
+  },
+  {
+    source:
+      'namespace M.N { export enum E { key = 2 } } namespace M.O { export enum E { entry = value[key] } }',
+    what: 'dotted namespaces of other names (pin)',
+  },
+  {
+    source:
+      'namespace M { namespace N { export enum E { key = 2 } } } namespace M { export namespace N { export enum E { entry = value[key] } } }',
+    what: 'a nested namespace exported where the other body’s is not (pin)',
+  },
+  {
+    source: 'namespace M.N { enum E { key = 2 } } namespace M.N { enum E { entry = value[key] } }',
+    what: 'enums of dotted namespaces that export none (pin)',
+  },
+  {
+    source:
+      'namespace M.N { export enum E { key = 2 } } namespace M { namespace N { export enum E { entry = value[key] } } }',
+    what: 'a dotted namespace and a nested one that is not exported (pin)',
   },
   {
     source: 'function read(): void { enum E { key = 2 } value[key]; }',
