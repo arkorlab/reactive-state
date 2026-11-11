@@ -933,6 +933,18 @@ const ELEMENTS = [
     elements: ['empty ?? { 0: error }:0', 'empty ?? { 0: error }:array', 'error:'],
   },
   {
+    id: 'define-key-for-key',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { [Symbol.keyFor(Symbol.for('0'))!]: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-symbol-length-key',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, Symbol.length, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -1171,6 +1183,11 @@ const CONVERSIONS = [
   {
     id: 'define-nullish-constant-getter-converts',
     source: `function frames(error: Error) { const a = ['safe']; const empty = null; Object.defineProperty(a, 0, { get: empty ?? (() => error) }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-key-for-key-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { [Symbol.keyFor(Symbol.for('0'))!]: error }); return String(a); }`,
     converts: true,
   },
   {

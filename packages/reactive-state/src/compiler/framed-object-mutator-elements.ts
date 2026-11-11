@@ -569,14 +569,38 @@ function keyMayBeSlot(key: Expression, index: number | undefined): boolean {
   );
 }
 
+/** The symbols the language gives: the names `Symbol.iterator` and the others read. */
+const WELL_KNOWN_SYMBOLS: ReadonlySet<string> = new Set([
+  'asyncDispose',
+  'asyncIterator',
+  'dispose',
+  'hasInstance',
+  'isConcatSpreadable',
+  'iterator',
+  'match',
+  'matchAll',
+  'replace',
+  'search',
+  'species',
+  'split',
+  'toPrimitive',
+  'toStringTag',
+  'unscopables',
+]);
+
 /**
  * Whether a key is a symbol the program writes: a well-known one, `Symbol.iterator`, or one made
- * by `Symbol(...)` or `Symbol.for(...)`, through a constant that holds it. A symbol names no index.
+ * by `Symbol(...)` or `Symbol.for(...)`, through a constant that holds it. A symbol names no index;
+ * other members of Symbol, `Symbol.length`, `Symbol.keyFor(...)`, read numbers and strings.
  */
 function isSymbolKey(key: Expression): boolean {
   const value = heldValue(key);
-  const path = globalPathOf(isCallExpression(value) ? unwrapped(value.expression) : value);
-  return path?.[0] === 'Symbol';
+  if (isCallExpression(value)) {
+    const made = globalPathOf(unwrapped(value.expression))?.join('.');
+    return made === 'Symbol' || made === 'Symbol.for';
+  }
+  const path = globalPathOf(value);
+  return path?.length === 2 && path[0] === 'Symbol' && WELL_KNOWN_SYMBOLS.has(path[1] ?? '');
 }
 
 /** Whether an object field's name may name the slot, a computed one by what its key may be. */
