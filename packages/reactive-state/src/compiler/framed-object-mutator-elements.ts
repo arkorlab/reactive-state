@@ -1,5 +1,6 @@
 import {
   type Block,
+  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   type Identifier,
@@ -367,15 +368,17 @@ function definedValues(
   const value = unwrapped(descriptors);
   if (isSpreadElement(descriptors))
     return [{ value: descriptors.expression, keys: ['0', slot, 'value'] }];
+  if (isArrayLiteralExpression(value)) return listedDescriptors(value, index, reading);
   if (!isObjectLiteralExpression(value)) {
     const names: Identifier[] = [];
     const held = heldValue(value, names);
     const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
-    const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
+    const literal = isObjectLiteralExpression(held) || isArrayLiteralExpression(held);
+    const alternatives = literal ? [held] : alternativesOf(held);
     const used =
       alternatives === undefined ? undefined : readUnder(reading.seen.maps, held, hidden);
     if (alternatives === undefined) return opaque;
-    const written = mapWrites(names, index, reading);
+    const written = mapWrites(names, index, reading, hidden);
     if (used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
@@ -389,19 +392,44 @@ function definedValues(
 }
 
 /**
+ * The descriptors of a map written as a list: the entry at the slot's position, or, where a
+ * spread may shift the positions or the slot is unknown, each entry.
+ */
+function listedDescriptors(
+  list: ArrayLiteralExpression,
+  index: number | undefined,
+  reading: Reading,
+): WrittenArrayElement[] {
+  let shifted = false;
+  return list.elements.flatMap((element, at) => {
+    if (isSpreadElement(element)) {
+      shifted = true;
+      return [{ value: element.expression, keys: [slotKey(index), 'value'] }];
+    }
+    if (isOmittedExpression(element)) return [];
+    return shifted || index === undefined || at === index ? descriptorValues(element, reading) : [];
+  });
+}
+
+/**
  * The descriptors assigned to the entries of a map a constant holds before the place that names it:
- * a constant does not keep its entries from changing, and the entry of the slot is possible.
+ * a constant does not keep its entries from changing, and the entry of the slot is possible,
+ * unless a field after the place hides it.
  */
 function mapWrites(
   names: readonly Identifier[],
   index: number | undefined,
   reading: Reading,
+  hidden: Hidden,
 ): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
-  return heldMemberWrites(first, names).flatMap(({ key, value }) =>
-    key === undefined || possibleKey(key, index) ? descriptorValues(value, reading) : [],
-  );
+  return heldMemberWrites(first, names).flatMap(({ key, value }) => {
+    const hides = key !== undefined && hidden.data.has(key);
+    return !hides && (key === undefined || possibleKey(key, index))
+      ? descriptorValues(value, reading)
+      : [];
+  });
 }
 
 /**
@@ -446,13 +474,13 @@ function descriptorValues(
   const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
   const used = alternatives === undefined ? undefined : readUnder(table, held, hidden);
   if (alternatives === undefined) return opaque;
-  if (used === undefined) return [...opaque, ...descriptorWrites(names)];
+  if (used === undefined) return [...opaque, ...descriptorWrites(names, hidden)];
   const chosen = alternatives.flatMap((each) => {
     return isObjectLiteralExpression(each)
       ? descriptorFields(each, reading, used)
       : descriptorValues(each, reading, used);
   });
-  return [...opaque, ...chosen, ...descriptorWrites(names)];
+  return [...opaque, ...chosen, ...descriptorWrites(names, hidden)];
 }
 
 /** The values the fields of a written descriptor give, each as the fields after it leave it. */
@@ -563,10 +591,11 @@ function accessedValues(
  * The values assigned to the `value` and `get` fields of an object a constant holds, or of what it
  * is aliased to: a constant does not keep its fields from changing. An assignment anywhere counts.
  */
-function descriptorWrites(names: readonly Identifier[]): WrittenArrayElement[] {
+function descriptorWrites(names: readonly Identifier[], hidden: Hidden): WrittenArrayElement[] {
   const [first] = names;
   if (first === undefined) return [];
   return heldMemberWrites(first, names).flatMap(({ key, value }) => {
+    if (key !== undefined && hidden.data.has(key)) return [];
     const installed = key === undefined || key === 'value' ? [{ value, keys: [] }] : [];
     return key === undefined || key === 'get'
       ? [...installed, ...functionReturns(value)]

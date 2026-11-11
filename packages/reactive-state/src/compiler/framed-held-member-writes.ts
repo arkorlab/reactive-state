@@ -16,6 +16,8 @@ import {
   isNewExpression,
   isPropertyAccessExpression,
   isSourceFile,
+  isSpreadAssignment,
+  isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -29,6 +31,7 @@ import { unwrapped } from './bounded.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { type MemberWrite, patternMemberWrites } from './framed-pattern-members.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 
 /** The assignments to a member of an object a constant holds: a constant does not freeze it. */
@@ -80,23 +83,35 @@ function isStatementKind(kind: SyntaxKind): boolean {
 
 /**
  * Where the object a descriptor names is read: by the call whose arguments hold the name, after
- * they are all evaluated; by the name itself, where it is only copied.
+ * they are all evaluated; by the name itself, where it is spread, which copies it at once.
  */
 function readAt(use: Identifier): Node {
   for (let at: Node = use.parent; !isSourceFile(at); at = at.parent) {
+    if (isSpreadAssignment(at) || isSpreadElement(at)) return use;
     if (isCallExpression(at) || isNewExpression(at)) return at;
     if (isFunctionLikeDeclaration(at) || isStatementKind(at.kind)) break;
   }
   return use;
 }
 
-/** The value one assignment gives a member of a held object. */
+/** The values one assignment, or a destructuring one, gives the members of a held object. */
 function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWrite[] {
-  if (!isAssignment(node) || !framedPossibleBranch(node)) return [];
-  const member = unwrapped(node.left);
-  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
-  if (!writesHeld(member, bindings)) return [];
-  return [{ key: frameMemberName(member), value: node.right }];
+  const held = memberWrites(node).filter(({ member }) => writesHeld(member, bindings));
+  if (held.length === 0 || !framedPossibleBranch(node)) return [];
+  return held.flatMap(({ member, values }) =>
+    values.map((value) => ({ key: frameMemberName(member), value })),
+  );
+}
+
+/** The members an assignment, a destructuring one, or a loop head writes, with their values. */
+function memberWrites(node: Node): readonly MemberWrite[] {
+  if (!isAssignment(node)) return patternMemberWrites(node);
+  const direct = unwrapped(node.left);
+  return isMember(direct) ? [{ member: direct, values: [node.right] }] : patternMemberWrites(node);
+}
+
+function isMember(node: Node): node is PropertyAccessExpression | ElementAccessExpression {
+  return isPropertyAccessExpression(node) || isElementAccessExpression(node);
 }
 
 /** The bindings of the names, and of each name a program gives them for good. */
