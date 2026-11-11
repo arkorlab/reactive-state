@@ -387,12 +387,14 @@ function textCall(
 }
 
 /**
- * The number a method of a date answers: of one the code writes, there or through a constant
- * (`timeOf`), of a time the same wherever and whenever the code runs (`fixedTime`), as the engine
- * computes it — but of what it reads or sets in the time zone where it runs, `NaN` alone; of
- * another, the clock's among them, what a setter answers whatever the date — `NaN` of what is no
- * finite number, `setTime(Infinity)`, or of a time past the dates the language holds, `setTime(9e15)`
- * — but none of what the code writes as no date (`writtenOtherwise`), whose method is its own.
+ * The number a method of a date answers: of one the code makes there, `new Date(0).getTime()`, of a
+ * time the same wherever and whenever the code runs (`fixedTime`), as the engine computes it — but
+ * of what it reads or sets in the time zone where it runs, `NaN` alone where no time zone holds a
+ * time (`localNaN`); of another, the clock's among them, and one a name holds, whose time a setter
+ * called on the name may have changed since, what a setter answers whatever the date — `NaN` of
+ * what is no finite number, `setTime(Infinity)`, or of a time past the dates the language holds,
+ * `setTime(9e15)` — but none of what the code writes as no date (`writtenOtherwise`), whose method
+ * is its own.
  */
 function dateCall(
   method: string,
@@ -400,25 +402,70 @@ function dateCall(
   given: readonly Constant[],
   names: Names,
 ): number | undefined {
-  const time = timeOf(target, names, true);
+  const value = unwrapped(target);
+  const time = isNewExpression(value) ? fixedTime(value, names) : undefined;
   if (time === undefined) {
     return setsTime(method) && !writtenOtherwise(target, names)
       ? setWhatever(method, given)
       : undefined;
   }
+  if (!DATE_TIMES.has(method) && !SETTING_UTC.has(method)) {
+    return localNaN(method, time, given) ? NaN : undefined;
+  }
   const date = new Date(time);
   const read = Reflect.get(date, method) as (...given: readonly number[]) => number;
-  const answered = Reflect.apply(read, date, given.map(Number));
-  const isExact = DATE_TIMES.has(method) || SETTING_UTC.has(method);
-  return isExact || Number.isNaN(answered) ? answered : undefined;
+  return Reflect.apply(read, date, given.map(Number));
 }
 
+/** The setters of a date's local time that start a date of none over, of the epoch: of a year. */
+const RESTARTING: ReadonlySet<string> = new Set(['setFullYear', 'setYear']);
+
 /**
- * What a date's setter answers whatever the date: `NaN` of what is no finite number — nothing given
- * first among it — and of `setTime`, of a time past the dates the language holds; none told else.
+ * Whether a method of a date that reads or sets its time in the time zone where it runs answers
+ * `NaN` in every time zone: a read of a date of none, and a setting of one — but `setFullYear`,
+ * which starts it over — or of what is no finite number (`setWhatever`). A time zone moves a time
+ * by less than a day, so that a time near the dates the language holds is one in some time zones
+ * and none in others: of it, none here.
+ */
+function localNaN(method: string, time: number, given: readonly Constant[]): boolean {
+  if (LOCAL_TIMES.has(method)) {
+    return Number.isNaN(time);
+  }
+  return (
+    (Number.isNaN(time) && !RESTARTING.has(method)) || Number.isNaN(setWhatever(method, given) ?? 0)
+  );
+}
+
+/** How many parts a setter of a date reads, past which it ignores what it is given. */
+const PARTS = { one: 1, two: 2, three: 3, four: 4 } as const;
+
+/** The parts each setter of a date reads, of the first it is given on: `setHours` up to four. */
+const SETTER_PARTS: ReadonlyMap<string, number> = new Map([
+  ['setDate', PARTS.one],
+  ['setFullYear', PARTS.three],
+  ['setHours', PARTS.four],
+  ['setMilliseconds', PARTS.one],
+  ['setMinutes', PARTS.three],
+  ['setMonth', PARTS.two],
+  ['setSeconds', PARTS.two],
+  ['setTime', PARTS.one],
+  ['setUTCDate', PARTS.one],
+  ['setUTCFullYear', PARTS.three],
+  ['setUTCHours', PARTS.four],
+  ['setUTCMilliseconds', PARTS.one],
+  ['setUTCMinutes', PARTS.three],
+  ['setUTCMonth', PARTS.two],
+  ['setUTCSeconds', PARTS.two],
+  ['setYear', PARTS.one],
+]);
+
+/**
+ * What a date's setter answers whatever the date: `NaN` of what is no finite number among the parts
+ * it reads (`SETTER_PARTS`) — nothing given first among them — and of `setTime`, of a time past the
+ * dates the language holds; none told else. What it is given past its parts it ignores.
  */
 function setWhatever(method: string, given: readonly Constant[]): number | undefined {
-  const numbers = given.map(Number);
+  const numbers = given.slice(0, SETTER_PARTS.get(method) ?? given.length).map(Number);
   const [first = NaN] = numbers;
   if (!Number.isFinite(first) || numbers.some((each) => !Number.isFinite(each))) {
     return NaN;
@@ -549,21 +596,18 @@ export function writtenTime(node: Expression, resolve?: Resolve): number | undef
   return timeOf(node, { following: new Set(), resolve });
 }
 
-/**
- * The time of a date the code writes (`writtenTime`), but of a name followed on the way already —
- * or, `fixed`, where it is the same wherever and whenever the code runs (`fixedTime`).
- */
-function timeOf(node: Expression, names: Names, fixed = false): number | undefined {
+/** The time of a date the code writes (`writtenTime`), but of a name followed on the way already. */
+function timeOf(node: Expression, names: Names): number | undefined {
   const value = unwrapped(node);
   if (isNewExpression(value)) {
-    return fixed ? fixedTime(value, names) : dateTime(value, names);
+    return dateTime(value, names);
   }
   if (!isIdentifier(value) || names.following.has(value.text)) {
     return undefined;
   }
   const held = names.resolve?.(value);
   const following = new Set([...names.following, value.text]);
-  return held === undefined ? undefined : timeOf(held, { ...names, following }, fixed);
+  return held === undefined ? undefined : timeOf(held, { ...names, following });
 }
 
 /**
