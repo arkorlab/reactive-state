@@ -101,6 +101,12 @@ function selectedEntries(
   return sources === undefined ? undefined : assignedEntries(sources, key);
 }
 
+/** The keys the setters of the prototypes installed so far answer, or that one cannot be read. */
+interface InstalledSetters {
+  readonly keys: string[];
+  unreadable: boolean;
+}
+
 /** Each source's fields are copied in order; the prototypes and setters they install are retained. */
 function assignedEntries(
   sources: readonly Expression[],
@@ -108,17 +114,21 @@ function assignedEntries(
 ): readonly AssignedFrameSource[] {
   let values: AssignedFrameSource[] = [];
   const inherited: AssignedFrameSource[] = [];
-  let intercepted = false;
+  const setters: InstalledSetters = { keys: [], unreadable: false };
   for (const source of sources) {
     const object = unwrapped(source);
-    if (isObjectLiteralExpression(object)) {
-      inherited.push(...copiedPrototypes(object, key));
-      intercepted ||= ownEntries(object, '__proto__').values.some((each) => !setterFree(each));
-      if (intercepted) inherited.push(...copiedValues(object));
-      const selected = ownEntries(object, key);
-      if (selected.own) values = selected.values;
-      else values.push(...selected.values);
-    } else values.push({ value: source, keys: [key] });
+    if (!isObjectLiteralExpression(object)) {
+      values.push({ value: source, keys: [key] });
+      inherited.push(...keyedValues(source, setters.keys));
+      continue;
+    }
+    inherited.push(...copiedPrototypes(object, key));
+    installSetters(object, setters);
+    if (setters.unreadable || setters.keys.length > 0)
+      inherited.push(...copiedValues(object, setters.keys));
+    const selected = ownEntries(object, key);
+    if (selected.own) values = selected.values;
+    else values.push(...selected.values);
   }
   return [...values, ...inherited];
 }
@@ -136,31 +146,53 @@ function copiedPrototypes(
   return prototypes.map((each) => ({ value: each.value, keys: [...each.keys, key] }));
 }
 
+/** Each key a setter may be given a source's value under, as that source's member of it. */
+function keyedValues(source: Expression, keys: readonly string[]): readonly AssignedFrameSource[] {
+  return keys.map((name) => ({ value: source, keys: [name] }));
+}
+
 /**
- * A prototype that is a literal with no setter, whose written prototypes have none either, runs no
- * code when a later copy is written to the target; one the compile cannot read may.
+ * The prototypes a literal's own `__proto__` entries install add the keys of their setters: those of
+ * the set accessors of a literal and of its written prototypes. A prototype the compile cannot
+ * read, or a setter's key it cannot, leaves the keys unknown.
  */
-function setterFree(prototype: AssignedFrameSource): boolean {
-  if (prototype.keys.length > 0) return false;
+function installSetters(object: ObjectLiteralExpression, setters: InstalledSetters): void {
+  for (const prototype of ownEntries(object, '__proto__').values) {
+    const keys = setterKeys(prototype);
+    if (keys === undefined) setters.unreadable = true;
+    else setters.keys.push(...keys);
+  }
+}
+
+/** The keys of the set accessors of a literal prototype and of its written prototypes. */
+function setterKeys(prototype: AssignedFrameSource): readonly string[] | undefined {
+  if (prototype.keys.length > 0) return undefined;
+  const found: string[] = [];
   const pending = [prototype.value];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const object = unwrapped(at);
-    if (
-      !isObjectLiteralExpression(object) ||
-      object.properties.some((each) => isSetAccessorDeclaration(each))
-    )
-      return false;
+    if (!isObjectLiteralExpression(object)) return undefined;
+    for (const property of object.properties) {
+      if (!isSetAccessorDeclaration(property)) continue;
+      const names = memberNames(property.name);
+      if (names === undefined) return undefined;
+      found.push(...names);
+    }
     pending.push(...framedLiteralPrototypes(object));
   }
-  return true;
+  return found;
 }
 
 /**
  * A setter the target's prototype holds is called with each value copied after it and may store
  * it under any key: the values of a literal's own entries, other than the `__proto__` entry that
- * sets a prototype, are possible values of any field.
+ * sets a prototype, are possible values of any field, and an opaque spread's member of each key a
+ * setter answers.
  */
-function copiedValues(object: ObjectLiteralExpression): readonly AssignedFrameSource[] {
+function copiedValues(
+  object: ObjectLiteralExpression,
+  setters: readonly string[],
+): readonly AssignedFrameSource[] {
   const found: AssignedFrameSource[] = [];
   const pending = [object];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
@@ -168,6 +200,7 @@ function copiedValues(object: ObjectLiteralExpression): readonly AssignedFrameSo
       if (isSpreadAssignment(property)) {
         const spread = unwrapped(property.expression);
         if (isObjectLiteralExpression(spread)) pending.push(spread);
+        else found.push(...keyedValues(property.expression, setters));
         continue;
       }
       const names = memberNames(property.name);
