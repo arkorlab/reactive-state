@@ -57,7 +57,7 @@ export interface ArrayMethodOverride {
   readonly configurable?: true;
 }
 
-/** One direct assignment to the native method selected by a call. */
+/** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
   node: Node,
   root: FrameBinding,
@@ -73,6 +73,8 @@ export function ownMethodAssignment(
     key,
     own: sourceArrayFunction(node.right) || knownNonNative(node.right),
     value: node.right,
+    writable: true,
+    configurable: true,
   };
 }
 
