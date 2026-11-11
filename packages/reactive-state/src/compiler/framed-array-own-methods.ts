@@ -4,12 +4,14 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isCallExpression,
   isElementAccessExpression,
   isComputedPropertyName,
   isConditionalExpression,
   isExpressionStatement,
   isFunctionLikeDeclaration,
   isIdentifier,
+  isNonNullExpression,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
@@ -137,6 +139,19 @@ function inOptionalChain(node: Node): boolean {
 }
 
 /**
+ * The links of an optional chain read the expression before them first: whatever that expression
+ * holds runs before `?.` decides whether the rest of the chain does.
+ */
+function readsFirst(link: Node, at: Node): boolean {
+  const reads =
+    isPropertyAccessExpression(link) ||
+    isElementAccessExpression(link) ||
+    isCallExpression(link) ||
+    isNonNullExpression(link);
+  return reads && link.expression === at;
+}
+
+/**
  * Whether an expression runs whenever its statement does: the statement is an expression or a
  * declaration, and no condition, short circuit, optional chain, default of a pattern, function or
  * inner statement lies between them. A loop, a branch or a switch runs its parts on some paths.
@@ -166,7 +181,8 @@ function skipsLink(at: Node, statement: Node): boolean {
       setsMember(parent) ||
       assignmentPatternDefault(parent)
     );
-  if (inOptionalChain(parent) || isFunctionLikeDeclaration(parent)) return true;
+  if (isFunctionLikeDeclaration(parent)) return true;
+  if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
   return inner && parent !== statement;
 }

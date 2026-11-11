@@ -472,6 +472,46 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.assign(values, { ignored: (values.join = Array.prototype.join) }); Object.defineProperty(values, 'join', { value: Array.prototype.join }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'optional-chain-base-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })?.length; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-element-access',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })?.[0]; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-later-links',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })?.length.toFixed(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-of-call-argument',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.keys(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }))?.length; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-base-non-null',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })?.length!; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'optional-chain-link-argument-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.keys(values)?.at(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }).length); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'optional-chain-element-argument-pin',
+    source: `function frames(error: Error, holder?: Record<string, unknown>) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); holder?.[(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), 'run')]; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'optional-call-argument-pin',
+    source: `function frames(error: Error, callback?: (value: unknown) => void) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); callback?.(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
