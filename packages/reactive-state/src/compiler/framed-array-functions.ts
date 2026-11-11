@@ -5,6 +5,7 @@ import {
   isArrowFunction,
   isAwaitExpression,
   isBinaryExpression,
+  isBindingElement,
   isBlock,
   isCallExpression,
   isClassDeclaration,
@@ -330,11 +331,11 @@ function priorBindingRead(
  * Completed earlier work can call a later-written hoisted mutator before a method is captured. So
  * does a pattern that takes a value apart, which runs the getters and the iterator it reads before
  * its defaults, and so before a reference in them — but not one whose own source holds the
- * reference, which it takes apart after.
+ * reference, which it takes apart after, a pattern inside it too.
  */
 function priorEffect(node: Node, reference: Identifier): boolean {
   if (isObjectBindingPattern(node) || isArrayBindingPattern(node))
-    return !patternAfter(node, reference);
+    return !patternAfter(outermostPattern(node), reference);
   if (!completed(node, reference)) return false;
   if (isComputedPropertyName(node)) return constantValue(node.expression) === undefined;
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
@@ -352,6 +353,13 @@ function priorEffect(node: Node, reference: Identifier): boolean {
     isBinaryExpression(node) ||
     implicitEffect(node)
   );
+}
+
+/** The outermost pattern `pattern` is part of: an element of a pattern holds a pattern of its own. */
+function outermostPattern(pattern: Node): Node {
+  let at = pattern;
+  while (isBindingElement(at.parent)) at = at.parent.parent;
+  return at;
 }
 
 /** Implicit calls, conversions, mutation and deferred completion also invalidate a mutable proof. */

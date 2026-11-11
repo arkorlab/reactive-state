@@ -1,12 +1,14 @@
 import {
   type Expression,
   isBinaryExpression,
+  isObjectBindingPattern,
   isPropertyAccessExpression,
+  isVariableDeclaration,
   type Node,
 } from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
-import { sourceArrayFunction } from '../src/compiler/framed-array-functions.ts';
+import { sourceArrayFunction, sourceArrayMethod } from '../src/compiler/framed-array-functions.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
@@ -38,6 +40,11 @@ const METHODS = [
   },
   {
     id: 'getter-taken-through-a-nested-pattern',
+    source: `${GETTER} ${HOLDER} const { x: { x } } = { x: source }; void x; ${TAKEN}`,
+    custom: false,
+  },
+  {
+    id: 'pattern-reading-another-field-is-work-too',
     source: `${GETTER} ${HOLDER} const { x: { y } } = { x: source }; void y; ${TAKEN}`,
     custom: false,
   },
@@ -78,6 +85,36 @@ const METHODS = [
   },
 ];
 
+/** The pattern declarations that take `methods` apart, with the path of the method each reads. */
+const PATTERNS = [
+  {
+    id: 'flat-pattern-pin',
+    source: `${HOLDER} const { join } = methods; void join;`,
+    path: ['join'],
+    custom: true,
+  },
+  {
+    id: 'nested-pattern-of-the-source-holding-the-read',
+    source:
+      "const methods = { inner: { join() { return 'fixed'; } } }; const { inner: { join } } = methods; void join;",
+    path: ['inner', 'join'],
+    custom: true,
+  },
+  {
+    id: 'doubly-nested-pattern-of-the-source-holding-the-read',
+    source:
+      "const methods = { a: { b: { join() { return 'fixed'; } } } }; const { a: { b: { join } } } = methods; void join;",
+    path: ['a', 'b', 'join'],
+    custom: true,
+  },
+  {
+    id: 'nested-pattern-after-a-getter-pattern',
+    source: `${GETTER} const methods = { inner: { join() { return 'fixed'; } } }; const { x } = source; void x; const { inner: { join } } = methods; void join;`,
+    path: ['inner', 'join'],
+    custom: false,
+  },
+];
+
 /** Every node of `root`'s tree. */
 function nodesOf(root: Node): readonly Node[] {
   const nodes: Node[] = [];
@@ -89,6 +126,17 @@ function nodesOf(root: Node): readonly Node[] {
     });
   }
   return nodes;
+}
+
+/** What each object pattern in `root` takes apart, where it is a declaration's initializer. */
+function patternReceivers(root: Node): readonly Expression[] {
+  return nodesOf(root).flatMap((node) => {
+    return isVariableDeclaration(node) &&
+      isObjectBindingPattern(node.name) &&
+      node.initializer?.getText() === 'methods'
+      ? [node.initializer]
+      : [];
+  });
 }
 
 describe('a method proof past a destructuring declaration', () => {
@@ -106,5 +154,14 @@ describe('a method proof past a destructuring declaration', () => {
 
     expect(taken).toBeDefined();
     expect(taken === undefined ? undefined : sourceArrayFunction(taken)).toBe(custom);
+  });
+
+  it.each(PATTERNS)('$id', ({ source, path, custom }) => {
+    using api = openTypeScript();
+    using parsed = parseModule(api, 'binding-pattern-receivers.ts', source);
+    const receivers = patternReceivers(parsed.sourceFile);
+
+    expect(receivers).toHaveLength(1);
+    expect(receivers.map((each) => sourceArrayMethod(each, path))).toStrictEqual([custom]);
   });
 });
