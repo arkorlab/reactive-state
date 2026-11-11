@@ -17,7 +17,6 @@ import {
   isSourceFile,
   isSpreadElement,
   isSpreadAssignment,
-  type MethodDeclaration,
   type Node,
   type ObjectLiteralExpression,
   SyntaxKind,
@@ -27,13 +26,15 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
-import {
-  sourceArrayFunction,
-  writtenArrayFunction,
-  writtenArrayKey,
-} from './framed-array-functions.ts';
+import { sourceArrayFunction, writtenArrayKey } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { arrayRestBinding } from './framed-array-rest.ts';
+import {
+  type ArrayMethodOverride,
+  arrayIdentity,
+  knownNonNative,
+  OWN_METHODS,
+  ownMethodAssignment,
+} from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
@@ -50,40 +51,7 @@ interface ArrayWords {
   readonly typed: (value: Expression) => boolean;
 }
 
-const OWN_METHODS = new Set([
-  'at',
-  'concat',
-  'every',
-  'filter',
-  'find',
-  'findIndex',
-  'findLast',
-  'findLastIndex',
-  'flat',
-  'flatMap',
-  'forEach',
-  'join',
-  'map',
-  'pop',
-  'reduce',
-  'reduceRight',
-  'shift',
-  'slice',
-  'some',
-  'sort',
-  'splice',
-  'toReversed',
-  'toSorted',
-  'toSpliced',
-  'toString',
-  'with',
-]);
 const ACCESSOR_KEYS = new Set(['get', 'set']);
-
-export interface ArrayMethodOverride {
-  readonly own: boolean;
-  readonly value?: Expression | MethodDeclaration;
-}
 
 type OwnMethods = Map<string, ArrayMethodOverride>;
 
@@ -502,57 +470,6 @@ function descriptorFunction(descriptor: Expression | undefined): ArrayMethodOver
 /** An opaque write can replace either method and therefore removes a proof of a custom method. */
 function forgetMethods(own: OwnMethods): void {
   for (const method of OWN_METHODS) own.set(method, { own: false });
-}
-
-/** One direct assignment to the native method selected by a call. */
-function ownMethodAssignment(
-  node: Node,
-  root: FrameBinding,
-): (ArrayMethodOverride & { readonly key: string }) | undefined {
-  if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.EqualsToken)
-    return undefined;
-  const member = unwrapped(node.left);
-  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
-  const key = frameMemberName(member);
-  if (key === undefined || !OWN_METHODS.has(key) || arrayIdentity(member.expression) !== root)
-    return undefined;
-  return {
-    key,
-    own: sourceArrayFunction(node.right) || knownNonNative(node.right),
-    value: node.right,
-  };
-}
-
-/** A written non-callable join makes native toString fall back to the ordinary object tag. */
-function knownNonNative(expression: Expression): boolean {
-  const value = unwrapped(expression);
-  return (
-    writtenArrayFunction(value) ||
-    constantValue(value) !== undefined ||
-    value.kind === SyntaxKind.NullKeyword ||
-    value.kind === SyntaxKind.TrueKeyword ||
-    value.kind === SyntaxKind.FalseKeyword ||
-    globalPathOf(value)?.join('.') === 'undefined'
-  );
-}
-
-/** The declaration whose array value a name or a chain of lexical aliases denotes. */
-function arrayIdentity(value: Expression): FrameBinding | undefined {
-  let each = unwrapped(value);
-  const rest = arrayRestBinding(each);
-  if (rest !== undefined) return rest;
-  const seen = new Set<FrameBinding>();
-  let root: FrameBinding | undefined;
-  while (isIdentifier(each)) {
-    const selected = frameBindingOf(each);
-    if (selected === undefined) return undefined;
-    if (selected.keys.length > 0 || seen.has(selected.binding)) return undefined;
-    root = selected.binding;
-    seen.add(root);
-    if (root.initializer === undefined) return root;
-    each = unwrapped(root.initializer);
-  }
-  return isArrayLiteralExpression(each) ? root : undefined;
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */
