@@ -215,6 +215,78 @@ function cacheOf(sourceFile: SourceFile): { declared: Identifier; named: readonl
   return { declared, named };
 }
 
+/** A constant a namespace declares, read where the namespace's own scope reaches. */
+const OWN = [
+  {
+    lines: ['namespace Inner {', '  const cache = {};', '  cache.changed = true;', '}'],
+    reads: ['3:cache'],
+    what: "a constant of a namespace's body, read in the body",
+  },
+  {
+    lines: [
+      'namespace Inner {',
+      '  export const cache = {};',
+      '  cache.changed = true;',
+      '}',
+      'namespace Inner {',
+      '  cache.again = true;',
+      '}',
+    ],
+    reads: ['3:cache', '6:cache'],
+    what: 'an exported constant of a namespace, read in the body and in a merged body',
+  },
+  {
+    lines: [
+      'namespace Inner {',
+      '  const cache = {};',
+      '  cache.changed = true;',
+      '}',
+      'const cache = {};',
+      'cache.other = true;',
+    ],
+    reads: ['3:cache'],
+    what: "a constant of a namespace's body, and one of the module of the name",
+  },
+  {
+    lines: [
+      'namespace Inner {',
+      '  const cache = {};',
+      '  export function run() {',
+      '    return cache.changed;',
+      '  }',
+      '}',
+    ],
+    reads: ['4:cache'],
+    what: "a constant of a namespace's body, read in a function of it",
+  },
+  {
+    lines: [
+      'namespace Inner {',
+      '  const cache = {};',
+      '  namespace Deep {',
+      '    const cache = {};',
+      '    cache.deeper = true;',
+      '  }',
+      '  cache.changed = true;',
+      '}',
+    ],
+    reads: ['7:cache'],
+    what: 'a constant of a namespace, hidden in a namespace nested in it',
+  },
+  {
+    lines: [
+      'namespace Inner {',
+      '  export function run() {',
+      '    const cache = {};',
+      '    return cache;',
+      '  }',
+      '}',
+    ],
+    reads: ['4:cache'],
+    what: "a constant of a function of a namespace's body",
+  },
+] as const;
+
 describe('a constant of the module read in a namespace that declares the name again', () => {
   let api: API;
 
@@ -242,7 +314,27 @@ describe('a constant of the module read in a namespace that declares the name ag
       });
   }
 
+  /** The lines, `line:cache`, of the reads of the first constant `cache` of `lines` that `readsOf` takes. */
+  function readsOfFirstCache(lines: readonly string[]): readonly string[] {
+    const source = `${lines.join('\n')}\n`;
+    using parsed = api.createSourceFile('reads.ts', source);
+    const { sourceFile } = parsed;
+    const { declared, named } = cacheOf(sourceFile);
+    const isRead = readsOf(declared, sourceFile);
+
+    return named
+      .filter((each) => isRead(each))
+      .map((each) => {
+        const { line } = sourceFile.getLineAndCharacterOfPosition(each.getStart(sourceFile));
+        return `${String(line + 1)}:${each.text}`;
+      });
+  }
+
   it.each(CASES)('takes the reads of the constant in $what', ({ lines, reads }) => {
     expect(readsOfCache(lines)).toStrictEqual(reads);
+  });
+
+  it.each(OWN)('takes the reads of $what', ({ lines, reads }) => {
+    expect(readsOfFirstCache(lines)).toStrictEqual(reads);
   });
 });
