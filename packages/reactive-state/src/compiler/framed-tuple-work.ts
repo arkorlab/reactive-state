@@ -2,9 +2,12 @@ import {
   type CallExpression,
   type Identifier,
   isBindingElement,
+  isClassDeclaration,
+  isClassExpression,
   isElementAccessExpression,
   isExportAssignment,
   isExportSpecifier,
+  isHeritageClause,
   isIdentifier,
   isPropertyAccessExpression,
   isSpreadElement,
@@ -150,6 +153,19 @@ function defaulted(binding: FrameBinding, name: Identifier): boolean {
 }
 
 /**
+ * Whether `node` is a class's `extends` clause, which reads the superclass's `prototype` where the
+ * class is defined — a proxy answers that read with a `get` trap of the application's own — as no
+ * `implements` clause or interface's `extends`, which are types, does.
+ */
+export function extendsWork(node: Node): boolean {
+  return (
+    isHeritageClause(node) &&
+    node.token === SyntaxKind.ExtendsKeyword &&
+    (isClassDeclaration(node.parent) || isClassExpression(node.parent))
+  );
+}
+
+/**
  * Evaluation that can run the application's code: a call, a construction, a conversion, a wait, a
  * member read — but a member of the language's own globals, such as the native function an argument
  * names.
@@ -157,7 +173,7 @@ function defaulted(binding: FrameBinding, name: Identifier): boolean {
 function applicationWork(node: Node): boolean {
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node))
     return !BUILT_INS.has(globalPathOf(node)?.[0] ?? '');
-  return APPLICATION_WORK.has(node.kind);
+  return APPLICATION_WORK.has(node.kind) || extendsWork(node);
 }
 
 /**

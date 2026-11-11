@@ -41,6 +41,7 @@ import { framedCondition } from './framed-sources.ts';
 import {
   APPLICATION_WORK,
   callWorkExposure,
+  extendsWork,
   namedElsewhere,
   tupleBindingExposure,
 } from './framed-tuple-work.ts';
@@ -284,7 +285,11 @@ function arrayExposure(
   aliases: ReadonlySet<FrameBinding>,
   reached: () => boolean,
 ): boolean {
-  if (PRIOR_WORK.has(node.kind) || (APPLICATION_WORK.has(node.kind) && reached())) return true;
+  if (
+    PRIOR_WORK.has(node.kind) ||
+    ((APPLICATION_WORK.has(node.kind) || extendsWork(node)) && reached())
+  )
+    return true;
   return tupleBindingExposure(node, binding, aliases);
 }
 
