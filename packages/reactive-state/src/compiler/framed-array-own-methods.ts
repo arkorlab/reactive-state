@@ -4,15 +4,23 @@ import {
   isBinaryExpression,
   isElementAccessExpression,
   isIdentifier,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isSpreadAssignment,
   type MethodDeclaration,
   type Node,
+  type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { sourceArrayFunction, writtenArrayFunction } from './framed-array-functions.ts';
+import {
+  sourceArrayFunction,
+  writtenArrayFunction,
+  writtenArrayKey,
+} from './framed-array-functions.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
@@ -57,6 +65,9 @@ export interface ArrayMethodOverride {
   readonly configurable?: true;
 }
 
+/** What an assignment makes a property: writable and configurable, as a descriptor would say. */
+export const PLAIN_PROPERTY = { writable: true, configurable: true } as const;
+
 /** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
   node: Node,
@@ -73,8 +84,7 @@ export function ownMethodAssignment(
     key,
     own: sourceArrayFunction(node.right) || knownNonNative(node.right),
     value: node.right,
-    writable: true,
-    configurable: true,
+    ...PLAIN_PROPERTY,
   };
 }
 
@@ -108,4 +118,74 @@ export function arrayIdentity(value: Expression): FrameBinding | undefined {
     each = unwrapped(root.initializer);
   }
   return isArrayLiteralExpression(each) ? root : undefined;
+}
+
+const ACCESSOR_KEYS = new Set(['get', 'set']);
+
+/**
+ * A written value function proves a custom implementation; getters and unknown values do not. An
+ * attribute the descriptor leaves unsaid stays as the property it redefines had it.
+ */
+export function descriptorFunction(
+  descriptor: Expression | undefined,
+  previous?: ArrayMethodOverride,
+): ArrayMethodOverride {
+  if (descriptor === undefined) return { own: false };
+  const value = unwrapped(descriptor);
+  if (!isObjectLiteralExpression(value)) return { own: false };
+  const writable = attributeKept(descriptorSays(value, 'writable'), previous?.writable);
+  const configurable = attributeKept(descriptorSays(value, 'configurable'), previous?.configurable);
+  return {
+    ...descriptorValue(value),
+    ...(writable && { writable: true as const }),
+    ...(configurable && { configurable: true as const }),
+  };
+}
+
+/** An attribute the descriptor says is true, or leaves unsaid where the property it redefines had it. */
+function attributeKept(says: AttributeSaid, before: true | undefined): boolean {
+  return says === 'true' || (says === 'omitted' && before === true);
+}
+
+/** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
+function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
+  let custom: ArrayMethodOverride = { own: false };
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) custom = { own: false };
+    else {
+      const key = writtenArrayKey(property.name);
+      if (key === undefined || ACCESSOR_KEYS.has(key)) custom = { own: false };
+      else if (key === 'value')
+        custom = isPropertyAssignment(property)
+          ? { own: knownNonNative(property.initializer), value: property.initializer }
+          : { own: false };
+    }
+  }
+  return custom;
+}
+
+type AttributeSaid = 'omitted' | 'other' | 'true';
+
+/**
+ * What a descriptor says of an attribute: a literal `true` as its last word, nothing at all, or
+ * anything else — `false`, a value the compile cannot read, a spread, a key that is not written out.
+ * A writable data property is not an accessor.
+ */
+function descriptorSays(
+  descriptor: ObjectLiteralExpression,
+  attribute: 'configurable' | 'writable',
+): AttributeSaid {
+  let says: AttributeSaid = 'omitted';
+  for (const property of descriptor.properties) {
+    if (isSpreadAssignment(property)) return 'other';
+    const key = writtenArrayKey(property.name);
+    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return 'other';
+    if (key === attribute)
+      says =
+        isPropertyAssignment(property) &&
+        unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword
+          ? 'true'
+          : 'other';
+  }
+  return says;
 }

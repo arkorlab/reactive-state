@@ -18,7 +18,6 @@ import {
   isSpreadAssignment,
   type Node,
   type ObjectLiteralExpression,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -32,7 +31,9 @@ import {
   arrayIdentity,
   knownNonNative,
   OWN_METHODS,
+  descriptorFunction,
   ownMethodAssignment,
+  PLAIN_PROPERTY,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
@@ -50,8 +51,6 @@ interface ArrayWords {
   readonly error: (value: Expression, keys?: readonly string[]) => boolean;
   readonly typed: (value: Expression) => boolean;
 }
-
-const ACCESSOR_KEYS = new Set(['get', 'set']);
 
 type OwnMethods = Map<string, ArrayMethodOverride>;
 
@@ -474,11 +473,12 @@ function assignMethods(source: Expression, own: OwnMethods): void {
   }
 }
 
-/** A written own method or callable value, with unknown entries kept unproven. */
+/** A written own method or callable value, with unknown entries kept unproven; a plain property. */
 function propertyOverride(property: Node): ArrayMethodOverride {
-  if (isMethodDeclaration(property)) return { own: true, value: property };
+  if (isMethodDeclaration(property)) return { own: true, value: property, ...PLAIN_PROPERTY };
   if (!isPropertyAssignment(property)) return { own: false };
-  return { own: knownNonNative(property.initializer), value: property.initializer };
+  const { initializer } = property;
+  return { own: knownNonNative(initializer), value: initializer, ...PLAIN_PROPERTY };
 }
 
 /** One statically named data descriptor, including restoration to the native implementation. */
@@ -510,74 +510,6 @@ function descriptorMethods(descriptors: ObjectLiteralExpression, own: OwnMethods
       );
     }
   }
-}
-
-/**
- * A written value function proves a custom implementation; getters and unknown values do not. An
- * attribute the descriptor leaves unsaid stays as the property it redefines had it.
- */
-function descriptorFunction(
-  descriptor: Expression | undefined,
-  previous?: ArrayMethodOverride,
-): ArrayMethodOverride {
-  if (descriptor === undefined) return { own: false };
-  const value = unwrapped(descriptor);
-  if (!isObjectLiteralExpression(value)) return { own: false };
-  const writable = attributeKept(descriptorSays(value, 'writable'), previous?.writable);
-  const configurable = attributeKept(descriptorSays(value, 'configurable'), previous?.configurable);
-  return {
-    ...descriptorValue(value),
-    ...(writable && { writable: true as const }),
-    ...(configurable && { configurable: true as const }),
-  };
-}
-
-/** An attribute the descriptor says is true, or leaves unsaid where the property it redefines had it. */
-function attributeKept(says: AttributeSaid, before: true | undefined): boolean {
-  return says === 'true' || (says === 'omitted' && before === true);
-}
-
-/** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
-function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
-  let custom: ArrayMethodOverride = { own: false };
-  for (const property of value.properties) {
-    if (isSpreadAssignment(property)) custom = { own: false };
-    else {
-      const key = writtenArrayKey(property.name);
-      if (key === undefined || ACCESSOR_KEYS.has(key)) custom = { own: false };
-      else if (key === 'value')
-        custom = isPropertyAssignment(property)
-          ? { own: knownNonNative(property.initializer), value: property.initializer }
-          : { own: false };
-    }
-  }
-  return custom;
-}
-
-type AttributeSaid = 'omitted' | 'other' | 'true';
-
-/**
- * What a descriptor says of an attribute: a literal `true` as its last word, nothing at all, or
- * anything else — `false`, a value the compile cannot read, a spread, a key that is not written out.
- * A writable data property is not an accessor.
- */
-function descriptorSays(
-  descriptor: ObjectLiteralExpression,
-  attribute: 'configurable' | 'writable',
-): AttributeSaid {
-  let says: AttributeSaid = 'omitted';
-  for (const property of descriptor.properties) {
-    if (isSpreadAssignment(property)) return 'other';
-    const key = writtenArrayKey(property.name);
-    if (key === undefined || (attribute === 'writable' && ACCESSOR_KEYS.has(key))) return 'other';
-    if (key === attribute)
-      says =
-        isPropertyAssignment(property) &&
-        unwrapped(property.initializer).kind === SyntaxKind.TrueKeyword
-          ? 'true'
-          : 'other';
-  }
-  return says;
 }
 
 /** An opaque write can replace either method and therefore removes a proof of a custom method. */
