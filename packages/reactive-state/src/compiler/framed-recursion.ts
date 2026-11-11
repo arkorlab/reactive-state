@@ -152,9 +152,13 @@ function runsWithin(node: Node, fn: Node): boolean {
 
 /** Whether a node lies in the initializer of an instance field, which runs when one is made. */
 function inInstanceInitializer(node: Node, fn: Node): boolean {
-  for (let at = node; at !== fn; at = at.parent)
-    if (isInstanceInitializer(at.parent, at)) return true;
+  for (let at = node; at !== fn; at = at.parent) if (deferredInitializer(at, fn)) return true;
   return false;
+}
+
+/** Whether a node is the initializer of an instance field of a class within the function. */
+function deferredInitializer(node: Node, fn: Node): boolean {
+  return isInstanceInitializer(node.parent, node) && node.parent.parent !== fn;
 }
 
 /** Whether a node is what the instance field that holds it is given, where it is run later. */
@@ -205,9 +209,10 @@ function functionsOf(file: SourceFile): FileFunctions {
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    for (const name of reachedNames(node).names)
-      byName.set(name, [...(byName.get(name) ?? []), node]);
-    if (isNamedFunction(node) && runsBySelf(node)) implicit.push(node);
+    const reached = reachedNames(node);
+    for (const name of reached.names) byName.set(name, [...(byName.get(name) ?? []), node]);
+    if ((isNamedFunction(node) && runsBySelf(node)) || (isClass(node) && reached.computed))
+      implicit.push(node);
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -217,9 +222,14 @@ function functionsOf(file: SourceFile): FileFunctions {
   return found;
 }
 
+/** Whether a node is a class, a declaration or an expression. */
+function isClass(node: Node): boolean {
+  return isClassDeclaration(node) || isClassExpression(node);
+}
+
 /** The names a function or a class is reached by; a class by its own. */
 function reachedNames(node: Node): FunctionNames {
-  if (isClassDeclaration(node) || isClassExpression(node)) return namesOfClass(node);
+  if (isClass(node)) return namesOfClass(node);
   return isNamedFunction(node) ? namesOf(node) : { names: [], computed: false };
 }
 
@@ -239,6 +249,7 @@ function mentionsAny(fn: Node, names: ReadonlySet<string>): boolean {
       pending.push(...definitionParts(node));
       continue;
     }
+    if (deferredInitializer(node, fn)) continue;
     const text = referenceText(node);
     if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
       return true;

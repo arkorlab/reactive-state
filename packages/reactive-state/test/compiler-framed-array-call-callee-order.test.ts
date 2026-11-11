@@ -1152,6 +1152,46 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'unused-class-field-in-a-helper-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { class Unused { x = read(); } } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'unused-class-expression-field-in-a-helper-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { const Unused = class { x = read(); }; } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'class-field-built-in-a-helper',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(pass); const text = String(values); values.join = Array.prototype.join; return text; function helper(p: number) { class Used { x = p < 1 ? read(p + 1) : 0; } new Used(); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-field-built-on-the-spot-in-a-helper',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(pass); const text = String(values); values.join = Array.prototype.join; return text; function helper(p: number) { new (class { x = p < 1 ? read(p + 1) : 0; })(); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-field-of-a-class-given-to-a-call',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { const wrap = (c: any) => c; const K = wrap(class { x = pass < 1 ? read(pass + 1) : 0; }); ${SAFE} new K(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-field-of-a-class-in-a-list',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { const ks = [class { x = pass < 1 ? read(pass + 1) : 0; }]; ${SAFE} new ks[0](); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-field-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { class K { x = pass < 1 ? read(pass + 1) : 0; } ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-field-of-the-parent-class',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { class A { x = pass < 1 ? read(pass + 1) : 0; } class B extends A {} ${SAFE} new B(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
