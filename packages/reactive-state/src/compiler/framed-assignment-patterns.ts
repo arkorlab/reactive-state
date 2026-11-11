@@ -123,14 +123,14 @@ function assignmentSources(
 
 /**
  * Defaults, array positions and object entries contribute their selected assignment targets. A
- * default runs where `missing` says some source held nothing at its position, and `offset` is the
- * place a rest's pattern starts at in the sources, which a rest's own pattern selects from.
+ * default runs where `missing` says some source held nothing at its position. A rest's own pattern
+ * reads a fresh array, which `offset` says starts at that place in the sources.
  */
 export function assignmentPatternTargets(
   target: Expression,
   sources: readonly AssignedFrameSource[],
   missing = false,
-  offset = 0,
+  offset?: number,
 ): readonly PatternWork[] {
   if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken)
     return [{ target: target.left, sources: defaultSources(sources, target.right, missing) }];
@@ -138,9 +138,9 @@ export function assignmentPatternTargets(
   if (!isArrayLiteralExpression(target)) return [];
   const targets: PatternWork[] = [];
   for (const [index, element] of target.elements.entries()) {
-    const key = String(offset + index);
+    const key = String((offset ?? 0) + index);
     if (isSpreadElement(element))
-      targets.push(...restTargets(element.expression, sources, offset + index));
+      targets.push(...restTargets(element.expression, sources, (offset ?? 0) + index));
     else if (!isOmittedExpression(element))
       targets.push({
         target: element,
@@ -153,7 +153,8 @@ export function assignmentPatternTargets(
 
 /**
  * A rest is a fresh array, which binds no error identity, but a pattern its own target writes takes
- * the elements from the rest's place on: `[...[e]] = [new Error()]` assigns `e` the `Error`.
+ * the elements from the rest's place on: `[...[e]] = [new Error()]` assigns `e` the `Error`. An
+ * object pattern reads the properties of that array, not of the sources.
  */
 function restTargets(
   target: Expression,
@@ -170,15 +171,15 @@ function restTargets(
 function objectTargets(
   properties: readonly Node[],
   sources: readonly AssignedFrameSource[],
-  offset: number,
+  offset: number | undefined,
 ): readonly PatternWork[] {
   const targets: PatternWork[] = [];
   for (const property of properties) {
     if (!isPropertyAssignment(property) && !isShorthandPropertyAssignment(property)) continue;
-    const name = placeOf(literalKey(property.name), offset);
-    if (name === undefined) continue;
-    const values = selectSources(sources, name);
-    const missing = missingSelection(sources, name);
+    const written = literalKey(property.name);
+    const selected = written === undefined ? undefined : entrySelection(written, sources, offset);
+    if (selected === undefined) continue;
+    const { values, missing } = selected;
     if (isPropertyAssignment(property))
       targets.push({ target: property.initializer, sources: values, missing });
     else if (isIdentifier(property.name))
@@ -193,10 +194,24 @@ function objectTargets(
   return targets;
 }
 
-/** The key an entry of an object pattern selects, shifted to a rest's place: only a position moves. */
-function placeOf(name: string | undefined, offset: number): string | undefined {
-  if (name === undefined || offset === 0) return name;
-  return /^(?:0|[1-9]\d*)$/u.test(name) ? String(Number(name) + offset) : undefined;
+/**
+ * What an entry of an object pattern selects. A rest's pattern reads a fresh array: a position of
+ * it is the sources' place shifted to where the rest starts, its `length` is always a number, which
+ * binds no error identity, and any other name holds nothing, so that its default runs.
+ */
+function entrySelection(
+  name: string,
+  sources: readonly AssignedFrameSource[],
+  offset: number | undefined,
+): { readonly values: readonly AssignedFrameSource[]; readonly missing: boolean } | undefined {
+  if (offset === undefined) return selection(sources, name);
+  if (/^(?:0|[1-9]\d*)$/u.test(name)) return selection(sources, String(Number(name) + offset));
+  return name === 'length' ? undefined : { values: [], missing: true };
+}
+
+/** The sources selected at one key, and whether some source holds nothing there. */
+function selection(sources: readonly AssignedFrameSource[], key: string) {
+  return { values: selectSources(sources, key), missing: missingSelection(sources, key) };
 }
 
 /** Literal entries are selected directly; opaque values retain the path for their declared type. */

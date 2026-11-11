@@ -19,9 +19,11 @@ import { frameDeclarationOf } from '../src/compiler/framed-bindings.ts';
  * A rest element of an array pattern is a fresh array, which binds no error identity, and its own
  * target may be a pattern that takes the elements from its place on: `[...[e]] = [new Error()]`
  * assigns `e` the `Error`, `[a, ...[e]]` the one after `a`, `[...[a, ...[e]]]` the second after the
- * first, and an object pattern on the rest reads the positions it names, `[...{ 0: e }]`. Each row
- * is the sources `assignmentPatternSources` gives `e` from the assignment, as written; a rest
- * written as a name, and a name of the rest that is no position, hold no element and pin what the change keeps.
+ * first, and an object pattern on the rest reads the positions it names, `[...{ 0: e }]`. The rest's
+ * other properties are the fresh array's, not the sources': its `length` is a number, so that a
+ * default beside it never runs, and a name no element holds is `undefined`, so that its default
+ * does, `[a, ...{ foo: e = new Error() }] = [0]`. Each row is the sources `assignmentPatternSources`
+ * gives `e` from the assignment, as written; a rest written as a name holds no element.
  */
 const CASES = [
   {
@@ -81,6 +83,56 @@ const CASES = [
     what: 'a name of the rest that is no position',
   },
   {
+    assignment: "[...{ length: e = new Error('fallback') }] = []",
+    sources: [],
+    what: 'the length of the rest, beside a default',
+  },
+  {
+    assignment: "[a, ...{ length: e = new Error('fallback') }] = [0]",
+    sources: [],
+    what: 'the length of the rest, after a position',
+  },
+  {
+    assignment: "[...{ length: e }] = [new Error('ours')]",
+    sources: [],
+    what: 'the length of the rest, not an element of the sources',
+  },
+  {
+    assignment: "[a, ...{ foo: e = new Error('fallback') }] = [0]",
+    sources: ["new Error('fallback')"],
+    what: 'a name no element holds, after a position',
+  },
+  {
+    assignment: "[...{ foo: e = new Error('fallback') }] = [0]",
+    sources: ["new Error('fallback')"],
+    what: 'a name no element holds',
+  },
+  {
+    assignment: "[...{ e = new Error('fallback') }] = [new Error('ours')]",
+    sources: ["new Error('fallback')"],
+    what: 'a shorthand name no element holds',
+  },
+  {
+    assignment: "[...{ '01': e = new Error('fallback') }] = [0, 1]",
+    sources: ["new Error('fallback')"],
+    what: 'a name that is no canonical position',
+  },
+  {
+    assignment: "[...{ foo: e }] = [new Error('ours')]",
+    sources: [],
+    what: 'a name no element holds, without a default',
+  },
+  {
+    assignment: "[a, ...{ 1: e = new Error('fallback') }] = [0, 1, 2]",
+    sources: ['2'],
+    what: 'a position the rest holds, beside a default',
+  },
+  {
+    assignment: "[a, ...{ 1: e = new Error('fallback') }] = [0]",
+    sources: ["new Error('fallback')"],
+    what: 'a position the rest does not reach, beside a default',
+  },
+  {
     assignment: "[e, ...[a]] = [new Error('ours'), 0]",
     sources: ["new Error('ours')"],
     what: 'a position before the rest',
@@ -98,6 +150,16 @@ const ELEMENTS = [
     assignment: "[a, ...[values[0]]] = [0, new Error('ours')]",
     sources: ["new Error('ours')"],
     what: 'an element in the pattern of a rest, after a position',
+  },
+  {
+    assignment: "[...{ length: values[0] = new Error('fallback') }] = []",
+    sources: [],
+    what: 'the length of the rest as an element default',
+  },
+  {
+    assignment: "[a, ...{ foo: values[0] = new Error('fallback') }] = [0]",
+    sources: ["new Error('fallback')"],
+    what: 'a name no element holds as an element default',
   },
   {
     assignment: "[...values] = [new Error('ours')]",
