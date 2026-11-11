@@ -22,6 +22,7 @@ import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
   mayRunAgain,
   overwrittenInPass,
+  recursesBefore,
   selectedMethod,
   type SelectedMethod,
   writtenAfterRead,
@@ -447,7 +448,8 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
         own,
         sameRun ? keys.filter((key) => !overwrittenInPass(node, key, call, root)) : keys,
         {
-          anew: sameRun && !mayRunAgain(node, call, root, block),
+          anew:
+            sameRun && !mayRunAgain(node, call, root, block) && !recursesBefore(call, root, owner),
           custom: sameRun ? customInstalled(node, root) : new Set<string>(),
         },
       );

@@ -190,7 +190,7 @@ function leavesLoopFirst(node: Node, body: Node): boolean {
     const exit = parent.statements.find(
       (each) => each.pos >= at.end && leavesBody(each, parent, body),
     );
-    if (exit !== undefined && !jumpsOver(body, node, exit)) return true;
+    if (exit !== undefined && !jumpsOver(body, node, exit, body)) return true;
   }
   return false;
 }
@@ -256,32 +256,72 @@ function jumpsOut(block: Node): boolean {
 }
 
 /**
- * Whether a continue or a break between a write and `target`, in `scope`, lands past `target`: the
- * loop, switch or labeled statement it leaves or goes round holds `target`, and so leaves it
- * behind; one that lands before it, out of an inner statement, does not, nor one in an arm a
- * written condition rules out. A write in a finally block is run by the jumps of its try and catch
- * blocks on their way out, whatever their place before it, unless `target` lies in the block too.
+ * Whether a continue, a break or a return between a write and `target`, in `scope`, lands past
+ * `target`: the loop, switch or labeled statement it leaves or goes round holds `target`, or the
+ * function it returns from, a function within the loop's `body`, does, and so leaves it behind;
+ * one that lands before it, out of an inner statement, does not, nor one in an arm a written
+ * condition rules out. A write in a finally block is run by the jumps of its try and catch blocks
+ * on their way out, whatever their place before it, unless `target` lies in the block too.
  */
-export function jumpsOver(scope: Node, write: Node, target: Node): boolean {
+export function jumpsOver(scope: Node, write: Node, target: Node, body: Node): boolean {
   const from = pendingFrom(write, scope, target);
   const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
-      (isContinueStatement(node) || isBreakStatement(node)) &&
+      (isContinueStatement(node) || isBreakStatement(node) || isReturnStatement(node)) &&
       node.pos >= from &&
       node.pos < target.pos &&
-      framedPossibleBranch(node)
-    ) {
-      const destination = jumpTarget(node);
-      if (
-        destination === undefined ||
-        (destination.pos <= target.pos && target.end <= destination.end)
-      )
-        return true;
-    }
+      framedPossibleBranch(node) &&
+      !inExclusiveArms(write, node) &&
+      skips(node, target, body)
+    )
+      return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
+  }
+  return false;
+}
+
+/**
+ * Whether two nodes lie in the two arms of one if statement or conditional expression: where the
+ * one runs the other does not, so a jump in the second skips nothing after a write in the first.
+ */
+function inExclusiveArms(first: Node, second: Node): boolean {
+  for (let at = first; !isSourceFile(at); at = at.parent) {
+    const { parent } = at;
+    if (parent.pos > second.pos || parent.end < second.end) continue;
+    let other = second;
+    while (other.parent !== parent) other = other.parent;
+    let arms: readonly (Node | undefined)[] = [];
+    if (isIfStatement(parent)) arms = [parent.thenStatement, parent.elseStatement];
+    else if (isConditionalExpression(parent)) arms = [parent.whenTrue, parent.whenFalse];
+    return at !== other && arms.includes(at) && arms.includes(other);
+  }
+  return false;
+}
+
+/** Whether a jump leaves `target` behind, where it is not found to land elsewhere. */
+function skips(jump: Node, target: Node, body: Node): boolean {
+  if (isReturnStatement(jump)) return returnsPast(jump, target, body);
+  const destination = jumpTarget(jump as BreakOrContinueStatement);
+  return (
+    destination === undefined || (destination.pos <= target.pos && target.end <= destination.end)
+  );
+}
+
+/**
+ * Whether a return leaves a function within the loop's body that holds `target`, as an immediately
+ * invoked function that the run flattens into its caller does, and the loop goes on; a return of
+ * the function that holds the loop ends the run, and one of a function that does not hold
+ * `target` skips nothing of it.
+ */
+function returnsPast(statement: Node, target: Node, body: Node): boolean {
+  for (let at = statement.parent; !isSourceFile(at); at = at.parent) {
+    if (!isAnswering(at) && !isConstructorDeclaration(at) && !isSetAccessorDeclaration(at))
+      continue;
+    const inside = at.pos >= body.pos && at.end <= body.end;
+    return inside && at.pos <= target.pos && target.end <= at.end;
   }
   return false;
 }

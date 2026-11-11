@@ -127,6 +127,7 @@ export function overwrittenInPass(
     bodies.some((body) => !(write.pos >= body.pos && write.end <= body.end))
   )
     return false;
+  const outermost = bodies.at(-1) ?? write;
   for (let at = write; !bodies.includes(at); at = at.parent) {
     const { parent } = at;
     if (!isBlock(parent)) continue;
@@ -136,7 +137,7 @@ export function overwrittenInPass(
         isExpressionStatement(each) &&
         ownMethodAssignment(each.expression, root)?.key === key &&
         bodies.every((body) => each.pos >= body.pos && each.end <= body.end) &&
-        !jumpsOver(parent, write, each)
+        !jumpsOver(parent, write, each, outermost)
       );
     });
     if (later !== undefined && !resumesWithin(parent, bodies)) return true;
@@ -146,28 +147,42 @@ export function overwrittenInPass(
 
 /**
  * Whether a function inside `limit` that holds the read calls itself by its name, unless the array
- * is made inside it and each call makes its own.
+ * is made inside it and each call makes its own. A call that `before` a position asks for lies
+ * before it, between a proof the function makes and the read.
  */
-function reenteredRead(read: Node, root: FrameBinding, limit: Node): boolean {
+function reenteredRead(read: Node, root: FrameBinding, limit: Node, before?: number): boolean {
   for (let at = read.parent; at !== limit; at = at.parent)
     if (
       isFunctionExpression(at) &&
       at.name !== undefined &&
       !(root.pos >= at.pos && root.end <= at.end) &&
-      namesItself(at, at.name)
+      namesItself(at, at.name, before)
     )
       return true;
   return false;
 }
 
-/** Whether the function's code reads the name it is given, as the name of the function itself. */
-function namesItself(fn: FunctionExpression, name: Identifier): boolean {
+/**
+ * Whether a function inside `limit` that holds the read calls itself before the read: another run
+ * of it, between a proof made earlier in the function and the read, writes what it writes after
+ * its own read.
+ */
+export function recursesBefore(read: Node, root: FrameBinding, limit: Node): boolean {
+  return reenteredRead(read, root, limit, read.pos);
+}
+
+/**
+ * Whether the function's code reads the name it is given, as the name of the function itself,
+ * before a position where one is asked for.
+ */
+function namesItself(fn: FunctionExpression, name: Identifier, before = Infinity): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
     if (
       isIdentifier(node) &&
       node.text === name.text &&
+      node.pos < before &&
       node.parent !== fn &&
       readsBinding(node) &&
       reachesName(node, fn)

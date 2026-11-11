@@ -467,6 +467,41 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-iife-return-skips-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { (function once() { values.join = Array.prototype.join; if (pass === 0) return; values.join = () => 'fixed'; })(); } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-iife-return-after-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { (function once() { values.join = Array.prototype.join; values.join = () => 'fixed'; if (pass === 0) return; })(); } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-callback-return-between-writes-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; [1].forEach((each) => { return each; }); values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-jump-in-sibling-else-branch',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 5) { values.join = Array.prototype.join; } else { continue; } values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-jump-in-later-branch-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (pass > 5) { values.join = Array.prototype.join; } else { continue; } values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-nested-function-between-proof-and-read',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} const again = () => read(pass + 1); if (pass < 1) again(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
