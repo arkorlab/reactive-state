@@ -12,6 +12,7 @@ import {
   isIdentifier,
   isLiteralTypeNode,
   isModuleBlock,
+  isModuleDeclaration,
   isMethodSignatureDeclaration,
   isNumericLiteral,
   isPrefixUnaryExpression,
@@ -32,6 +33,7 @@ import {
   type TypeElement,
   type TypeLiteralNode,
   type LiteralTypeNode,
+  type Node,
 } from 'typescript/ast';
 
 import { frameBindingOf } from './framed-bindings.ts';
@@ -345,17 +347,34 @@ function enumDeclaration(name: Identifier): EnumDeclaration | undefined {
 
 /** Explicit literal values and native numeric auto-increments retain source member order. */
 function enumMemberValue(declaration: EnumDeclaration, name: string): EnumInitializer | undefined {
+  const ambient = ambientValues(declaration);
   let previous: number | undefined = -1;
   for (const member of declaration.members) {
-    const value: EnumInitializer | undefined =
-      member.initializer === undefined
-        ? automaticEnumValue(previous)
-        : enumLiteral(member.initializer);
+    let value: EnumInitializer | undefined;
+    if (member.initializer !== undefined) value = enumLiteral(member.initializer);
+    else if (!ambient) value = automaticEnumValue(previous);
     if ((isIdentifier(member.name) || isStringLiteral(member.name)) && member.name.text === name)
       return value;
     previous = typeof value?.identity === 'number' ? value.identity : undefined;
   }
   return undefined;
+}
+
+/**
+ * A non-const enum an ambient context declares numbers no omitted member: TypeScript reads such a
+ * member as computed, of a value it does not know, apart from every other member.
+ */
+function ambientValues(declaration: EnumDeclaration): boolean {
+  if (declaration.modifiers?.some((each) => each.kind === SyntaxKind.ConstKeyword) === true)
+    return false;
+  for (let node: Node = declaration; !isSourceFile(node); node = node.parent) {
+    if (
+      (isEnumDeclaration(node) || isModuleDeclaration(node)) &&
+      node.modifiers?.some((each) => each.kind === SyntaxKind.DeclareKeyword) === true
+    )
+      return true;
+  }
+  return declaration.getSourceFile().isDeclarationFile;
 }
 
 /** An omitted numeric initializer follows the preceding known numeric member. */
