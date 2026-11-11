@@ -51,6 +51,10 @@ export const OWN_METHODS = new Set([
 export interface ArrayMethodOverride {
   readonly own: boolean;
   readonly value?: Expression | MethodDeclaration;
+  /** A data property the descriptor wrote writable: a later write replaces it. */
+  readonly writable?: true;
+  /** A property the descriptor wrote configurable: a later definition or deletion replaces it. */
+  readonly configurable?: true;
 }
 
 /** One direct assignment to the native method selected by a call. */
