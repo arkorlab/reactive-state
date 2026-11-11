@@ -46,6 +46,7 @@ import {
   type Node,
   type ObjectBindingPattern,
   type ObjectLiteralExpression,
+  type PropertyAssignment,
   type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
@@ -167,6 +168,17 @@ function methodValue(
   return keys.length > 0 ? value : undefined;
 }
 
+/**
+ * Whether `property`, a name or text and not a computed one, is `__proto__: value`, which sets the
+ * object's prototype and defines no member of it.
+ */
+function setsPrototype(property: PropertyAssignment): boolean {
+  return (
+    property.name.kind !== SyntaxKind.ComputedPropertyName &&
+    writtenArrayKey(property.name) === '__proto__'
+  );
+}
+
 /** A final own literal member; later opaque fields cannot establish the selected function's identity. */
 function literalFunctionMember(
   object: ObjectLiteralExpression,
@@ -178,7 +190,8 @@ function literalFunctionMember(
     if (name === undefined) return undefined;
     if (name !== key) continue;
     if (isMethodDeclaration(property)) return property;
-    return isPropertyAssignment(property) ? property.initializer : undefined;
+    if (!isPropertyAssignment(property) || setsPrototype(property)) return undefined;
+    return property.initializer;
   }
   return undefined;
 }
