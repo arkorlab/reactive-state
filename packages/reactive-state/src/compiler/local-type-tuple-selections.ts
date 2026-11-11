@@ -59,6 +59,33 @@ export function writtenTupleReadings(
   return state.result;
 }
 
+/**
+ * How many places a written tuple's members may stand at, the most any alternative has: each member
+ * stands at one, a rest of written tuples at as many as its tuple has, and a rest of unknown length
+ * at one, from which it supplies its elements. Undefined where the type is no tuple.
+ */
+export function writtenTuplePlaces(
+  at: TypeReading,
+  operands: Operands,
+  parents: readonly TypeReading[] = [],
+): number | undefined {
+  if (isExpressionWithTypeArguments(at.type)) return undefined;
+  const tuple = unwrappedType(at.type);
+  if (!isTupleTypeNode(tuple)) return undefined;
+  const lineage = [...parents, { ...at, type: tuple }];
+  let places = 0;
+  for (const element of tuple.elements) {
+    const rest = writtenRestType(element);
+    const expanded =
+      rest === undefined ? undefined : finiteRestReadings({ ...at, type: rest }, operands, lineage);
+    places +=
+      expanded === undefined
+        ? 1
+        : Math.max(...expanded.map((each) => writtenTuplePlaces(each, operands, lineage) ?? 1));
+  }
+  return places;
+}
+
 /** One member either supplies a result, adds finite alternatives or retains the opaque rest rule. */
 function selectTupleMember(member: Member, path: Selection, state: TupleReadings): boolean {
   const { reading, element, parents } = member;

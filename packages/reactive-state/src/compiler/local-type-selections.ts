@@ -35,7 +35,7 @@ import { parameterUtilityReading } from './local-type-parameter-utilities.ts';
 import { receiverUtilityReading } from './local-type-receivers.ts';
 import { writtenReturnReading } from './local-type-return-results.ts';
 import { finiteIndexKeys } from './local-type-template-keys.ts';
-import { writtenTupleReadings } from './local-type-tuple-selections.ts';
+import { writtenTuplePlaces, writtenTupleReadings } from './local-type-tuple-selections.ts';
 import { projectedIndexReadings, projectedMemberReadings } from './local-type-utility-readings.ts';
 
 /** Written result, member and native array selections that retain each operand's environment. */
@@ -270,36 +270,24 @@ function expandedRest(readings: readonly TypeReading[]): boolean {
   );
 }
 
-/** Every position of a finite required tuple may be produced by source iteration. */
+/**
+ * Every place of a written tuple may be produced by source iteration, as may the elements of any
+ * other iterable, which one place stands for. Undefined where no source is a tuple.
+ */
 export function arrayIterationKeys(
   readings: readonly TypeReading[],
   operands: Operands,
 ): readonly string[] | undefined {
-  const sources = readings.flatMap((reading) => operands(reading));
-  if (sources.length === 0) return undefined;
   const keys = new Set<string>();
+  const sources = readings.flatMap((reading) => operands(reading));
+  let tuples = false;
   for (const source of sources) {
-    let type = source.type;
-    while (
-      isParenthesizedTypeNode(type) ||
-      (isTypeOperatorNode(type) && type.operator === SyntaxKind.ReadonlyKeyword)
-    )
-      type = type.type;
-    if (
-      !isTupleTypeNode(type) ||
-      type.elements.some((element) => {
-        return (
-          isRestTypeNode(element) ||
-          isOptionalTypeNode(element) ||
-          (isNamedTupleMember(element) &&
-            (element.dotDotDotToken !== undefined || element.questionToken !== undefined))
-        );
-      })
-    )
-      return undefined;
-    for (const [index] of type.elements.entries()) keys.add(String(index));
+    const places = writtenTuplePlaces(source, operands);
+    if (places === undefined) keys.add('0');
+    else tuples = true;
+    for (let place = 0; place < (places ?? 0); place += 1) keys.add(String(place));
   }
-  return [...keys];
+  return tuples ? [...keys] : undefined;
 }
 
 /**
