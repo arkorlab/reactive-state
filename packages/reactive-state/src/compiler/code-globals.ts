@@ -404,7 +404,8 @@ function readsCodeKey(node: Node): boolean {
 /**
  * What a call hands to the function it calls: its arguments; of one borrowed, `call` or `apply`,
  * what follows the `this` it takes, up to a spread — of `apply`, the elements of the array written
- * there; none of an array the code gives by a name.
+ * there, up to a spread as well; none of an array the code gives by a name, nor where a spread
+ * comes before the array.
  */
 function givenTo(call: CallExpression, borrowing: string | undefined): readonly Expression[] {
   if (borrowing === undefined) {
@@ -413,7 +414,7 @@ function givenTo(call: CallExpression, borrowing: string | undefined): readonly 
   if (borrowing === 'call') {
     return untilSpread(call.arguments).slice(1);
   }
-  const [, list] = call.arguments;
+  const [, list] = untilSpread(call.arguments);
   const array = list === undefined ? undefined : unwrapped(list);
   return array !== undefined && isArrayLiteralExpression(array) ? untilSpread(array.elements) : [];
 }

@@ -94,6 +94,21 @@ const CASES = [
     what: 'a `this` that a spread may be',
   },
   {
+    reads: [],
+    source: "return Reflect.get.apply(...[null, [run, 'name']], [run, 'constructor']);",
+    what: 'an array of `apply` that a spread of the arguments before it moves',
+  },
+  {
+    reads: [],
+    source: "return Reflect.get.apply(...args, [run, 'constructor']);",
+    what: 'a `this` of `apply` that a spread may be',
+  },
+  {
+    reads: ["Reflect.get.apply(null, [run, 'constructor'], ...rest)"],
+    source: "return Reflect.get.apply(null, [run, 'constructor'], ...rest)(text)();",
+    what: 'an array of `apply` before a spread',
+  },
+  {
     reads: ["Reflect.get.call(null, run, 'constructor', ...rest)"],
     source: "return Reflect.get.call(null, run, 'constructor', ...rest)(text)();",
     what: 'a key before a spread',
