@@ -52,6 +52,9 @@ interface Reading {
   readonly returned: Expression[];
 }
 
+/** The key of a literal's `__proto__: value`, which sets its prototype rather than a field. */
+const PROTOTYPE_KEY = '__proto__';
+
 const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AwaitExpression,
   SyntaxKind.BinaryExpression,
@@ -232,7 +235,10 @@ function defaultSource(
 /**
  * A default's member read reaches one ordinary own field or a present ordinary array slot; a
  * getter's return, which the read evaluates, is kept (`returned`). A key the code computes after
- * the field may replace it, `['message']`, with what the read cannot tell: none then.
+ * the field may replace it, `['message']`, with what the read cannot tell: none then. A
+ * `__proto__: value` sets the literal's prototype and is no own field: it is passed over, an own
+ * `__proto__` beside it, a getter or a shorthand, is the field read, and where there is none the
+ * read, which runs what the prototype holds, is none.
  */
 function literalField(
   value: Expression,
@@ -253,6 +259,7 @@ function literalField(
     const name = literalName(property.name);
     replaceable ||= name === undefined;
     if (name !== key) continue;
+    if (key === PROTOTYPE_KEY && isPropertyAssignment(property)) continue;
     field = property;
     replaceable = false;
   }
