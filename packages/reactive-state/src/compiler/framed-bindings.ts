@@ -327,11 +327,32 @@ function exposedContents(namespace: ModuleDeclaration): readonly Statement[] {
 /**
  * What is in scope in a namespace's body: its own statements, and those the other bodies of its
  * namespace expose, which are members of it (`namespaceStatements`, but for what the context of a
- * body does not export).
+ * body does not export, nor for what is within a namespace that an enclosing body keeps private).
  */
 function bodyStatements(block: ModuleBlock): readonly Statement[] {
-  const own = new Set<Statement>(block.statements);
-  return namespaceStatements(block).filter((statement) => own.has(statement) || exposed(statement));
+  const around = new Set<Node>();
+  for (let at: Node = block; !isSourceFile(at); at = at.parent) around.add(at);
+  return namespaceStatements(block).filter((statement) => shown(statement, around));
+}
+
+/**
+ * Whether a statement of another body is a member of a namespace that `around`, the nodes about
+ * the one that looks, are within: the statement is exposed in its body, and so is each namespace
+ * of it, in its own enclosing body, up to one that holds the looker too. A namespace that an
+ * enclosing body does not export is private to that body (`namespace N` of an ambient body with an
+ * `export {}`), with whatever it holds.
+ */
+function shown(statement: Statement, around: ReadonlySet<Node>): boolean {
+  let at: Statement = statement;
+  while (!around.has(at)) {
+    const { parent } = at;
+    // The dotted inner namespace of a name is exported by the parser, so only a block's can lack it.
+    if (isModuleBlock(parent) && !exposed(at)) return false;
+    const holder = isModuleBlock(parent) ? parent.parent : parent;
+    if (!isModuleDeclaration(holder)) return true;
+    at = holder;
+  }
+  return true;
 }
 
 /**

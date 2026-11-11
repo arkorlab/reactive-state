@@ -84,6 +84,11 @@ const PINS = [
     source: `declare namespace N { export {}; enum E { field = 'other' } } namespace N { export enum E { entry = ${MAKES} } }`,
     what: 'an enum of an ambient namespace that exports by `export {}` (pin)',
   },
+  {
+    dated: true,
+    source: `declare namespace A { namespace N { enum E { field = 'other' } } export {}; } namespace A { export namespace N { export enum E { entry = ${MAKES} } } }`,
+    what: 'an enum of a nested namespace that an ambient body keeps private (pin)',
+  },
 ] as const;
 
 /** Whether `expression` reads the global `File`. */

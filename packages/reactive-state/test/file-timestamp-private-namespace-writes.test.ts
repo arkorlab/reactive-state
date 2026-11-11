@@ -28,6 +28,11 @@ const CASES = [
     what: 'a write within a namespace beside a private one of an ambient body that exports by `export {}`',
   },
   {
+    clock: true,
+    source: `${OPTIONS} declare namespace A { namespace N { enum E { options = 0 } } export {}; } namespace A { export namespace N { export enum E { entry = (options.lastModified = undefined, 0) } } } ${MADE}`,
+    what: 'a write within an enum of a namespace beside a private one of an ambient body',
+  },
+  {
     clock: false,
     source: `${OPTIONS} namespace A { export namespace N { export const options: { lastModified?: number } = {}; } } namespace A { export namespace N { options.lastModified = undefined; } } ${MADE}`,
     what: 'a write within a namespace that merges with the exported one (pin)',

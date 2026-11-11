@@ -86,6 +86,16 @@ const CASES = [
   },
   {
     source:
+      'declare namespace A { namespace N { enum E { key = 2 } } } namespace A { export namespace N { export enum E { entry = value[key] } } }',
+    what: 'a member of an enum of an ambient nested namespace an exported one merges with',
+  },
+  {
+    source:
+      'declare namespace A { namespace B { namespace N { enum E { key = 2 } } } } namespace A { export namespace B { export namespace N { export enum E { entry = value[key] } } } }',
+    what: 'a member of an enum of an ambient namespace two levels in',
+  },
+  {
+    source:
       'declare namespace N { export enum E { key = 2 } } declare namespace N { enum E { entry = value[key] } }',
     what: 'a member of an enum of an ambient namespace, exported with no word',
   },
@@ -108,6 +118,11 @@ const CASES = [
     source:
       'namespace A.B.C { export enum E { key = 2 } } namespace A.B.C { export enum E { entry = value[key] } }',
     what: 'a member of an enum of a namespace dotted three deep',
+  },
+  {
+    source:
+      'namespace C { namespace A { export namespace N { export enum E { key = 2 } } export namespace N { export enum E { entry = value[key] } } } }',
+    what: 'a member of an enum of a body beside it, in a namespace its enclosing body keeps private (pin)',
   },
 ] as const;
 
@@ -156,6 +171,16 @@ const PINS = [
     source:
       'declare namespace N { export {}; enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
     what: 'an enum of an ambient namespace that exports by `export {}` (pin)',
+  },
+  {
+    source:
+      'declare namespace A { namespace N { enum E { key = 2 } } export {}; } namespace A { export namespace N { export enum E { entry = value[key] } } }',
+    what: 'an enum of a nested namespace that an ambient body keeps private (pin)',
+  },
+  {
+    source:
+      'declare namespace A { namespace B { namespace N { enum E { key = 2 } } } export {}; } namespace A { export namespace B { export namespace N { export enum E { entry = value[key] } } } }',
+    what: 'an enum of a namespace two levels in that an ambient body keeps private (pin)',
   },
   {
     source:

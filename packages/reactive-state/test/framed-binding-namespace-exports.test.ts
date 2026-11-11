@@ -59,6 +59,10 @@ const CASES = [
     what: 'an export of a nested namespace’s other body',
   },
   {
+    source: `namespace C { namespace A { export namespace N { export const key = 2; } export namespace N { ${READ}; } } }`,
+    what: 'an export of a body beside it, in a namespace its enclosing body keeps private (pin)',
+  },
+  {
     source: `namespace M.N { export const key = 2; } namespace M.N { ${READ}; }`,
     what: 'an export of a dotted namespace’s other body',
   },
@@ -145,6 +149,10 @@ const CASES = [
   {
     source: `declare namespace Z { namespace N { const key: number; } } namespace Z { export namespace N { ${READ}; } }`,
     what: 'a member of an ambient nested namespace an exported one merges with',
+  },
+  {
+    source: `declare namespace A { namespace B { namespace N { const key: number; } } } namespace A { export namespace B { export namespace N { ${READ}; } } }`,
+    what: 'a member of an ambient namespace two levels in',
   },
   {
     source: `namespace Z { export namespace A { export const key = 2; } } namespace Z { export namespace A.B { ${READ}; } }`,
@@ -252,6 +260,10 @@ const PINS = [
   {
     source: `declare namespace Z { namespace N { const key: number; } export {}; } namespace Z { export namespace N { ${READ}; } }`,
     what: 'a nested namespace of an ambient body that exports by `export {}` (pin)',
+  },
+  {
+    source: `declare namespace A { namespace B { namespace N { const key: number; } } export {}; } namespace A { export namespace B { export namespace N { ${READ}; } } }`,
+    what: 'a namespace two levels in that an ambient body keeps private (pin)',
   },
 ] as const;
 
