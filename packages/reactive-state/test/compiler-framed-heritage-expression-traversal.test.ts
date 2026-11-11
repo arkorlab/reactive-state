@@ -95,6 +95,12 @@ const FILLS = [
     empty: true,
   },
   {
+    id: 'fill-beside-an-implements-clause-naming-an-interface-of-the-array-name-pin',
+    source:
+      'interface values {} const values = [1, 2]; class A implements values {} void A; values.fill(0, 2);',
+    empty: true,
+  },
+  {
     id: 'fill-beside-an-implements-clause-pin',
     source:
       'interface Shape { size: number } const values = [1, 2]; class A implements Shape { size = 1; } void A; values.fill(0, 2);',
