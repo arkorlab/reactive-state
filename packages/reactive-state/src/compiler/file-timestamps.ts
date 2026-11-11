@@ -123,7 +123,12 @@ function aliasReads(
   }
   if (seen.has(parent)) return [];
   seen.add(parent);
-  return constructorReferences(parent, localBinding);
+  const { name } = parent;
+  // Only a read of the constant's own name can read the constant: one lookup of its binding for
+  // each of those, where one for every read of the module walks the module for each.
+  return constructorReferences(parent, (read) =>
+    isIdentifier(name) && read.text === name.text ? localBinding(read) : undefined,
+  );
 }
 
 /** Whether a global File, or a constant alias of it, may take its timestamp from the clock. */
