@@ -102,6 +102,14 @@ const CASES = [
     source: `namespace N { export const key = 2; } namespace N { if (kind) { var other = 1; } ${READ}; }`,
     what: 'a var of the body of another name',
   },
+  {
+    source: `namespace N { export const key = 2; } namespace N { namespace Inner { export var key = 3; } ${READ}; }`,
+    what: 'a var a nested namespace exports',
+  },
+  {
+    source: `namespace N { export const key = 2; } namespace N { namespace Inner { if (kind) { var key = 3; } } ${READ}; }`,
+    what: 'a var in a block of a nested namespace',
+  },
 ] as const;
 
 const PINS = [
@@ -163,13 +171,16 @@ describe('a read of a name another body of a namespace exports', () => {
   });
 
   /** What `value[key]`, the last read of a key in `source`, records, and the declaration of `key`. */
-  function readOf(source: string): {
+  function readOf(
+    source: string,
+    outside = 'const key = 1;',
+  ): {
     readonly declared: boolean;
     readonly member: string | undefined;
   } {
     using parsed = api.createSourceFile(
       'framed-bindings.ts',
-      `declare const value: unknown[]; declare const kind: boolean; const key = 1; ${source}`,
+      `declare const value: unknown[]; declare const kind: boolean; ${outside} ${source}`,
     );
     let read: ElementAccessExpression | undefined;
     const find = (node: Node): void => {
@@ -201,5 +212,12 @@ describe('a read of a name another body of a namespace exports', () => {
 
     // The var is no constant, so no key is told of it, but it is the name's declaration.
     expect(readOf(source)).toStrictEqual({ declared: true, member: undefined });
+  });
+
+  it('reads no var of a namespace as one of the file', () => {
+    const source = `namespace N { export var key = 3; } ${READ};`;
+
+    // Nothing but the namespace declares it, which a bare name outside it does not reach.
+    expect(readOf(source, '')).toStrictEqual({ declared: false, member: undefined });
   });
 });

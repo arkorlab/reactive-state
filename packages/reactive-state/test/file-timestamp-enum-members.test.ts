@@ -64,6 +64,16 @@ const PINS = [
     source: `enum E { entry = ${MAKES} }`,
     what: 'an enum of no member of the name (pin)',
   },
+  {
+    dated: true,
+    source: `namespace N { export enum E { field = 'other' } } namespace N { enum E { entry = ${MAKES} } }`,
+    what: 'an enum that is not exported beside one that is (pin)',
+  },
+  {
+    dated: true,
+    source: `declare namespace N { enum E { field = 'other' } } namespace N { enum E { entry = ${MAKES} } }`,
+    what: 'an enum that is not exported beside an ambient one (pin)',
+  },
 ] as const;
 
 /** Whether `expression` reads the global `File`. */

@@ -41,6 +41,7 @@ import {
   isVariableDeclarationList,
   isVariableStatement,
   type Node,
+  NodeFlags,
   type ParameterDeclaration,
   type Statement,
   type TypeNode,
@@ -48,6 +49,7 @@ import {
   isSignatureDeclaration,
   type ModuleBlock,
   type ModuleDeclaration,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -241,17 +243,29 @@ function memberText(member: EnumMember): readonly string[] {
 
 /**
  * The enums that merge with `enumeration`, itself among them: those of its name in its scope and,
- * in a namespace's body, those the namespace's other bodies export (`namespaceStatements`).
+ * where the other bodies of its namespace see it, exported or ambient, those they export
+ * (`namespaceStatements`); one that is private to its body merges with its own scope's alone.
  */
 function mergedEnums(enumeration: EnumDeclaration): readonly EnumDeclaration[] {
   const { parent } = enumeration;
   const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
-  const statements = isModuleBlock(scope) ? namespaceStatements(scope) : statementsOf(scope);
+  const merging = isModuleBlock(scope) && seenElsewhere(enumeration);
+  const statements = merging ? namespaceStatements(scope) : statementsOf(scope);
   return (statements ?? [enumeration]).flatMap((statement) => {
     return isEnumDeclaration(statement) && statement.name.text === enumeration.name.text
       ? [statement]
       : [];
   });
+}
+
+/** Whether the other bodies of a namespace see an enum: it is exported, or ambient, where all are. */
+function seenElsewhere(enumeration: EnumDeclaration): boolean {
+  return (
+    enumeration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) ===
+      true ||
+    // eslint-disable-next-line no-bitwise -- TypeScript says a declaration is ambient in these flags alone.
+    (enumeration.flags & NodeFlags.Ambient) !== 0
+  );
 }
 
 /**
@@ -305,12 +319,22 @@ function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | 
   else return undefined;
   let declarations = HOISTED.get(root);
   if (declarations === undefined) {
-    declarations = hoistedIn(isSourceFile(root) ? root.statements : [root]);
+    declarations = hoistedIn(isSourceFile(root) ? root.statements : [root]).filter(
+      (declaration) => !ownedByNamespace(declaration, root),
+    );
     HOISTED.set(root, declarations);
   }
   return declarations.find((declaration) =>
     bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
   );
+}
+
+/** Whether a namespace within `root` holds the var: a namespace's own vars are those of its body. */
+function ownedByNamespace(declaration: VariableDeclaration, root: Node): boolean {
+  for (let at = declaration.parent; at !== root; at = at.parent) {
+    if (isModuleDeclaration(at)) return true;
+  }
+  return false;
 }
 
 /** A block-scoped loop header binding shadows outer names throughout its body. */

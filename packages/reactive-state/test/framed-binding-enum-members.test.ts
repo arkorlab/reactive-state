@@ -81,6 +81,16 @@ const CASES = [
   },
   {
     source:
+      'declare namespace N { enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
+    what: 'a member of an ambient enum an exported one merges with',
+  },
+  {
+    source:
+      'declare namespace N { export enum E { key = 2 } } declare namespace N { enum E { entry = value[key] } }',
+    what: 'a member of an enum of an ambient namespace, exported with no word',
+  },
+  {
+    source:
       'namespace M.N { export enum E { key = 2 } } namespace M.N { export enum E { entry = value[key] } }',
     what: 'a member of an enum of a dotted namespace declared again',
   },
@@ -126,6 +136,16 @@ const PINS = [
     source:
       'namespace N { enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
     what: 'an enum of another body that is not exported (pin)',
+  },
+  {
+    source:
+      'namespace N { export enum E { key = 2 } } namespace N { enum E { entry = value[key] } }',
+    what: 'an enum that is not exported beside one that is (pin)',
+  },
+  {
+    source:
+      'declare namespace N { enum E { key = 2 } } namespace N { enum E { entry = value[key] } }',
+    what: 'an enum that is not exported beside an ambient one (pin)',
   },
   {
     source:
