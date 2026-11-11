@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { unwrapped } from '../src/compiler/bounded.ts';
+import type { ArrayMethodOverride } from '../src/compiler/framed-array-own-methods.ts';
 import {
   arrayMethodOverride,
   framedArrayString,
@@ -256,6 +257,51 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'loop-custom-only-write-keeps-proof',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = () => 'also fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-custom-object-assign-keeps-proof',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { Object.assign(values, { join: () => 'also fixed' }); } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-custom-definition-keeps-proof',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { Object.defineProperty(values, 'join', { value: () => 'also fixed', writable: true }); } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-custom-write-in-branch-keeps-proof',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 0) values.join = () => 'also fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-custom-then-native-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = () => 'also fixed'; values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-unknown-function-write-pin',
+    source: `function frames(error: Error) { const values = [error]; const choices = [() => 'also fixed', Array.prototype.join]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = choices[pass] as any; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-of-another-method-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; values.sort = () => values; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-without-proof-pin',
+    source: `function frames(error: Error) { const values = [error]; for (let pass = 0; pass < 2 && String(values); pass++) { values.join = () => 'later'; } }`,
+    converts: true,
+  },
+  {
+    id: 'other-function-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} function again() { values.join = () => 'also fixed'; } again(); return String(values); }`,
+    converts: true,
+  },
+  {
     id: 'recursive-iife-own-array-pin',
     source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
     converts: false,
@@ -280,13 +326,23 @@ describe("writes in a call's arguments, after it selected its method", () => {
     expect(convertsError(parsed.sourceFile)).toBe(converts);
   });
 
+  it('drops the value of a method a repeated custom write may replace, and keeps it custom', () => {
+    const source =
+      "function frames(error: Error) { const values = [error]; values.map = () => 'fixed'; for (let pass = 0; pass < 2 && values.map(String); pass++) { values.map = () => 'again'; } }";
+    using api = openTypeScript();
+    using parsed = parseModule(api, 'call-callee-order.ts', source);
+
+    expect(overrideFound(parsed.sourceFile, 'map')?.own).toBe(true);
+    expect(overrideFound(parsed.sourceFile, 'map')?.value).toBeUndefined();
+  });
+
   it('keeps the selected method for a result-sensitive read', () => {
     const source =
       "function frames(error: Error) { const values = [error]; values.at = () => 'fixed'; return values.at(delete values.at); }";
     using api = openTypeScript();
     using parsed = parseModule(api, 'call-callee-order.ts', source);
 
-    expect(overrideOf(parsed.sourceFile, 'at')).toBe(true);
+    expect(overrideFound(parsed.sourceFile, 'at')?.own).toBe(true);
   });
 });
 
@@ -318,8 +374,8 @@ function convertsError(root: Node): boolean {
   return false;
 }
 
-/** Whether the source's call of the method on `values` finds the method written on it. */
-function overrideOf(root: Node, method: string): boolean {
+/** What the source's call of the method on `values` finds written on it. */
+function overrideFound(root: Node, method: string): ArrayMethodOverride | undefined {
   const pending = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
@@ -327,7 +383,7 @@ function overrideOf(root: Node, method: string): boolean {
       isPropertyAccessExpression(node.expression) &&
       node.expression.name.text === method
     )
-      return arrayMethodOverride(node.expression.expression, method, node)?.own === true;
+      return arrayMethodOverride(node.expression.expression, method, node);
     node.forEachChild((child) => {
       pending.push(child);
     });

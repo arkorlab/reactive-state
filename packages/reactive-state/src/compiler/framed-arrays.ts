@@ -403,7 +403,8 @@ function definedMethods(
  * Another function that may run before the read may write any method at any point before it, and
  * so may a write after it that a loop around the read brings back to it. A method the read's block
  * wrote before the read stays proven against the second, where each loop that brings the write back
- * runs that block again, and so writes the method anew before the read.
+ * runs that block again, and so writes the method anew before the read; and a custom function the
+ * write installs replaces a custom one, which stays custom, though no longer the one it was.
  */
 function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, block: Node): void {
   const owner = executionOwner(call);
@@ -411,13 +412,40 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const keys = writtenMethods(node, root);
     if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node)) {
-      const anew = executionOwner(node) === owner && !mayRunAgain(node, call, root, block);
-      for (const key of keys) if (!anew || own.get(key)?.own !== true) own.set(key, { own: false });
+      const sameRun = executionOwner(node) === owner;
+      replaceProofs(own, keys, {
+        anew: sameRun && !mayRunAgain(node, call, root, block),
+        custom: sameRun ? customInstalled(node, root) : new Set<string>(),
+      });
     }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
+}
+
+/**
+ * A deferred write leaves the methods it names unproven, but for one written anew before the read,
+ * and one that was proven custom where the write installs a custom function.
+ */
+function replaceProofs(
+  own: OwnMethods,
+  keys: readonly string[],
+  { anew, custom }: { readonly anew: boolean; readonly custom: ReadonlySet<string> },
+): void {
+  for (const key of keys) {
+    const proven = own.get(key)?.own === true;
+    if (!anew || !proven) own.set(key, { own: proven && custom.has(key) });
+  }
+}
+
+/** The methods a write installs a custom function for, with the array's own identity. */
+function customInstalled(node: Node, root: FrameBinding): ReadonlySet<string> {
+  const installed: OwnMethods = new Map();
+  const assignment = ownMethodAssignment(node, root);
+  if (assignment !== undefined) installed.set(assignment.key, assignment);
+  if (isCallExpression(node)) callMethodWrites(node, root, installed);
+  return new Set([...installed].filter(([, method]) => method.own).map(([key]) => key));
 }
 
 /**
