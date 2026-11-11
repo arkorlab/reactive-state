@@ -129,7 +129,8 @@ export function readsCodeGlobal(node: Node): boolean {
 /**
  * The names a read of a global goes by, the global first — `crypto`, `subtle` of `crypto.subtle`,
  * of `globalThis.crypto.subtle` too, the global object read past — by its name or by text in
- * brackets; none of what reads no global, or by a key the code computes. A name is the global's
+ * brackets, past a comma's first operands, `(0, Reflect.get)`; none of what reads no global, or by
+ * a key the code computes. A name is the global's
  * where no declaration in scope gives it, though one elsewhere in the module does (`scopedGlobal`).
  */
 export function globalPathOf(node: Node): readonly string[] | undefined {
@@ -146,6 +147,9 @@ export function globalPathOf(node: Node): readonly string[] | undefined {
       }
       names.unshift(key);
       each = unwrapped(each.expression);
+    } else if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
+      // A comma's value is its last operand: `(0, Reflect.get)` is `Reflect.get`.
+      each = unwrapped(each.right);
     } else {
       break;
     }
