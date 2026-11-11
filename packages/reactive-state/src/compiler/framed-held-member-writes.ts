@@ -30,6 +30,7 @@ import {
 import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { executionOwner } from './framed-array-mutations.ts';
+import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { type MemberWrite, patternMemberWrites } from './framed-pattern-members.ts';
@@ -126,9 +127,13 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
   );
 }
 
-/** The members an assignment, a destructuring one, or a loop head writes, with their values. */
+/**
+ * The members an assignment, a destructuring one, or a loop head writes, with their values. A
+ * default inside a pattern is the pattern's to route: it runs only where the value is missing.
+ */
 function memberWrites(node: Node): readonly MemberWrite[] {
   if (!isAssignment(node)) return patternMemberWrites(node);
+  if (assignmentPatternDefault(node)) return [];
   const direct = unwrapped(node.left);
   return isMember(direct)
     ? [{ member: direct, values: [{ value: node.right, keys: [] }] }]

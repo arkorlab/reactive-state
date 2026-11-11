@@ -1841,6 +1841,26 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-pattern-default-skipped-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get = () => error] = [{} as never]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-pattern-default-used',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get = () => error] = []; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-pattern-default-maybe-used',
+    source: `function frames(error: Error, list: (() => string)[]) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; [descriptor.get = () => error] = list; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-object-default-skipped-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; ({ f: descriptor.get = () => error } = { f: {} as never }); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'getter-dead-branch-return',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { get 0() { let value = 'safe'; value += '!'; if (false) return error; return value; } }); return String(a); }`,
     converts: false,
