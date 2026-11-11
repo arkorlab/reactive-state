@@ -14,6 +14,7 @@ import {
   isIdentifier,
   isMethodDeclaration,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAssignment,
   isReturnStatement,
   isShorthandPropertyAssignment,
@@ -33,6 +34,7 @@ import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
+import { framedAppliedArguments } from './framed-keys.ts';
 import { constantValue } from './numbers.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
@@ -57,7 +59,9 @@ export function objectMutatorElements(
   const [target, first, second, third] = call.arguments;
   if (target === undefined || isSpreadElement(target)) return undefined;
   if (path === 'Object.assign') {
-    const elements = call.arguments.slice(1).flatMap((source) => assignedValues(source, index));
+    const elements = call.arguments
+      .slice(1)
+      .flatMap((source) => assignedValues(call, source, index));
     return { target, elements };
   }
   if (first === undefined) return { target, elements: [] };
@@ -76,10 +80,24 @@ export function objectMutatorElements(
   };
 }
 
-/** One assign source's values at numeric keys; a getter there answers what it returns. */
-function assignedValues(source: Expression, index: number | undefined): WrittenArrayElement[] {
+/**
+ * One assign source's values at numeric keys; a getter there answers what it returns. A spread of
+ * a written list is each of its sources; one the compile cannot read holds them at its first key.
+ */
+function assignedValues(
+  call: CallExpression,
+  source: Expression,
+  index: number | undefined,
+): WrittenArrayElement[] {
   const slot = slotKey(index);
-  if (isSpreadElement(source)) return [{ value: source.expression, keys: ['0', slot] }];
+  if (isSpreadElement(source)) {
+    const listed = framedAppliedArguments(call, source.expression);
+    return listed === undefined
+      ? [{ value: source.expression, keys: ['0', slot] }]
+      : listed.flatMap((each) =>
+          isOmittedExpression(each) ? [] : assignedValues(call, each, index),
+        );
+  }
   const value = unwrapped(source);
   if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
   if (!isObjectLiteralExpression(value)) return opaqueSource(source, index);

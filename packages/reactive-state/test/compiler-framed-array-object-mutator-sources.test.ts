@@ -195,6 +195,36 @@ const ELEMENTS = [
     elements: ['maps:0.0.value', 'error:'],
   },
   {
+    id: 'assign-spread-list-sources',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, ...[{}, { 0: error }]); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-list-at-index',
+    source: `function frames(error: Error, other: Error) { ${VALUES} Object.assign(values, ...[{ 0: other }, { 1: error }]); return values; }`,
+    index: 1,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-constant-list',
+    source: `function frames(error: Error) { ${VALUES} const list = [{}, { 0: error }]; Object.assign(values, ...list); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-list-with-opaque',
+    source: `function frames(error: Error, rest: [object]) { ${VALUES} Object.assign(values, ...[{ 0: error }, ...rest]); return values; }`,
+    index: undefined,
+    elements: ['error:', 'rest:0.0'],
+  },
+  {
+    id: 'assign-spread-opaque-pin',
+    source: `function frames(rest: [object]) { ${VALUES} Object.assign(values, ...rest); return values; }`,
+    index: undefined,
+    elements: ['rest:0.0'],
+  },
+  {
     id: 'define-map-getter',
     source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { value: error }; } }); return values; }`,
     index: undefined,
@@ -252,6 +282,11 @@ const CONVERSIONS = [
   {
     id: 'define-spread-key-then-descriptor-converts',
     source: `function frames(error: Error, keys: [number]) { const a = ['safe']; Object.defineProperty(a, ...keys, { value: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, ...[{}, { 0: error }]); return String(a); }`,
     converts: true,
   },
   {
