@@ -329,9 +329,24 @@ function reaching(fn: Node): { readonly names: ReadonlySet<string>; readonly any
   }
   const anywhere =
     namesOf(fn).computed ||
+    reachedByProperty(fn) ||
     implicit.some((each) => mentionsAny(each, names)) ||
     escapes(fn.getSourceFile(), names);
   return { names, anywhere };
+}
+
+/** Whether a function is the value of a property, or a method: a key worked out reaches it. */
+function reachedByProperty(fn: Node): boolean {
+  if (isMethodDeclaration(fn) || isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn))
+    return true;
+  if (!isFunctionExpression(fn) && !isArrowFunction(fn)) return false;
+  const { parent } = holderOf(fn);
+  if (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) return true;
+  return (
+    isBinaryExpression(parent) &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+    (isPropertyAccessExpression(parent.left) || isElementAccessExpression(parent.left))
+  );
 }
 
 /** Whether the file uses one of the names otherwise than by calling it or giving it a value. */
