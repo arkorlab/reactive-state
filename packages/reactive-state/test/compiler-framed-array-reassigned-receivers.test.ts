@@ -209,6 +209,11 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'alias-assignment-keeps-unwritable-method-unwritable',
+    source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { value: () => 'first', configurable: true }); let b = [1]; b.join = Array.prototype.join; b = []; Object.defineProperty(a, 'join', { value: Array.prototype.join }); ${SAFE} return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'alias-never-reassigned-pin',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} const b = a; b.join = Array.prototype.join; return String(a); }`,
     converts: true,

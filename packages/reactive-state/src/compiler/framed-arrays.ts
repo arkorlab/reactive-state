@@ -9,7 +9,6 @@ import {
   isExpression,
   isElementAccessExpression,
   isIdentifier,
-  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSourceFile,
   isSpreadElement,
@@ -22,7 +21,7 @@ import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
   mayRunAgain,
   overwrittenInPass,
-  recursesBefore,
+  recursesBetween,
   selectedMethod,
   type SelectedMethod,
   writtenAfterRead,
@@ -34,19 +33,17 @@ import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
   arrayIdentity,
-  assignMethods,
-  defineMethod,
-  descriptorMethods,
+  callMethodWrites,
   forgetMethods,
   mayBeArray,
   OWN_METHODS,
+  afterAssignment,
   afterPossibleWrite,
   afterSureWrite,
   definiteExpression,
   evaluatedForSure,
   type OwnMethods,
   ownMethodAssignment,
-  possibleOverride,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
@@ -366,12 +363,42 @@ function unprovenWrites(
   const defined = isDeleteExpression(node)
     ? undefined
     : definedMethods(node, writes.root, { previous: writes.own });
-  for (const key of keys) {
-    if (selected !== undefined && writtenAfterSelection(node, key, selected)) continue;
-    const previous = writes.own.get(key);
-    const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
-    writes.own.set(key, sure ? afterSureWrite(written) : afterPossibleWrite(previous, written));
+  const deleting = isDeleteExpression(node);
+  const assigns = sure && !deleting && defined === undefined && writesExactly(node, writes.root);
+  const how = { sure, assigns, deleting, defined };
+  for (const key of keys)
+    if (selected === undefined || !writtenAfterSelection(node, key, selected))
+      writes.own.set(key, afterWrite(key, how, writes));
+}
+
+/** Whether the members a write names are the array's own, not those of a name that may hold another. */
+function writesExactly(node: Node, root: FrameBinding): boolean {
+  if (isCallExpression(node)) {
+    const target = node.arguments[0];
+    return target !== undefined && arrayIdentity(target) === root;
   }
+  return framedWrittenTargets(node).every((target) => {
+    const member = unwrapped(target);
+    if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return true;
+    return !mayBeArray(member.expression, root) || arrayIdentity(member.expression) === root;
+  });
+}
+
+/** What a write that may run leaves of a method it names, as its kind and its certainty say. */
+function afterWrite(
+  key: string,
+  how: {
+    readonly sure: boolean;
+    readonly assigns: boolean;
+    readonly deleting: boolean;
+    readonly defined: OwnMethods | undefined;
+  },
+  writes: MethodWrites,
+): ArrayMethodOverride {
+  const previous = writes.own.get(key);
+  if (how.assigns && writes.held?.has(key) !== true) return afterAssignment(previous);
+  const written = how.deleting ? undefined : (how.defined ?? writes.own).get(key);
+  return how.sure ? afterSureWrite(written) : afterPossibleWrite(previous, written);
 }
 
 /**
@@ -444,12 +471,18 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
     const keys = writtenMethods(node, root);
     if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node)) {
       const sameRun = executionOwner(node) === owner;
+      const again = sameRun && mayRunAgain(node, call, root, block);
       replaceProofs(
         own,
         sameRun ? keys.filter((key) => !overwrittenInPass(node, key, call, root)) : keys,
         {
-          anew:
-            sameRun && !mayRunAgain(node, call, root, block) && !recursesBefore(call, root, owner),
+          anew: (key) => {
+            return (
+              sameRun &&
+              !again &&
+              !recursesBetween(call, root, owner, own.get(key)?.value?.end ?? block.pos)
+            );
+          },
           custom: sameRun ? customInstalled(node, root) : new Set<string>(),
         },
       );
@@ -467,11 +500,17 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
 function replaceProofs(
   own: OwnMethods,
   keys: readonly string[],
-  { anew, custom }: { readonly anew: boolean; readonly custom: ReadonlySet<string> },
+  {
+    anew,
+    custom,
+  }: {
+    readonly anew: (key: string) => boolean;
+    readonly custom: ReadonlySet<string>;
+  },
 ): void {
   for (const key of keys) {
     const proven = own.get(key)?.own === true;
-    if (!anew || !proven) own.set(key, { own: proven && custom.has(key) });
+    if (!proven || !anew(key)) own.set(key, { own: proven && custom.has(key) });
   }
 }
 
@@ -531,52 +570,6 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
-}
-
-/**
- * Native object mutators replace own methods in source order, retaining unknown writes as unknown.
- * Through a name that may hold another array they only leave the methods they write unproven, with
- * the attributes a definition gives them that hold either way, read against the methods as they
- * stood, since a definition that leaves an attribute unsaid keeps it.
- */
-function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
-  if (!isCallExpression(node)) return;
-  const target = node.arguments[0];
-  if (target === undefined || !mayBeArray(target, root)) return;
-  const path = globalPathOf(unwrapped(node.expression))?.join('.');
-  if (path === undefined) return;
-  if (arrayIdentity(target) === root) {
-    mutatorWrites(node, path, own);
-    return;
-  }
-  const possible: OwnMethods = new Map(own);
-  mutatorWrites(node, path, possible);
-  for (const [key, written] of possible)
-    if (written !== own.get(key)) own.set(key, possibleOverride(written, own.get(key)));
-}
-
-/** The methods one native object mutator writes, as it names them. */
-function mutatorWrites(node: CallExpression, path: string, own: OwnMethods): void {
-  switch (path) {
-    case 'Object.assign': {
-      for (const source of node.arguments.slice(1)) assignMethods(source, own);
-      break;
-    }
-    case 'Object.defineProperty': {
-      defineMethod(node, own);
-      break;
-    }
-    case 'Object.defineProperties': {
-      const descriptors = node.arguments[1];
-      const value = descriptors === undefined ? undefined : unwrapped(descriptors);
-      if (value !== undefined && isObjectLiteralExpression(value)) descriptorMethods(value, own);
-      else forgetMethods(own);
-      break;
-    }
-    default: {
-      break;
-    }
-  }
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */

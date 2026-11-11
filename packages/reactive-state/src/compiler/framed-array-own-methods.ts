@@ -4,6 +4,7 @@ import {
   type Expression,
   isArrayLiteralExpression,
   isBinaryExpression,
+  isCallExpression,
   isBindingElement,
   isElementAccessExpression,
   isComputedPropertyName,
@@ -213,6 +214,18 @@ export function afterSureWrite(written: ArrayMethodOverride | undefined): ArrayM
     own: false,
     ...(written?.writable === true && { writable: true as const }),
     ...(written?.configurable === true && { configurable: true as const }),
+  };
+}
+
+/**
+ * A method an assignment sure to run leaves: unproven, and a writable data property, since an
+ * assignment to one that is not throws; it is configurable if it was, or was made by this write.
+ */
+export function afterAssignment(previous: ArrayMethodOverride | undefined): ArrayMethodOverride {
+  return {
+    own: false,
+    writable: true,
+    ...(previous?.configurable === true && { configurable: true as const }),
   };
 }
 
@@ -492,4 +505,50 @@ function descriptorSays(
 /** An opaque write can replace either method and therefore removes a proof of a custom method. */
 export function forgetMethods(own: OwnMethods): void {
   for (const method of OWN_METHODS) own.set(method, { own: false });
+}
+
+/**
+ * Native object mutators replace own methods in source order, retaining unknown writes as unknown.
+ * Through a name that may hold another array they only leave the methods they write unproven, with
+ * the attributes a definition gives them that hold either way, read against the methods as they
+ * stood, since a definition that leaves an attribute unsaid keeps it.
+ */
+export function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
+  if (!isCallExpression(node)) return;
+  const target = node.arguments[0];
+  if (target === undefined || !mayBeArray(target, root)) return;
+  const path = globalPathOf(unwrapped(node.expression))?.join('.');
+  if (path === undefined) return;
+  if (arrayIdentity(target) === root) {
+    mutatorWrites(node, path, own);
+    return;
+  }
+  const possible: OwnMethods = new Map(own);
+  mutatorWrites(node, path, possible);
+  for (const [key, written] of possible)
+    if (written !== own.get(key)) own.set(key, possibleOverride(written, own.get(key)));
+}
+
+/** The methods one native object mutator writes, as it names them. */
+function mutatorWrites(node: CallExpression, path: string, own: OwnMethods): void {
+  switch (path) {
+    case 'Object.assign': {
+      for (const source of node.arguments.slice(1)) assignMethods(source, own);
+      break;
+    }
+    case 'Object.defineProperty': {
+      defineMethod(node, own);
+      break;
+    }
+    case 'Object.defineProperties': {
+      const descriptors = node.arguments[1];
+      const value = descriptors === undefined ? undefined : unwrapped(descriptors);
+      if (value !== undefined && isObjectLiteralExpression(value)) descriptorMethods(value, own);
+      else forgetMethods(own);
+      break;
+    }
+    default: {
+      break;
+    }
+  }
 }
