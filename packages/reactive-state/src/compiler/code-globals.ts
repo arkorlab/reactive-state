@@ -477,8 +477,8 @@ function readsCodeKey(node: Node): boolean {
 /**
  * What a call hands to the function it calls: its arguments; of one borrowed, `call` or `apply`,
  * what follows the `this` it takes, up to a spread — of `apply`, the elements of the array written
- * there, up to a spread as well; none of an array the code gives by a name, nor where a spread
- * comes before the array.
+ * there, past the casts around it, up to a spread as well; none of an array the code gives by a
+ * name, nor where a spread comes before the array.
  */
 function givenTo(call: CallExpression, borrowing: string | undefined): readonly Expression[] {
   if (borrowing === undefined) {
@@ -488,7 +488,11 @@ function givenTo(call: CallExpression, borrowing: string | undefined): readonly 
     return untilSpread(call.arguments).slice(1);
   }
   const [, list] = untilSpread(call.arguments);
-  const array = list === undefined ? undefined : unwrapped(list);
+  let array = list === undefined ? undefined : unwrapped(list);
+  // `unwrapped` leaves a cast in angle brackets: `<any>[run, 'constructor']` is the array within.
+  while (array !== undefined && isTypeAssertion(array)) {
+    array = unwrapped(array.expression);
+  }
   return array !== undefined && isArrayLiteralExpression(array) ? untilSpread(array.elements) : [];
 }
 
