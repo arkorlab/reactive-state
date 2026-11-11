@@ -278,8 +278,10 @@ function holesOnly(pattern: TemplateLiteralTypeNode): boolean {
 /**
  * Whether a pattern of `${string}` holes matches a key as TypeScript matches it: the text before
  * the first hole starts the key and the text after the last ends it, without overlap, and the
- * text between holes follows in order; of two adjacent holes the first takes a character.
- * `undefined` for a hole of another type.
+ * text between holes follows in order; of two adjacent holes the first takes a character, which
+ * TypeScript 6 counts as a UTF-16 unit and 7.1 as a code point, so a key they count differently
+ * is matched by one and not by the other, and is said to match neither way: `undefined`, as for
+ * a hole of another type.
  */
 function patternCovers(pattern: TemplateLiteralTypeNode, key: string): boolean | undefined {
   const { head, templateSpans } = pattern;
@@ -288,14 +290,39 @@ function patternCovers(pattern: TemplateLiteralTypeNode, key: string): boolean |
   const last = texts.pop() ?? '';
   const end = key.length - last.length;
   if (!key.startsWith(head.text) || !key.endsWith(last) || end < head.text.length) return false;
-  let at = head.text.length;
+  const span = { end, start: head.text.length };
+  const units = holesMatch(texts, key, { ...span, width: unitWidth });
+  const points = holesMatch(texts, key, { ...span, width: pointWidth });
+  return units === points ? units : undefined;
+}
+
+/** Where the texts between holes are looked for, and how wide the character a hole takes is. */
+interface HoleSpan {
+  readonly start: number;
+  readonly end: number;
+  readonly width: (key: string, at: number) => number;
+}
+
+/** Whether the texts between holes follow in order from `start`, before `end`. */
+function holesMatch(texts: readonly string[], key: string, span: HoleSpan): boolean {
+  let at = span.start;
   for (const text of texts) {
-    const width = Math.max(text.length, 1);
+    const width = text === '' ? span.width(key, at) : text.length;
     const found = text === '' ? at : key.indexOf(text, at);
-    if (found === -1 || found + width > end) return false;
+    if (found === -1 || found + width > span.end) return false;
     at = found + width;
   }
   return true;
+}
+
+/** A character as TypeScript 6 counts it: one UTF-16 unit. */
+function unitWidth(): number {
+  return 1;
+}
+
+/** A character as TypeScript 7.1 counts it: the code point that begins at `at`. */
+function pointWidth(key: string, at: number): number {
+  return String.fromCodePoint(key.codePointAt(at) ?? 0).length;
 }
 
 /** A parenthesized or readonly type's underlying syntax, without following aliases. */
