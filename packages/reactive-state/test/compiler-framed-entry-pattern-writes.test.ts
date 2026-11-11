@@ -234,6 +234,48 @@ const CASES = [
     key: 'message',
     values: ["'safe':", 'record:', 'record:0'],
   },
+  {
+    id: 'computed-key-overwritten-by-spread',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'computed-key-overwritten-by-field',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ other: 1 }, other: 2, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '2:'],
+  },
+  {
+    id: 'computed-key-overwritten-in-spread',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ field: error }, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'computed-key-nested-spread-overwrite',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ ...{ field: 'kept' } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'computed-key-overwritten-by-opaque-pin',
+    source: `function frames(error: Error, name: string, record: Record<string, unknown>) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...record })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:', 'record:', 'record:0'],
+  },
+  {
+    id: 'computed-key-overwritten-by-computed-pin',
+    source: `function frames(error: Error, name: string, other: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, [other]: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:'],
+  },
+  {
+    id: 'computed-key-other-field-kept-pin',
+    source: `function frames(error: Error, name: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ other: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

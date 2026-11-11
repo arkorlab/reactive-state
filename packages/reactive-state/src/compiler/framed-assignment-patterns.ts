@@ -236,7 +236,7 @@ function mayBeUndefined(source: AssignedFrameSource): boolean {
 }
 
 /** Literal computed keys only; arbitrary key expressions retain their existing opaque boundary. */
-function literalKey(name: PropertyName): string | undefined {
+export function literalKey(name: PropertyName): string | undefined {
   if (isIdentifier(name)) return name.text;
   const key = isComputedPropertyName(name) ? name.expression : name;
   const value = isExpression(key) ? constantValue(key) : undefined;

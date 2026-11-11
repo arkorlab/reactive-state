@@ -26,6 +26,8 @@ import {
   isVariableDeclarationList,
   isSpreadElement,
   type Node,
+  type ObjectLiteralElementLike,
+  type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -37,6 +39,7 @@ import {
   assignmentPatternDefault,
   assignmentPatternTargets,
   iteratedFrameSources,
+  literalKey,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
@@ -336,22 +339,59 @@ function yieldsNothing(iterable: Expression): boolean {
 
 /**
  * What sources may hand an unrouted target: their fields or elements, and themselves. The fields a
- * written spread copies into an object literal are the object's own.
+ * written spread copies into an object literal are the object's own, and a field a later one of
+ * the same name overwrites is no value the key can select.
  */
 function possibleFields(sources: readonly AssignedFrameSource[]): readonly AssignedFrameSource[] {
   return sources.flatMap((source) => {
     const value = unwrapped(source.value);
     if (source.keys.length > 0) return [source];
     if (!isObjectLiteralExpression(value)) return [source, ...iteratedFrameSources(value)];
-    return value.properties.flatMap((property) => {
-      if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-      if (isSpreadAssignment(property))
-        return possibleFields([{ value: property.expression, keys: [] }]);
-      return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
-        ? [{ value: property.name, keys: [] }]
-        : [];
-    });
+    return survivingFields(value, new Set());
   });
+}
+
+/** The values a written object holds, each field read as the fields after it leave it. */
+function survivingFields(
+  object: ObjectLiteralExpression,
+  overwritten: ReadonlySet<string>,
+): AssignedFrameSource[] {
+  const found: AssignedFrameSource[] = [];
+  const later = new Set(overwritten);
+  for (const property of object.properties.toReversed()) {
+    const name = isSpreadAssignment(property) ? undefined : literalKey(property.name);
+    if (name !== undefined && later.has(name)) continue;
+    found.push(...fieldValues(property, later));
+    for (const each of fieldNames(property)) later.add(each);
+  }
+  return found.toReversed();
+}
+
+/** The values one field holds; a spread of a written object holds that object's own fields. */
+function fieldValues(
+  property: ObjectLiteralElementLike,
+  later: ReadonlySet<string>,
+): readonly AssignedFrameSource[] {
+  if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+  if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+    return [{ value: property.name, keys: [] }];
+  if (!isSpreadAssignment(property)) return [];
+  const copied = unwrapped(property.expression);
+  return isObjectLiteralExpression(copied)
+    ? survivingFields(copied, later)
+    : possibleFields([{ value: property.expression, keys: [] }]);
+}
+
+/** The names a field of a written object always sets: its own, or those of the literal it spreads. */
+function fieldNames(property: ObjectLiteralElementLike): readonly string[] {
+  if (!isSpreadAssignment(property)) {
+    const name = literalKey(property.name);
+    return name === undefined ? [] : [name];
+  }
+  const copied = unwrapped(property.expression);
+  return isObjectLiteralExpression(copied)
+    ? copied.properties.flatMap((each) => fieldNames(each))
+    : [];
 }
 
 /** The slot a written target names on one of the tuple's bindings; none for another target. */
