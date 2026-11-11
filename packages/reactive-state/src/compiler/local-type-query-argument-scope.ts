@@ -1,6 +1,7 @@
 import {
   isExpressionWithTypeArguments,
   isIdentifier,
+  isQualifiedName,
   isTypeAliasDeclaration,
   isTypeParameterDeclaration,
   isTypeQueryNode,
@@ -10,13 +11,18 @@ import {
   type TypeReferenceNode,
 } from 'typescript/ast';
 
-import { localTypeBinding, mergedHeritageDeclarations } from './local-type-aliases.ts';
+import {
+  localTypeBinding,
+  type LocalTypeBinding,
+  mergedHeritageDeclarations,
+} from './local-type-aliases.ts';
 import { capturedTypeReading } from './local-type-captured-sequences.ts';
 import {
   boundTypeBody,
   type GenericDeclaration,
   type TypeReading,
 } from './local-type-environment.ts';
+import { qualifiedLocalTypeBinding } from './local-type-namespaces.ts';
 
 /** Explicit query arguments retain actual bindings rather than an unresolved parameter's constraint. */
 
@@ -54,9 +60,7 @@ function argumentReferences(at: ArgumentNode): ArgumentSelection | undefined {
   if (captured !== undefined) return { nodes: [{ node: captured.type, reading: captured }] };
   if (isTypeQueryNode(node)) return { nodes: [], opaque: true };
   if (!isTypeReferenceNode(node) && !isExpressionWithTypeArguments(node)) return undefined;
-  const name = isTypeReferenceNode(node) ? node.typeName : node.expression;
-  if (!isIdentifier(name)) return undefined;
-  const binding = localTypeBinding(name);
+  const binding = referencedBinding(node);
   if (binding === undefined || binding === null) return undefined;
   if (isTypeParameterDeclaration(binding)) {
     const actual = reading.bindings.get(binding);
@@ -65,6 +69,15 @@ function argumentReferences(at: ArgumentNode): ArgumentSelection | undefined {
       : { nodes: [{ node: actual.type, reading: actual }] };
   }
   return argumentBodies(binding, node, reading);
+}
+
+/** The local declaration a reference names, followed through namespaces as `NS.Alias` writes it. */
+function referencedBinding(
+  node: TypeReferenceNode | ExpressionWithTypeArguments,
+): LocalTypeBinding {
+  const name = isTypeReferenceNode(node) ? node.typeName : node.expression;
+  if (isIdentifier(name)) return localTypeBinding(name);
+  return isQualifiedName(name) ? qualifiedLocalTypeBinding(name) : undefined;
 }
 
 /** Each local declaration retains its supplied defaults and merged declaration environment. */
