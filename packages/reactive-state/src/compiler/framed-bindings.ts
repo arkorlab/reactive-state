@@ -1,6 +1,7 @@
 import {
   type BindingElement,
   type ClassDeclaration,
+  type EnumDeclaration,
   type Expression,
   type Identifier,
   type FunctionDeclaration,
@@ -9,10 +10,12 @@ import {
   isBlock,
   isCallExpression,
   isCaseBlock,
+  isCaseClause,
   isCatchClause,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
+  isDefaultClause,
   isElementAccessExpression,
   isEnumDeclaration,
   isIdentifier,
@@ -178,6 +181,7 @@ function resolvedKey(node: Expression): string | undefined {
 function localBinding(node: Node, within: Node, name: string): FrameDeclaration | null | undefined {
   const loop = loopBinding(node, name);
   if (loop !== undefined) return loop;
+  if (isEnumDeclaration(node) && hasMember(node, name)) return null;
   if (
     isCatchClause(node) &&
     node.variableDeclaration !== undefined &&
@@ -195,6 +199,26 @@ function localBinding(node: Node, within: Node, name: string): FrameDeclaration 
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name?.text === name
     ? null
     : undefined;
+}
+
+/**
+ * Whether an enum, or one merged with it in its scope, has a member named `name`: within their
+ * initializers the bare name is that member, before any binding around them.
+ */
+function hasMember(enumeration: EnumDeclaration, name: string): boolean {
+  const { parent } = enumeration;
+  const scope = isCaseClause(parent) || isDefaultClause(parent) ? parent.parent : parent;
+  return (statementsOf(scope) ?? [enumeration]).some((statement) => {
+    return (
+      isEnumDeclaration(statement) &&
+      statement.name.text === enumeration.name.text &&
+      statement.members.some((member) => {
+        return (
+          (isIdentifier(member.name) || isStringLiteral(member.name)) && member.name.text === name
+        );
+      })
+    );
+  });
 }
 
 /** Ordinary and namespace blocks keep their statements; a switch's clauses share one scope. */

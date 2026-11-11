@@ -1,0 +1,124 @@
+import {
+  type ElementAccessExpression,
+  type Identifier,
+  isElementAccessExpression,
+  isIdentifier,
+  type Node,
+} from 'typescript/ast';
+import { API } from 'typescript/sync';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { frameDeclarationOf, frameMemberName } from '../src/compiler/framed-bindings.ts';
+
+/**
+ * Within an enum's initializers a bare name is a member of that enum — of any declaration of it
+ * beside them in its scope — before it is a constant around the enum: `enum E { key = 2, entry =
+ * value[key] }` reads index `2`, not that of the constant `key`. So the key `value[key]` reads there
+ * is none the code fixes, and no declaration is the name's. The rows marked a pin answer the same
+ * before the change as after it.
+ */
+
+const CASES = [
+  {
+    source: 'enum E { key = 2, entry = value[key] }',
+    what: 'a member before the read',
+  },
+  {
+    source: 'enum E { entry = value[key], key = 2 }',
+    what: 'a member after the read',
+  },
+  {
+    source: "enum E { 'key' = 2, entry = value[key] }",
+    what: 'a member named by text',
+  },
+  {
+    source: 'const enum E { key = 2, entry = value[key] }',
+    what: 'a member of a const enum',
+  },
+  {
+    source: 'enum E { key = 2 } enum E { entry = value[key] }',
+    what: 'a member of an enum merged with it',
+  },
+  {
+    source: 'enum E { entry = value[key] } enum E { key = 2 }',
+    what: 'a member of an enum merged with it, after',
+  },
+  {
+    source: 'function read() { enum E { key = 2, entry = value[key] } }',
+    what: 'a member of an enum of a function’s body',
+  },
+  {
+    source: 'switch (kind) { case 0: enum E { key = 2 } enum E { entry = value[key] } }',
+    what: 'a member of a merged enum of a switch’s cases',
+  },
+  {
+    source: 'namespace N { export enum E { key = 2, entry = value[key] } }',
+    what: 'a member of an enum of a namespace',
+  },
+  {
+    source: 'enum E { key = 2, entry = value[Number(key)] }',
+    what: 'a key computed of a member',
+  },
+] as const;
+
+const PINS = [
+  { source: 'enum E { other = 2, entry = value[key] }', what: 'a member of another name (pin)' },
+  {
+    source: 'enum F { key = 2 } enum E { entry = value[key] }',
+    what: 'a member of another enum (pin)',
+  },
+  { source: 'enum E { key = 2 } value[key];', what: 'a read beside the enum (pin)' },
+  {
+    source: 'function read(): void { enum E { key = 2 } value[key]; }',
+    what: 'a read after the enum in its scope (pin)',
+  },
+] as const;
+
+describe('a read within an enum that has a member of the name', () => {
+  let api: API;
+
+  beforeAll(() => {
+    api = new API({ cwd: process.cwd() });
+  });
+
+  afterAll(() => {
+    api[Symbol.dispose]();
+  });
+
+  /**
+   * What `value[…]`, the last read of a key in `source`, records as its member, and whether a
+   * declaration is the name `key` it reads.
+   */
+  function readOf(source: string): {
+    readonly declared: boolean;
+    readonly member: string | undefined;
+  } {
+    using parsed = api.createSourceFile(
+      'framed-bindings.ts',
+      `declare const kind: number; declare const value: unknown[]; const key = 1; ${source}`,
+    );
+    let read: ElementAccessExpression | undefined;
+    const find = (node: Node): void => {
+      if (isElementAccessExpression(node)) read = node;
+      node.forEachChild(find);
+    };
+    find(parsed.sourceFile);
+    if (read === undefined) throw new Error(`No key is read in ${source}.`);
+    let name: Identifier | undefined;
+    const named = (node: Node): void => {
+      if (name === undefined && isIdentifier(node) && node.text === 'key') name = node;
+      node.forEachChild(named);
+    };
+    named(read.argumentExpression);
+    if (name === undefined) throw new Error(`No \`key\` is read in ${source}.`);
+    return { declared: frameDeclarationOf(name) !== undefined, member: frameMemberName(read) };
+  }
+
+  it.each(CASES)('$what', ({ source }) => {
+    expect(readOf(source)).toStrictEqual({ declared: false, member: undefined });
+  });
+
+  it.each(PINS)('$what', ({ source }) => {
+    expect(readOf(source)).toStrictEqual({ declared: true, member: '1' });
+  });
+});
