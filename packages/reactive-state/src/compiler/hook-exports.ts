@@ -187,7 +187,8 @@ export function exportsOf(statements: readonly Statement[]): ReadonlyMap<string,
 
 /**
  * The names a top-level statement of a module declares: of a namespace, its name — none of a module
- * declared by its text, `declare module 'x'`, nor of a global's augmentation, `declare global`.
+ * declared by its text, `declare module 'x'`, nor of a global's augmentation, `declare global` — and
+ * of an alias of one, `import alias = Hooks.value`.
  */
 export function declaredAtTop(statement: Statement): readonly Identifier[] {
   if (isModuleDeclaration(statement)) {
@@ -208,7 +209,8 @@ export function declaredAtTop(statement: Statement): readonly Identifier[] {
     isClassDeclaration(statement) ||
     isInterfaceDeclaration(statement) ||
     isTypeAliasDeclaration(statement) ||
-    isEnumDeclaration(statement)
+    isEnumDeclaration(statement) ||
+    isImportEqualsDeclaration(statement)
   ) {
     return statement.name === undefined ? [] : [statement.name];
   }
