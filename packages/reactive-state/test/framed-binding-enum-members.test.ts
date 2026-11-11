@@ -59,6 +59,26 @@ const CASES = [
     source: 'enum E { key = 2, entry = value[Number(key)] }',
     what: 'a key computed of a member',
   },
+  {
+    source:
+      'namespace N { export enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
+    what: 'a member of an enum a namespace’s other body exports',
+  },
+  {
+    source:
+      'namespace N { export enum E { entry = value[key] } } namespace N { export enum F { other = 0 } } namespace N { export enum E { key = 2 } }',
+    what: 'a member of the exported enum of a third body',
+  },
+  {
+    source:
+      'namespace M { export namespace N { export enum E { key = 2 } } } namespace M { export namespace N { export enum E { entry = value[key] } } }',
+    what: 'a member of an enum of a namespace nested in a merged one',
+  },
+  {
+    source:
+      'namespace M { export namespace N { export enum E { key = 2 } } export namespace N { export enum E { entry = value[key] } } }',
+    what: 'a member of an enum of a nested namespace declared again',
+  },
 ] as const;
 
 const PINS = [
@@ -68,6 +88,30 @@ const PINS = [
     what: 'a member of another enum (pin)',
   },
   { source: 'enum E { key = 2 } value[key];', what: 'a read beside the enum (pin)' },
+  {
+    source: 'namespace N { enum E { key = 2 } } namespace N { enum E { entry = value[key] } }',
+    what: 'enums of two bodies that export none (pin)',
+  },
+  {
+    source:
+      'namespace N { export enum E { key = 2 } } namespace O { export enum E { entry = value[key] } }',
+    what: 'an enum of another namespace (pin)',
+  },
+  {
+    source:
+      'namespace N { export enum F { key = 2 } } namespace N { export enum E { entry = value[key] } }',
+    what: 'an exported enum of another name (pin)',
+  },
+  {
+    source:
+      'namespace N { enum E { key = 2 } } namespace N { export enum E { entry = value[key] } }',
+    what: 'an enum of another body that is not exported (pin)',
+  },
+  {
+    source:
+      'namespace M { export namespace N { export enum E { key = 2 } } } namespace M { namespace N { export enum E { entry = value[key] } } }',
+    what: 'a nested namespace one body exports and the other does not (pin)',
+  },
   {
     source: 'function read(): void { enum E { key = 2 } value[key]; }',
     what: 'a read after the enum in its scope (pin)',
