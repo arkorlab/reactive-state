@@ -120,13 +120,25 @@ function called(node: Node): boolean {
   );
 }
 
-/** Whether a reference is a name that is written to, and not read. */
+/**
+ * Whether a reference is a name that is written to, and not read: a variable, or a property by its
+ * name. A write of a property that calls a setter is found by the setter, which is reached from
+ * anywhere, whatever the name.
+ */
 function written(node: Node): boolean {
   const { parent } = node;
+  const target =
+    (isPropertyAccessExpression(parent) && parent.name === node) ||
+    (isElementAccessExpression(parent) &&
+      isStringLiteral(node) &&
+      parent.argumentExpression === node)
+      ? parent
+      : node;
+  const held = holderOf(target);
   return (
-    isBinaryExpression(parent) &&
-    parent.left === node &&
-    parent.operatorToken.kind === SyntaxKind.EqualsToken
+    isBinaryExpression(held.parent) &&
+    held.parent.left === held &&
+    held.parent.operatorToken.kind === SyntaxKind.EqualsToken
   );
 }
 

@@ -1112,6 +1112,46 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'property-write-of-the-name-pin',
+    source: `function frames(error: Error) { const values = [error]; const holder: any = {}; function read(): string { ${SAFE} holder.read = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'element-write-of-the-name-pin',
+    source: `function frames(error: Error) { const values = [error]; const holder: any = {}; function read(): string { ${SAFE} holder['read'] = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'wrapped-property-write-of-the-name-pin',
+    source: `function frames(error: Error) { const values = [error]; const holder: any = {}; function read(): string { ${SAFE} (holder.read as any) = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-a-setter-the-write-calls',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; const holder = { set x(v: number) { if (depth++ < 1) read(); } }; function read(): string { ${SAFE} holder.x = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-setter-named-like-the-function',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; const holder = { set read(v: number) { if (depth++ < 1) read(); } }; function read(): string { ${SAFE} holder.read = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-defined-setter',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; const holder = {}; Object.defineProperty(holder, 'read', { set(v: number) { if (depth++ < 1) read(); } }); function read(): string { ${SAFE} (holder as any).read = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-setter-a-pattern-writes',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; const holder = { set read(v: number) { if (depth++ < 1) read(); } }; function read(): string { ${SAFE} ({ a: holder.read } = { a: 1 }); const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-in-the-key-of-a-write',
+    source: `function frames(error: Error) { const values = [error]; let depth = 0; const holder: any = { get [String(1)]() { return 1; } }; function read(pass: number): string { ${SAFE} holder[pass < 1 ? read(pass + 1) : 0] = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
