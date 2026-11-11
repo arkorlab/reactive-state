@@ -191,6 +191,18 @@ export function afterPossibleWrite(
   };
 }
 
+/**
+ * A method a write that is sure to run leaves: unproven, with the attributes the write leaves it,
+ * which a write of the value alone leaves as they were.
+ */
+export function afterSureWrite(written: ArrayMethodOverride | undefined): ArrayMethodOverride {
+  return {
+    own: false,
+    ...(written?.writable === true && { writable: true as const }),
+    ...(written?.configurable === true && { configurable: true as const }),
+  };
+}
+
 /** One direct assignment to the native method selected by a call; it creates a plain property. */
 export function ownMethodAssignment(
   node: Node,

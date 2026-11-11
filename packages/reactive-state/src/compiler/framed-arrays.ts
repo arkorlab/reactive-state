@@ -32,6 +32,7 @@ import {
   knownNonNative,
   OWN_METHODS,
   afterPossibleWrite,
+  afterSureWrite,
   definiteExpression,
   evaluatedForSure,
   descriptorFunction,
@@ -347,7 +348,7 @@ function unprovenWrites(
   for (const key of keys) {
     const previous = writes.own.get(key);
     const written = isDeleteExpression(node) ? undefined : (defined ?? writes.own).get(key);
-    writes.own.set(key, afterPossibleWrite(previous, written));
+    writes.own.set(key, sure ? afterSureWrite(written) : afterPossibleWrite(previous, written));
   }
 }
 
