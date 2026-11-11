@@ -477,6 +477,48 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-constant-map-getter',
+    source: `function frames(error: Error) { ${VALUES} const descriptors = { 0: { get: () => error } }; Object.defineProperties(values, descriptors); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value', 'error:'],
+  },
+  {
+    id: 'define-constant-map-value',
+    source: `function frames(error: Error) { ${VALUES} const descriptors = { 0: { value: error } }; Object.defineProperties(values, descriptors); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value', 'error:'],
+  },
+  {
+    id: 'define-constant-map-other-key-pin',
+    source: `function frames(error: Error) { ${VALUES} const descriptors = { label: { get: () => error } }; Object.defineProperties(values, descriptors); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value'],
+  },
+  {
+    id: 'define-map-spread-literal',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { ...{ 0: { get: () => error } } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-map-spread-opaque-pin',
+    source: `function frames(maps: PropertyDescriptorMap) { ${VALUES} Object.defineProperties(values, { ...maps }); return values; }`,
+    index: undefined,
+    elements: ['maps:0.value'],
+  },
+  {
+    id: 'assign-spread-property-literal',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { ...{ get 0() { return error; } } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'assign-spread-property-array-literal',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { ...[error] }); return values; }`,
+    index: undefined,
+    elements: ['[error]:array'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -582,6 +624,16 @@ const CONVERSIONS = [
   {
     id: 'define-spread-target-converts',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(...[a, 0] as const, { value: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-constant-map-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptors = { 0: { get: () => error } }; Object.defineProperties(a, descriptors); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-property-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...{ get 0() { return error; } } }); return String(a); }`,
     converts: true,
   },
   {

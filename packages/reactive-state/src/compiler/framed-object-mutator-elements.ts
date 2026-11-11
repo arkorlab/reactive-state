@@ -147,7 +147,7 @@ function assignedValues(source: Expression, index: number | undefined): WrittenA
   if (!isObjectLiteralExpression(value)) return opaqueSource(source, index);
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
-    if (isSpreadAssignment(property)) found.push(...opaqueSource(property.expression, index));
+    if (isSpreadAssignment(property)) found.push(...assignedValues(property.expression, index));
     else if (!nameMayBeSlot(property.name, index)) continue;
     else if (isPropertyAssignment(property)) found.push({ value: property.initializer, keys: [] });
     else if (isGetAccessorDeclaration(property)) found.push(...returnedValues(property.body));
@@ -164,18 +164,24 @@ function opaqueSource(source: Expression, index: number | undefined): WrittenArr
   return index === undefined ? [selected, { value: source, keys: [], array: true }] : [selected];
 }
 
-/** A descriptor map's entries at numeric keys; an opaque map keeps its slot's descriptor. */
+/**
+ * A descriptor map's entries at numeric keys, those of a spread or a constant it names read as
+ * written; an opaque map keeps its slot's descriptor.
+ */
 function definedValues(descriptors: Expression, index: number | undefined): WrittenArrayElement[] {
   if (isOmittedExpression(descriptors)) return [];
   const slot = slotKey(index);
   const value = unwrapped(descriptors);
   if (isSpreadElement(descriptors))
     return [{ value: descriptors.expression, keys: ['0', slot, 'value'] }];
-  if (!isObjectLiteralExpression(value)) return [{ value: descriptors, keys: [slot, 'value'] }];
+  if (!isObjectLiteralExpression(value)) {
+    const held = heldValue(value);
+    const opaque = [{ value: descriptors, keys: [slot, 'value'] }];
+    return isObjectLiteralExpression(held) ? [...opaque, ...definedValues(held, index)] : opaque;
+  }
   const found: WrittenArrayElement[] = [];
   for (const property of value.properties) {
-    if (isSpreadAssignment(property))
-      found.push({ value: property.expression, keys: [slot, 'value'] });
+    if (isSpreadAssignment(property)) found.push(...definedValues(property.expression, index));
     else if (isPropertyAssignment(property) && nameMayBeSlot(property.name, index))
       found.push(...descriptorValues(property.initializer));
     else if (isGetAccessorDeclaration(property) && nameMayBeSlot(property.name, index))
