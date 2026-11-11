@@ -7,6 +7,7 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAssignment,
+  NodeFlags,
   SyntaxKind,
   type VariableStatement,
 } from 'typescript/ast';
@@ -25,8 +26,16 @@ const INERT: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TrueKeyword,
 ]);
 
-/** Whether leaving a statement out skips only values whose construction runs no application code. */
+/**
+ * Whether leaving a statement out skips only values whose construction runs no application code.
+ * A `using` or an `await using` is more than its value: it reads the resource's disposal method and
+ * registers a cleanup its scope runs, which only its whole behavior could show inert, so it stays.
+ */
 export function canOmit(statement: VariableStatement): boolean {
+  // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
+  if ((statement.declarationList.flags & NodeFlags.Using) !== 0) {
+    return false;
+  }
   return statement.declarationList.declarations.every((declaration) => {
     return (
       isIdentifier(declaration.name) &&
