@@ -123,21 +123,25 @@ function assignmentSources(
 
 /**
  * Defaults, array positions and object entries contribute their selected assignment targets. A
- * default runs where `missing` says some source held nothing at its position.
+ * default runs where `missing` says some source held nothing at its position, and `offset` is the
+ * place a rest's pattern starts at in the sources, which a rest's own pattern selects from.
  */
 export function assignmentPatternTargets(
   target: Expression,
   sources: readonly AssignedFrameSource[],
   missing = false,
+  offset = 0,
 ): readonly PatternWork[] {
   if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken)
     return [{ target: target.left, sources: defaultSources(sources, target.right, missing) }];
-  if (isObjectLiteralExpression(target)) return objectTargets(target.properties, sources);
+  if (isObjectLiteralExpression(target)) return objectTargets(target.properties, sources, offset);
   if (!isArrayLiteralExpression(target)) return [];
   const targets: PatternWork[] = [];
   for (const [index, element] of target.elements.entries()) {
-    const key = String(index);
-    if (!isSpreadElement(element) && !isOmittedExpression(element))
+    const key = String(offset + index);
+    if (isSpreadElement(element))
+      targets.push(...restTargets(element.expression, sources, offset + index));
+    else if (!isOmittedExpression(element))
       targets.push({
         target: element,
         sources: selectSources(sources, key),
@@ -147,15 +151,31 @@ export function assignmentPatternTargets(
   return targets;
 }
 
+/**
+ * A rest is a fresh array, which binds no error identity, but a pattern its own target writes takes
+ * the elements from the rest's place on: `[...[e]] = [new Error()]` assigns `e` the `Error`.
+ */
+function restTargets(
+  target: Expression,
+  sources: readonly AssignedFrameSource[],
+  offset: number,
+): readonly PatternWork[] {
+  const pattern = unwrapped(target);
+  return isArrayLiteralExpression(pattern) || isObjectLiteralExpression(pattern)
+    ? assignmentPatternTargets(pattern, sources, false, offset)
+    : [];
+}
+
 /** Named object entries and their selected defaults; methods and rest copies bind no error identity. */
 function objectTargets(
   properties: readonly Node[],
   sources: readonly AssignedFrameSource[],
+  offset: number,
 ): readonly PatternWork[] {
   const targets: PatternWork[] = [];
   for (const property of properties) {
     if (!isPropertyAssignment(property) && !isShorthandPropertyAssignment(property)) continue;
-    const name = literalKey(property.name);
+    const name = placeOf(literalKey(property.name), offset);
     if (name === undefined) continue;
     const values = selectSources(sources, name);
     const missing = missingSelection(sources, name);
@@ -171,6 +191,12 @@ function objectTargets(
       });
   }
   return targets;
+}
+
+/** The key an entry of an object pattern selects, shifted to a rest's place: only a position moves. */
+function placeOf(name: string | undefined, offset: number): string | undefined {
+  if (name === undefined || offset === 0) return name;
+  return /^(?:0|[1-9]\d*)$/u.test(name) ? String(Number(name) + offset) : undefined;
 }
 
 /** Literal entries are selected directly; opaque values retain the path for their declared type. */
