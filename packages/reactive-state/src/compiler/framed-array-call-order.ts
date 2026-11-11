@@ -217,15 +217,16 @@ function runsItselfBetween(
 
 /**
  * The names by which the function runs itself: its own, and those of the functions it holds, a
- * declaration or a variable given one, whose code names one of them.
+ * declaration or a variable given one, whose code names one of them. A name that more than one
+ * function of the function holds counts if any of them does.
  */
 function recursiveNames(fn: FunctionExpression, name: Identifier): ReadonlySet<string> {
   const names = new Set([name.text]);
   const helpers = localHelpers(fn);
   for (let grew = true; grew;) {
     grew = false;
-    for (const [helper, body] of helpers)
-      if (!names.has(helper) && mentionsAny(body, names)) {
+    for (const [helper, bodies] of helpers)
+      if (!names.has(helper) && bodies.some((body) => mentionsAny(body, names))) {
         names.add(helper);
         grew = true;
       }
@@ -233,18 +234,20 @@ function recursiveNames(fn: FunctionExpression, name: Identifier): ReadonlySet<s
   return names;
 }
 
-/** The functions a function holds, each by its name, with its code. */
-function localHelpers(fn: FunctionExpression): ReadonlyMap<string, Node> {
-  const helpers = new Map<string, Node>();
+/** The functions a function holds, each name with the code of every function that has it. */
+function localHelpers(fn: FunctionExpression): ReadonlyMap<string, readonly Node[]> {
+  const helpers = new Map<string, Node[]>();
+  const add = (name: string, body: Node): void => {
+    helpers.set(name, [...(helpers.get(name) ?? []), body]);
+  };
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeNode(node)) continue;
     if (node !== fn && isFunctionDeclaration(node) && node.name !== undefined && node.body)
-      helpers.set(node.name.text, node.body);
+      add(node.name.text, node.body);
     else if (isVariableDeclaration(node) && isIdentifier(node.name) && node.initializer) {
       const value = unwrapped(node.initializer);
-      if (isArrowFunction(value) || isFunctionExpression(value))
-        helpers.set(node.name.text, value.body);
+      if (isArrowFunction(value) || isFunctionExpression(value)) add(node.name.text, value.body);
     }
     node.forEachChild((child) => {
       pending.push(child);

@@ -527,6 +527,11 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'recursion-through-helper-hidden-by-nested-helper-of-the-same-name',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { function unused() { function again() { return 0; } again(); } unused(); ${SAFE} if (pass < 1) again(); const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
