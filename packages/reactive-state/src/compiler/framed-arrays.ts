@@ -3,7 +3,6 @@ import {
   type ArrayLiteralExpression,
   type CallExpression,
   isArrayLiteralExpression,
-  isBinaryExpression,
   isBlock,
   isCallExpression,
   isDeleteExpression,
