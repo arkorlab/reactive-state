@@ -100,9 +100,11 @@ function betweenPasses(
 }
 
 /**
- * A function body is deferred; its computed name and synchronous immediate invocation are not. An
- * instance field's initializer is deferred too, run at each construction; a static one's runs where
- * its class is defined.
+ * A function body is deferred; its computed name and synchronous immediate invocation without
+ * arguments are not. A call's arguments run before the body it invokes, though they are written
+ * after it, so a body called with arguments keeps an order of its own. An instance field's
+ * initializer is deferred too, run at each construction; a static one's runs where its class is
+ * defined.
  */
 export function executionOwner(node: Node): Node {
   for (let parent = node.parent, within: Node = node; ; within = parent, parent = parent.parent) {
@@ -116,7 +118,8 @@ export function executionOwner(node: Node): Node {
     const regions: readonly (Node | undefined)[] = [parent.body, ...parent.parameters];
     if (!regions.includes(within)) continue;
     const { parent: use } = useOf(parent);
-    if (!isCallExpression(use) || eagerBody(use) !== parent.body) return parent;
+    if (!isCallExpression(use) || use.arguments.length > 0 || eagerBody(use) !== parent.body)
+      return parent;
   }
 }
 
