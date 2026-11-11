@@ -25,7 +25,6 @@ import {
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadElement,
-  isTypeNode,
   type Node,
   SyntaxKind,
   type ParameterDeclaration,
@@ -34,6 +33,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { framedDefaultTaken } from './framed-constructor-defaults.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** Added constructor-default paths require finite, quiet source-written default evaluation. */
 
@@ -88,7 +88,7 @@ export function framedConstructorDefaultEvaluation(
   const pending: Node[] = [...parameters, ...evaluated];
   const getters = new Set<Expression>();
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node) || isArrowFunction(node) || isFunctionExpression(node)) continue;
+    if (isTypeOnly(node) || isArrowFunction(node) || isFunctionExpression(node)) continue;
     if (OPAQUE_EVALUATION.has(node.kind)) return false;
     const returned: Expression[] = [];
     if (!quietSelection(node, { parameters, returned, slots })) return false;
