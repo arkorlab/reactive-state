@@ -51,14 +51,17 @@ export function omittedReceiverReadings(
   });
 }
 
-/** A noncallable or receiver-free operand keeps its type; a known receiver leaves a signature. */
+/**
+ * A noncallable or receiver-free operand keeps its type; a known receiver leaves a signature. A
+ * selection a part the reader cannot see may change keeps its type too, rather than be guessed.
+ */
 function omittedCallable(
   at: TypeReading,
   operands: Operands,
   original: TypeReading,
 ): readonly TypeReading[] {
   const selected = lastCallable(at, operands);
-  if (selected === undefined) return [at];
+  if (selected === undefined || selected.unknown === true) return [at];
   const receiver = receiverReading(selected.reading, selected.signature.parameters);
   if (!knownReceiver(receiver, operands)) return [at];
   const reading = omittedGenericReading(selected, receiver, original);
@@ -92,7 +95,10 @@ function knownReceiver(
   return receiver !== undefined && !receiverAcceptsUnknown(receiver, operands);
 }
 
-/** The existing interface and intersection traversal selects the last written call signature. */
+/**
+ * The existing interface and intersection traversal selects the last written call signature; a
+ * base or an intersected member the reader cannot resolve leaves the selection uncertain.
+ */
 function lastCallable(at: TypeReading, operands: Operands): OmittedCallableReading | undefined {
   let result: OmittedCallableReading | undefined;
   let unknown = false;
@@ -103,11 +109,11 @@ function lastCallable(at: TypeReading, operands: Operands): OmittedCallableReadi
     if (interfaces !== undefined) {
       unknown ||= interfaces.unknown;
       pending.push(...interfaces.sources.toReversed());
-    } else if (isIntersectionTypeNode(type))
-      pending.push(
-        ...type.types.flatMap((member) => operands({ ...reading, type: member })).toReversed(),
-      );
-    else if (isFunctionTypeNode(type)) result = { reading, signature: type };
+    } else if (isIntersectionTypeNode(type)) {
+      const members = type.types.map((member) => operands({ ...reading, type: member }));
+      unknown ||= members.some((each) => each.length === 0);
+      pending.push(...members.flat().toReversed());
+    } else if (isFunctionTypeNode(type)) result = { reading, signature: type };
     else if (isTypeLiteralNode(type)) {
       for (const member of type.members) {
         if (isCallSignatureDeclaration(member)) result = { reading, signature: member };
