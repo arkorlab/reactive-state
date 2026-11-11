@@ -228,11 +228,14 @@ function bindsScopedValue(node: Node, within: Node, name: string): boolean {
       return true;
     }
   }
-  return (
-    'body' in node &&
-    node.body === within &&
-    hoistedIn([within]).some((declaration) => bindingNames(declaration.name, name))
-  );
+  if (!('body' in node) || node.body !== within) {
+    return false;
+  }
+  // A namespace's `var`s are its own: those of a namespace in the body are not the body's.
+  const code = isModuleBlock(within)
+    ? within.statements.filter((statement) => !isModuleDeclaration(statement))
+    : [within];
+  return hoistedIn(code).some((declaration) => bindingNames(declaration.name, name));
 }
 
 /** Whether `statement` declares or imports a value of `name`, even if its shape is unknown. */
