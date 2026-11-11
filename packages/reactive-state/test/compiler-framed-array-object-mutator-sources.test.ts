@@ -273,6 +273,36 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-explicit-key-spread-then-descriptor',
+    source: `function frames(error: Error, descriptors: PropertyDescriptor[]) { ${VALUES} Object.defineProperty(values, 0, ...descriptors, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['descriptors:0.value', 'error:'],
+  },
+  {
+    id: 'define-two-spreads-then-descriptor',
+    source: `function frames(error: Error, keys: [number], more: PropertyDescriptor[]) { ${VALUES} Object.defineProperty(values, ...keys, ...more, { value: error }); return values; }`,
+    index: undefined,
+    elements: ['keys:1.value', 'more:0.value', 'error:'],
+  },
+  {
+    id: 'define-spread-then-extra-arguments',
+    source: `function frames(keys: number[], a: Error, b: Error, c: Error) { ${VALUES} Object.defineProperty(values, ...keys, { value: a }, { value: b }, { value: c }); return values; }`,
+    index: undefined,
+    elements: ['keys:1.value', 'a:', 'b:'],
+  },
+  {
+    id: 'define-maps-two-spreads-then-map',
+    source: `function frames(error: Error, maps: PropertyDescriptorMap[], more: PropertyDescriptorMap[]) { ${VALUES} Object.defineProperties(values, ...maps, ...more, { 0: { value: error } }); return values; }`,
+    index: undefined,
+    elements: ['maps:0.0.value', 'more:0.0.value', 'error:'],
+  },
+  {
+    id: 'define-maps-spread-then-extra-maps',
+    source: `function frames(maps: PropertyDescriptorMap[], a: Error, b: Error) { ${VALUES} Object.defineProperties(values, ...maps, { 0: { value: a } }, { 0: { value: b } }); return values; }`,
+    index: undefined,
+    elements: ['maps:0.0.value', 'a:'],
+  },
+  {
     id: 'define-async-named-getter-pin',
     source: `function frames(error: Error) { ${VALUES} async function getter() { return error; } Object.defineProperty(values, 0, { get: getter }); return values; }`,
     index: undefined,
@@ -339,6 +369,11 @@ const CONVERSIONS = [
     id: 'assign-getter-nested-setter-converts',
     source: `function frames(error: Error) { const a = ['plain']; Object.assign(a, { get 0() { let later = { set field(value: number) { return error; } }; later = later; return 'safe'; } }); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'define-explicit-key-spread-converts',
+    source: `function frames(error: Error, descriptors: PropertyDescriptor[]) { const a = ['safe']; Object.defineProperty(a, 0, ...descriptors, { value: error }); return String(a); }`,
+    converts: true,
   },
   {
     id: 'tuple-source',

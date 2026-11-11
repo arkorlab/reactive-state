@@ -84,24 +84,46 @@ function definedProperty(call: CallExpression, index: number | undefined): Writt
       ? descriptorValues(descriptor)
       : [];
   }
-  const [, first, second, third] = call.arguments;
+  const args = call.arguments.slice(1);
+  const [first] = args;
   if (first === undefined) return [];
-  if (isSpreadElement(first)) {
-    const spread = { value: first.expression, keys: ['1', 'value'] };
-    return [spread, ...descriptorValues(second), ...descriptorValues(third)];
-  }
-  return possibleKey(constantValue(first), index) ? descriptorValues(second) : [];
+  if (!isSpreadElement(first) && !possibleKey(constantValue(first), index)) return [];
+  return descriptorCandidates(args);
 }
 
-/** The descriptor map written at the second position; after an unreadable spread, the next one too. */
+/**
+ * Every argument after an unreadable spread that may take the descriptor's position: a spread may
+ * be empty, so each argument up to the second written one may be preceded by the key alone.
+ */
+function descriptorCandidates(args: readonly Expression[]): WrittenArrayElement[] {
+  const found: WrittenArrayElement[] = [];
+  let written = 0;
+  let spread = false;
+  for (const argument of args) {
+    if (written > 1) break;
+    if (isSpreadElement(argument)) {
+      const keys = [written === 0 && !spread ? '1' : '0', 'value'];
+      found.push({ value: argument.expression, keys });
+      spread = true;
+    } else {
+      if (spread || written === 1) found.push(...descriptorValues(argument));
+      written += 1;
+    }
+  }
+  return found;
+}
+
+/** The descriptor maps that may take the second position: each up to the first written one. */
 function definedMaps(call: CallExpression, index: number | undefined): WrittenArrayElement[] {
   const prefix = framedArgumentPrefix(call, call.arguments, ARGUMENTS.map);
-  const [, first, second] = call.arguments;
   if (!prefix.unknown)
     return prefix.values[1] === undefined ? [] : definedValues(prefix.values[1], index);
-  if (first === undefined) return [];
-  const later = second !== undefined && isSpreadElement(first) ? definedValues(second, index) : [];
-  return [...definedValues(first, index), ...later];
+  const found: WrittenArrayElement[] = [];
+  for (const map of call.arguments.slice(1)) {
+    found.push(...definedValues(map, index));
+    if (!isSpreadElement(map)) break;
+  }
+  return found;
 }
 
 /**
