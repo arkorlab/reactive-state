@@ -342,6 +342,26 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const first = 1, replaced = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'destructured-default-after-initializer',
+    source: `function frames(error: Error) { const values = [error]; const { ignored = (values.join = Array.prototype.join) } = Object.assign(values, { join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'destructuring-assignment-default-after-initializer',
+    source: `function frames(error: Error) { const values = [error]; let ignored: unknown; ({ ignored = (values.join = Array.prototype.join) } = Object.assign(values, { join: () => 'safe' })); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'array-destructured-default-after-initializer',
+    source: `function frames(error: Error) { const values = [error]; const [ignored = (values.join = Array.prototype.join)] = [Object.assign(values, { join: () => 'safe' }) && undefined]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'simple-binding-initializer-pin',
+    source: `function frames(error: Error) { const values = [error]; const assigned = Object.assign(values, { join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
