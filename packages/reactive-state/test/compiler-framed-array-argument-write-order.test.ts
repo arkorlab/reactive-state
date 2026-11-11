@@ -607,6 +607,36 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { method() { return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }, join: () => 'safe' }); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'object-method-computed-name-runs',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'key')]() {} }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'object-accessor-computed-name-runs',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = { get [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'key')]() { return 1; } }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'class-method-computed-name-runs',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = class { [(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }), 'key')]() {} }; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'object-method-body-is-deferred-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = { method() { return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'object-method-parameter-default-is-deferred-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = { method(value = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })) {} }; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'arrow-parameter-default-is-deferred-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const unused = (value = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })) => value; values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

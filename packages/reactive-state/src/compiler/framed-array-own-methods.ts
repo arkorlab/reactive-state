@@ -169,6 +169,16 @@ export function evaluatedForSure(node: Node, statement: Node): boolean {
   return true;
 }
 
+/**
+ * Whether a node lies in what runs later: the body and the parameters of a function, which run when
+ * it is called, and the initializer of an instance field, which runs when an instance is made. The
+ * computed name of a member runs when the object or the class is defined.
+ */
+function runsLater(parent: Node, at: Node): boolean {
+  if (isFunctionLikeDeclaration(parent)) return !isComputedPropertyName(at);
+  return instanceInitializer(parent) === at;
+}
+
 /** The initializer of an instance field, which runs when an instance is made. */
 function instanceInitializer(node: Node): Node | undefined {
   const instance =
@@ -194,7 +204,7 @@ function skipsLink(at: Node, statement: Node): boolean {
       setsMember(parent) ||
       assignmentPatternDefault(parent)
     );
-  if (isFunctionLikeDeclaration(parent) || instanceInitializer(parent) === at) return true;
+  if (runsLater(parent, at)) return true;
   if (inOptionalChain(parent) && !readsFirst(parent, at)) return true;
   const inner = parent.kind >= SyntaxKind.FirstStatement && parent.kind <= SyntaxKind.LastStatement;
   return inner && parent !== statement;
