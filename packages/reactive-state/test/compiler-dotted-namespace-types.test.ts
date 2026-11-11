@@ -8,6 +8,7 @@ import {
   isTypeAliasDeclaration,
   isTypeReferenceNode,
   type Node,
+  type SourceFile,
 } from 'typescript/ast';
 import { API } from 'typescript/sync';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -33,7 +34,7 @@ const CASES = [
       '  export const value: Probe = 1;',
       '}',
     ],
-    reads: ['type alias'],
+    reads: ['type alias number'],
     what: 'an alias the outer namespace exports',
   },
   {
@@ -71,7 +72,7 @@ const CASES = [
       '  export type Probe = number;',
       '}',
     ],
-    reads: ['type alias'],
+    reads: ['type alias number'],
     what: 'an alias a later body of the outer namespace exports',
   },
   {
@@ -83,7 +84,7 @@ const CASES = [
       '  export const value: Probe = 1;',
       '}',
     ],
-    reads: ['type alias'],
+    reads: ['type alias number'],
     what: 'an alias the outermost namespace exports, in a body of three names',
   },
   {
@@ -95,7 +96,7 @@ const CASES = [
       '  export const value: Probe = 1;',
       '}',
     ],
-    reads: ['type alias'],
+    reads: ['type alias number'],
     what: 'an alias the middle namespace exports, in a body of three names',
   },
   {
@@ -109,7 +110,7 @@ const CASES = [
       '  export const value: Shapes.Probe = 1;',
       '}',
     ],
-    reads: ['qualified alias'],
+    reads: ['qualified alias number'],
     what: 'a namespace the outer namespace exports, named in a qualified type',
   },
   {
@@ -146,7 +147,7 @@ const CASES = [
       '  export const value: Probe = "";',
       '}',
     ],
-    reads: ['type alias'],
+    reads: ['type alias string'],
     what: "an alias of the inner namespace's own, beside the outer one's",
   },
   {
@@ -156,17 +157,17 @@ const CASES = [
       '  export const value: Probe = 1;',
       '}',
     ],
-    reads: ['type alias'],
+    reads: ['type alias number'],
     what: "the module's alias",
   },
 ] as const;
 
-/** What a lookup of a reference found: its kind, then `alias`, `interface`, `class` or `none`. */
-function describeFound(kind: string, found: Node | null | undefined): string {
+/** What a lookup of a reference found: its kind, then `alias` and the type it is of, `interface`, `class` or `none`. */
+function describeFound(kind: string, found: Node | null | undefined, file: SourceFile): string {
   let what = 'none';
   if (found !== undefined && found !== null) {
     if (isTypeAliasDeclaration(found)) {
-      what = 'alias';
+      what = `alias ${found.type.getText(file)}`;
     } else if (isInterfaceDeclaration(found)) {
       what = 'interface';
     } else if (isClassDeclaration(found) || isClassExpression(found)) {
@@ -197,9 +198,11 @@ describe('a name read in a namespace of a dotted name, of what the outer namespa
       if (isTypeReferenceNode(node)) {
         const { typeName } = node;
         if (isIdentifier(typeName) && typeName.text === 'Probe') {
-          found.push(describeFound('type', localTypeBinding(typeName)));
+          found.push(describeFound('type', localTypeBinding(typeName), parsed.sourceFile));
         } else if (isQualifiedName(typeName) && typeName.right.text === 'Probe') {
-          found.push(describeFound('qualified', qualifiedLocalTypeBinding(typeName)));
+          found.push(
+            describeFound('qualified', qualifiedLocalTypeBinding(typeName), parsed.sourceFile),
+          );
         }
       }
       if (
@@ -207,7 +210,9 @@ describe('a name read in a namespace of a dotted name, of what the outer namespa
         isIdentifier(node.expression) &&
         node.expression.text === 'Probe'
       ) {
-        found.push(describeFound('value', localClassValueBinding(node.expression)));
+        found.push(
+          describeFound('value', localClassValueBinding(node.expression), parsed.sourceFile),
+        );
       }
       node.forEachChild(visit);
     };
