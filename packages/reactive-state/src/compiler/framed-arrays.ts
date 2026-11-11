@@ -21,6 +21,7 @@ import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
   mayRunAgain,
+  overwrittenInPass,
   selectedMethod,
   type SelectedMethod,
   writtenAfterRead,
@@ -426,10 +427,14 @@ function deferredMethodWrites(call: Node, root: FrameBinding, own: OwnMethods, b
     const keys = writtenMethods(node, root);
     if (keys.length > 0 && mayPrecedeRead(node, call, root) && framedPossibleBranch(node)) {
       const sameRun = executionOwner(node) === owner;
-      replaceProofs(own, keys, {
-        anew: sameRun && !mayRunAgain(node, call, root, block),
-        custom: sameRun ? customInstalled(node, root) : new Set<string>(),
-      });
+      replaceProofs(
+        own,
+        sameRun ? keys.filter((key) => !overwrittenInPass(node, key, call, root)) : keys,
+        {
+          anew: sameRun && !mayRunAgain(node, call, root, block),
+          custom: sameRun ? customInstalled(node, root) : new Set<string>(),
+        },
+      );
     }
     node.forEachChild((child) => {
       pending.push(child);

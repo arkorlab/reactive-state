@@ -302,6 +302,101 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-break-after-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; break; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-return-after-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; return 1; } return 0; }`,
+    converts: false,
+  },
+  {
+    id: 'loop-throw-after-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; throw error; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-break-in-block-after-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { if (pass++ > 1) { values.join = Array.prototype.join; break; } } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-break-after-write-in-for',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; String(values) === 'fixed'; pass++) { values.join = Array.prototype.join; break; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-continue-before-exit-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-continue-in-write-block-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { if (pass++ < 1) { values.join = Array.prototype.join; continue; } break; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-conditional-exit-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ > 1) break; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-exit-before-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { if (pass++ > 1) break; values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-exit-after-write-of-outer-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let outer = 0; outer < 2; outer++) { while (String(values) === 'fixed') { values.join = Array.prototype.join; break; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-restoration-then-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-branch-restoration-then-custom-write',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 0) { values.join = Array.prototype.join; } values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-unknown-write-then-custom-write',
+    source: `function frames(error: Error) { const values = [error]; const choices = [() => 'also fixed', Array.prototype.join]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = choices[pass] as any; values.join = () => 'fixed'; } }`,
+    converts: false,
+  },
+  {
+    id: 'loop-custom-then-restoration-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = () => 'fixed'; values.join = Array.prototype.join; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-continue-between-restoration-and-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (pass >= 0) continue; values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-after-the-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; } values.join = () => 'fixed'; }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-in-inner-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; for (let inner = 0; inner < pass; inner++) { values.join = () => 'fixed'; } } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-update-write-then-custom-write-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); values.join = Array.prototype.join) { values.join = () => 'fixed'; } }`,
+    converts: true,
+  },
+  {
+    id: 'loop-custom-write-of-another-method-after-restoration-pin',
+    source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; values.sort = () => values; } }`,
+    converts: true,
+  },
+  {
     id: 'recursive-iife-own-array-pin',
     source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
     converts: false,

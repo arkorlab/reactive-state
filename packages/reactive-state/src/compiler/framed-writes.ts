@@ -13,6 +13,8 @@ import {
   isForOfStatement,
   isForStatement,
   isBlock,
+  isBreakStatement,
+  isContinueStatement,
   isExpressionStatement,
   isExpression,
   isIdentifier,
@@ -27,8 +29,10 @@ import {
   type VariableDeclaration,
   isIfStatement,
   isSourceFile,
+  isReturnStatement,
   isSetAccessorDeclaration,
   isSpreadElement,
+  isThrowStatement,
   isVariableDeclaration,
   isVariableStatement,
   isWhileStatement,
@@ -140,6 +144,17 @@ function bindingOwner(declared: Node): Node {
  * reached by no pass, unless the body initializes the binding anew first.
  */
 export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner: Node): boolean {
+  return repeatingBodies(node, name, declared, owner).length > 0;
+}
+
+/** The bodies of the loops around a read that bring a later write back to it, as `repeatedFrameRead` asks. */
+export function repeatingBodies(
+  node: Node,
+  name: Node,
+  declared: Node,
+  owner: Node,
+): readonly Node[] {
+  const bodies: Node[] = [];
   for (let at = name.parent; at !== owner; at = at.parent) {
     const body = loopBody(at);
     if (
@@ -148,9 +163,42 @@ export function repeatedFrameRead(node: Node, name: Node, declared: Node, owner:
       withinBody(node, at) &&
       !runsOnce(node, at) &&
       !runsOnce(name, at) &&
+      !leavesLoopFirst(node, body) &&
       !initializedWithin(declared, name, body)
     )
-      return true;
+      bodies.push(body);
+  }
+  return bodies;
+}
+
+/**
+ * Whether a write in the loop's body is always followed by a break, a return or a throw of a block
+ * around it, with no continue between them: the loop never comes round to its next pass after it.
+ */
+function leavesLoopFirst(node: Node, body: Node): boolean {
+  if (!withinBody(node, body)) return false;
+  for (let at = node; at !== body; at = at.parent) {
+    const { parent } = at;
+    if (!isBlock(parent)) continue;
+    const exit = parent.statements.find((each) => {
+      return (
+        each.pos >= at.end &&
+        (isBreakStatement(each) || isReturnStatement(each) || isThrowStatement(each))
+      );
+    });
+    if (exit !== undefined && !continuesBetween(body, node.pos, exit.pos)) return true;
+  }
+  return false;
+}
+
+/** Whether a continue lies in the body between two positions, wherever it is nested. */
+export function continuesBetween(body: Node, from: number, to: number): boolean {
+  const pending: Node[] = [body];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isContinueStatement(node) && node.pos >= from && node.pos < to) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
   }
   return false;
 }
