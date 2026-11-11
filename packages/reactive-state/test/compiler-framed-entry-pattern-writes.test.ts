@@ -696,6 +696,78 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':", 'error:'],
   },
+  {
+    id: 'named-key-prototype-field',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: { field: error } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-key-prototype-chain',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: { __proto__: { field: error } } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-key-own-field-over-prototype-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: { field: error }, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'named-key-prototype-other-field-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: { other: error } })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'named-key-spread-prototype-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ __proto__: { field: error } } })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'named-key-null-prototype-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: null })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'named-key-computed-prototype-name-keeps-inherited',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: { field: error }, ['__proto__']: 'x' })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-key-nested-prototype-field',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ outer: { field: entry[1] } } = { outer: { __proto__: { field: error } } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-key-prototype-array-element',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ 0: entry[1] } = { __proto__: [error] })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-key-prototype-constant-is-opaque',
+    source: `function frames(error: Error)  { const entry: [string, unknown] = ['message', 'safe']; const base = { field: error }; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: base })); }`,
+    key: 'message',
+    values: ["'safe':", '{ __proto__: base }:field'],
+  },
+  {
+    id: 'named-key-prototype-call-is-opaque',
+    source: `function frames(error: Error, make: () => object) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: make() })); }`,
+    key: 'message',
+    values: ["'safe':", '{ __proto__: make() }:field'],
+  },
+  {
+    id: 'named-key-own-prototype-name-is-no-prototype',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ['__proto__']: { field: error } })); }`,
+    key: 'message',
+    values: ["'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

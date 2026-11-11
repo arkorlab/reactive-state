@@ -188,7 +188,8 @@ function arraySource(
 /**
  * A surviving literal own entry, without executing getters or unknown spread sources. A spread of a
  * written object has the entries that object writes, and is passed over where it has none of the
- * key; what it copies is its own entries, and a prototype it sets is none of them.
+ * key; what it copies is its own entries, and a prototype it sets is none of them. A key no own
+ * entry names comes from the prototype the literal writes.
  */
 function objectSource(
   value: ObjectLiteralExpression,
@@ -202,7 +203,25 @@ function objectSource(
       : fieldSource(property, key, opaque, own);
     if (found !== undefined && found.length > 0) return found;
   }
-  return [];
+  return own ? [] : prototypeSource(value, key, opaque);
+}
+
+/**
+ * What the prototype a literal writes selects of a key no own entry names: the entry of a written
+ * object or list, none for `null`, and the path for any other prototype, which the compile does not
+ * read.
+ */
+function prototypeSource(
+  value: ObjectLiteralExpression,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const field = value.properties.find((property) => setsPrototype(property));
+  if (field === undefined || !isPropertyAssignment(field)) return [];
+  const prototype = unwrapped(field.initializer);
+  if (prototype.kind === SyntaxKind.NullKeyword) return [];
+  if (isObjectLiteralExpression(prototype)) return objectSource(prototype, key, opaque);
+  return isArrayLiteralExpression(prototype) ? arraySource(prototype, key, opaque) : [opaque];
 }
 
 /** What one field selects: its value for its key, the path for one that is unknown, else none. */
