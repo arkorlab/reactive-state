@@ -8,6 +8,7 @@ import {
   isDeleteExpression,
   isExpression,
   isElementAccessExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
   isObjectLiteralExpression,
@@ -494,22 +495,33 @@ function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods)
   }
 }
 
-/** Each source's last explicitly written field wins; an unknown source may restore native methods. */
+/**
+ * Each source's last explicitly written field wins; an unknown source may restore native methods. A
+ * getter runs where the copy reaches it, and may give the array another method, or the fields after
+ * it another value: the methods are unproven from there on.
+ */
 function assignMethods(source: Expression, own: OwnMethods): void {
   const value = unwrapped(source);
   if (!isObjectLiteralExpression(value)) {
     forgetMethods(own);
     return;
   }
+  let run = false;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
       forgetMethods(own);
       continue;
     }
+    if (isGetAccessorDeclaration(property)) {
+      forgetMethods(own);
+      run = true;
+      continue;
+    }
     const key = writtenArrayKey(property.name);
     if (key === undefined) forgetMethods(own);
     else if (OWN_METHODS.has(key)) {
-      own.set(key, propertyOverride(property));
+      const written = propertyOverride(property);
+      own.set(key, run ? afterPossibleWrite(own.get(key), written) : written);
     }
   }
 }
@@ -533,22 +545,30 @@ function defineMethod(call: CallExpression, own: OwnMethods): void {
   if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2], own.get(key)));
 }
 
-/** Object.defineProperties selects each descriptor by its written property name. */
+/**
+ * Object.defineProperties selects each descriptor by its written property name. A getter of the map
+ * runs where the definitions reach it, and may give the array another method, or the descriptors
+ * after it another value: the methods are unproven from there on.
+ */
 function descriptorMethods(descriptors: ObjectLiteralExpression, own: OwnMethods): void {
+  let run = false;
   for (const property of descriptors.properties) {
     if (isSpreadAssignment(property)) {
       forgetMethods(own);
       continue;
     }
+    if (isGetAccessorDeclaration(property)) {
+      forgetMethods(own);
+      run = true;
+      continue;
+    }
     const key = writtenArrayKey(property.name);
     if (key === undefined) forgetMethods(own);
     else if (OWN_METHODS.has(key)) {
-      own.set(
-        key,
-        isPropertyAssignment(property)
-          ? descriptorFunction(property.initializer, own.get(key))
-          : { own: false },
-      );
+      const written = isPropertyAssignment(property)
+        ? descriptorFunction(property.initializer, own.get(key))
+        : { own: false };
+      own.set(key, run ? afterPossibleWrite(own.get(key), written) : written);
     }
   }
 }

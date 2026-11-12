@@ -957,6 +957,36 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const replace = () => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'assign-getter-rewrites-later-field',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { get probe() { this.join = Array.prototype.join; return 1; }, join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-getter-after-custom-method-restores-native',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { join: () => 'safe', get probe() { values.join = Array.prototype.join; return 1; } }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-setter-only-source-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { set probe(value: unknown) {}, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'define-properties-getter-rewrites-later-descriptor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperties(values, { get probe() { this.join = { value: Array.prototype.join }; return { value: 1 }; }, join: { value: () => 'safe' } }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-named-field-rewrites-value',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { this.value = Array.prototype.join; return false; }, value: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-other-name-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get probe() { this.value = Array.prototype.join; return false; }, value: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

@@ -494,13 +494,27 @@ function attributeKept(says: AttributeSaid, before: true | undefined): boolean {
   return says === 'true' || (says === 'omitted' && before === true);
 }
 
-/** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
+/** The attributes a descriptor's conversion reads before its value. */
+const READ_BEFORE_VALUE: ReadonlySet<string> = new Set(['configurable', 'enumerable']);
+
+/** Whether a field is a getter that may give the descriptor another value before it is read. */
+function rewritesValue(property: ObjectLiteralElementLike, key: string | undefined): boolean {
+  return isGetAccessorDeclaration(property) && (key === undefined || READ_BEFORE_VALUE.has(key));
+}
+
+/**
+ * The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow.
+ * A getter named by an attribute read before the value, or that may be, may give the descriptor
+ * another value first.
+ */
 function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
   let custom: ArrayMethodOverride = { own: false };
+  let rewritten = false;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) custom = { own: false };
     else {
       const key = writtenArrayKey(property.name);
+      rewritten ||= rewritesValue(property, key);
       if (key === undefined || ACCESSOR_KEYS.has(key) || setsPrototype(property))
         custom = { own: false };
       else if (key === 'value')
@@ -509,7 +523,7 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
           : { own: false };
     }
   }
-  return custom;
+  return rewritten ? { own: false } : custom;
 }
 
 type AttributeSaid = 'omitted' | 'other' | 'true';
