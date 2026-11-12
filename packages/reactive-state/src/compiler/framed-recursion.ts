@@ -44,6 +44,7 @@ import {
   isGenerator,
   isNamedFunction,
   IMPLICIT_METHODS,
+  madeInPlace,
   madeOnTheSpot,
   runsInPlace,
   type FunctionNames,
@@ -134,7 +135,10 @@ function droppedCall(node: Node): boolean {
   return call !== undefined && isExpressionStatement(call.parent);
 }
 
-/** Whether the parameters of a function, which run when it is called, read one of the names. */
+/**
+ * Whether the parameters of a function, which run when it is called, read one of the names where
+ * the code may run.
+ */
 function parametersMention(fn: Node, names: ReadonlySet<string>): boolean {
   const pending: Node[] = [...((fn as { readonly parameters?: readonly Node[] }).parameters ?? [])];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -144,7 +148,8 @@ function parametersMention(fn: Node, names: ReadonlySet<string>): boolean {
       continue;
     }
     const text = referenceText(node);
-    if (text !== undefined && names.has(text) && !written(node)) return true;
+    if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
+      return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -410,11 +415,20 @@ function isDeclarationName(node: Node): boolean {
   return (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) && parent.name === node;
 }
 
-/** The parts of a function that run where it is written: a computed name, and its decorators. */
+/**
+ * The parts of a function that run where it is written: a computed name, its decorators, and the
+ * parameters of a generator that is called there, whose body waits for its iterator.
+ */
 function definitionParts(fn: Node): readonly Node[] {
-  const { name, modifiers } = fn as { readonly name?: Node; readonly modifiers?: readonly Node[] };
+  const { name, modifiers, parameters } = fn as {
+    readonly name?: Node;
+    readonly modifiers?: readonly Node[];
+    readonly parameters?: readonly Node[];
+  };
   const decorators = modifiers?.filter((each) => each.kind === SyntaxKind.Decorator) ?? [];
-  return name !== undefined && isComputedPropertyName(name) ? [name, ...decorators] : decorators;
+  const run = isGenerator(fn) && madeInPlace(fn) ? (parameters ?? []) : [];
+  const named = name !== undefined && isComputedPropertyName(name) ? [name] : [];
+  return [...named, ...decorators, ...run];
 }
 
 /** Whether code that runs in the range reaches what the language may call by itself. */
