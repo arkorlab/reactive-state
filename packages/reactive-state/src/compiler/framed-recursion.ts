@@ -1,5 +1,7 @@
 import {
+  type BigIntLiteral,
   isAwaitExpression,
+  isBigIntLiteral,
   type Identifier,
   isArrowFunction,
   isBinaryExpression,
@@ -17,6 +19,7 @@ import {
   isIdentifier,
   isMetaProperty,
   isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isMethodDeclaration,
   isNewExpression,
   isParameterDeclaration,
@@ -32,6 +35,7 @@ import {
   isYieldExpression,
   type Node,
   type NoSubstitutionTemplateLiteral,
+  type NumericLiteral,
   type PrivateIdentifier,
   type SourceFile,
   type StringLiteral,
@@ -51,7 +55,6 @@ import {
   isFunctionCode,
   isGenerator,
   isNamedFunction,
-  IMPLICIT_METHODS,
   madeInPlace,
   madeOnTheSpot,
   runsInPlace,
@@ -111,14 +114,30 @@ function referenceText(node: Node): string | undefined {
   if (isMetaProperty(node))
     return node.keywordToken === SyntaxKind.NewKeyword ? 'constructor' : undefined;
   if (isIdentifier(node) || isPrivateIdentifier(node)) return readName(node);
-  return isLiteralKey(node)
-    ? (node as StringLiteral | NoSubstitutionTemplateLiteral).text
-    : undefined;
+  return isLiteralKey(node) ? literalText(node as KeyLiteral) : undefined;
+}
+
+/** The literals a property is named by: a string, a template without substitutions, a number. */
+type KeyLiteral = BigIntLiteral | NoSubstitutionTemplateLiteral | NumericLiteral | StringLiteral;
+
+/** Whether a node is a literal that names a property. */
+function isLiteral(node: Node): node is KeyLiteral {
+  return (
+    isStringLiteral(node) ||
+    isNoSubstitutionTemplateLiteral(node) ||
+    isNumericLiteral(node) ||
+    isBigIntLiteral(node)
+  );
+}
+
+/** The property a literal names: a big integer's is its digits. */
+function literalText(node: KeyLiteral): string {
+  return isBigIntLiteral(node) ? node.text.replace(/n$/u, '') : node.text;
 }
 
 /** Whether a node is a literal an element access names its property by, past type wrappers. */
 function isLiteralKey(node: Node): boolean {
-  if (!isStringLiteral(node) && !isNoSubstitutionTemplateLiteral(node)) return false;
+  if (!isLiteral(node)) return false;
   const held = holderOf(node);
   return isElementAccessExpression(held.parent) && held.parent.argumentExpression === held;
 }
@@ -255,7 +274,7 @@ function inInstanceInitializer(node: Node, fn: Node): boolean {
 
 /** Whether a node is the initializer of an instance field of a class within the function. */
 function deferredInitializer(node: Node, fn: Node): boolean {
-  return isInstanceInitializer(node.parent, node) && node.parent.parent !== fn;
+  return node !== fn && isInstanceInitializer(node.parent, node) && node.parent.parent !== fn;
 }
 
 /** Whether a node is what the instance field that holds it is given, where it is run later. */
@@ -363,18 +382,13 @@ function reachedNames(node: Node): FunctionNames {
 }
 
 /**
- * Whether the language may call a function by itself: an accessor, a method or a property's value
- * the language calls without a name, or a generator whose iterator may be advanced.
+ * Whether a function may be reached by a way no name follows: its name is worked out, an object
+ * holds it, or the language calls it by itself, as a getter, a setter or a method of the iteration
+ * or of a coercion; or it is a generator whose iterator may be advanced. An object may be read by a
+ * key that is worked out, by its values, by a copy, or by a lookup at run time.
  */
 function runsBySelf(fn: Node): boolean {
-  const { names, computed } = namesOf(fn);
-  const accessor = isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn);
-  return (
-    computed ||
-    accessor ||
-    (reachedByProperty(fn) && names.some((name) => IMPLICIT_METHODS.has(name))) ||
-    (isGenerator(fn) && advanced(fn))
-  );
+  return namesOf(fn).computed || reachedByProperty(fn) || (isGenerator(fn) && advanced(fn));
 }
 
 /** Whether the code of a function reads one of the names where it may run. */
@@ -497,6 +511,7 @@ function runsCodeBetween(fn: Node, from: number, to: number): boolean {
       pending.push(...definitionParts(node));
       continue;
     }
+    if (deferredInitializer(node, fn)) continue;
     if (node.pos >= from && node.pos < to && !isCodeFree(node) && framedPossibleBranch(node))
       return true;
     node.forEachChild((child) => {
@@ -517,13 +532,18 @@ const CODE_FREE: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.CaseBlock,
   SyntaxKind.CaseClause,
   SyntaxKind.CatchClause,
+  SyntaxKind.ClassDeclaration,
+  SyntaxKind.ClassExpression,
+  SyntaxKind.ClassStaticBlockDeclaration,
   SyntaxKind.ConditionalExpression,
   SyntaxKind.ContinueStatement,
   SyntaxKind.DefaultClause,
   SyntaxKind.EmptyStatement,
   SyntaxKind.ExpressionStatement,
+  SyntaxKind.ExpressionWithTypeArguments,
   SyntaxKind.FalseKeyword,
   SyntaxKind.FunctionExpression,
+  SyntaxKind.HeritageClause,
   SyntaxKind.Identifier,
   SyntaxKind.IfStatement,
   SyntaxKind.LabeledStatement,
@@ -534,6 +554,7 @@ const CODE_FREE: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ObjectLiteralExpression,
   SyntaxKind.ParenthesizedExpression,
   SyntaxKind.PropertyAssignment,
+  SyntaxKind.PropertyDeclaration,
   SyntaxKind.RegularExpressionLiteral,
   SyntaxKind.ReturnStatement,
   SyntaxKind.SatisfiesExpression,
