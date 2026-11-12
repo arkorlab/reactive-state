@@ -2651,6 +2651,11 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-array-rest-member-captured-twice-is-no-descriptor',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const other: any = {}; const maps: any = {}; [...holder.items] = [{ get: () => error }]; ({ items: other.nested } = holder); ({ nested: maps[0] } = other); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'define-array-rest-member-captured-is-no-descriptor',
     source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const other: any = {}; const maps: any = {}; [...holder.items] = [{ get: () => error }]; ({ items: other.nested } = holder); Object.defineProperties(a, { 0: other.nested }); return String(a); }`,
     converts: false,

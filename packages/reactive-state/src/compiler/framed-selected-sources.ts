@@ -169,9 +169,12 @@ function memberWrites(
       return select(write.value, write.keys, captured).map((each) => ({ ...each, inList: true }));
     const later = copy ? { ...captured, own: true } : { ...reading, following };
     return select(write.value, took.path, captured).flatMap((each) => {
-      return each.keys.length === 0
-        ? select(each.value, took.tail, later)
-        : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
+      const handed =
+        each.keys.length === 0
+          ? select(each.value, took.tail, later)
+          : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
+      const inList = each.inList === true && took.tail.length === 0;
+      return inList ? handed.map((one) => ({ ...one, inList })) : handed;
     });
   });
 }
