@@ -319,19 +319,17 @@ function hasComputedKey(member: Node): boolean {
 
 /**
  * Whether `at`, in the function or constructor `parent`, runs when the function is called, and not
- * where it is written: a body called where it is written, without arguments, runs in place.
+ * where it is written: its body and its parameters do — but for a body called where it is written,
+ * without arguments, which runs in place — and its computed name, which is evaluated where the
+ * function is written, does not.
  */
 function deferredBody(parent: Node, at: Node): boolean {
   if (isConstructorDeclaration(parent)) return true;
   if (!isAnswering(parent)) return false;
   const regions: readonly (Node | undefined)[] = [parent.body, ...parent.parameters];
+  if (!regions.includes(at)) return false;
   const { parent: use } = useOf(parent);
-  return (
-    !isCallExpression(use) ||
-    use.arguments.length > 0 ||
-    eagerBody(use) !== parent.body ||
-    !regions.includes(at)
-  );
+  return !isCallExpression(use) || use.arguments.length > 0 || eagerBody(use) !== parent.body;
 }
 
 /**

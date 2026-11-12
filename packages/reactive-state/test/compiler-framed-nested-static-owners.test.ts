@@ -48,6 +48,41 @@ const METHODS = [
     custom: false,
   },
   {
+    id: 'reviewed-class-in-a-computed-method-name-of-a-nested-class',
+    source: `${HOLDER} class Outer { static Nested = class { [(class Inner { static taken = methods.join; }, 'x')]() {} }; ${REPLACE} = 0; } void Outer;`,
+    custom: false,
+  },
+  {
+    id: 'class-in-a-computed-accessor-name-of-a-nested-class',
+    source: `${HOLDER} class Outer { static Nested = class { get [(class Inner { static taken = methods.join; }, 'x')]() { return 0; } }; ${REPLACE} = 0; } void Outer;`,
+    custom: false,
+  },
+  {
+    id: 'class-in-a-computed-field-name-of-a-nested-class',
+    source: `${HOLDER} class Outer { static Nested = class { [(class Inner { static taken = methods.join; }, 'x')] = 0; }; ${REPLACE} = 0; } void Outer;`,
+    custom: false,
+  },
+  {
+    id: 'class-in-a-computed-name-of-a-static-method-of-a-nested-class',
+    source: `${HOLDER} class Outer { static Nested = class { static [(class Inner { static taken = methods.join; }, 'x')]() {} }; ${REPLACE} = 0; } void Outer;`,
+    custom: false,
+  },
+  {
+    id: 'class-in-a-parameter-default-of-a-method-pin',
+    source: `${HOLDER} class Outer { static Nested = class { run(x = class Inner { static taken = methods.join; }) { return x; } }; ${REPLACE} = 0; } void Outer;`,
+    custom: false,
+  },
+  {
+    id: 'class-in-the-body-of-a-method-pin',
+    source: `${HOLDER} class Outer { static Nested = class { run() { return class Inner { static taken = methods.join; }; } }; ${REPLACE} = 0; } void Outer;`,
+    custom: false,
+  },
+  {
+    id: 'class-in-a-computed-name-with-no-computed-key-outside-pin',
+    source: `${HOLDER} class Outer { static Nested = class { [(class Inner { static taken = methods.join; }, 'x')]() {} }; other = 0; } void Outer;`,
+    custom: true,
+  },
+  {
     id: 'key-of-the-inner-class-after-its-static-field-pin',
     source: `${HOLDER} class Outer { static Nested = class Inner { static taken = methods.join; ${REPLACE} = 0; }; } void Outer;`,
     custom: false,
