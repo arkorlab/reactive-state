@@ -1387,6 +1387,41 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'parameter-named-like-the-function-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(() => 'ok'); const text = String(values); values.join = Array.prototype.join; return text; function helper(read: () => string) { return read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'parameter-named-like-a-helper-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function (helper: () => any) { helper(); })(() => 1); const text = String(values); values.join = Array.prototype.join; return text; function helper() { if (pass < 1) read(pass + 1); } })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-a-parameter-given-a-caller',
+    source: `function frames(error: Error) { const values = [error]; return (function go(pass: number): string { ${SAFE} helper(pass); const text = String(values); values.join = Array.prototype.join; return text; function helper(read: any) { read = () => { if (pass < 1) go(pass + 1); }; read(); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-function-passed-as-an-argument',
+    source: `function frames(error: Error) { const values = [error]; return (function go(pass: number): string { ${SAFE} helper(go, pass); const text = String(values); values.join = Array.prototype.join; return text; function helper(f: any, p: number) { if (p < 1) f(p + 1); } })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'parameter-of-another-name-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(() => 'ok'); const text = String(values); values.join = Array.prototype.join; return text; function helper(other: () => string) { return other(); } function again() { read(1); } })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'unused-class-in-the-default-of-a-generator-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(next: any = (() => { class Unused { text = read(); } })()) { read(); } })(); }`,
+    converts: false,
+  },
+  {
+    id: 'class-built-in-the-default-of-a-generator',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(next: any = (() => { class Used { text = pass < 1 ? read(pass + 1) : ''; } new Used(); })()) {} })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
