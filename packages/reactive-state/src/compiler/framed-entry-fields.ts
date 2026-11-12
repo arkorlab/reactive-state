@@ -317,7 +317,27 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
   if (copied === undefined || !isObjectLiteralExpression(copied) || seen.has(copied)) return [];
   if (!isStable(property.expression)) return [];
   seen.add(copied);
-  return copied.properties.flatMap((each) => fieldNames(each, seen));
+  const names: string[] = [];
+  let getterRan = false;
+  for (const each of copied.properties) {
+    if (!getterRan) names.push(...fieldNames(each, seen));
+    getterRan ||= mayRunGetter(each, new Set());
+  }
+  return names;
+}
+
+/**
+ * Whether copying a field may run a getter, which may delete the fields the copy has yet to reach:
+ * a getter, or a spread of what is not a written literal, or of one that holds a getter.
+ */
+function mayRunGetter(property: ObjectLiteralElementLike, seen: Set<Node>): boolean {
+  if (isGetAccessorDeclaration(property)) return true;
+  if (!isSpreadAssignment(property)) return false;
+  const copied = writtenValue(property.expression);
+  if (copied === undefined || !isObjectLiteralExpression(copied)) return true;
+  if (seen.has(copied)) return false;
+  seen.add(copied);
+  return copied.properties.some((each) => mayRunGetter(each, seen));
 }
 
 /**
