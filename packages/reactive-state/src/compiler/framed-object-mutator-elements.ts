@@ -585,9 +585,9 @@ function descriptorEntry(
   else if (key !== 'value' && isMethodDeclaration(property) && !answersLater(property))
     found.push(...returnedValues(property.body));
   if (key !== 'value' && isPropertyAssignment(property))
-    found.push(...functionReturns(property.initializer));
+    found.push(...functionReturns(property.initializer, new Set(), selectedValues));
   if (key !== 'value' && isShorthandPropertyAssignment(property) && isIdentifier(property.name))
-    found.push(...functionReturns(property.name));
+    found.push(...functionReturns(property.name, new Set(), selectedValues));
   return isGetAccessorDeclaration(property) ? [...found, ...accessedValues(property, key)] : found;
 }
 
@@ -606,7 +606,8 @@ function descriptorWrites(
       const installed = key === undefined || key === 'value' ? [each] : [];
       const calls = key === undefined || key === 'get';
       const callable = list !== true && each.inList !== true && each.keys.length === 0;
-      const returned = calls && callable ? functionReturns(each.value) : [];
+      const returned =
+        calls && callable ? functionReturns(each.value, new Set(), selectedValues) : [];
       return [...installed, ...returned];
     });
   });

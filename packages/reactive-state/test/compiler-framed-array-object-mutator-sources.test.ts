@@ -2701,6 +2701,41 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-getter-from-destructured-constant',
+    source: `function frames(error: Error) { const a = ['safe']; const { get } = { get: () => error }; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-getter-from-renamed-destructured-constant',
+    source: `function frames(error: Error) { const a = ['safe']; const { get: reader } = { get: () => error }; Object.defineProperty(a, 0, { get: reader }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-getter-from-nested-destructured-constant',
+    source: `function frames(error: Error) { const a = ['safe']; const { outer: { get } } = { outer: { get: () => error } }; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-getter-from-array-destructured-constant',
+    source: `function frames(error: Error) { const a = ['safe']; const [get] = [() => error]; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-getter-from-destructured-held-object',
+    source: `function frames(error: Error) { const a = ['safe']; const source = { get: () => error }; const { get } = source; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-safe-getter-from-destructured-constant-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const { get } = { get: () => 'safe' }; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-getter-from-destructured-other-field-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const { other } = { get: () => error, other: () => 'safe' }; Object.defineProperty(a, 0, { get: other }); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'define-array-rest-member-captured-twice-is-no-descriptor',
     source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const other: any = {}; const maps: any = {}; [...holder.items] = [{ get: () => error }]; ({ items: other.nested } = holder); ({ nested: maps[0] } = other); Object.defineProperties(a, maps); return String(a); }`,
     converts: false,

@@ -54,6 +54,7 @@ const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
 export function functionReturns(
   initializer: Expression,
   seen = new Set<Node>(),
+  select?: FunctionSelector,
 ): WrittenArrayElement[] {
   if (seen.has(initializer)) return [];
   seen.add(initializer);
@@ -62,12 +63,39 @@ export function functionReturns(
   const alternatives = alternativesOf(held);
   const returned =
     alternatives === undefined
-      ? bodyReturns(held)
-      : alternatives.flatMap((each) => functionReturns(each, seen));
+      ? [...bodyReturns(held), ...destructuredReturns(held, seen, select)]
+      : alternatives.flatMap((each) => functionReturns(each, seen, select));
   const replaced = names
     .flatMap((name) => [...variableInitializer(name), ...framedAssignedValues(name)])
-    .flatMap((each) => functionReturns(each, seen));
+    .flatMap((each) => functionReturns(each, seen, select));
   return distinctElements([...returned, ...replaced]);
+}
+
+/** What the values a constant's initializer holds at a path are, each with the path left to take. */
+export type FunctionSelector = (
+  value: Expression,
+  keys: readonly string[],
+  at: Node,
+) => readonly { readonly value: Expression; readonly keys: readonly string[] }[];
+
+/**
+ * What the function a name returns, that a pattern took out of a constant: the functions the
+ * initializer holds at the path the pattern selected.
+ */
+function destructuredReturns(
+  held: Expression | FunctionDeclaration,
+  seen: Set<Node>,
+  select: FunctionSelector | undefined,
+): WrittenArrayElement[] {
+  if (select === undefined || isFunctionDeclaration(held) || !isIdentifier(held)) return [];
+  const selected = frameBindingOf(held);
+  const declaration =
+    selected !== undefined && selected.keys.length > 0 ? selected.binding : undefined;
+  if (declaration === undefined || !isVariableDeclaration(declaration)) return [];
+  if (!isConstant(declaration) || declaration.initializer === undefined) return [];
+  return select(declaration.initializer, selected?.keys ?? [], held)
+    .filter((each) => each.keys.length === 0)
+    .flatMap((each) => functionReturns(each.value, seen, select));
 }
 
 /** The elements without the repeats that reading one function from two places makes. */
