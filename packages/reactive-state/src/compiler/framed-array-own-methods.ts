@@ -53,10 +53,10 @@ import {
   writtenArrayFunction,
   writtenArrayKey,
 } from './framed-array-functions.ts';
+import { arrayIdentity } from './framed-array-identity.ts';
 import { instanceInitializer, invokedAtOnce } from './framed-array-mutations.ts';
-import { arrayRestBinding } from './framed-array-rest.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
-import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 
 /** The names an array's own methods may take, and what a direct write of one declares. */
@@ -458,25 +458,6 @@ export function knownNonNative(expression: Expression): boolean {
     value.kind === SyntaxKind.FalseKeyword ||
     globalPathOf(value)?.join('.') === 'undefined'
   );
-}
-
-/** The declaration whose array value a name or a chain of lexical aliases denotes. */
-export function arrayIdentity(value: Expression): FrameBinding | undefined {
-  let each = unwrapped(value);
-  const rest = arrayRestBinding(each);
-  if (rest !== undefined) return rest;
-  const seen = new Set<FrameBinding>();
-  let root: FrameBinding | undefined;
-  while (isIdentifier(each)) {
-    const selected = frameBindingOf(each);
-    if (selected === undefined) return undefined;
-    if (selected.keys.length > 0 || seen.has(selected.binding)) return undefined;
-    root = selected.binding;
-    seen.add(root);
-    if (root.initializer === undefined) return root;
-    each = unwrapped(root.initializer);
-  }
-  return isArrayLiteralExpression(each) ? root : undefined;
 }
 
 /**

@@ -9,7 +9,6 @@ import {
   isExpression,
   isElementAccessExpression,
   isIdentifier,
-  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSourceFile,
   isSpreadElement,
@@ -28,15 +27,13 @@ import {
   writtenAfterRead,
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
+import { callMethodWrites } from './framed-array-call-writes.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
+import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
-  arrayIdentity,
-  assignMethods,
-  defineMethod,
-  descriptorMethods,
   forgetMethods,
   OWN_METHODS,
   afterAssignment,
@@ -372,12 +369,26 @@ function unprovenWrites(
   if (writes.held !== undefined) holdDefinition(node, writes.root, writes.held, writes.own);
   const defined = isDeleteExpression(node)
     ? undefined
-    : definedMethods(node, writes.root, writes.own);
+    : definedMethods(node, writes.root, { previous: writes.own });
   const deleting = isDeleteExpression(node);
-  const how = { sure, assigns: sure && !deleting && defined === undefined, deleting, defined };
+  const assigns = sure && !deleting && defined === undefined && writesExactly(node, writes.root);
+  const how = { sure, assigns, deleting, defined };
   for (const key of keys)
     if (selected === undefined || !writtenAfterSelection(node, key, selected))
       writes.own.set(key, afterWrite(key, how, writes));
+}
+
+/** Whether the members a write names are the array's own, not those of a name that may hold another. */
+function writesExactly(node: Node, root: FrameBinding): boolean {
+  if (isCallExpression(node)) {
+    const target = node.arguments[0];
+    return target !== undefined && arrayIdentity(target) === root;
+  }
+  return framedWrittenTargets(node).every((target) => {
+    const member = unwrapped(target);
+    if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return true;
+    return !mayBeArray(member.expression, root) || arrayIdentity(member.expression) === root;
+  });
 }
 
 /** What a write that may run leaves of a method it names, as its kind and its certainty say. */
@@ -408,7 +419,7 @@ function holdDefinition(
   held: HeldMethods,
   previous: OwnMethods,
 ): void {
-  const defined = definedMethods(node, root, previous);
+  const defined = definedMethods(node, root, { previous });
   if (defined === undefined) return;
   for (const [key, method] of defined) {
     if (method.own || method.writable === true) continue;
@@ -416,26 +427,34 @@ function holdDefinition(
   }
 }
 
-/** A definite redefinition or deletion replaces a configurable property, setter and all. */
+/**
+ * A definite redefinition or deletion replaces a configurable property, setter and all: one of the
+ * array itself, not of a name that may hold another.
+ */
 function releaseHeld(top: Node, root: FrameBinding, held: HeldMethods): void {
-  const replaced = definedMethods(top, root) ?? new Map<string, ArrayMethodOverride>();
-  if (isExpression(top)) deletedMethod(top, root, replaced);
+  const replaced =
+    definedMethods(top, root, { exact: true }) ?? new Map<string, ArrayMethodOverride>();
+  if (isExpression(top)) deletedMethod(top, root, replaced, true);
   if (replaced.size >= OWN_METHODS.size) return;
   for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
 }
 
-/** The methods one call of Object.defineProperty or Object.defineProperties defines on the array. */
+/**
+ * The methods one call of Object.defineProperty or Object.defineProperties defines on the array, or
+ * on what may be it unless `exact` asks for the array itself, read against the methods `previous`
+ * holds from before it.
+ */
 function definedMethods(
   node: Node,
   root: FrameBinding,
-  previous?: OwnMethods,
+  { previous, exact = false }: { readonly previous?: OwnMethods; readonly exact?: boolean } = {},
 ): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const target = node.arguments[0];
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (
     target === undefined ||
-    arrayIdentity(target) !== root ||
+    !(exact ? arrayIdentity(target) === root : mayBeArray(target, root)) ||
     (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
   )
     return undefined;
@@ -536,7 +555,7 @@ function writtenMethods(node: Node, root: FrameBinding): readonly string[] {
 function assignedMethods(target: Expression, root: FrameBinding): readonly string[] {
   const member = unwrapped(target);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return [];
-  if (arrayIdentity(member.expression) !== root) return [];
+  if (!mayBeArray(member.expression, root)) return [];
   const key = frameMemberName(member);
   const opaque = isElementAccessExpression(member)
     ? framedKeyNames(member.argumentExpression)
@@ -545,44 +564,19 @@ function assignedMethods(target: Expression, root: FrameBinding): readonly strin
   return keys.filter((each) => OWN_METHODS.has(each));
 }
 
-/** A completed deletion reveals an inherited method; an opaque key may remove either proof. */
-function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods): void {
+/**
+ * A completed deletion reveals an inherited method; an opaque key may remove either proof. It
+ * deletes from what may be the array unless `exact` asks for the array itself.
+ */
+function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, exact = false): void {
   if (!isDeleteExpression(node)) return;
   const member = unwrapped(node.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
-  if (arrayIdentity(member.expression) !== root) return;
+  if (!(exact ? arrayIdentity(member.expression) === root : mayBeArray(member.expression, root)))
+    return;
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
-}
-
-/** Native object mutators replace own methods in source order, retaining unknown writes as unknown. */
-function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
-  if (!isCallExpression(node)) return;
-  const target = node.arguments[0];
-  if (target === undefined || arrayIdentity(target) !== root) return;
-  const path = globalPathOf(unwrapped(node.expression))?.join('.');
-  if (path === undefined) return;
-  switch (path) {
-    case 'Object.assign': {
-      for (const source of node.arguments.slice(1)) assignMethods(source, own);
-      break;
-    }
-    case 'Object.defineProperty': {
-      defineMethod(node, own);
-      break;
-    }
-    case 'Object.defineProperties': {
-      const descriptors = node.arguments[1];
-      const value = descriptors === undefined ? undefined : unwrapped(descriptors);
-      if (value !== undefined && isObjectLiteralExpression(value)) descriptorMethods(value, own);
-      else forgetMethods(own);
-      break;
-    }
-    default: {
-      break;
-    }
-  }
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */

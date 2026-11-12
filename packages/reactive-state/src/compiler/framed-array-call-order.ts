@@ -20,8 +20,9 @@ import {
 import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { patternAfter } from './destructuring-order.ts';
+import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { arrayIdentity, ownMethodAssignment } from './framed-array-own-methods.ts';
+import { ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import {
   isNamedFunction,
@@ -206,7 +207,7 @@ function patternReadsFirst(node: Node, read: Node, root: FrameBinding): boolean 
     const member = unwrapped(target);
     const named =
       (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
-      arrayIdentity(member.expression) === root;
+      mayBeArray(member.expression, root);
     return !named || target.pos >= read.end;
   });
 }
