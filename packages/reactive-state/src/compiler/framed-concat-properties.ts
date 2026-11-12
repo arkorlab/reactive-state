@@ -37,6 +37,9 @@ import { framedNativeConstructor } from './framed-sources.ts';
 
 /** Written concat array-like fields retain their original nodes and native symbol identity. */
 
+/** Constants that each spread the one before twice grow as a power of two: the expansion stops here. */
+const EXPANSION = { limit: 256 } as const;
+
 const SPREADABLE = new Set(['Symbol.isConcatSpreadable']);
 const UNDEFINED = new Set(['undefined']);
 const PRIMITIVE_LENGTHS = new Set([
@@ -152,12 +155,16 @@ export function concatSource(expression: Expression, stable: ConcatStable): Expr
   return stable(expression) ? value : undefined;
 }
 
-/** The ordered literal fields of an array-like receiver, including quiet whole literal spreads. */
+/**
+ * The ordered literal fields of an array-like receiver, including quiet whole literal spreads, up
+ * to a bound on the spreads expanded: past it a spread stands as one field the compile cannot read.
+ */
 export function concatFields(
   root: ObjectLiteralExpression,
   stable: ConcatStable,
 ): readonly (ConcatField | undefined)[] {
   const fields: (ConcatField | undefined)[] = [];
+  let expanded = 0;
   const pending = root.properties.toReversed().map((property) => {
     return {
       property,
@@ -170,10 +177,16 @@ export function concatFields(
       continue;
     }
     const value = concatSource(at.property.expression, stable);
-    if (value === undefined || !isObjectLiteralExpression(value) || at.seen.has(value)) {
+    if (
+      value === undefined ||
+      !isObjectLiteralExpression(value) ||
+      at.seen.has(value) ||
+      expanded >= EXPANSION.limit
+    ) {
       fields.push(undefined);
       continue;
     }
+    expanded += 1;
     const seen = new Set(at.seen).add(value);
     pending.push(...value.properties.toReversed().map((property) => ({ property, seen })));
   }
