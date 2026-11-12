@@ -13,6 +13,7 @@ import {
   isElementAccessExpression,
   isFunctionExpression,
   isGetAccessorDeclaration,
+  isJsxExpression,
   isReturnStatement,
   isStringLiteral,
   isNumericLiteral,
@@ -64,6 +65,7 @@ const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ComputedPropertyName,
   SyntaxKind.DeleteExpression,
   SyntaxKind.GetAccessor,
+  SyntaxKind.JsxSpreadAttribute,
   SyntaxKind.MethodDeclaration,
   SyntaxKind.NewExpression,
   SyntaxKind.PostfixUnaryExpression,
@@ -75,6 +77,11 @@ const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TemplateExpression,
   SyntaxKind.YieldExpression,
 ]);
+
+/** A JSX child spread, `{...items}`, which iterates what it spreads; an attribute spread is none. */
+function spreadChild(node: Node): boolean {
+  return isJsxExpression(node) && node.dotDotDotToken !== undefined;
+}
 
 /**
  * Application calls and unknown member getters in any parameter keep the earlier scan — those a
@@ -89,7 +96,7 @@ export function framedConstructorDefaultEvaluation(
   const getters = new Set<Expression>();
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node) || isArrowFunction(node) || isFunctionExpression(node)) continue;
-    if (OPAQUE_EVALUATION.has(node.kind)) return false;
+    if (OPAQUE_EVALUATION.has(node.kind) || spreadChild(node)) return false;
     const returned: Expression[] = [];
     if (!quietSelection(node, { parameters, returned, slots })) return false;
     for (const each of returned) {
