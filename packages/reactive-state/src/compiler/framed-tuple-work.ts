@@ -13,7 +13,6 @@ import {
   isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
-  isVariableStatement,
   type Expression,
   type NewExpression,
   type Node,
@@ -23,7 +22,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { BUILT_INS } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
@@ -219,15 +218,6 @@ export function namedElsewhere(
     });
   }
   return false;
-}
-
-/** Whether `binding` is exported where it is declared: `export const tuple = …`. */
-export function exportedDeclaration(binding: FrameBinding): boolean {
-  const statement = binding.parent.parent;
-  return (
-    isVariableStatement(statement) &&
-    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
-  );
 }
 
 /** Whether `name` is exported where it stands: `export { name }`, `export default name`. */

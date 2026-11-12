@@ -30,6 +30,7 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isTypeAssertion,
+  isVariableStatement,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -120,6 +121,15 @@ export function executionOwner(node: Node): Node {
     if (!isCallExpression(use) || use.arguments.length > 0 || eagerBody(use) !== parent.body)
       return parent;
   }
+}
+
+/** Whether `binding` is exported where it is declared: `export const tuple = …`. */
+export function exportedDeclaration(binding: FrameBinding): boolean {
+  const statement = binding.parent.parent;
+  return (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
+  );
 }
 
 /** Whether `within` is the initializer of the instance field `parent`, which a construction runs. */
