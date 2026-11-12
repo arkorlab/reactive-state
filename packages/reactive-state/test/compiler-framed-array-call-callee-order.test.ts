@@ -1852,6 +1852,31 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'unused-setter-between-a-proof-and-a-read-pin',
+    source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function read(): string { ${SAFE} const unused = { set x(value: number) {} }; const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'unused-constructor-between-a-proof-and-a-read-pin',
+    source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function note() {} function read(): string { ${SAFE} class Unused { constructor() { note(); } } const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'unused-class-expression-constructor-between-a-proof-and-a-read-pin',
+    source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function note() {} function read(): string { ${SAFE} const Unused = class { constructor() { note(); } }; const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'setter-called-between-a-proof-and-a-read',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const kept: unknown[] = []; function read(): string { ${SAFE} const used = { set x(value: number) { if (n++ < 1) read(); } }; used.x = 1; const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'constructor-called-between-a-proof-and-a-read',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const kept: unknown[] = []; function read(): string { ${SAFE} class Used { constructor() { if (n++ < 1) read(); } } new Used(); const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
