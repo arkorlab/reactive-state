@@ -3,6 +3,7 @@ import {
   type Expression,
   isBinaryExpression,
   isConditionalExpression,
+  type GetAccessorDeclaration,
   isGetAccessorDeclaration,
   isIdentifier,
   isObjectLiteralExpression,
@@ -230,18 +231,47 @@ function writtenValue(expression: Expression): Expression | undefined {
 function survivingFields(object: ObjectLiteralExpression, reading: Reading): AssignedFrameSource[] {
   const found: AssignedFrameSource[] = [];
   const later = { data: new Set(reading.data), getters: new Set(reading.getters) };
+  const replacing = { data: new Set<string>(), getters: new Set<string>() };
   for (const property of object.properties.toReversed()) {
     const name = fieldName(property);
-    const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
-    if (name === undefined || !taken.has(name))
-      found.push(...fieldValues(property, { ...reading, ...later }));
-    for (const each of fieldNames(property)) {
-      later.data.add(each);
-      if (!isSetAccessorDeclaration(property)) later.getters.add(each);
-    }
+    const getter = isGetAccessorDeclaration(property);
+    const hides = name !== undefined && (getter ? later.getters : later.data).has(name);
+    if (!hides) found.push(...fieldValues(property, { ...reading, ...later }));
+    const replaced = name !== undefined && getter && replacing.getters.has(name);
+    if (getter && !replaced && (!hides || !reading.inherited))
+      found.push(...getterEffects(property, reading));
+    setNames(property, later);
+    setNames(property, replacing);
   }
   const inherited = reading.inherited ? inheritedValues(object, { ...reading, ...later }) : [];
   return [...found.toReversed(), ...inherited];
+}
+
+/** Adds the names a field always sets: a setter hides the values written before it, not the getters. */
+function setNames(
+  property: ObjectLiteralElementLike,
+  names: { readonly data: Set<string>; readonly getters: Set<string> },
+): void {
+  for (const each of fieldNames(property)) {
+    names.data.add(each);
+    if (!isSetAccessorDeclaration(property)) names.getters.add(each);
+  }
+}
+
+/**
+ * The values a getter that runs writes into the object it runs on, each under the name it writes:
+ * a copy of the object runs it wherever a later field hides its result, and a later field of that
+ * name hides what it wrote. The entries are refused where `this` is given on.
+ */
+function getterEffects(
+  getter: GetAccessorDeclaration,
+  reading: Reading,
+): readonly AssignedFrameSource[] {
+  const written = getterWrites(getter);
+  if (written === undefined) throw new UnfollowableError();
+  return written
+    .filter((each) => each.name === undefined || !reading.data.has(each.name))
+    .map((each) => ({ value: each.value, keys: [] }));
 }
 
 /**
@@ -289,11 +319,8 @@ function fieldValues(
   if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
     return [{ value: property.name, keys: [] }];
-  if (isGetAccessorDeclaration(property)) {
-    const written = getterWrites(property);
-    if (written === undefined) throw new UnfollowableError();
-    return [...returnedBy(property), ...written].map((value) => ({ value, keys: [] }));
-  }
+  if (isGetAccessorDeclaration(property))
+    return returnedBy(property).map((value) => ({ value, keys: [] }));
   if (!isSpreadAssignment(property)) return [];
   const copied = { ...reading, getters: reading.data, inherited: false };
   return fieldsOf([{ value: property.expression, keys: [] }], copied);

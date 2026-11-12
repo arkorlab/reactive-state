@@ -1093,6 +1093,24 @@ const CASES = [
     values: ["'kept':", "'safe':", '0:'],
   },
   {
+    id: 'spread-getter-write-overwritten-by-later-field-adds-no-value',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, field: 'old' }, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'spread-getter-hidden-result-still-writes',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, field: 'kept' }, trigger: 0 })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-replaced-in-its-own-literal-never-runs',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { return this; }, trigger: 1 } })); }`,
+    key: 'message',
+    values: ["'safe':", '1:'],
+  },
+  {
     id: 'spread-getter-iterates-member-of-this-is-followed',
     source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { for (const key of this.list) { void key; } return 0; }, field: 'kept' } })); }`,
     key: 'message',
@@ -1103,6 +1121,12 @@ const CASES = [
     source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { for (this.field of [error]) { void 0; } return 0; }, field: 'kept' } })); }`,
     key: 'message',
     values: undefined,
+  },
+  {
+    id: 'for-in-known-key-default-stays-possible-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], (() => { for ([entry[1] = error] in { a: 0 }); })()); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
   },
   {
     id: 'computed-key-constant-member-written-hands-over-source-pin',
