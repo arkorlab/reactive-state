@@ -2756,6 +2756,51 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'define-logical-after-condition-test-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; if (descriptor) {} descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-ternary-test-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const picked = descriptor ? 1 : 2; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-negation-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const missing = !descriptor; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-type-test-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const kind = typeof descriptor; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-identity-test-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const same = descriptor === descriptor; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-in-test-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const has = 'get' in descriptor; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-loop-test-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; while (descriptor) { break; } descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-after-logical-alias',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const alias = flag && descriptor; if (alias) alias.get = undefined; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-after-equality-coercion',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const same = descriptor == 1; descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'assign-rest-list-member-installs-array-pin',
     source: `function frames(error: Error) { const a = ['safe']; const src: any = {}; [...src[0]] = [error]; Object.assign(a, src); return String(a); }`,
     converts: true,

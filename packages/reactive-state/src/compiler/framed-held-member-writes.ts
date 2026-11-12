@@ -29,7 +29,9 @@ import {
   isGetAccessorDeclaration,
   isFunctionDeclaration,
   isFunctionLikeDeclaration,
+  isDoStatement,
   isIdentifier,
+  isIfStatement,
   isMethodDeclaration,
   isNewExpression,
   isParameterDeclaration,
@@ -39,8 +41,10 @@ import {
   isSetAccessorDeclaration,
   isSpreadElement,
   isTaggedTemplateExpression,
+  isTypeOfExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
+  isWhileStatement,
   type Node,
   type PropertyAccessExpression,
   SyntaxKind,
@@ -261,6 +265,7 @@ function handedToChange(node: Node, bindings: ReadonlySet<unknown>): boolean {
   if (isVariableDeclaration(parent)) return isIdentifier(parent.name) && !bindings.has(parent);
   if (isSpreadAssignment(parent)) return false;
   if (isBinaryExpression(parent) && parent.right === at && isPattern(parent)) return false;
+  if (isTested(at)) return false;
   if (isPropertyAccessExpression(parent) || isElementAccessExpression(parent))
     return parent.expression !== at || calledAsMethod(parent);
   return handedAsArgument(node, at);
@@ -279,6 +284,28 @@ function handedAsArgument(node: Identifier, at: Node): boolean {
   if (invoked === undefined) return true;
   const position = invoked.args.findIndex((each) => unwrapped(each) === (map ?? node));
   return map === undefined ? position <= 0 : invoked.path !== PATHS.properties || position !== 1;
+}
+
+/** The comparisons that read no more than the identity of their operands. */
+const IDENTITY: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.EqualsEqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsEqualsToken,
+]);
+
+/**
+ * Whether a mention is only tested: as a condition, negated, given to `typeof`, compared by
+ * identity, or the object of an `in`. None of them calls anything on the object.
+ */
+function isTested(at: Node): boolean {
+  const { parent } = at;
+  if (isIfStatement(parent) || isWhileStatement(parent) || isDoStatement(parent))
+    return parent.expression === at;
+  if (isConditionalExpression(parent)) return parent.condition === at;
+  if (isPrefixUnaryExpression(parent)) return parent.operator === SyntaxKind.ExclamationToken;
+  if (isTypeOfExpression(parent)) return true;
+  if (!isBinaryExpression(parent)) return false;
+  const { kind } = parent.operatorToken;
+  return IDENTITY.has(kind) || (kind === SyntaxKind.InKeyword && parent.right === at);
 }
 
 /** Whether an identifier only names: a property, a parameter, a variable, a binding. */
