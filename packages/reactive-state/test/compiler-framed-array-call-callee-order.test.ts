@@ -1502,6 +1502,86 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'recursion-through-a-private-method-a-method-calls',
+    source: `function frames(error: Error) { const values = [error]; class C { #again(p: number): string { return read(p); } call(p: number): string { return this.#again(p); } } function read(pass: number): string { ${SAFE} if (pass < 1) new C().call(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-private-static-method',
+    source: `function frames(error: Error) { const values = [error]; class C { static #again(p: number): string { return read(p); } static call(p: number): string { return C.#again(p); } } function read(pass: number): string { ${SAFE} if (pass < 1) C.call(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-private-method-the-constructor-calls',
+    source: `function frames(error: Error) { const values = [error]; class C { #again(p: number): void { read(p); } constructor(p: number) { this.#again(p); } } function read(pass: number): string { ${SAFE} if (pass < 1) new C(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'write-of-a-private-field-pin',
+    source: `function frames(error: Error) { const values = [error]; class C { #again: number = 0; set(p: number): void { this.#again = p; } } function read(pass: number): string { ${SAFE} new C().set(pass); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-unreachable-code-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} if (false) { const unused = { get again() { return read(); } }; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'class-in-unreachable-code-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} if (false) { class U { get again() { return read(); } } } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-reachable-code',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} if (true) { const used = { get again() { if (n++ < 1) read(); return 0; } }; used.again; } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-chain-that-ends-in-an-implicit-property',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; let x: any; let y: any; const o: any = {}; function read(): string { ${SAFE} '' + o; const text = String(values); values.join = Array.prototype.join; return text; } o.toString = x = () => { if (n++ === 0) read(); return 'x'; }; return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-chain-into-an-element-property',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; let x: any; let y: any; const o: any = {}; function read(): string { ${SAFE} '' + o; const text = String(values); values.join = Array.prototype.join; return text; } o['toString'] = x = () => { if (n++ === 0) read(); return 'x'; }; return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-property-in-the-middle-of-a-chain',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; let x: any; let y: any; const o: any = {}; function read(): string { ${SAFE} '' + o; const text = String(values); values.join = Array.prototype.join; return text; } x = o.valueOf = y = () => { if (n++ === 0) read(); return 'x'; }; return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-chain-into-a-property-value',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; let x: any; let y: any; const o: any = {}; function read(): string { ${SAFE} \`\${o.p}\`; const text = String(values); values.join = Array.prototype.join; return text; } o.p = { toString: x = () => { if (n++ === 0) read(); return 'x'; } }; return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'chain-of-variables-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; let x: any; let y: any; const o: any = {}; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} x = y = () => { read(); }; return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'call-through-a-template-key-is-a-call-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib[\`read\`].call(null); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'call-through-a-string-key-is-a-call-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib['read'].apply(null, []); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'call-through-a-wrapped-key-is-a-call-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib[('read' as const)].call(null); return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'bind-through-a-template-key-is-an-escape-pin',
+    source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib[\`read\`].bind(null); return read(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

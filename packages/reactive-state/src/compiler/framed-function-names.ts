@@ -117,7 +117,7 @@ export function boundVariable(fn: Node): VariableDeclaration | undefined {
 }
 
 /** Whether a node is an assignment that gives a value, plain or by a condition. */
-function isAssignment(node: Node): node is BinaryExpression {
+export function isAssignment(node: Node): node is BinaryExpression {
   return (
     isBinaryExpression(node) &&
     (node.operatorToken.kind === SyntaxKind.EqualsToken ||
