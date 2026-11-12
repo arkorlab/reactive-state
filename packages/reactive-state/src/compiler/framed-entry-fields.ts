@@ -322,16 +322,19 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
 
 /**
  * Whether the names a spread's object sets are certain: a written literal is, and so is a constant
- * that the program only ever spreads. A constant may be given or lose fields where it is named
- * otherwise, and a spread of it sets those it then has.
+ * that the program only ever spreads, or only gives to another constant that is stable in turn. A
+ * constant may be given or lose fields where it is named otherwise, and a spread of it sets those it
+ * then has.
  */
-function isStable(expression: Expression): boolean {
+function isStable(expression: Expression, seen = new Set<Node>()): boolean {
   const value = unwrapped(expression);
   if (isObjectLiteralExpression(value)) return true;
   const held = isIdentifier(value) ? frameBindingOf(value) : undefined;
   const declaration = held?.keys.length === 0 ? held.binding : undefined;
-  if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+  if (declaration === undefined || !isVariableDeclaration(declaration) || seen.has(declaration))
+    return false;
   if (!isIdentifier(declaration.name)) return false;
+  seen.add(declaration);
   const { text } = declaration.name;
   const pending: Node[] = [declaration.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -340,12 +343,22 @@ function isStable(expression: Expression): boolean {
       node.text === text &&
       node !== declaration.name &&
       frameBindingOf(node)?.binding === declaration &&
-      !isSpreadAssignment(node.parent)
+      !isSpreadAssignment(node.parent) &&
+      !givenToStable(node, seen)
     )
       return false;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return true;
+  const initial = declaration.initializer;
+  return initial === undefined || !isIdentifier(unwrapped(initial)) || isStable(initial, seen);
+}
+
+/** Whether a name is the initializer of a constant that is stable in turn: only an alias of it. */
+function givenToStable(name: Node, seen: Set<Node>): boolean {
+  const { parent } = name;
+  if (!isVariableDeclaration(parent)) return false;
+  const initial: Node | undefined = parent.initializer;
+  return initial === name && isIdentifier(parent.name) && isStable(parent.name, seen);
 }

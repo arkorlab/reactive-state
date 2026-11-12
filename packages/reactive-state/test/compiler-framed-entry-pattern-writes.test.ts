@@ -954,6 +954,12 @@ const CASES = [
     key: 'message',
     values: ["'safe':", '[...list, error]:', 'error:', 'list:0'],
   },
+  {
+    id: 'computed-key-aliased-changed-constant-spread-keeps-field',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; const base: { field?: string } = { field: 'kept' }; const alias = base; delete base.field; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...alias })); }`,
+    key: 'message',
+    values: ["'kept':", 'alias:', 'alias:0', 'base:', 'base:0', 'entry:1', 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
