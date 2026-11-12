@@ -32,6 +32,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner, exportedDeclaration } from './framed-array-mutations.ts';
 import {
@@ -175,14 +176,18 @@ function tupleTargetWrites(
   return values;
 }
 
-/** Later writes in a repeated body can supply the tuple at its next native call. */
+/**
+ * Later writes in a repeated body can supply the tuple at its next native call, and so can those in
+ * a computed key of a class around the call, which runs before the static initializer that holds it.
+ */
 function tupleWriteBefore(
   node: Node,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
   owner: Node,
 ): boolean {
-  if (executionOwner(node) !== owner || node.pos < call.pos) return true;
+  if (executionOwner(node) !== owner || node.pos < call.pos || ownerKeyFirst(node, call))
+    return true;
   for (const binding of aliases) if (repeatedFrameRead(node, call, binding, owner)) return true;
   return false;
 }
@@ -222,8 +227,10 @@ function argumentArray(
 }
 
 /**
- * Prior reads or application work can change a captured array before the native call reads it, and
- * so can the call's own work before it reads `read` (`callWorkExposure`).
+ * Prior reads or application work can change a captured array before the native call reads it — the
+ * work of a pattern's source and of a computed key of a class around the call, which run before it
+ * though they are written after — and so can the call's own work before it reads `read`
+ * (`callWorkExposure`).
  */
 function arrayExposed(
   binding: FrameBinding,
@@ -242,6 +249,7 @@ function arrayExposed(
       node.pos >= call.end &&
       executionOwner(node) === executionOwner(call) &&
       (destructuredFirst(node, call) ||
+        ownerKeyFirst(node, call) ||
         repeatedFrameRead(node, call, binding, executionOwner(call))) &&
       framedPossibleBranch(node);
     if (!repeated && node.pos >= call.pos) continue;
