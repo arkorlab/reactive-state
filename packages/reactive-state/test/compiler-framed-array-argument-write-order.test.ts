@@ -973,8 +973,48 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'assign-second-source-length-throws-after-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; try { Object.assign(values, { join: Array.prototype.join }, { length: -1, join: () => 'safe' }); } catch {} return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-second-source-computed-key-throws-after-native',
+    source: `function frames(error: Error, key: string) { const values = [error]; values.join = () => 'safe'; try { Object.assign(values, { join: Array.prototype.join }, { [key]: -1, join: () => 'safe' }); } catch {} return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-second-source-unknown-length-throws-after-native',
+    source: `function frames(error: Error, size: number) { const values = [error]; values.join = () => 'safe'; try { Object.assign(values, { join: Array.prototype.join }, { length: size, join: () => 'safe' }); } catch {} return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-second-source-spread-throws-after-native',
+    source: `function frames(error: Error, rest: object) { const values = [error]; values.join = () => 'safe'; try { Object.assign(values, { join: Array.prototype.join }, { ...rest, join: () => 'safe' }); } catch {} return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-second-source-valid-length-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { join: Array.prototype.join }, { length: 1, join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-loop-partial-write-keeps-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; for (let pass = 0; pass < 2 && String(values); pass++) { try { Object.assign(values, { join: Array.prototype.join }, { length: -1, join: () => 'safe' }); } catch {} } return String(values); }`,
+    converts: true,
+  },
+  {
     id: 'define-properties-getter-rewrites-later-descriptor',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperties(values, { get probe() { this.join = { value: Array.prototype.join }; return { value: 1 }; }, join: { value: () => 'safe' } }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-properties-length-throws-before-custom',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); try { Object.defineProperties(values, { length: { value: -1 }, join: { value: () => 'safe' } }); } catch {} return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-properties-computed-key-throws-before-custom',
+    source: `function frames(error: Error, key: string) { const values = [error]; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); try { Object.defineProperties(values, { [key]: { value: -1 }, join: { value: () => 'safe' } }); } catch {} return String(values); }`,
     converts: true,
   },
   {
@@ -986,6 +1026,16 @@ const CASES = [
     id: 'define-descriptor-getter-other-name-keeps-custom-pin',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get probe() { this.value = Array.prototype.join; return false; }, value: () => 'safe' }); return String(values); }`,
     converts: false,
+  },
+  {
+    id: 'assign-second-source-throws-in-function-called-in-try',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const run = () => Object.assign(values, { join: Array.prototype.join }, { length: -1, join: () => 'safe' }); try { run(); } catch {} return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-second-source-throws-read-in-finally',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; try { Object.assign(values, { join: Array.prototype.join }, { length: -1, join: () => 'safe' }); } finally { return String(values); } }`,
+    converts: true,
   },
 ] as const;
 
