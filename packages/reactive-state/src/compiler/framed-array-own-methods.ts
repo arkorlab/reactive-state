@@ -452,22 +452,33 @@ export function knownNonNative(expression: Expression): boolean {
   );
 }
 
-/** Each source's last explicitly written field wins; an unknown source may restore native methods. */
+/**
+ * Each source's last explicitly written field wins; an unknown source may restore native methods. A
+ * getter runs where the copy reaches it, and may give the array another method, or the fields after
+ * it another value: the methods are unproven from there on.
+ */
 export function assignMethods(source: Expression, own: OwnMethods): void {
   const value = unwrapped(source);
   if (!isObjectLiteralExpression(value)) {
     forgetMethods(own);
     return;
   }
+  let run = false;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
       forgetMethods(own);
       continue;
     }
+    if (isGetAccessorDeclaration(property)) {
+      forgetMethods(own);
+      run = true;
+      continue;
+    }
     const key = writtenArrayKey(property.name);
     if (key === undefined) forgetMethods(own);
     else if (OWN_METHODS.has(key)) {
-      own.set(key, propertyOverride(property));
+      const written = propertyOverride(property);
+      own.set(key, run ? afterPossibleWrite(own.get(key), written) : written);
     }
   }
 }
@@ -491,22 +502,30 @@ export function defineMethod(call: CallExpression, own: OwnMethods): void {
   if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2], own.get(key)));
 }
 
-/** Object.defineProperties selects each descriptor by its written property name. */
+/**
+ * Object.defineProperties selects each descriptor by its written property name. A getter of the map
+ * runs where the definitions reach it, and may give the array another method, or the descriptors
+ * after it another value: the methods are unproven from there on.
+ */
 export function descriptorMethods(descriptors: ObjectLiteralExpression, own: OwnMethods): void {
+  let run = false;
   for (const property of descriptors.properties) {
     if (isSpreadAssignment(property)) {
       forgetMethods(own);
       continue;
     }
+    if (isGetAccessorDeclaration(property)) {
+      forgetMethods(own);
+      run = true;
+      continue;
+    }
     const key = writtenArrayKey(property.name);
     if (key === undefined) forgetMethods(own);
     else if (OWN_METHODS.has(key)) {
-      own.set(
-        key,
-        isPropertyAssignment(property)
-          ? descriptorFunction(property.initializer, own.get(key))
-          : { own: false },
-      );
+      const written = isPropertyAssignment(property)
+        ? descriptorFunction(property.initializer, own.get(key))
+        : { own: false };
+      own.set(key, run ? afterPossibleWrite(own.get(key), written) : written);
     }
   }
 }
@@ -538,13 +557,27 @@ function attributeKept(says: AttributeSaid, before: true | undefined): boolean {
   return says === 'true' || (says === 'omitted' && before === true);
 }
 
-/** The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow. */
+/** The attributes a descriptor's conversion reads before its value. */
+const READ_BEFORE_VALUE: ReadonlySet<string> = new Set(['configurable', 'enumerable']);
+
+/** Whether a field is a getter that may give the descriptor another value before it is read. */
+function rewritesValue(property: ObjectLiteralElementLike, key: string | undefined): boolean {
+  return isGetAccessorDeclaration(property) && (key === undefined || READ_BEFORE_VALUE.has(key));
+}
+
+/**
+ * The value a descriptor writes, unproven once an accessor, a spread or an unknown key may follow.
+ * A getter named by an attribute read before the value, or that may be, may give the descriptor
+ * another value first.
+ */
 function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
   let custom: ArrayMethodOverride = { own: false };
+  let rewritten = false;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) custom = { own: false };
     else {
       const key = writtenArrayKey(property.name);
+      rewritten ||= rewritesValue(property, key);
       if (key === undefined || ACCESSOR_KEYS.has(key) || setsPrototype(property))
         custom = { own: false };
       else if (key === 'value')
@@ -553,7 +586,7 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
           : { own: false };
     }
   }
-  return custom;
+  return rewritten ? { own: false } : custom;
 }
 
 type AttributeSaid = 'omitted' | 'other' | 'true';

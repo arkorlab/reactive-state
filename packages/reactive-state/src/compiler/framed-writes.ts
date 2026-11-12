@@ -180,6 +180,18 @@ export function repeatingBodies(
 }
 
 /**
+ * Whether a statement that holds the write is a return or a throw that leaves the loop: the write
+ * is made, and the statement goes on to leave, as a return after it does, past the same try
+ * statements.
+ */
+function exitsWithWrite(statement: Node, body: Node): boolean {
+  if (!isReturnStatement(statement) && !isThrowStatement(statement)) return false;
+  let block = statement.parent;
+  while (block !== body && !isBlock(block)) block = block.parent;
+  return isBlock(block) && leavesBody(statement, block, body);
+}
+
+/**
  * Whether a write in the loop's body is always followed by a statement of a block around it that
  * leaves the loop, with no jump between them that may skip it: the loop never comes round to its
  * next pass.
@@ -187,6 +199,7 @@ export function repeatingBodies(
 function leavesLoopFirst(node: Node, body: Node, declared: Node): boolean {
   if (!withinBody(node, body) || runsAgainAround(body, declared)) return false;
   for (let at = node; at !== body; at = at.parent) {
+    if (exitsWithWrite(at, body)) return true;
     const { parent } = at;
     if (!isBlock(parent)) continue;
     const exit = parent.statements.find(

@@ -1827,6 +1827,31 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'loop-ends-in-a-return-that-holds-the-write-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; while ((seen += String(values)) === 'fixed') { return (values.join = Array.prototype.join); } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'loop-ends-in-a-branch-return-that-holds-the-write-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let c = true; while ((seen += String(values)) === 'fixed') { if (c) return (values.join = Array.prototype.join); } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'return-that-holds-the-write-in-a-try-whose-finally-continues',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let pass = 0; while ((seen += String(values)) === 'fixed' && pass++ < 2) { try { return (values.join = Array.prototype.join); } finally { continue; } } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'return-that-holds-the-write-in-a-branch-not-taken-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let c = false; while ((seen += String(values)) === 'fixed' && !c) { if (c) { return (values.join = Array.prototype.join); } c = true; } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'return-of-a-function-in-the-loop-that-holds-the-write',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let pass = 0; while ((seen += String(values)) === 'fixed' && pass++ < 2) { (() => { return (values.join = Array.prototype.join); })(); } return seen; }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
