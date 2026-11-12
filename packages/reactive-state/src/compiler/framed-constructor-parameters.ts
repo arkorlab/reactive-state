@@ -205,10 +205,14 @@ function parameterValues(
   if (selected === undefined || parameter === undefined) return restRead(name, parameters, slots);
   const path = readPath(name);
   const keys = [...selected.keys, ...path.keys];
-  if (parameter.dotDotDotToken !== undefined)
-    return { defaults: [], values: restValues(slots.slice(index), keys, path.any) };
-  const given = slots[index] ?? [];
   const declared = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
+  if (parameter.dotDotDotToken !== undefined) {
+    return {
+      defaults: declared === undefined ? [] : restDefaults(declared),
+      values: restValues(slots.slice(index), keys, path.any),
+    };
+  }
+  const given = slots[index] ?? [];
   const takesDefault = framedDefaultTaken(given);
   const effective =
     takesDefault && parameter.initializer !== undefined
@@ -300,6 +304,20 @@ function elementDefaults(
         selected: framedDefaultTaken(given, keys.slice(0, depth)),
       });
     depth -= 1;
+  }
+  return defaults;
+}
+
+/**
+ * The defaults of the binding elements from a name in a rest parameter's pattern up to the
+ * parameter: whether the rest holds an argument where the name stands is not told, so each default
+ * may be taken, and any member of it may be what the name holds.
+ */
+function restDefaults(name: Identifier): DefaultValue[] {
+  const defaults: DefaultValue[] = [];
+  for (let at: Node = name.parent; isBindingElement(at); at = at.parent.parent) {
+    if (at.initializer !== undefined)
+      defaults.push({ any: true, keys: [], value: at.initializer, selected: false });
   }
   return defaults;
 }
