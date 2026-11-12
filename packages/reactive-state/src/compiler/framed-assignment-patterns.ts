@@ -13,6 +13,7 @@ import {
   isComputedPropertyName,
   isIdentifier,
   isExpression,
+  isForOfStatement,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPropertyAssignment,
@@ -488,7 +489,10 @@ function literalKey(name: PropertyName): string | undefined {
   return value === undefined ? undefined : String(value);
 }
 
-/** A default inside an enclosing assignment pattern is evaluated by that pattern's selected value. */
+/**
+ * A default inside an enclosing assignment pattern is evaluated by that pattern's selected value:
+ * the pattern of an assignment, or of the header of a `for … of`, whose iteration selects it.
+ */
 export function assignmentPatternDefault(node: Node): boolean {
   let at = node;
   for (;;) {
@@ -503,9 +507,10 @@ export function assignmentPatternDefault(node: Node): boolean {
       continue;
     }
     return (
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === at
+      (isBinaryExpression(parent) &&
+        parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+        parent.left === at) ||
+      (isForOfStatement(parent) && parent.initializer === at)
     );
   }
 }
