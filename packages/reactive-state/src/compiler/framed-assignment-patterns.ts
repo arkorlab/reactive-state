@@ -3,8 +3,10 @@ import {
   type ArrayLiteralExpression,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  type BinaryExpression,
   type PropertyAssignment,
   type PropertyName,
+  type ShorthandPropertyAssignment,
   type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
@@ -52,6 +54,9 @@ const NO_PROTOTYPE: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.StringLiteral,
   SyntaxKind.TrueKeyword,
 ]);
+
+/** The array a rest makes, from which a pattern on one of its properties reads the host's own built-ins. */
+const FRESH_ARRAY: readonly unknown[] = [];
 
 /** The sources assigned to one lexical identifier, excluding fresh object and array rest copies. */
 export function assignmentPatternSources(
@@ -123,21 +128,25 @@ function assignmentSources(
 
 /**
  * Defaults, array positions and object entries contribute their selected assignment targets. A
- * default runs where `missing` says some source held nothing at its position.
+ * default runs where `missing` says some source held nothing at its position. A rest's own pattern
+ * reads a fresh array, which `offset` says starts at that place in the sources.
  */
 export function assignmentPatternTargets(
   target: Expression,
   sources: readonly AssignedFrameSource[],
   missing = false,
+  offset?: number,
 ): readonly PatternWork[] {
-  if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken)
+  if (isDefault(target))
     return [{ target: target.left, sources: defaultSources(sources, target.right, missing) }];
-  if (isObjectLiteralExpression(target)) return objectTargets(target.properties, sources);
+  if (isObjectLiteralExpression(target)) return objectTargets(target.properties, sources, offset);
   if (!isArrayLiteralExpression(target)) return [];
   const targets: PatternWork[] = [];
   for (const [index, element] of target.elements.entries()) {
-    const key = String(index);
-    if (!isSpreadElement(element) && !isOmittedExpression(element))
+    const key = String((offset ?? 0) + index);
+    if (isSpreadElement(element))
+      targets.push(...restTargets(element.expression, sources, (offset ?? 0) + index));
+    else if (!isOmittedExpression(element))
       targets.push({
         target: element,
         sources: selectSources(sources, key),
@@ -147,30 +156,141 @@ export function assignmentPatternTargets(
   return targets;
 }
 
+/**
+ * A rest is a fresh array, which binds no error identity, but a pattern its own target writes takes
+ * the elements from the rest's place on: `[...[e]] = [new Error()]` assigns `e` the `Error`. An
+ * object pattern reads the properties of that array, not of the sources.
+ */
+function restTargets(
+  target: Expression,
+  sources: readonly AssignedFrameSource[],
+  offset: number,
+): readonly PatternWork[] {
+  const pattern = unwrapped(target);
+  return isArrayLiteralExpression(pattern) || isObjectLiteralExpression(pattern)
+    ? assignmentPatternTargets(pattern, sources, false, offset)
+    : [];
+}
+
+/** Whether a target is written with a default: `target = fallback`. */
+function isDefault(target: Expression): target is BinaryExpression {
+  return isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken;
+}
+
 /** Named object entries and their selected defaults; methods and rest copies bind no error identity. */
 function objectTargets(
   properties: readonly Node[],
   sources: readonly AssignedFrameSource[],
+  offset: number | undefined,
 ): readonly PatternWork[] {
   const targets: PatternWork[] = [];
   for (const property of properties) {
     if (!isPropertyAssignment(property) && !isShorthandPropertyAssignment(property)) continue;
-    const name = literalKey(property.name);
-    if (name === undefined) continue;
-    const values = selectSources(sources, name);
-    const missing = missingSelection(sources, name);
-    if (isPropertyAssignment(property))
-      targets.push({ target: property.initializer, sources: values, missing });
-    else if (isIdentifier(property.name))
-      targets.push({
-        target: property.name,
-        sources:
-          property.objectAssignmentInitializer === undefined
-            ? values
-            : defaultSources(values, property.objectAssignmentInitializer, missing),
-      });
+    const written = literalKey(property.name);
+    if (written === undefined) continue;
+    const place = offset === undefined ? written : placeOf(written, offset);
+    if (place === undefined) {
+      targets.push(...builtinEntry(property, FRESH_ARRAY, written));
+      continue;
+    }
+    const target = entryTarget(property, selection(sources, place));
+    if (target !== undefined) targets.push(target);
   }
   return targets;
+}
+
+/** The target an entry assigns, with its default run where the selection is missing. */
+function entryTarget(
+  property: PropertyAssignment | ShorthandPropertyAssignment,
+  {
+    values,
+    missing,
+  }: { readonly values: readonly AssignedFrameSource[]; readonly missing: boolean },
+): PatternWork | undefined {
+  if (isPropertyAssignment(property))
+    return { target: property.initializer, sources: values, missing };
+  if (!isIdentifier(property.name)) return undefined;
+  return {
+    target: property.name,
+    sources:
+      property.objectAssignmentInitializer === undefined
+        ? values
+        : defaultSources(values, property.objectAssignmentInitializer, missing),
+  };
+}
+
+/**
+ * The place of the sources an entry of a rest's object pattern selects: a position of the fresh
+ * array, shifted to where the rest starts. Any other name is a property of the array itself.
+ */
+function placeOf(name: string, offset: number): string | undefined {
+  return /^(?:0|[1-9]\d*)$/u.test(name) ? String(Number(name) + offset) : undefined;
+}
+
+/**
+ * An entry of an object pattern written on a built-in value reads a property of `holder`. The fresh
+ * array a rest makes holds, beside its positions, its `length`, a method its prototypes supply, or
+ * nothing at all. Each such value is a built-in, which the host that compiles holds as every engine
+ * that runs the application does, so that it is read from there. It binds no error identity, and a default beside it runs only where it is
+ * `undefined`; a pattern written on it reads its properties in turn.
+ */
+function builtinEntry(
+  property: PropertyAssignment | ShorthandPropertyAssignment,
+  holder: unknown,
+  name: string,
+): readonly PatternWork[] {
+  const read = readBuiltin(holder, name);
+  if (read === undefined) return [];
+  if (isPropertyAssignment(property)) return builtinTargets(property.initializer, read.value);
+  const fallback = property.objectAssignmentInitializer;
+  if (fallback === undefined || read.value !== undefined || !isIdentifier(property.name)) return [];
+  return [{ target: property.name, sources: [{ value: fallback, keys: [] }] }];
+}
+
+/**
+ * What a pattern written on a built-in value assigns: the defaults that run where it holds nothing.
+ * A value that is no object, nor iterable, cannot be destructured by an array pattern, which throws;
+ * an iterable that is no array, text, is not read position by position, and every default stays possible.
+ */
+function builtinTargets(target: Expression, value: unknown): readonly PatternWork[] {
+  const pattern = unwrapped(target);
+  if (isDefault(pattern))
+    return value === undefined
+      ? [{ target: pattern.left, sources: [{ value: pattern.right, keys: [] }] }]
+      : builtinTargets(pattern.left, value);
+  if (isObjectLiteralExpression(pattern)) {
+    if (value === undefined || value === null) return [];
+    return pattern.properties.flatMap((property) => {
+      if (!isPropertyAssignment(property) && !isShorthandPropertyAssignment(property)) return [];
+      const name = literalKey(property.name);
+      return name === undefined ? [] : builtinEntry(property, value, name);
+    });
+  }
+  if (!isArrayLiteralExpression(pattern)) return [];
+  if (!Array.isArray(value))
+    return Reflect.has(new Object(value), Symbol.iterator)
+      ? assignmentPatternTargets(pattern, [])
+      : [];
+  const items: readonly unknown[] = value;
+  return pattern.elements.flatMap((element, index) => {
+    return isSpreadElement(element)
+      ? builtinTargets(element.expression, items.slice(index))
+      : builtinTargets(element, items[index]);
+  });
+}
+
+/** A property of a built-in value as the host holds it, or nothing where reading it throws. */
+function readBuiltin(holder: unknown, name: string): { readonly value: unknown } | undefined {
+  try {
+    return { value: Reflect.get(new Object(holder), name) };
+  } catch {
+    return undefined;
+  }
+}
+
+/** The sources selected at one key, and whether some source holds nothing there. */
+function selection(sources: readonly AssignedFrameSource[], key: string) {
+  return { values: selectSources(sources, key), missing: missingSelection(sources, key) };
 }
 
 /** Literal entries are selected directly; opaque values retain the path for their declared type. */
@@ -315,6 +435,7 @@ export function assignmentPatternDefault(node: Node): boolean {
     if (
       isArrayLiteralExpression(parent) ||
       isObjectLiteralExpression(parent) ||
+      isSpreadElement(parent) ||
       (isPropertyAssignment(parent) && parent.initializer === at)
     ) {
       at = parent;
