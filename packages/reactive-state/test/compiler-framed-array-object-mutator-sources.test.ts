@@ -2915,6 +2915,31 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const src: any = {}; [...src[1]] = [error]; Object.assign(a, src); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'define-logical-and-on-inherited-member-runs',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.constructor &&= () => error; ({ constructor: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-and-on-inherited-to-string-runs',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.toString &&= () => error; ({ toString: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-or-on-inherited-member-stays-possible-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.constructor ||= () => error; ({ constructor: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-and-on-missing-member-skips-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.reader &&= () => error; ({ reader: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-nullish-on-missing-member-runs-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.reader ??= () => error; ({ reader: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
