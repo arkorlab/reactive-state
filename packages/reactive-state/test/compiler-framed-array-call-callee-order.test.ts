@@ -1812,6 +1812,21 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'accessor-in-a-generator-method-an-object-holds-is-refused-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const holder = { *helper() { const o = { get again() { return read(); } }; o.again; } }; holder.helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'generator-method-advanced-by-the-values-of-its-object',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} const holder: any = { *helper() { const o = { get again() { if (n++ < 1) read(); return 0; } }; o.again; } }; Object.values(holder).forEach((f: any) => f().next()); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'generator-method-advanced-by-a-key-worked-out',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} const holder: any = { *helper() { const o = { get again() { if (n++ < 1) read(); return 0; } }; o.again; } }; const k = Object.keys(holder)[0]; holder[k]().next(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
