@@ -38,7 +38,11 @@ export function framedObjectMember(
   return framedObjectSources(node, keys)?.some((each) => error(each.value, each.keys)) === true;
 }
 
-/** Direct literal selections retain their original values and remaining written member paths. */
+/**
+ * Direct literal selections retain their original values and remaining written member paths. A value
+ * read by a path is read once, however many ways reach it: a key may select a prototype and what it
+ * holds both, so a chain of prototypes is met by a number of paths that grows as a power of two.
+ */
 export function framedObjectSources(
   node: Expression,
   keys: readonly string[],
@@ -47,8 +51,13 @@ export function framedObjectSources(
   if (root === undefined) return undefined;
   const pending: AssignedFrameSource[] = [root];
   const found: AssignedFrameSource[] = [];
+  const read = new Map<Expression, Set<string>>();
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const value = unwrapped(at.value);
+    const path = JSON.stringify(at.keys);
+    const paths = read.get(value) ?? new Set<string>();
+    if (paths.has(path)) continue;
+    read.set(value, paths.add(path));
     const key = at.keys[0];
     if (key === undefined) {
       found.push(at);
