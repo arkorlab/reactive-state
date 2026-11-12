@@ -1197,9 +1197,9 @@ const CASES = [
     converts: false,
   },
   {
-    id: 'generator-method-made-and-dropped-pin',
+    id: 'generator-method-an-object-holds-is-reached-by-its-keys-pin',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} ({ *helper() { read(); } }).helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'generator-made-and-dropped-in-a-helper-pin',
@@ -1342,9 +1342,9 @@ const CASES = [
     converts: false,
   },
   {
-    id: 'dead-default-of-a-dropped-generator-method-pin',
+    id: 'dead-default-of-a-generator-method-an-object-holds-pin',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} ({ *helper(p: any = false ? read() : 1) { read(); } }).helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'live-default-of-a-dropped-generator',
@@ -1580,6 +1580,81 @@ const CASES = [
     id: 'bind-through-a-template-key-is-an-escape-pin',
     source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib[\`read\`].bind(null); return read(); }`,
     converts: true,
+  },
+  {
+    id: 'recursion-through-a-numeric-key',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { 0(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[0](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-numeric-key-written-with-a-point',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { 1.0(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[1](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-hexadecimal-key',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { 16(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[0x10](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-bigint-key',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { 1(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[1n as any](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-negative-key',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { '-1'(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[-1](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-null-key',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { null(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[null as any](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-key-worked-out',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper['ag' + 'ain'](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-key-held-by-a-constant',
+    source: `function frames(error: Error) { const values = [error]; const key = 'again'; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) helper[key](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-key-a-call-gives',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { const k = Object.keys(helper)[0]; ${SAFE} if (pass < 1) helper[k](pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-values-of-an-object',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) Object.values(helper).forEach((f: any) => f(pass + 1)); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-copy-of-an-object',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} if (pass < 1) { const copy = { ...helper }; copy.again(pass + 1); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-method-found-by-its-name-at-run-time',
+    source: `function frames(error: Error) { const values = [error]; class C { again(next: number): string { return read(next); } } function read(pass: number): string { ${SAFE} if (pass < 1) { const m = Object.getOwnPropertyNames(C.prototype).filter((n) => n !== 'constructor')[0]; (new C() as any)[m](pass + 1); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'method-never-reached-pin',
+    source: `function frames(error: Error) { const values = [error]; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
+  },
+  {
+    id: 'recursion-through-a-field-arrow-a-method-calls',
+    source: `function frames(error: Error) { const values = [error]; class C { helper = (p: number): string => read(p); } function read(pass: number): string { ${SAFE} if (pass < 1) new C().helper(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: true,
+  },
+  {
+    id: 'field-arrow-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; class C { helper = (p: number): string => read(p); } function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
+    converts: false,
   },
   {
     id: 'loop-continue-before-exit-pin',

@@ -51,31 +51,6 @@ export interface FunctionNames {
   readonly computed: boolean;
 }
 
-/** The methods the language calls where nothing names them: a coercion, an iteration, a trap. */
-export const IMPLICIT_METHODS: ReadonlySet<string> = new Set([
-  'apply',
-  'construct',
-  'defineProperty',
-  'deleteProperty',
-  'get',
-  'getOwnPropertyDescriptor',
-  'getPrototypeOf',
-  'has',
-  'isExtensible',
-  'next',
-  'ownKeys',
-  'preventExtensions',
-  'return',
-  'set',
-  'setPrototypeOf',
-  'then',
-  'throw',
-  'toJSON',
-  'toLocaleString',
-  'toString',
-  'valueOf',
-]);
-
 /** The text of a property name that is written out, none for a computed one. */
 export function keyText(name: PropertyName | undefined): string | undefined {
   if (name === undefined || isComputedPropertyName(name)) return undefined;
