@@ -228,6 +228,12 @@ export function namesOfClass(declaration: Node): FunctionNames {
   return { names: [...names, ...given.names], computed: given.computed };
 }
 
+/** Whether a function expression is made where it is written, by a `new`: it has no name but its own. */
+function madeWithNew(fn: Node): boolean {
+  const call = callOnTheSpot(holderOf(fn));
+  return call !== undefined && isNewExpression(call);
+}
+
 /**
  * The names a function is reached by. One that can be made, a declaration or an expression of
  * `function`, is reached by `constructor` too, which an instance and `new.target` read it by.
@@ -244,7 +250,7 @@ export function namesOf(fn: Node): FunctionNames {
   const given = givenNames(fn);
   const own = isFunctionExpression(fn) && fn.name ? [fn.name.text] : [];
   const names = [...own, ...given.names];
-  if (isFunctionExpression(fn) && names.length > 0) names.push('constructor');
+  if (isFunctionExpression(fn) && (names.length > 0 || madeWithNew(fn))) names.push('constructor');
   return { names, computed: given.computed };
 }
 
