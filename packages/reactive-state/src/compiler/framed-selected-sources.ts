@@ -85,7 +85,7 @@ export function selectedValues(
   value: Expression,
   keys: readonly string[],
   at?: Node,
-): readonly AssignedFrameSource[] {
+): readonly SelectedSource[] {
   return select(value, keys, { visited: new Map(), own: false, at, following: new Set() });
 }
 
@@ -93,7 +93,7 @@ function select(
   value: Expression,
   keys: readonly string[],
   reading: Reading,
-): readonly AssignedFrameSource[] {
+): readonly SelectedSource[] {
   if (keys.length === 0) return [{ value, keys: [] }];
   const whole = [{ value, keys }];
   const names: Identifier[] = [];
@@ -132,17 +132,23 @@ function valueOf(expression: Expression, names: Identifier[]): Expression | Func
   return held;
 }
 
+/** A value a selection hands over: a list the rest of an array pattern wrote is itself the value. */
+export interface SelectedSource extends AssignedFrameSource {
+  readonly array?: boolean;
+}
+
 /**
  * What the writes to the members of the constant the names stand for hand over at the path: a
  * constant does not keep its members from changing. A write to the key, or to a key the compile
- * cannot read, before the place that consumes the selection is possible; what a rest copied into
- * the member is read as the own fields of its source.
+ * cannot read, before the place that consumes the selection is possible. The write captures what
+ * its pattern selects where it runs, and the fields below that are read where the selection is
+ * consumed; what a rest copied into the member is read as the own fields its source had then.
  */
 function memberWrites(
   names: readonly Identifier[],
   keys: readonly string[],
   reading: Reading,
-): readonly AssignedFrameSource[] {
+): readonly SelectedSource[] {
   const [first] = names;
   const [key = '', ...rest] = keys;
   if (first === undefined) return [];
@@ -151,35 +157,47 @@ function memberWrites(
     if (!matches || reading.following.has(write.value)) return [];
     const copy = write.copiedAt !== undefined;
     if (copy && write.without?.includes(rest[0] ?? '') === true) return [];
+    const took = takes(write, rest);
+    if (took === undefined) return [];
+    if (took.whole) return [{ value: write.value, keys: write.keys.slice(0, -1), array: true }];
     const following = new Set(reading.following).add(write.value);
-    const where = { ...reading, own: copy && write.keys.length === 0, at: write.node, following };
-    if (write.list === true) return listEntries(write, rest, where);
-    return select(write.value, [...write.keys, ...rest], where);
+    const captured = { ...reading, own: false, at: write.node, following };
+    const later = copy ? { ...captured, own: true } : { ...reading, following };
+    return select(write.value, took.path, captured).flatMap((each) => {
+      return each.keys.length === 0
+        ? select(each.value, took.tail, later)
+        : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
+    });
   });
 }
 
+/** The path a write captures, and the path below what it captured. */
+interface Takes {
+  readonly path: readonly string[];
+  readonly tail: readonly string[];
+  /** The list itself, where nothing below it is asked. */
+  readonly whole: boolean;
+}
+
 /**
- * What the entries a rest wrote into a member hand over at the path below it: the member holds the
- * entries from the rest's position, so an index below the member is the index in the source less
- * that position, and any other key reads the entries from there on.
+ * What a write hands over below the member: the path of what its pattern selected and the rest of
+ * the path below it; for the entries a rest wrote, the path of one entry, an index below the member
+ * being the index in the source less the position the rest starts at, or of the entries from a
+ * position on; the list itself where nothing below it is asked; none for a named property of it.
  */
-function listEntries(
-  write: HeldWrite,
-  rest: readonly string[],
-  reading: Reading,
-): readonly AssignedFrameSource[] {
+function takes(write: HeldWrite, rest: readonly string[]): Takes | undefined {
+  if (write.list !== true) return { path: write.keys, tail: rest, whole: false };
   const start = suffixStart(write.keys.at(-1) ?? '');
-  if (start === undefined) return [];
-  const base = write.keys.slice(0, -1);
+  if (start === undefined) return undefined;
   const [first, ...tail] = rest;
-  if (first === undefined) return select(write.value, write.keys, reading);
+  if (first === undefined) return { path: [], tail: [], whole: true };
+  const base = write.keys.slice(0, -1);
+  const from = suffixStart(first);
   const index = Number(first);
   const exact = Number.isSafeInteger(index) && index >= 0 && String(index) === first;
-  return select(
-    write.value,
-    [...base, exact ? String(start + index) : fromKey(start), ...tail],
-    reading,
-  );
+  if (first === ANY_FIELD) return { path: [...base, fromKey(start)], tail, whole: false };
+  if (from !== undefined) return { path: [...base, fromKey(start + from)], tail, whole: false };
+  return exact ? { path: [...base, String(start + index)], tail, whole: false } : undefined;
 }
 
 /** What reads below the first step of a path read: the fields of a copy are no copy. */

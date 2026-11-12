@@ -461,6 +461,7 @@ function mapWrites(
     const left = { data: new Set(without), getters: new Set(without) };
     const read = copiedAt === undefined ? reading : { ...reading, at: copiedAt, inherited: false };
     return selectedValues(value, keys, write.node).flatMap((each) => {
+      if (each.array === true) return [];
       return each.keys.length > 0
         ? [{ value: each.value, keys: [...each.keys, 'value'] }]
         : descriptorValues(each.value, read, left);
@@ -618,8 +619,8 @@ function descriptorWrites(
     return selectedValues(value, keys, node).flatMap((each) => {
       const installed = key === undefined || key === 'value' ? [each] : [];
       const calls = key === undefined || key === 'get';
-      const returned =
-        calls && list !== true && each.keys.length === 0 ? functionReturns(each.value) : [];
+      const callable = list !== true && each.array !== true && each.keys.length === 0;
+      const returned = calls && callable ? functionReturns(each.value) : [];
       return [...installed, ...returned];
     });
   });

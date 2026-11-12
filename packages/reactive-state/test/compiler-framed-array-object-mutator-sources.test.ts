@@ -2525,6 +2525,61 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[error, 'x'], 1: 'y' }); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'define-captured-reference-fields-written-later',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const inner: any = {}; const holder: any = {}; holder.nested = inner; inner.f = () => error; ({ nested: { f: descriptor.get } } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-copied-reference-fields-written-later-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const inner: any = {}; const holder: any = {}; ({ ...holder.nested } = inner); inner.f = () => error; ({ nested: { f: descriptor.get } } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-captured-reference-fields-written-earlier',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const inner: any = {}; const holder: any = {}; inner.f = () => error; holder.nested = inner; ({ nested: { f: descriptor.get } } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-captured-reference-read-before-write-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const inner: any = {}; const holder: any = {}; holder.nested = inner; ({ nested: { f: descriptor.get } } = holder); inner.f = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-member-is-no-descriptor',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; [...holder.items] = [{ get: () => error }]; ({ items: maps[0] } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-member-whole-is-an-array-value',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; [...holder.items] = [error]; ({ items: descriptor.value } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-rest-member-named-property-is-no-entry',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; [...holder.items] = [error]; ({ items: { length: descriptor.value } } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-member-second-rest-offset',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; let again: unknown; [ignored, ...holder.items] = [0, error, 'safe']; ({ items: [again, ...descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-array-rest-member-second-rest-keeps-error-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; let again: unknown; [ignored, ...holder.items] = [0, 'x', error]; ({ items: [again, ...descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-rest-member-index-entry',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; [ignored, ...holder.items] = [0, error]; ({ items: [descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-array-rest-member-index-offset-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; [ignored, ...holder.items] = [error, 'safe']; ({ items: [descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
