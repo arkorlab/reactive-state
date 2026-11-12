@@ -624,11 +624,13 @@ function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolea
 }
 
 /**
- * Whether a declaration lies in the function as a variable it declares: each run of the function
- * makes it. A parameter does not: a caller gives it, and a recursive call may pass on the same one.
+ * Whether a declaration lies in the function as an array each run of the function makes: a variable
+ * it declares, or its rest parameter. A parameter that a caller gives is not: a recursive call may
+ * pass on the same one.
  */
 export function madeWithin(declared: Node, fn: Node): boolean {
-  return !isParameterDeclaration(declared) && declared.pos >= fn.pos && declared.end <= fn.end;
+  const given = isParameterDeclaration(declared) && declared.dotDotDotToken === undefined;
+  return !given && declared.pos >= fn.pos && declared.end <= fn.end;
 }
 
 /** Whether the function runs itself again anywhere in its code. */

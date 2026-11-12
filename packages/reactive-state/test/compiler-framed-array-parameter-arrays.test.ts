@@ -26,6 +26,18 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'rest-array-override-restored-by-the-recursive-call-pin',
+    source: `function frames(error: Error) { function read(pass: number, ...values: Error[]): string { ${SAFE} if (pass < 1) read(pass + 1, ...values); const text = String(values); values.join = Array.prototype.join; return text; } return read(0, error); }`,
+    typed: true,
+    converts: false,
+  },
+  {
+    id: 'rest-array-passed-on-by-name-is-a-copy-pin',
+    source: `function frames(error: Error) { function read(pass: number, ...values: Error[]): string { ${SAFE} if (pass < 1) read(pass + 1, values[0]); const text = String(values); values.join = Array.prototype.join; return text; } return read(0, error); }`,
+    typed: true,
+    converts: false,
+  },
+  {
     id: 'array-a-function-makes-override-restored-by-the-recursive-call-pin',
     source: `function frames(error: Error) { function read(pass: number): string { const values = [error]; ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
     typed: true,
