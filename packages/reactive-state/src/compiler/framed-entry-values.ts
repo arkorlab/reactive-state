@@ -305,7 +305,7 @@ function unroutedTargets(child: Node, at: PatternTarget): readonly PatternTarget
   if (isSpreadElement(child) || isSpreadAssignment(child)) {
     const target = unwrapped(child.expression);
     const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
-    const from = restStart(child);
+    const from = restStart(child, at.from);
     if (pattern) return [{ target, sources, loose: true, ...(from !== undefined && { from }) }];
     return [{ target, sources }];
   }
@@ -316,12 +316,16 @@ function unroutedTargets(child: Node, at: PatternTarget): readonly PatternTarget
   return [{ target: target.left, sources: [...selected, { value: target.right, keys: [] }] }];
 }
 
-/** The position an array rest starts at in its pattern, after entries it leaves to the others; none from the start. */
-function restStart(rest: Node): number | undefined {
+/**
+ * The position an array rest starts at in the source, after the entries the patterns above and
+ * before it leave to the others: the rest's place in its pattern, past the position its pattern
+ * itself starts at when it is under a rest. None from the start.
+ */
+function restStart(rest: Node, under = 0): number | undefined {
   const pattern = rest.parent;
-  const at =
+  const place =
     isSpreadElement(rest) && isArrayLiteralExpression(pattern) ? pattern.elements.indexOf(rest) : 0;
-  return at > 0 ? at : undefined;
+  return under + place > 0 ? under + place : undefined;
 }
 
 /**

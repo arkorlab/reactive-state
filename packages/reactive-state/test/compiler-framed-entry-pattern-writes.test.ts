@@ -961,6 +961,18 @@ const CASES = [
     values: ["'kept':", 'alias:', 'alias:0', 'base:', 'base:0', 'entry:1', 'error:'],
   },
   {
+    id: 'rest-pattern-nested-rest-after-consumed-entries',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[other, ...[entry[1]]]] = [error, 'a', 'kept'])); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'rest-pattern-nested-rest-from-the-start-keeps-the-rest',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([...[other, ...[entry[1]]]] = [error, 'a', 'kept'])); }`,
+    key: 'message',
+    values: ["'a':", "'kept':", "'safe':"],
+  },
+  {
     id: 'named-prototype-key-null-prototype-takes-default',
     source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] = error } = { __proto__: null })); }`,
     key: 'message',
