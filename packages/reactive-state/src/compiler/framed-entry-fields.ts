@@ -331,8 +331,8 @@ function isStable(expression: Expression, seen = new Set<Node>()): boolean {
   if (isObjectLiteralExpression(value)) return true;
   const held = isIdentifier(value) ? frameBindingOf(value) : undefined;
   const declaration = held?.keys.length === 0 ? held.binding : undefined;
-  if (declaration === undefined || !isVariableDeclaration(declaration) || seen.has(declaration))
-    return false;
+  if (declaration === undefined || !isVariableDeclaration(declaration)) return false;
+  if (seen.has(declaration)) return true;
   if (!isIdentifier(declaration.name)) return false;
   seen.add(declaration);
   const { text } = declaration.name;

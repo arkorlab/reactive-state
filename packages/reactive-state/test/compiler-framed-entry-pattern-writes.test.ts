@@ -961,6 +961,24 @@ const CASES = [
     values: ["'kept':", 'alias:', 'alias:0', 'base:', 'base:0', 'entry:1', 'error:'],
   },
   {
+    id: 'computed-key-aliased-constant-spread-overwrites-field',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; const base: { field?: string } = { field: 'kept' }; const alias = base; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...alias })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'alias:', 'alias:0', 'base:', 'base:0'],
+  },
+  {
+    id: 'computed-key-direct-constant-spread-overwrites-field',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; const base: { field?: string } = { field: 'kept' }; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...base })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'base:', 'base:0'],
+  },
+  {
+    id: 'computed-key-alias-chain-spread-overwrites-field',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; const base: { field?: string } = { field: 'kept' }; const first = base; const second = first; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...second })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'base:', 'base:0', 'first:', 'first:0', 'second:', 'second:0'],
+  },
+  {
     id: 'rest-pattern-nested-rest-after-consumed-entries',
     source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[other, ...[entry[1]]]] = [error, 'a', 'kept'])); }`,
     key: 'message',
