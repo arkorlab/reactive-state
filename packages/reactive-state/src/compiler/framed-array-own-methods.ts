@@ -99,6 +99,9 @@ export interface ArrayMethodOverride {
   readonly configurable?: true;
 }
 
+/** The own methods a write names, as far as it shows them. */
+export type OwnMethods = Map<string, ArrayMethodOverride>;
+
 /**
  * The expression a statement of the block evaluates for certain and may write the array's methods
  * with: an expression statement's, the initializer of the one declaration of a plain name, or the
@@ -476,13 +479,91 @@ export function arrayIdentity(value: Expression): FrameBinding | undefined {
   return isArrayLiteralExpression(each) ? root : undefined;
 }
 
+/**
+ * Each source's last explicitly written field wins; an unknown source may restore native methods. A
+ * getter runs where the copy reaches it, and may give the array another method, or the fields after
+ * it another value: the methods are unproven from there on.
+ */
+export function assignMethods(source: Expression, own: OwnMethods): void {
+  const value = unwrapped(source);
+  if (!isObjectLiteralExpression(value)) {
+    forgetMethods(own);
+    return;
+  }
+  let run = false;
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) {
+      forgetMethods(own);
+      continue;
+    }
+    if (isGetAccessorDeclaration(property)) {
+      forgetMethods(own);
+      run = true;
+      continue;
+    }
+    const key = writtenArrayKey(property.name);
+    if (key === undefined) forgetMethods(own);
+    else if (OWN_METHODS.has(key)) {
+      const written = propertyOverride(property);
+      own.set(key, run ? afterPossibleWrite(own.get(key), written) : written);
+    }
+  }
+}
+
+/** A written own method or callable value, with unknown entries kept unproven; a plain property. */
+function propertyOverride(property: Node): ArrayMethodOverride {
+  if (isMethodDeclaration(property)) return { own: true, value: property, ...PLAIN_PROPERTY };
+  if (!isPropertyAssignment(property)) return { own: false };
+  const { initializer } = property;
+  return { own: knownNonNative(initializer), value: initializer, ...PLAIN_PROPERTY };
+}
+
+/** One statically named data descriptor, including restoration to the native implementation. */
+export function defineMethod(call: CallExpression, own: OwnMethods): void {
+  const keyNode = call.arguments[1];
+  const key = keyNode === undefined ? undefined : constantValue(keyNode);
+  if (typeof key !== 'string') {
+    forgetMethods(own);
+    return;
+  }
+  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2], own.get(key)));
+}
+
+/**
+ * Object.defineProperties selects each descriptor by its written property name. A getter of the map
+ * runs where the definitions reach it, and may give the array another method, or the descriptors
+ * after it another value: the methods are unproven from there on.
+ */
+export function descriptorMethods(descriptors: ObjectLiteralExpression, own: OwnMethods): void {
+  let run = false;
+  for (const property of descriptors.properties) {
+    if (isSpreadAssignment(property)) {
+      forgetMethods(own);
+      continue;
+    }
+    if (isGetAccessorDeclaration(property)) {
+      forgetMethods(own);
+      run = true;
+      continue;
+    }
+    const key = writtenArrayKey(property.name);
+    if (key === undefined) forgetMethods(own);
+    else if (OWN_METHODS.has(key)) {
+      const written = isPropertyAssignment(property)
+        ? descriptorFunction(property.initializer, own.get(key))
+        : { own: false };
+      own.set(key, run ? afterPossibleWrite(own.get(key), written) : written);
+    }
+  }
+}
+
 const ACCESSOR_KEYS = new Set(['get', 'set']);
 
 /**
  * A written value function proves a custom implementation; getters and unknown values do not. An
  * attribute the descriptor leaves unsaid stays as the property it redefines had it.
  */
-export function descriptorFunction(
+function descriptorFunction(
   descriptor: Expression | undefined,
   previous?: ArrayMethodOverride,
 ): ArrayMethodOverride {
@@ -560,4 +641,9 @@ function descriptorSays(
           : 'other';
   }
   return says;
+}
+
+/** An opaque write can replace either method and therefore removes a proof of a custom method. */
+export function forgetMethods(own: OwnMethods): void {
+  for (const method of OWN_METHODS) own.set(method, { own: false });
 }
