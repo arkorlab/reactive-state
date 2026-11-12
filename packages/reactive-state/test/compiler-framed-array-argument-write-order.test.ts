@@ -108,9 +108,9 @@ const CASES = [
     converts: false,
   },
   {
-    id: 'other-key-accessor-pin',
+    id: 'other-key-accessor-stays-possible-pin',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'toString', { get: () => Array.prototype.toString, set: () => {} }); values.join = () => 'safe'; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'other-key-definition-pin',
@@ -1055,6 +1055,36 @@ const CASES = [
   {
     id: 'call-argument-runs-before-the-called-function-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((callback: (value: unknown) => unknown) => callback(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })))(() => Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-set-to-native-join-after-custom-join',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-defined-as-native-join-accessor-after-custom-join',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'toString', { get: () => Array.prototype.join, set: () => {} }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-assigned-through-object-assign-to-native-join',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { toString: Array.prototype.join }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-set-to-a-custom-function-after-custom-join-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-untouched-delegates-to-custom-join-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-set-to-native-to-string-after-custom-join-stays-possible-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = Array.prototype.toString; return String(values); }`,
     converts: true,
   },
 ] as const;

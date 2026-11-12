@@ -237,10 +237,14 @@ function elementErrors(
   return false;
 }
 
-/** A prior own method assignment replaces the native method; toString delegates to join as well. */
+/**
+ * A prior own method assignment replaces the native method; toString delegates to join as well,
+ * but only while nothing was written to toString: what is written there runs in its place.
+ */
 function arrayMethodOverridden(receiver: Expression, method: string, call: Node): boolean {
   const own = ownMethods(receiver, call, method);
-  return own.get(method)?.own === true || (method === 'toString' && own.get('join')?.own === true);
+  if (own.get(method)?.own === true) return true;
+  return method === 'toString' && !own.has('toString') && own.get('join')?.own === true;
 }
 
 /** The last source-written override, with its value retained for result-sensitive selectors. */
