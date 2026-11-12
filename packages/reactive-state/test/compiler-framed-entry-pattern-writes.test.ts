@@ -1081,6 +1081,24 @@ const CASES = [
     values: ["'kept':", "'safe':"],
   },
   {
+    id: 'computed-key-integer-field-before-getter-overwrites',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { 0: error, ...{ trigger: 1, 0: 'kept', get trigger() { delete this[0]; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'computed-key-integer-field-after-getter-overwrites',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { 0: error, ...{ get trigger() { delete this[0]; return 0; }, 0: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'computed-key-string-field-after-getter-keeps-earlier-value-pin',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { 0: error, ...{ get trigger() { delete this.field; return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
     id: 'computed-key-replaced-getter-keeps-first-position',
     source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ get trigger() { return 0; }, field: 'kept', get trigger() { delete this.field; return 0; } } })); }`,
     key: 'message',

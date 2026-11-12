@@ -325,7 +325,7 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
   let getterRan = false;
   for (const [at, each] of properties.entries()) {
     getterRan ||= before.has(at);
-    if (!getterRan) names.push(...fieldNames(each, seen));
+    if (!getterRan || isIndexField(each)) names.push(...fieldNames(each, seen));
     getterRan ||= after.has(at) || spreadRunsGetter(each, new Set());
   }
   return names;
@@ -390,10 +390,23 @@ function liveGetter(properties: readonly ObjectLiteralElementLike[], at: number)
     .every((later) => isSetAccessorDeclaration(later) || fieldName(later) !== name);
 }
 
+/** The text of an array index. */
+const INDEX_NAME = /^(?:0|[1-9]\d*)$/u;
+
+/**
+ * Whether a field is written with the name of an array index. A copy reaches those before any other
+ * name, so a getter it runs, none of which is named by an index, has no field of that kind left to
+ * delete wherever the field stands.
+ */
+function isIndexField(property: ObjectLiteralElementLike): boolean {
+  const name = isSpreadAssignment(property) ? undefined : fieldName(property);
+  return name !== undefined && INDEX_NAME.test(name);
+}
+
 /** Whether a field may be named by an array index, which a copy reaches before any other name. */
 function mayBeIndex(property: ObjectLiteralElementLike | undefined): boolean {
   const name = property === undefined ? undefined : fieldName(property);
-  return name === undefined || /^(?:0|[1-9]\d*)$/u.test(name);
+  return name === undefined || INDEX_NAME.test(name);
 }
 
 /**
