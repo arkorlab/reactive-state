@@ -200,6 +200,18 @@ function takes(write: HeldWrite, rest: readonly string[]): Takes | undefined {
   return exact ? { path: [...base, String(start + index)], tail, whole: false } : undefined;
 }
 
+/**
+ * The list a spread copies where it is written out: a literal, or the one name of a constant that
+ * nothing but a read mentions. None for any other list, which may hold its entries elsewhere.
+ */
+export function writtenList(expression: Expression): ArrayLiteralExpression | undefined {
+  const names: Identifier[] = [];
+  const held = valueOf(expression, names);
+  return !isFunctionDeclaration(held) && isArrayLiteralExpression(held) && unchanged(names)
+    ? held
+    : undefined;
+}
+
 /** What reads below the first step of a path read: the fields of a copy are no copy. */
 function below(reading: Reading): Reading {
   return reading.own ? { ...reading, own: false } : reading;

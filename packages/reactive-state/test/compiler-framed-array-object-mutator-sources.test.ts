@@ -2580,6 +2580,51 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; [ignored, ...holder.items] = [error, 'safe']; ({ items: [descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'assign-spread-list-empty-spread-then-entry-hidden-at-runtime-index',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[...[], error], 1: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-entry-survives-inner-spread-start-hidden',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[...['x', error]], 0: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-inner-spread-entry-hidden',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[...[error, 'x']], 0: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-spread-list-held-spread-entry-hidden',
+    source: `function frames(error: Error) { const a = ['safe']; const pair = [error, 'x']; Object.assign(a, { ...[...pair], 0: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-spread-list-held-spread-later-entry-kept',
+    source: `function frames(error: Error) { const a = ['safe']; const pair = [error]; Object.assign(a, { ...[...pair, 'x'], 1: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-held-spread-first-entry-hidden',
+    source: `function frames(error: Error) { const a = ['safe']; const pair = [error]; Object.assign(a, { ...[...pair, 'x'], 0: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-spread-list-unknown-spread-keeps-entries',
+    source: `function frames(error: Error, list: unknown[]) { const a = ['safe']; Object.assign(a, { ...[...list, error], 0: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-hole-takes-a-position',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[, error], 0: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-doubling-lists-terminate',
+    source: `function frames(error: Error) { const a = ['safe']; const s0: unknown[] = []; const s1 = [...s0, ...s0]; const s2 = [...s1, ...s1]; const s3 = [...s2, ...s2]; const s4 = [...s3, ...s3]; const s5 = [...s4, ...s4]; const s6 = [...s5, ...s5]; const s7 = [...s6, ...s6]; const s8 = [...s7, ...s7]; const s9 = [...s8, ...s8]; const s10 = [...s9, ...s9]; const s11 = [...s10, ...s10]; const s12 = [...s11, ...s11]; const s13 = [...s12, ...s12]; const s14 = [...s13, ...s13]; const s15 = [...s14, ...s14]; const s16 = [...s15, ...s15]; const s17 = [...s16, ...s16]; const s18 = [...s17, ...s17]; const s19 = [...s18, ...s18]; const s20 = [...s19, ...s19]; const s21 = [...s20, ...s20]; const s22 = [...s21, ...s21]; const s23 = [...s22, ...s22]; const s24 = [...s23, ...s23]; const s25 = [...s24, ...s24]; Object.assign(a, { ...[...s25, error], 0: 'safe' }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

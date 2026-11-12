@@ -28,6 +28,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
+import { listSource } from './framed-list-sources.ts';
 import { mutatorInvocation, PATHS, returnedTarget } from './framed-mutator-calls.ts';
 import {
   accessedValues,
@@ -217,7 +218,7 @@ function assignedValues(
   if (isSpreadElement(source))
     return iteratedFrameSources(source.expression).map((each) => atSlot(each, index));
   const value = unwrapped(source);
-  if (isArrayLiteralExpression(value)) return listSource(value, hidden);
+  if (isArrayLiteralExpression(value)) return listSource(value, hidden.data);
   if (!isObjectLiteralExpression(value)) {
     const names: Identifier[] = [];
     const held = heldValue(value, names);
@@ -241,21 +242,6 @@ function assignedValues(
 function writesTo(names: readonly Identifier[], reading: Reading): readonly HeldWrite[] {
   const [first] = names;
   return first === undefined ? [] : heldMemberWrites(first, names, reading.at);
-}
-
-/**
- * The elements a list source installs: the list whole where no field after it names a position, the
- * entries at the other positions where one does. A spread entry, whose length the compile does not
- * know, stays a list.
- */
-function listSource(list: ArrayLiteralExpression, hidden: Hidden): WrittenArrayElement[] {
-  if (hidden.data.size === 0) return [{ value: list, keys: [], array: true }];
-  return list.elements.flatMap((each, at): WrittenArrayElement[] => {
-    if (isOmittedExpression(each) || hidden.data.has(String(at))) return [];
-    return isSpreadElement(each)
-      ? [{ value: each.expression, keys: [], array: true }]
-      : [{ value: each, keys: [] }];
-  });
 }
 
 /**
