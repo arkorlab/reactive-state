@@ -80,7 +80,8 @@ export type FunctionSelector = (
 
 /**
  * What the function a name returns, that a pattern took out of a constant: the functions the
- * initializer holds at the path the pattern selected.
+ * initializer held at the path the pattern selected, as the declaration took them: a write to the
+ * constant after it changes what was taken out no more.
  */
 function destructuredReturns(
   held: Expression | FunctionDeclaration,
@@ -93,7 +94,7 @@ function destructuredReturns(
     selected !== undefined && selected.keys.length > 0 ? selected.binding : undefined;
   if (declaration === undefined || !isVariableDeclaration(declaration)) return [];
   if (!isConstant(declaration) || declaration.initializer === undefined) return [];
-  return select(declaration.initializer, selected?.keys ?? [], held)
+  return select(declaration.initializer, selected?.keys ?? [], declaration)
     .filter((each) => each.keys.length === 0)
     .flatMap((each) => functionReturns(each.value, seen, select));
 }

@@ -2726,6 +2726,16 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-getter-from-destructured-held-object-written-after-capture',
+    source: `function frames(error: Error) { const a = ['safe']; const source: any = { get: () => 'safe' }; const { get } = source; source.get = () => error; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-getter-from-destructured-held-object-written-before-capture',
+    source: `function frames(error: Error) { const a = ['safe']; const source: any = { get: () => 'safe' }; source.get = () => error; const { get } = source; Object.defineProperty(a, 0, { get }); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-safe-getter-from-destructured-constant-pin',
     source: `function frames(error: Error) { const a = ['safe']; const { get } = { get: () => 'safe' }; Object.defineProperty(a, 0, { get }); return String(a); }`,
     converts: false,
