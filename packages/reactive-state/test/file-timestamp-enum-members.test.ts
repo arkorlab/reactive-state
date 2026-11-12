@@ -38,6 +38,10 @@ const CASES = [
     what: 'a member of an enum a namespace’s other body exports',
   },
   {
+    source: `namespace C { namespace A { export namespace N { export enum E { field = 'other' } } } namespace A { export namespace N { export enum E { entry = ${MAKES} } } } }`,
+    what: 'a member of an enum of a nested namespace in the other of two bodies of a namespace its enclosing body keeps private',
+  },
+  {
     source: `function make() { enum E { field = 'other', entry = ${MAKES} } }`,
     what: 'a member of an enum of a function’s body',
   },
@@ -63,6 +67,31 @@ const PINS = [
     dated: true,
     source: `enum E { entry = ${MAKES} }`,
     what: 'an enum of no member of the name (pin)',
+  },
+  {
+    dated: true,
+    source: `namespace N { export enum E { field = 'other' } } namespace N { enum E { entry = ${MAKES} } }`,
+    what: 'an enum that is not exported beside one that is (pin)',
+  },
+  {
+    dated: true,
+    source: `declare namespace N { enum E { field = 'other' } } namespace N { enum E { entry = ${MAKES} } }`,
+    what: 'an enum that is not exported beside an ambient one (pin)',
+  },
+  {
+    dated: true,
+    source: `namespace N { declare enum E { field = 'other' } } namespace N { export enum E { entry = ${MAKES} } }`,
+    what: 'an enum declared in a body that is not ambient (pin)',
+  },
+  {
+    dated: true,
+    source: `declare namespace N { export {}; enum E { field = 'other' } } namespace N { export enum E { entry = ${MAKES} } }`,
+    what: 'an enum of an ambient namespace that exports by `export {}` (pin)',
+  },
+  {
+    dated: true,
+    source: `declare namespace A { namespace N { enum E { field = 'other' } } export {}; } namespace A { export namespace N { export enum E { entry = ${MAKES} } } }`,
+    what: 'an enum of a nested namespace that an ambient body keeps private (pin)',
   },
 ] as const;
 
