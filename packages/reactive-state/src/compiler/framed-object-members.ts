@@ -124,7 +124,7 @@ function assignedEntries(
       continue;
     }
     inherited.push(...copiedPrototypes(object, key));
-    const prototypeSetter = setters.keys.includes('__proto__');
+    const prototypeSetter = setters.unreadable || setters.keys.includes('__proto__');
     installSetters(object, setters);
     if (setters.unreadable || setters.keys.length > 0)
       inherited.push(...copiedValues(object, setters.keys, prototypeSetter));
@@ -190,7 +190,7 @@ function setterKeys(prototype: AssignedFrameSource): readonly string[] | undefin
  * it under any key: the values of a literal's own entries are possible values of any field, and an
  * opaque spread's member of each key a setter answers. A written `__proto__: value` is no entry,
  * and an own `__proto__` entry sets a prototype, unless an earlier prototype's setter answers
- * `__proto__`, which it is then given.
+ * `__proto__`, or may, where the compile cannot read it: the entry is then given to the setter.
  */
 function copiedValues(
   object: ObjectLiteralExpression,
