@@ -291,7 +291,9 @@ function jumpsOut(block: Node): boolean {
  * on their way out, whatever their place before it, unless `target` lies in the block too.
  */
 export function jumpsOver(scope: Node, write: Node, target: Node, body: Node): boolean {
-  const from = pendingFrom(write, scope, target);
+  const loops = loopsRound(write, scope, target);
+  const base = pendingFrom(write, scope, target);
+  const from = Math.min(base, ...loops.map((each) => each.pos));
   const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
@@ -299,7 +301,8 @@ export function jumpsOver(scope: Node, write: Node, target: Node, body: Node): b
       node.pos >= from &&
       node.pos < target.pos &&
       framedPossibleBranch(node) &&
-      !inExclusiveArms(write, node) &&
+      !(node.pos < base && endsRun(node, body)) &&
+      !inExclusiveArms(write, node, loops) &&
       skips(node, target, body)
     )
       return true;
@@ -310,16 +313,25 @@ export function jumpsOver(scope: Node, write: Node, target: Node, body: Node): b
   return false;
 }
 
+/** Whether a break leaves the loop whose body it is asked about, or one around it: no pass follows. */
+function endsRun(jump: Node, body: Node): boolean {
+  if (!isBreakStatement(jump)) return false;
+  const destination = jumpTarget(jump);
+  return destination !== undefined && destination.pos <= body.pos && body.end <= destination.end;
+}
+
 /**
  * Whether two nodes lie in the two arms of one if statement or conditional expression: where the
  * one runs the other does not, so a jump in the second skips nothing after a write in the first. A
- * jump that holds the write is not in an arm of its own: it goes after the write is made.
+ * jump that holds the write is not in an arm of its own: it goes after the write is made. Within a
+ * loop that comes round to the write, the two arms run in different passes.
  */
-function inExclusiveArms(first: Node, second: Node): boolean {
+function inExclusiveArms(first: Node, second: Node, loops: readonly Node[]): boolean {
   if (second.pos <= first.pos && first.end <= second.end) return false;
   for (let at = first; !isSourceFile(at); at = at.parent) {
     const { parent } = at;
     if (parent.pos > second.pos || parent.end < second.end) continue;
+    if (loops.some((each) => withinBody(parent, each))) return false;
     let other = second;
     while (other.parent !== parent) other = other.parent;
     let arms: readonly (Node | undefined)[] = [];
@@ -353,6 +365,19 @@ function returnsPast(statement: Node, target: Node, body: Node): boolean {
     return inside && at.pos <= target.pos && target.end <= at.end;
   }
   return false;
+}
+
+/**
+ * The loops within `scope` that hold the write and not `target`, and may come round to the write
+ * again before they end: a jump of theirs that lies before the write in the source may run after
+ * the write in a later pass, and the arms of a branch of theirs run in different passes.
+ */
+function loopsRound(write: Node, scope: Node, target: Node): readonly Node[] {
+  const loops: Node[] = [];
+  let within = write;
+  for (let at = write.parent; at !== scope && !isSourceFile(at); within = at, at = at.parent)
+    if (canRepeat(at) && !runsOnce(within, at) && !withinBody(target, at)) loops.push(at);
+  return loops;
 }
 
 /**

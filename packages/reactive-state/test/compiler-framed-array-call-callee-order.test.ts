@@ -1897,6 +1897,86 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'jump-before-the-write-in-an-inner-loop-goes-round-the-outer-one',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) continue outer; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'opposite-arms-in-an-inner-loop-run-in-different-iterations',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 0) values.join = Array.prototype.join; else continue outer; } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'break-of-the-outer-loop-in-an-inner-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) break outer; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'return-in-an-inner-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) return seen; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'jump-after-the-write-in-an-inner-loop-goes-round-the-outer-one',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { values.join = Array.prototype.join; if (inner === 0) continue outer; } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'jump-before-the-write-that-only-skips-the-inner-pass-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) continue; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'opposite-arms-of-one-evaluation-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { if (pass === 5) continue outer; else values.join = Array.prototype.join; values.join = () => 'fixed'; } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'jump-before-the-write-in-an-inner-while-loop',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { let inner = 0; while (inner++ < 2) { if (inner === 2) continue outer; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'jump-before-the-write-in-a-switch-of-an-inner-loop',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { switch (i) { case 1: continue outer; default: values.join = Array.prototype.join; } } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'jump-before-the-write-in-a-try-of-an-inner-loop',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { try { if (i === 1) continue outer; values.join = Array.prototype.join; } finally { } } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'jump-before-the-write-in-two-inner-loops',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let a = 0; a < 2; a++) { for (let b = 0; b < 2; b++) { if (a === 1 && b === 1) continue outer; values.join = Array.prototype.join; } } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'conditional-arms-run-in-different-passes-of-an-inner-loop',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { i === 0 ? (values.join = Array.prototype.join) : (() => { })(); if (i === 1) continue outer; } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'else-if-arms-run-in-different-passes-of-an-inner-loop',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 3; i++) { if (i === 0) { values.join = Array.prototype.join; } else if (i === 1) { continue outer; } } values.join = () => 'fixed'; } return seen; }`,
+    converts: true,
+  },
+  {
+    id: 'jump-in-a-loop-that-ends-before-the-write-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { if (i === 1) continue outer; } values.join = Array.prototype.join; values.join = () => 'fixed'; } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'jump-before-the-write-with-the-target-in-the-same-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { if (i === 1) continue outer; values.join = Array.prototype.join; values.join = () => 'fixed'; } } return seen; }`,
+    converts: false,
+  },
+  {
+    id: 'break-of-a-labeled-block-in-the-inner-loop-pin',
+    source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { blk: { values.join = Array.prototype.join; if (i === 0) break blk; } } values.join = () => 'fixed'; } return seen; }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
