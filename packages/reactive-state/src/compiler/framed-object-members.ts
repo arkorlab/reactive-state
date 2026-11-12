@@ -16,6 +16,7 @@ import {
   isStringLiteral,
   type ObjectLiteralExpression,
   type PropertyName,
+  type SpreadAssignment,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -123,9 +124,10 @@ function assignedEntries(
       continue;
     }
     inherited.push(...copiedPrototypes(object, key));
+    const prototypeSetter = setters.keys.includes('__proto__');
     installSetters(object, setters);
     if (setters.unreadable || setters.keys.length > 0)
-      inherited.push(...copiedValues(object, setters.keys));
+      inherited.push(...copiedValues(object, setters.keys, prototypeSetter));
     const selected = ownEntries(object, key);
     if (selected.own) values = selected.values;
     else values.push(...selected.values);
@@ -185,13 +187,15 @@ function setterKeys(prototype: AssignedFrameSource): readonly string[] | undefin
 
 /**
  * A setter the target's prototype holds is called with each value copied after it and may store
- * it under any key: the values of a literal's own entries, other than the `__proto__` entry that
- * sets a prototype, are possible values of any field, and an opaque spread's member of each key a
- * setter answers.
+ * it under any key: the values of a literal's own entries are possible values of any field, and an
+ * opaque spread's member of each key a setter answers. A written `__proto__: value` is no entry,
+ * and an own `__proto__` entry sets a prototype, unless an earlier prototype's setter answers
+ * `__proto__`, which it is then given.
  */
 function copiedValues(
   object: ObjectLiteralExpression,
   setters: readonly string[],
+  prototypeSetter: boolean,
 ): readonly AssignedFrameSource[] {
   const found: AssignedFrameSource[] = [];
   const pending = [object];
@@ -201,14 +205,22 @@ function copiedValues(
         const spread = unwrapped(property.expression);
         if (isObjectLiteralExpression(spread)) pending.push(spread);
         else found.push(...keyedValues(property.expression, setters));
-        continue;
+      } else if (copiedEntry(property, prototypeSetter)) {
+        found.push(...entryValues(property).map((value) => ({ value, keys: [] })));
       }
-      const names = memberNames(property.name);
-      if (names?.length === 1 && names[0] === '__proto__') continue;
-      found.push(...entryValues(property).map((value) => ({ value, keys: [] })));
     }
   }
   return found;
+}
+
+/** Whether a property is an own entry a setter may be given: not a written prototype, nor one set. */
+function copiedEntry(
+  property: Exclude<ObjectLiteralExpression['properties'][number], SpreadAssignment>,
+  prototypeSetter: boolean,
+): boolean {
+  if (isPropertyAssignment(property) && prototypeName(property.name)) return false;
+  const names = memberNames(property.name);
+  return prototypeSetter || names?.length !== 1 || names[0] !== '__proto__';
 }
 
 /**
