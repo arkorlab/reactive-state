@@ -2646,6 +2646,11 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-prototype-field-shadowed-by-constant-spread-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const own = { get: () => 'safe' }; Object.defineProperty(a, 0, { __proto__: { get: () => error }, ...own }); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'assign-spread-list-shared-doubling-lists-safe-terminate',
     source: `function frames(error: Error) { const a = ['safe']; const s0 = ['safe']; const s1 = [...s0, ...s0]; const s2 = [...s1, ...s1]; const s3 = [...s2, ...s2]; const s4 = [...s3, ...s3]; const s5 = [...s4, ...s4]; const s6 = [...s5, ...s5]; const s7 = [...s6, ...s6]; const s8 = [...s7, ...s7]; const s9 = [...s8, ...s8]; const s10 = [...s9, ...s9]; const s11 = [...s10, ...s10]; const s12 = [...s11, ...s11]; const s13 = [...s12, ...s12]; const s14 = [...s13, ...s13]; const s15 = [...s14, ...s14]; const s16 = [...s15, ...s15]; const s17 = [...s16, ...s16]; const s18 = [...s17, ...s17]; const s19 = [...s18, ...s18]; const s20 = [...s19, ...s19]; const s21 = [...s20, ...s20]; const s22 = [...s21, ...s21]; const s23 = [...s22, ...s22]; const s24 = [...s23, ...s23]; const s25 = [...s24, ...s24]; Object.assign(a, { ...[...s25], 0: 'safe' }); return String(a); }`,
     converts: false,
