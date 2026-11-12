@@ -86,8 +86,8 @@ interface Reading {
   readonly seen: {
     readonly full: Map<Node, readonly Hidden[]>;
     readonly own: Map<Node, readonly Hidden[]>;
-    readonly maps: Map<Node, readonly Hidden[]>;
-    readonly sources: Map<Node, readonly Hidden[]>;
+    readonly maps: SlotReads;
+    readonly sources: SlotReads;
   };
 }
 
@@ -105,6 +105,35 @@ const NOTHING_HIDDEN: Hidden = { data: new Set(), getters: new Set() };
 /** How many reads of one object are kept apart: past it, one read under their common names covers all. */
 const READS = { kept: 4 } as const;
 
+/** What reads of the objects a constant holds have covered, apart for each slot read: none is all of them. */
+type SlotReads = Map<number | undefined, Map<Node, readonly Hidden[]>>;
+
+/**
+ * The names to read an object under for a slot, none where it has already been read for the slot, or
+ * for every slot, under names hidden no more than now: a read of one slot reads no entry another
+ * asks for, and a read of every slot reads what any slot does.
+ */
+function readUnderSlot(
+  reads: SlotReads,
+  index: number | undefined,
+  held: Node,
+  hidden: Hidden,
+): Hidden | undefined {
+  const every = reads.get(undefined);
+  if (index !== undefined && every !== undefined && coveredBy(every.get(held) ?? [], hidden))
+    return undefined;
+  const table = reads.get(index) ?? new Map<Node, readonly Hidden[]>();
+  reads.set(index, table);
+  return readUnder(table, held, hidden);
+}
+
+/** Whether one of the reads hid no more names than now. */
+function coveredBy(earlier: readonly Hidden[], hidden: Hidden): boolean {
+  return earlier.some(
+    (each) => isSubset(each.data, hidden.data) && isSubset(each.getters, hidden.getters),
+  );
+}
+
 /**
  * The names to read an object under, none where it has already been read under names hidden no
  * more than now: a read under fewer hidden names reads everything a read under more would. Past a
@@ -117,10 +146,7 @@ function readUnder(
   hidden: Hidden,
 ): Hidden | undefined {
   const earlier = table.get(held) ?? [];
-  const covered = earlier.some(
-    (each) => isSubset(each.data, hidden.data) && isSubset(each.getters, hidden.getters),
-  );
-  if (covered) return undefined;
+  if (coveredBy(earlier, hidden)) return undefined;
   const used = hiddenFor(earlier, hidden);
   table.set(held, [...earlier, { data: new Set(used.data), getters: new Set(used.getters) }]);
   return used;
@@ -225,7 +251,9 @@ function assignedValues(
     const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
     const opaque = opaqueSource(source, index);
     const used =
-      alternatives === undefined ? undefined : readUnder(reading.seen.sources, held, hidden);
+      alternatives === undefined
+        ? undefined
+        : readUnderSlot(reading.seen.sources, index, held, hidden);
     if (alternatives === undefined) return opaque;
     const written = sourceWrites(names, index, reading, hidden);
     if (used === undefined) return [...opaque, ...written];
@@ -386,7 +414,9 @@ function definedValues(
     const literal = isObjectLiteralExpression(held) || isArrayLiteralExpression(held);
     const alternatives = literal ? [held] : alternativesOf(held);
     const used =
-      alternatives === undefined ? undefined : readUnder(reading.seen.maps, held, hidden);
+      alternatives === undefined
+        ? undefined
+        : readUnderSlot(reading.seen.maps, index, held, hidden);
     if (alternatives === undefined) return opaque;
     const written = mapWrites(names, index, reading, hidden);
     if (used === undefined) return [...opaque, ...written];

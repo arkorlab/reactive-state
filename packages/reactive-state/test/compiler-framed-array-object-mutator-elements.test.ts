@@ -90,6 +90,44 @@ const CASES = [
     index: undefined,
     elements: [],
   },
+  {
+    id: 'define-map-shifted-list-spread-after-slot-read',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe', 'safe', 'safe']; const L = [{ get: () => error }, { value: 'safe' }]; const M = [{ value: 'safe' }, { get: () => error }]; Object.defineProperties(values, { ...L, ...[{ value: 'safe' }, ...M], ...M }); return values; }`,
+    index: 2,
+    elements: ['L:2.value', 'M:2.value', 'M:0.value', "'safe':", 'error:', 'M:2.value'],
+  },
+  {
+    id: 'define-map-list-spread-after-slot-read',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe', 'safe', 'safe']; const L = [{ get: () => error }, { value: 'safe' }]; const M = [{ value: 'safe' }, { get: () => error }]; Object.defineProperties(values, [...L, { value: 'safe' }, ...M]); return values; }`,
+    index: 2,
+    elements: [
+      'L:2.value',
+      'L:0.value',
+      'error:',
+      "'safe':",
+      "'safe':",
+      'M:2.value',
+      'M:0.value',
+      "'safe':",
+      'error:',
+    ],
+  },
+  {
+    id: 'define-map-shifted-list-spread-any-slot',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe', 'safe', 'safe']; const L = [{ get: () => error }, { value: 'safe' }]; const M = [{ value: 'safe' }, { get: () => error }]; Object.defineProperties(values, { ...L, ...[{ value: 'safe' }, ...M], ...M }); return values; }`,
+    index: undefined,
+    elements: [
+      'L:0.value',
+      'error:',
+      "'safe':",
+      "'safe':",
+      'M:0.value',
+      'M:0.value',
+      'M:0.value',
+      "'safe':",
+      'error:',
+    ],
+  },
 ] as const;
 
 describe('array elements native object mutators install', () => {
