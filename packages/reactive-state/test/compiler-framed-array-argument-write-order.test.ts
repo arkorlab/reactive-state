@@ -1037,6 +1037,26 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; try { Object.assign(values, { join: Array.prototype.join }, { length: -1, join: () => 'safe' }); } finally { return String(values); } }`,
     converts: true,
   },
+  {
+    id: 'iife-argument-runs-before-body',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((unused: unknown) => Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }))(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iife-argument-accessor-then-body-data-definition-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((unused: unknown) => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }))(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-function-expression-argument-runs-before-body',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: (function (unused: unknown) { return Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); })(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'call-argument-runs-before-the-called-function-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((callback: (value: unknown) => unknown) => callback(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })))(() => Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
