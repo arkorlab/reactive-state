@@ -9,6 +9,8 @@ import {
   isComputedPropertyName,
   isIdentifier,
   isExpression,
+  isForInStatement,
+  isForOfStatement,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPropertyAssignment,
@@ -17,6 +19,8 @@ import {
   isSpreadAssignment,
   isVoidExpression,
   type Node,
+  type ObjectLiteralElementLike,
+  type SpreadAssignment,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -181,23 +185,100 @@ function arraySource(
     : [{ value: element, keys: [] }];
 }
 
-/** A surviving literal own entry, without executing getters or unknown spread sources. */
+/**
+ * A surviving literal own entry, without executing getters or unknown spread sources. A spread of a
+ * written object has the entries that object writes, and is passed over where it has none of the
+ * key; what it copies is its own entries, and a prototype it sets is none of them. A key no own
+ * entry names comes from the prototype the literal writes.
+ */
 function objectSource(
   value: ObjectLiteralExpression,
   key: string,
   opaque: AssignedFrameSource,
+  own = false,
 ): readonly AssignedFrameSource[] {
   for (const property of value.properties.toReversed()) {
-    if (isSpreadAssignment(property)) return [opaque];
-    const name = literalKey(property.name);
-    if (name === undefined) return [opaque];
-    if (name !== key) continue;
-    if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
-    if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
-      return [{ value: property.name, keys: [] }];
-    return [opaque];
+    const found = isSpreadAssignment(property)
+      ? spreadSource(property.expression, key, opaque)
+      : fieldSource(property, key, opaque);
+    if (found !== undefined && found.length > 0) return found;
   }
-  return [];
+  return own ? [] : prototypeSource(value, key, opaque);
+}
+
+/**
+ * What the prototype a literal writes selects of a key no own entry names: the entry of a written
+ * object or list, none for `null`, and the path for any other prototype, which the compile does not
+ * read. A written `__proto__: value` is no own entry, and a read of `__proto__` itself gives the
+ * prototype it sets, none where that is `null`: no prototype has the accessor to read.
+ */
+function prototypeSource(
+  value: ObjectLiteralExpression,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const field = value.properties.find((property) => setsPrototype(property));
+  if (field === undefined || !isPropertyAssignment(field)) return [];
+  const prototype = unwrapped(field.initializer);
+  if (prototype.kind === SyntaxKind.NullKeyword) return [];
+  if (key === '__proto__') return protoRead(field.initializer, opaque);
+  if (isObjectLiteralExpression(prototype)) return objectSource(prototype, key, opaque);
+  return isArrayLiteralExpression(prototype) ? arraySource(prototype, key, opaque) : [opaque];
+}
+
+/**
+ * What a read of `__proto__` gives where no entry of the source has the name: an own field of that
+ * name on a prototype of the chain that is written out, else the accessor of Object.prototype, which
+ * hands over the first prototype, unless the chain ends in `null` before it. A prototype that is not
+ * written out is taken as the accessor gives it.
+ */
+function protoRead(first: Expression, opaque: AssignedFrameSource): readonly AssignedFrameSource[] {
+  let at = first;
+  for (;;) {
+    const prototype = unwrapped(at);
+    if (prototype.kind === SyntaxKind.NullKeyword) return [];
+    if (!isObjectLiteralExpression(prototype)) return [{ value: first, keys: [] }];
+    const own = objectSource(prototype, '__proto__', opaque, true);
+    if (own.length > 0) return own;
+    const next = prototype.properties.find((property) => setsPrototype(property));
+    if (next === undefined || !isPropertyAssignment(next)) return [{ value: first, keys: [] }];
+    at = next.initializer;
+  }
+}
+
+/** What one field selects: its value for its key, the path for one that is unknown, else none. */
+function fieldSource(
+  property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] | undefined {
+  if (setsPrototype(property)) return undefined;
+  const name = literalKey(property.name);
+  if (name === undefined) return [opaque];
+  if (name !== key) return undefined;
+  if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
+  if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+    return [{ value: property.name, keys: [] }];
+  return [opaque];
+}
+
+/** What a spread selects: the entry a written object has, none where it has none, else the path. */
+function spreadSource(
+  copied: Expression,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const value = unwrapped(copied);
+  return isObjectLiteralExpression(value) ? objectSource(value, key, opaque, true) : [opaque];
+}
+
+/** A written `__proto__: value`, which sets the prototype; `['__proto__']` and a shorthand do not. */
+export function setsPrototype(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
+    literalKey(property.name) === '__proto__'
+  );
 }
 
 /** A missing or possibly undefined selection may take its written fallback. */
@@ -236,30 +317,41 @@ function mayBeUndefined(source: AssignedFrameSource): boolean {
 }
 
 /** Literal computed keys only; arbitrary key expressions retain their existing opaque boundary. */
-function literalKey(name: PropertyName): string | undefined {
+export function literalKey(name: PropertyName): string | undefined {
   if (isIdentifier(name)) return name.text;
   const key = isComputedPropertyName(name) ? name.expression : name;
   const value = isExpression(key) ? constantValue(key) : undefined;
   return value === undefined ? undefined : String(value);
 }
 
-/** A default inside an enclosing assignment pattern is evaluated by that pattern's selected value. */
-export function assignmentPatternDefault(node: Node): boolean {
+/** The outermost array or object literal a node is written in, through property initializers. */
+function patternRoot(node: Node): Node {
   let at = node;
   for (;;) {
     const parent = at.parent;
-    if (
+    const within =
       isArrayLiteralExpression(parent) ||
       isObjectLiteralExpression(parent) ||
-      (isPropertyAssignment(parent) && parent.initializer === at)
-    ) {
-      at = parent;
-      continue;
-    }
-    return (
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === at
-    );
+      (isPropertyAssignment(parent) && parent.initializer === at);
+    if (!within) return at;
+    at = parent;
   }
+}
+
+/** A default inside an enclosing assignment pattern is evaluated by that pattern's selected value. */
+export function assignmentPatternDefault(node: Node): boolean {
+  const root = patternRoot(node);
+  const parent = root.parent;
+  return (
+    isBinaryExpression(parent) &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+    parent.left === root
+  );
+}
+
+/** A default inside a pattern a loop head holds is evaluated by the head's selected value. */
+export function loopHeadDefault(node: Node): boolean {
+  const root = patternRoot(node);
+  const parent = root.parent;
+  return (isForOfStatement(parent) || isForInStatement(parent)) && parent.initializer === root;
 }

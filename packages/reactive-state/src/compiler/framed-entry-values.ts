@@ -7,13 +7,22 @@ import {
   isArrayLiteralExpression,
   isElementAccessExpression,
   isConditionalExpression,
+  isExpression,
+  isForInStatement,
+  isForOfStatement,
   isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isOmittedExpression,
+  isObjectLiteralExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
   isStringLiteral,
+  isVoidExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isSpreadElement,
@@ -22,10 +31,19 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
+import {
+  type AssignedFrameSource,
+  assignmentPatternDefault,
+  assignmentPatternTargets,
+  iteratedFrameSources,
+  loopHeadDefault,
+} from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { possibleFields } from './framed-entry-fields.ts';
+import { UnfollowableError } from './framed-getter-writes.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -49,6 +67,15 @@ export function framedEntryValues(
   node: Expression,
   key: string,
 ): readonly AssignedFrameSource[] | undefined {
+  try {
+    return entryValuesOf(node, key);
+  } catch (error) {
+    if (error instanceof UnfollowableError) return undefined;
+    throw error;
+  }
+}
+
+function entryValuesOf(node: Expression, key: string): readonly AssignedFrameSource[] | undefined {
   if (!framedEntriesCall(node)) return undefined;
   const argument = framedArgumentPrefix(node, node.arguments, 1);
   const input = argument.values[0];
@@ -125,14 +152,42 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
     node.forEachChild((child) => {
       pending.push(child);
     });
-    const slot = tupleWrite(node, aliases);
-    if (slot === null || !isBinaryExpression(node) || executionOwner(node) !== owner) continue;
-    if (!reachedWrite(node, call)) continue;
-    if (slot === undefined || slot === '0') key = true;
-    if ((slot === undefined || slot === '1') && VALUE_WRITES.has(node.operatorToken.kind))
-      values.push({ value: node.right, keys: [] });
+    if (executionOwner(node) !== owner) continue;
+    for (const write of slotWrites(node, aliases)) {
+      if (!reachedWrite(node, call)) break;
+      if (write.slot === undefined || write.slot === '0') key = true;
+      if (write.slot === undefined || write.slot === '1') values.push(...write.sources);
+    }
   }
-  return { key, values };
+  return {
+    key,
+    values: values.filter(
+      (each, at) => values.findIndex((other) => sameSource(other, each)) === at,
+    ),
+  };
+}
+
+/**
+ * The slots a node writes on the tuple's bindings, with the values it hands them. A default inside
+ * a pattern is no assignment of its own, whatever its left is: the enclosing pattern, or the loop
+ * head that holds it, evaluates it or not, and routes its right side where it does.
+ */
+function slotWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
+  if (assignmentPatternDefault(node) || loopHeadDefault(node)) return [];
+  const slot = tupleWrite(node, aliases);
+  if (slot === null) return patternWrites(node, aliases);
+  if (isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind))
+    return [{ slot, sources: [{ value: node.right, keys: [] }] }];
+  return [{ slot, sources: [] }];
+}
+
+/** A default is read as the write it is and as the value its pattern falls back to: one source. */
+function sameSource(left: AssignedFrameSource, right: AssignedFrameSource): boolean {
+  return (
+    left.value === right.value &&
+    left.keys.length === right.keys.length &&
+    left.keys.every((key, at) => key === right.keys[at])
+  );
 }
 
 /**
@@ -187,7 +242,178 @@ function tupleWrite(node: Node, aliases: ReadonlySet<FrameBinding>): string | un
   if (!isBinaryExpression(node)) return null;
   const kind = node.operatorToken.kind;
   if (kind < SyntaxKind.FirstAssignment || kind > SyntaxKind.LastAssignment) return null;
-  const member = unwrapped(node.left);
+  return memberSlot(node.left, aliases);
+}
+
+interface SlotWrite {
+  readonly slot: string | undefined;
+  readonly sources: readonly AssignedFrameSource[];
+}
+
+interface PatternTarget {
+  readonly target: Expression;
+  readonly sources: readonly AssignedFrameSource[];
+  /** Set under a rest: the pattern reads the container's elements at offsets the compile cannot tell. */
+  readonly loose?: true;
+  /** Under an array rest: the position it starts at, before which the entries are consumed. */
+  readonly from?: number;
+}
+
+/**
+ * The slots a destructuring assignment or a loop head writes on the tuple's bindings, each with the
+ * values its pattern hands it. Where the pattern readers do not route a target, a rest or a
+ * computed key, it keeps its slot and may take any field or element of the sources at its level.
+ */
+function patternWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrite[] {
+  const start = patternStart(node);
+  if (start === undefined) return [];
+  const found: SlotWrite[] = [];
+  const pending: PatternTarget[] = [start];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    const target = unwrapped(at.target);
+    const slot = memberSlot(target, aliases);
+    if (slot !== null) found.push({ slot, sources: at.sources });
+    else if (!isIdentifier(target)) pending.push(...patternTargets(target, at));
+  }
+  return found;
+}
+
+/** The targets a pattern goes on to: those the pattern readers route, and its others unrouted. */
+function patternTargets(target: Expression, at: PatternTarget): readonly PatternTarget[] {
+  const routed = at.loose === true ? [] : assignmentPatternTargets(target, at.sources);
+  const covered = new Set<Node>(routed.map((each) => each.target));
+  const unrouted = patternChildren(target)
+    .filter((child) => !covered.has(child))
+    .flatMap((child) => unroutedTargets(child, at));
+  return [...routed, ...unrouted];
+}
+
+/** The targets a pattern or a default names directly, each as the pattern readers route it. */
+function patternChildren(target: Expression): readonly Node[] {
+  if (isBinaryExpression(target)) return [target.left];
+  if (isArrayLiteralExpression(target))
+    return target.elements.filter((each) => !isOmittedExpression(each));
+  if (!isObjectLiteralExpression(target)) return [];
+  return target.properties.flatMap((property): Node[] => {
+    if (isPropertyAssignment(property)) return [property.initializer];
+    if (isSpreadAssignment(property)) return [property];
+    return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+      ? [property.name]
+      : [];
+  });
+}
+
+/**
+ * What a target the pattern readers do not route goes on to. A computed key hands it any field or
+ * element of the sources, and it is routed against those, a default's right side among them; a
+ * rest target takes a fresh container of its level, not what the container holds, and a pattern
+ * under a rest reads the container's elements. The receiver and the index of a member that is not
+ * the tuple's, and a computed key itself, are reads.
+ */
+function unroutedTargets(child: Node, at: PatternTarget): readonly PatternTarget[] {
+  const { sources } = at;
+  if (isSpreadElement(child) || isSpreadAssignment(child)) {
+    const target = unwrapped(child.expression);
+    const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
+    const from = restStart(child, at.from);
+    if (pattern) return [{ target, sources, loose: true, ...(from !== undefined && { from }) }];
+    return [{ target, sources }];
+  }
+  if (!isExpression(child)) return [];
+  const selected = at.from === undefined ? possibleFields(sources) : fieldsFrom(sources, at.from);
+  const target = unwrapped(child);
+  if (!isBinaryExpression(target)) return [{ target, sources: selected }];
+  return [{ target: target.left, sources: [...selected, { value: target.right, keys: [] }] }];
+}
+
+/**
+ * The position an array rest starts at in the source, after the entries the patterns above and
+ * before it leave to the others: the rest's place in its pattern, past the position its pattern
+ * itself starts at when it is under a rest. None from the start.
+ */
+function restStart(rest: Node, under = 0): number | undefined {
+  const pattern = rest.parent;
+  const place =
+    isSpreadElement(rest) && isArrayLiteralExpression(pattern) ? pattern.elements.indexOf(rest) : 0;
+  return under + place > 0 ? under + place : undefined;
+}
+
+/**
+ * What a pattern under an array rest may take: of a written list no spread shifts before the rest,
+ * the elements after the rest's position, each as a value; of any other source, and of a list a
+ * spread may shift, its fields and elements. A member that is the rest takes the array whole.
+ */
+function fieldsFrom(
+  sources: readonly AssignedFrameSource[],
+  from: number,
+): readonly AssignedFrameSource[] {
+  return sources.flatMap((source) => {
+    const value = unwrapped(source.value);
+    const cut =
+      source.keys.length === 0 &&
+      isArrayLiteralExpression(value) &&
+      value.elements.slice(0, from).every((each) => !isSpreadElement(each));
+    if (!cut) return possibleFields([source]);
+    return value.elements.slice(from).flatMap((each): AssignedFrameSource[] => {
+      if (isOmittedExpression(each)) return [];
+      return isSpreadElement(each)
+        ? [...iteratedFrameSources(each.expression)]
+        : [{ value: each, keys: [] }];
+    });
+  });
+}
+
+/** The pattern a node assigns, with the sources its right side or iterable hands it. */
+function patternStart(
+  node: Node,
+): { readonly target: Expression; readonly sources: readonly AssignedFrameSource[] } | undefined {
+  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken)
+    return { target: node.left, sources: [{ value: node.right, keys: [] }] };
+  if (isForOfStatement(node) && isExpression(node.initializer) && !yieldsNothing(node.expression))
+    return { target: node.initializer, sources: iteratedFrameSources(node.expression) };
+  const head = isForInStatement(node) && isExpression(node.initializer);
+  return head && !enumeratesNothing(node.expression)
+    ? { target: node.initializer, sources: [] }
+    : undefined;
+}
+
+/**
+ * Whether what a `for ... in` walks is written out and has no key to give its head: null, undefined,
+ * an empty string, a list of holes, an object that holds no field and spreads only such things. A
+ * prototype it writes may hold enumerable keys; a hole in a list is not a key.
+ */
+function enumeratesNothing(walked: Expression): boolean {
+  const value = unwrapped(walked);
+  if (value.kind === SyntaxKind.NullKeyword || isVoidExpression(value)) return true;
+  if (isIdentifier(value)) return globalPathOf(value)?.join('.') === 'undefined';
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text === '';
+  if (isArrayLiteralExpression(value))
+    return value.elements.every((each) => isOmittedExpression(each));
+  return (
+    isObjectLiteralExpression(value) &&
+    value.properties.every((each) => isSpreadAssignment(each) && enumeratesNothing(each.expression))
+  );
+}
+
+/**
+ * Whether an iterable is written out and yields nothing: an empty list, a spread of one, an empty
+ * string. A loop over it never assigns its head; a hole in a list is an element.
+ */
+function yieldsNothing(iterable: Expression): boolean {
+  const value = unwrapped(iterable);
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text === '';
+  return (
+    isArrayLiteralExpression(value) &&
+    value.elements.every((each) => isSpreadElement(each) && yieldsNothing(each.expression))
+  );
+}
+
+/** The slot a written target names on one of the tuple's bindings; none for another target. */
+function memberSlot(
+  target: Expression,
+  aliases: ReadonlySet<FrameBinding>,
+): string | undefined | null {
+  const member = unwrapped(target);
   if (!isElementAccessExpression(member) && !isPropertyAccessExpression(member)) return null;
   const receiver = unwrapped(member.expression);
   const selected = isIdentifier(receiver) ? frameBindingOf(receiver) : undefined;
