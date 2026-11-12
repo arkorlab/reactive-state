@@ -45,6 +45,7 @@ import { framedCondition } from './framed-sources.ts';
 import {
   APPLICATION_WORK,
   callWorkExposure,
+  exportedDeclaration,
   extendsWork,
   namedElsewhere,
   tupleBindingExposure,
@@ -260,13 +261,17 @@ function arrayExposed(
   );
 }
 
-/** A deferred read also sees later uses that can replace a captured tuple's entries. */
+/**
+ * A deferred read also sees later uses that can replace a captured tuple's entries, and what an
+ * importing module does to a tuple this one exports before it calls a function that reads it.
+ */
 function deferredTupleExposure(
   binding: FrameBinding,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
 ): boolean {
   if (executionOwner(call) === executionOwner(binding)) return false;
+  if (exportedDeclaration(binding)) return true;
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (node === call) continue;
