@@ -623,6 +623,14 @@ function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolea
   );
 }
 
+/**
+ * Whether a declaration lies in the function as a variable it declares: each run of the function
+ * makes it. A parameter does not: a caller gives it, and a recursive call may pass on the same one.
+ */
+export function madeWithin(declared: Node, fn: Node): boolean {
+  return !isParameterDeclaration(declared) && declared.pos >= fn.pos && declared.end <= fn.end;
+}
+
 /** Whether the function runs itself again anywhere in its code. */
 export function runsItself(fn: Node): boolean {
   return runsItselfBetween(fn, -Infinity, Infinity);
