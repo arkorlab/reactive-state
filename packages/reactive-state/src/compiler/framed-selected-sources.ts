@@ -132,9 +132,13 @@ function valueOf(expression: Expression, names: Identifier[]): Expression | Func
   return held;
 }
 
-/** A value a selection hands over: a list the rest of an array pattern wrote is itself the value. */
+/**
+ * A value a selection hands over. One that is `inList` is an entry of the list an array rest wrote
+ * into the member, read where the list is asked for whole: a value the list holds, no value of the
+ * member, which is the list.
+ */
 export interface SelectedSource extends AssignedFrameSource {
-  readonly array?: boolean;
+  readonly inList?: boolean;
 }
 
 /**
@@ -159,9 +163,10 @@ function memberWrites(
     if (copy && write.without?.includes(rest[0] ?? '') === true) return [];
     const took = takes(write, rest);
     if (took === undefined) return [];
-    if (took.whole) return [{ value: write.value, keys: write.keys.slice(0, -1), array: true }];
     const following = new Set(reading.following).add(write.value);
     const captured = { ...reading, own: false, at: write.node, following };
+    if (took.whole)
+      return select(write.value, write.keys, captured).map((each) => ({ ...each, inList: true }));
     const later = copy ? { ...captured, own: true } : { ...reading, following };
     return select(write.value, took.path, captured).flatMap((each) => {
       return each.keys.length === 0
