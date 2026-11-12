@@ -1075,6 +1075,24 @@ const CASES = [
     values: ["'kept':", "'safe':", '0:', 'error:'],
   },
   {
+    id: 'computed-key-inherited-getter-writes-over-own-field',
+    source: `function frames(error: Error, name: string, first: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; return Object.fromEntries([entry], ({ [first]: sink, [name]: entry[1] } = { __proto__: { get trigger() { this.field = error; return 0; } }, field: 'kept' })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      '{ get trigger() { this.field = error; return 0; } }:',
+      '0:',
+      'error:',
+    ],
+  },
+  {
+    id: 'computed-key-inherited-getter-shadowed-by-own-field-never-runs',
+    source: `function frames(error: Error, name: string, first: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; return Object.fromEntries([entry], ({ [first]: sink, [name]: entry[1] } = { __proto__: { get trigger() { this.field = error; return 0; } }, trigger: 1, field: 'kept' })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '{ get trigger() { this.field = error; return 0; } }:', '1:'],
+  },
+  {
     id: 'computed-key-getter-replaced-by-method-overwrites',
     source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ get trigger() { return 0; }, trigger() {}, field: 'kept' } })); }`,
     key: 'message',

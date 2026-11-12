@@ -261,7 +261,8 @@ function setNames(
 /**
  * The values a getter that runs writes into the object it runs on, each under the name it writes:
  * a copy of the object runs it wherever a later field hides its result, and a later field of that
- * name hides what it wrote. The entries are refused where `this` is given on.
+ * name hides what it wrote; the names of an object's own fields hide the fields it inherits, not
+ * what an inherited getter writes into it. The entries are refused where `this` is given on.
  */
 function getterEffects(
   getter: GetAccessorDeclaration,
@@ -270,7 +271,7 @@ function getterEffects(
   const written = getterWrites(getter);
   if (written === undefined) throw new UnfollowableError();
   return written
-    .filter((each) => each.name === undefined || !reading.data.has(each.name))
+    .filter((each) => each.name === undefined || reading.inherited || !reading.data.has(each.name))
     .map((each) => ({ value: each.value, keys: [] }));
 }
 
