@@ -25,13 +25,16 @@ import { framedCondition } from './framed-sources.ts';
 /**
  * A written constant predicate keeps or drops every element; other predicates keep each possible.
  * A kept element's result position is its source position only where the source is shown to have
- * no hole before it; elsewhere any kept element may be at the selected position.
+ * no hole before it; elsewhere any kept element may be at the selected position. A negative
+ * position counts from the end of a result whose length the source does not show: it is no source
+ * position, and any kept element may be at it.
  */
 export function filteredArrayViews(
   copy: QuietCopyCall,
-  index: number | undefined,
+  position: number | undefined,
   stable: (receiver: Expression) => boolean,
 ): readonly ArrayElementView[] {
+  const index = position !== undefined && position < 0 ? undefined : position;
   const base = { value: copy.receiver, index };
   const argument = copy.given[0];
   const predicate = argument === undefined ? undefined : unwrapped(argument);
