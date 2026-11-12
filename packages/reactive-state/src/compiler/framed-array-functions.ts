@@ -55,7 +55,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { answersLater, isAnswering } from './answers.ts';
+import { answersLater, eagerBody, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { destructuredFirst, patternAfter } from './destructuring-order.ts';
@@ -313,10 +313,27 @@ function hasComputedKey(member: Node): boolean {
   );
 }
 
+/**
+ * Whether `at`, in the function or constructor `parent`, runs when the function is called, and not
+ * where it is written: a body called where it is written, without arguments, runs in place.
+ */
+function deferredBody(parent: Node, at: Node): boolean {
+  if (isConstructorDeclaration(parent)) return true;
+  if (!isAnswering(parent)) return false;
+  const regions: readonly (Node | undefined)[] = [parent.body, ...parent.parameters];
+  const { parent: use } = useOf(parent);
+  return (
+    !isCallExpression(use) ||
+    use.arguments.length > 0 ||
+    eagerBody(use) !== parent.body ||
+    !regions.includes(at)
+  );
+}
+
 /** The class whose static initializer or static block `reference` is evaluated in, as it is defined. */
 function staticOwner(reference: Identifier): Node | undefined {
   for (let at: Node = reference; !isSourceFile(at.parent); at = at.parent) {
-    if (isAnswering(at.parent) || isConstructorDeclaration(at.parent)) return undefined;
+    if (deferredBody(at.parent, at)) return undefined;
     if (isClassStaticBlockDeclaration(at.parent)) return at.parent.parent;
     if (
       isPropertyDeclaration(at.parent) &&

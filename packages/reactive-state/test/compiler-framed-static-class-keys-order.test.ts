@@ -47,6 +47,41 @@ const METHODS = [
     custom: false,
   },
   {
+    id: 'key-after-an-arrow-called-where-it-is-written',
+    source: `${HOLDER} class C { static taken = (() => methods.join)(); ${REPLACE} = 0; } void C;`,
+    custom: false,
+  },
+  {
+    id: 'key-after-a-function-called-where-it-is-written',
+    source: `${HOLDER} class C { static taken = (function () { return methods.join; })(); ${REPLACE} = 0; } void C;`,
+    custom: false,
+  },
+  {
+    id: 'key-after-two-functions-called-where-they-are-written',
+    source: `${HOLDER} class C { static taken = (() => (() => methods.join)())(); ${REPLACE} = 0; } void C;`,
+    custom: false,
+  },
+  {
+    id: 'key-after-an-arrow-called-in-a-static-block',
+    source: `${HOLDER} class C { static { (() => methods.join)(); } ${REPLACE} = 0; } void C;`,
+    custom: false,
+  },
+  {
+    id: 'key-after-an-arrow-called-with-an-argument-pin',
+    source: `${HOLDER} class C { static taken = ((x: number) => methods.join)(1); ${REPLACE} = 0; } void C;`,
+    custom: false,
+  },
+  {
+    id: 'key-after-an-arrow-that-is-not-called-pin',
+    source: `${HOLDER} class C { static taken = () => methods.join; ${REPLACE} = 0; } void C;`,
+    custom: false,
+  },
+  {
+    id: 'arrow-called-where-it-is-written-and-no-computed-key-pin',
+    source: `${HOLDER} class C { static taken = (() => methods.join)(); other = 0; } void C;`,
+    custom: true,
+  },
+  {
     id: 'key-before-a-static-field-pin',
     source: `${HOLDER} class C { ${REPLACE} = 0; static taken = methods.join; } void C;`,
     custom: false,
