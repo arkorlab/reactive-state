@@ -10,12 +10,18 @@ import {
   isDeleteExpression,
   isElementAccessExpression,
   isExpression,
+  isForInStatement,
+  isForOfStatement,
   isFunctionLikeDeclaration,
   isNewExpression,
   isObjectLiteralExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
+  isSpreadElement,
   isTaggedTemplateExpression,
   type Node,
   SyntaxKind,
@@ -92,17 +98,23 @@ function use(node: Node): readonly Expression[] | undefined {
   return isTarget(member) ? undefined : [];
 }
 
-/** Whether a node is a place in a pattern, or the head of a loop, that is assigned. */
+/** Whether a node is a place in a pattern that is assigned, or the head of a loop. */
 function isTarget(node: Node): boolean {
   let at = node;
   for (;;) {
     const { parent } = at;
-    if (isBinaryExpression(parent)) return parent.left === at;
-    const inPattern = isObjectLiteralExpression(parent) || isArrayLiteralExpression(parent);
-    const inside = inPattern || parent.kind === SyntaxKind.PropertyAssignment;
-    if (!inside && parent.kind !== SyntaxKind.ShorthandPropertyAssignment) {
-      return parent.kind === SyntaxKind.ForOfStatement || parent.kind === SyntaxKind.ForInStatement;
+    if (isBinaryExpression(parent)) {
+      return parent.left === at && parent.operatorToken.kind === SyntaxKind.EqualsToken;
     }
+    if (isForOfStatement(parent) || isForInStatement(parent)) return parent.initializer === at;
+    const inside =
+      isObjectLiteralExpression(parent) ||
+      isArrayLiteralExpression(parent) ||
+      isPropertyAssignment(parent) ||
+      isShorthandPropertyAssignment(parent) ||
+      isSpreadElement(parent) ||
+      isSpreadAssignment(parent);
+    if (!inside) return false;
     at = parent;
   }
 }

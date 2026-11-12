@@ -1093,6 +1093,18 @@ const CASES = [
     values: ["'kept':", "'safe':", '0:'],
   },
   {
+    id: 'spread-getter-iterates-member-of-this-is-followed',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { for (const key of this.list) { void key; } return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'spread-getter-loop-head-writes-this-refuses',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { for (this.field of [error]) { void 0; } return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
     id: 'computed-key-constant-member-written-hands-over-source-pin',
     source: `function frames(error: Error, name: string, mutate: (value: object) => void) { const source: { field: unknown } = { field: 'kept' }; const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], (source.field = error, ({ [name]: entry[1] } = source))); }`,
     key: 'message',
