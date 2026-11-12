@@ -960,6 +960,18 @@ const CASES = [
     key: 'message',
     values: ["'kept':", 'alias:', 'alias:0', 'base:', 'base:0', 'entry:1', 'error:'],
   },
+  {
+    id: 'named-prototype-key-null-prototype-takes-default',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] = error } = { __proto__: null })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-object-prototype-skips-default',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] = error } = { __proto__: {} })); }`,
+    key: 'message',
+    values: ["'safe':", '{}:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

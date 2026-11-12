@@ -210,7 +210,7 @@ function objectSource(
  * What the prototype a literal writes selects of a key no own entry names: the entry of a written
  * object or list, none for `null`, and the path for any other prototype, which the compile does not
  * read. A written `__proto__: value` is no own entry, and a read of `__proto__` itself gives the
- * prototype it sets.
+ * prototype it sets, none where that is `null`: no prototype has the accessor to read.
  */
 function prototypeSource(
   value: ObjectLiteralExpression,
@@ -219,9 +219,9 @@ function prototypeSource(
 ): readonly AssignedFrameSource[] {
   const field = value.properties.find((property) => setsPrototype(property));
   if (field === undefined || !isPropertyAssignment(field)) return [];
-  if (key === '__proto__') return [{ value: field.initializer, keys: [] }];
   const prototype = unwrapped(field.initializer);
   if (prototype.kind === SyntaxKind.NullKeyword) return [];
+  if (key === '__proto__') return [{ value: field.initializer, keys: [] }];
   if (isObjectLiteralExpression(prototype)) return objectSource(prototype, key, opaque);
   return isArrayLiteralExpression(prototype) ? arraySource(prototype, key, opaque) : [opaque];
 }
