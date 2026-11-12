@@ -12,6 +12,10 @@ import {
   isClassExpression,
   isConditionalExpression,
   isComputedPropertyName,
+  isSourceFile,
+  isPropertyDeclaration,
+  isConstructorDeclaration,
+  isClassStaticBlockDeclaration,
   isDeleteExpression,
   isElementAccessExpression,
   isExpression,
@@ -51,7 +55,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { answersLater, isAnswering } from './answers.ts';
+import { answersLater, eagerBody, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { destructuredFirst, patternAfter } from './destructuring-order.ts';
@@ -268,12 +272,77 @@ function firstReference(
  * computed keys, though it is written after them.
  */
 function completed(node: Node, reference: Identifier): boolean {
-  return node.end <= reference.pos || destructuredFirst(node, reference);
+  return (
+    node.end <= reference.pos ||
+    destructuredFirst(node, reference) ||
+    ownerKeyFirst(node, reference)
+  );
 }
 
 /** Whether `node` is written after `reference` and runs after it too. */
 function runsAfter(node: Node, reference: Identifier): boolean {
-  return node.pos >= reference.pos && !destructuredFirst(node, reference);
+  return (
+    node.pos >= reference.pos &&
+    !destructuredFirst(node, reference) &&
+    !ownerKeyFirst(node, reference)
+  );
+}
+
+/**
+ * Whether `node` lies in a computed key of the class whose static initializer or static block holds
+ * `reference`: a class evaluates the keys of all its members before it runs any static initializer,
+ * whichever is written first.
+ */
+function ownerKeyFirst(node: Node, reference: Identifier): boolean {
+  const owner = staticOwner(reference);
+  if (owner === undefined) return false;
+  if (node.parent === owner && hasComputedKey(node)) return true;
+  for (let at: Node = node; at !== owner && !isSourceFile(at); at = at.parent)
+    if (isComputedPropertyName(at) && at.parent.parent === owner) return true;
+  return false;
+}
+
+/** Whether `member` of a class is named by a computed key, which the walk must reach to read it. */
+function hasComputedKey(member: Node): boolean {
+  return (
+    (isPropertyDeclaration(member) ||
+      isMethodDeclaration(member) ||
+      isGetAccessorDeclaration(member) ||
+      isSetAccessorDeclaration(member)) &&
+    isComputedPropertyName(member.name)
+  );
+}
+
+/**
+ * Whether `at`, in the function or constructor `parent`, runs when the function is called, and not
+ * where it is written: a body called where it is written, without arguments, runs in place.
+ */
+function deferredBody(parent: Node, at: Node): boolean {
+  if (isConstructorDeclaration(parent)) return true;
+  if (!isAnswering(parent)) return false;
+  const regions: readonly (Node | undefined)[] = [parent.body, ...parent.parameters];
+  const { parent: use } = useOf(parent);
+  return (
+    !isCallExpression(use) ||
+    use.arguments.length > 0 ||
+    eagerBody(use) !== parent.body ||
+    !regions.includes(at)
+  );
+}
+
+/** The class whose static initializer or static block `reference` is evaluated in, as it is defined. */
+function staticOwner(reference: Identifier): Node | undefined {
+  for (let at: Node = reference; !isSourceFile(at.parent); at = at.parent) {
+    if (deferredBody(at.parent, at)) return undefined;
+    if (isClassStaticBlockDeclaration(at.parent)) return at.parent.parent;
+    if (
+      isPropertyDeclaration(at.parent) &&
+      at.parent.initializer?.pos === at.pos &&
+      at.parent.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true
+    )
+      return at.parent.parent;
+  }
+  return undefined;
 }
 
 /**
