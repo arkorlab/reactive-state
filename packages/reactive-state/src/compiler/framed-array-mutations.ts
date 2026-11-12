@@ -134,6 +134,15 @@ export function exportedDeclaration(binding: FrameBinding): boolean {
   );
 }
 
+/**
+ * Whether the body `owner` can run again with `binding` as an earlier run left it: it is a function
+ * and `binding` is declared outside it. What it does to `binding` after a read is done before that
+ * read in the next call.
+ */
+export function repeatsAround(owner: Node, binding: FrameBinding): boolean {
+  return !isSourceFile(owner) && executionOwner(binding) !== owner;
+}
+
 /** Whether `within` is the initializer of the instance field `parent`, which a construction runs. */
 function instanceInitializer(parent: Node, within: Node): boolean {
   return (

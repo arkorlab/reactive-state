@@ -21,7 +21,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -115,7 +115,8 @@ function canPrecede(node: Node, read: BinaryExpression, root: FrameBinding): boo
     ? target ||
         node.pos < read.pos ||
         destructuredFirst(node, read) ||
-        repeatedFrameRead(node, read, root, owner)
+        repeatedFrameRead(node, read, root, owner) ||
+        repeatsAround(owner, root)
     : !unreferencedLocalFunction(writer, owner);
 }
 
