@@ -334,22 +334,83 @@ function arraySource(
 /**
  * A surviving literal own entry, without executing getters or unknown spread sources. A key no own
  * entry holds is read from the prototype the literal's `__proto__:` sets, as a destructuring reads
- * an inherited property.
+ * an inherited property. That entry is no own property, so the key `__proto__` itself reads the
+ * prototype it sets, through the accessor every object inherits, unless an own entry named so
+ * shadows the accessor.
  */
 function objectSource(
   value: ObjectLiteralExpression,
   key: string,
   opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
-  let prototype: Expression | undefined;
+  let prototype: PropertyAssignment | undefined;
   for (const property of value.properties.toReversed()) {
     if (isSpreadAssignment(property)) return [opaque];
     const name = literalKey(property.name);
     if (name === undefined) return [opaque];
-    if (name === key) return ownSource(property, opaque);
-    if (isPrototypeEntry(property)) prototype = property.initializer;
+    if (isPrototypeEntry(property)) prototype = property;
+    else if (name === key) return ownSource(property, opaque);
   }
-  return prototype === undefined ? [] : inheritedSource(prototype, key);
+  if (prototype === undefined) return [];
+  return key === '__proto__'
+    ? heldPrototype(prototype.initializer, opaque)
+    : inheritedSource(prototype.initializer, key);
+}
+
+/**
+ * The prototype a literal sets is the value its `__proto__` reads, through the accessor
+ * `Object.prototype` holds. A chain that ends in `null` before it reaches `Object.prototype` has no
+ * accessor, so that nothing is read; a property of that name along the chain shadows it, and is the
+ * value read; a primitive is ignored by the literal that sets it, and leaves `Object.prototype`.
+ * Where a literal along the chain holds an unknown spread, key or prototype, the read stays open.
+ */
+function heldPrototype(
+  prototype: Expression,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const held = { value: prototype, keys: [] };
+  let at: Expression | undefined = prototype;
+  while (at !== undefined) {
+    const value = unwrapped(at);
+    if (value.kind === SyntaxKind.NullKeyword) return [];
+    if (!isObjectLiteralExpression(value))
+      return at === prototype || reachesAccessor(value) ? [held] : [held, opaque];
+    const step = prototypeStep(value, held, opaque);
+    if ('read' in step) return step.read;
+    at = step.next;
+  }
+  return [held];
+}
+
+/** A prototype along the chain: what it reads as `__proto__`, or the prototype it sets in turn. */
+type PrototypeStep =
+  | { readonly read: readonly AssignedFrameSource[] }
+  | { readonly next: Expression | undefined };
+
+/** An own property of a literal named `__proto__` shadows the accessor; else its `__proto__:` goes on. */
+function prototypeStep(
+  value: ObjectLiteralExpression,
+  held: AssignedFrameSource,
+  opaque: AssignedFrameSource,
+): PrototypeStep {
+  let next: Expression | undefined;
+  for (const property of value.properties.toReversed()) {
+    if (isSpreadAssignment(property)) return { read: [held, opaque] };
+    const name = literalKey(property.name);
+    if (name === undefined) return { read: [held, opaque] };
+    if (isPrototypeEntry(property)) next = property.initializer;
+    else if (name === '__proto__') return { read: ownSource(property, opaque) };
+  }
+  return { next };
+}
+
+/** Whether a value that is no object literal leaves `Object.prototype` on the chain: arrays and constructions do. */
+function reachesAccessor(value: Expression): boolean {
+  return (
+    isArrayLiteralExpression(value) ||
+    value.kind === SyntaxKind.NewExpression ||
+    NO_PROTOTYPE.has(value.kind)
+  );
 }
 
 /** The value an own entry of the selected key writes, or the entry's literal where it writes none. */
