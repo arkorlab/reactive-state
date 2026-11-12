@@ -2756,6 +2756,16 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'assign-array-source-written-after-copy-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const source: unknown[] = ['safe']; Object.assign(a, source); source[0] = error; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-target-setter-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { set(_value: unknown) {} }); Object.assign(a, { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-logical-after-condition-test-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; if (descriptor) {} descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
