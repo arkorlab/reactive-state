@@ -178,7 +178,8 @@ function tupleTargetWrites(
 
 /**
  * Later writes in a repeated body can supply the tuple at its next native call, and so can those in
- * a computed key of a class around the call, which runs before the static initializer that holds it.
+ * what a pattern around the call destructures and in a computed key of a class around it, which run
+ * before it though they are written after.
  */
 function tupleWriteBefore(
   node: Node,
@@ -186,7 +187,12 @@ function tupleWriteBefore(
   aliases: ReadonlySet<FrameBinding>,
   owner: Node,
 ): boolean {
-  if (executionOwner(node) !== owner || node.pos < call.pos || ownerKeyFirst(node, call))
+  if (
+    executionOwner(node) !== owner ||
+    node.pos < call.pos ||
+    destructuredFirst(node, call) ||
+    ownerKeyFirst(node, call)
+  )
     return true;
   for (const binding of aliases) if (repeatedFrameRead(node, call, binding, owner)) return true;
   return false;
