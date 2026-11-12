@@ -26,6 +26,7 @@ import { arrayPatternSources } from './framed-array-pattern-writes.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -118,7 +119,10 @@ const ELEMENT_WRITES = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
-/** Only indexed assignment positions and the insertion arguments of native mutators become elements. */
+/**
+ * Only indexed assignment positions, the insertion arguments of native mutators and the numeric
+ * entries native object mutators install become elements.
+ */
 function elementSources(
   node: Node,
   root: FrameBinding,
@@ -137,6 +141,9 @@ function elementSources(
       : [{ value: node.right, keys: [] }];
   }
   if (!isCallExpression(node)) return [];
+  const mutated = objectMutatorElements(node, index);
+  if (mutated !== undefined)
+    return literalArrayBinding(mutated.target) === root ? mutated.elements : [];
   const borrowed = borrowedElements(node, root);
   if (borrowed !== undefined) return borrowed;
   const member = unwrapped(node.expression);
