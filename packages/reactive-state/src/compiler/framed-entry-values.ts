@@ -43,6 +43,7 @@ import {
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { possibleFields } from './framed-entry-fields.ts';
+import { UnfollowableError } from './framed-getter-writes.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -66,6 +67,15 @@ export function framedEntryValues(
   node: Expression,
   key: string,
 ): readonly AssignedFrameSource[] | undefined {
+  try {
+    return entryValuesOf(node, key);
+  } catch (error) {
+    if (error instanceof UnfollowableError) return undefined;
+    throw error;
+  }
+}
+
+function entryValuesOf(node: Expression, key: string): readonly AssignedFrameSource[] | undefined {
   if (!framedEntriesCall(node)) return undefined;
   const argument = framedArgumentPrefix(node, node.arguments, 1);
   const input = argument.values[0];

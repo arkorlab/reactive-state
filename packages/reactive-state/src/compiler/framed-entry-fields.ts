@@ -29,6 +29,7 @@ import {
   setsPrototype,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
+import { getterWrites, UnfollowableError } from './framed-getter-writes.ts';
 import { framedCondition } from './framed-sources.ts';
 
 /** The values a computed key may select from what a destructuring assignment reads. */
@@ -288,8 +289,11 @@ function fieldValues(
   if (isPropertyAssignment(property)) return [{ value: property.initializer, keys: [] }];
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
     return [{ value: property.name, keys: [] }];
-  if (isGetAccessorDeclaration(property))
-    return returnedBy(property).map((value) => ({ value, keys: [] }));
+  if (isGetAccessorDeclaration(property)) {
+    const written = getterWrites(property);
+    if (written === undefined) throw new UnfollowableError();
+    return [...returnedBy(property), ...written].map((value) => ({ value, keys: [] }));
+  }
   if (!isSpreadAssignment(property)) return [];
   const copied = { ...reading, getters: reading.data, inherited: false };
   return fieldsOf([{ value: property.expression, keys: [] }], copied);
