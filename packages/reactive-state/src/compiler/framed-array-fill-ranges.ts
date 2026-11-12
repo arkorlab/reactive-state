@@ -15,7 +15,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
@@ -109,7 +109,8 @@ function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (
     (name.pos > context.call.end || destructuredFirst(context.call, name)) &&
     !destructuredFirst(name, context.call) &&
-    !repeatedFrameRead(name, context.call, context.root, owner)
+    !repeatedFrameRead(name, context.call, context.root, owner) &&
+    !repeatsAround(owner, context.root)
   )
     return false;
   return !constantAliasUse(name, context);
