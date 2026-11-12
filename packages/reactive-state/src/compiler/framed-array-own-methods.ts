@@ -5,6 +5,7 @@ import {
   type ClassDeclaration,
   type ClassExpression,
   type Expression,
+  type FunctionLikeDeclaration,
   isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
@@ -22,6 +23,7 @@ import {
   isExpressionStatement,
   isFunctionLikeDeclaration,
   isIdentifier,
+  isReturnStatement,
   isSetAccessorDeclaration,
   isMethodDeclaration,
   isGetAccessorDeclaration,
@@ -52,7 +54,7 @@ import {
   writtenArrayKey,
 } from './framed-array-functions.ts';
 import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
-import { instanceInitializer } from './framed-array-mutations.ts';
+import { instanceInitializer, invokedAtOnce } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
@@ -206,11 +208,13 @@ export function evaluatedForSure(node: Node, statement: Node): boolean {
 /**
  * Whether a node lies in what runs later: the body and the parameters of a function, which run when
  * it is called, and the initializer of an instance field, which runs when an instance is made. The
- * computed name of a member runs when the object or the class is defined.
+ * computed name of a member runs when the object or the class is defined, and the body of a
+ * function called where it is written runs now.
  */
 function runsLater(parent: Node, at: Node): boolean {
-  if (isFunctionLikeDeclaration(parent)) return !isComputedPropertyName(at);
-  return instanceInitializer(parent) === at;
+  if (!isFunctionLikeDeclaration(parent)) return instanceInitializer(parent) === at;
+  const body: Node | undefined = parent.body;
+  return !isComputedPropertyName(at) && !(body === at && invokedAtOnce(parent));
 }
 
 /** The default a binding element or a shorthand field of a pattern holds: it runs on some values. */
@@ -237,16 +241,38 @@ function skipsLink(at: Node, statement: Node): boolean {
 }
 
 /**
- * Whether a statement of a class's static block runs whenever the block does: it is an expression, a
- * declaration or a plain block, and only plain blocks lie between it and the static block, which
- * runs, from its first statement to its last, when the class is defined.
+ * Whether a statement of a class's static block, or of the body of a function called where it is
+ * written, runs whenever that body does: it is an expression, a declaration, a plain block or the
+ * last `return`, and only plain blocks lie between it and the body, which runs, from its first
+ * statement to its last, when the class is defined or the function is called.
  */
 function runsStraight(statement: Node): boolean {
-  if (!isBlock(statement) && !isExpressionStatement(statement) && !isVariableStatement(statement))
-    return false;
+  const plain =
+    isBlock(statement) ||
+    isExpressionStatement(statement) ||
+    isVariableStatement(statement) ||
+    isReturnStatement(statement);
+  if (!plain) return false;
   let within = statement.parent;
   while (isBlock(within)) within = within.parent;
-  return isClassStaticBlockDeclaration(within);
+  if (isClassStaticBlockDeclaration(within)) return !isReturnStatement(statement);
+  return isFunctionLikeDeclaration(within) && invokedAtOnce(within) && !returnsEarly(within);
+}
+
+/** Whether a function body may leave before its last statement: a `return` that is not the last. */
+function returnsEarly(fn: FunctionLikeDeclaration): boolean {
+  const { body } = fn;
+  if (body === undefined || !isBlock(body)) return false;
+  const last: Node | undefined = body.statements.at(-1);
+  const pending: Node[] = [...body.statements];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node !== last && isReturnStatement(node)) return true;
+    if (!isFunctionLikeDeclaration(node))
+      node.forEachChild((child) => {
+        pending.push(child);
+      });
+  }
+  return false;
 }
 
 /** A pattern and the value it binds: a declaration's or a default's initializer, an assignment's right. */

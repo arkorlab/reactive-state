@@ -88,9 +88,14 @@ export function executionOwner(node: Node): Node {
       continue;
     const regions: readonly (Node | undefined)[] = [parent.body, ...parent.parameters];
     if (!regions.includes(within)) continue;
-    const { parent: use } = useOf(parent);
-    if (!isCallExpression(use) || eagerBody(use) !== parent.body) return parent;
+    if (!invokedAtOnce(parent)) return parent;
   }
+}
+
+/** Whether a function is called where it is written, and answers synchronously: its body runs now. */
+export function invokedAtOnce(fn: Node & { readonly body?: Node | undefined }): boolean {
+  const { parent: use } = useOf(fn);
+  return isCallExpression(use) && eagerBody(use) === fn.body;
 }
 
 /** The initializer of an instance field, which runs when an instance is made. */
