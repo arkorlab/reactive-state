@@ -33,9 +33,9 @@ import {
 import { writtenArrayKey } from './framed-array-functions.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
+import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
-import { ANY_FIELD, suffixStart } from './framed-pattern-members.ts';
+import { ANY_FIELD, fromKey, suffixStart } from './framed-pattern-members.ts';
 
 /**
  * What a destructuring picks out of a source, read where the compile can; the rest is kept whole.
@@ -72,6 +72,8 @@ interface Reading {
   readonly own: boolean;
   /** Where the selection is consumed, which the writes to a constant's members must precede. */
   readonly at: Node | undefined;
+  /** The values of the writes the selection is inside of, which it does not follow into again. */
+  readonly following: ReadonlySet<Node>;
 }
 
 /**
@@ -84,7 +86,7 @@ export function selectedValues(
   keys: readonly string[],
   at?: Node,
 ): readonly AssignedFrameSource[] {
-  return select(value, keys, { visited: new Map(), own: false, at });
+  return select(value, keys, { visited: new Map(), own: false, at, following: new Set() });
 }
 
 function select(
@@ -145,12 +147,39 @@ function memberWrites(
   const [key = '', ...rest] = keys;
   if (first === undefined) return [];
   return heldMemberWrites(first, names, reading.at).flatMap((write) => {
-    if (write.list === true || !(asksAny(key) || write.key === undefined || write.key === key))
-      return [];
+    const matches = asksAny(key) || write.key === undefined || write.key === key;
+    if (!matches || reading.following.has(write.value)) return [];
     const copy = write.copiedAt !== undefined;
-    const where = { ...reading, own: copy && write.keys.length === 0, at: write.node };
+    if (copy && write.without?.includes(rest[0] ?? '') === true) return [];
+    const following = new Set(reading.following).add(write.value);
+    const where = { ...reading, own: copy && write.keys.length === 0, at: write.node, following };
+    if (write.list === true) return listEntries(write, rest, where);
     return select(write.value, [...write.keys, ...rest], where);
   });
+}
+
+/**
+ * What the entries a rest wrote into a member hand over at the path below it: the member holds the
+ * entries from the rest's position, so an index below the member is the index in the source less
+ * that position, and any other key reads the entries from there on.
+ */
+function listEntries(
+  write: HeldWrite,
+  rest: readonly string[],
+  reading: Reading,
+): readonly AssignedFrameSource[] {
+  const start = suffixStart(write.keys.at(-1) ?? '');
+  if (start === undefined) return [];
+  const base = write.keys.slice(0, -1);
+  const [first, ...tail] = rest;
+  if (first === undefined) return select(write.value, write.keys, reading);
+  const index = Number(first);
+  const exact = Number.isSafeInteger(index) && index >= 0 && String(index) === first;
+  return select(
+    write.value,
+    [...base, exact ? String(start + index) : fromKey(start), ...tail],
+    reading,
+  );
 }
 
 /** What reads below the first step of a path read: the fields of a copy are no copy. */
