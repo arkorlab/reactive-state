@@ -8,7 +8,6 @@ import {
   isPropertyDeclaration,
   isSetAccessorDeclaration,
   isSourceFile,
-  type Identifier,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -27,7 +26,7 @@ import { useOf } from './code-globals.ts';
  * its members before it runs any static initializer, whichever is written first, and the classes
  * written in its static initializers are created while they run.
  */
-export function ownerKeyFirst(node: Node, reference: Identifier): boolean {
+export function ownerKeyFirst(node: Node, reference: Node): boolean {
   return staticOwners(reference).some((owner) => keyOf(node, owner));
 }
 
@@ -69,7 +68,7 @@ function deferredBody(parent: Node, at: Node): boolean {
  * The classes whose static initializer or static block `reference` is evaluated in, as they are
  * defined, the nearest first, and those that hold such a class in a static initializer of theirs.
  */
-function staticOwners(reference: Identifier): readonly Node[] {
+function staticOwners(reference: Node): readonly Node[] {
   const owners: Node[] = [];
   for (let at: Node = reference; !isSourceFile(at.parent); at = at.parent) {
     const { parent } = at;
