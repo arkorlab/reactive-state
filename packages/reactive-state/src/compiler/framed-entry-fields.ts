@@ -318,6 +318,8 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
   if (!isStable(property.expression)) return [];
   seen.add(copied);
   const { properties } = copied;
+  if (properties.some((_each, at) => liveGetter(properties, at) && mayBeIndex(properties[at])))
+    return [];
   const names: string[] = [];
   let getterRan = false;
   for (const [at, each] of properties.entries()) {
@@ -339,6 +341,12 @@ function liveGetter(properties: readonly ObjectLiteralElementLike[], at: number)
   return properties
     .slice(at + 1)
     .every((later) => isSetAccessorDeclaration(later) || fieldName(later) !== name);
+}
+
+/** Whether a field may be named by an array index, which a copy reaches before any other name. */
+function mayBeIndex(property: ObjectLiteralElementLike | undefined): boolean {
+  const name = property === undefined ? undefined : fieldName(property);
+  return name === undefined || /^(?:0|[1-9]\d*)$/u.test(name);
 }
 
 /**

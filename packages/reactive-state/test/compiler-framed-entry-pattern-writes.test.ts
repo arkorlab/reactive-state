@@ -1051,6 +1051,18 @@ const CASES = [
     values: ["'safe':", '{ field: error }:'],
   },
   {
+    id: 'computed-key-integer-getter-keeps-earlier-value',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ field: 'kept', get 0() { return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'computed-key-integer-getter-replaced-overwrites-pin',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ field: 'kept', get 0() { return 0; }, 0: 1 } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '1:'],
+  },
+  {
     id: 'computed-key-replaced-getter-overwrites',
     source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ get trigger() { return 0; }, trigger: 0, field: 'kept' } })); }`,
     key: 'message',
