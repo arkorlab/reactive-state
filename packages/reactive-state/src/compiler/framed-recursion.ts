@@ -1,45 +1,26 @@
 import {
-  type BigIntLiteral,
   isAwaitExpression,
-  isBigIntLiteral,
   type Identifier,
   isArrowFunction,
-  isBinaryExpression,
-  isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
   isElementAccessExpression,
-  isExpressionWithTypeArguments,
   isFunctionDeclaration,
   isForOfStatement,
   isFunctionExpression,
   isGetAccessorDeclaration,
-  isExpressionStatement,
   isIdentifier,
-  isMetaProperty,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isMethodDeclaration,
-  isNewExpression,
   isParameterDeclaration,
-  isPrivateIdentifier,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
   isSetAccessorDeclaration,
-  isShorthandPropertyAssignment,
-  isStringLiteral,
-  isTaggedTemplateExpression,
   isSourceFile,
-  isTypeNode,
   isYieldExpression,
   type Node,
-  type NoSubstitutionTemplateLiteral,
-  type NumericLiteral,
-  type PrivateIdentifier,
   type SourceFile,
-  type StringLiteral,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -61,8 +42,8 @@ import {
   runsInPlace,
   type FunctionNames,
 } from './framed-function-names.ts';
+import { called, droppedCall, isTypeOnly, referenceText, written } from './framed-references.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
-import { readsBinding } from './scope.ts';
 
 export { isNamedFunction, madeInPlace } from './framed-function-names.ts';
 
@@ -94,85 +75,6 @@ export { isNamedFunction, madeInPlace } from './framed-function-names.ts';
  * `apply` are followed; `bind`, `Reflect.apply`, a trap, a stored alias are uses that reach it from
  * anywhere); code in another file; `eval`; a short circuit is a branch that may run.
  */
-
-/** Whether a node is a type and no value: the expression a class extends is a value. */
-function isTypeOnly(node: Node): boolean {
-  return isTypeNode(node) && !isExpressionWithTypeArguments(node);
-}
-
-/** The name an identifier or a private name reads: a variable's, or a property's by its name. */
-function readName(node: Identifier | PrivateIdentifier): string | undefined {
-  const { parent } = node;
-  if (isPropertyAccessExpression(parent) && parent.name === node) return node.text;
-  if (!isIdentifier(node)) return undefined;
-  if (!isShorthandPropertyAssignment(parent) && (parent as { name?: Node }).name === node)
-    return undefined;
-  return readsBinding(node) ? node.text : undefined;
-}
-
-/** The name a node reads, if it reads one: a variable, or a property by its name. */
-function referenceText(node: Node): string | undefined {
-  if (isMetaProperty(node))
-    return node.keywordToken === SyntaxKind.NewKeyword ? 'constructor' : undefined;
-  if (isIdentifier(node) || isPrivateIdentifier(node)) return readName(node);
-  return isLiteralKey(node) ? literalText(node as KeyLiteral) : undefined;
-}
-
-/** The literals a property is named by: a string, a template without substitutions, a number. */
-type KeyLiteral = BigIntLiteral | NoSubstitutionTemplateLiteral | NumericLiteral | StringLiteral;
-
-/** Whether a node is a literal that names a property. */
-function isLiteral(node: Node): node is KeyLiteral {
-  return (
-    isStringLiteral(node) ||
-    isNoSubstitutionTemplateLiteral(node) ||
-    isNumericLiteral(node) ||
-    isBigIntLiteral(node)
-  );
-}
-
-/** The property a literal names: a big integer's is its digits. */
-function literalText(node: KeyLiteral): string {
-  return isBigIntLiteral(node) ? node.text.replace(/n$/u, '') : node.text;
-}
-
-/** Whether a node is a literal an element access names its property by, past type wrappers. */
-function isLiteralKey(node: Node): boolean {
-  if (!isLiteral(node)) return false;
-  const held = holderOf(node);
-  return isElementAccessExpression(held.parent) && held.parent.argumentExpression === held;
-}
-
-/**
- * The call, construction or tag that a node, the name of a reference, is what it calls: the name
- * itself, a property's, or either of them through `call` or `apply`.
- */
-function callOf(node: Node): Node | undefined {
-  let at = holderOf(node);
-  if ((isPropertyAccessExpression(at.parent) && at.parent.name === at) || isLiteralKey(node))
-    at = holderOf(at.parent);
-  if (isPropertyAccessExpression(at.parent) && at.parent.expression === at) {
-    const via = at.parent.name.text;
-    if (via !== 'call' && via !== 'apply') return undefined;
-    at = holderOf(at.parent);
-  }
-  const { parent } = at;
-  return ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
-    (isTaggedTemplateExpression(parent) && parent.tag === at)
-    ? parent
-    : undefined;
-}
-
-/** Whether a node, the name of a reference, is what a call, a construction or a tag calls. */
-function called(node: Node): boolean {
-  return callOf(node) !== undefined;
-}
-
-/** Whether a node, the name of a reference, is what a call calls whose result is dropped. */
-function droppedCall(node: Node): boolean {
-  const call = callOf(node);
-  return call !== undefined && isExpressionStatement(call.parent);
-}
 
 /**
  * Whether the parameters of a function, which run when it is called, read one of the names where
@@ -239,24 +141,6 @@ function advanced(fn: Node): boolean {
     });
   }
   return false;
-}
-
-/**
- * Whether a reference is a name that is written to, and not read: a variable, or a property by its
- * name. A write of a property that calls a setter is found by the setter, which is reached from
- * anywhere, whatever the name.
- */
-function written(node: Node): boolean {
-  const { parent } = node;
-  let target = node;
-  if (isPropertyAccessExpression(parent) && parent.name === node) target = parent;
-  else if (isLiteralKey(node)) target = holderOf(node).parent;
-  const held = holderOf(target);
-  return (
-    isBinaryExpression(held.parent) &&
-    held.parent.left === held &&
-    held.parent.operatorToken.kind === SyntaxKind.EqualsToken
-  );
 }
 
 /** Whether no arm a written condition rules out holds the node, or a function that holds it. */
@@ -382,19 +266,46 @@ function isNested(node: Node): boolean {
 }
 
 /**
+ * Whether what a node lies in of a function runs where the function is written: the function is
+ * called there, and the node is in its body, or in what a generator runs at the call.
+ */
+function runsAtOnce(fn: Node, node: Node): boolean {
+  if (!madeInPlace(fn)) return false;
+  return (
+    !isGenerator(fn) ||
+    definitionParts(fn).some((part) => node.pos >= part.pos && node.end <= part.end)
+  );
+}
+
+/**
  * Whether a node lies in a function that is never made or run: it is declared within another
  * function, no name of it is read anywhere in the file, and nothing else reaches it, a computed
- * name or an object that holds it. A function at the top of a file may be run from elsewhere, and
- * is taken to run.
+ * name or an object that holds it; or in the initializer of an instance field of a class that is
+ * declared within a function and read by no name. A function or a class at the top of a file may be
+ * run from elsewhere, and is taken to run.
  */
 function neverCreated(node: Node, referenced: ReadonlySet<string>): boolean {
-  for (let at = node.parent; !isSourceFile(at); at = at.parent) {
-    if (!isFunctionCode(at) || !isNested(at) || runsInPlace(at)) continue;
-    if (reachedByProperty(at)) continue;
-    const { names, computed } = namesOf(at);
-    if (!computed && names.every((name) => !referenced.has(name))) return true;
+  for (let at = node; !isSourceFile(at); at = at.parent) {
+    if (isInstanceInitializer(at.parent, at) && unreachedClass(at.parent.parent, referenced))
+      return true;
+    if (at !== node && unreachedFunction(at, node, referenced)) return true;
   }
   return false;
+}
+
+/** Whether a function declared within another is read by no name, and nothing else reaches it. */
+function unreachedFunction(fn: Node, node: Node, referenced: ReadonlySet<string>): boolean {
+  if (!isFunctionCode(fn) || !isNested(fn) || runsAtOnce(fn, node) || reachedByProperty(fn))
+    return false;
+  const { names, computed } = namesOf(fn);
+  return !computed && names.every((name) => !referenced.has(name));
+}
+
+/** Whether a class declared within a function is read by no name, so that no instance is made. */
+function unreachedClass(declaration: Node, referenced: ReadonlySet<string>): boolean {
+  if (!isNested(declaration)) return false;
+  const { names, computed } = namesOfClass(declaration);
+  return !computed && names.every((name) => !referenced.has(name));
 }
 
 /** Whether a node is a class, a declaration or an expression. */

@@ -303,9 +303,11 @@ export function jumpsOver(scope: Node, write: Node, target: Node, body: Node): b
 
 /**
  * Whether two nodes lie in the two arms of one if statement or conditional expression: where the
- * one runs the other does not, so a jump in the second skips nothing after a write in the first.
+ * one runs the other does not, so a jump in the second skips nothing after a write in the first. A
+ * jump that holds the write is not in an arm of its own: it goes after the write is made.
  */
 function inExclusiveArms(first: Node, second: Node): boolean {
+  if (second.pos <= first.pos && first.end <= second.end) return false;
   for (let at = first; !isSourceFile(at); at = at.parent) {
     const { parent } = at;
     if (parent.pos > second.pos || parent.end < second.end) continue;
