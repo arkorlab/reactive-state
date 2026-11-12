@@ -58,7 +58,7 @@ import {
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
-import { isNamedFunction, runsItself } from './framed-recursion.ts';
+import { isNamedFunction, madeWithin, runsItself } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
 import { readsBinding } from './scope.ts';
 
@@ -218,12 +218,7 @@ function leavesLoopFirst(node: Node, body: Node, declared: Node): boolean {
  */
 function runsAgainAround(body: Node, declared: Node): boolean {
   for (let at = body.parent; !isSourceFile(at); at = at.parent)
-    if (
-      isNamedFunction(at) &&
-      !(declared.pos >= at.pos && declared.end <= at.end) &&
-      runsItself(at)
-    )
-      return true;
+    if (isNamedFunction(at) && !madeWithin(declared, at) && runsItself(at)) return true;
   return false;
 }
 

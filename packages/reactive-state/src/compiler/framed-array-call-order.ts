@@ -23,7 +23,13 @@ import { patternAfter } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { arrayIdentity, ownMethodAssignment } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { isNamedFunction, madeInPlace, runsItself, runsItselfBetween } from './framed-recursion.ts';
+import {
+  isNamedFunction,
+  madeInPlace,
+  madeWithin,
+  runsItself,
+  runsItselfBetween,
+} from './framed-recursion.ts';
 import { jumpsOver, repeatedFrameRead, repeatingBodies, resumesWithin } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 
@@ -170,7 +176,7 @@ function enclosingFunctions(read: Node, root: FrameBinding, limit: Node): readon
   const found: Node[] = [];
   let past = false;
   for (let at = read.parent; ; at = at.parent) {
-    if (isNamedFunction(at) && !(root.pos >= at.pos && root.end <= at.end)) found.push(at);
+    if (isNamedFunction(at) && !madeWithin(root, at)) found.push(at);
     if (isSourceFile(at)) return found;
     if (at === limit) {
       if (!madeInPlace(at)) return found;
