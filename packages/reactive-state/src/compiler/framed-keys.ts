@@ -390,7 +390,7 @@ function keyAlternatives(value: Expression):
   if (literal !== undefined) return { names: [String(literal)] };
   const binding = isIdentifier(value) ? frameBindingOf(value) : undefined;
   if (binding === undefined || binding.keys.length > 0) return undefined;
-  const names = literalTypeKeys(binding.binding.type);
+  const names = declaredKeys(binding.binding);
   const values = constantKeys(binding.binding);
   if (values !== undefined) return { values, fallback: names };
   if (names === undefined) return undefined;
@@ -442,6 +442,19 @@ function changedTarget(node: Node): Expression | undefined {
   return isForInStatement(node) && isExpression(node.initializer)
     ? unwrapped(node.initializer)
     : undefined;
+}
+
+/**
+ * The names a binding's declared type allows: those of its literal union, and `undefined` as well
+ * for an optional parameter with no default, which holds it where the argument is left out.
+ */
+function declaredKeys(binding: FrameBinding): readonly string[] | undefined {
+  const names = literalTypeKeys(binding.type);
+  const optional =
+    isParameterDeclaration(binding) &&
+    binding.questionToken !== undefined &&
+    binding.initializer === undefined;
+  return names !== undefined && optional ? [...names, 'undefined'] : names;
 }
 
 /** A written literal key or union, without inferring arbitrary string values from their uses. */
