@@ -355,6 +355,12 @@ function membersInRunOrder(
   ];
 }
 
+/** Whether a call runs a function written as its callee, whose body runs after the arguments. */
+function calledAtOnce(call: CallExpression): boolean {
+  const callee = unwrapped(call.expression);
+  return isFunctionLikeDeclaration(callee) && invokedAtOnce(callee);
+}
+
 /**
  * The children of a node in the order they run. A pattern binds what its value evaluated to, so the
  * value runs before the keys and targets the pattern names.
@@ -365,6 +371,8 @@ export function inRunOrder(node: Node): readonly Node[] {
     children.push(child);
   });
   if (isClassExpression(node) || isClassDeclaration(node)) return membersInRunOrder(node, children);
+  if (isCallExpression(node) && calledAtOnce(node))
+    return [...children.filter((child) => child !== node.expression), node.expression];
   const bound = boundPattern(node);
   if (bound === undefined) return children;
   const rest = children.filter((child) => child !== bound.value);
