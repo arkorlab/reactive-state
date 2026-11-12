@@ -1742,6 +1742,76 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'accessor-in-the-body-of-a-generator-whose-iterator-is-dropped-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function* helper() { const o = { get again() { return read(); } }; o.again; } helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-the-body-of-a-dropped-generator-expression-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const helper = function* () { const o = { get again() { return read(); } }; o.again; }; helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-the-body-of-a-generator-that-is-advanced',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} function* helper() { const o = { get again() { if (n++ < 1) read(); return 0; } }; o.again; } [...helper()]; const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'accessor-in-the-body-of-a-generator-advanced-elsewhere',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} function* helper() { const o = { get again() { if (n++ < 1) read(); return 0; } }; o.again; } helper(); const it = helper(); it.next(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'accessor-in-the-default-of-a-generator-whose-iterator-is-dropped',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} function* helper(p: any = { get again() { if (n++ < 1) read(); return 0; } }.again) {} helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'accessor-in-the-body-of-a-generator-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function* helper() { const o = { get again() { return read(); } }; o.again; } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'class-builds-itself-in-a-static-block',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class Unused { object = { again() { if (n++ < 1) read(); } }; constructor() { this.object.again(); } static { new this(); } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'class-builds-itself-in-a-static-field',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class Unused { object = { again() { if (n++ < 1) read(); } }; constructor() { this.object.again(); } static made = new this(); } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'class-builds-itself-with-reflect',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class Unused { object = { again() { if (n++ < 1) read(); } }; constructor() { this.object.again(); } static { Reflect.construct(this, []); } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'class-static-block-without-this-pin',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class Unused { object = { again() { if (n++ < 1) read(); } }; constructor() { this.object.again(); } static { n; } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'class-a-decorator-builds',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const build = (c: any) => new c(); return (function read(): string { ${SAFE} @build class Unused { object = { again() { if (n++ < 1) read(); } }; constructor() { this.object.again(); } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-constructor-of-an-unnamed-function',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; new (function (this: any, pass: number) { ${SAFE} if (pass < 1) new this.constructor(pass + 1); const text = String(values); values.join = Array.prototype.join; last = text; } as any)(0); return last; }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-new-target-of-an-unnamed-function',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; new (function (this: any, pass: number) { ${SAFE} if (pass < 1) new (new.target as any)(pass + 1); const text = String(values); values.join = Array.prototype.join; last = text; } as any)(0); return last; }`,
+    converts: true,
+  },
+  {
+    id: 'unnamed-function-made-with-new-without-reentry-pin',
+    source: `function frames(error: Error) { const values = [error]; let last = ''; new (function (this: any, pass: number) { ${SAFE} const text = String(values); values.join = Array.prototype.join; last = text; } as any)(0); return last; }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

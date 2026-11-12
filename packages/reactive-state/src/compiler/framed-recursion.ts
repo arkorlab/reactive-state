@@ -233,28 +233,41 @@ interface FileFunctions {
 
 const FUNCTIONS = new WeakMap<SourceFile, FileFunctions>();
 
+/** Adds a function or a class to the names it is reached by, and to those reached from anywhere. */
+function register(
+  found: { byName: Map<string, Node[]>; implicit: Node[] },
+  node: Node,
+  reached: FunctionNames,
+): void {
+  for (const name of reached.names)
+    found.byName.set(name, [...(found.byName.get(name) ?? []), node]);
+  if ((isNamedFunction(node) && runsBySelf(node)) || (isClass(node) && reached.computed))
+    found.implicit.push(node);
+}
+
 /** The functions of a file by name, and those the language may call by itself. */
 function functionsOf(file: SourceFile): FileFunctions {
   const known = FUNCTIONS.get(file);
   if (known !== undefined) return known;
-  const byName = new Map<string, Node[]>();
-  const candidates: Node[] = [];
+  const found: { byName: Map<string, Node[]>; implicit: Node[] } = {
+    byName: new Map(),
+    implicit: [],
+  };
+  const reachedBy = new Map<Node, FunctionNames>();
   const referenced = new Set<string>();
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node) || (node !== file && !framedPossibleBranch(node))) continue;
     const reached = reachedNames(node);
-    for (const name of reached.names) byName.set(name, [...(byName.get(name) ?? []), node]);
-    if ((isNamedFunction(node) && runsBySelf(node)) || (isClass(node) && reached.computed))
-      candidates.push(node);
+    if (reached.names.length > 0 || reached.computed) reachedBy.set(node, reached);
     const text = referenceText(node);
     if (text !== undefined) referenced.add(text);
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  const implicit = candidates.filter((node) => !neverCreated(node, referenced));
-  const found = { byName, implicit };
+  for (const [node, reached] of reachedBy)
+    if (!neverCreated(node, referenced)) register(found, node, reached);
   FUNCTIONS.set(file, found);
   return found;
 }
@@ -271,18 +284,16 @@ function isNested(node: Node): boolean {
  */
 function runsAtOnce(fn: Node, node: Node): boolean {
   if (!madeInPlace(fn)) return false;
-  return (
-    !isGenerator(fn) ||
-    definitionParts(fn).some((part) => node.pos >= part.pos && node.end <= part.end)
-  );
+  return !isGenerator(fn) || inDefinition(fn, node);
 }
 
 /**
  * Whether a node lies in a function that is never made or run: it is declared within another
  * function, no name of it is read anywhere in the file, and nothing else reaches it, a computed
  * name or an object that holds it; or in the initializer of an instance field of a class that is
- * declared within a function and read by no name. A function or a class at the top of a file may be
- * run from elsewhere, and is taken to run.
+ * declared within a function and read by no name; or in the body of a generator whose iterator no
+ * name advances. A function or a class at the top of a file may be run from elsewhere, and is taken
+ * to run.
  */
 function neverCreated(node: Node, referenced: ReadonlySet<string>): boolean {
   for (let at = node; !isSourceFile(at); at = at.parent) {
@@ -298,14 +309,60 @@ function unreachedFunction(fn: Node, node: Node, referenced: ReadonlySet<string>
   if (!isFunctionCode(fn) || !isNested(fn) || runsAtOnce(fn, node) || reachedByProperty(fn))
     return false;
   const { names, computed } = namesOf(fn);
-  return !computed && names.every((name) => !referenced.has(name));
+  if (computed) return false;
+  if (names.every((name) => !referenced.has(name))) return true;
+  return isGenerator(fn) && !advanced(fn) && !inDefinition(fn, node);
+}
+
+/**
+ * Whether a node lies in what a generator runs at a call, though its body waits for the iterator:
+ * its parameters, and what `definitionParts` has.
+ */
+function inDefinition(fn: Node, node: Node): boolean {
+  const { parameters } = fn as { readonly parameters?: readonly Node[] };
+  return [...definitionParts(fn), ...(parameters ?? [])].some(
+    (part) => node.pos >= part.pos && node.end <= part.end,
+  );
 }
 
 /** Whether a class declared within a function is read by no name, so that no instance is made. */
 function unreachedClass(declaration: Node, referenced: ReadonlySet<string>): boolean {
-  if (!isNested(declaration)) return false;
+  if (!isNested(declaration) || buildsItself(declaration)) return false;
   const { names, computed } = namesOfClass(declaration);
   return !computed && names.every((name) => !referenced.has(name));
+}
+
+/**
+ * Whether a class may be built with no name of it read: a decorator is handed the class, or its
+ * static code reads `this`, which is the class there.
+ */
+function buildsItself(declaration: Node): boolean {
+  const { modifiers, members } = declaration as {
+    readonly modifiers?: readonly Node[];
+    readonly members?: readonly Node[];
+  };
+  if (modifiers?.some((each) => each.kind === SyntaxKind.Decorator) === true) return true;
+  return (members ?? []).some((member) => isStaticCode(member) && readsThis(member));
+}
+
+/** Whether a member of a class runs when the class is defined: a static block, a static field. */
+function isStaticCode(member: Node): boolean {
+  if (member.kind === SyntaxKind.ClassStaticBlockDeclaration) return true;
+  const { modifiers } = member as { readonly modifiers?: readonly Node[] };
+  return (
+    member.kind === SyntaxKind.PropertyDeclaration &&
+    modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true
+  );
+}
+
+/** Whether a node holds a `this`, whichever function it is in. */
+function readsThis(node: Node): boolean {
+  if (node.kind === SyntaxKind.ThisKeyword) return true;
+  let found = false;
+  node.forEachChild((child) => {
+    found ||= readsThis(child);
+  });
+  return found;
 }
 
 /** Whether a node is a class, a declaration or an expression. */
