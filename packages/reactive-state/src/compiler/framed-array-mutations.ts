@@ -30,6 +30,7 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isTypeAssertion,
+  isVariableStatement,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -49,9 +50,10 @@ interface QuietProof {
 }
 
 /**
- * Other execution owners can see writes or escapes appearing anywhere in the holder's source. So
- * does a loop around the reference that passes again: its next pass reads what the rest of the
- * loop, and the functions the loop may run, made of the holder.
+ * Other execution owners can see writes or escapes appearing anywhere in the holder's source, and,
+ * where the holder is declared with `export`, what an importing module does to it before it calls
+ * them. So does a loop around the reference that passes again: its next pass reads what the rest of
+ * the loop, and the functions the loop may run, made of the holder.
  */
 export function deferredArrayChange(
   reference: Identifier,
@@ -61,6 +63,7 @@ export function deferredArrayChange(
   const owner = executionOwner(reference);
   const deferred = owner !== executionOwner(binding);
   if (!deferred && !repeatedFrameRead(reference, reference, binding, owner)) return false;
+  if (deferred && !isFunctionDeclaration(binding) && exportedDeclaration(binding)) return true;
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
@@ -120,6 +123,15 @@ export function executionOwner(node: Node): Node {
     if (!isCallExpression(use) || use.arguments.length > 0 || eagerBody(use) !== parent.body)
       return parent;
   }
+}
+
+/** Whether `binding` is exported where it is declared: `export const tuple = …`. */
+export function exportedDeclaration(binding: FrameBinding): boolean {
+  const statement = binding.parent.parent;
+  return (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
+  );
 }
 
 /** Whether `within` is the initializer of the instance field `parent`, which a construction runs. */

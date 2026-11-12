@@ -33,7 +33,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration } from './framed-array-mutations.ts';
 import {
   type FrameBinding,
   frameBindingContainer,
@@ -45,7 +45,6 @@ import { framedCondition } from './framed-sources.ts';
 import {
   APPLICATION_WORK,
   callWorkExposure,
-  exportedDeclaration,
   extendsWork,
   namedElsewhere,
   tupleBindingExposure,
