@@ -2915,6 +2915,36 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const src: any = {}; [...src[1]] = [error]; Object.assign(a, src); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'define-descriptor-getter-before-value-writes-value',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.value = error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-before-value-writes-get',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { get configurable() { delete this.value; this.get = () => error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-spread-getter-writes-value',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ get enumerable() { this.value = error; return true; }, value: 'safe' }, enumerable: true }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-spread-getter-write-overwritten-adds-nothing',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { ...{ get enumerable() { this.value = error; return true; }, value: 'old' }, value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-getter-never-read-adds-nothing-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { get probe() { this.value = error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-getter-writes-another-field-adds-nothing-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.label = error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

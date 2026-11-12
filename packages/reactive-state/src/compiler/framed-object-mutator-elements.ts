@@ -26,6 +26,7 @@ import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
+import { descriptorRewrites } from './framed-descriptor-rewrites.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { listSource } from './framed-list-sources.ts';
@@ -542,9 +543,10 @@ function descriptorFields(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
-  return fieldsAfter(object, hidden, (property, later) =>
-    descriptorEntry(property, reading, later),
-  );
+  return [
+    ...fieldsAfter(object, hidden, (property, later) => descriptorEntry(property, reading, later)),
+    ...descriptorRewrites(object, hidden.data, !reading.inherited),
+  ];
 }
 
 /**

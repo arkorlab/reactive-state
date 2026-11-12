@@ -597,6 +597,21 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
   return rewritten ? { own: false } : custom;
 }
 
+/** The names a getter of a descriptor may have to run before an attribute is read: it may change it. */
+const READ_BEFORE_ATTRIBUTE: Record<'configurable' | 'writable', ReadonlySet<string>> = {
+  configurable: new Set(['enumerable']),
+  writable: new Set(['configurable', 'enumerable', 'value']),
+};
+
+/** Whether a field is a getter that runs before the attribute is read, and may give it another word. */
+function readsBefore(
+  property: ObjectLiteralElementLike,
+  key: string,
+  attribute: 'configurable' | 'writable',
+): boolean {
+  return isGetAccessorDeclaration(property) && READ_BEFORE_ATTRIBUTE[attribute].has(key);
+}
+
 type AttributeSaid = 'omitted' | 'other' | 'true';
 
 /**
@@ -612,7 +627,8 @@ function descriptorSays(
   for (const property of descriptor.properties) {
     if (isSpreadAssignment(property)) return 'other';
     const key = writtenArrayKey(property.name);
-    if (key === undefined || setsPrototype(property)) return 'other';
+    if (key === undefined || setsPrototype(property) || readsBefore(property, key, attribute))
+      return 'other';
     if (attribute === 'writable' && ACCESSOR_KEYS.has(key)) return 'other';
     if (key === attribute)
       says =

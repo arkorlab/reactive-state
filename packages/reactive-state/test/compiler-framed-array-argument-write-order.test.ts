@@ -1057,6 +1057,16 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((callback: (value: unknown) => unknown) => callback(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })))(() => Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'define-descriptor-getter-before-attributes-makes-an-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { delete this.value; delete this.writable; this.get = () => Array.prototype.join; this.set = () => {}; return false; }, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-never-read-keeps-attributes-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get probe() { delete this.value; delete this.writable; this.get = () => Array.prototype.join; this.set = () => {}; return false; }, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
