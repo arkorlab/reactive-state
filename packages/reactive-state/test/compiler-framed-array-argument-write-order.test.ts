@@ -882,6 +882,81 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); if (flag) { class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } } values.join = () => 'safe'; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'iife-arrow-expression-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }))(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-arrow-block-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-function-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (function () { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-return-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => { return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-two-statements-release',
+    source: `function frames(error: Error) { const values = [error]; (() => { Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-nested-block-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => { { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } })(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-in-argument-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), second: (() => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }))(), join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-declaration-replaces-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const done = (() => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }))(); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'iife-early-return-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => { if (flag) return 0; return Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iife-statement-after-early-return-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => { if (flag) return 0; Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); return 1; })(); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iife-branch-pin',
+    source: `function frames(error: Error, flag: boolean) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (() => { if (flag) Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iife-async-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (async () => { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iife-generator-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); (function* () { Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); })(); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iife-parameter-default-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); ((value = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true })) => value)(); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'called-later-function-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); const replace = () => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
