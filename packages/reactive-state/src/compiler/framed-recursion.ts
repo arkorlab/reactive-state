@@ -497,12 +497,11 @@ function definitionParts(fn: Node): readonly Node[] {
 }
 
 /** Whether code that runs in the range reaches what the language may call by itself. */
-
 function runsCodeBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (node !== fn && isAnswering(node) && !runsInPlace(node)) {
+    if (node !== fn && isFunctionCode(node) && !runsInPlace(node)) {
       pending.push(...definitionParts(node));
       continue;
     }
