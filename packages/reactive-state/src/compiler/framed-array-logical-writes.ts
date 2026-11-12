@@ -3,6 +3,7 @@ import {
   type Expression,
   isArrayLiteralExpression,
   isArrowFunction,
+  isBinaryExpression,
   isElementAccessExpression,
   isFunctionExpression,
   isIdentifier,
@@ -99,17 +100,45 @@ function unchangedBefore(
   return true;
 }
 
-/** The assignment itself is skipped as a unit; later iterations and referenced owners remain possible. */
+/**
+ * The right side and the test are skipped as a unit; the target, whose receiver and key are
+ * evaluated before the slot is tested, is not. Later iterations and referenced owners remain
+ * possible.
+ */
 function canPrecede(node: Node, read: BinaryExpression, root: FrameBinding): boolean {
-  if (node.pos >= read.pos && node.end <= read.end) return false;
+  const target = inTarget(node, read);
+  if (!target && node.pos >= read.pos && node.end <= read.end) return false;
   if (!framedPossibleBranch(node)) return false;
   const owner = executionOwner(read);
   const writer = executionOwner(node);
   return writer === owner
-    ? node.pos < read.pos ||
+    ? target ||
+        node.pos < read.pos ||
         destructuredFirst(node, read) ||
         repeatedFrameRead(node, read, root, owner)
     : !unreferencedLocalFunction(writer, owner);
+}
+
+/**
+ * Whether `node` is in what the assignment evaluates of its target before it tests the slot — the
+ * receiver and the key — but not the receiver's own name, which hands the array to nothing.
+ */
+function inTarget(node: Node, read: BinaryExpression): boolean {
+  const { left } = read;
+  if (node.pos < left.pos || node.end > left.end) return false;
+  const target = unwrapped(left);
+  if (!isElementAccessExpression(target)) return false;
+  let receiver: Expression = unwrapped(target.expression);
+  for (let next = commaResult(receiver); next !== undefined; next = commaResult(receiver))
+    receiver = next;
+  return node !== receiver;
+}
+
+/** What a comma expression comes to: its last operand. */
+function commaResult(value: Expression): Expression | undefined {
+  return isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken
+    ? unwrapped(value.right)
+    : undefined;
 }
 
 /** A whole constant alias does not read or replace any stored array entry. */
