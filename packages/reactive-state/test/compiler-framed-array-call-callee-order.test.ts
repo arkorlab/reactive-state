@@ -1657,6 +1657,46 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'accessor-in-a-function-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function unused() { const object = { get again() { return read(); } }; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-an-arrow-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const unused = () => { const object = { get again() { return read(); } }; }; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-a-function-that-is-called',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} function used() { const object = { get again() { if (n++ < 1) read(); return 0; } }; object.again; } used(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'accessor-in-a-function-nested-in-one-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function outer() { function inner() { const object = { get again() { return read(); } }; } } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-a-function-called-on-the-spot',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} (() => { const object = { get again() { if (n++ < 1) read(); return 0; } }; object.again; })(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-the-prototype-read-of-extends',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; const Base: any = new Proxy(class {}, { get(t: any, k: any) { if (n++ < 1) read(); return t[k]; } }); function read(): string { ${SAFE} class Derived extends Base {} const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: true,
+  },
+  {
+    id: 'class-without-heritage-runs-nothing-pin',
+    source: `function frames(error: Error) { const values = [error]; function read(): string { ${SAFE} class Plain { m() { read(); } } const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
+    converts: false,
+  },
+  {
+    id: 'function-at-the-top-of-a-file-is-taken-to-run',
+    source: `function unused() { const object = { get again() { return read(); } }; } function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

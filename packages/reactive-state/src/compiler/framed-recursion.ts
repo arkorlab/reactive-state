@@ -31,6 +31,7 @@ import {
   isShorthandPropertyAssignment,
   isStringLiteral,
   isTaggedTemplateExpression,
+  isSourceFile,
   isTypeNode,
   isYieldExpression,
   type Node,
@@ -353,21 +354,47 @@ function functionsOf(file: SourceFile): FileFunctions {
   const known = FUNCTIONS.get(file);
   if (known !== undefined) return known;
   const byName = new Map<string, Node[]>();
-  const implicit: Node[] = [];
+  const candidates: Node[] = [];
+  const referenced = new Set<string>();
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node) || (node !== file && !framedPossibleBranch(node))) continue;
     const reached = reachedNames(node);
     for (const name of reached.names) byName.set(name, [...(byName.get(name) ?? []), node]);
     if ((isNamedFunction(node) && runsBySelf(node)) || (isClass(node) && reached.computed))
-      implicit.push(node);
+      candidates.push(node);
+    const text = referenceText(node);
+    if (text !== undefined) referenced.add(text);
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
+  const implicit = candidates.filter((node) => !neverCreated(node, referenced));
   const found = { byName, implicit };
   FUNCTIONS.set(file, found);
   return found;
+}
+
+/** Whether a node lies within a function, a method or an arrow, as code that runs when it is called. */
+function isNested(node: Node): boolean {
+  for (let at = node.parent; !isSourceFile(at); at = at.parent) if (isFunctionCode(at)) return true;
+  return false;
+}
+
+/**
+ * Whether a node lies in a function that is never made or run: it is declared within another
+ * function, no name of it is read anywhere in the file, and nothing else reaches it, a computed
+ * name or an object that holds it. A function at the top of a file may be run from elsewhere, and
+ * is taken to run.
+ */
+function neverCreated(node: Node, referenced: ReadonlySet<string>): boolean {
+  for (let at = node.parent; !isSourceFile(at); at = at.parent) {
+    if (!isFunctionCode(at) || !isNested(at) || runsInPlace(at)) continue;
+    if (reachedByProperty(at)) continue;
+    const { names, computed } = namesOf(at);
+    if (!computed && names.every((name) => !referenced.has(name))) return true;
+  }
+  return false;
 }
 
 /** Whether a node is a class, a declaration or an expression. */
@@ -540,10 +567,8 @@ const CODE_FREE: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.DefaultClause,
   SyntaxKind.EmptyStatement,
   SyntaxKind.ExpressionStatement,
-  SyntaxKind.ExpressionWithTypeArguments,
   SyntaxKind.FalseKeyword,
   SyntaxKind.FunctionExpression,
-  SyntaxKind.HeritageClause,
   SyntaxKind.Identifier,
   SyntaxKind.IfStatement,
   SyntaxKind.LabeledStatement,
