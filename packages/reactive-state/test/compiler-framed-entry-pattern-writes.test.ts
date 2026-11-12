@@ -1081,6 +1081,18 @@ const CASES = [
     values: ["'kept':", "'safe':"],
   },
   {
+    id: 'computed-key-name-past-the-last-index-is-a-string-key',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { 4294967295: error, ...{ get trigger() { delete this[4294967295]; return 0; }, 4294967295: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'computed-key-last-index-field-before-getter-overwrites',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { 4294967294: error, ...{ get trigger() { delete this[4294967294]; return 0; }, 4294967294: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:'],
+  },
+  {
     id: 'computed-key-constant-member-written-hands-over-source-pin',
     source: `function frames(error: Error, name: string, mutate: (value: object) => void) { const source: { field: unknown } = { field: 'kept' }; const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], (source.field = error, ({ [name]: entry[1] } = source))); }`,
     key: 'message',

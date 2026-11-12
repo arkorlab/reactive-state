@@ -394,8 +394,11 @@ function liveGetter(properties: readonly ObjectLiteralElementLike[], at: number)
     .every((later) => isSetAccessorDeclaration(later) || fieldName(later) !== name);
 }
 
-/** The text of an array index. */
+/** The text of an array index, or of a name that looks like one. */
 const INDEX_NAME = /^(?:0|[1-9]\d*)$/u;
+
+/** The last array index: the names past it are ordinary names, copied in the order they were set. */
+const LAST_INDEX = 4_294_967_294;
 
 /**
  * Whether a field is written with the name of an array index. A copy reaches those before any other
@@ -404,7 +407,7 @@ const INDEX_NAME = /^(?:0|[1-9]\d*)$/u;
  */
 function isIndexField(property: ObjectLiteralElementLike): boolean {
   const name = isSpreadAssignment(property) ? undefined : fieldName(property);
-  return name !== undefined && INDEX_NAME.test(name);
+  return name !== undefined && INDEX_NAME.test(name) && Number(name) <= LAST_INDEX;
 }
 
 /** Whether a field may be named by an array index, which a copy reaches before any other name. */
