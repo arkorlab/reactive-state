@@ -18,6 +18,7 @@ import {
   isMetaProperty,
   isMethodDeclaration,
   isNewExpression,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
@@ -33,6 +34,7 @@ import {
 } from 'typescript/ast';
 
 import { isAnswering } from './answers.ts';
+import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
 import {
@@ -49,6 +51,7 @@ import {
   runsInPlace,
   type FunctionNames,
 } from './framed-function-names.ts';
+import { framedWrittenTargets } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
 
 export { isNamedFunction, madeInPlace } from './framed-function-names.ts';
@@ -147,8 +150,15 @@ function parametersMention(fn: Node, names: ReadonlySet<string>): boolean {
       pending.push(...definitionParts(node));
       continue;
     }
+    if (deferredInitializer(node, fn)) continue;
     const text = referenceText(node);
-    if (text !== undefined && names.has(text) && !written(node) && runsWithin(node, fn))
+    if (
+      text !== undefined &&
+      names.has(text) &&
+      !written(node) &&
+      !shadowedByParameter(node, fn) &&
+      runsWithin(node, fn)
+    )
       return true;
     node.forEachChild((child) => {
       pending.push(child);
@@ -248,6 +258,36 @@ function isInstanceInitializer(holder: Node, node: Node): boolean {
 }
 
 /**
+ * Whether a name is read as a parameter of a function within the scope, which takes what its caller
+ * gives and is not written within it: the parameter is no function the name is given to.
+ */
+function shadowedByParameter(node: Node, scope: Node): boolean {
+  if (!isIdentifier(node)) return false;
+  const declared = frameDeclarationOf(node);
+  if (
+    declared === undefined ||
+    !isParameterDeclaration(declared) ||
+    declared.pos < scope.pos ||
+    declared.end > scope.end
+  )
+    return false;
+  const pending: Node[] = [scope];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (
+      framedWrittenTargets(each).some((target) => {
+        const assigned = unwrapped(target) as Node;
+        return isIdentifier(assigned) && assigned.text === node.text;
+      })
+    )
+      return false;
+    each.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return true;
+}
+
+/**
  * Whether a name read inside the function resolves to the function: no parameter, no local, and no
  * function or class within it that is named alike takes the name first. A name that is not the
  * function's own or its variable's is taken for the function's wherever it is read.
@@ -339,6 +379,7 @@ function mentionsAny(fn: Node, names: ReadonlySet<string>): boolean {
       names.has(text) &&
       !written(node) &&
       !dropsGenerator(node, text, names) &&
+      !shadowedByParameter(node, fn) &&
       runsWithin(node, fn)
     )
       return true;
@@ -548,6 +589,7 @@ function callsFunction(node: Node, fn: Node, names: ReadonlySet<string>): boolea
     !written(node) &&
     !dropsGenerator(node, text, names) &&
     (!isIdentifier(node) || refersToFunction(node, fn)) &&
+    !shadowedByParameter(node, fn) &&
     runsWithin(node, fn) &&
     !inInstanceInitializer(node, fn)
   );
