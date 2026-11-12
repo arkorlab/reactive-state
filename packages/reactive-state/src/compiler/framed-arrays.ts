@@ -27,13 +27,13 @@ import {
   writtenAfterRead,
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
+import { callMethodWrites } from './framed-array-call-writes.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
-  callMethodWrites,
   forgetMethods,
   OWN_METHODS,
   afterAssignment,
