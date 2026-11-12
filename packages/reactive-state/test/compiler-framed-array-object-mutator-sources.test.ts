@@ -2671,6 +2671,31 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-rest-excludes-constant-computed-key',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; const key = 'get'; ({ [key]: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-excludes-literal-computed-key',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown;  ({ ['get']: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-excludes-aliased-constant-computed-key',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; const first = 'get'; const key = first; ({ [key]: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-keeps-conditional-computed-key',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; const key = flag ? 'get' : 'value'; ({ [key]: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-rest-keeps-unrelated-constant-computed-key',
+    source: `function frames(error: Error, flag: boolean) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; let ignored: unknown; const key = 'value'; ({ [key]: ignored, ...maps[0] } = { get: () => error, value: 'safe' }); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-array-rest-member-captured-twice-is-no-descriptor',
     source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const other: any = {}; const maps: any = {}; [...holder.items] = [{ get: () => error }]; ({ items: other.nested } = holder); ({ nested: maps[0] } = other); Object.defineProperties(a, maps); return String(a); }`,
     converts: false,

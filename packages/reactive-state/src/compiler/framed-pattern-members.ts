@@ -113,7 +113,7 @@ function unroutedChildren(target: Expression): readonly Unrouted[] {
   if (!isObjectLiteralExpression(target)) return [];
   const listed: string[] = [];
   for (const property of target.properties) {
-    const name = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
+    const name = isSpreadAssignment(property) ? undefined : listedName(property.name);
     if (name !== undefined) listed.push(name);
   }
   return target.properties.flatMap((property): Unrouted[] => {
@@ -123,6 +123,17 @@ function unroutedChildren(target: Expression): readonly Unrouted[] {
       { child: property.initializer, copy: false, keys: keyNames(property.name), without: [] },
     ];
   });
+}
+
+/**
+ * The name a field of a pattern takes out of what a rest copies: written out, or a computed key the
+ * compile reads as one name, a constant holding it; none where it may be one of several.
+ */
+function listedName(name: PropertyName): string | undefined {
+  const written = writtenArrayKey(name);
+  if (written !== undefined) return written;
+  const names = keyNames(name);
+  return names?.length === 1 ? names[0] : undefined;
 }
 
 /** A rest target: a member takes the copy itself, a pattern the fields of the copy. */
