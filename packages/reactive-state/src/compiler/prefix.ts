@@ -89,10 +89,11 @@ const PARAMETER_PROPERTY: ReadonlySet<SyntaxKind> = new Set([
  * transform turns into JavaScript — an `enum`, a parameter property — fails to load there
  * (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`), and a decorator is no JavaScript yet. The Durable Object's
  * bundler would transform them, and the browser's code is compiled by Next.js: the server part
- * alone is refused them.
+ * alone is refused them. Within a `declare` all of it is erased: an `enum`, and a decorator of what
+ * the declaration holds, though not one written before a `declare`d class, nor a parameter property.
  */
 function checkStrippable(node: Node, fail: Fail): void {
-  if (isEnumDeclaration(node)) {
+  if (isEnumDeclaration(node) && !ambient(node)) {
     fail(
       'The server part is run with its types stripped, which leaves an `enum` nothing to run: declare an object of constants instead.',
       node,
@@ -107,7 +108,7 @@ function checkStrippable(node: Node, fail: Fail): void {
       node,
     );
   }
-  if (isDecorator(node)) {
+  if (isDecorator(node) && !ambient(node.parent, false)) {
     fail(
       'The server part is run with its types stripped, and a decorator is not yet JavaScript: call the function on the class instead.',
       node,
@@ -142,10 +143,13 @@ function checkModuleSyntax(node: Node, fail: Fail): void {
   }
 }
 
-/** Whether a `declare` is on the node or on a namespace around it: ambient code is erased whole. */
-function ambient(node: Node): boolean {
-  for (let at = node; !isSourceFile(at); at = at.parent) {
-    if (isModuleDeclaration(at) && declares(at)) return true;
+/**
+ * Whether a `declare` is on the node or on a namespace, module or class around it, as `self` allows
+ * for the node itself: ambient code is erased whole.
+ */
+function ambient(node: Node, self = true): boolean {
+  for (let at = self ? node : node.parent; !isSourceFile(at); at = at.parent) {
+    if (declares(at)) return true;
   }
   return false;
 }
@@ -174,9 +178,12 @@ function holdsCode(declaration: ModuleDeclaration): boolean {
   return false;
 }
 
-/** Whether a declaration is a `declare`d one on its own. */
-function declares(declaration: ModuleDeclaration): boolean {
+/** Whether a declaration of a namespace, a module, a class or an enum is a `declare`d one on its own. */
+function declares(declaration: Node): boolean {
   return (
+    (isModuleDeclaration(declaration) ||
+      isClassDeclaration(declaration) ||
+      isEnumDeclaration(declaration)) &&
     declaration.modifiers?.some((modifier) => modifier.kind === SyntaxKind.DeclareKeyword) === true
   );
 }
