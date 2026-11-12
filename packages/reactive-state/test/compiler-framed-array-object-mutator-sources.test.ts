@@ -2495,6 +2495,36 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; [ignored, ...holder.items] = [() => error, () => 'safe']; ({ items: [descriptor.get] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'assign-spread-list-hidden-by-later-index',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[error], 0: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-spread-list-other-index-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[error], 1: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-before-index-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { 0: 'safe', ...[error] }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-spread-list-computed-index-hides',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[error], ['0']: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-spread-list-entry-hidden-only',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...['x', error], 1: 'y' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-spread-list-entry-kept',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { ...[error, 'x'], 1: 'y' }); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

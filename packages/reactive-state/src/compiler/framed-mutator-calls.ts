@@ -1,4 +1,9 @@
-import { type CallExpression, type Expression, isSpreadElement } from 'typescript/ast';
+import {
+  type CallExpression,
+  type Expression,
+  isCallExpression,
+  isSpreadElement,
+} from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
@@ -78,4 +83,32 @@ export function writtenArguments(
     }
   }
   return written;
+}
+
+/** The natives that hand back the object they were given first. */
+const RETURNS_TARGET: ReadonlySet<string> = new Set([
+  'Object.freeze',
+  'Object.preventExtensions',
+  'Object.seal',
+  'Object.setPrototypeOf',
+  PATHS.assign,
+  PATHS.properties,
+  PATHS.property,
+]);
+
+/**
+ * The object a mutation reaches through the natives that return their first argument:
+ * Object.assign(Object.assign(a, {}), ...) mutates a.
+ */
+export function returnedTarget(target: Expression): Expression {
+  let at = target;
+  for (;;) {
+    const inner = unwrapped(at);
+    if (!isCallExpression(inner)) return at;
+    const path = globalPathOf(unwrapped(inner.expression))?.join('.');
+    const [first] = writtenArguments(inner);
+    if (path === undefined || !RETURNS_TARGET.has(path)) return at;
+    if (first === undefined || isSpreadElement(first)) return at;
+    at = first;
+  }
 }

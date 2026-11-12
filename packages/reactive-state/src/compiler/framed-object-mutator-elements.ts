@@ -4,7 +4,6 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isCallExpression,
   isComputedPropertyName,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -24,13 +23,12 @@ import {
 
 import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
-import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
+import { mutatorInvocation, PATHS, returnedTarget } from './framed-mutator-calls.ts';
 import {
   accessedValues,
   alternativesOf,
@@ -73,34 +71,6 @@ export function objectMutatorElements(
       ? definedMaps(rest, index, reading)
       : definedProperty(rest, index, reading);
   return { target: mutated, elements: defined };
-}
-
-/** The natives that hand back the object they were given first. */
-const RETURNS_TARGET: ReadonlySet<string> = new Set([
-  'Object.freeze',
-  'Object.preventExtensions',
-  'Object.seal',
-  'Object.setPrototypeOf',
-  PATHS.assign,
-  PATHS.properties,
-  PATHS.property,
-]);
-
-/**
- * The object a mutation reaches through the natives that return their first argument:
- * Object.assign(Object.assign(a, {}), ...) mutates a.
- */
-function returnedTarget(target: Expression): Expression {
-  let at = target;
-  for (;;) {
-    const inner = unwrapped(at);
-    if (!isCallExpression(inner)) return at;
-    const path = globalPathOf(unwrapped(inner.expression))?.join('.');
-    const [first] = writtenArguments(inner);
-    if (path === undefined || !RETURNS_TARGET.has(path)) return at;
-    if (first === undefined || isSpreadElement(first)) return at;
-    at = first;
-  }
 }
 
 /**
@@ -247,7 +217,7 @@ function assignedValues(
   if (isSpreadElement(source))
     return iteratedFrameSources(source.expression).map((each) => atSlot(each, index));
   const value = unwrapped(source);
-  if (isArrayLiteralExpression(value)) return [{ value, keys: [], array: true }];
+  if (isArrayLiteralExpression(value)) return listSource(value, hidden);
   if (!isObjectLiteralExpression(value)) {
     const names: Identifier[] = [];
     const held = heldValue(value, names);
@@ -271,6 +241,21 @@ function assignedValues(
 function writesTo(names: readonly Identifier[], reading: Reading): readonly HeldWrite[] {
   const [first] = names;
   return first === undefined ? [] : heldMemberWrites(first, names, reading.at);
+}
+
+/**
+ * The elements a list source installs: the list whole where no field after it names a position, the
+ * entries at the other positions where one does. A spread entry, whose length the compile does not
+ * know, stays a list.
+ */
+function listSource(list: ArrayLiteralExpression, hidden: Hidden): WrittenArrayElement[] {
+  if (hidden.data.size === 0) return [{ value: list, keys: [], array: true }];
+  return list.elements.flatMap((each, at): WrittenArrayElement[] => {
+    if (isOmittedExpression(each) || hidden.data.has(String(at))) return [];
+    return isSpreadElement(each)
+      ? [{ value: each.expression, keys: [], array: true }]
+      : [{ value: each, keys: [] }];
+  });
 }
 
 /**
