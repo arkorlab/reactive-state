@@ -317,27 +317,42 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
   if (copied === undefined || !isObjectLiteralExpression(copied) || seen.has(copied)) return [];
   if (!isStable(property.expression)) return [];
   seen.add(copied);
+  const { properties } = copied;
   const names: string[] = [];
   let getterRan = false;
-  for (const each of copied.properties) {
+  for (const [at, each] of properties.entries()) {
     if (!getterRan) names.push(...fieldNames(each, seen));
-    getterRan ||= mayRunGetter(each, new Set());
+    getterRan ||= liveGetter(properties, at) || spreadRunsGetter(each, new Set());
   }
   return names;
 }
 
 /**
- * Whether copying a field may run a getter, which may delete the fields the copy has yet to reach:
- * a getter, or a spread of what is not a written literal, or of one that holds a getter.
+ * Whether a getter is one the copy runs: no field after it, a setter aside, replaces it, and a
+ * spread after it may. A name the compile cannot read may be any name.
  */
-function mayRunGetter(property: ObjectLiteralElementLike, seen: Set<Node>): boolean {
-  if (isGetAccessorDeclaration(property)) return true;
+function liveGetter(properties: readonly ObjectLiteralElementLike[], at: number): boolean {
+  const getter = properties[at];
+  if (getter === undefined || !isGetAccessorDeclaration(getter)) return false;
+  const name = fieldName(getter);
+  if (name === undefined) return true;
+  return properties
+    .slice(at + 1)
+    .every((later) => isSetAccessorDeclaration(later) || fieldName(later) !== name);
+}
+
+/**
+ * Whether copying a spread may run a getter, which may delete the fields the copy has yet to reach:
+ * the spread of what is not a written literal, or of one that holds a getter the copy runs.
+ */
+function spreadRunsGetter(property: ObjectLiteralElementLike, seen: Set<Node>): boolean {
   if (!isSpreadAssignment(property)) return false;
   const copied = writtenValue(property.expression);
   if (copied === undefined || !isObjectLiteralExpression(copied)) return true;
   if (seen.has(copied)) return false;
   seen.add(copied);
-  return copied.properties.some((each) => mayRunGetter(each, seen));
+  const { properties } = copied;
+  return properties.some((each, at) => liveGetter(properties, at) || spreadRunsGetter(each, seen));
 }
 
 /**
