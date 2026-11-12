@@ -20,6 +20,7 @@ import {
   isMethodDeclaration,
   isNewExpression,
   isParameterDeclaration,
+  isPrivateIdentifier,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
@@ -31,6 +32,7 @@ import {
   isYieldExpression,
   type Node,
   type NoSubstitutionTemplateLiteral,
+  type PrivateIdentifier,
   type SourceFile,
   type StringLiteral,
   SyntaxKind,
@@ -45,6 +47,7 @@ import {
   namesOfClass,
   holderOf,
   boundVariable,
+  isAssignment,
   isFunctionCode,
   isGenerator,
   isNamedFunction,
@@ -93,17 +96,21 @@ function isTypeOnly(node: Node): boolean {
   return isTypeNode(node) && !isExpressionWithTypeArguments(node);
 }
 
+/** The name an identifier or a private name reads: a variable's, or a property's by its name. */
+function readName(node: Identifier | PrivateIdentifier): string | undefined {
+  const { parent } = node;
+  if (isPropertyAccessExpression(parent) && parent.name === node) return node.text;
+  if (!isIdentifier(node)) return undefined;
+  if (!isShorthandPropertyAssignment(parent) && (parent as { name?: Node }).name === node)
+    return undefined;
+  return readsBinding(node) ? node.text : undefined;
+}
+
 /** The name a node reads, if it reads one: a variable, or a property by its name. */
 function referenceText(node: Node): string | undefined {
   if (isMetaProperty(node))
     return node.keywordToken === SyntaxKind.NewKeyword ? 'constructor' : undefined;
-  if (isIdentifier(node)) {
-    const { parent } = node;
-    if (isPropertyAccessExpression(parent) && parent.name === node) return node.text;
-    if (!isShorthandPropertyAssignment(parent) && (parent as { name?: Node }).name === node)
-      return undefined;
-    return readsBinding(node) ? node.text : undefined;
-  }
+  if (isIdentifier(node) || isPrivateIdentifier(node)) return readName(node);
   return isLiteralKey(node)
     ? (node as StringLiteral | NoSubstitutionTemplateLiteral).text
     : undefined;
@@ -122,7 +129,8 @@ function isLiteralKey(node: Node): boolean {
  */
 function callOf(node: Node): Node | undefined {
   let at = holderOf(node);
-  if (isPropertyAccessExpression(at.parent) && at.parent.name === at) at = holderOf(at.parent);
+  if ((isPropertyAccessExpression(at.parent) && at.parent.name === at) || isLiteralKey(node))
+    at = holderOf(at.parent);
   if (isPropertyAccessExpression(at.parent) && at.parent.expression === at) {
     const via = at.parent.name.text;
     if (via !== 'call' && via !== 'apply') return undefined;
@@ -329,7 +337,7 @@ function functionsOf(file: SourceFile): FileFunctions {
   const implicit: Node[] = [];
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
+    if (isTypeOnly(node) || (node !== file && !framedPossibleBranch(node))) continue;
     const reached = reachedNames(node);
     for (const name of reached.names) byName.set(name, [...(byName.get(name) ?? []), node]);
     if ((isNamedFunction(node) && runsBySelf(node)) || (isClass(node) && reached.computed))
@@ -425,13 +433,14 @@ function reachedByProperty(fn: Node): boolean {
   if (isMethodDeclaration(fn) || isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn))
     return true;
   if (!isFunctionExpression(fn) && !isArrowFunction(fn)) return false;
-  const { parent } = holderOf(fn);
-  if (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) return true;
-  return (
-    isBinaryExpression(parent) &&
-    parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-    (isPropertyAccessExpression(parent.left) || isElementAccessExpression(parent.left))
-  );
+  for (let at = holderOf(fn); ;) {
+    const { parent } = at;
+    if (isPropertyAssignment(parent) || isPropertyDeclaration(parent)) return true;
+    if (!isAssignment(parent) || (parent.right as Node) !== at) return false;
+    const left = unwrapped(parent.left) as Node;
+    if (isPropertyAccessExpression(left) || isElementAccessExpression(left)) return true;
+    at = holderOf(parent);
+  }
 }
 
 /** Whether the file uses one of the names otherwise than by calling it or giving it a value. */
