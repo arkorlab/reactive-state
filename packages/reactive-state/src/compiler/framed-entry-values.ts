@@ -307,7 +307,7 @@ function unroutedTargets(child: Node, at: PatternTarget): readonly PatternTarget
     const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
     const from = restStart(child);
     if (pattern) return [{ target, sources, loose: true, ...(from !== undefined && { from }) }];
-    return [{ target, sources: from === undefined ? sources : entriesFrom(sources, from) }];
+    return [{ target, sources }];
   }
   if (!isExpression(child)) return [];
   const selected = at.from === undefined ? possibleFields(sources) : fieldsFrom(sources, at.from);
@@ -325,36 +325,27 @@ function restStart(rest: Node): number | undefined {
 }
 
 /**
- * The entries of a source from a position on, each as a value: of a written list no spread shifts
- * before the position, the elements after it; of any other source, the source itself.
+ * What a pattern under an array rest may take: of a written list no spread shifts before the rest,
+ * the elements after the rest's position, each as a value; of any other source, and of a list a
+ * spread may shift, its fields and elements. A member that is the rest takes the array whole.
  */
-function entriesFrom(
-  sources: readonly AssignedFrameSource[],
-  from: number,
-): readonly AssignedFrameSource[] {
-  return sources.flatMap((source) => {
-    const value = unwrapped(source.value);
-    const written = source.keys.length === 0 && isArrayLiteralExpression(value);
-    if (!written || value.elements.slice(0, from).some((each) => isSpreadElement(each)))
-      return [source];
-    return value.elements.slice(from).flatMap((each): AssignedFrameSource[] => {
-      if (isOmittedExpression(each)) return [];
-      return isSpreadElement(each)
-        ? [...iteratedFrameSources(each.expression)]
-        : [{ value: each, keys: [] }];
-    });
-  });
-}
-
-/** What a pattern under an array rest may take: the entries from its position, or any field. */
 function fieldsFrom(
   sources: readonly AssignedFrameSource[],
   from: number,
 ): readonly AssignedFrameSource[] {
   return sources.flatMap((source) => {
     const value = unwrapped(source.value);
-    const written = source.keys.length === 0 && isArrayLiteralExpression(value);
-    return written ? entriesFrom([source], from) : possibleFields([source]);
+    const cut =
+      source.keys.length === 0 &&
+      isArrayLiteralExpression(value) &&
+      value.elements.slice(0, from).every((each) => !isSpreadElement(each));
+    if (!cut) return possibleFields([source]);
+    return value.elements.slice(from).flatMap((each): AssignedFrameSource[] => {
+      if (isOmittedExpression(each)) return [];
+      return isSpreadElement(each)
+        ? [...iteratedFrameSources(each.expression)]
+        : [{ value: each, keys: [] }];
+    });
   });
 }
 

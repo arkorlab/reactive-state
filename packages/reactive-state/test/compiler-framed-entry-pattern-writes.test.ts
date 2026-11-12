@@ -916,13 +916,13 @@ const CASES = [
     id: 'rest-pattern-after-unknown-spread-keeps-all',
     source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[entry[1]]] = [...list, error, 'kept'])); }`,
     key: 'message',
-    values: ["'safe':", "[...list, error, 'kept']:"],
+    values: ["'kept':", "'safe':", "[...list, error, 'kept']:", 'error:', 'list:0'],
   },
   {
     id: 'rest-member-after-consumed-entry',
     source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...entry[1]] = [error, 'kept'])); }`,
     key: 'message',
-    values: ["'kept':", "'safe':"],
+    values: ["'safe':", "[error, 'kept']:"],
   },
   {
     id: 'rest-member-from-start-keeps-entries',
@@ -935,6 +935,24 @@ const CASES = [
     source: `function frames(error: Error, list: unknown[]) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[{ ['field']: entry[1] }]] = [error, { field: 'kept' }])); }`,
     key: 'message',
     values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'rest-member-keeps-an-array-value',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...entry[1]] = [0, error])); }`,
+    key: 'message',
+    values: ["'safe':", '[0, error]:'],
+  },
+  {
+    id: 'rest-member-empty-suffix-keeps-an-array-value',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...entry[1]] = [0])); }`,
+    key: 'message',
+    values: ["'safe':", '[0]:'],
+  },
+  {
+    id: 'rest-pattern-after-spread-keeps-elements',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ([sink, ...[entry[1]]] = [...list, error])); }`,
+    key: 'message',
+    values: ["'safe':", '[...list, error]:', 'error:', 'list:0'],
   },
 ] as const;
 
