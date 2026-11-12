@@ -198,7 +198,14 @@ function exitsWithWrite(statement: Node, body: Node): boolean {
  * next pass.
  */
 function leavesLoopFirst(node: Node, body: Node, declared: Node): boolean {
-  if (!withinBody(node, body) || runsAgainAround(body, declared)) return false;
+  return withinBody(node, body) && !runsAgainAround(body, declared) && exitFollows(node, body);
+}
+
+/**
+ * Whether the write, in the body of a loop, is followed by an exit of the loop, or is made by one,
+ * with no jump between them that may skip it: the loop does not come round to the write again.
+ */
+function exitFollows(node: Node, body: Node): boolean {
   for (let at = node; ; at = at.parent) {
     if (exitsWithWrite(at, body)) return true;
     if (at === body) return false;
@@ -368,6 +375,20 @@ function returnsPast(statement: Node, target: Node, body: Node): boolean {
 }
 
 /**
+ * Whether a loop may come round to the write: it can repeat, the write is not in what it runs once,
+ * and no exit of it follows the write.
+ */
+function comesRound(loop: Node, within: Node, write: Node): boolean {
+  const body = loopBody(loop);
+  return (
+    body !== undefined &&
+    canRepeat(loop) &&
+    !runsOnce(within, loop) &&
+    !(withinBody(write, body) && exitFollows(write, body))
+  );
+}
+
+/**
  * The loops within `scope` that hold the write and not `target`, and may come round to the write
  * again before they end: a jump of theirs that lies before the write in the source may run after
  * the write in a later pass, and the arms of a branch of theirs run in different passes.
@@ -376,7 +397,7 @@ function loopsRound(write: Node, scope: Node, target: Node): readonly Node[] {
   const loops: Node[] = [];
   let within = write;
   for (let at = write.parent; at !== scope && !isSourceFile(at); within = at, at = at.parent)
-    if (canRepeat(at) && !runsOnce(within, at) && !withinBody(target, at)) loops.push(at);
+    if (comesRound(at, within, write) && !withinBody(target, at)) loops.push(at);
   return loops;
 }
 
