@@ -289,13 +289,17 @@ function runsAfter(node: Node, reference: Identifier): boolean {
 }
 
 /**
- * Whether `node` lies in a computed key of the class whose static initializer or static block holds
- * `reference`: a class evaluates the keys of all its members before it runs any static initializer,
- * whichever is written first.
+ * Whether `node` lies in a computed key of a class whose static initializer or static block holds
+ * `reference`, or of one that holds that class in such a place: a class evaluates the keys of all
+ * its members before it runs any static initializer, whichever is written first, and the classes
+ * written in its static initializers are created while they run.
  */
 function ownerKeyFirst(node: Node, reference: Identifier): boolean {
-  const owner = staticOwner(reference);
-  if (owner === undefined) return false;
+  return staticOwners(reference).some((owner) => keyOf(node, owner));
+}
+
+/** Whether `node` lies in a computed key of the members of `owner`, or is a member that holds one. */
+function keyOf(node: Node, owner: Node): boolean {
   if (node.parent === owner && hasComputedKey(node)) return true;
   for (let at: Node = node; at !== owner && !isSourceFile(at); at = at.parent)
     if (isComputedPropertyName(at) && at.parent.parent === owner) return true;
@@ -330,19 +334,28 @@ function deferredBody(parent: Node, at: Node): boolean {
   );
 }
 
-/** The class whose static initializer or static block `reference` is evaluated in, as it is defined. */
-function staticOwner(reference: Identifier): Node | undefined {
+/**
+ * The classes whose static initializer or static block `reference` is evaluated in, as they are
+ * defined, the nearest first, and those that hold such a class in a static initializer of theirs.
+ */
+function staticOwners(reference: Identifier): readonly Node[] {
+  const owners: Node[] = [];
   for (let at: Node = reference; !isSourceFile(at.parent); at = at.parent) {
-    if (deferredBody(at.parent, at)) return undefined;
-    if (isClassStaticBlockDeclaration(at.parent)) return at.parent.parent;
-    if (
-      isPropertyDeclaration(at.parent) &&
-      at.parent.initializer?.pos === at.pos &&
-      at.parent.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true
-    )
-      return at.parent.parent;
+    const { parent } = at;
+    if (deferredBody(parent, at)) break;
+    const field = initializerKind(parent, at);
+    if (field === 'instance') break;
+    if (field === 'static' || isClassStaticBlockDeclaration(parent)) owners.push(parent.parent);
   }
-  return undefined;
+  return owners;
+}
+
+/** Whether `at` is the initializer of a field of a class, and whether the field is static. */
+function initializerKind(parent: Node, at: Node): 'instance' | 'static' | undefined {
+  if (!isPropertyDeclaration(parent) || parent.initializer?.pos !== at.pos) return undefined;
+  return parent.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true
+    ? 'static'
+    : 'instance';
 }
 
 /**
