@@ -16,6 +16,7 @@ import {
   isExpressionStatement,
   isIdentifier,
   isMetaProperty,
+  isNoSubstitutionTemplateLiteral,
   isMethodDeclaration,
   isNewExpression,
   isParameterDeclaration,
@@ -29,7 +30,9 @@ import {
   isTypeNode,
   isYieldExpression,
   type Node,
+  type NoSubstitutionTemplateLiteral,
   type SourceFile,
+  type StringLiteral,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -101,11 +104,16 @@ function referenceText(node: Node): string | undefined {
       return undefined;
     return readsBinding(node) ? node.text : undefined;
   }
-  return isStringLiteral(node) &&
-    isElementAccessExpression(node.parent) &&
-    node.parent.argumentExpression === node
-    ? node.text
+  return isLiteralKey(node)
+    ? (node as StringLiteral | NoSubstitutionTemplateLiteral).text
     : undefined;
+}
+
+/** Whether a node is a literal an element access names its property by, past type wrappers. */
+function isLiteralKey(node: Node): boolean {
+  if (!isStringLiteral(node) && !isNoSubstitutionTemplateLiteral(node)) return false;
+  const held = holderOf(node);
+  return isElementAccessExpression(held.parent) && held.parent.argumentExpression === held;
 }
 
 /**
@@ -212,13 +220,9 @@ function advanced(fn: Node): boolean {
  */
 function written(node: Node): boolean {
   const { parent } = node;
-  const target =
-    (isPropertyAccessExpression(parent) && parent.name === node) ||
-    (isElementAccessExpression(parent) &&
-      isStringLiteral(node) &&
-      parent.argumentExpression === node)
-      ? parent
-      : node;
+  let target = node;
+  if (isPropertyAccessExpression(parent) && parent.name === node) target = parent;
+  else if (isLiteralKey(node)) target = holderOf(node).parent;
   const held = holderOf(target);
   return (
     isBinaryExpression(held.parent) &&
@@ -259,7 +263,8 @@ function isInstanceInitializer(holder: Node, node: Node): boolean {
 
 /**
  * Whether a name is read as a parameter of a function within the scope, which takes what its caller
- * gives and is not written within it: the parameter is no function the name is given to.
+ * gives, has no default and is not written within it: the parameter is no function the name is given
+ * to.
  */
 function shadowedByParameter(node: Node, scope: Node): boolean {
   if (!isIdentifier(node)) return false;
@@ -267,6 +272,7 @@ function shadowedByParameter(node: Node, scope: Node): boolean {
   if (
     declared === undefined ||
     !isParameterDeclaration(declared) ||
+    declared.initializer !== undefined ||
     declared.pos < scope.pos ||
     declared.end > scope.end
   )
@@ -349,8 +355,8 @@ function reachedNames(node: Node): FunctionNames {
 }
 
 /**
- * Whether the language may call a function by itself: an accessor, an implicit method, or a
- * generator whose iterator may be advanced.
+ * Whether the language may call a function by itself: an accessor, a method or a property's value
+ * the language calls without a name, or a generator whose iterator may be advanced.
  */
 function runsBySelf(fn: Node): boolean {
   const { names, computed } = namesOf(fn);
@@ -358,7 +364,7 @@ function runsBySelf(fn: Node): boolean {
   return (
     computed ||
     accessor ||
-    names.some((name) => IMPLICIT_METHODS.has(name)) ||
+    (reachedByProperty(fn) && names.some((name) => IMPLICIT_METHODS.has(name))) ||
     (isGenerator(fn) && advanced(fn))
   );
 }
@@ -478,7 +484,7 @@ function runsCodeBetween(fn: Node, from: number, to: number): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (node !== fn && isAnswering(node)) {
+    if (node !== fn && isAnswering(node) && !runsInPlace(node)) {
       pending.push(...definitionParts(node));
       continue;
     }
