@@ -1697,6 +1697,51 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'recursion-through-a-method-the-default-of-a-generator-creates',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} (function* (p: any = +{ valueOf() { if (n++ < 1) read(); return 0; } }) {})(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-getter-the-default-of-a-generator-creates',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} (function* (p: any = { get again() { if (n++ < 1) read(); return 0; } }.again) {})(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'recursion-through-a-method-the-default-of-an-immediate-function-creates',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} (function (p: any = +{ valueOf() { if (n++ < 1) read(); return 0; } }) {})(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'method-made-in-the-body-of-a-dropped-generator-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} (function* () { const o = { valueOf() { return read(); } }; })(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-a-field-of-a-class-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} class Unused { object = { get again() { return read(); } }; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-a-field-of-a-class-expression-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const Unused = class { object = { get again() { return read(); } }; }; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'accessor-in-a-field-of-a-class-that-is-built',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class Used { object = { get again() { if (n++ < 1) read(); return 0; } }; constructor() { this.object.again; } } new Used(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'accessor-in-a-field-of-a-class-made-on-the-spot',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} new (class { object = { get again() { if (n++ < 1) read(); return 0; } }; constructor() { this.object.again; } })(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'accessor-in-a-static-field-of-a-class',
+    source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class K { static object = { get again() { if (n++ < 1) read(); return 0; } }; static { K.object.again; } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
