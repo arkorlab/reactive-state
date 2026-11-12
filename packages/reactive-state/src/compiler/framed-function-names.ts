@@ -19,6 +19,7 @@ import {
   isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isParameterDeclaration,
   isParenthesizedExpression,
   isPrivateIdentifier,
   isPropertyAccessExpression,
@@ -188,7 +189,11 @@ function initializedName(
   at: Node,
 ): { readonly name: string | undefined } | undefined {
   if ((parent as { readonly initializer?: Node }).initializer !== at) return undefined;
-  if (isVariableDeclaration(parent) && isIdentifier(parent.name)) return { name: parent.name.text };
+  if (
+    (isVariableDeclaration(parent) || isParameterDeclaration(parent)) &&
+    isIdentifier(parent.name)
+  )
+    return { name: parent.name.text };
   if (isPropertyAssignment(parent) || isPropertyDeclaration(parent))
     return { name: keyText(parent.name) };
   return undefined;
