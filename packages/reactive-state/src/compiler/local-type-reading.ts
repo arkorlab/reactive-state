@@ -141,10 +141,15 @@ export function namesLocalTypeArgument(
   });
 }
 
-const iterationOperands = (reading: Reading): Reading[] =>
-  operandReadings(reading, STANDARD_ERRORS);
+const iterationOperands = constrainedOperands((reading) =>
+  operandReadings(reading, STANDARD_ERRORS),
+);
 
-/** Literal places of the iteration tuples a type may be, retaining each original type environment. */
+/**
+ * Literal places of the iteration tuples a type may be, retaining each original type environment. A
+ * type parameter no actual argument fills stands for its written constraint, as it does where
+ * members and elements are selected.
+ */
 export function localArrayIterationKeys(
   type: TypeNode,
   keys: readonly string[],
