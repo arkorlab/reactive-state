@@ -1026,6 +1026,30 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':"],
   },
+  {
+    id: 'named-prototype-key-own-proto-field-of-prototype',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { __proto__: { ['__proto__']: error } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-own-proto-field-up-the-chain',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { __proto__: { __proto__: { ['__proto__']: error } } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-chain-ends-in-null-takes-default',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] = error } = { __proto__: { __proto__: null } })); }`,
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'named-prototype-key-prototype-without-own-field-pin',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { __proto__: { field: error } })); }`,
+    key: 'message',
+    values: ["'safe':", '{ field: error }:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

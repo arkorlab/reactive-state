@@ -221,9 +221,29 @@ function prototypeSource(
   if (field === undefined || !isPropertyAssignment(field)) return [];
   const prototype = unwrapped(field.initializer);
   if (prototype.kind === SyntaxKind.NullKeyword) return [];
-  if (key === '__proto__') return [{ value: field.initializer, keys: [] }];
+  if (key === '__proto__') return protoRead(field.initializer, opaque);
   if (isObjectLiteralExpression(prototype)) return objectSource(prototype, key, opaque);
   return isArrayLiteralExpression(prototype) ? arraySource(prototype, key, opaque) : [opaque];
+}
+
+/**
+ * What a read of `__proto__` gives where no entry of the source has the name: an own field of that
+ * name on a prototype of the chain that is written out, else the accessor of Object.prototype, which
+ * hands over the first prototype, unless the chain ends in `null` before it. A prototype that is not
+ * written out is taken as the accessor gives it.
+ */
+function protoRead(first: Expression, opaque: AssignedFrameSource): readonly AssignedFrameSource[] {
+  let at = first;
+  for (;;) {
+    const prototype = unwrapped(at);
+    if (prototype.kind === SyntaxKind.NullKeyword) return [];
+    if (!isObjectLiteralExpression(prototype)) return [{ value: first, keys: [] }];
+    const own = objectSource(prototype, '__proto__', opaque, true);
+    if (own.length > 0) return own;
+    const next = prototype.properties.find((property) => setsPrototype(property));
+    if (next === undefined || !isPropertyAssignment(next)) return [{ value: first, keys: [] }];
+    at = next.initializer;
+  }
 }
 
 /** What one field selects: its value for its key, the path for one that is unknown, else none. */
