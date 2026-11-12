@@ -1080,6 +1080,42 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':"],
   },
+  {
+    id: 'computed-key-replaced-getter-keeps-first-position',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ get trigger() { return 0; }, field: 'kept', get trigger() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'computed-key-earlier-computed-key-keeps-earlier-value',
+    source: `function frames(error: Error, list: unknown[], name: string, first: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ [first]: 0, field: 'kept', get trigger() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
+    id: 'computed-key-data-then-getter-keeps-earlier-value',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ trigger: 1, field: 'kept', get trigger() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'computed-key-earlier-spread-key-keeps-earlier-value',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ ...{ trigger: 1 }, field: 'kept', get trigger() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'computed-key-field-before-computed-key-overwrites-pin',
+    source: `function frames(error: Error, list: unknown[], name: string, first: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ field: 'kept', [first]: 0, get trigger() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:'],
+  },
+  {
+    id: 'computed-key-unrelated-spread-before-getter-overwrites-pin',
+    source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ ...{ other: 1 }, field: 'kept', get trigger() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '1:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

@@ -320,13 +320,60 @@ function fieldNames(property: ObjectLiteralElementLike, seen = new Set<Node>()):
   const { properties } = copied;
   if (properties.some((_each, at) => liveGetter(properties, at) && mayBeIndex(properties[at])))
     return [];
+  const { before, after } = getterStarts(properties);
   const names: string[] = [];
   let getterRan = false;
   for (const [at, each] of properties.entries()) {
+    getterRan ||= before.has(at);
     if (!getterRan) names.push(...fieldNames(each, seen));
-    getterRan ||= liveGetter(properties, at) || spreadRunsGetter(each, new Set());
+    getterRan ||= after.has(at) || spreadRunsGetter(each, new Set());
   }
   return names;
+}
+
+/**
+ * Where the copy may first run a getter of a written literal. A key is copied where it was first
+ * set, not where its last field sets it, so a getter runs at the first field that may have set its
+ * name: one of that name, a computed one, or a spread that may hold it. Where that field is the
+ * getter's name written out, its own name is set by then; where it only may be, nothing is.
+ */
+function getterStarts(properties: readonly ObjectLiteralElementLike[]): {
+  readonly before: ReadonlySet<number>;
+  readonly after: ReadonlySet<number>;
+} {
+  const before = new Set<number>();
+  const after = new Set<number>();
+  for (const [at, getter] of properties.entries()) {
+    if (!liveGetter(properties, at)) continue;
+    const name = fieldName(getter);
+    const first = properties.findIndex((each) => mayName(each, name, new Set()));
+    const start = properties[first];
+    const written = name !== undefined && start !== undefined && fieldName(start) === name;
+    (written ? after : before).add(first === -1 ? at : first);
+  }
+  return { before, after };
+}
+
+/**
+ * Whether a field may set a name, none meaning any: its own, a computed one the compile cannot
+ * read, or a spread of what is not a written literal or of one that holds it.
+ */
+function mayName(
+  property: ObjectLiteralElementLike,
+  name: string | undefined,
+  seen: Set<Node>,
+): boolean {
+  if (setsPrototype(property)) return false;
+  if (!isSpreadAssignment(property)) {
+    const own = fieldName(property);
+    return name === undefined || own === undefined || own === name;
+  }
+  const copied = writtenValue(property.expression);
+  if (copied === undefined || !isObjectLiteralExpression(copied) || !isStable(property.expression))
+    return true;
+  if (seen.has(copied)) return false;
+  seen.add(copied);
+  return name === undefined || copied.properties.some((each) => mayName(each, name, seen));
 }
 
 /**
