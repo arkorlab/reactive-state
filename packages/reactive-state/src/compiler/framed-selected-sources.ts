@@ -147,9 +147,9 @@ function memberWrites(
   return heldMemberWrites(first, names, reading.at).flatMap((write) => {
     if (write.list === true || !(asksAny(key) || write.key === undefined || write.key === key))
       return [];
-    const copied =
-      write.copiedAt === undefined ? reading : { ...reading, own: true, at: write.copiedAt };
-    return select(write.value, [...write.keys, ...rest], copied);
+    const copy = write.copiedAt !== undefined;
+    const where = { ...reading, own: copy && write.keys.length === 0, at: write.node };
+    return select(write.value, [...write.keys, ...rest], where);
   });
 }
 

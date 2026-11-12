@@ -28,7 +28,7 @@ import { globalPathOf } from './code-globals.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
-import { heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
+import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS, writtenArguments } from './framed-mutator-calls.ts';
 import {
@@ -267,6 +267,12 @@ function assignedValues(
   return sourceFields(value, index, reading, hidden);
 }
 
+/** The writes to the members of the constant the names stand for, before the place that reads it. */
+function writesTo(names: readonly Identifier[], reading: Reading): readonly HeldWrite[] {
+  const [first] = names;
+  return first === undefined ? [] : heldMemberWrites(first, names, reading.at);
+}
+
 /**
  * The elements the writes to the members of an assign source a constant holds install: a constant
  * does not keep its members from changing, and a write to the key of the slot, or to a key the
@@ -279,13 +285,11 @@ function sourceWrites(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
-  const [first] = names;
-  if (first === undefined) return [];
-  return heldMemberWrites(first, names, reading.at).flatMap(({ key, value, keys, copiedAt }) => {
+  return writesTo(names, reading).flatMap(({ key, value, keys, node, copiedAt }) => {
     const hides = key !== undefined && hidden.data.has(key);
     if (copiedAt !== undefined || hides || (key !== undefined && !possibleKey(key, index)))
       return [];
-    return selectedValues(value, keys, reading.at);
+    return selectedValues(value, keys, node);
   });
 }
 
@@ -465,15 +469,13 @@ function mapWrites(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
-  const [first] = names;
-  if (first === undefined) return [];
-  return heldMemberWrites(first, names, reading.at).flatMap((write) => {
+  return writesTo(names, reading).flatMap((write) => {
     const { key, value, keys, without, copiedAt } = write;
     const hides = key !== undefined && hidden.data.has(key);
     if (hides || write.list === true || (key !== undefined && !possibleKey(key, index))) return [];
     const left = { data: new Set(without), getters: new Set(without) };
     const read = copiedAt === undefined ? reading : { ...reading, at: copiedAt, inherited: false };
-    return selectedValues(value, keys, reading.at).flatMap((each) => {
+    return selectedValues(value, keys, write.node).flatMap((each) => {
       return each.keys.length > 0
         ? [{ value: each.value, keys: [...each.keys, 'value'] }]
         : descriptorValues(each.value, read, left);
@@ -626,18 +628,14 @@ function descriptorWrites(
   hidden: Hidden,
   reading: Reading,
 ): WrittenArrayElement[] {
-  const [first] = names;
-  if (first === undefined) return [];
-  return heldMemberWrites(first, names, reading.at).flatMap(
-    ({ key, value, keys, list, copiedAt }) => {
-      if (copiedAt !== undefined || (key !== undefined && hidden.data.has(key))) return [];
-      return selectedValues(value, keys, reading.at).flatMap((each) => {
-        const installed = key === undefined || key === 'value' ? [each] : [];
-        const calls = key === undefined || key === 'get';
-        const returned =
-          calls && list !== true && each.keys.length === 0 ? functionReturns(each.value) : [];
-        return [...installed, ...returned];
-      });
-    },
-  );
+  return writesTo(names, reading).flatMap(({ key, value, keys, list, node, copiedAt }) => {
+    if (copiedAt !== undefined || (key !== undefined && hidden.data.has(key))) return [];
+    return selectedValues(value, keys, node).flatMap((each) => {
+      const installed = key === undefined || key === 'value' ? [each] : [];
+      const calls = key === undefined || key === 'get';
+      const returned =
+        calls && list !== true && each.keys.length === 0 ? functionReturns(each.value) : [];
+      return [...installed, ...returned];
+    });
+  });
 }

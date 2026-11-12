@@ -64,6 +64,8 @@ export interface HeldWrite {
   readonly without?: readonly string[] | undefined;
   /** The member is given a list of entries, an array rest: no getter, and no descriptor. */
   readonly list?: boolean | undefined;
+  /** The assignment or loop head that writes it: what it selects is read where it runs. */
+  readonly node: Node;
   /** Where a rest copies its source, whose later changes the copy does not hold. */
   readonly copiedAt?: Node | undefined;
   /** What the member must be for a logical assignment to run its right side. */
@@ -175,6 +177,7 @@ function heldWrite(node: Node, bindings: ReadonlySet<unknown>): readonly HeldWri
         keys,
         without,
         list,
+        node,
         copiedAt: without === undefined ? undefined : node,
         runsIf: runsIf(node),
       };

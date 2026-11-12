@@ -2435,6 +2435,31 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const copy = Object.assign({}, descriptor); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'define-rest-copy-of-selected-field-before-later-write',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const source: Record<string, PropertyDescriptor> = { a: {} }; ({ a: { ...maps[0] } } = source); source.a = { get: () => error }; Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-rest-copy-of-selected-field-after-earlier-write-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const source: Record<string, PropertyDescriptor> = { a: {} }; source.a = { get: () => error }; ({ a: { ...maps[0] } } = source); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-selected-field-captured-before-later-write',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { f: () => 'safe' }; ({ f: descriptor.get } = source); source.f = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-selected-field-captured-after-earlier-write-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source: { f: () => unknown } = { f: () => 'safe' }; source.f = () => error; ({ f: descriptor.get } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-selected-held-field-captured-before-later-write',
+    source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: { nested: { f: () => unknown } } = { nested: { f: () => 'safe' } }; ({ nested: { f: descriptor.get } } = holder); holder.nested = { f: () => error }; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
