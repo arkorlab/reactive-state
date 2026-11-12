@@ -6,6 +6,7 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
+  isBindingElement,
   isDeleteExpression,
   isFunctionExpression,
   isNoSubstitutionTemplateLiteral,
@@ -25,14 +26,19 @@ import {
   isExpression,
   isForInStatement,
   isForOfStatement,
+  isGetAccessorDeclaration,
   isFunctionDeclaration,
   isFunctionLikeDeclaration,
   isIdentifier,
+  isMethodDeclaration,
   isNewExpression,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isSourceFile,
   isSpreadAssignment,
+  isSetAccessorDeclaration,
   isSpreadElement,
+  isTaggedTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -48,7 +54,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
-import { mutatorInvocation } from './framed-mutator-calls.ts';
+import { mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { type MemberWrite, patternMemberWrites } from './framed-pattern-members.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 
@@ -240,17 +246,86 @@ function otherChanges(node: Node, bindings: ReadonlySet<unknown>): readonly (str
 }
 
 /**
- * Whether a node is a held object handed to a call that may change it: an argument of a call that is
- * no native mutator, or the target of one. The descriptor an `Object.defineProperty` takes, and a
- * source an `Object.assign` copies, are only read.
+ * Whether a node is a mention of a held object that may change it: any mention but a known read.
+ * The reads are the object's own declaration, a name the compile follows for it, a member of it
+ * that is no callee (a method runs with the object as its receiver), a spread or a destructuring
+ * of it, and a non-target argument of a native mutator, which an `Object.assign` or an
+ * `Object.defineProperty` only reads, directly or in the list it is applied to. A mention in a
+ * call, a list, a literal, a return, a condition or a template may hand the object to a writer.
  */
 function handedToChange(node: Node, bindings: ReadonlySet<unknown>): boolean {
-  if (!isIdentifier(node) || !bindings.has(frameBindingOf(node)?.binding)) return false;
-  const call = isSpreadElement(node.parent) ? node.parent.parent : node.parent;
-  const isArgument = isCallExpression(call) || isNewExpression(call);
-  if (!isArgument) return false;
+  if (!isIdentifier(node) || isDeclaredName(node)) return false;
+  if (!bindings.has(frameBindingOf(node)?.binding)) return false;
+  const at = outermost(node);
+  const parent = at.parent;
+  if (isVariableDeclaration(parent)) return isIdentifier(parent.name) && !bindings.has(parent);
+  if (isSpreadAssignment(parent)) return false;
+  if (isBinaryExpression(parent) && parent.right === at && isPattern(parent)) return false;
+  if (isPropertyAccessExpression(parent) || isElementAccessExpression(parent))
+    return parent.expression !== at || calledAsMethod(parent);
+  return handedAsArgument(node, at);
+}
+
+/**
+ * Whether a mention in a call is an argument that may change the object: any but a non-target one
+ * of a native mutator, or a descriptor in the map an `Object.defineProperties` reads.
+ */
+function handedAsArgument(node: Identifier, at: Node): boolean {
+  const entry = at.parent;
+  const map =
+    isPropertyAssignment(entry) || isShorthandPropertyAssignment(entry) ? entry.parent : undefined;
+  const call = callOf(map === undefined ? at : outermost(map));
   const invoked = isCallExpression(call) ? mutatorInvocation(call) : undefined;
-  return invoked === undefined || unwrapped(invoked.args[0] ?? node) === node;
+  if (invoked === undefined) return true;
+  const position = invoked.args.findIndex((each) => unwrapped(each) === (map ?? node));
+  return map === undefined ? position <= 0 : invoked.path !== PATHS.properties || position !== 1;
+}
+
+/** Whether an identifier only names: a property, a parameter, a variable, a binding. */
+function isDeclaredName(node: Identifier): boolean {
+  const { parent } = node;
+  if (isBindingElement(parent)) return parent.name === node || parent.propertyName === node;
+  if (isPropertyAccessExpression(parent)) return parent.name === node;
+  const named =
+    isVariableDeclaration(parent) ||
+    isParameterDeclaration(parent) ||
+    isPropertyAssignment(parent) ||
+    isMethodDeclaration(parent) ||
+    isGetAccessorDeclaration(parent) ||
+    isSetAccessorDeclaration(parent);
+  return named && parent.name === node;
+}
+
+/** The node that stands for the same value as `node`, through parentheses and assertions. */
+function outermost(node: Node): Node {
+  let at = node;
+  while (isExpression(at.parent) && unwrapped(at.parent) === node) at = at.parent;
+  return at;
+}
+
+/** Whether a destructuring assignment takes the value of its right. */
+function isPattern(assignment: BinaryExpression): boolean {
+  const left = unwrapped(assignment.left);
+  return (
+    assignment.operatorToken.kind === SyntaxKind.EqualsToken &&
+    (isObjectLiteralExpression(left) || isArrayLiteralExpression(left))
+  );
+}
+
+/** Whether a member read is what a call, a construction or a template runs: the receiver is the object. */
+function calledAsMethod(member: Node): boolean {
+  const access = outermost(member);
+  const user = access.parent;
+  if (isTaggedTemplateExpression(user)) return user.tag === access;
+  return (isCallExpression(user) || isNewExpression(user)) && user.expression === access;
+}
+
+/** The node an argument belongs to: through a spread, and through a list a call is applied to. */
+function callOf(at: Node): Node {
+  let each = at;
+  if (isArrayLiteralExpression(each.parent)) each = outermost(each.parent);
+  if (isSpreadElement(each.parent)) each = each.parent;
+  return each.parent;
 }
 
 /** What a held descriptor holds, and what has changed it, when a logical assignment is asked to run. */
