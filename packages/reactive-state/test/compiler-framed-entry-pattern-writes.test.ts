@@ -1441,6 +1441,44 @@ const CASES = [
       '0:',
     ],
   },
+  {
+    id: 'named-getter-gives-this-on-unknown',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get trigger() { Object.assign(this, { field: error }); return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      "{ ...{ get trigger() { Object.assign(this, { field: error }); return 0; }, field: 'kept' } }:field",
+    ],
+  },
+  {
+    id: 'named-getter-replaced-by-a-later-spread-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, field: 'kept', ...{ trigger: 1 } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'named-getter-replaced-by-a-later-spread-of-a-setter-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, field: 'kept', ...{ set trigger(value: unknown) {} } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':"],
+  },
+  {
+    id: 'named-getter-not-replaced-by-an-unknown-spread',
+    source: `function frames(error: Error, other: object) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, field: 'kept', ...other } })); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      "{ ...{ get trigger() { this.field = error; return 0; }, field: 'kept', ...other } }:field",
+      'error:',
+    ],
+  },
+  {
+    id: 'named-getter-increment-runs-a-setter',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get trigger() { this.activate++; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

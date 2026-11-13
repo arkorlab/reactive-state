@@ -275,25 +275,45 @@ function spreadSource(
   const value = unwrapped(copied);
   if (!isObjectLiteralExpression(value)) return [opaque];
   const found = objectSource(value, key, opaque, true);
-  return found.length > 0 ? [...found, ...copiedWrites(value, key)] : found;
+  return found.length > 0 ? [...found, ...copiedWrites(value, key, opaque)] : found;
 }
 
 /**
  * What the getters of a written object write into the entry of a key that it has, before a copy
- * of it reaches the entry: the getters it still holds, those a later field of the object
- * replaces having gone, and the setters their writes run. None where a getter gives `this` on.
+ * of it reaches the entry: the getters it still holds, those a later field or a later spread of
+ * the object replaces having gone, and the setters their writes run. The path for a getter that
+ * gives `this` on, which the compile does not read.
  */
-function copiedWrites(value: ObjectLiteralExpression, key: string): readonly AssignedFrameSource[] {
+function copiedWrites(
+  value: ObjectLiteralExpression,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
   const replaced = new Set<string>();
   const found: AssignedFrameSource[] = [];
   for (const property of value.properties.toReversed()) {
-    const name = isSpreadAssignment(property) ? undefined : literalKey(property.name);
+    if (isSpreadAssignment(property)) {
+      for (const each of spreadNames(property.expression)) replaced.add(each);
+      continue;
+    }
+    const name = literalKey(property.name);
     const live = name === undefined || !replaced.has(name);
     if (live && isGetAccessorDeclaration(property))
-      found.push(...gettersWrites(value, property, key));
+      found.push(...gettersWrites(value, property, key, opaque));
     if (name !== undefined && !isSetAccessorDeclaration(property)) replaced.add(name);
   }
   return found;
+}
+
+/** The names a spread of a written object copies as values, a setter's and those of the spreads it holds included. */
+function spreadNames(copied: Expression): readonly string[] {
+  const value = unwrapped(copied);
+  if (!isObjectLiteralExpression(value)) return [];
+  return value.properties.flatMap((each) => {
+    if (isSpreadAssignment(each)) return spreadNames(each.expression);
+    const name = setsPrototype(each) ? undefined : literalKey(each.name);
+    return name === undefined ? [] : [name];
+  });
 }
 
 /** What running one getter of a written object writes into the entry of a key. */
@@ -301,9 +321,10 @@ function gettersWrites(
   value: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
   key: string,
+  opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
   const written = accessorWrites(value, getter);
-  if (written === undefined) return [];
+  if (written === undefined) return [opaque];
   return written
     .filter((each) => each.name === undefined || each.name === key)
     .map((each) => ({ value: each.value, keys: [] }));
