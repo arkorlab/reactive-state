@@ -2904,6 +2904,46 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'descriptor-of-a-catch-clause-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw { get: () => error }; } catch (d) { Object.defineProperty(a, 0, d); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'map-of-a-catch-clause-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw { 0: { get: () => error } }; } catch (m) { Object.defineProperties(a, m); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'source-of-a-catch-clause-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw { 0: error }; } catch (s) { Object.assign(a, s); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-taken-from-a-catch-clause-by-a-pattern-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw { d: { get: () => error } }; } catch ({ d }) { Object.defineProperty(a, 0, d); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'catch-clause-without-a-binding-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw 1; } catch { Object.defineProperty(a, 0, { value: 'safe' }); } return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-of-a-catch-clause-assigned-in-it-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw 1; } catch (d) { d = { get: () => error }; Object.defineProperty(a, 0, d); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-catch-clause-kept-by-a-constant-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; try { throw { get: () => error }; } catch (d) { const e = d; Object.defineProperty(a, 0, e); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-declared-in-a-for-head-and-assigned-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; for (let d: any; ;) { d = { get: () => error }; Object.defineProperty(a, 0, d); break; } return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-array-rest-member-index-offset-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; [ignored, ...holder.items] = [error, 'safe']; ({ items: [descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,

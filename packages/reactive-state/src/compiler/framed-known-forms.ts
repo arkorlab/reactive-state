@@ -4,6 +4,7 @@ import {
   isArrayLiteralExpression,
   isArrowFunction,
   isBinaryExpression,
+  isCatchClause,
   isConditionalExpression,
   isForInStatement,
   isForOfStatement,
@@ -174,15 +175,16 @@ function entryOf(element: Expression, role: Role): readonly Consulted[] {
 
 /**
  * Whether a declaration without an initializer is given a value elsewhere: a loop head gives it one
- * for each turn, and an assignment, a pattern or a declaration again gives the others one. A value
- * given so is no form the compile has read.
+ * for each turn, a `catch` clause gives it what was thrown, and an assignment, a pattern or a
+ * declaration again gives the others one. A value given so is no form the compile has read.
  */
 function givenLater(declaration: VariableDeclaration): boolean {
   const list = declaration.parent;
-  const head =
-    isVariableDeclarationList(list) &&
-    (isForOfStatement(list.parent) || isForInStatement(list.parent));
-  return head || writtenAsWhole(declaration);
+  const given =
+    isCatchClause(list) ||
+    (isVariableDeclarationList(list) &&
+      (isForOfStatement(list.parent) || isForInStatement(list.parent)));
+  return given || writtenAsWhole(declaration);
 }
 
 /** The initializer a name stands for, once, where it is a constant followed and read as known. */
