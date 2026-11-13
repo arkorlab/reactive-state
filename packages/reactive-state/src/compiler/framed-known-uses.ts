@@ -14,6 +14,7 @@ import {
   isExpressionStatement,
   isForInStatement,
   isForOfStatement,
+  isForStatement,
   isFunctionExpression,
   isIdentifier,
   isIfStatement,
@@ -254,10 +255,20 @@ function assigned(at: Node, subject: Subject): Use | undefined {
   return overwritten(at) ? KNOWN : undefined;
 }
 
-/** Whether a mention is only dropped or compared: copied by a spread, a statement, a test. */
+/** Whether a mention is only dropped or compared: copied by a spread, a statement, a loop head, a test. */
 function discarded(at: Node): boolean {
   const { parent } = at;
-  return isSpreadAssignment(parent) || isExpressionStatement(parent) || tested(at);
+  if (isForStatement(parent)) {
+    const heads: readonly (Node | undefined)[] = [parent.initializer, parent.incrementor];
+    return heads.includes(at);
+  }
+  const comma = isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.CommaToken;
+  return (
+    (comma && parent.left === at) ||
+    isSpreadAssignment(parent) ||
+    isExpressionStatement(parent) ||
+    tested(at)
+  );
 }
 
 /** Whether a name is the left of a plain assignment: it is given a value, and nothing reads it. */
@@ -341,21 +352,24 @@ function memberUse(first: Node, subject: Subject): Use {
     const deeper =
       (isPropertyAccessExpression(user) || isElementAccessExpression(user)) &&
       user.expression === result;
-    if (!deeper) return memberResult(access, result, { subject, depth });
+    if (!deeper) return memberResult(access, result, { subject, depth, base: memberName(first) });
     access = user;
   }
 }
 
+/** A chain of members: whose they are, how many, and the name of the first. */
+interface Chain {
+  readonly subject: Subject;
+  readonly depth: number;
+  readonly base: string | undefined;
+}
+
 /** What a member read, called or written at the end of a chain of members is used for. */
-function memberResult(
-  access: Node,
-  result: Node,
-  { subject, depth }: { readonly subject: Subject; readonly depth: number },
-): Use {
+function memberResult(access: Node, result: Node, { subject, depth, base }: Chain): Use {
   const { parent: user } = result;
   if (isTaggedTemplateExpression(user)) return UNKNOWN;
   if ((isCallExpression(user) || isNewExpression(user)) && user.expression === result)
-    return methodCall(access, user, { subject, depth });
+    return methodCall(access, user, { subject, depth, base });
   if (written(result))
     return depth === 1 && FOLLOWED.has(subject) && !keepsThis(result) ? KNOWN : UNKNOWN;
   return subject === 'array' ? KNOWN : resultUse(result, memberName(access), depth);
@@ -374,12 +388,8 @@ function keepsThis(result: Node): boolean {
  * which hands the array to no function of the program. A method of a member of the mention is a method
  * of something else.
  */
-function methodCall(
-  access: Node,
-  call: Node,
-  { subject, depth }: { readonly subject: Subject; readonly depth: number },
-): Use {
-  if (depth > 1) return isArray(subject) ? KNOWN : UNKNOWN;
+function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): Use {
+  if (depth > 1) return subject === 'array' || base === 'length' ? KNOWN : UNKNOWN;
   if (!isArray(subject)) return UNKNOWN;
   const name = memberName(access);
   if (name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
@@ -428,12 +438,9 @@ function answerUse(answer: Node): Use {
   let at = outermost(answer);
   let handed = false;
   for (;;) {
-    const { parent } = at;
-    if (isExpressionStatement(parent) || tested(at)) return KNOWN;
-    const comma = isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.CommaToken;
-    if (comma && parent.left === at) return KNOWN;
+    if (discarded(at)) return KNOWN;
     if (!passed(at)) break;
-    at = outermost(parent);
+    at = outermost(at.parent);
     handed = true;
   }
   if (readsArray(at)) return KNOWN;
@@ -488,6 +495,7 @@ function returned(at: Node): Use | undefined {
 function chained(at: Node): Use {
   const flowing = containing(at);
   const user = flowing.top.parent;
+  if (flowing.inLiteral && discarded(flowing.top)) return KNOWN;
   if (!isCallExpression(user) || !onArray(user)) return UNKNOWN;
   if (flowing.inLiteral) return CARRIES;
   const first = mutatorInvocation(user)?.args[0];
@@ -498,7 +506,7 @@ function chained(at: Node): Use {
 /** What a member read hands over: a field of a descriptor, a read, or nothing the compile follows. */
 function resultUse(result: Node, field: string | undefined, depth: number): Use {
   const { parent } = result;
-  if (isExpressionStatement(parent) || tested(result) || isTemplateSpan(parent)) return KNOWN;
+  if (discarded(result) || isTemplateSpan(parent)) return KNOWN;
   if (isVariableDeclaration(parent)) {
     const initializer: Node | undefined = parent.initializer;
     const direct = initializer === result && depth === 1 && field !== undefined;

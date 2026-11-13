@@ -3196,6 +3196,51 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; const read = () => error; d.get = read; Object.defineProperty(a, 0, d); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'push-bound-through-a-spread-receiver-refused',
+    source: `function frames(error: Error) { const values: any[] = ['safe']; const push = Array.prototype.push.bind(...([values] as [any[]])); push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'aliased-native-mutator-of-a-list-followed',
+    source: `function frames(error: Error) { const list: any[] = ['safe']; const assign = Object.assign; assign(list, { 0: error }); return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'bound-native-mutator-of-a-list-refused',
+    source: `function frames(error: Error) { const list: any[] = ['safe']; Object.assign.bind(null)(list, { 0: error }); return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'call-call-native-mutator-of-a-list-refused',
+    source: `function frames(error: Error) { const list: any[] = ['safe']; Function.prototype.call.call(Object.assign, null, list, { 0: error }); return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'held-list-written-through-a-parenthesized-method-refused',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; const descriptor: PropertyDescriptor = {}; const list: any[] = []; (list.push)(() => error); [descriptor.get] = list; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-list-written-through-an-element-method-refused',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; const descriptor: PropertyDescriptor = {}; const list: any[] = []; list['push'](() => error); [descriptor.get] = list; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-written-through-an-alias-assigned-later-refused',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; let b: any[] = []; b = a; b[0] = error; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-held-by-a-destructured-constant-refused',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; const { descriptor } = { descriptor: { get: () => error } }; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-held-by-an-array-destructured-constant-refused',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; const [descriptor] = [{ get: () => error }]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

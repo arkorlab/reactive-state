@@ -1431,6 +1431,36 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: () => 1 }); void (values as any).x; return String(values); }`,
     converts: false,
   },
+  {
+    id: 'nested-call-through-a-name-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; Object.assign(values, { self: Object.assign(values, { y: 1 }) }); const r: any = Object.assign(values, {}); r.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-in-a-discarded-literal-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; [Object.assign(values, { y: 1 })]; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'answer-in-a-for-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; for (Object.assign(values, { y: 1 }); false; ) {} return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'answer-member-read-dropped-by-a-comma-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (Object.assign(values, { y: 1 }).length, 0); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'destructured-alias-of-the-array-refused',
+    source: `function frames(error: Error) { const values: any[] = [error]; values.join = () => 'safe'; const [alias] = [values]; alias.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-called-through-call-restores-the-method',
+    source: `function frames(error: Error) { const a: any[] = [error]; a.join = () => 'safe'; Object.assign.call(null, a, { join: Array.prototype.join }); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
