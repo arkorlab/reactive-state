@@ -29,7 +29,8 @@ import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
-import { consultedKnown, knownUsesOnly } from './framed-known-uses.ts';
+import { consultedKnown } from './framed-known-forms.ts';
+import { knownUsesOnly } from './framed-known-uses.ts';
 import { type MutatorInvocation, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -89,6 +90,26 @@ function candidatesOf(root: FrameBinding, read: Node): readonly Node[] {
 }
 
 /**
+ * Whether every mention of the array that may run before the read is a use the compile knows. The
+ * mention the read selects from, where it is given, hands the array on only after it has read.
+ */
+export function arrayUsesKnown(
+  root: VariableDeclaration,
+  {
+    read,
+    owner,
+    receiver,
+  }: { readonly read: Node; readonly owner: Node; readonly receiver?: Expression },
+): boolean {
+  return knownUsesOnly(root, 'array', (name) => {
+    return (
+      (receiver === undefined || unwrapped(receiver) !== name) &&
+      possibleBefore(name, read, owner, root)
+    );
+  });
+}
+
+/**
  * Whether the compile does not follow every write to the array a read names: a mention of it, or of a
  * name that stands for it, that may run before the read and is no use the compile knows, or a native
  * mutator of it that is handed an argument written in a form no reader follows. Such an array holds
@@ -98,7 +119,7 @@ export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
   const root = literalArrayBinding(value);
   if (root === undefined || !isVariableDeclaration(root)) return false;
   const owner = executionOwner(read);
-  if (!knownUsesOnly(root, 'array', (name) => possibleBefore(name, read, owner, root))) return true;
+  if (!arrayUsesKnown(root, { read, owner })) return true;
   const held: VariableDeclaration[] = [];
   const known = candidatesOf(root, read).every((node) => {
     const invoked = isCallExpression(node) ? mutatorInvocation(node) : undefined;

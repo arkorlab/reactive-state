@@ -1,4 +1,5 @@
 import {
+  type CallExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -16,21 +17,18 @@ import {
   isFunctionExpression,
   isIdentifier,
   isIfStatement,
-  isMethodDeclaration,
   isNewExpression,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectLiteralExpression,
-  isOmittedExpression,
   isParenthesizedExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isReturnStatement,
   isShorthandPropertyAssignment,
+  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
   isTaggedTemplateExpression,
   isTemplateSpan,
   isTypeNode,
@@ -40,13 +38,14 @@ import {
   isVoidExpression,
   isWhileStatement,
   type Node,
-  type ObjectLiteralExpression,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { useOf } from './code-globals.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
+import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { mutatorInvocation, nativePath } from './framed-mutator-calls.ts';
 import { readsBinding } from './scope.ts';
@@ -58,10 +57,12 @@ import { readsBinding } from './scope.ts';
  * each of them as the source wrote it. An object is followed only where every mention of it, and of
  * each name that stands for it, is a use this module knows: a declaration, a constant that names it,
  * a member read that no call or write follows, a spread or a destructuring of it, a test, an
- * argument of a native mutator it knows, a write to one of its own members that the readers of
- * writes collect. Any other mention may write it in a way no reader follows (an unknown callee, a
- * literal that holds it, a return, a destructured alias, a write through a member of a member), and
- * the compile refuses what it cannot show safe. A program that uses these forms is refused too.
+ * argument of a native mutator it knows, a call of a native method of an array that hands the array
+ * to no function of the program, a write to one of its own members that the readers of writes
+ * collect. Any other mention may write it in a way no reader follows (an unknown callee, a literal
+ * that holds it, a return, a destructured alias, a callback that is given it, a write through a
+ * member of a member), and the compile refuses what it cannot show safe. A program that uses these
+ * forms is refused too. The arguments of a native mutator are judged by `framed-known-forms`.
  *
  * Not covered: `eval` and `Function`, a `Proxy` whose trap runs application code, a `with` scope,
  * and code of other files. What a getter or a setter of a written literal runs is read by the
@@ -121,7 +122,7 @@ const CONVERTERS: ReadonlySet<string> = new Set([
 ]);
 
 /** The operators that hand over one of their operands. */
-const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
+export const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AmpersandAmpersandToken,
   SyntaxKind.BarBarToken,
   SyntaxKind.QuestionQuestionToken,
@@ -139,6 +140,37 @@ const ARRAY_METHODS: ReadonlySet<string> = new Set(
 
 /** The methods of an array that answer the array itself. */
 const SELF_RETURNING: ReadonlySet<string> = new Set(['copyWithin', 'fill', 'reverse', 'sort']);
+
+/** The place of the array among the parameters of a reducer: after the accumulator, the element and the index. */
+const REDUCER_ARRAY = 3;
+
+/** The methods that call back with the array itself, and the place of the parameter that is given it. */
+const ARRAY_PARAMETER: ReadonlyMap<string, number> = new Map([
+  ['every', 2],
+  ['filter', 2],
+  ['find', 2],
+  ['findIndex', 2],
+  ['findLast', 2],
+  ['findLastIndex', 2],
+  ['flatMap', 2],
+  ['forEach', 2],
+  ['map', 2],
+  ['reduce', REDUCER_ARRAY],
+  ['reduceRight', REDUCER_ARRAY],
+  ['some', 2],
+]);
+
+/** The nodes that a `return` leaves: a function, a method, an accessor, a constructor, a static block. */
+const FUNCTIONS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrowFunction,
+  SyntaxKind.ClassStaticBlockDeclaration,
+  SyntaxKind.Constructor,
+  SyntaxKind.FunctionDeclaration,
+  SyntaxKind.FunctionExpression,
+  SyntaxKind.GetAccessor,
+  SyntaxKind.MethodDeclaration,
+  SyntaxKind.SetAccessor,
+]);
 
 /** The comparisons that read no more than the identity of their operands. */
 const IDENTITY: ReadonlySet<SyntaxKind> = new Set([
@@ -166,7 +198,7 @@ export function knownUsesOnly(
   const tracked = new Set<VariableDeclaration>([declaration]);
   const pending: VariableDeclaration[] = [declaration];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (!constant(at)) return false;
+    if (subject !== 'array' && !constant(at)) return false;
     const seen = mentions(at).filter((each) => relevant(each));
     const kind = subject === 'held' && holdsList(at) ? 'list' : subject;
     for (const name of seen) {
@@ -222,6 +254,7 @@ export function classify(name: Identifier, subject: Subject): Use {
   if (isSpreadAssignment(parent) || isExpressionStatement(parent)) return KNOWN;
   if (subject === 'array' && readsArray(at)) return KNOWN;
   if (isBinaryExpression(parent) && parent.right === at && takesApart(parent.left)) return KNOWN;
+  if (overwritten(at)) return KNOWN;
   if (tested(at)) return KNOWN;
   const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
   if (member && parent.expression === at) return memberUse(parent, subject);
@@ -242,6 +275,16 @@ function aliased(declaration: VariableDeclaration, at: Node): Use {
   const initializer: Node | undefined = declaration.initializer;
   if (initializer !== at || !isIdentifier(declaration.name)) return KNOWN;
   return { known: true, alias: declaration };
+}
+
+/** Whether a name is the left of a plain assignment: it is given a value, and nothing reads it. */
+function overwritten(at: Node): boolean {
+  const { parent } = at;
+  return (
+    isBinaryExpression(parent) &&
+    parent.left === at &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken
+  );
 }
 
 /** Whether the left of an assignment takes a value apart: a pattern, not a name or a member. */
@@ -318,16 +361,58 @@ function memberResult(
   const { parent: user } = result;
   if (isTaggedTemplateExpression(user)) return UNKNOWN;
   if ((isCallExpression(user) || isNewExpression(user)) && user.expression === result)
-    return methodCall(access, user, subject);
+    return methodCall(access, user, { subject, depth });
   if (written(result)) return depth === 1 && subject !== 'list' ? KNOWN : UNKNOWN;
   return subject === 'array' ? KNOWN : resultUse(result, memberName(access), depth);
 }
 
-/** A method called on a mention: a native method of an array, whose answer goes where it is known. */
-function methodCall(access: Node, call: Node, subject: Subject): Use {
+/**
+ * A method called on a mention: a native method of an array, whose answer goes where it is known and
+ * which hands the array to no function of the program. A method of a member of the mention is a method
+ * of something else.
+ */
+function methodCall(
+  access: Node,
+  call: Node,
+  { subject, depth }: { readonly subject: Subject; readonly depth: number },
+): Use {
+  if (depth > 1) return subject === 'array' ? KNOWN : UNKNOWN;
   const name = memberName(access);
   if (subject !== 'array' || name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
+  if (isCallExpression(call) && handsArray(call, name)) return UNKNOWN;
   return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+}
+
+/**
+ * Whether a method calls a function back with the array as an argument: a function of the program
+ * that has a parameter for it (a rest parameter or `arguments` among them), or any callback that is not
+ * written out, which may be one.
+ */
+function handsArray(call: CallExpression, name: string): boolean {
+  const position = ARRAY_PARAMETER.get(name);
+  const [first] = call.arguments;
+  if (position === undefined || first === undefined) return false;
+  const callback = unwrapped(first);
+  if (!isArrowFunction(callback) && !isFunctionExpression(callback))
+    return call.arguments.length > 1 || nativePath(first) === undefined;
+  return (
+    callback.parameters.length > position ||
+    callback.parameters.some((each) => each.dotDotDotToken !== undefined) ||
+    mentionsArguments(callback)
+  );
+}
+
+/** Whether a function names `arguments` anywhere. */
+function mentionsArguments(fn: Node): boolean {
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (isIdentifier(node) && node.text === 'arguments') return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /**
@@ -345,10 +430,52 @@ function answerUse(answer: Node): Use {
     if (parent.left === at) return KNOWN;
     at = outermost(parent);
   }
+  if (readsArray(at)) return KNOWN;
   const { parent } = at;
   const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
   if (member && parent.expression === at) return memberUse(parent, 'array');
-  return chained(at);
+  return stored(at) ?? returned(at) ?? chained(at);
+}
+
+/** An answer that a constant is initialized with, or a name is assigned: that name stands for the array. */
+function stored(at: Node): Use | undefined {
+  const { parent } = at;
+  if (isVariableDeclaration(parent)) {
+    const initializer: Node | undefined = parent.initializer;
+    return initializer === at && isIdentifier(parent.name)
+      ? { known: true, alias: parent }
+      : UNKNOWN;
+  }
+  const assignment =
+    isBinaryExpression(parent) &&
+    parent.right === at &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken;
+  if (!assignment) return undefined;
+  const declaration = namedVariable(parent.left);
+  return declaration !== undefined && answerUse(parent).known
+    ? { known: true, alias: declaration }
+    : UNKNOWN;
+}
+
+/** The variable a plain name stands for, where the expression is one. */
+function namedVariable(expression: Expression): VariableDeclaration | undefined {
+  const name = unwrapped(expression);
+  const selected = isIdentifier(name) ? frameBindingOf(name) : undefined;
+  if (selected === undefined || selected.keys.length > 0) return undefined;
+  return isVariableDeclaration(selected.binding) ? selected.binding : undefined;
+}
+
+/** An answer that a function called where it is written returns: the call answers it in turn. */
+function returned(at: Node): Use | undefined {
+  const { parent } = at;
+  let fn: Node | undefined = isArrowFunction(parent) && parent.body === at ? parent : undefined;
+  if (isReturnStatement(parent)) {
+    fn = parent.parent;
+    while (!isSourceFile(fn) && !FUNCTIONS.has(fn.kind)) fn = fn.parent;
+  }
+  if (fn === undefined || !(isArrowFunction(fn) || isFunctionExpression(fn))) return undefined;
+  const call = useOf(fn).parent;
+  return invokedAtOnce(fn) && isCallExpression(call) ? answerUse(call) : undefined;
 }
 
 /** An answer that is the target of a native mutator of a written array, or a field of what it is handed. */
@@ -478,122 +605,4 @@ function argumentUse(
   const target = invoked.args[0];
   if (target !== undefined && arrayIdentity(target) !== undefined) return KNOWN;
   return subject === 'array' ? KNOWN : UNKNOWN;
-}
-
-/**
- * What the reader of a form takes it for: a source whose fields are values, a descriptor, a map of
- * descriptors, or a pattern's source, every field of which the compile reads (a member of another
- * object, a call or a method there is no value it follows).
- */
-export type Role = 'descriptor' | 'map' | 'pattern' | 'source';
-
-/** An argument a form stands for, read in a role. */
-interface Consulted {
-  readonly node: Expression;
-  readonly role: Role;
-}
-
-/** What a consultation has met: the constants it followed, and who is told of those that hold objects. */
-interface Context {
-  readonly seen: Set<Node>;
-  readonly held?: ((declaration: VariableDeclaration) => void) | undefined;
-}
-
-/**
- * Whether an argument of a native mutator of an array is written in a form the compile follows: an
- * object or list literal, whose spreads are followed and whose entries are descriptors where it is a
- * map; a constant that holds such a form and has only known mentions; a choice between them. The
- * values a field holds are read as values. A member of another object, a call, a destructured
- * name or a variable written as a whole may hold anything, and no reader follows it.
- */
-export function consultedKnown(
-  expression: Expression,
-  role: Role,
-  held?: (declaration: VariableDeclaration) => void,
-): boolean {
-  const pending: Consulted[] = [{ node: expression, role }];
-  const context: Context = { seen: new Set(), held };
-  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    const next = consult(unwrapped(at.node), at.role, context);
-    if (next === undefined) return false;
-    pending.push(...next);
-  }
-  return true;
-}
-
-/** The arguments an argument stands for in turn, none where it is a form the compile does not follow. */
-function consult(
-  value: Expression,
-  role: Role,
-  context: Context,
-): readonly Consulted[] | undefined {
-  if (isObjectLiteralExpression(value)) return objectOf(value, role);
-  if (isArrayLiteralExpression(value))
-    return value.elements.flatMap((each) => entryOf(each, role === 'map' ? 'descriptor' : role));
-  if (isConditionalExpression(value))
-    return [
-      { node: value.whenTrue, role },
-      { node: value.whenFalse, role },
-    ];
-  if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken)
-    return [{ node: value.right, role }];
-  if (isBinaryExpression(value) && LOGICAL.has(value.operatorToken.kind))
-    return [
-      { node: value.left, role },
-      { node: value.right, role },
-    ];
-  if (isIdentifier(value)) return named(value, role, context);
-  return atom(value) ? [] : undefined;
-}
-
-/** A value that is no object: `null`, a literal, a function, a class. */
-function atom(value: Expression): boolean {
-  return (
-    value.kind === SyntaxKind.NullKeyword ||
-    value.kind === SyntaxKind.TrueKeyword ||
-    value.kind === SyntaxKind.FalseKeyword ||
-    isNumericLiteral(value) ||
-    isStringLiteral(value) ||
-    isNoSubstitutionTemplateLiteral(value) ||
-    isArrowFunction(value) ||
-    isFunctionExpression(value)
-  );
-}
-
-/** What a literal object stands for: none for a method of a pattern's source, which no reader follows. */
-function objectOf(value: ObjectLiteralExpression, role: Role): readonly Consulted[] | undefined {
-  if (role === 'pattern' && value.properties.some((each) => isMethodDeclaration(each)))
-    return undefined;
-  const inner: Role = role === 'map' ? 'descriptor' : role;
-  return value.properties.flatMap((each): Consulted[] => {
-    if (isSpreadAssignment(each)) return [{ node: each.expression, role }];
-    if (role !== 'map' && role !== 'pattern') return [];
-    if (isPropertyAssignment(each)) return [{ node: each.initializer, role: inner }];
-    return isShorthandPropertyAssignment(each) && isIdentifier(each.name)
-      ? [{ node: each.name, role: inner }]
-      : [];
-  });
-}
-
-/** The argument an element of a list stands for: a spread is a list in the role, an entry a descriptor of a map. */
-function entryOf(element: Expression, role: Role): readonly Consulted[] {
-  if (isOmittedExpression(element)) return [];
-  if (isSpreadElement(element)) return [{ node: element.expression, role }];
-  return role === 'descriptor' || role === 'pattern' ? [{ node: element, role }] : [];
-}
-
-/** The initializer a name stands for, once, where it is a constant followed and read as known. */
-function named(name: Identifier, role: Role, context: Context): readonly Consulted[] | undefined {
-  if (!readsBinding(name)) return name.text === 'undefined' ? [] : undefined;
-  const selected = frameBindingOf(name);
-  if (selected === undefined) return [];
-  if (selected.keys.length > 0) return undefined;
-  const declaration = selected.binding;
-  if (!isVariableDeclaration(declaration) || context.seen.has(declaration)) return [];
-  context.seen.add(declaration);
-  const { initializer } = declaration;
-  if (initializer === undefined || atom(unwrapped(initializer))) return [];
-  if (!knownUsesOnly(declaration, 'held')) return undefined;
-  context.held?.(declaration);
-  return [{ node: initializer, role }];
 }

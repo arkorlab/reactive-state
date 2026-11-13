@@ -603,9 +603,10 @@ const CASES = [
     converts: true,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is held by a static field of a class.
     id: 'class-static-field-initializer-runs',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); }, join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-computed-key-runs',
@@ -623,9 +624,10 @@ const CASES = [
     converts: true,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is held by a static field of a class.
     id: 'class-computed-then-static-key-order',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-static-block-after-computed-key',
@@ -848,9 +850,10 @@ const CASES = [
     converts: false,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is held by a static field of a class.
     id: 'class-declaration-static-field-replaces-accessor',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-declaration-computed-name-replaces-accessor',
@@ -1043,9 +1046,10 @@ const CASES = [
     converts: true,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is handed to a parameter of a function.
     id: 'iife-argument-accessor-then-body-data-definition-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((unused: unknown) => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }))(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'iife-function-expression-argument-runs-before-body',
@@ -1140,6 +1144,121 @@ const CASES = [
   {
     id: 'nested-callee-data-definition-lets-the-assignment-replace-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.call(Object, values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'refused-method-proof-after-reflect-set',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.set(values, 'join', Array.prototype.join); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-reflect-delete',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.deleteProperty(values, 'join'); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-with-a-destructured-alias',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const [alias] = [values]; alias.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-with-an-object-destructured-alias',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { alias } = { alias: values }; alias.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-bound-mutator',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.defineProperty.bind(null)(values, 'join', { value: Array.prototype.join }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-function-of-the-program',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const swap = (list: any) => { list.join = Array.prototype.join; }; swap(values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-called-function-literal',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; ((array: any) => Object.defineProperty(array, 'join', { value: Array.prototype.join, writable: true, configurable: true }))(values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-with-the-array-in-a-literal',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const holder = [values]; (holder[0] as any).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-called-function-handed-the-answer',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { ignored: ((array: any) => Object.defineProperty(array, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }))(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'known-method-proof-after-a-method-of-the-array-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.push('safe'); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-after-a-spread-of-the-array-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const copy = [...values]; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-after-a-second-custom-method-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.join = () => 'again'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-after-a-native-mutator-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { label: 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-with-a-handing-after-the-read-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const text = String(values); ((list: any) => { list.join = Array.prototype.join; })(values); return text; }`,
+    converts: false,
+  },
+  {
+    id: 'refused-callback-handed-the-array',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((_: unknown, __: unknown, array: any) => { Object.defineProperty(array, 'join', { value: Array.prototype.join, writable: true, configurable: true }); }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-map-callback-handed-the-array',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.map((_: unknown, __: unknown, array: any) => { array.join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-reduce-callback-handed-the-array',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.reduce((_: unknown, __: unknown, ___: unknown, array: any) => { array.join = Array.prototype.join; }, 0); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-callback-with-a-rest-parameter',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((...rest: any[]) => { rest[2].join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-function-callback-reading-arguments',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach(function () { arguments[2].join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-callback-named-elsewhere',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const writeBack = (_: unknown, __: unknown, array: any) => { array.join = Array.prototype.join; }; values.forEach(writeBack); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'known-callback-without-the-array-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((item: unknown) => { void item; }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-callback-native-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.filter(Boolean); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-callback-with-two-parameters-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.map((item: unknown, index: number) => [item, index]); return String(values); }`,
     converts: false,
   },
 ] as const;
