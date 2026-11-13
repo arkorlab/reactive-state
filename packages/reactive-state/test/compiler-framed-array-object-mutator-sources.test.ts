@@ -1487,6 +1487,30 @@ const ELEMENTS = [
     index: 1,
     elements: ["'kept':"],
   },
+  {
+    id: 'assign-symbol-getter-writes-a-slot-pin',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get [Symbol.iterator]() { this[1] = error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-symbol-getter-gives-this-on-pin',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get [Symbol.iterator]() { Object.assign(this, { 1: error }); return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-map-symbol-getter-writes-a-slot-pin',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.defineProperties(values, { get [Symbol.iterator]() { this[1] = { value: error }; return { value: 'safe' }; }, 1: { value: 'safe' } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-computed-getter-writes-a-slot',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get [name]() { this[1] = error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ['error:', "'safe':", "'safe':"],
+  },
 ] as const;
 
 describe('descriptors built from constants that spread each other', () => {

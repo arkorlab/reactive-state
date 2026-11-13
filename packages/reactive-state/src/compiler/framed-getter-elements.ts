@@ -1,7 +1,9 @@
 import {
   type Expression,
+  isComputedPropertyName,
   isGetAccessorDeclaration,
   isObjectLiteralExpression,
+  isPropertyAccessExpression,
   isSetAccessorDeclaration,
   isSpreadAssignment,
   isTypeNode,
@@ -11,10 +13,12 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { getterWrites } from './framed-getter-writes.ts';
 import { possibleKey, slotKey } from './framed-mutator-keys.ts';
+import { framedNativeConstructor } from './framed-sources.ts';
 
 /** The values the getters of a source write through `this` before the fields after them are read. */
 
@@ -50,6 +54,19 @@ function runsBeforeSlot(getter: string | undefined, index: number | undefined): 
   if (getter === undefined) return true;
   const own = indexOf(getter);
   return own !== undefined && (index === undefined || own < index);
+}
+
+/** The global that names the well-known symbols. */
+const SYMBOLS: ReadonlySet<string> = new Set(['Symbol']);
+
+/**
+ * Whether a field is named by a well-known symbol (`[Symbol.iterator]`): a copy reaches the symbols after
+ * every array index and every other name, so what such a getter writes comes too late for any slot.
+ */
+function symbolKeyed(property: ObjectLiteralElementLike): boolean {
+  if (isSpreadAssignment(property) || !isComputedPropertyName(property.name)) return false;
+  const key = unwrapped(property.name.expression);
+  return isPropertyAccessExpression(key) && framedNativeConstructor(key.expression, SYMBOLS);
 }
 
 /** What a field of a written object is where a getter assigns to it. */
@@ -110,7 +127,8 @@ export function getterUnfollowed(
   name: string | undefined,
   index: number | undefined,
 ): boolean {
-  if (!isGetAccessorDeclaration(property) || !runsBeforeSlot(name, index)) return false;
+  if (!isGetAccessorDeclaration(property) || symbolKeyed(property)) return false;
+  if (!runsBeforeSlot(name, index)) return false;
   const writes = getterWrites(property);
   if (writes === undefined) return true;
   const literal = isObjectLiteralExpression(property.parent) ? property.parent : undefined;
@@ -134,7 +152,7 @@ export function getterWrittenValues(
   index: number | undefined,
   hidden: ReadonlySet<string>,
 ): Expression[] {
-  if (!isGetAccessorDeclaration(property)) return [];
+  if (!isGetAccessorDeclaration(property) || symbolKeyed(property)) return [];
   const literal = isObjectLiteralExpression(property.parent) ? property.parent : undefined;
   const reaches = (written: string | undefined): boolean => {
     if (written === undefined) {
