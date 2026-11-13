@@ -26,6 +26,7 @@ import { arrayPatternSources } from './framed-array-pattern-writes.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { soleTarget } from './framed-mutator-calls.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
@@ -143,7 +144,9 @@ export function elementSources(
   if (!isCallExpression(node)) return [];
   const mutated = objectMutatorElements(node, index);
   if (mutated !== undefined)
-    return literalArrayBinding(mutated.target) === root ? mutated.elements : [];
+    return mutated.targets.some((target) => literalArrayBinding(target) === root)
+      ? mutated.elements
+      : [];
   const borrowed = borrowedElements(node, root);
   if (borrowed !== undefined) return borrowed;
   const member = unwrapped(node.expression);
@@ -230,7 +233,7 @@ export function literalArrayBinding(node: Expression): FrameBinding | undefined 
     root = selected.binding;
     seen.add(root);
     if (root.initializer === undefined) return undefined;
-    value = unwrapped(root.initializer);
+    value = soleTarget(unwrapped(root.initializer));
   }
   return isArrayLiteralExpression(value) ? root : undefined;
 }

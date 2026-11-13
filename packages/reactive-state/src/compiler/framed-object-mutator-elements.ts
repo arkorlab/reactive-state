@@ -29,7 +29,7 @@ import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignm
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { listSource } from './framed-list-sources.ts';
-import { mutatorInvocation, PATHS, returnedTarget } from './framed-mutator-calls.ts';
+import { mutatorInvocation, PATHS, returnedTargets } from './framed-mutator-calls.ts';
 import {
   accessedValues,
   alternativesOf,
@@ -43,7 +43,7 @@ import { selectedValues } from './framed-selected-sources.ts';
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
 export interface MutatorElements {
-  readonly target: Expression;
+  readonly targets: readonly Expression[];
   readonly elements: readonly WrittenArrayElement[];
 }
 
@@ -61,17 +61,17 @@ export function objectMutatorElements(
   const [target, ...rest] = invoked.args;
   if (target === undefined || isSpreadElement(target)) return undefined;
   const reading = freshReading(call);
-  const mutated = returnedTarget(target);
+  const mutated = returnedTargets(target);
   if (path === PATHS.assign)
     return {
-      target: mutated,
+      targets: mutated,
       elements: rest.flatMap((source) => assignedValues(source, index, reading)),
     };
   const defined =
     path === PATHS.properties
       ? definedMaps(rest, index, reading)
       : definedProperty(rest, index, reading);
-  return { target: mutated, elements: defined };
+  return { targets: mutated, elements: defined };
 }
 
 /**

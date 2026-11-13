@@ -54,3 +54,9 @@ function trackedCall(node: CallExpression, root: FrameBinding): boolean {
     ['fill', 'push', 'splice', 'unshift'].includes(frameMemberName(member) ?? '')
   );
 }
+
+/** Whether the call is one a native object mutator or an array method makes on a written array. */
+export function isTrackedCall(node: CallExpression, value: Expression): boolean {
+  const root = literalArrayBinding(value);
+  return root !== undefined && trackedCall(node, root);
+}

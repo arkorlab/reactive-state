@@ -137,6 +137,111 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'closure-declared-after-the-call',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([entry, (reviewed(), ['other', 0])]); function reviewed() { entry[1] = error; } return out; }",
+    key: 'message',
+    values: ['entry:1', "reviewed(), ['other', 0]:1"],
+  },
+  {
+    id: 'closure-called-by-a-callback',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, [1].map(() => { entry[1] = error; })]); }",
+    key: 'message',
+    values: ['[1].map(() => { entry[1] = error; }):1', 'entry:1'],
+  },
+  {
+    id: 'closure-declared-before-the-call-pin',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; function reviewed() { entry[1] = error; } return Object.fromEntries([entry, (reviewed(), ['other', 0])]); }",
+    key: 'message',
+    values: ['entry:1', "reviewed(), ['other', 0]:1"],
+  },
+  {
+    id: 'closure-that-no-call-runs-pin',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([entry, ['other', 0]]); function reviewed() { entry[1] = error; } return out; }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'tuple-given-through-a-condition',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; function reviewed(row: [string, unknown]) { row[1] = error; } return Object.fromEntries([entry], reviewed(true ? entry : [])); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'tuple-given-through-a-comma',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; function reviewed(row: [string, unknown]) { row[1] = error; } return Object.fromEntries([entry], reviewed((0, entry))); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'tuple-given-through-an-assignment',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; let held: unknown; function reviewed(row: unknown) { (row as [string, unknown])[1] = error; } return Object.fromEntries([entry], reviewed((held = entry))); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'tuple-given-in-a-list',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; function reviewed(rows: [string, unknown][]) { rows[0]![1] = error; } return Object.fromEntries([entry], reviewed([entry])); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'tuple-given-through-a-logical-operator',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; function reviewed(row: [string, unknown]) { row[1] = error; } return Object.fromEntries([entry], reviewed(entry || [])); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'tuple-given-in-a-spread-list',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; function reviewed(row: [string, unknown]) { row[1] = error; } return Object.fromEntries([entry], reviewed(...[entry])); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'tuple-held-in-a-constant-list',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const held = [entry]; function reviewed(row: [string, unknown]) { row[1] = error; } return Object.fromEntries([entry], reviewed(...held)); }",
+    key: 'message',
+    values: ['entry:1'],
+  },
+  {
+    id: 'assign-through-the-result-of-an-aliased-assign',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const assign = Object.assign; return Object.fromEntries([entry], Object.assign(assign(entry, {}), { 1: error })); }",
+    key: 'message',
+    values: ['entry:1', 'error:'],
+  },
+  {
+    id: 'assign-through-a-condition',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.assign(true ? entry : [], { 1: error })); }",
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'member-read-pin',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['other', entry.length]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'tuple-element-read-pin',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['other', entry[1]]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
 ] as const;
 
 describe('entry tuples the argument list mutates by a native', () => {
