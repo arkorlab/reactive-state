@@ -3514,6 +3514,66 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'carrier-element-given-by-get-own-property-descriptor-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Object.getOwnPropertyDescriptor(array, 0) as any; d.value[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-get-own-property-descriptors-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Object.getOwnPropertyDescriptors(array) as any; d[0].value[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-values-and-written-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const v = Object.values(array); v[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-a-set-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const s = new Set(array); [...s][0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-reflect-get-own-property-descriptor-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Reflect.getOwnPropertyDescriptor(array, 0) as any; d.value[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-grouped-and-written-through-the-group-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const g = (Object as any).groupBy(array, () => 'k'); g.k[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-structured-clone-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = structuredClone(array); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-keys-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); Object.keys(array); return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-of-an-element-of-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = ['safe']; Object.getOwnPropertyDescriptor(array, 0); return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'carrier-element-given-by-a-descriptor-kept-by-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Object.getOwnPropertyDescriptor(array, 0) as any; const m = d.value; m[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-own-property-names-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); Object.getOwnPropertyNames(array); return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'carrier-descriptors-given-to-define-properties-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const copy: any[] = []; Object.defineProperties(copy, Object.getOwnPropertyDescriptors(array)); copy[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
     id: 'sequence-ending-at-an-unknown-reassigned-converts',
     source: `function frames(error: Error, original: unknown[], flag: boolean) { let values = (0, original); values = 'other'; return String([values]); }`,
     converts: true,

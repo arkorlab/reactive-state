@@ -147,8 +147,17 @@ const MUTATING: ReadonlySet<string> = new Set([
   'unshift',
 ]);
 
-/** The natives that gather the elements of an array into a new list. */
-const COPIERS: ReadonlySet<string> = new Set(['Array.from', 'Object.entries', 'Object.values']);
+/**
+ * The natives that give the elements of an array to a new object: a new list, or the descriptors of its
+ * fields, whose `value` is the element itself.
+ */
+const COPIERS: ReadonlySet<string> = new Set([
+  'Array.from',
+  'Object.entries',
+  'Object.getOwnPropertyDescriptor',
+  'Object.getOwnPropertyDescriptors',
+  'Object.values',
+]);
 
 /** The methods of an array that answer the array itself. */
 const SELF_RETURNING: ReadonlySet<string> = new Set(['copyWithin', 'fill', 'reverse', 'sort']);
