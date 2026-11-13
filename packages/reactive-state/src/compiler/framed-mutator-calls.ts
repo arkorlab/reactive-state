@@ -1,12 +1,21 @@
 import {
   type CallExpression,
   type Expression,
+  type Identifier,
+  isBinaryExpression,
   isCallExpression,
+  isIdentifier,
+  isPropertyAccessExpression,
   isSpreadElement,
+  isVariableDeclaration,
+  isVariableDeclarationList,
+  type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { framedAppliedArguments } from './framed-keys.ts';
 
 /** The native object mutators, and the arguments a call of one hands them, borrowed or not. */
@@ -23,6 +32,56 @@ const MUTATORS: ReadonlySet<string> = new Set(Object.values(PATHS));
 export interface MutatorInvocation {
   readonly path: string;
   readonly args: readonly Expression[];
+  /** Whether the mutator answers `false` where it fails, and runs on, as `Reflect` does. */
+  readonly silent?: boolean;
+}
+
+/**
+ * The native a callee names: by its global path, through parentheses and a comma (`(0, f)`), through
+ * a constant that holds it (`const define = Object.defineProperty`), and through `.call` or `.apply`
+ * of such a name. None for a callee that is any other expression, a bound function among them.
+ */
+function nativePath(callee: Expression): string | undefined {
+  const seen = new Set<Node>();
+  const suffixes: string[] = [];
+  let value = unwrapped(callee);
+  for (;;) {
+    if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken) {
+      value = unwrapped(value.right);
+      continue;
+    }
+    const global = globalPathOf(value)?.join('.');
+    if (global !== undefined) return [global, ...suffixes].join('.');
+    if (isPropertyAccessExpression(value) && ['apply', 'call'].includes(value.name.text)) {
+      suffixes.unshift(value.name.text);
+      value = unwrapped(value.expression);
+      continue;
+    }
+    const held = isIdentifier(value) && !seen.has(value) ? constantInitializer(value) : undefined;
+    if (held === undefined || !isIdentifier(value)) return undefined;
+    seen.add(value);
+    value = unwrapped(held);
+  }
+}
+
+/** The initializer of the constant a name stands for whole. */
+function constantInitializer(name: Identifier): Expression | undefined {
+  const held = frameBindingOf(name);
+  const declaration = held?.keys.length === 0 ? held.binding : undefined;
+  if (declaration === undefined || !isVariableDeclaration(declaration)) return undefined;
+  const list = declaration.parent;
+  const constant =
+    isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
+  return constant ? declaration.initializer : undefined;
+}
+
+/** `Reflect.defineProperty` takes the arguments of `Object.defineProperty`, and answers instead of throwing. */
+function normalized(path: string): string {
+  const reflected = 'Reflect.defineProperty';
+  if (path === reflected) return PATHS.property;
+  return path.startsWith(`${reflected}.`)
+    ? `${PATHS.property}${path.slice(reflected.length)}`
+    : path;
 }
 
 /**
@@ -30,24 +89,36 @@ export interface MutatorInvocation {
  * arguments it receives; none for a call of something else, or one whose arguments are unread.
  */
 export function mutatorInvocation(call: CallExpression): MutatorInvocation | undefined {
-  const path = globalPathOf(unwrapped(call.expression))?.join('.');
-  if (path === undefined) return undefined;
-  if (MUTATORS.has(path)) return { path, args: writtenArguments(call) };
+  const named = nativePath(call.expression);
+  if (named === undefined) return undefined;
+  const path = normalized(named);
+  const silent = named !== path;
+  if (MUTATORS.has(path)) return { path, args: writtenArguments(call), silent };
   if (path === 'Reflect.apply') {
     const [callee, , list] = call.arguments;
-    const native = callee === undefined ? undefined : globalPathOf(unwrapped(callee))?.join('.');
-    return native !== undefined && MUTATORS.has(native) ? applied(call, native, list) : undefined;
+    const native = callee === undefined ? undefined : nativePath(callee);
+    const aimed = native === undefined ? undefined : normalized(native);
+    if (aimed === undefined || !MUTATORS.has(aimed)) return undefined;
+    return withSilence(applied(call, aimed, list), native !== aimed);
   }
   const split = path.lastIndexOf('.');
   const native = path.slice(0, split);
   if (!MUTATORS.has(native)) return undefined;
   const how = path.slice(split + 1);
-  if (how === 'apply') return applied(call, native, call.arguments[1]);
+  if (how === 'apply') return withSilence(applied(call, native, call.arguments[1]), silent);
   if (how !== 'call') return undefined;
   const [receiver, ...rest] = writtenArguments(call);
   return receiver === undefined || isSpreadElement(receiver)
     ? undefined
-    : { path: native, args: rest };
+    : { path: native, args: rest, silent };
+}
+
+/** An invocation, marked as the one that fails silently where it does. */
+function withSilence(
+  invoked: MutatorInvocation | undefined,
+  silent: boolean,
+): MutatorInvocation | undefined {
+  return invoked === undefined ? undefined : { ...invoked, silent };
 }
 
 /** A mutator called with the entries of a written list. */
