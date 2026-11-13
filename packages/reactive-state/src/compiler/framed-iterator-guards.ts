@@ -36,19 +36,30 @@ import { framedPossibleBranch } from './framed-writes.ts';
 export const DEFAULT_ITERATOR = 'Symbol.iterator';
 const ITERATOR = new Set([DEFAULT_ITERATOR]);
 const NAMED = new Set(['entries', 'keys', 'values']);
+/**
+ * The nodes that run application code: a call, a read of a member that may be a getter, a spread,
+ * a pattern that reads the getters or the iterator of what it takes apart, a template that coerces
+ * what it holds, and a loop whose head iterates.
+ */
 const EFFECTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrayBindingPattern,
   SyntaxKind.AwaitExpression,
   SyntaxKind.BinaryExpression,
   SyntaxKind.CallExpression,
   SyntaxKind.DeleteExpression,
   SyntaxKind.ElementAccessExpression,
+  SyntaxKind.ForInStatement,
+  SyntaxKind.ForOfStatement,
+  SyntaxKind.JsxSpreadAttribute,
   SyntaxKind.NewExpression,
+  SyntaxKind.ObjectBindingPattern,
   SyntaxKind.PostfixUnaryExpression,
   SyntaxKind.PrefixUnaryExpression,
   SyntaxKind.PropertyAccessExpression,
   SyntaxKind.SpreadAssignment,
   SyntaxKind.SpreadElement,
   SyntaxKind.TaggedTemplateExpression,
+  SyntaxKind.TemplateExpression,
   SyntaxKind.YieldExpression,
 ]);
 
