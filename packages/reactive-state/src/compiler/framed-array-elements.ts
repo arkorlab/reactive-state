@@ -22,6 +22,7 @@ import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { emptyArrayFill } from './framed-array-fill-ranges.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
+import { arrayIdentity } from './framed-array-identity.ts';
 import { framedLogicalElementSkipped } from './framed-array-logical-writes.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
@@ -92,12 +93,14 @@ function candidatesOf(root: FrameBinding, read: Node): readonly Node[] {
 /**
  * Whether the compile does not follow every write to the array a read names: a mention of it, or of a
  * name that stands for it, that may run before the read and is no use the compile knows, or a native
- * mutator of it that is handed an argument written in a form no reader follows. Such an array holds
- * what the compile cannot show, and the read is refused.
+ * mutator of it that is handed an argument written in a form no reader follows, or a name of the chain
+ * the read goes by that is written as a whole elsewhere, which may hold another array than the one it
+ * was given. Such an array holds what the compile cannot show, and the read is refused.
  */
 export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
   const root = literalArrayBinding(value);
   if (root === undefined || !isVariableDeclaration(root)) return false;
+  if (arrayIdentity(value) === undefined) return true;
   const owner = executionOwner(read);
   const relevant = (name: Identifier): boolean =>
     possibleBefore(name, read, owner, root) && framedPossibleBranch(name);
