@@ -38,6 +38,7 @@ import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-membe
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { ANY_FIELD, fromKey, suffixStart } from './framed-pattern-members.ts';
 import { isWrittenMember } from './framed-written-members.ts';
+import { outermost } from './framed-written-targets.ts';
 
 /**
  * What a destructuring picks out of a source, read where the compile can; the rest is kept whole.
@@ -277,15 +278,16 @@ function onlyReads(name: Identifier): boolean {
     );
   if (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) return false;
   if (isWrittenMember(parent)) return false;
-  const used = parent.parent;
-  if (isCallExpression(used) && used.expression === parent)
+  const member = outermost(parent);
+  const used = member.parent;
+  if (isCallExpression(used) && used.expression === member)
     return (
       isPropertyAccessExpression(parent) &&
       !CHANGING.has(parent.name.text) &&
       !callbackTakesList(parent.name.text, used)
     );
   if (isBinaryExpression(used))
-    return !(used.left === parent && isAssignmentOperator(used.operatorToken.kind));
+    return !(used.left === member && isAssignmentOperator(used.operatorToken.kind));
   return !(
     isDeleteExpression(used) ||
     isPrefixUnaryExpression(used) ||
