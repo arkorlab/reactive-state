@@ -70,11 +70,25 @@ describe('the work between a source and its iterator', () => {
 
     expect(windowQuiet(source)).toBe(quiet);
   });
+
+  it('a spread attribute of an element', () => {
+    const between = 'const view = <Widget {...hooks} />;';
+    const source = `declare const hooks: any; declare const Widget: any; function frames() { const set = new Set([1, 2]); ${between} return set[Symbol.iterator](); }`;
+
+    expect(windowQuiet(source, 'iterator-guards.tsx')).toBe(false);
+  });
+
+  it('an element with no spread attribute', () => {
+    const between = 'const view = <Widget label="x" />;';
+    const source = `declare const Widget: any; function frames() { const set = new Set([1, 2]); ${between} return set[Symbol.iterator](); }`;
+
+    expect(windowQuiet(source, 'iterator-guards.tsx')).toBe(true);
+  });
 });
 
-function windowQuiet(source: string): boolean {
+function windowQuiet(source: string, file = 'iterator-guards.ts'): boolean {
   using api = openTypeScript();
-  using parsed = parseModule(api, 'iterator-guards.ts', source);
+  using parsed = parseModule(api, file, source);
   const created = find(parsed.sourceFile, (node): node is Expression => isNewExpression(node));
   const acquisition = find(
     parsed.sourceFile,
