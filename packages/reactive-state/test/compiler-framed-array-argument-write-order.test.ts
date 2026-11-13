@@ -1522,9 +1522,10 @@ const CASES = [
     converts: false,
   },
   {
+    // Refused since an array that holds itself may hold itself in an element, which a spread copies out.
     id: 'list-spread-of-an-array-that-holds-itself-pin',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; Object.assign(values, { self: Object.assign(values, {}) }); const copy: any[] = [...values]; void copy; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'push-through-a-name-of-an-answer-refused',
@@ -1544,6 +1545,46 @@ const CASES = [
   {
     id: 'fill-through-a-name-of-an-answer-refused',
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); r.fill(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'chained-assignment-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; let outer: any, inner: any; outer = inner = Object.assign(values, {}); outer[0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'single-assignment-of-an-answer-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; let inner: any; inner = Object.assign(values, {}); void inner; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'answer-assigned-and-declared-through-a-chain-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; let mid: any; const outer: any = (mid = Object.assign(values, {})); outer[0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-into-a-call-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { 0: Object.assign(values, {}) }); ((alias: any) => { alias[0] = error; })(...values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'loop-over-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { 0: Object.assign(values, {}) }); for (const each of values) each[0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'array-from-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { 0: Object.assign(values, {}) }); const copy: any[] = Array.from(values); copy[0][0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-into-a-call-of-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; ((alias: any) => { void alias; })(...values); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-push-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); Array.prototype.push.call(r, error); return String(a); }`,
     converts: true,
   },
 ] as const;

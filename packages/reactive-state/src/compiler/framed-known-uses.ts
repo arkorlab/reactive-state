@@ -154,6 +154,9 @@ const MUTATING: ReadonlySet<string> = new Set([
   'unshift',
 ]);
 
+/** The natives that gather the elements of an array into a new list. */
+const COPIERS: ReadonlySet<string> = new Set(['Array.from', 'Object.entries', 'Object.values']);
+
 /** The methods of an array that answer the array itself. */
 const SELF_RETURNING: ReadonlySet<string> = new Set(['copyWithin', 'fill', 'reverse', 'sort']);
 
@@ -197,6 +200,7 @@ export function classify(name: Identifier, subject: Subject): Use {
   if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at, subject);
   if (isSpreadAssignment(parent)) return SPREADS;
   if (discarded(at)) return KNOWN;
+  if (isArray(subject) && copiesOut(at)) return SPREADS;
   if (isArray(subject) && readsArray(at)) return KNOWN;
   const given = assigned(at, subject);
   if (given !== undefined) return given;
@@ -277,12 +281,24 @@ function takenApart(subject: Subject): boolean {
 function readsArray(at: Node): boolean {
   const { parent } = at;
   if (isTemplateSpan(parent)) return !isTaggedTemplateExpression(parent.parent.parent);
-  if (isForOfStatement(parent) && parent.expression === at) return true;
-  if (isSpreadElement(parent)) return true;
   if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) return true;
   if (!isFirstArgument(parent, at)) return false;
   const path = nativePath(parent.expression);
   return path !== undefined && (READERS.has(path) || CONVERTERS.has(path));
+}
+
+/**
+ * Whether a mention of an array is copied out of: spread into a list or a call, iterated by a loop, or
+ * given to a native that gathers what it holds. The elements an array holds go where the copy goes, and
+ * an array that holds itself hands itself on.
+ */
+function copiesOut(at: Node): boolean {
+  const { parent } = at;
+  if (isSpreadElement(parent) || (isForOfStatement(parent) && parent.expression === at))
+    return true;
+  if (!isFirstArgument(parent, at)) return false;
+  const path = nativePath(parent.expression);
+  return path !== undefined && COPIERS.has(path);
 }
 
 /** What a name stands for where it is one of the values a choice may hand over: not the one readers follow. */
@@ -386,6 +402,7 @@ function answerUse(answer: Node): Use {
     at = outermost(at.parent);
     handed = true;
   }
+  if (copiesOut(at)) return SPREADS;
   if (readsArray(at)) return KNOWN;
   const { parent } = at;
   const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
@@ -408,7 +425,9 @@ function stored(at: Node): Use | undefined {
     parent.operatorToken.kind === SyntaxKind.EqualsToken;
   if (!assignment) return undefined;
   const declaration = namedVariable(parent.left);
-  return declaration !== undefined && answerUse(parent).known
+  const onward = answerUse(parent);
+  const single = onward.known && onward.alias === undefined;
+  return declaration !== undefined && single
     ? { known: true, alias: declaration, echo: true }
     : UNKNOWN;
 }
@@ -595,7 +614,7 @@ function targetUse(call: Node, flowing: Flowing, subject: Subject): Use {
  */
 function borrowedUse(call: CallExpression, borrowed: Borrowed, subject: Subject): Use {
   const { name, apply } = borrowed;
-  if (subject !== 'array') return UNKNOWN;
+  if (!isArray(subject) || (subject === 'echo' && MUTATING.has(name))) return UNKNOWN;
   if (apply ? callsBack(name) : handsArray(call, name, 1)) return UNKNOWN;
   return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
 }
