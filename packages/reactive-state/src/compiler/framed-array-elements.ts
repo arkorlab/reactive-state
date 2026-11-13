@@ -26,6 +26,7 @@ import { arrayPatternSources } from './framed-array-pattern-writes.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { possibleKey } from './framed-mutator-keys.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
@@ -205,17 +206,14 @@ function positionsMove(node: Node, root: FrameBinding): boolean {
   return MOVING.has(frameMemberName(member) ?? '');
 }
 
-/** Unknown computed positions may be numeric; known non-index own names are not joined elements. */
+/**
+ * Unknown computed positions may be numeric; known non-index own names are not joined elements, and
+ * neither is an integer past the greatest array index, which names an ordinary property.
+ */
 function possibleIndex(key: Expression, index: number | undefined): boolean {
   const value = constantValue(unwrapped(key));
   if (value === undefined) return true;
-  if (typeof value === 'number')
-    return Number.isSafeInteger(value) && value >= 0 && (index === undefined || value === index);
-  return (
-    typeof value === 'string' &&
-    /^(?:0|[1-9]\d*)$/u.test(value) &&
-    (index === undefined || Number(value) === index)
-  );
+  return (typeof value === 'number' || typeof value === 'string') && possibleKey(value, index);
 }
 
 /** A written literal array behind lexical whole-value aliases, excluding destructured projections. */
