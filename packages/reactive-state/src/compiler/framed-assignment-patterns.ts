@@ -1,6 +1,7 @@
 import {
   type Expression,
   type ArrayLiteralExpression,
+  type GetAccessorDeclaration,
   type ObjectLiteralExpression,
   type PropertyName,
   type Identifier,
@@ -11,9 +12,11 @@ import {
   isExpression,
   isForInStatement,
   isForOfStatement,
+  isGetAccessorDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPropertyAssignment,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadElement,
   isSpreadAssignment,
@@ -27,6 +30,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf, frameTypeOf, type FrameDeclaration } from './framed-bindings.ts';
+import { accessorWrites, copiedAfter, copyOrder, surelyCopied } from './framed-getter-writes.ts';
 import { localArrayIterationKeys } from './local-type-reading.ts';
 import { constantValue } from './numbers.ts';
 
@@ -269,7 +273,54 @@ function spreadSource(
   opaque: AssignedFrameSource,
 ): readonly AssignedFrameSource[] {
   const value = unwrapped(copied);
-  return isObjectLiteralExpression(value) ? objectSource(value, key, opaque, true) : [opaque];
+  if (!isObjectLiteralExpression(value)) return [opaque];
+  const found = objectSource(value, key, opaque, true);
+  return found.length > 0 ? [...found, ...copiedWrites(value, key, opaque)] : found;
+}
+
+/**
+ * What the getters of a written object write into the entry of a key that it has, before a copy
+ * of it reaches the entry: the getters it still holds, those a later field or a later spread of
+ * the object replaces having gone, and the setters their writes run. A getter counts only where the
+ * copy reaches the entry after it has run: a field copied before it is not changed in the copy. The path for a getter that
+ * gives `this` on, which the compile does not read.
+ */
+function copiedWrites(
+  value: ObjectLiteralExpression,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const replaced = new Set<string>();
+  const found: AssignedFrameSource[] = [];
+  const order = copyOrder(value);
+  for (const property of value.properties.toReversed()) {
+    if (isSpreadAssignment(property)) {
+      for (const each of surelyCopied(property.expression)) replaced.add(each);
+      continue;
+    }
+    const name = literalKey(property.name);
+    const live = name === undefined || !replaced.has(name);
+    if (live && isGetAccessorDeclaration(property) && copiedAfter(order, name, key))
+      found.push(...gettersWrites(value, property, key, opaque));
+    const field =
+      name !== undefined && !setsPrototype(property) && !isSetAccessorDeclaration(property);
+    if (field) replaced.add(name);
+  }
+  return found;
+}
+
+/** What running one getter of a written object writes into the entry of a key. */
+function gettersWrites(
+  value: ObjectLiteralExpression,
+  getter: GetAccessorDeclaration,
+  key: string,
+  opaque: AssignedFrameSource,
+): readonly AssignedFrameSource[] {
+  const written = accessorWrites(value, getter);
+  if (written === undefined) return [opaque];
+  return written
+    .filter((each) => each.name === undefined || each.name === key)
+    .map((each) => ({ value: each.value, keys: [] }));
 }
 
 /** A written `__proto__: value`, which sets the prototype; `['__proto__']` and a shorthand do not. */
