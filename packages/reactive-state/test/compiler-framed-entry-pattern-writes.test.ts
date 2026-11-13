@@ -1586,6 +1586,30 @@ const CASES = [
       "{ ...{ get trigger() { this.field = error; return 0; }, get field() { return 'kept'; }, set field(value: unknown) {} } }:field",
     ],
   },
+  {
+    id: 'spread-getter-deletes-a-setter-then-assigns',
+    source: `function frames(error: Error, name: string, first: string, other: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { delete this.field; this.field = error; return 0; }, set field(value: unknown) {} } })); }`,
+    key: 'message',
+    values: ["'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-of-a-computed-name-meets-a-computed-setter',
+    source: `function frames(error: Error, name: string, first: string, other: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this[first] = error; return 0; }, set [other](value: unknown) {}, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-of-a-known-name-meets-a-computed-setter',
+    source: `function frames(error: Error, name: string, first: string, other: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, set [other](value: unknown) {}, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-to-a-known-setter-stores-nothing-pin',
+    source: `function frames(error: Error, name: string, first: string, other: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, set field(value: unknown) {} } })); }`,
+    key: 'message',
+    values: ["'safe':", '0:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
