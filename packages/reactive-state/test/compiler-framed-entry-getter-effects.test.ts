@@ -167,6 +167,83 @@ const CASES = [
     key: 'message',
     values: ['entry:1', 'error:'],
   },
+  {
+    id: 'to-string-of-a-key-run-by-the-call',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['message', error], [{ toString() { entry[1] = error; return 'other'; } }, 0], entry]); }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
+  {
+    id: 'value-of-of-a-key-run-by-the-call',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['message', error], [{ valueOf() { entry[1] = error; return 'other'; } }, 0], entry]); }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
+  {
+    id: 'to-primitive-of-a-key-run-by-the-call',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['message', error], [{ [Symbol.toPrimitive]() { entry[1] = error; return 'other'; } }, 0], entry]); }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
+  {
+    id: 'arrow-to-string-of-a-key-run-by-the-call',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['message', error], [{ toString: () => { entry[1] = error; return 'other'; } }, 0], entry]); }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
+  {
+    id: 'inherited-to-string-of-a-key-run-by-the-call',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['message', error], [{ __proto__: { toString() { entry[1] = error; return 'other'; } } }, 0], entry]); }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
+  {
+    id: 'key-that-may-be-an-object-with-a-function-elsewhere',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], [key, 0], entry]); elsewhere(); return out; function elsewhere() { entry[1] = error; } }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
+  {
+    id: 'key-of-a-string-type-with-a-function-elsewhere-pin',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], [name, 0], entry]); elsewhere(); return out; function elsewhere() { entry[1] = error; } }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'key-of-a-written-text-with-a-function-elsewhere-pin',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], ['other', 0], entry]); elsewhere(); return out; function elsewhere() { entry[1] = error; } }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'key-of-a-constant-text-with-a-function-elsewhere-pin',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; const label = 'other'; const out = Object.fromEntries([['message', error], [label, 0], entry]); elsewhere(); return out; function elsewhere() { entry[1] = error; } }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'key-of-a-number-with-a-function-elsewhere-pin',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], [1, 0], entry]); elsewhere(); return out; function elsewhere() { entry[1] = error; } }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'hook-in-the-value-slot-pin',
+    source:
+      "function frames(error: Error, name: string, key: unknown) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['message', error], ['other', { toString() { entry[1] = error; return 'x'; } }], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
 ] as const;
 
 describe('entry tuples code the argument list runs by no call', () => {
