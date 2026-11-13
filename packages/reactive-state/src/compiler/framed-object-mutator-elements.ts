@@ -316,7 +316,7 @@ function fieldsAfter(
   read: (property: ObjectLiteralElementLike, later: Hidden) => WrittenArrayElement[],
 ): WrittenArrayElement[] {
   const found: (readonly WrittenArrayElement[])[] = [];
-  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters) };
+  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters), own: hidden.own };
   for (const property of object.properties.toReversed()) {
     const name = sourceName(property);
     const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
@@ -585,7 +585,7 @@ function copiedFields(
   const shadowed = {
     data: withNames(later.data, own),
     getters: withNames(later.getters, own),
-    own: new Set(own),
+    own: withNames(later.own ?? new Set<string>(), own),
   };
   return descriptorValues(prototype, reading, shadowed);
 }

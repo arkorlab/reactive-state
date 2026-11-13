@@ -1,11 +1,18 @@
 import {
+  type Expression,
+  isExpression,
   isGetAccessorDeclaration,
+  isObjectLiteralExpression,
   isSetAccessorDeclaration,
   isSpreadAssignment,
+  isTypeNode,
+  type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { getterWrites } from './framed-getter-writes.ts';
@@ -49,24 +56,44 @@ export function descriptorRewrites(
 ): WrittenArrayElement[] {
   const replacing = new Set<string>();
   const found: WrittenArrayElement[] = [];
-  const order = copied ? copyOrder(descriptor) : undefined;
+  const mode: Mode = copied ? 'copy' : 'convert';
+  const order = copied && copiedInline(descriptor) ? copyOrder(descriptor) : undefined;
   const hides = new Set([...hidden.data].filter((each) => hidden.own?.has(each) !== true));
   for (const property of descriptor.properties.toReversed()) {
-    const name = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
-    const read = copied || name === undefined || READ_BEFORE_VALUE.has(name);
-    const shadowed = name !== undefined && hidden.own?.has(name) === true;
-    const live = name === undefined || (!replacing.has(name) && read && !shadowed);
+    if (isSpreadAssignment(property)) {
+      for (const each of copiedNames(property.expression)) replacing.add(each);
+      continue;
+    }
+    const name = writtenArrayKey(property.name);
+    const live = name === undefined || runs(name, { copied, replacing, own: hidden.own });
     if (live && isGetAccessorDeclaration(property))
-      found.push(...rewrites(descriptor, property, { hides, order }));
+      found.push(...rewrites(descriptor, property, { hides, order, mode }));
     if (name !== undefined && !isSetAccessorDeclaration(property)) replacing.add(name);
   }
   return found;
 }
 
 /**
- * The names of a descriptor in the order a copy reaches them: an array index first, then the other
- * names as they were first written. None where a spread or a name the compile cannot read makes the
- * order unknown.
+ * Whether a getter of a name runs: a field after it does not replace it, a conversion reads it before
+ * `value` or a copy reaches it at all, and a field of the descriptor that inherits this one does not
+ * hide it.
+ */
+function runs(
+  name: string,
+  context: {
+    readonly copied: boolean;
+    readonly replacing: ReadonlySet<string>;
+    readonly own: ReadonlySet<string> | undefined;
+  },
+): boolean {
+  const read = context.copied || READ_BEFORE_VALUE.has(name);
+  return read && !context.replacing.has(name) && context.own?.has(name) !== true;
+}
+
+/**
+ * The names of a descriptor in the order a copy reaches them: an array index first, in order, then the
+ * other names as they were first written. None where a spread or a name the compile cannot read makes
+ * the order unknown.
  */
 function copyOrder(descriptor: ObjectLiteralExpression): readonly string[] | undefined {
   const names: string[] = [];
@@ -76,7 +103,43 @@ function copyOrder(descriptor: ObjectLiteralExpression): readonly string[] | und
     if (name === undefined) return undefined;
     if (!names.includes(name)) names.push(name);
   }
-  return names;
+  return [
+    ...names.filter((each) => isIndex(each)).toSorted((one, two) => Number(one) - Number(two)),
+    ...names.filter((each) => !isIndex(each)),
+  ];
+}
+
+/** The last array index: a larger integer names an ordinary property. */
+const LAST_INDEX = 4_294_967_294;
+
+/** Whether a name is the text of an array index. */
+function isIndex(name: string): boolean {
+  return /^(?:0|[1-9]\d*)$/u.test(name) && Number(name) <= LAST_INDEX;
+}
+
+/**
+ * Whether a descriptor is written where the copy is: it is the operand of the spread itself. A
+ * descriptor a name holds may have fields that were added to it, which the written fields do not tell.
+ */
+function copiedInline(descriptor: ObjectLiteralExpression): boolean {
+  let at: Node = descriptor;
+  while (isExpression(at.parent) && unwrapped(at.parent) === descriptor) at = at.parent;
+  return isSpreadAssignment(at.parent);
+}
+
+/**
+ * The names a later spread surely copies: those of a written object that holds no getter, which could
+ * delete one before the copy reaches it, and those of the spreads such an object holds.
+ */
+function copiedNames(copied: Expression): readonly string[] {
+  const value = unwrapped(copied);
+  if (!isObjectLiteralExpression(value)) return [];
+  if (value.properties.some((each) => isGetAccessorDeclaration(each))) return [];
+  return value.properties.flatMap((each) => {
+    if (isSpreadAssignment(each)) return copiedNames(each.expression);
+    const name = writtenArrayKey(each.name);
+    return name === undefined ? [] : [name];
+  });
 }
 
 /** Whether a copy reaches the field after the getter that is named `getter`; any, where the order is unknown. */
@@ -87,19 +150,98 @@ function copiedAfter(
 ): boolean {
   if (order === undefined || getter === undefined) return true;
   const at = order.indexOf(field);
-  if (at === -1) return false;
-  return /^(?:0|[1-9]\d*)$/u.test(getter) || at > order.indexOf(getter);
+  return at !== -1 && at > order.indexOf(getter);
+}
+
+/** The order a conversion reads the fields of a descriptor in. */
+const READ_ORDER: readonly string[] = [
+  'enumerable',
+  'configurable',
+  'value',
+  'writable',
+  'get',
+  'set',
+];
+
+/** Whether a conversion reads the field after the getter that is named `getter` has run. */
+function readAfter(getter: string | undefined, field: string): boolean {
+  if (getter === undefined) return true;
+  const own = READ_ORDER.indexOf(getter);
+  return own !== -1 && READ_ORDER.indexOf(field) > own;
 }
 
 /** What decides which writes of a getter count: the names a field after hides, and the order of a copy. */
 interface Counting {
   readonly hides: ReadonlySet<string>;
   readonly order: readonly string[] | undefined;
+  readonly mode: Mode;
 }
+
+/** A descriptor is converted, its fields read in a fixed order, or copied by a spread, in the order of its keys. */
+type Mode = 'convert' | 'copy';
 
 /** Whether what a getter named `getter` writes to the field is read: no field after hides it, and a copy reaches it. */
 function reachedBy(counting: Counting, getter: string | undefined, field: string): boolean {
-  return !counting.hides.has(field) && copiedAfter(counting.order, getter, field);
+  if (counting.hides.has(field)) return false;
+  return counting.mode === 'copy'
+    ? copiedAfter(counting.order, getter, field)
+    : readAfter(getter, field);
+}
+
+/** What a field of a written descriptor is where a getter assigns to it. */
+type Slot = 'absent' | 'accessor' | 'data' | 'setter';
+
+/**
+ * What the field a getter assigns to is: a value, which the assignment replaces; an accessor, whose
+ * setter an assignment runs instead (a getter alone swallows it); a setter that names `this`, which
+ * writes as it likes; or none, which the assignment creates. A spread or a name that is computed
+ * leaves it a value.
+ */
+function slotOf(descriptor: ObjectLiteralExpression, name: string): Slot {
+  let slot = 'absent' as Slot;
+  for (const property of descriptor.properties) {
+    const key = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
+    if (key === undefined) return 'data';
+    if (key === name) slot = slotAfter(slot, property);
+  }
+  return slot;
+}
+
+/** The slot a field makes of one that was: a setter or a getter makes an accessor, any other a value. */
+function slotAfter(slot: Slot, property: ObjectLiteralElementLike): Slot {
+  if (isSetAccessorDeclaration(property))
+    return slot === 'setter' || namesThis(property) ? 'setter' : 'accessor';
+  if (isGetAccessorDeclaration(property)) return slot === 'setter' ? 'setter' : 'accessor';
+  return 'data';
+}
+
+/** Whether a function names `this` anywhere in its body. */
+function namesThis(fn: Node): boolean {
+  const pending: Node[] = [fn];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (node.kind === SyntaxKind.ThisKeyword) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** Whether an assignment to the field leaves the descriptor the value written: no accessor swallows it. */
+function stores(descriptor: ObjectLiteralExpression, field: string): boolean {
+  const slot = slotOf(descriptor, field);
+  return slot === 'data' || slot === 'absent';
+}
+
+/** Whether what a getter writes to a field of the descriptor is read, and the descriptor keeps it. */
+function counted(
+  descriptor: ObjectLiteralExpression,
+  counting: Counting,
+  { name, field }: { readonly name: string | undefined; readonly field: string },
+): boolean {
+  const wanted = field === 'value' || field === 'get';
+  return wanted && reachedBy(counting, name, field) && stores(descriptor, field);
 }
 
 /** The elements one getter writes into the `value` or the `get` of the descriptor it runs on. */
@@ -111,21 +253,37 @@ function rewrites(
   if (!isGetAccessorDeclaration(getter)) return [];
   const writes = getterWrites(getter);
   const name = writtenArrayKey(getter.name);
-  if (writes === undefined) {
-    const reaches = ['value', 'get'].some((one) => reachedBy(counting, name, one));
-    return reaches ? [{ value: descriptor, keys: ['value'] }] : [];
-  }
-  return writes.flatMap((each) => {
+  const reaches = ['value', 'get'].some((one) => reachedBy(counting, name, one));
+  if (writes === undefined) return reaches ? [{ value: descriptor, keys: ['value'] }] : [];
+  const found = writes.flatMap((each) => {
     const field = each.name;
     const fields = field === undefined ? ['value', 'get'] : [field];
-    const counts = fields.some(
-      (one) => (one === 'value' || one === 'get') && reachedBy(counting, name, one),
-    );
+    const counts = fields.some((one) => counted(descriptor, counting, { name, field: one }));
     if (!counts) return [];
     const value = field === 'get' ? [] : [{ value: each.value, keys: [] }];
     const get = field === 'value' ? [] : functionReturns(each.value, new Set(), selectedValues);
     return [...value, ...get];
   });
+  return reaches && runsWritingSetter(descriptor, writes)
+    ? [...found, { value: descriptor, keys: ['value'] }]
+    : found;
+}
+
+/** Whether a write of a getter runs a setter that names `this`: it may write the descriptor as it likes. */
+function runsWritingSetter(
+  descriptor: ObjectLiteralExpression,
+  writes: readonly { readonly name: string | undefined }[],
+): boolean {
+  const setters = descriptor.properties.filter((one) => isSetAccessorDeclaration(one));
+  for (const { name } of writes) {
+    if (
+      name === undefined
+        ? setters.some((one) => namesThis(one))
+        : slotOf(descriptor, name) === 'setter'
+    )
+      return true;
+  }
+  return false;
 }
 
 /** Whether the getter at `at` never runs: a field after it gives its name a value that is no accessor. */
@@ -135,7 +293,8 @@ export function neverRuns(descriptor: ObjectLiteralExpression, at: number): bool
     getter === undefined || isSpreadAssignment(getter) ? undefined : writtenArrayKey(getter.name);
   if (key === undefined) return false;
   return descriptor.properties.slice(at + 1).some((each) => {
+    if (isSpreadAssignment(each)) return copiedNames(each.expression).includes(key);
     const accessor = isGetAccessorDeclaration(each) || isSetAccessorDeclaration(each);
-    return !isSpreadAssignment(each) && !accessor && writtenArrayKey(each.name) === key;
+    return !accessor && writtenArrayKey(each.name) === key;
   });
 }

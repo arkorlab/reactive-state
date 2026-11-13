@@ -2999,6 +2999,51 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { this.value = error; return true; } }, value: 'safe', enumerable: true }); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'descriptor-writable-getter-writes-the-value-after-it-was-read-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { value: 'safe', get writable() { this.value = error; return true; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-enumerable-getter-writes-the-value',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.value = error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-later-spread-replaces-the-getter-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.value = error; return true; }, value: 'safe', ...{ enumerable: true } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-later-spread-with-a-getter-may-keep-the-getter',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.value = error; return true; }, value: 'safe', ...{ get zap() { delete this.enumerable; return 0; }, enumerable: true } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-held-descriptor-with-an-added-field-copied',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; const d: any = { get enumerable() { this.value = error; return true; } }; d.value = 'safe'; Object.defineProperty(a, 0, { ...d }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-index-beyond-the-last-keeps-its-position-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ value: 'safe', get 4294967295() { this.value = error; return true; } } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-index-getter-runs-before-the-fields',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ value: 'safe', get 7() { this.value = error; return true; } } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-value-accessor-swallows-the-write-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.value = error; return true; }, get value() { return 'safe'; }, set value(v: unknown) {} }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-grandparent-getter-hidden-by-own-attribute-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { __proto__: { get enumerable() { delete this.value; this.get = () => error; return true; } } }, enumerable: true, value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
