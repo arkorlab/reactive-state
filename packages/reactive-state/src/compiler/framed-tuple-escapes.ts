@@ -1,5 +1,4 @@
 import {
-  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   isArrayLiteralExpression,
@@ -19,11 +18,14 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isSatisfiesExpression,
+  isSpreadAssignment,
   isSpreadElement,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
+import { writtenArrayKey } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { isTrackedCall } from './framed-called-elements.ts';
@@ -113,14 +115,9 @@ function neverRuns(node: Node, call: CallExpression): boolean {
   return false;
 }
 
-/** Whether a node is the first element of a list written out. */
-function isFirst(list: ArrayLiteralExpression, node: Node): boolean {
-  return isExpression(node) && list.elements.indexOf(node) === 0;
-}
-
-/** Whether a node lies within the call. */
-function within(node: Node, call: CallExpression): boolean {
-  return node.pos >= call.pos && node.end <= call.end;
+/** Whether a node lies within another. */
+function within(node: Node, container: Node): boolean {
+  return node.pos >= container.pos && node.end <= container.end;
 }
 
 /** Whether a node is one of the arguments of the call. */
@@ -128,27 +125,94 @@ function isArgument(call: CallExpression, node: Node): boolean {
   return call.arguments.some((each) => each === node);
 }
 
+/** The operators that give the value of one of their operands. */
+const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
 /**
- * Whether a function the list makes is held only as data the call's own arguments hold. A function a
- * field of an object holds, which is the first of an entry, is no such data: the call converts that
- * object to the key it installs, and runs its `Symbol.toPrimitive`, its `toString` or its `valueOf`.
+ * The expressions an entry (or the list of them) may stand for: itself, or, through a condition, a
+ * comma, a logical operand, the operands that give their value on.
+ */
+function valuesOf(expression: Expression): readonly Expression[] {
+  const found: Expression[] = [];
+  const pending = [expression];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    const value = unwrapped(at);
+    if (isConditionalExpression(value)) pending.push(value.whenTrue, value.whenFalse);
+    else if (!isBinaryExpression(value)) found.push(value);
+    else if (value.operatorToken.kind === SyntaxKind.CommaToken) pending.push(value.right);
+    else if (LOGICAL.has(value.operatorToken.kind)) pending.push(value.left, value.right);
+    else found.push(value);
+  }
+  return found;
+}
+
+/**
+ * The places of one entry that `Object.fromEntries` converts to the name it installs: the first
+ * of a list, the field `0` of an object (or one whose name the compile cannot read, or a spread, which
+ * may bring one). A list with a spread, whose first is not known, is all of them.
+ */
+function keySlotsOf(entry: Expression): readonly Node[] {
+  if (isArrayLiteralExpression(entry)) {
+    const spread = entry.elements.some((each) => isSpreadElement(each));
+    return spread ? entry.elements : entry.elements.slice(0, 1);
+  }
+  if (!isObjectLiteralExpression(entry)) return [];
+  return entry.properties.flatMap((property): readonly Node[] => {
+    if (isSpreadAssignment(property)) return [property.expression];
+    const key = writtenArrayKey(property.name);
+    if (key !== undefined && key !== '0') return [];
+    return isPropertyAssignment(property) ? [property.initializer] : [property];
+  });
+}
+
+const KEY_SLOTS = new WeakMap<CallExpression, readonly Node[]>();
+
+/** The places of the entries of the call's argument that are converted to names, whatever the entry is written as. */
+function keySlots(call: CallExpression): readonly Node[] {
+  const known = KEY_SLOTS.get(call);
+  if (known !== undefined) return known;
+  const slots: Node[] = [];
+  const lists = call.arguments.slice(0, 1).flatMap((each) => valuesOf(each));
+  for (let list = lists.pop(); list !== undefined; list = lists.pop()) {
+    if (!isArrayLiteralExpression(list)) continue;
+    for (const element of list.elements) {
+      if (isSpreadElement(element)) lists.push(...valuesOf(element.expression));
+      else slots.push(...valuesOf(element).flatMap((entry) => keySlotsOf(entry)));
+    }
+  }
+  KEY_SLOTS.set(call, slots);
+  return slots;
+}
+
+/**
+ * Whether a function the list makes is held only as data the call's own arguments hold. A function an
+ * object holds that is converted to the name of an entry (the first of a list, the field `0` of an
+ * object, wherever the entry stands) is no such data: the call runs its `Symbol.toPrimitive`, its
+ * `toString` or its `valueOf`, or those of the prototype it writes.
  */
 function onlyStored(made: Node, call: CallExpression): boolean {
   let at = made;
-  let member = false;
   for (;;) {
     const { parent } = at;
-    if (parent === call) return isArgument(call, at);
-    if (isObjectLiteralExpression(parent)) member = true;
-    if (member && isArrayLiteralExpression(parent) && isFirst(parent, at)) return false;
+    if (parent === call) return isArgument(call, at) && !convertedToName(made, call);
     const holds =
       passesValue(parent, at) ||
       isArrayLiteralExpression(parent) ||
       isObjectLiteralExpression(parent) ||
-      (isPropertyAssignment(parent) && parent.initializer === at);
+      (isPropertyAssignment(parent) && parent.initializer === at) ||
+      (isSpreadElement(parent) && isArrayLiteralExpression(at));
     if (!holds) return false;
     at = parent;
   }
+}
+
+/** Whether a function lies within an object that is the name of an entry, and is not that name itself. */
+function convertedToName(made: Node, call: CallExpression): boolean {
+  return keySlots(call).some((slot) => slot !== made && within(made, slot));
 }
 
 /**

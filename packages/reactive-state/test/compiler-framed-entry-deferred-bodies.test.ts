@@ -206,6 +206,167 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'field-of-a-value-in-an-entry-before-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['unused', { run: () => reviewed(entry) }], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'field-of-a-value-in-an-entry-after-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['unused', { run: () => reviewed(entry) }]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'field-of-a-value-in-an-entry-between-others',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['a', 1], ['unused', { run: () => reviewed(entry) }], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'field-of-a-value-in-the-first-of-two-entries',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['unused', { run: () => reviewed(entry) }], ['b', 2], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'arrow-in-a-value-in-the-first-entry-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['unused', () => reviewed(entry)], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'hook-of-the-key-of-the-second-entry',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, [{ toString: () => (reviewed(entry), 'k') }, 0]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-the-third-entry',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['a', 1], entry, [{ toString: () => (reviewed(entry), 'k') }, 0]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-object-entry-after-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { 0: { toString: () => (reviewed(entry), 'k') }, 1: 2 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-object-entry-before-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ 0: { toString: () => (reviewed(entry), 'k') }, 1: 2 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-object-entry-by-a-text-name',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { '0': { toString: () => (reviewed(entry), 'k') }, 1: 2 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-object-entry-by-an-unread-name',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { [String(flag)]: { toString: () => (reviewed(entry), 'k') }, 1: 2 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-object-entry-by-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { ...{ 0: { toString: () => (reviewed(entry), 'k') } }, 1: 2 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-object-entry-by-an-accessor',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { get 0() { return { toString: () => (reviewed(entry), 'k') }; }, 1: 2 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-entry-in-a-spread-list',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ...[[{ toString: () => (reviewed(entry), 'k') }, 0]]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-entry-in-a-condition',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, flag ? [{ toString: () => (reviewed(entry), 'k') }, 0] : ['a', 1]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-entry-after-a-comma',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, (0, [{ toString: () => (reviewed(entry), 'k') }, 0])]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-entry-through-a-logical-operand',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, flag && [{ toString: () => (reviewed(entry), 'k') }, 0]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-of-an-entry-with-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, [...['a', { toString: () => (reviewed(entry), 'k') }]]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-key-in-a-list-held-by-a-condition',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(flag ? [entry, [{ toString: () => (reviewed(entry), 'k') }, 0]] : [entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-the-value-of-an-object-entry-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { 0: 'a', 1: { toString: () => (reviewed(entry), 'k') } }]); }",
+    key: 'message',
+    values: ["'safe':", "{ 0: 'a', 1: { toString: () => (reviewed(entry), 'k') } }:1"],
+  },
+  {
+    id: 'hook-of-the-value-of-an-entry-in-a-spread-list-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ...[['a', { toString: () => (reviewed(entry), 'k') }]]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'hook-of-the-value-of-an-entry-in-a-condition-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, flag ? ['a', { toString: () => (reviewed(entry), 'k') }] : ['b', 1]]); }",
+    key: 'message',
+    values: ["'safe':", "flag ? ['a', { toString: () => (reviewed(entry), 'k') }] : ['b', 1]:1"],
+  },
+  {
+    id: 'hook-of-a-field-the-object-entry-names-1-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { 0: 'a', 1: { run: () => reviewed(entry) } }]); }",
+    key: 'message',
+    values: ["'safe':", "{ 0: 'a', 1: { run: () => reviewed(entry) } }:1"],
+  },
 ] as const;
 
 describe('entry tuples a function of the argument list is given', () => {
