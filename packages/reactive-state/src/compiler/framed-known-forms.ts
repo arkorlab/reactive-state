@@ -55,9 +55,12 @@ interface Consulted {
   readonly role: Role;
 }
 
-/** What a consultation has met: the constants it followed, and who is told of those that hold objects. */
+/**
+ * What a consultation has met: the constants it followed, in each role apart (a constant read as a
+ * descriptor and as a map of descriptors is judged in both), and who is told of those that hold objects.
+ */
 interface Context {
-  readonly seen: Set<Node>;
+  readonly seen: Readonly<Record<Role, Set<Node>>>;
   readonly held?: ((declaration: VariableDeclaration) => void) | undefined;
 }
 
@@ -74,7 +77,13 @@ export function consultedKnown(
   held?: (declaration: VariableDeclaration) => void,
 ): boolean {
   const pending: Consulted[] = [{ node: expression, role }];
-  const context: Context = { seen: new Set(), held };
+  const seen = {
+    descriptor: new Set<Node>(),
+    map: new Set<Node>(),
+    pattern: new Set<Node>(),
+    source: new Set<Node>(),
+  };
+  const context: Context = { seen, held };
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const next = consult(unwrapped(at.node), at.role, context);
     if (next === undefined) return false;
@@ -183,8 +192,8 @@ function named(name: Identifier, role: Role, context: Context): readonly Consult
   if (selected === undefined) return [];
   if (selected.keys.length > 0) return undefined;
   const declaration = selected.binding;
-  if (!isVariableDeclaration(declaration) || context.seen.has(declaration)) return [];
-  context.seen.add(declaration);
+  if (!isVariableDeclaration(declaration) || context.seen[role].has(declaration)) return [];
+  context.seen[role].add(declaration);
   const { initializer } = declaration;
   if (initializer === undefined) return givenLater(declaration) ? undefined : [];
   if (atom(unwrapped(initializer))) return [];
