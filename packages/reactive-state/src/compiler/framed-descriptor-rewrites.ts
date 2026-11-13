@@ -16,7 +16,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { deletedNames, getterWrites } from './framed-getter-writes.ts';
+import { getterWrites, inheritedDeletions } from './framed-getter-writes.ts';
 import { functionReturns } from './framed-mutator-getters.ts';
 import { selectedValues } from './framed-selected-sources.ts';
 import { namesThis } from './framed-this-functions.ts';
@@ -217,7 +217,7 @@ function slotsOf(descriptor: ObjectLiteralExpression, name: string): ReadonlySet
     else if (isSpreadAssignment(property)) slots.add('data');
     else for (const each of made) slots.add(each);
   }
-  const deleted = deletedNames(descriptor);
+  const deleted = inheritedDeletions(descriptor);
   if (deleted.includes(undefined) || deleted.includes(name)) slots.add('data');
   return slots;
 }
