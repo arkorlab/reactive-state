@@ -36,6 +36,7 @@ import {
   type MutatorInvocation,
   mutatorInvocation,
   PATHS,
+  returnedTargets,
   soleTarget,
 } from './framed-mutator-calls.ts';
 import { possibleKey } from './framed-mutator-keys.ts';
@@ -254,7 +255,7 @@ export function elementSources(
   const member = unwrapped(node.expression);
   if (
     (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) ||
-    literalArrayBinding(member.expression) !== root ||
+    !mayBeArrayOf(member.expression, root) ||
     sourceArrayFunction(member)
   )
     return [];
@@ -294,16 +295,25 @@ function insertedArguments(
 
 const MOVING = new Set(['copyWithin', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
 
+/**
+ * Whether the array a method is called on may be this one: the name of it, or any of the arrays the
+ * expression stands for, a condition, a comma, a logical operand, an assignment, a call that
+ * returns what it was called on.
+ */
+export function mayBeArrayOf(receiver: Expression, root: FrameBinding): boolean {
+  return returnedTargets(receiver).some((each) => literalArrayBinding(each) === root);
+}
+
 /** A possible position-moving mutator leaves every assigned numeric entry reachable. */
 export function positionsMove(node: Node, root: FrameBinding): boolean {
   if (!isCallExpression(node)) return false;
   const borrowed = borrowedArrayMutation(node);
   if (borrowed !== undefined)
-    return literalArrayBinding(borrowed.receiver) === root && MOVING.has(borrowed.method);
+    return mayBeArrayOf(borrowed.receiver, root) && MOVING.has(borrowed.method);
   const member = unwrapped(node.expression);
   if (
     (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) ||
-    literalArrayBinding(member.expression) !== root ||
+    !mayBeArrayOf(member.expression, root) ||
     sourceArrayFunction(member)
   )
     return false;
@@ -344,7 +354,7 @@ function borrowedElements(
 ): readonly WrittenArrayElement[] | undefined {
   const borrowed = borrowedArrayMutation(node);
   if (borrowed === undefined) return undefined;
-  if (literalArrayBinding(borrowed.receiver) !== root) return [];
+  if (!mayBeArrayOf(borrowed.receiver, root)) return [];
   if (
     borrowed.method === 'fill' &&
     emptyArrayFill(borrowed.given, {

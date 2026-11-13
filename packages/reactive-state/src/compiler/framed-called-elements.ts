@@ -9,6 +9,7 @@ import { unwrapped } from './bounded.ts';
 import {
   elementSources,
   literalArrayBinding,
+  mayBeArrayOf,
   positionsMove,
   type WrittenArrayElement,
 } from './framed-array-elements.ts';
@@ -49,7 +50,7 @@ function trackedCall(node: CallExpression, root: FrameBinding): boolean {
   const member = unwrapped(node.expression);
   return (
     (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
-    literalArrayBinding(member.expression) === root &&
+    mayBeArrayOf(member.expression, root) &&
     !sourceArrayFunction(member) &&
     ['fill', 'push', 'splice', 'unshift'].includes(frameMemberName(member) ?? '')
   );
