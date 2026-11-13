@@ -9,7 +9,6 @@ import {
   isCallExpression,
   isConditionalExpression,
   isDeleteExpression,
-  isDoStatement,
   isElementAccessExpression,
   isExpression,
   isExpressionStatement,
@@ -17,7 +16,6 @@ import {
   isForOfStatement,
   isFunctionExpression,
   isIdentifier,
-  isIfStatement,
   isMethodDeclaration,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
@@ -36,11 +34,8 @@ import {
   isTaggedTemplateExpression,
   isTemplateSpan,
   isTypeNode,
-  isTypeOfExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
-  isVoidExpression,
-  isWhileStatement,
   type Node,
   type PropertyAccessExpression,
   type ObjectLiteralExpression,
@@ -66,7 +61,13 @@ import {
 import { arrayIdentity } from './framed-array-identity.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { iterates } from './framed-iterated-uses.ts';
-import { mutatorInvocation, nativePath } from './framed-mutator-calls.ts';
+import {
+  coercesArgument,
+  mutatorInvocation,
+  nativePath,
+  type MutatorInvocation,
+} from './framed-mutator-calls.ts';
+import { tested } from './framed-tested-uses.ts';
 import { readsBinding } from './scope.ts';
 
 /**
@@ -112,12 +113,6 @@ const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
 
 /** The methods of an array that answer the array itself. */
 const SELF_RETURNING: ReadonlySet<string> = new Set(['copyWithin', 'fill', 'reverse', 'sort']);
-
-/** The comparisons that read no more than the identity of their operands. */
-const IDENTITY: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.EqualsEqualsEqualsToken,
-  SyntaxKind.ExclamationEqualsEqualsToken,
-]);
 
 /** The node that stands for the same value as `node`, through parentheses and assertions. */
 export function outermost(node: Node): Node {
@@ -262,19 +257,6 @@ function readsArray(at: Node): boolean {
   if (!isFirstArgument(parent, at)) return false;
   const path = nativePath(parent.expression);
   return path !== undefined && (READERS.has(path) || CONVERTERS.has(path));
-}
-
-/** Whether a mention is only tested: a condition, a negation, `typeof`, an identity or an `in`. */
-function tested(at: Node): boolean {
-  const { parent } = at;
-  if (isIfStatement(parent) || isWhileStatement(parent) || isDoStatement(parent))
-    return parent.expression === at;
-  if (isConditionalExpression(parent)) return parent.condition === at;
-  if (isPrefixUnaryExpression(parent)) return parent.operator === SyntaxKind.ExclamationToken;
-  if (isTypeOfExpression(parent) || isVoidExpression(parent)) return true;
-  if (!isBinaryExpression(parent)) return false;
-  const { kind } = parent.operatorToken;
-  return IDENTITY.has(kind) || (kind === SyntaxKind.InKeyword && parent.right === at);
 }
 
 /** The name a member reads, where it is written out. */
@@ -539,9 +521,14 @@ function argumentUse(call: Node, flowing: Flowing, subject: Subject): Use {
   const position = invoked.args.findIndex((each) => outermost(each) === flowing.top);
   if (position === -1) return UNKNOWN;
   if (position === 0) return subject === 'array' && !flowing.inLiteral ? answerUse(call) : UNKNOWN;
+  return subject === 'array' || followedArgument(invoked, position) ? KNOWN : UNKNOWN;
+}
+
+/** Whether a mutator of a written array reads the argument at the place for its fields, and coerces it to nothing. */
+function followedArgument(invoked: MutatorInvocation, position: number): boolean {
   const target = invoked.args[0];
-  if (target !== undefined && arrayIdentity(target) !== undefined) return KNOWN;
-  return subject === 'array' ? KNOWN : UNKNOWN;
+  const toArray = target !== undefined && arrayIdentity(target) !== undefined;
+  return toArray && !coercesArgument(invoked.path, position);
 }
 
 /**
