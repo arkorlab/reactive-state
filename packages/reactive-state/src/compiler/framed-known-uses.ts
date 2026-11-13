@@ -44,7 +44,6 @@ import {
   ARRAY_METHODS,
   borrowedMethod,
   ELEMENT_RETURNING,
-  CONVERTERS,
   DESCRIPTOR_FIELDS,
   callsBack,
   handsArray,
@@ -52,6 +51,7 @@ import {
   LIST_FIELDS,
   NO_FIELDS,
   READERS,
+  readsWithoutCallback,
   type Borrowed,
 } from './framed-array-callbacks.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
@@ -282,7 +282,7 @@ function readsArray(at: Node): boolean {
   if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) return true;
   if (!isFirstArgument(parent, at)) return false;
   const path = nativePath(parent.expression);
-  return path !== undefined && (READERS.has(path) || CONVERTERS.has(path));
+  return path !== undefined && readsWithoutCallback(parent, path);
 }
 
 /**
