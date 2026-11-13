@@ -94,11 +94,14 @@ export interface Use {
   readonly contained?: boolean;
   readonly echo?: boolean;
   readonly carries?: boolean;
+  /** An object spread copies the mention: the copy holds what the array holds, itself among them. */
+  readonly spreads?: boolean;
 }
 
 const KNOWN: Use = { known: true };
 const UNKNOWN: Use = { known: false };
 const CARRIES: Use = { known: true, carries: true };
+const SPREADS: Use = { known: true, spreads: true };
 
 /** Whether the subject is an array, however it is named. */
 export function isArray(subject: Subject): boolean {
@@ -165,6 +168,19 @@ const ARRAY_METHODS: ReadonlySet<string> = new Set(
   }),
 );
 
+/** The methods of an array that change it in place: a name that is no name the readers follow may not call them. */
+const MUTATING: ReadonlySet<string> = new Set([
+  'copyWithin',
+  'fill',
+  'pop',
+  'push',
+  'reverse',
+  'shift',
+  'sort',
+  'splice',
+  'unshift',
+]);
+
 /** The methods of an array that answer the array itself. */
 const SELF_RETURNING: ReadonlySet<string> = new Set(['copyWithin', 'fill', 'reverse', 'sort']);
 
@@ -206,6 +222,7 @@ export function classify(name: Identifier, subject: Subject): Use {
   }
   const { parent } = at;
   if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at, subject);
+  if (isSpreadAssignment(parent)) return SPREADS;
   if (discarded(at)) return KNOWN;
   if (isArray(subject) && readsArray(at)) return KNOWN;
   const given = assigned(at, subject);
@@ -242,7 +259,7 @@ function assigned(at: Node, subject: Subject): Use | undefined {
   return overwritten(at) ? KNOWN : undefined;
 }
 
-/** Whether a mention is only dropped or compared: copied by a spread, a statement, a loop head, a test. */
+/** Whether a mention is only dropped or compared: a statement, a comma, a loop head, a test. */
 function discarded(at: Node): boolean {
   const { parent } = at;
   if (isForStatement(parent)) {
@@ -250,12 +267,7 @@ function discarded(at: Node): boolean {
     return heads.includes(at);
   }
   const comma = isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.CommaToken;
-  return (
-    (comma && parent.left === at) ||
-    isSpreadAssignment(parent) ||
-    isExpressionStatement(parent) ||
-    tested(at)
-  );
+  return (comma && parent.left === at) || isExpressionStatement(parent) || tested(at);
 }
 
 /** Whether a name is the left of a plain assignment: it is given a value, and nothing reads it. */
@@ -382,6 +394,7 @@ function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): 
   const name = memberName(access);
   if (name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
   if (isCallExpression(call) && handsArray(call, name)) return UNKNOWN;
+  if (subject === 'echo' && MUTATING.has(name)) return UNKNOWN;
   return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
 }
 
@@ -394,6 +407,7 @@ function answerUse(answer: Node): Use {
   let at = outermost(answer);
   let handed = false;
   for (;;) {
+    if (isSpreadAssignment(at.parent)) return SPREADS;
     if (discarded(at)) return KNOWN;
     if (!passed(at)) break;
     at = outermost(at.parent);
@@ -470,6 +484,7 @@ function resultUse(
   { depth, subject }: { readonly depth: number; readonly subject: Subject },
 ): Use {
   const { parent } = result;
+  if (isSpreadAssignment(parent)) return SPREADS;
   if (discarded(result) || isTemplateSpan(parent)) return KNOWN;
   if (isVariableDeclaration(parent)) {
     const initializer: Node | undefined = parent.initializer;

@@ -43,6 +43,7 @@ function scan(
     const kind = base === 'held' && holdsList(at) ? 'list' : base;
     const uses = usesOf(at, kind, relevant, at === declaration);
     if (uses === undefined) return 'unknown';
+    if (spreadsCarrier(subject, uses)) return 'unknown';
     carries ||= uses.some((use) => use.carries === true);
     for (const { alias, ...use } of uses) {
       if (alias === undefined || kinds.has(alias)) continue;
@@ -51,6 +52,11 @@ function scan(
     }
   }
   return carries && subject === 'array' ? 'carries' : 'known';
+}
+
+/** Whether an object spread copies an array that holds itself, so that the copy holds the array. */
+function spreadsCarrier(subject: Subject, uses: readonly Use[]): boolean {
+  return subject === 'carrier' && uses.some((use) => use.spreads === true);
 }
 
 /**

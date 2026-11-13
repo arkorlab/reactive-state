@@ -1496,6 +1496,56 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { valueOf: (function (this: any) { this.join = Array.prototype.join; return this; }) }); void ((values as any) + ''); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'box-length-call-refused',
+    source: `function frames(error: Error, flag: boolean) { const d: any = { value: 'safe', mutate() { this.value = error; } }; const box = { length: d }; box.length.mutate(); const values: any[] = []; Object.defineProperty(values, '0', d); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-the-answer-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; const copy: any = { ...Object.assign(values, { self: Object.assign(values, {}) }) }; copy.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { self: Object.assign(values, {}) }); const copy: any = { ...values }; copy.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-through-a-name-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { self: Object.assign(values, {}) }); const r: any = Object.assign(values, {}); const copy: any = { ...r }; copy.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; const copy: any = { ...values }; void copy; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'list-spread-of-an-array-that-holds-itself-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; Object.assign(values, { self: Object.assign(values, {}) }); const copy: any[] = [...values]; void copy; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'push-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); r.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'push-on-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; (Object.assign(a, {}) as any).push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'read-through-a-name-of-an-answer-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); void r.indexOf('safe'); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'fill-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); r.fill(error); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
