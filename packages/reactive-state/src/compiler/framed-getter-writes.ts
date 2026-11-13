@@ -137,7 +137,10 @@ export function accessorWrites(
   return accessorUses(object, getter, receiving)?.writes;
 }
 
-/** What running a getter does to the object it runs on, the setters its assignments run included. */
+/**
+ * What running a getter does to the object it runs on, the setters its assignments run included. A
+ * value assigned to a field that has a setter is the setter's argument, and is stored nowhere.
+ */
 function accessorUses(
   object: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
@@ -165,12 +168,18 @@ function accessorUses(
       }
     }
   }
+  const consumed = new Set(setters.map((each) => accessorName(each.name)));
   return {
-    writes: found.flatMap((each) => each.writes),
+    writes: found.flatMap((each) => each.writes.filter((write) => !consumed.has(write.name))),
     named: found.flatMap((each) => each.named),
     deleted: found.flatMap((each) => each.deleted),
   };
 }
+
+const NO_NAMES: ReadonlySet<string> = new Set();
+
+/** What `surelyCopied` found for each written object: judged once, as nested literals judge their children. */
+const COPIED = new WeakMap<ObjectLiteralExpression, ReadonlySet<string>>();
 
 /**
  * The names a spread of an expression surely copies as own fields of its own: those of a written
@@ -180,8 +189,17 @@ function accessorUses(
  */
 export function surelyCopied(copied: Expression): ReadonlySet<string> {
   const value = unwrapped(copied);
+  if (!isObjectLiteralExpression(value)) return NO_NAMES;
+  const known = COPIED.get(value);
+  if (known !== undefined) return known;
+  const found = copiedBy(value);
+  COPIED.set(value, found);
+  return found;
+}
+
+/** The names a spread of a written object surely copies. */
+function copiedBy(value: ObjectLiteralExpression): ReadonlySet<string> {
   const names = new Set<string>();
-  if (!isObjectLiteralExpression(value)) return names;
   const deleted: (string | undefined)[] = [];
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
@@ -199,6 +217,14 @@ export function surelyCopied(copied: Expression): ReadonlySet<string> {
   return deleted.includes(undefined)
     ? new Set()
     : new Set([...names].filter((each) => !deleted.includes(each)));
+}
+
+/** Whether a field sets the prototype to `null`: an assignment to a new property meets no setter. */
+function nullPrototype(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    unwrapped(property.initializer).kind === SyntaxKind.NullKeyword
+  );
 }
 
 /** Whether a written field sets the prototype of the object: `__proto__: value`. */
@@ -280,7 +306,7 @@ function isLiveSetter(
 function replaces(property: ObjectLiteralElementLike, name: string): boolean {
   if (isSpreadAssignment(property)) return surelyCopied(property.expression).has(name);
   if (isGetAccessorDeclaration(property) || isSetAccessorDeclaration(property)) return false;
-  return accessorName(property.name) === name;
+  return !setsProto(property) && accessorName(property.name) === name;
 }
 
 /** Whether a write the object does not hold may reach a setter of the prototype the object sets. */
@@ -288,7 +314,7 @@ function runsPrototypeSetter(
   object: ObjectLiteralExpression,
   named: readonly (string | undefined)[],
 ): boolean {
-  const sets = object.properties.some((each) => setsProto(each));
+  const sets = object.properties.some((each) => setsProto(each) && !nullPrototype(each));
   if (!sets) return false;
   const own = new Set(
     object.properties.flatMap((each) => {
