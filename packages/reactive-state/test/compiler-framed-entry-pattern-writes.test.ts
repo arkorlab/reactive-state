@@ -1610,6 +1610,54 @@ const CASES = [
     key: 'message',
     values: ["'safe':", '0:'],
   },
+  {
+    id: 'spread-setter-stores-its-argument-in-a-field-is-unfollowed',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = error; return 0; }, set activate(value: unknown) { this.field = value; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-setter-stores-its-argument-through-arguments-is-unfollowed',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = error; return 0; }, set activate(value: unknown) { this.field = arguments[0]; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-setter-ignores-its-argument-stores-a-constant-pin',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = error; return 0; }, set activate(value: unknown) { this.field = 'constant'; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'constant':", "'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'spread-setter-with-a-property-named-like-its-parameter-pin',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = error; return 0; }, set activate(value: unknown) { this.value = 'constant'; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'constant':", "'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'spread-setter-reads-its-argument-only-in-a-condition-stays-refused',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = error; return 0; }, set activate(value: unknown) { if (value) this.field = 'constant'; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-prototype-setter-hidden-by-a-spread-field',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: other, get trigger() { this.field = error; return 0; }, ...{ field: 'kept' } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-prototype-setter-spread-whose-getter-deletes-stays-refused',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: other, get trigger() { this.field = error; return 0; }, ...{ get zap() { delete this.field; return 0; }, field: 'kept' } } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-prototype-setter-computed-spread-stays-refused',
+    source: `function frames(error: Error, name: string, first: string, other: Record<string, unknown>) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: other, get trigger() { this.field = error; return 0; }, ...other } })); }`,
+    key: 'message',
+    values: undefined,
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
