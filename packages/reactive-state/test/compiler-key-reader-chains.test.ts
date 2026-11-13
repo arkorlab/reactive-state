@@ -212,6 +212,135 @@ const CASES = [
     source: "return Reflect.apply(Reflect.get, null, <any>[run, 'constructor'])(text)();",
     what: 'an array in a cast in angle brackets, given to `Reflect.apply`',
   },
+  // `Reflect.apply`, bound or borrowed: the function it acts on is an argument, not the `this`.
+  {
+    reads: ["Reflect.apply.bind(null, Reflect.get)(null, [run, 'constructor'])"],
+    source: "return Reflect.apply.bind(null, Reflect.get)(null, [run, 'constructor'])(text)();",
+    what: '`Reflect.apply` bound to the reader, called',
+  },
+  {
+    reads: ["Reflect.apply.bind(null, Reflect.get, null, [run, 'constructor'])"],
+    source: "return Reflect.apply.bind(null, Reflect.get, null, [run, 'constructor'])()(text)();",
+    what: 'an array `Reflect.apply` is bound to, with the reader',
+  },
+  {
+    reads: ["Reflect.apply.call(null, Reflect.get, null, [run, 'constructor'])"],
+    source: "return Reflect.apply.call(null, Reflect.get, null, [run, 'constructor'])(text)();",
+    what: '`Reflect.apply` borrowed through `call`',
+  },
+  {
+    reads: ["Reflect.apply.apply(null, [Reflect.get, null, [run, 'constructor']])"],
+    source: "return Reflect.apply.apply(null, [Reflect.get, null, [run, 'constructor']])(text)();",
+    what: '`Reflect.apply` borrowed through `apply`',
+  },
+  {
+    reads: ["run.call.call(Reflect.apply, null, Reflect.get, null, [run, 'constructor'])"],
+    source:
+      "return run.call.call(Reflect.apply, null, Reflect.get, null, [run, 'constructor'])(text)();",
+    what: '`Reflect.apply` given to `call` of a function',
+  },
+  {
+    reads: ["Reflect.apply.bind(null).bind(null, Reflect.get)(null, [run, 'constructor'])"],
+    source:
+      "return Reflect.apply.bind(null).bind(null, Reflect.get)(null, [run, 'constructor'])(text)();",
+    what: '`Reflect.apply` bound twice',
+  },
+  // A method of a function bound to a method: what it acts on is given when it is called.
+  {
+    reads: ["run.call.bind(run.call)(Reflect.get, null, run, 'constructor')"],
+    source: "return run.call.bind(run.call)(Reflect.get, null, run, 'constructor')(text)();",
+    what: '`call` bound to `call`, given the reader',
+  },
+  {
+    reads: ["run.call.bind(run.call, Reflect.get, null, run, 'constructor')"],
+    source: "return run.call.bind(run.call, Reflect.get, null, run, 'constructor')()(text)();",
+    what: '`call` bound to `call`, with the reader and a key',
+  },
+  {
+    reads: ["run.apply.bind(run.call)(Reflect.get, [null, run, 'constructor'])"],
+    source: "return run.apply.bind(run.call)(Reflect.get, [null, run, 'constructor'])(text)();",
+    what: '`apply` bound to `call`, given the reader',
+  },
+  {
+    reads: ["run.call.bind(run.apply)(Reflect.get, null, [run, 'constructor'])"],
+    source: "return run.call.bind(run.apply)(Reflect.get, null, [run, 'constructor'])(text)();",
+    what: '`call` bound to `apply`, given the reader',
+  },
+  {
+    reads: ["run.bind.bind(run.call)(Reflect.get, null, run)('constructor')"],
+    source: "return run.bind.bind(run.call)(Reflect.get, null, run)('constructor')(text)();",
+    what: '`bind` bound to `call`, given the reader, then a key',
+  },
+  {
+    reads: ["run.call.call(run.call, Reflect.get, null, run, 'constructor')"],
+    source: "return run.call.call(run.call, Reflect.get, null, run, 'constructor')(text)();",
+    what: '`call` called on `call`',
+  },
+  // An apply array consumed: what it leaves of what a function takes is not given later.
+  {
+    reads: [],
+    source:
+      "return run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [])(null, 'constructor');",
+    what: 'an empty array `apply` is bound to, the key given after it',
+  },
+  {
+    reads: [],
+    source:
+      "return run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [null])(null, 'constructor');",
+    what: 'an array of the `this` alone `apply` is bound to, the key given after it',
+  },
+  {
+    reads: [
+      "run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [null, 'constructor'])",
+    ],
+    source:
+      "return run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [null, 'constructor'])()(text)();",
+    what: 'an array `apply` is bound to that gives the key',
+  },
+  {
+    reads: [
+      "run.apply.call(run.call.bind(Reflect.get.bind(null, obj)), null, [null, 'constructor'])",
+    ],
+    source:
+      "return run.apply.call(run.call.bind(Reflect.get.bind(null, obj)), null, [null, 'constructor'])(text)();",
+    what: 'an array `apply` is called with that gives the key',
+  },
+  // An object of the code's own, whose `call`, `apply` and `bind` are its own.
+  {
+    reads: [],
+    source: "return helper.call.call(Reflect.get, null, obj, 'constructor');",
+    what: '`call` of an object that has its own, called',
+  },
+  {
+    reads: [],
+    source: "return helper.apply.call(Reflect.get, null, [obj, 'constructor']);",
+    what: '`apply` of an object that has its own, called',
+  },
+  {
+    reads: [],
+    source: "return helper.bind.call(Reflect.get, null, obj, 'constructor');",
+    what: '`bind` of an object that has its own, called',
+  },
+  {
+    reads: [],
+    source: "return helper.call(Reflect.get, null, obj, 'constructor');",
+    what: 'an object that has its own `call`, called',
+  },
+  {
+    reads: [],
+    source: "return helper.call.bind(Reflect.get)(null, obj, 'constructor');",
+    what: '`call` of an object that has its own, bound',
+  },
+  {
+    reads: [],
+    source: "return ({ call: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: '`call` of an object written in place that has its own',
+  },
+  {
+    reads: ["fn.call.call(Reflect.get, null, run, 'constructor')"],
+    source: "return fn.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: '`call` of a function the code is given, called on the reader',
+  },
   // Optional chains and wrappers.
   {
     reads: ["Reflect.get?.bind(null, run)?.('constructor')"],
@@ -406,6 +535,8 @@ describe('a key reader of the language called through call, apply, bind and Refl
   function codeReadsIn(body: string): readonly string[] {
     const source = [
       'const reader = { get: (target: unknown, key: string) => key };',
+      'const helper = { apply: () => 42, bind: () => 42, call: () => 42 };',
+      'const obj = {};',
       'export function run(text: string, rest: unknown[], args: unknown[], fn: () => void): unknown {',
       `  ${body}`,
       '}',

@@ -39,6 +39,7 @@ import {
   isTypeNode,
   isTypeOfExpression,
   isTypeParameterDeclaration,
+  isVariableDeclaration,
   isVariableStatement,
   type ModuleDeclaration,
   type Node,
@@ -49,6 +50,7 @@ import {
 
 import { globalOf, unwrapped } from './bounded.ts';
 import { readsConstructorKey, type Reading } from './key-reader-calls.ts';
+import { localClassValueBinding } from './local-type-aliases.ts';
 import { holdsValues, mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 
@@ -410,7 +412,16 @@ function readsConstructor(node: Node): boolean {
 }
 
 /** What `readsConstructorKey` reads a global and a written text by: this module's own. */
-const READING: Reading = { pathOf: (node) => globalPathOf(node)?.join('.'), textOf };
+const READING: Reading = {
+  initializerOf: (name) => {
+    const binding = isIdentifier(name) ? localClassValueBinding(name) : undefined;
+    return binding !== undefined && binding !== null && isVariableDeclaration(binding)
+      ? binding.initializer
+      : undefined;
+  },
+  pathOf: (node) => globalPathOf(node)?.join('.'),
+  textOf,
+};
 
 /**
  * Whether `node` is a read of the language's that reads a member by the key it is given — of what
