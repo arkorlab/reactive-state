@@ -117,7 +117,7 @@ function uncast(node: Expression): Expression {
 interface ReactNames {
   /** Each name the file imports a value of `react`'s by, with `react`'s: `useEffect` of `onMount`. */
   readonly hooks: ReadonlyMap<string, string>;
-  /** The names `react` is imported by whole: `React` of `import * as React`, of `import React`. */
+  /** The names `react` is imported by whole: `React` of `import * as React`, of `import React`, of `{ default as React }`. */
   readonly whole: ReadonlySet<string>;
   /**
    * The reads of a name no function, block, `catch` or namespace around them declares
@@ -152,8 +152,15 @@ function readReact(statement: Statement, hooks: Map<string, string>, whole: Set<
     return;
   }
   for (const element of named.elements) {
-    if (!element.isTypeOnly) {
-      hooks.set(element.name.text, (element.propertyName ?? element.name).text);
+    if (element.isTypeOnly) {
+      continue;
+    }
+    const exported = (element.propertyName ?? element.name).text;
+    // The default of `react` is `react` read whole, as `import React from 'react'` names it.
+    if (exported === 'default') {
+      whole.add(element.name.text);
+    } else {
+      hooks.set(element.name.text, exported);
     }
   }
 }
