@@ -110,22 +110,22 @@ const CASES = [
     what: 'a key the call is given after the one `bind` was',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, ...rest, 'constructor')"],
     source: "return Reflect.get.bind(null, ...rest, 'constructor')();",
     what: 'a key past a spread of what `bind` is given',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, ...rest)(run, 'constructor')"],
     source: "return Reflect.get.bind(null, ...rest)(run, 'constructor');",
     what: 'a call past a spread of what `bind` is given',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(...args)(run, 'constructor')"],
     source: "return Reflect.get.bind(...args)(run, 'constructor');",
     what: 'a `this` that a spread may be',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run)(...rest, 'constructor')"],
     source: "return Reflect.get.bind(null, run)(...rest, 'constructor');",
     what: 'a key past a spread of what the call is given',
   },
@@ -135,7 +135,7 @@ const CASES = [
     what: 'another key, given to a bound reader past a comma',
   },
   {
-    reads: [],
+    reads: ["(<any>Reflect.get.bind(null, ...rest))('constructor')"],
     source: "return (<any>Reflect.get.bind(null, ...rest))('constructor');",
     what: 'a bound reader past a spread, in a cast',
   },

@@ -96,12 +96,12 @@ const CASES = [
     what: 'a key the borrowed call is given after the one `bind` was',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, ...rest).call(null, 'constructor')"],
     source: "return Reflect.get.bind(null, ...rest).call(null, 'constructor');",
     what: 'a borrowed call past a spread of what `bind` is given',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run).call(...args, 'constructor')"],
     source: "return Reflect.get.bind(null, run).call(...args, 'constructor');",
     what: 'a key past a spread of what the borrowed call is given',
   },
@@ -111,7 +111,7 @@ const CASES = [
     what: 'an array a bound reader is applied to by a name',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run).apply(...args, ['constructor'])"],
     source: "return Reflect.get.bind(null, run).apply(...args, ['constructor']);",
     what: 'an array of `apply` that a spread may move',
   },
