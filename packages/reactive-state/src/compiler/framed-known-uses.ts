@@ -1,5 +1,6 @@
 import {
   type CallExpression,
+  type ElementAccessExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -41,6 +42,7 @@ import {
   isVoidExpression,
   isWhileStatement,
   type Node,
+  type PropertyAccessExpression,
   type ObjectLiteralExpression,
   SyntaxKind,
   type VariableDeclaration,
@@ -50,9 +52,14 @@ import { unwrapped } from './bounded.ts';
 import {
   ARRAY_METHODS,
   borrowedMethod,
+  ELEMENT_RETURNING,
   CONVERTERS,
+  DESCRIPTOR_FIELDS,
   callsBack,
   handsArray,
+  isFirstArgument,
+  LIST_FIELDS,
+  NO_FIELDS,
   READERS,
   type Borrowed,
 } from './framed-array-callbacks.ts';
@@ -94,23 +101,6 @@ export interface Use {
 
 const KNOWN: Use = { known: true };
 const UNKNOWN: Use = { known: false };
-
-/** The fields whose values are functions and data, no object the compile follows: a descriptor's, a list's length. */
-const DESCRIPTOR_FIELDS: ReadonlySet<string> = new Set([
-  'configurable',
-  'enumerable',
-  'get',
-  'length',
-  'set',
-  'value',
-  'writable',
-]);
-
-/** The fields of a list that hold data: its length. */
-const LIST_FIELDS: ReadonlySet<string> = new Set(['length']);
-
-/** A literal that holds a followed object holds it in every field. */
-const NO_FIELDS: ReadonlySet<string> = new Set();
 
 /** The operators that hand over one of their operands. */
 const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
@@ -331,7 +321,31 @@ function methodCall(access: Node, call: Node, subject: Subject): Use {
   const name = memberName(access);
   if (subject !== 'array' || name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
   if (isCallExpression(call) && handsArray(call, name)) return UNKNOWN;
+  if (ELEMENT_RETURNING.has(name) && elementWritten(call)) return UNKNOWN;
   return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+}
+
+/**
+ * Whether the element a method answers is written or called through a member (`array.at(0).x = value`):
+ * a member of a member of the array, which no reader of writes collects, as for an index.
+ */
+function elementWritten(call: Node): boolean {
+  const start = outermost(call);
+  let at = start;
+  for (let { parent } = at; isMemberOf(parent, at); { parent } = at) at = outermost(parent);
+  const { parent } = at;
+  const called = (isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at;
+  return at !== start && (written(at) || called);
+}
+
+/** Whether a node is a member read of the expression: `at.name` or `at[key]`. */
+function isMemberOf(
+  node: Node,
+  at: Node,
+): node is PropertyAccessExpression | ElementAccessExpression {
+  return (
+    (isPropertyAccessExpression(node) || isElementAccessExpression(node)) && node.expression === at
+  );
 }
 
 /**
@@ -390,13 +404,6 @@ function resultUse(
 function dataFields(subject: Subject): ReadonlySet<string> {
   if (subject === 'held') return DESCRIPTOR_FIELDS;
   return subject === 'list' ? LIST_FIELDS : NO_FIELDS;
-}
-
-/** Whether a node is the first argument of a call: the position a native reads, and a later one it coerces. */
-function isFirstArgument(call: Node, at: Node): call is CallExpression {
-  if (!isCallExpression(call)) return false;
-  const first: Node | undefined = call.arguments[0];
-  return first === at;
 }
 
 /** Whether a node is an argument of a native that reads and runs no application code. */

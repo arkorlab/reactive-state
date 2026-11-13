@@ -3321,6 +3321,41 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const write = (x: any[]) => x.push(error); if (false) write(a); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'element-of-at-written-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = [{ v: 'safe' }]; (a.at(0) as any).v = error; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-find-called-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = [{ add() { this.push(error); } }]; a.find((x: any) => x)?.add(); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-at-read-through-a-member-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = [{ v: 'safe' }]; const m = (a.at(0) as any).v; void m; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'pop-discarded-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; a.pop(); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-push-through-a-comma-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; (0, Array.prototype.push).call(a, error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-push-through-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const push = Array.prototype.push; push.call(a, error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-push-written-whole',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Array.prototype.push.call(a, error); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
