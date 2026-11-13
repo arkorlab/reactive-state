@@ -2017,6 +2017,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'reader-saved-by-the-constructor-of-a-class-that-builds-itself-in-a-static-block',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { constructor() { saved = read; } static { new this(); } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-that-builds-itself-in-a-static-field',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { constructor() { saved = read; } static made = new this(); } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Unused { constructor() { saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-built-by-its-name',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Used { constructor() { saved = read; } } new Used(); ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

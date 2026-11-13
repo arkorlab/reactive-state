@@ -5,6 +5,7 @@ import {
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
+  isConstructorDeclaration,
   isElementAccessExpression,
   isFunctionDeclaration,
   isForOfStatement,
@@ -310,6 +311,7 @@ function neverCreated(node: Node, referenced: ReadonlySet<string>): boolean {
 function unreachedFunction(fn: Node, node: Node, referenced: ReadonlySet<string>): boolean {
   if (!isFunctionCode(fn) || !isNested(fn) || runsAtOnce(fn, node) || reachedByProperty(fn))
     return false;
+  if (isConstructorDeclaration(fn) && buildsItself(fn.parent)) return false;
   const { names, computed } = namesOf(fn);
   if (computed) return false;
   if (names.every((name) => !referenced.has(name))) return true;
