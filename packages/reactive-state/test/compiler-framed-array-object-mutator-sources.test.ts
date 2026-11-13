@@ -3044,6 +3044,26 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { __proto__: { get enumerable() { delete this.value; this.get = () => error; return true; } } }, enumerable: true, value: 'safe' }); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'descriptor-proto-null-spread-keeps-the-getter',
+    source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ get __proto__() { this.value = error; return 0; }, value: 'safe', ...{ __proto__: null } } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-deleting-getter-keeps-the-assignment',
+    source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { delete this.value; this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-unknown-key-write-after-the-value-was-read-pin',
+    source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { value: 'safe', get writable() { this[key] = error; return true; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-unknown-key-write-before-the-value-is-read',
+    source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this[key] = error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

@@ -3,6 +3,7 @@ import {
   isExpression,
   isGetAccessorDeclaration,
   isObjectLiteralExpression,
+  isPropertyAssignment,
   isSetAccessorDeclaration,
   isSpreadAssignment,
   isTypeNode,
@@ -66,9 +67,11 @@ export function descriptorRewrites(
     }
     const name = writtenArrayKey(property.name);
     const live = name === undefined || runs(name, { copied, replacing, own: hidden.own });
+    const inherited = hidden.own !== undefined;
     if (live && isGetAccessorDeclaration(property))
-      found.push(...rewrites(descriptor, property, { hides, order, mode }));
-    if (name !== undefined && !isSetAccessorDeclaration(property)) replacing.add(name);
+      found.push(...rewrites(descriptor, property, { hides, order, mode, inherited }));
+    if (name !== undefined && !isSetAccessorDeclaration(property) && !setsProto(property))
+      replacing.add(name);
   }
   return found;
 }
@@ -99,6 +102,7 @@ function copyOrder(descriptor: ObjectLiteralExpression): readonly string[] | und
   const names: string[] = [];
   for (const property of descriptor.properties) {
     if (isSpreadAssignment(property)) return undefined;
+    if (setsProto(property)) continue;
     const name = writtenArrayKey(property.name);
     if (name === undefined) return undefined;
     if (!names.includes(name)) names.push(name);
@@ -137,7 +141,7 @@ function copiedNames(copied: Expression): readonly string[] {
   if (value.properties.some((each) => isGetAccessorDeclaration(each))) return [];
   return value.properties.flatMap((each) => {
     if (isSpreadAssignment(each)) return copiedNames(each.expression);
-    const name = writtenArrayKey(each.name);
+    const name = setsProto(each) ? undefined : writtenArrayKey(each.name);
     return name === undefined ? [] : [name];
   });
 }
@@ -175,6 +179,8 @@ interface Counting {
   readonly hides: ReadonlySet<string>;
   readonly order: readonly string[] | undefined;
   readonly mode: Mode;
+  /** The getter runs on a descriptor that inherits its object: that descriptor's fields are not the ones written out here. */
+  readonly inherited: boolean;
 }
 
 /** A descriptor is converted, its fields read in a fixed order, or copied by a spread, in the order of its keys. */
@@ -234,14 +240,34 @@ function stores(descriptor: ObjectLiteralExpression, field: string): boolean {
   return slot === 'data' || slot === 'absent';
 }
 
-/** Whether what a getter writes to a field of the descriptor is read, and the descriptor keeps it. */
+/**
+ * Whether what a getter writes to a field of the descriptor is read, and the descriptor keeps it: no
+ * accessor of the field swallows it. A getter that deletes fields may have removed the accessor first, and a
+ * getter of a prototype runs on a descriptor whose fields are not those written here: neither says.
+ */
 function counted(
   descriptor: ObjectLiteralExpression,
   counting: Counting,
-  { name, field }: { readonly name: string | undefined; readonly field: string },
+  {
+    name,
+    field,
+    deletes,
+  }: { readonly name: string | undefined; readonly field: string; readonly deletes: boolean },
 ): boolean {
-  const wanted = field === 'value' || field === 'get';
-  return wanted && reachedBy(counting, name, field) && stores(descriptor, field);
+  if (!reachedBy(counting, name, field)) return false;
+  return deletes || counting.inherited || stores(descriptor, field);
+}
+
+/** Whether a getter deletes a member of any object: it may have removed an accessor before it assigns. */
+function deletesMembers(getter: Node): boolean {
+  const pending: Node[] = [getter];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node.kind === SyntaxKind.DeleteExpression) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /** The elements one getter writes into the `value` or the `get` of the descriptor it runs on. */
@@ -255,18 +281,31 @@ function rewrites(
   const name = writtenArrayKey(getter.name);
   const reaches = ['value', 'get'].some((one) => reachedBy(counting, name, one));
   if (writes === undefined) return reaches ? [{ value: descriptor, keys: ['value'] }] : [];
+  const deletes = deletesMembers(getter);
   const found = writes.flatMap((each) => {
     const field = each.name;
-    const fields = field === undefined ? ['value', 'get'] : [field];
-    const counts = fields.some((one) => counted(descriptor, counting, { name, field: one }));
-    if (!counts) return [];
-    const value = field === 'get' ? [] : [{ value: each.value, keys: [] }];
-    const get = field === 'value' ? [] : functionReturns(each.value, new Set(), selectedValues);
+    const asValue =
+      (field === undefined || field === 'value') &&
+      counted(descriptor, counting, { name, field: 'value', deletes });
+    const asGet =
+      (field === undefined || field === 'get') &&
+      counted(descriptor, counting, { name, field: 'get', deletes });
+    const value = asValue ? [{ value: each.value, keys: [] }] : [];
+    const get = asGet ? functionReturns(each.value, new Set(), selectedValues) : [];
     return [...value, ...get];
   });
   return reaches && runsWritingSetter(descriptor, writes)
     ? [...found, { value: descriptor, keys: ['value'] }]
     : found;
+}
+
+/** Whether a field sets the prototype of the descriptor (`__proto__: value`), which is no own field. */
+function setsProto(property: ObjectLiteralElementLike): boolean {
+  return (
+    !isSpreadAssignment(property) &&
+    isPropertyAssignment(property) &&
+    writtenArrayKey(property.name) === '__proto__'
+  );
 }
 
 /** Whether a write of a getter runs a setter that names `this`: it may write the descriptor as it likes. */
@@ -295,6 +334,6 @@ export function neverRuns(descriptor: ObjectLiteralExpression, at: number): bool
   return descriptor.properties.slice(at + 1).some((each) => {
     if (isSpreadAssignment(each)) return copiedNames(each.expression).includes(key);
     const accessor = isGetAccessorDeclaration(each) || isSetAccessorDeclaration(each);
-    return !accessor && writtenArrayKey(each.name) === key;
+    return !accessor && !setsProto(each) && writtenArrayKey(each.name) === key;
   });
 }
