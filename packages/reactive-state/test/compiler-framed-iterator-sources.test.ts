@@ -17,11 +17,18 @@ const SOURCES = [
   { id: 'a-name-for-the-entries', source: 'new Map(entries)', quiet: false },
   { id: 'a-name-in-a-written-list', source: 'new Set([list])', quiet: true },
   { id: 'a-call', source: 'new Set(list.slice())', quiet: false },
+  { id: 'a-name-as-an-entry', source: 'new Map([entry])', quiet: false },
+  { id: 'a-name-as-a-later-entry', source: "new Map([['key', 1], entry])", quiet: false },
+  { id: 'an-object-as-an-entry', source: "new Map([{ 0: 'key', 1: 1 }])", quiet: false },
+  { id: 'a-name-as-an-entry-of-a-weak-map', source: 'new WeakMap([entry])', quiet: false },
+  { id: 'a-spread-as-an-entry', source: 'new Map([...entries])', quiet: false },
+  { id: 'names-in-a-written-entry-pin', source: 'new Map([[key, value]])', quiet: true },
+  { id: 'a-name-as-an-element-of-a-set-pin', source: 'new Set([entry])', quiet: true },
 ] as const;
 
 describe('the argument a collection source is built from', () => {
   it.each(SOURCES)('$id', ({ source, quiet }) => {
-    const program = `declare const list: any; declare const entries: any; function frames() { const held = ${source}; const iterator = held[Symbol.iterator](); return iterator.next(); }`;
+    const program = `declare const list: any; declare const entries: any; declare const entry: any; declare const key: any; declare const value: any; function frames() { const held = ${source}; const iterator = held[Symbol.iterator](); return iterator.next(); }`;
 
     expect(boundaryQuiet(program)).toBe(quiet);
   });

@@ -20,6 +20,7 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTypeNode,
+  type NewExpression,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -88,7 +89,25 @@ export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   const values = isNewExpression(source.value) ? (source.value.arguments ?? []) : [source.value];
   return (
     values.every((each) => !(isNewExpression(source.value) && isIdentifier(unwrapped(each)))) &&
+    (!isNewExpression(source.value) || entriesWritten(source.value)) &&
     iteratorQuietValues(values)
+  );
+}
+
+/** The constructors of a map, which read the first two slots of each entry they are built from. */
+const MAPS: ReadonlySet<string> = new Set(['Map', 'WeakMap']);
+
+/**
+ * Whether a map is built from entries written out: an entry that is a name, a call or an object
+ * may have a getter at a slot, which the constructor reads. A collection that is no map reads none.
+ */
+function entriesWritten(source: NewExpression): boolean {
+  if (!framedNativeConstructor(source.expression, MAPS)) return true;
+  const [first] = source.arguments ?? [];
+  const list = first === undefined ? undefined : unwrapped(first);
+  if (list === undefined || !isArrayLiteralExpression(list)) return true;
+  return list.elements.every(
+    (each) => isOmittedExpression(each) || isArrayLiteralExpression(unwrapped(each)),
   );
 }
 
