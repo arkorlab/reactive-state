@@ -55,17 +55,18 @@ export interface GetterWrite {
 }
 
 /**
- * The values a getter writes through `this`, each a value a field of the object may hold when the
- * copy reaches it: the right of an assignment to a member of `this`, under the name of the member.
- * A deletion writes none, and an arithmetic assignment or an increment writes a number or a text,
- * which is no object. None where `this` is given to anything else: a call, a method, a pattern, a
- * loop head, a list, the result of the getter.
+ * The values a getter writes through `this`, or through `super`, which sets on the same receiver,
+ * each a value a field of the object may hold when the copy reaches it: the right of an assignment
+ * to a member of `this`, under the name of the member. A deletion writes none, and an arithmetic
+ * assignment or an increment writes a number or a text, which is no object. None where `this` is
+ * given to anything else: a call, a method, a pattern, a loop head, a list, the result of the
+ * getter.
  */
 export function getterWrites(getter: GetAccessorDeclaration): readonly GetterWrite[] | undefined {
   const writes: GetterWrite[] = [];
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.kind === SyntaxKind.ThisKeyword) {
+    if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) {
       const used = use(node);
       if (used === undefined) return undefined;
       writes.push(...used);
