@@ -1,4 +1,5 @@
 import {
+  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   isArrayLiteralExpression,
@@ -112,17 +113,34 @@ function neverRuns(node: Node, call: CallExpression): boolean {
   return false;
 }
 
+/** Whether a node is the first element of a list written out. */
+function isFirst(list: ArrayLiteralExpression, node: Node): boolean {
+  return isExpression(node) && list.elements.indexOf(node) === 0;
+}
+
+/** Whether a node lies within the call. */
+function within(node: Node, call: CallExpression): boolean {
+  return node.pos >= call.pos && node.end <= call.end;
+}
+
 /** Whether a node is one of the arguments of the call. */
 function isArgument(call: CallExpression, node: Node): boolean {
   return call.arguments.some((each) => each === node);
 }
 
-/** Whether a function the list makes is held only as data the call's own arguments hold. */
+/**
+ * Whether a function the list makes is held only as data the call's own arguments hold. A function a
+ * field of an object holds, which is the first of an entry, is no such data: the call converts that
+ * object to the key it installs, and runs its `Symbol.toPrimitive`, its `toString` or its `valueOf`.
+ */
 function onlyStored(made: Node, call: CallExpression): boolean {
   let at = made;
+  let member = false;
   for (;;) {
     const { parent } = at;
     if (parent === call) return isArgument(call, at);
+    if (isObjectLiteralExpression(parent)) member = true;
+    if (member && isArrayLiteralExpression(parent) && isFirst(parent, at)) return false;
     const holds =
       passesValue(parent, at) ||
       isArrayLiteralExpression(parent) ||
@@ -178,7 +196,7 @@ function tupleRunsElsewhere(call: CallExpression, aliases: ReadonlySet<FrameBind
   if (!runs) return false;
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (namesTuple(node, aliases)) {
+    if (namesTuple(node, aliases) && !(within(node, call) && neverRuns(node, call))) {
       const writer = executionOwner(node);
       if (writer !== owner && !unreferencedLocalFunction(writer, owner)) return true;
     }

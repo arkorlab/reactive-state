@@ -108,6 +108,104 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'stored-arrow-with-an-unrelated-call-in-the-list',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['unused', () => reviewed(entry)], ['count', Math.abs(-1)]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'stored-arrow-with-an-unrelated-new-in-the-list',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['unused', () => reviewed(entry)], ['when', new Date(0)]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'stored-function-that-writes-the-tuple-with-an-unrelated-call',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['unused', () => { entry[1] = error; }], ['count', Math.abs(-1)]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'stored-arrow-in-a-field-with-an-unrelated-call',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['unused', { run: () => reviewed(entry) }], ['count', Math.abs(-1)]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'arrow-called-at-once-with-an-unrelated-call',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, (() => { entry[1] = error; })(), ['count', Math.abs(-1)]]); }",
+    key: 'message',
+    values: ["'safe':", '(() => { entry[1] = error; })():1', 'error:'],
+  },
+  {
+    id: 'to-primitive-of-a-key-calls-with-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ [Symbol.toPrimitive]: () => (reviewed(entry), 'unused') }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'to-string-of-a-key-calls-with-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ toString: () => (reviewed(entry), 'unused') }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'value-of-of-a-key-calls-with-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ valueOf: () => (reviewed(entry), 'unused') }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'to-string-of-a-key-by-a-function-expression',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ toString: function () { reviewed(entry); return 'unused'; } }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'to-string-inherited-by-a-key',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ __proto__: { toString: () => (reviewed(entry), 'unused') } }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'to-string-of-a-key-in-a-nested-field',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ a: { toString: () => (reviewed(entry), 'unused') } }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-in-the-value-slot-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, ['unused', { toString: () => (reviewed(entry), 'unused') }]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-the-key-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[() => reviewed(entry), 0], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'hook-in-an-object-that-is-no-entry-pin',
+    source:
+      "function frames(error: Error, flag: boolean, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], { toString: () => (reviewed(entry), 'unused') }); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
 ] as const;
 
 describe('entry tuples a function of the argument list is given', () => {
