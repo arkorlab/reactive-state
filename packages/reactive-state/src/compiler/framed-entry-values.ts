@@ -7,6 +7,7 @@ import {
   isArrayLiteralExpression,
   isElementAccessExpression,
   isConditionalExpression,
+  isDeleteExpression,
   isExpression,
   isForInStatement,
   isForOfStatement,
@@ -16,6 +17,7 @@ import {
   isNumericLiteral,
   isOmittedExpression,
   isObjectLiteralExpression,
+  isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
@@ -237,8 +239,17 @@ function literalCondition(expression: Expression): boolean | undefined {
   return truth === undefined ? undefined : truth !== negated;
 }
 
-/** The slot an assignment writes on one of the tuple's bindings, none for an opaque key. */
+/** The operators that step a number: an increment and a decrement, before and after. */
+const STEPS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.MinusMinusToken,
+  SyntaxKind.PlusPlusToken,
+]);
+
+/** The slot an assignment, a step or a deletion writes on one of the tuple's bindings, none for an opaque key. */
 function tupleWrite(node: Node, aliases: ReadonlySet<FrameBinding>): string | undefined | null {
+  if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node))
+    return STEPS.has(node.operator) ? memberSlot(node.operand, aliases) : null;
+  if (isDeleteExpression(node)) return memberSlot(node.expression, aliases);
   if (!isBinaryExpression(node)) return null;
   const kind = node.operatorToken.kind;
   if (kind < SyntaxKind.FirstAssignment || kind > SyntaxKind.LastAssignment) return null;
