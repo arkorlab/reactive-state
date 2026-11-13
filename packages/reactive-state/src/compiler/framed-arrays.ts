@@ -53,7 +53,7 @@ import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { afterDeletion, deletedFrom, deletedReceiver } from './framed-deleted-methods.ts';
+import { afterDeletion, deletedMethod, deletedReceiver } from './framed-deleted-methods.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { invokedTargets, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
@@ -582,26 +582,6 @@ function assignedMethods(target: Expression, root: FrameBinding): readonly strin
     : undefined;
   const keys = key === undefined ? (opaque ?? [...OWN_METHODS]) : [key];
   return keys.filter((each) => OWN_METHODS.has(each));
-}
-
-/**
- * A completed deletion reveals an inherited method; an opaque key may remove either proof. It
- * deletes from what may be the array unless `exact` asks for the array itself.
- */
-function deletedMethod(
-  node: Expression,
-  root: FrameBinding,
-  own: OwnMethods,
-  { exact = false, prior = own }: { readonly exact?: boolean; readonly prior?: OwnMethods } = {},
-): void {
-  if (!isDeleteExpression(node)) return;
-  const member = unwrapped(node.expression);
-  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
-  if (!(exact ? arrayIdentity(member.expression) === root : mayBeArray(member.expression, root)))
-    return;
-  const key = frameMemberName(member);
-  if (key === undefined) forgetMethods(own);
-  else if (OWN_METHODS.has(key)) own.set(key, deletedFrom(member.expression, root, prior.get(key)));
 }
 
 /**

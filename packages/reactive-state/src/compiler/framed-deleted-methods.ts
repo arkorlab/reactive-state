@@ -7,11 +7,14 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { arrayIdentity } from './framed-array-identity.ts';
+import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import {
   type ArrayMethodOverride,
   afterPossibleWrite,
   afterSureWrite,
+  forgetMethods,
+  OWN_METHODS,
+  type OwnMethods,
 } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { prototypeMayChange } from './framed-prototype-changes.ts';
@@ -56,4 +59,24 @@ export function afterDeletion(
   const known = how.sure || previous === undefined || previous.inherited === true;
   if (known && gone?.inherited === true) return gone;
   return how.sure ? afterSureWrite(undefined) : afterPossibleWrite(previous, undefined);
+}
+
+/**
+ * A completed deletion reveals an inherited method; an opaque key may remove either proof. It
+ * deletes from what may be the array unless `exact` asks for the array itself.
+ */
+export function deletedMethod(
+  node: Expression,
+  root: FrameBinding,
+  own: OwnMethods,
+  { exact = false, prior = own }: { readonly exact?: boolean; readonly prior?: OwnMethods } = {},
+): void {
+  if (!isDeleteExpression(node)) return;
+  const member = unwrapped(node.expression);
+  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
+  if (!(exact ? arrayIdentity(member.expression) === root : mayBeArray(member.expression, root)))
+    return;
+  const key = frameMemberName(member);
+  if (key === undefined) forgetMethods(own);
+  else if (OWN_METHODS.has(key)) own.set(key, deletedFrom(member.expression, root, prior.get(key)));
 }
