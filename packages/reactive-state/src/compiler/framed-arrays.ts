@@ -29,7 +29,7 @@ import {
 import { callMethodWrites } from './framed-array-call-writes.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
+import { arrayIdentity, mayBeArray, reachesArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
@@ -49,7 +49,7 @@ import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
-import { invokedTarget, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
+import { invokedTargets, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
@@ -382,8 +382,8 @@ function unprovenWrites(
 function writesExactly(node: Node, root: FrameBinding): boolean {
   if (isCallExpression(node)) {
     const invoked = mutatorInvocation(node);
-    const target = invoked === undefined ? node.arguments[0] : invokedTarget(invoked);
-    return target !== undefined && arrayIdentity(target) === root;
+    const targets = invoked === undefined ? node.arguments.slice(0, 1) : invokedTargets(invoked);
+    return reachesArray(targets, root, true);
   }
   return framedWrittenTargets(node).every((target) => {
     const member = unwrapped(target);
@@ -452,11 +452,10 @@ function definedMethods(
 ): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const invoked = mutatorInvocation(node);
-  const target = invoked === undefined ? undefined : invokedTarget(invoked);
+  const targets = invoked === undefined ? [] : invokedTargets(invoked);
   if (
     invoked === undefined ||
-    target === undefined ||
-    !(exact ? arrayIdentity(target) === root : mayBeArray(target, root)) ||
+    !reachesArray(targets, root, exact) ||
     (invoked.path !== PATHS.property && invoked.path !== PATHS.properties)
   )
     return undefined;

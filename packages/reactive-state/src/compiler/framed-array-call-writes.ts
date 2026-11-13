@@ -1,7 +1,7 @@
 import { type Expression, isCallExpression, isObjectLiteralExpression } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
+import { reachesArray } from './framed-array-identity.ts';
 import {
   type ArrayMethodOverride,
   assignMethods,
@@ -12,7 +12,7 @@ import {
 } from './framed-array-own-methods.ts';
 import type { FrameBinding } from './framed-bindings.ts';
 import {
-  invokedTarget,
+  invokedTargets,
   type MutatorInvocation,
   mutatorInvocation,
 } from './framed-mutator-calls.ts';
@@ -46,9 +46,9 @@ function possibleOverride(
 export function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
   if (!isCallExpression(node)) return;
   const invoked = mutatorInvocation(node);
-  const target = invoked === undefined ? undefined : invokedTarget(invoked);
-  if (invoked === undefined || target === undefined || !mayBeArray(target, root)) return;
-  if (arrayIdentity(target) === root && invoked.silent !== true) {
+  const targets = invoked === undefined ? [] : invokedTargets(invoked);
+  if (invoked === undefined || !reachesArray(targets, root, false)) return;
+  if (reachesArray(targets, root, true) && invoked.silent !== true) {
     mutatorWrites(invoked, own);
     return;
   }

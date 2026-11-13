@@ -14,6 +14,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+import { soleTarget } from './framed-mutator-calls.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { bindingIdentifiers, isBlockScoped } from './scope.ts';
 
@@ -24,6 +25,20 @@ import { bindingIdentifiers, isBlockScoped } from './scope.ts';
 export function arrayIdentity(value: Expression): FrameBinding | undefined {
   const followed = followedIdentity(value);
   return followed.written ? undefined : followed.root;
+}
+
+/**
+ * Whether a mutation that may reach any of the expressions may write the array `root`: or, as
+ * `sure`, whether it reaches that array and nothing else.
+ */
+export function reachesArray(
+  targets: readonly Expression[],
+  root: FrameBinding,
+  sure: boolean,
+): boolean {
+  if (!sure) return targets.some((target) => mayBeArray(target, root));
+  const [only] = targets;
+  return targets.length === 1 && only !== undefined && arrayIdentity(only) === root;
 }
 
 /**
@@ -57,7 +72,7 @@ function followedIdentity(value: Expression): FollowedIdentity {
     written ||= writtenWhole(root.getSourceFile()).has(root);
     seen.add(root);
     if (root.initializer === undefined) return { root, written };
-    each = unwrapped(root.initializer);
+    each = soleTarget(unwrapped(root.initializer));
   }
   return { root: isArrayLiteralExpression(each) ? root : undefined, written };
 }
