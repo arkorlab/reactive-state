@@ -1096,13 +1096,13 @@ const CASES = [
     id: 'spread-getter-write-runs-a-setter-that-writes',
     source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+    values: ["'kept':", "'safe':", '0:', 'error:'],
   },
   {
     id: 'spread-getter-write-runs-a-setter-chain',
     source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.first = 0; return 0; }, set first(value: unknown) { this.second = 0; }, set second(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', '0:', '0:', 'error:'],
+    values: ["'kept':", "'safe':", '0:', 'error:'],
   },
   {
     id: 'spread-getter-write-of-an-unknown-name-runs-every-setter',
@@ -1120,7 +1120,7 @@ const CASES = [
     id: 'spread-getter-write-runs-a-setter-that-writes-another-field-stays-possible-pin',
     source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.label = error; }, field: 'kept' } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+    values: ["'kept':", "'safe':", '0:', 'error:'],
   },
   {
     id: 'computed-key-getter-replaced-by-method-overwrites',
@@ -1377,7 +1377,6 @@ const CASES = [
       "'safe':",
       '{ get trigger() { this.activate = 0; return 0; } }:',
       '0:',
-      '0:',
       'error:',
     ],
   },
@@ -1397,7 +1396,7 @@ const CASES = [
     id: 'spread-getter-write-runs-a-setter-that-a-later-spread-may-keep',
     source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, ...{ get 0() { delete this.activate; return 0; }, activate: 5 }, field: 'kept' } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', '0:', '0:', '5:', 'error:'],
+    values: ["'kept':", "'safe':", '0:', '0:', '5:', 'error:'],
   },
   {
     id: 'spread-getter-write-runs-a-setter-a-later-spread-of-accessors-replaces-pin',
@@ -1421,6 +1420,30 @@ const CASES = [
       "{ ...{ get trigger() { this.activate = 0; return 0; }, field: 'kept' } }:",
       '0:',
     ],
+  },
+  {
+    id: 'spread-getter-write-with-a-null-prototype-meets-no-setter',
+    source: `function frames(error: Error, name: string, other: object) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: null, get trigger() { this.extra = 0; return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:'],
+  },
+  {
+    id: 'spread-getter-write-with-a-prototype-is-unfollowable',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: other, get trigger() { this.extra = 0; return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-write-to-a-field-with-a-setter-stores-nothing-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, get field() { return 'kept'; }, set field(value: unknown) {}, } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:'],
+  },
+  {
+    id: 'spread-prototype-null-does-not-replace-a-setter-named-proto-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, __proto__: null, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
   },
   {
     id: 'named-key-spread-getter-writes-the-field',
