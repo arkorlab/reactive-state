@@ -34,7 +34,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { ownerKeyFirst } from './class-key-order.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner, exportedDeclaration } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import {
   type FrameBinding,
   frameBindingContainer,
@@ -177,7 +177,8 @@ function tupleTargetWrites(
 }
 
 /**
- * Later writes in a repeated body can supply the tuple at its next native call, and so can those in
+ * Later writes in a repeated body — a loop's, or a function's that can be called again with a tuple
+ * declared outside it — can supply the tuple at its next native call, and so can those in
  * what a pattern around the call destructures and in a computed key of a class around it, which run
  * before it though they are written after.
  */
@@ -194,7 +195,8 @@ function tupleWriteBefore(
     ownerKeyFirst(node, call)
   )
     return true;
-  for (const binding of aliases) if (repeatedFrameRead(node, call, binding, owner)) return true;
+  for (const binding of aliases)
+    if (repeatedFrameRead(node, call, binding, owner) || repeatsAround(owner, binding)) return true;
   return false;
 }
 
