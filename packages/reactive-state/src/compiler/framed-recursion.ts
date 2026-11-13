@@ -229,6 +229,7 @@ function refersToFunction(name: Identifier, fn: Node): boolean {
 interface FileFunctions {
   readonly byName: ReadonlyMap<string, readonly Node[]>;
   readonly implicit: readonly Node[];
+  readonly referenced: ReadonlySet<string>;
 }
 
 const FUNCTIONS = new WeakMap<SourceFile, FileFunctions>();
@@ -249,12 +250,13 @@ function register(
 function functionsOf(file: SourceFile): FileFunctions {
   const known = FUNCTIONS.get(file);
   if (known !== undefined) return known;
-  const found: { byName: Map<string, Node[]>; implicit: Node[] } = {
+  const referenced = new Set<string>();
+  const found: { byName: Map<string, Node[]>; implicit: Node[]; referenced: Set<string> } = {
     byName: new Map(),
     implicit: [],
+    referenced,
   };
   const reachedBy = new Map<Node, FunctionNames>();
-  const referenced = new Set<string>();
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node) || (node !== file && !framedPossibleBranch(node))) continue;
@@ -454,6 +456,7 @@ function reachedByProperty(fn: Node): boolean {
 
 /** Whether the file uses one of the names otherwise than by calling it or giving it a value. */
 function escapes(file: SourceFile, names: ReadonlySet<string>): boolean {
+  const { referenced } = functionsOf(file);
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
@@ -464,7 +467,8 @@ function escapes(file: SourceFile, names: ReadonlySet<string>): boolean {
       !written(node) &&
       !called(node) &&
       !isDeclarationName(node) &&
-      framedPossibleBranch(node)
+      framedPossibleBranch(node) &&
+      !neverCreated(node, referenced)
     )
       return true;
     node.forEachChild((child) => {

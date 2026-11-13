@@ -1992,6 +1992,31 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'reader-returned-by-a-function-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function unused() { return read; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-returned-by-an-arrow-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const unused = () => read; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-returned-by-a-method-an-object-holds-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const o = { unused() { return read; } }; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-returned-by-a-function-that-is-called',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} function used() { return read; } if (pass < 1) used()(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-held-by-a-field-of-a-class-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} class Unused { held = read; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
