@@ -2263,6 +2263,56 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'reduce-with-reflect-set-hands-the-array-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ set k(v: unknown) { (this as any).push(error); } }, 'k']; a.reduce(Reflect.set); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'reduce-right-with-reflect-set-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ set k(v: unknown) { (this as any).push(error); } }, 'k']; a.reduceRight(Reflect.set); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'reduce-with-a-held-reflect-set-hands-the-array-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ set k(v: unknown) { (this as any).push(error); } }, 'k']; const set = Reflect.set; a.reduce(set); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'for-each-with-reflect-set-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ set k(v: unknown) { (this as any).push(error); } }]; a.forEach(Reflect.set); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'reduce-with-object-assign-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 1 }, 'k']; a.reduce(Object.assign as any); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'map-with-an-unlisted-native-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.forEach(console.log); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'map-with-math-abs-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; a.map(Math.abs); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'map-with-parse-int-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['1']; a.map(parseInt); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'map-with-string-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.map(String); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'filter-with-boolean-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.filter(Boolean); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'src-held-proto',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const source = { __proto__: { f: () => error } }; ({ f: descriptor.get } = source); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
