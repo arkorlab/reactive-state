@@ -39,6 +39,7 @@ import {
   returnedValues,
 } from './framed-mutator-getters.ts';
 import { keyMayBeSlot, nameMayBeSlot, possibleKey, slotKey } from './framed-mutator-keys.ts';
+import { withNames } from './framed-name-sets.ts';
 import { selectedValues } from './framed-selected-sources.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
@@ -335,6 +336,8 @@ function fieldsAfter(
 interface Hidden {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
+  /** The names the descriptor that inherits the one read sets itself: they hide its getters, not what they write. */
+  readonly own?: ReadonlySet<string> | undefined;
 }
 
 /**
@@ -545,7 +548,7 @@ function descriptorFields(
 ): WrittenArrayElement[] {
   return [
     ...fieldsAfter(object, hidden, (property, later) => descriptorEntry(property, reading, later)),
-    ...descriptorRewrites(object, hidden.data, !reading.inherited),
+    ...descriptorRewrites(object, hidden, !reading.inherited),
   ];
 }
 
@@ -579,15 +582,12 @@ function copiedFields(
   const own = isObjectLiteralExpression(property.parent)
     ? property.parent.properties.flatMap((each) => sourceNames(each))
     : [];
-  const shadowed = { data: withNames(later.data, own), getters: withNames(later.getters, own) };
+  const shadowed = {
+    data: withNames(later.data, own),
+    getters: withNames(later.getters, own),
+    own: new Set(own),
+  };
   return descriptorValues(prototype, reading, shadowed);
-}
-
-/** The names of a set, and more. */
-function withNames(names: ReadonlySet<string>, more: readonly string[]): Set<string> {
-  const merged = new Set(names);
-  for (const each of more) merged.add(each);
-  return merged;
 }
 
 /**

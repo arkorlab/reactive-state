@@ -1362,6 +1362,30 @@ const ELEMENTS = [
     index: undefined,
     elements: ['error:'],
   },
+  {
+    id: 'define-descriptor-getter-gives-this-on-before-value',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { Object.assign(this, { value: error }); return true; }, value: 'safe' }); return values; }`,
+    index: undefined,
+    elements: [
+      "'safe':",
+      "{ get enumerable() { Object.assign(this, { value: error }); return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-gives-this-on-after-value-is-read-pin',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { value: 'safe', get probe() { Object.assign(this, { value: error }); return true; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-spread-descriptor-getter-gives-this-on',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { ...{ get probe() { Object.assign(this, { value: error }); return true; }, value: 'safe' } }); return values; }`,
+    index: undefined,
+    elements: [
+      "'safe':",
+      "{ get probe() { Object.assign(this, { value: error }); return true; }, value: 'safe' }:value",
+    ],
+  },
 ] as const;
 
 describe('descriptors built from constants that spread each other', () => {
@@ -2943,6 +2967,36 @@ const CONVERSIONS = [
   {
     id: 'define-descriptor-getter-writes-another-field-adds-nothing-pin',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this.label = error; return true; }, value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'inherited-getter-rewrites-own-value',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { this.value = error; return true; } }, value: 'safe' }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'own-attribute-hides-inherited-getter-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { this.value = error; return true; } }, enumerable: false, value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'spread-copies-value-before-getter-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ value: 'safe', get enumerable() { this.value = error; return true; } } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'spread-runs-getter-before-value',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ get enumerable() { this.value = error; return true; }, value: 'safe' } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-getter-writes-a-field-the-source-lacks-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ get enumerable() { this.value = error; return true; } } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'own-attribute-after-inherited-getter-writes-value-pin',
+    source: `function frames(error: Error) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { this.value = error; return true; } }, value: 'safe', enumerable: true }); return String(a); }`,
     converts: false,
   },
 ] as const;

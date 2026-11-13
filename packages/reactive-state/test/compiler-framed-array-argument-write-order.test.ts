@@ -1072,6 +1072,11 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { get enumerable() { delete this.value; delete this.writable; Object.assign(this, { get: () => Array.prototype.join, set: () => {} }); return false; }, value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'define-descriptor-getter-replaced-by-a-later-attribute-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { return false; }, enumerable: true, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
