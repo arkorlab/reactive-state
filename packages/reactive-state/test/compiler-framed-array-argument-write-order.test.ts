@@ -1057,6 +1057,91 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((callback: (value: unknown) => unknown) => callback(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })))(() => Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
     converts: true,
   },
+  {
+    id: 'callee-reflect-define-property-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-define-property-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; (0, Object.defineProperty)(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const define = Object.defineProperty; define(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-call-form-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.defineProperty.call(Object, values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-apply-form-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.defineProperty.apply(Object, [values, 'join', { value: Array.prototype.join, writable: true, configurable: true }]); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-apply-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.apply(Object.defineProperty, Object, [values, 'join', { value: Array.prototype.join, writable: true, configurable: true }]); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-assign-call-form-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign.call(null, values, { join: Array.prototype.join }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-assign-restores-native',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; (0, Object.assign)(values, { join: Array.prototype.join }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-define-custom-stays-possible-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.defineProperty(values, 'join', { value: () => 'again', writable: true, configurable: true }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-define-custom-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; (0, Object.defineProperty)(values, 'join', { value: () => 'again', writable: true, configurable: true }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-callee-reflect-accessor-is-held',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Reflect.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-callee-comma-accessor-is-held',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: (0, Object.defineProperty)(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-callee-alias-accessor-is-held',
+    source: `function frames(error: Error) { const values = [error]; const define = Object.defineProperty; Object.assign(values, { ignored: define(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-callee-call-form-accessor-is-held',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.call(Object, values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-callee-apply-form-accessor-is-held',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.apply(Object, [values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }]), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-callee-reflect-apply-accessor-is-held',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Reflect.apply(Object.defineProperty, Object, [values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }]), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-callee-data-definition-lets-the-assignment-replace-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.call(Object, values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

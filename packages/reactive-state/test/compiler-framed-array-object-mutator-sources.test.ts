@@ -2915,6 +2915,86 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const src: any = {}; [...src[1]] = [error]; Object.assign(a, src); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'callee-reflect-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.defineProperty)(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-assign',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.assign)(a, { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; define(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-of-reflect-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Reflect.defineProperty; define(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-of-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const first = Object.defineProperty; const define = first; define(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-call',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; define.call(Object, a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-apply',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; define.apply(Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-define-property-call',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty.call(Reflect, a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-apply-of-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; Reflect.apply(define, Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-call-form-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty.call(Object, a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-apply-form-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty.apply(Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-apply-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.apply(Object.defineProperty, Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-of-a-reader-adds-nothing-pin',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.keys)(a); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'callee-alias-of-a-reader-adds-nothing-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const keys = Object.keys; keys(a); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'callee-safe-descriptor-through-reflect-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty(a, 0, { get: () => 'safe' }); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
