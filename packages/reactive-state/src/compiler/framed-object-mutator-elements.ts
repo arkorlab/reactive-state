@@ -196,9 +196,8 @@ function assignedValues(
       alternatives === undefined
         ? undefined
         : readUnderSlot(reading.seen.sources, index, held, hidden);
-    if (alternatives === undefined) return opaque;
     const written = sourceWrites(names, index, reading, hidden);
-    if (used === undefined) return [...opaque, ...written];
+    if (alternatives === undefined || used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
       ...alternatives.flatMap((each) => assignedValues(each, index, reading, used)),
@@ -365,9 +364,8 @@ function definedValues(
       alternatives === undefined
         ? undefined
         : readUnderSlot(reading.seen.maps, index, held, hidden);
-    if (alternatives === undefined) return opaque;
     const written = mapWrites(names, index, reading, hidden);
-    if (used === undefined) return [...opaque, ...written];
+    if (alternatives === undefined || used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
       ...alternatives.flatMap((each) => definedValues(each, index, reading, used)),
@@ -485,8 +483,8 @@ function descriptorValues(
   const table = reading.inherited ? reading.seen.full : reading.seen.own;
   const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
   const used = alternatives === undefined ? undefined : readUnder(table, held, hidden);
-  if (alternatives === undefined) return opaque;
-  if (used === undefined) return [...opaque, ...descriptorWrites(names, hidden, reading)];
+  if (alternatives === undefined || used === undefined)
+    return [...opaque, ...descriptorWrites(names, hidden, reading)];
   const chosen = alternatives.flatMap((each) => {
     return isObjectLiteralExpression(each)
       ? descriptorFields(each, reading, used)
