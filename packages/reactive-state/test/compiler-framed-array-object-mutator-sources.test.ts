@@ -2960,6 +2960,11 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const original: any[] = ['safe']; let values = original; return String(values); }`,
     converts: false,
   },
+  {
+    id: 'reassigned-scalar-alias-pin',
+    source: `function frames(error: Error) { const initial = 'safe'; let text: string = initial; text = 'still safe'; return String([text]); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

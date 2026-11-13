@@ -580,14 +580,27 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
 }
 
 /**
- * Whether a name that starts as a written array, or as another name, is written as a whole
- * elsewhere: it may hold another array than the one the chain of names ends at.
+ * Whether a name that starts as a written array, or as a name that stands for one, is written as a
+ * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
+ * does not end at a written array (a scalar, a parameter) is no array the compile started from.
  */
 function rewrittenArray(binding: FrameBinding): boolean {
-  const { initializer } = binding;
-  if (initializer === undefined) return false;
-  const start = unwrapped(initializer);
-  return (isArrayLiteralExpression(start) || isIdentifier(start)) && writtenAsWhole(binding);
+  return startsAsArray(binding) && writtenAsWhole(binding);
+}
+
+/** Whether the initializer of a binding is a written array, or a chain of names that ends at one. */
+function startsAsArray(binding: FrameBinding): boolean {
+  const seen = new Set<FrameBinding>([binding]);
+  let { initializer } = binding;
+  while (initializer !== undefined) {
+    const start = unwrapped(initializer);
+    if (isArrayLiteralExpression(start)) return true;
+    const next = isIdentifier(start) ? frameBindingOf(start)?.binding : undefined;
+    if (next === undefined || seen.has(next)) return false;
+    seen.add(next);
+    ({ initializer } = next);
+  }
+  return false;
 }
 
 /**
