@@ -13,6 +13,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
@@ -98,7 +99,8 @@ function unexposedLength(context: FillContext): number | undefined {
 /**
  * Earlier uses, argument effects and possible other-owner reads can change the captured length: a
  * use in what a destructuring pattern destructures runs before a fill in the pattern's defaults,
- * though it is written after it.
+ * though it is written after it, and a use in a computed key of a class runs before a fill in one
+ * of the class's static initializers.
  */
 function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (!readsBinding(name) || context.identity(name) !== context.root) return false;
@@ -109,6 +111,7 @@ function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (
     (name.pos > context.call.end || destructuredFirst(context.call, name)) &&
     !destructuredFirst(name, context.call) &&
+    !ownerKeyFirst(name, context.call) &&
     !repeatedFrameRead(name, context.call, context.root, owner) &&
     !repeatsAround(owner, context.root)
   )

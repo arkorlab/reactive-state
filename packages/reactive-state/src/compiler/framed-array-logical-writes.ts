@@ -19,6 +19,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
@@ -103,7 +104,8 @@ function unchangedBefore(
 /**
  * The right side and the test are skipped as a unit; the target, whose receiver and key are
  * evaluated before the slot is tested, is not. Later iterations and referenced owners remain
- * possible.
+ * possible, and so does a computed key of a class, written after the assignment in one of its
+ * static initializers, which runs before it.
  */
 function canPrecede(node: Node, read: BinaryExpression, root: FrameBinding): boolean {
   const target = inTarget(node, read);
@@ -115,6 +117,7 @@ function canPrecede(node: Node, read: BinaryExpression, root: FrameBinding): boo
     ? target ||
         node.pos < read.pos ||
         destructuredFirst(node, read) ||
+        ownerKeyFirst(node, read) ||
         repeatedFrameRead(node, read, root, owner) ||
         repeatsAround(owner, root)
     : !unreferencedLocalFunction(writer, owner);

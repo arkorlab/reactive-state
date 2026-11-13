@@ -37,6 +37,7 @@ import {
 
 import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import {
   type AssignedFrameSource,
@@ -106,7 +107,8 @@ function assignedAt(
 
 /**
  * Referenced closures remain possible; an entirely unreferenced nested declaration does not run. A
- * write in what a pattern destructures runs before the pattern's defaults and computed keys.
+ * write in what a pattern destructures runs before the pattern's defaults and computed keys, and a
+ * write in a computed key of a class runs before a read in one of its static initializers.
  */
 function possibleWriteBefore(
   node: Node,
@@ -120,6 +122,7 @@ function possibleWriteBefore(
   return (
     node.pos < name.pos ||
     destructuredFirst(node, name) ||
+    ownerKeyFirst(node, name) ||
     repeatedFrameRead(node, name, declared, owner) ||
     (cutoff === undefined && bindingOwner(declared) !== owner)
   );
