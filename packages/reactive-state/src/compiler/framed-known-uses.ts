@@ -1,5 +1,4 @@
 import {
-  type CallExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -32,7 +31,6 @@ import {
   isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateSpan,
-  isTypeNode,
   isTypeOfExpression,
   isVariableDeclaration,
   isVoidExpression,
@@ -44,6 +42,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
+import { handsArray } from './framed-array-callbacks.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
 import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
@@ -117,6 +116,12 @@ const DESCRIPTOR_FIELDS: ReadonlySet<string> = new Set([
   'writable',
 ]);
 
+/** The fields of a list that hold data: its length. */
+const LIST_FIELDS: ReadonlySet<string> = new Set(['length']);
+
+/** A literal that holds a followed object holds it in every field. */
+const NO_FIELDS: ReadonlySet<string> = new Set();
+
 /** The natives that read their arguments and run no application code on them. */
 const READERS: ReadonlySet<string> = new Set([
   'Array.isArray',
@@ -162,25 +167,6 @@ const ARRAY_METHODS: ReadonlySet<string> = new Set(
 
 /** The methods of an array that answer the array itself. */
 const SELF_RETURNING: ReadonlySet<string> = new Set(['copyWithin', 'fill', 'reverse', 'sort']);
-
-/** The place of the array among the parameters of a reducer: after the accumulator, the element and the index. */
-const REDUCER_ARRAY = 3;
-
-/** The methods that call back with the array itself, and the place of the parameter that is given it. */
-const ARRAY_PARAMETER: ReadonlyMap<string, number> = new Map([
-  ['every', 2],
-  ['filter', 2],
-  ['find', 2],
-  ['findIndex', 2],
-  ['findLast', 2],
-  ['findLastIndex', 2],
-  ['flatMap', 2],
-  ['forEach', 2],
-  ['map', 2],
-  ['reduce', REDUCER_ARRAY],
-  ['reduceRight', REDUCER_ARRAY],
-  ['some', 2],
-]);
 
 /** The subjects whose writes to their own members the readers of writes collect. */
 const FOLLOWED: ReadonlySet<Subject> = new Set(['array', 'carrier', 'held']);
@@ -251,7 +237,8 @@ function aliased(declaration: VariableDeclaration, at: Node, subject: Subject): 
 function assigned(at: Node, subject: Subject): Use | undefined {
   const { parent } = at;
   if (!isBinaryExpression(parent)) return undefined;
-  if (parent.right === at && isPattern(parent.left)) return takenApart(subject) ? KNOWN : UNKNOWN;
+  const pattern = parent.right === at && parent.operatorToken.kind === SyntaxKind.EqualsToken;
+  if (pattern && isPattern(parent.left)) return takenApart(subject) ? KNOWN : UNKNOWN;
   return overwritten(at) ? KNOWN : undefined;
 }
 
@@ -372,7 +359,7 @@ function memberResult(access: Node, result: Node, { subject, depth, base }: Chai
     return methodCall(access, user, { subject, depth, base });
   if (written(result))
     return depth === 1 && FOLLOWED.has(subject) && !keepsThis(result) ? KNOWN : UNKNOWN;
-  return subject === 'array' ? KNOWN : resultUse(result, memberName(access), depth);
+  return subject === 'array' ? KNOWN : resultUse(result, memberName(access), { depth, subject });
 }
 
 /** Whether a member is given a function that names `this`, which runs with the array as `this`. */
@@ -389,44 +376,13 @@ function keepsThis(result: Node): boolean {
  * of something else.
  */
 function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): Use {
-  if (depth > 1) return subject === 'array' || base === 'length' ? KNOWN : UNKNOWN;
+  if (depth > 1)
+    return isArray(subject) && (subject === 'array' || base === 'length') ? KNOWN : UNKNOWN;
   if (!isArray(subject)) return UNKNOWN;
   const name = memberName(access);
   if (name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
   if (isCallExpression(call) && handsArray(call, name)) return UNKNOWN;
   return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
-}
-
-/**
- * Whether a method calls a function back with the array as an argument: a function of the program
- * that has a parameter for it (a rest parameter or `arguments` among them), or any callback that is not
- * written out, which may be one.
- */
-function handsArray(call: CallExpression, name: string): boolean {
-  const position = ARRAY_PARAMETER.get(name);
-  const [first] = call.arguments;
-  if (position === undefined || first === undefined) return false;
-  const callback = unwrapped(first);
-  if (!isArrowFunction(callback) && !isFunctionExpression(callback))
-    return call.arguments.length > 1 || nativePath(first) === undefined;
-  return (
-    callback.parameters.length > position ||
-    callback.parameters.some((each) => each.dotDotDotToken !== undefined) ||
-    mentionsArguments(callback)
-  );
-}
-
-/** Whether a function names `arguments` anywhere. */
-function mentionsArguments(fn: Node): boolean {
-  const pending: Node[] = [fn];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (isIdentifier(node) && node.text === 'arguments') return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
 }
 
 /**
@@ -503,16 +459,30 @@ function chained(at: Node): Use {
   return target !== undefined && target === flowing.top ? answerUse(user) : UNKNOWN;
 }
 
-/** What a member read hands over: a field of a descriptor, a read, or nothing the compile follows. */
-function resultUse(result: Node, field: string | undefined, depth: number): Use {
+/**
+ * What a member read hands over: a field of a descriptor, the length of a list, a read, or nothing
+ * the compile follows. A literal that holds a followed object holds it under any name, `value` and
+ * `length` among them: what its members give is that object.
+ */
+function resultUse(
+  result: Node,
+  field: string | undefined,
+  { depth, subject }: { readonly depth: number; readonly subject: Subject },
+): Use {
   const { parent } = result;
   if (discarded(result) || isTemplateSpan(parent)) return KNOWN;
   if (isVariableDeclaration(parent)) {
     const initializer: Node | undefined = parent.initializer;
     const direct = initializer === result && depth === 1 && field !== undefined;
-    return direct && DESCRIPTOR_FIELDS.has(field) ? KNOWN : UNKNOWN;
+    return direct && dataFields(subject).has(field) ? KNOWN : UNKNOWN;
   }
   return readerArgument(result) ? KNOWN : UNKNOWN;
+}
+
+/** The fields of a subject whose values are functions and data, no object the compile follows. */
+function dataFields(subject: Subject): ReadonlySet<string> {
+  if (subject === 'held') return DESCRIPTOR_FIELDS;
+  return subject === 'list' || isArray(subject) ? LIST_FIELDS : NO_FIELDS;
 }
 
 /** Whether a node is an argument of a native that reads and runs no application code. */

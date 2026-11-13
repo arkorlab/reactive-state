@@ -3261,6 +3261,66 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const s: any = { f: () => 'safe' }; const holder = { s }; holder.s.f = undefined; s.f ||= () => error; const { f: read } = s; Object.defineProperty(a, 0, { get: read }); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'c1-container-value-alias',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { get: () => 'safe' }; const holder = { value: d }; const x = holder.value; x.get = undefined; d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'c1b-container-length-alias',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { get: () => 'safe' }; const holder = { length: d }; const x = holder.length; x.get = undefined; d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'c1c-box-alias-written-through',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { get: () => 'safe' }; const holder = { value: d }; const x = holder.value; x.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'c1d-box-length-alias-written-through',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { value: 'safe' }; const holder = { length: d }; const x = holder.length; x.value = error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'c2-arithmetic-coerces-descriptor',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { valueOf() { this.get = undefined; return 0; }, get: () => 'safe' }; ({}) + d; d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'c2b-pattern-assignment-stays-known-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { get: () => 'safe' }; const { get: read } = d; Object.defineProperty(a, 0, { get: read }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 's1-element-callback',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; values.forEach((_: any, __: any, array: any[]) => { array.push(error); }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 's1b-element-callback-map',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; values.map((_: any, __: any, array: any[]) => array.push(error)); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 's1c-element-callback-reduce',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; values.reduce((acc: any, _: any, __: any, array: any[]) => array.push(error), 0); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 's1d-element-callback-named',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; const add = (_: any, __: any, array: any[]) => { array.push(error); }; values.forEach(add); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 's1e-element-callback-two-params-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; values.forEach((item: any, index: number) => { void item; void index; }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 's1f-element-callback-written-out-of-reach-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; values.filter(Boolean); return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
