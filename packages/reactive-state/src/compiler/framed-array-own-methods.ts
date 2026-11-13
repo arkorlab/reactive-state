@@ -98,6 +98,8 @@ export interface ArrayMethodOverride {
   readonly writable?: true;
   /** A property the descriptor wrote configurable: a later definition or deletion replaces it. */
   readonly configurable?: true;
+  /** A deletion left the array the method it inherits. */
+  readonly inherited?: true;
 }
 
 /** The own methods a write names, as far as it shows them. */

@@ -108,11 +108,6 @@ const CASES = [
     converts: false,
   },
   {
-    id: 'other-key-accessor-pin',
-    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'toString', { get: () => Array.prototype.toString, set: () => {} }); values.join = () => 'safe'; return String(values); }`,
-    converts: false,
-  },
-  {
     id: 'other-key-definition-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'label', { value: 1 }), join: () => 'safe' }); return String(values); }`,
     converts: false,
@@ -1140,6 +1135,86 @@ const CASES = [
   {
     id: 'nested-callee-data-definition-lets-the-assignment-replace-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.call(Object, values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'other-key-accessor-stays-possible-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'toString', { get: () => Array.prototype.toString, set: () => {} }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-set-to-native-join-after-custom-join',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-defined-as-native-join-accessor-after-custom-join',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'toString', { get: () => Array.prototype.join, set: () => {} }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-assigned-through-object-assign-to-native-join',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { toString: Array.prototype.join }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-set-to-a-custom-function-after-custom-join-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-untouched-delegates-to-custom-join-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-set-to-native-to-string-after-custom-join-stays-possible-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = Array.prototype.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-after-an-assignment-delegates-to-custom-join-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-after-a-custom-function-delegates-to-custom-join-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = () => 'x'; delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-though-never-written-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-after-a-configurable-definition-delegates-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'toString', { value: Array.prototype.join, configurable: true }); delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-then-written-native',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; delete values.toString; values.toString = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-through-an-alias-stays-possible',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; let other: any[] = []; other = values; delete other.toString; values.toString = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-after-a-prototype-write-stays-possible',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; (values as any).__proto__ = { toString: Array.prototype.join }; delete values.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-after-set-prototype-of-stays-possible',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; Object.setPrototypeOf(values, { toString: Array.prototype.join }); delete values.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-twice-delegates-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; delete values.toString; return String(values); }`,
     converts: false,
   },
   {
