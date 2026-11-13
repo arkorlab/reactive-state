@@ -22,7 +22,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { BUILT_INS } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
-import { executionOwner, exportedDeclaration } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
@@ -86,7 +86,8 @@ export function callWorkExposure(
 
 /**
  * Whether `node`, the call's work after the `spread` that reads the tuple, comes too late for that
- * read. Where the call passes again, the next pass reads what that work left.
+ * read. Where the call passes again — in a loop, or in a function that can be called again with a
+ * tuple declared outside it — the next pass reads what that work left.
  */
 function afterSpread(
   node: Node,
@@ -98,7 +99,10 @@ function afterSpread(
   return (
     node.pos < spread.end ||
     !framedPossibleBranch(node) ||
-    !repeatedFrameRead(node, call, binding, executionOwner(call))
+    !(
+      repeatedFrameRead(node, call, binding, executionOwner(call)) ||
+      repeatsAround(executionOwner(call), binding)
+    )
   );
 }
 
