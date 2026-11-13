@@ -47,6 +47,7 @@ import {
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { deletedFrom } from './framed-deleted-methods.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
@@ -237,10 +238,17 @@ function elementErrors(
   return false;
 }
 
-/** A prior own method assignment replaces the native method; toString delegates to join as well. */
+/**
+ * A prior own method assignment replaces the native method; toString delegates to join as well,
+ * but only while toString is the native one: what is written there runs in its place, and a
+ * deletion that removes it gives the native one back.
+ */
 function arrayMethodOverridden(receiver: Expression, method: string, call: Node): boolean {
   const own = ownMethods(receiver, call, method);
-  return own.get(method)?.own === true || (method === 'toString' && own.get('join')?.own === true);
+  if (own.get(method)?.own === true) return true;
+  const written = own.get('toString');
+  const native = written === undefined || written.inherited === true;
+  return method === 'toString' && native && own.get('join')?.own === true;
 }
 
 /** The last source-written override, with its value retained for result-sensitive selectors. */
@@ -303,13 +311,14 @@ function statementMethodWrites(
   const assignment = top === undefined ? undefined : ownMethodAssignment(top, root);
   const definite = assignment !== undefined || (top !== undefined && isCallExpression(top));
   const writes = { root, owner, own, held, definite: definite ? top : undefined };
+  const prior = new Map(own);
   possibleMethodWrites(before, writes);
   if (top === undefined) return;
   releaseHeld(top, root, held);
   holdDefinition(top, root, held, own);
   if (assignment !== undefined) own.set(assignment.key, assignment);
   callMethodWrites(top, root, own);
-  deletedMethod(top, root, own);
+  deletedMethod(top, root, own, { prior });
   for (const [key, configurable] of held)
     own.set(key, configurable ? { own: false, configurable: true } : { own: false });
 }
@@ -434,7 +443,7 @@ function holdDefinition(
 function releaseHeld(top: Node, root: FrameBinding, held: HeldMethods): void {
   const replaced =
     definedMethods(top, root, { exact: true }) ?? new Map<string, ArrayMethodOverride>();
-  if (isExpression(top)) deletedMethod(top, root, replaced, true);
+  if (isExpression(top)) deletedMethod(top, root, replaced, { exact: true });
   if (replaced.size >= OWN_METHODS.size) return;
   for (const key of replaced.keys()) if (held.get(key) === true) held.delete(key);
 }
@@ -569,7 +578,12 @@ function assignedMethods(target: Expression, root: FrameBinding): readonly strin
  * A completed deletion reveals an inherited method; an opaque key may remove either proof. It
  * deletes from what may be the array unless `exact` asks for the array itself.
  */
-function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, exact = false): void {
+function deletedMethod(
+  node: Expression,
+  root: FrameBinding,
+  own: OwnMethods,
+  { exact = false, prior = own }: { readonly exact?: boolean; readonly prior?: OwnMethods } = {},
+): void {
   if (!isDeleteExpression(node)) return;
   const member = unwrapped(node.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
@@ -577,7 +591,7 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
     return;
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
-  else if (OWN_METHODS.has(key)) own.set(key, { own: false });
+  else if (OWN_METHODS.has(key)) own.set(key, deletedFrom(member.expression, root, prior.get(key)));
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */
