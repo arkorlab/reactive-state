@@ -214,7 +214,7 @@ const ELEMENT_WRITES = new Set([
  * Only indexed assignment positions, the insertion arguments of native mutators and the numeric
  * entries native object mutators install become elements.
  */
-function elementSources(
+export function elementSources(
   node: Node,
   root: FrameBinding,
   index: number | undefined,
@@ -283,7 +283,7 @@ function insertedArguments(
 const MOVING = new Set(['copyWithin', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
 
 /** A possible position-moving mutator leaves every assigned numeric entry reachable. */
-function positionsMove(node: Node, root: FrameBinding): boolean {
+export function positionsMove(node: Node, root: FrameBinding): boolean {
   if (!isCallExpression(node)) return false;
   const borrowed = borrowedArrayMutation(node);
   if (borrowed !== undefined)
@@ -309,7 +309,7 @@ function possibleIndex(key: Expression, index: number | undefined): boolean {
 }
 
 /** A written literal array behind lexical whole-value aliases, excluding destructured projections. */
-function literalArrayBinding(node: Expression): FrameBinding | undefined {
+export function literalArrayBinding(node: Expression): FrameBinding | undefined {
   let value = unwrapped(node);
   let root: FrameBinding | undefined;
   const seen = new Set<FrameBinding>();
