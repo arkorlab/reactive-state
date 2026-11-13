@@ -1992,6 +1992,156 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'reader-returned-by-a-function-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function unused() { return read; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-returned-by-an-arrow-never-called-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const unused = () => read; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-returned-by-a-method-an-object-holds-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const o = { unused() { return read; } }; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-returned-by-a-function-that-is-called',
+    source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} function used() { return read; } if (pass < 1) used()(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-held-by-a-field-of-a-class-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} class Unused { held = read; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-that-builds-itself-in-a-static-block',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { constructor() { saved = read; } static { new this(); } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-that-builds-itself-in-a-static-field',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { constructor() { saved = read; } static made = new this(); } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Unused { constructor() { saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'reader-saved-by-the-constructor-of-a-class-built-by-its-name',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Used { constructor() { saved = read; } } new Used(); ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-captured-by-a-parameter-decorator-of-a-constructor',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(@capture(read) value: unknown) {} } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-captured-by-a-parameter-decorator-of-a-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { method(@capture(read) value: unknown) {} } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-captured-by-a-decorator-of-a-class-never-built',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} @capture(read) class Unused { } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-in-the-body-of-a-constructor-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(value: unknown) { capture(read); } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'class-built-by-a-static-super-call-in-a-static-block',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Base { static make() { new this(); } } class Unused extends Base { static { super.make(); } constructor() { super(); saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-a-static-super-call-in-a-static-field',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Base { static make() { return new this(); } } class Unused extends Base { static made = super.make(); constructor() { super(); saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-with-a-static-super-call-that-builds-nothing-is-refused-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Base { static note() {} } class Unused extends Base { static { super.note(); } constructor() { super(); saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'class-that-extends-and-is-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Base { } class Unused extends Base { constructor() { super(); saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-static-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build static marker() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-an-instance-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build marker() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-property',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build marker = 1; constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-static-property',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build static marker = 1; constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-an-accessor',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build get marker() { return 1; } constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-parameter-of-a-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { method(@build value: unknown) {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-class-expression',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} const Unused = @build class { constructor() { saved = read; } }; if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-parameter-of-the-constructor',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(@build value: unknown) { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-with-members-and-no-decorator-is-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { marker() {} static other() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'class-built-by-an-arrow-of-a-static-field-that-reads-this',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { static made = (() => new this())(); constructor() { saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-a-static-method-its-static-block-calls-with-this',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { static make() { return new this(); } static { this.make(); } constructor() { saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-expression-built-by-its-static-block',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { const K = class { static { new this(); } constructor() { saved = read; } }; ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-with-a-computed-name-is-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Unused { [(() => 'k')()]() {} constructor() { saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
