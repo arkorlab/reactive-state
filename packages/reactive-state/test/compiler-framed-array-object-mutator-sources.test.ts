@@ -3566,6 +3566,36 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'json-replacer-on-a-mutator-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(Object.assign(a, {}), (k: string, v: any) => { if (k === '') v[0] = error; return v; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-replacer-on-a-define-property-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(Object.defineProperty(a, 'x', { value: 1 }), (k: string, v: any) => { if (k === '') v[0] = error; return v; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-replacer-on-a-reverse-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a.reverse(), (k: string, v: any) => { if (k === '') v[0] = error; return v; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-replacer-on-a-fill-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a.fill(1), (k: string, v: any) => { if (k === '') v[0] = error; return v; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-mutator-answer-without-a-replacer-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(Object.assign(a, {})); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'json-mutator-answer-with-a-null-replacer-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(Object.assign(a, {}), null, 2); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
