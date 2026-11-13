@@ -339,16 +339,38 @@ function unreachedClass(declaration: Node, referenced: ReadonlySet<string>): boo
 }
 
 /**
- * Whether a class may be built with no name of it read: a decorator is handed the class, or its
- * static code reads `this` or `super`, which hand it the class.
+ * Whether a class may be built with no name of it read: a decorator is handed the class, or what
+ * leads to it, the prototype, whichever its member is, a parameter of one among them; or its static
+ * code reads `this` or `super`, which hand it the class.
  */
 function buildsItself(declaration: Node): boolean {
   const { modifiers, members } = declaration as {
     readonly modifiers?: readonly Node[];
     readonly members?: readonly Node[];
   };
-  if (modifiers?.some((each) => each.kind === SyntaxKind.Decorator) === true) return true;
-  return (members ?? []).some((member) => isStaticCode(member) && exposesClass(member));
+  return (
+    isDecorated(modifiers) ||
+    (members ?? []).some((member) => isDecoratedMember(member) || isStaticExposure(member))
+  );
+}
+
+/** Whether a list of modifiers has a decorator. */
+function isDecorated(modifiers: readonly Node[] | undefined): boolean {
+  return modifiers?.some((each) => each.kind === SyntaxKind.Decorator) === true;
+}
+
+/** Whether a member of a class, or a parameter of it, has a decorator. */
+function isDecoratedMember(member: Node): boolean {
+  const { modifiers, parameters } = member as {
+    readonly modifiers?: readonly Node[];
+    readonly parameters?: readonly { readonly modifiers?: readonly Node[] }[];
+  };
+  return isDecorated(modifiers) || (parameters ?? []).some((each) => isDecorated(each.modifiers));
+}
+
+/** Whether a member of a class runs when it is defined and reads `this` or `super`. */
+function isStaticExposure(member: Node): boolean {
+  return isStaticCode(member) && exposesClass(member);
 }
 
 /** Whether a member of a class runs when the class is defined: a static block, a static field. */

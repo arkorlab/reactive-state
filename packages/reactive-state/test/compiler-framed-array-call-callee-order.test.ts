@@ -2077,6 +2077,71 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'class-built-by-the-decorator-of-a-static-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build static marker() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-an-instance-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build marker() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-property',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build marker = 1; constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-static-property',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build static marker = 1; constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-an-accessor',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { @build get marker() { return 1; } constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-parameter-of-a-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { method(@build value: unknown) {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-class-expression',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} const Unused = @build class { constructor() { saved = read; } }; if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-the-decorator-of-a-parameter-of-the-constructor',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(@build value: unknown) { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-with-members-and-no-decorator-is-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { marker() {} static other() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
+    id: 'class-built-by-an-arrow-of-a-static-field-that-reads-this',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { static made = (() => new this())(); constructor() { saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-a-static-method-its-static-block-calls-with-this',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Unused { static make() { return new this(); } static { this.make(); } constructor() { saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-expression-built-by-its-static-block',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { const K = class { static { new this(); } constructor() { saved = read; } }; ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-with-a-computed-name-is-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Unused { [(() => 'k')()]() {} constructor() { saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
