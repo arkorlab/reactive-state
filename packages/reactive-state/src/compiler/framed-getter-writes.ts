@@ -43,8 +43,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { frameMemberName } from './framed-bindings.ts';
-import { prototypeMayChange } from './framed-prototype-changes.ts';
-import { framedPossibleBranch } from './framed-writes.ts';
+import { framedPossibleBranch } from './framed-branches.ts';
 import { readsBinding } from './scope.ts';
 
 /** What a getter the copy of a spread runs writes into the object it runs on. */
@@ -69,14 +68,13 @@ export interface GetterWrite {
 }
 
 /**
- * The values a getter writes through `this`, or through `super`, which sets on the same receiver,
- * each a value a field of the object may hold when the copy reaches it: the right of an assignment
- * to a member of `this`, under the name of the member. A deletion writes none, and an arithmetic
- * assignment or an increment writes a number or a text, which is no object (it runs a setter all the
- * same: `accessorWrites` counts the names). None where `this` is given to anything else: a call, a
- * method, a pattern, a loop head, a list, the result of the getter. None where `super` is used and
- * the file may give an object another prototype: what a member of `super` reads or sets is then a
- * getter or a setter that runs with the same receiver.
+ * The values a getter writes through `this`, each a value a field of the object may hold when the
+ * copy reaches it: the right of an assignment to a member of `this`, under the name of the member. A
+ * deletion writes none, and an arithmetic assignment or an increment writes a number or a text, which
+ * is no object (it runs a setter all the same: `accessorWrites` counts the names). None where `this`
+ * is given to anything else: a call, a method, a pattern, a loop head, a list, the result of the
+ * getter. None where `super` is used: what a member of `super` reads or sets is a getter or a setter
+ * of the prototype that runs with the same receiver, which the compile does not follow.
  */
 export function getterWrites(getter: {
   readonly body?: Node | undefined;
@@ -102,9 +100,8 @@ function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | unde
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (!framedPossibleBranch(node)) continue;
-    if (node.kind === SyntaxKind.SuperKeyword && prototypeMayChange(node.getSourceFile()))
-      return undefined;
-    if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) {
+    if (node.kind === SyntaxKind.SuperKeyword) return undefined;
+    if (node.kind === SyntaxKind.ThisKeyword) {
       const used = use(node);
       if (used === undefined) return undefined;
       writes.push(...used.writes);

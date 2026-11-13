@@ -6,41 +6,42 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
  * A getter the copy of a spread runs writes into its receiver through `super` as it does through
- * `this`: an assignment to a member of `super` sets the field on the receiver, and a call of one
- * runs a method on it.
+ * `this`: an assignment to a member of `super` sets the field on the receiver (or runs a setter of
+ * the prototype that does), and a call of one runs a method on it. The compile does not follow a
+ * getter that uses `super`: every such source is refused.
  */
 const ENTRY = "const entry: [string, unknown] = ['message', 'safe'];";
 
 const CASES = [
   {
-    id: 'super-write-keeps-the-written-value',
+    id: 'super-write-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { super.field = error; return 0; } } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', 'error:'],
+    values: undefined,
   },
   {
-    id: 'super-element-write-keeps-the-written-value',
+    id: 'super-element-write-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { super['field'] = error; return 0; } } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', 'error:'],
+    values: undefined,
   },
   {
-    id: 'super-computed-write-keeps-the-written-value',
+    id: 'super-computed-write-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { super[name] = error; return 0; } } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', 'error:'],
+    values: undefined,
   },
   {
-    id: 'super-logical-write-keeps-the-written-value',
+    id: 'super-logical-write-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { super.field ||= error; return 0; } } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', 'error:'],
+    values: undefined,
   },
   {
-    id: 'super-write-in-an-arrow-keeps-the-written-value',
+    id: 'super-write-in-an-arrow-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { (() => { super.field = error; })(); return 0; } } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", '0:', 'error:'],
+    values: undefined,
   },
   {
     id: 'super-method-call-refuses',
@@ -67,10 +68,10 @@ const CASES = [
     values: undefined,
   },
   {
-    id: 'super-read-pin',
+    id: 'super-read-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { return super.field; } } })); }`,
     key: 'message',
-    values: ["'kept':", "'safe':", 'super.field:'],
+    values: undefined,
   },
   {
     id: 'super-in-a-method-of-the-getter-pin',
