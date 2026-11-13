@@ -26,7 +26,7 @@ import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
-import { getterElements, getterWrittenValues } from './framed-getter-elements.ts';
+import { getterElements, getterUnfollowed, getterWrittenValues } from './framed-getter-elements.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { listSource } from './framed-list-sources.ts';
@@ -366,9 +366,12 @@ function definedValues(
     hidden,
     (property, later) => mapElements(property, index, reading, later),
     (property, outer, name) => {
-      return getterWrittenValues(property, name, index, outer.data).flatMap((each) =>
+      const written = getterWrittenValues(property, name, index, outer.data).flatMap((each) =>
         descriptorValues(each, reading),
       );
+      if (!getterUnfollowed(property, name, index) || !isObjectLiteralExpression(property.parent))
+        return written;
+      return [...written, { value: property.parent, keys: [slotKey(index), 'value'] }];
     },
   );
 }
