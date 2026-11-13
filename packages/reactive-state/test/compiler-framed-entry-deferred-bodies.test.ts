@@ -367,6 +367,188 @@ const CASES = [
     key: 'message',
     values: ["'safe':", "{ 0: 'a', 1: { run: () => reviewed(entry) } }:1"],
   },
+  {
+    id: 'hook-of-a-key-the-prototype-has',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ __proto__: { 0: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-the-prototype-has-after-the-tuple',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: { 0: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-the-prototype-of-the-prototype-has',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: { __proto__: { 0: { toString: () => (reviewed(entry), 'k') } } }, 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-a-list-prototype-has',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: [{ toString: () => (reviewed(entry), 'k') }, 'x'], 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-a-conditional-prototype-has',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: flag ? { 0: { toString: () => (reviewed(entry), 'k') } } : null, 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-the-prototype-has-by-a-text-name',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { '__proto__': { 0: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-a-spread-brings',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { ...{ 0: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-a-spread-of-a-list-brings',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { ...[{ toString: () => (reviewed(entry), 'k') }], 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-a-spread-through-a-condition-brings',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { ...(flag ? { 0: { toString: () => (reviewed(entry), 'k') } } : {}), 1: 0 }]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-set-by-a-prototype-written-by-a-call',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, Object.setPrototypeOf({ 1: 0 }, { 0: { toString: () => (reviewed(entry), 'k') } })]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-the-prototype-an-object-create-gives',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, Object.create({ 0: { toString: () => (reviewed(entry), 'k') } })]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'prototype-given-by-a-name-holds-no-function-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: proto, 1: 0 }]); }",
+    key: 'message',
+    values: ["'safe':", '{ __proto__: proto, 1: 0 }:1'],
+  },
+  {
+    id: 'function-as-the-key-a-spread-brings-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { ...{ 0: () => reviewed(entry) }, 1: 0 }]); }",
+    key: 'message',
+    values: ["'safe':", '{ ...{ 0: () => reviewed(entry) }, 1: 0 }:1'],
+  },
+  {
+    id: 'function-as-the-key-the-prototype-has-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: { 0: () => reviewed(entry) }, 1: 0 }]); }",
+    key: 'message',
+    values: ["'safe':", '{ __proto__: { 0: () => reviewed(entry) }, 1: 0 }:1'],
+  },
+  {
+    id: 'hook-of-the-value-with-a-prototype-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { __proto__: { 1: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }]); }",
+    key: 'message',
+    values: ["'safe':", "{ __proto__: { 1: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }:1"],
+  },
+  {
+    id: 'function-as-a-key-in-parentheses-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[(() => reviewed(entry)), 0], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-a-key-after-a-comma-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[(0, () => reviewed(entry)), 0], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-a-key-in-a-branch-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[flag ? () => reviewed(entry) : 'a', 0], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-a-key-after-a-cast-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[(() => reviewed(entry)) as unknown, 0], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-a-key-before-a-fallback-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[(() => reviewed(entry)) || 'a', 0], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-the-key-of-an-object-entry-in-parentheses-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, { 0: (() => reviewed(entry)), 1: 0 }]); }",
+    key: 'message',
+    values: ["'safe':", '{ 0: (() => reviewed(entry)), 1: 0 }:1'],
+  },
+  {
+    id: 'hook-of-a-key-in-parentheses',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[({ toString: () => (reviewed(entry), 'k') }), 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-after-a-comma',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[(0, { toString: () => (reviewed(entry), 'k') }), 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-in-a-branch',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[flag ? { toString: () => (reviewed(entry), 'k') } : 'a', 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-after-a-cast',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[({ toString: () => (reviewed(entry), 'k') }) as unknown, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-before-a-fallback',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([[{ toString: () => (reviewed(entry), 'k') } || 'a', 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
 ] as const;
 
 describe('entry tuples a function of the argument list is given', () => {
