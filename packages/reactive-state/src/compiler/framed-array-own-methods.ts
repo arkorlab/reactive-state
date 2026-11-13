@@ -57,6 +57,7 @@ import { arrayIdentity } from './framed-array-identity.ts';
 import { instanceInitializer, invokedAtOnce } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { prototypeMayChange } from './framed-prototype-changes.ts';
 import { constantValue } from './numbers.ts';
 
 /** The names an array's own methods may take, and what a direct write of one declares. */
@@ -441,11 +442,12 @@ export function ownMethodAssignment(
   const key = frameMemberName(member);
   if (key === undefined || !OWN_METHODS.has(key) || arrayIdentity(member.expression) !== root)
     return undefined;
+  const creates = !prototypeMayChange(node.getSourceFile());
   return {
     key,
-    own: sourceArrayFunction(node.right) || knownNonNative(node.right),
+    own: creates && (sourceArrayFunction(node.right) || knownNonNative(node.right)),
     value: node.right,
-    ...PLAIN_PROPERTY,
+    ...(creates && PLAIN_PROPERTY),
   };
 }
 
@@ -495,6 +497,7 @@ export function assignMethods(source: Expression, own: OwnMethods): void {
 
 /** A written own method or callable value, with unknown entries kept unproven; a plain property. */
 function propertyOverride(property: Node): ArrayMethodOverride {
+  if (prototypeMayChange(property.getSourceFile())) return { own: false };
   if (isMethodDeclaration(property)) return { own: true, value: property, ...PLAIN_PROPERTY };
   if (!isPropertyAssignment(property)) return { own: false };
   const { initializer } = property;
