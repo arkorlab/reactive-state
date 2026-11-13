@@ -160,7 +160,7 @@ function memberWrites(
     const matches = asksAny(key) || write.key === undefined || write.key === key;
     if (!matches || reading.following.has(write.value)) return [];
     const copy = write.copiedAt !== undefined;
-    if (copy && write.without?.includes(rest[0] ?? '') === true) return [];
+    if (copy && rest[0] !== undefined && write.without?.includes(rest[0]) === true) return [];
     const took = takes(write, rest);
     if (took === undefined) return [];
     const following = new Set(reading.following).add(write.value);
