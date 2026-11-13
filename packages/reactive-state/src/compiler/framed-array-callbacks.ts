@@ -2,6 +2,7 @@ import {
   type CallExpression,
   type Expression,
   isArrowFunction,
+  isCallExpression,
   isFunctionExpression,
   isIdentifier,
   isTypeNode,
@@ -9,6 +10,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 import { nativePath } from './framed-mutator-calls.ts';
 
 /** The methods of an array that the language gives it: those a call of which runs no code of the program. */
@@ -20,6 +22,23 @@ export const ARRAY_METHODS: ReadonlySet<string> = new Set(
     );
   }),
 );
+
+/** The fields whose values are functions and data, no object the compile follows: a descriptor's, a list's length. */
+export const DESCRIPTOR_FIELDS: ReadonlySet<string> = new Set([
+  'configurable',
+  'enumerable',
+  'get',
+  'length',
+  'set',
+  'value',
+  'writable',
+]);
+
+/** The fields of a list that hold data: its length. */
+export const LIST_FIELDS: ReadonlySet<string> = new Set(['length']);
+
+/** A literal that holds a followed object holds it in every field. */
+export const NO_FIELDS: ReadonlySet<string> = new Set();
 
 /** The natives that read their arguments and run no application code on them. */
 export const READERS: ReadonlySet<string> = new Set([
@@ -47,6 +66,13 @@ export const CONVERTERS: ReadonlySet<string> = new Set([
   'String',
 ]);
 
+/** Whether a node is the first argument of a call: the position a native reads, and a later one it coerces. */
+export function isFirstArgument(call: Node, at: Node): call is CallExpression {
+  if (!isCallExpression(call)) return false;
+  const first: Node | undefined = call.arguments[0];
+  return first === at;
+}
+
 /** The parts of the path of a borrowed method: `Array.prototype.join.call`. */
 const BORROWED_PATH = 4;
 
@@ -57,9 +83,13 @@ export interface Borrowed {
   readonly receiver: Expression;
 }
 
-/** The method a call borrows from the array prototype, and the receiver it is given. */
+/**
+ * The method a call borrows from the array prototype, and the receiver it is given. The callee is
+ * written as the readers of borrowed calls read it, whole: `(0, Array.prototype.push).call(array, …)`
+ * is a call they cannot follow.
+ */
 export function borrowedMethod(call: CallExpression): Borrowed | undefined {
-  const path = nativePath(call.expression)?.split('.');
+  const path = globalPathOf(unwrapped(call.expression))?.join('.').split('.');
   const [receiver] = call.arguments;
   if (receiver === undefined || path?.length !== BORROWED_PATH) return undefined;
   const [owner, prototype, name, how] = path;
@@ -69,6 +99,15 @@ export function borrowedMethod(call: CallExpression): Borrowed | undefined {
     ? { name, apply: how === 'apply', receiver }
     : undefined;
 }
+
+/** The methods that answer an element of the array. */
+export const ELEMENT_RETURNING: ReadonlySet<string> = new Set([
+  'at',
+  'find',
+  'findLast',
+  'pop',
+  'shift',
+]);
 
 /** The place of the array among the parameters of a reducer: after the accumulator, the element and the index. */
 const REDUCER_ARRAY = 3;
