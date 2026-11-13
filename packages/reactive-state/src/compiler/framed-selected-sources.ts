@@ -36,6 +36,7 @@ import { frameBindingOf } from './framed-bindings.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { ANY_FIELD, fromKey, suffixStart } from './framed-pattern-members.ts';
+import { isWrittenMember } from './framed-written-members.ts';
 
 /**
  * What a destructuring picks out of a source, read where the compile can; the rest is kept whole.
@@ -250,6 +251,7 @@ function onlyReads(name: Identifier): boolean {
       (isArrayLiteralExpression(parent.left) || isObjectLiteralExpression(parent.left))
     );
   if (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) return false;
+  if (isWrittenMember(parent)) return false;
   const used = parent.parent;
   if (isCallExpression(used) && used.expression === parent)
     return isPropertyAccessExpression(parent) && !CHANGING.has(parent.name.text);
