@@ -1571,6 +1571,21 @@ const CASES = [
       'error:',
     ],
   },
+  {
+    id: 'named-getter-named-proto-kept-beside-a-null-prototype',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get __proto__() { this.field = error; return 0; }, __proto__: null, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'error:'],
+  },
+  {
+    id: 'named-getter-write-to-a-field-with-a-setter-stores-nothing-pin',
+    source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, get field() { return 'kept'; }, set field(value: unknown) {} } })); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      "{ ...{ get trigger() { this.field = error; return 0; }, get field() { return 'kept'; }, set field(value: unknown) {} } }:field",
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

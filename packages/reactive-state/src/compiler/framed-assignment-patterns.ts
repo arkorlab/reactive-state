@@ -302,7 +302,9 @@ function copiedWrites(
     const live = name === undefined || !replaced.has(name);
     if (live && isGetAccessorDeclaration(property) && copiedAfter(order, name, key))
       found.push(...gettersWrites(value, property, key, opaque));
-    if (name !== undefined && !isSetAccessorDeclaration(property)) replaced.add(name);
+    const field =
+      name !== undefined && !setsPrototype(property) && !isSetAccessorDeclaration(property);
+    if (field) replaced.add(name);
   }
   return found;
 }
