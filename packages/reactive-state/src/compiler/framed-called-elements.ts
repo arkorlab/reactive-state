@@ -42,10 +42,11 @@ export function calledArrayElements(
   };
 }
 
-/** A native object mutator, a borrowed array method or an insertion on the array itself. */
+/** A native object mutator, a borrowed array method on the array itself, or an insertion on it. */
 function trackedCall(node: CallExpression, root: FrameBinding): boolean {
-  if (mutatorInvocation(node) !== undefined || borrowedArrayMutation(node) !== undefined)
-    return true;
+  if (mutatorInvocation(node) !== undefined) return true;
+  const borrowed = borrowedArrayMutation(node);
+  if (borrowed !== undefined) return literalArrayBinding(borrowed.receiver) === root;
   const member = unwrapped(node.expression);
   return (
     (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
