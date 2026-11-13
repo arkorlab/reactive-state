@@ -2037,6 +2037,26 @@ const CASES = [
     converts: true,
   },
   {
+    id: 'reader-captured-by-a-parameter-decorator-of-a-constructor',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(@capture(read) value: unknown) {} } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-captured-by-a-parameter-decorator-of-a-method',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { method(@capture(read) value: unknown) {} } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-captured-by-a-decorator-of-a-class-never-built',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} @capture(read) class Unused { } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'reader-in-the-body-of-a-constructor-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(value: unknown) { capture(read); } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,

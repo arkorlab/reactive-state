@@ -312,6 +312,8 @@ function unreachedFunction(fn: Node, node: Node, referenced: ReadonlySet<string>
   if (!isFunctionCode(fn) || !isNested(fn) || runsAtOnce(fn, node) || reachedByProperty(fn))
     return false;
   if (isConstructorDeclaration(fn) && buildsItself(fn.parent)) return false;
+  if (definitionParts(fn).some((part) => node.pos >= part.pos && node.end <= part.end))
+    return false;
   const { names, computed } = namesOf(fn);
   if (computed) return false;
   if (names.every((name) => !referenced.has(name))) return true;
@@ -487,19 +489,22 @@ function isDeclarationName(node: Node): boolean {
 }
 
 /**
- * The parts of a function that run where it is written: a computed name, its decorators, and the
- * parameters of a generator that is called there, whose body waits for its iterator.
+ * The parts of a function that run where it is written: a computed name, its decorators and those of
+ * its parameters, and the parameters of a generator that is called there, whose body waits for its
+ * iterator.
  */
 function definitionParts(fn: Node): readonly Node[] {
   const { name, modifiers, parameters } = fn as {
     readonly name?: Node;
     readonly modifiers?: readonly Node[];
-    readonly parameters?: readonly Node[];
+    readonly parameters?: readonly (Node & { readonly modifiers?: readonly Node[] })[];
   };
-  const decorators = modifiers?.filter((each) => each.kind === SyntaxKind.Decorator) ?? [];
+  const decorators = (each: readonly Node[] | undefined): readonly Node[] =>
+    each?.filter((one) => one.kind === SyntaxKind.Decorator) ?? [];
   const run = isGenerator(fn) && madeInPlace(fn) ? (parameters ?? []) : [];
   const named = name !== undefined && isComputedPropertyName(name) ? [name] : [];
-  return [...named, ...decorators, ...run];
+  const given = (parameters ?? []).flatMap((each) => decorators(each.modifiers));
+  return [...named, ...decorators(modifiers), ...given, ...run];
 }
 
 /** Whether code that runs in the range reaches what the language may call by itself. */
