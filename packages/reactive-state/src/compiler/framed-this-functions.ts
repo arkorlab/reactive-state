@@ -1,10 +1,8 @@
 import {
   isArrowFunction,
   isFunctionExpression,
-  isGetAccessorDeclaration,
   isMethodDeclaration,
   isPropertyAssignment,
-  isSetAccessorDeclaration,
   isTypeNode,
   type Node,
   type ObjectLiteralElementLike,
@@ -28,14 +26,13 @@ export function namesThis(fn: Node): boolean {
   return false;
 }
 
-/** Whether a field of a literal is a function that names `this`: a method, an accessor, or a function expression. */
+/**
+ * Whether a field of a literal is a function that names `this` and is kept as a value: a method, or a
+ * function expression. An accessor is no such function: it runs where the literal is read, with the
+ * literal as `this`, and what it answers is kept.
+ */
 export function fieldNamesThis(field: ObjectLiteralElementLike): boolean {
-  if (
-    isMethodDeclaration(field) ||
-    isGetAccessorDeclaration(field) ||
-    isSetAccessorDeclaration(field)
-  )
-    return namesThis(field);
+  if (isMethodDeclaration(field)) return namesThis(field);
   if (!isPropertyAssignment(field)) return false;
   const value = field.initializer;
   return isFunctionExpression(value) && !isArrowFunction(value) && namesThis(value);

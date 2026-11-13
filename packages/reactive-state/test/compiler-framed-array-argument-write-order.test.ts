@@ -1461,6 +1461,11 @@ const CASES = [
     source: `function frames(error: Error) { const a: any[] = [error]; a.join = () => 'safe'; Object.assign.call(null, a, { join: Array.prototype.join }); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'descriptor-accessor-field-naming-this-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get get() { return () => this; } }); return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
