@@ -46,6 +46,7 @@ import {
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
+import { mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
@@ -582,25 +583,10 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
 /**
  * Whether a name that starts as a written array, or as a name that stands for one, is written as a
  * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
- * does not end at a written array (a scalar, a parameter) is no array the compile started from.
+ * ends at a value that is no array (a scalar, a function, an object) is no array the compile started from.
  */
 function rewrittenArray(binding: FrameBinding): boolean {
-  return startsAsArray(binding) && writtenAsWhole(binding);
-}
-
-/** Whether the initializer of a binding is a written array, or a chain of names that ends at one. */
-function startsAsArray(binding: FrameBinding): boolean {
-  const seen = new Set<FrameBinding>([binding]);
-  let { initializer } = binding;
-  while (initializer !== undefined) {
-    const start = unwrapped(initializer);
-    if (isArrayLiteralExpression(start)) return true;
-    const next = isIdentifier(start) ? frameBindingOf(start)?.binding : undefined;
-    if (next === undefined || seen.has(next)) return false;
-    seen.add(next);
-    ({ initializer } = next);
-  }
-  return false;
+  return mayStartAsArray(binding) && writtenAsWhole(binding);
 }
 
 /**

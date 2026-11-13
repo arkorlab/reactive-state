@@ -2965,6 +2965,31 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const initial = 'safe'; let text: string = initial; text = 'still safe'; return String([text]); }`,
     converts: false,
   },
+  {
+    id: 'param-chain-reassigned-converts',
+    source: `function frames(error: Error, original: unknown[]) { let values = original; values = [error]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-alias-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[]) { const initial = 'safe'; let text: string = initial; text = 'still safe'; return String([text]); }`,
+    converts: false,
+  },
+  {
+    id: 'destructured-scalar-alias-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[]) { const [initial] = ['safe']; let text: string = initial; text = 'still safe'; return String([text]); }`,
+    converts: false,
+  },
+  {
+    id: 'destructured-array-alias-reassigned-converts',
+    source: `function frames(error: Error, original: unknown[]) { const [inner] = [[] as any[]]; let values = inner; values = [error]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-array-alias-reassigned-converts',
+    source: `function frames(error: Error, original: unknown[]) { const { inner } = { inner: [] as any[] }; let values = inner; values = [error]; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
