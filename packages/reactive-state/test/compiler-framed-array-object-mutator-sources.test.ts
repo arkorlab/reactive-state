@@ -1511,6 +1511,63 @@ const ELEMENTS = [
     index: undefined,
     elements: ['error:', "'safe':", "'safe':"],
   },
+  {
+    id: 'assign-spread-before-an-accessor-pair-hides-the-write',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { ...{}, get 0() { this[1] = error; return 'safe'; }, get 1() { return 'safe'; }, set 1(value: unknown) {} }); return values; }`,
+    index: 1,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-symbol-length-getter-writes-a-slot',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get [Symbol.length]() { this[1] = error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ['error:', "'safe':", "'safe':"],
+  },
+  {
+    id: 'assign-symbol-call-getter-writes-no-slot',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get [Symbol('label')]() { this[1] = error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-spread-before-a-writing-setter',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { ...{}, get 0() { this.field = 1; return 'safe'; }, set field(value: unknown) { this[1] = error; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ ...{}, get 0() { this.field = 1; return 'safe'; }, set field(value: unknown) { this[1] = error; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-writing-setter-before-a-spread',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this.field = 1; return 'safe'; }, set field(value: unknown) { this[1] = error; }, ...{}, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ get 0() { this.field = 1; return 'safe'; }, set field(value: unknown) { this[1] = error; }, ...{}, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-computed-writing-setter-may-be-the-field',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this.field = 1; return 'safe'; }, set [name](value: unknown) { this[1] = error; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ get 0() { this.field = 1; return 'safe'; }, set [name](value: unknown) { this[1] = error; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-logical-write-to-a-slot-holding-a-value-pin',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this[1] ??= error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: ['error:', "'safe':"],
+  },
+  {
+    id: 'define-map-getter-logical-write-to-a-slot-holding-a-value-pin',
+    source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.defineProperties(values, { get 0() { this[1] ??= { value: error }; return { value: 'safe' }; }, 1: { value: 'safe' } }); return values; }`,
+    index: 1,
+    elements: ['error:', "'safe':"],
+  },
 ] as const;
 
 describe('descriptors built from constants that spread each other', () => {

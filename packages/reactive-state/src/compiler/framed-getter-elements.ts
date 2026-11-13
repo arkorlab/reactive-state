@@ -3,7 +3,6 @@ import {
   isComputedPropertyName,
   isGetAccessorDeclaration,
   isObjectLiteralExpression,
-  isPropertyAccessExpression,
   isSetAccessorDeclaration,
   isSpreadAssignment,
   isTypeNode,
@@ -13,12 +12,10 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { getterWrites } from './framed-getter-writes.ts';
-import { possibleKey, slotKey } from './framed-mutator-keys.ts';
-import { framedNativeConstructor } from './framed-sources.ts';
+import { isSymbolKey, possibleKey, slotKey } from './framed-mutator-keys.ts';
 
 /** The values the getters of a source write through `this` before the fields after them are read. */
 
@@ -56,37 +53,42 @@ function runsBeforeSlot(getter: string | undefined, index: number | undefined): 
   return own !== undefined && (index === undefined || own < index);
 }
 
-/** The global that names the well-known symbols. */
-const SYMBOLS: ReadonlySet<string> = new Set(['Symbol']);
-
 /**
- * Whether a field is named by a well-known symbol (`[Symbol.iterator]`): a copy reaches the symbols after
+ * Whether a field is named by a symbol (`[Symbol.iterator]`): a copy reaches the symbols after
  * every array index and every other name, so what such a getter writes comes too late for any slot.
+ * Other members of `Symbol`, `Symbol.length`, read numbers and strings, which `isSymbolKey` leaves out.
  */
 function symbolKeyed(property: ObjectLiteralElementLike): boolean {
-  if (isSpreadAssignment(property) || !isComputedPropertyName(property.name)) return false;
-  const key = unwrapped(property.name.expression);
-  return isPropertyAccessExpression(key) && framedNativeConstructor(key.expression, SYMBOLS);
+  return (
+    !isSpreadAssignment(property) &&
+    isComputedPropertyName(property.name) &&
+    isSymbolKey(property.name.expression)
+  );
 }
 
 /** What a field of a written object is where a getter assigns to it. */
 type Slot = 'absent' | 'accessor' | 'data' | 'setter';
 
 /**
- * What the field a getter assigns to is: none, so that nothing the copy takes is changed (the copy
- * works from the keys the source had before it began); a value, which the assignment replaces; an
+ * What the field a getter assigns to may be: none, so that nothing the copy takes is changed (the
+ * copy works from the keys the source had before it began); a value, which the assignment replaces; an
  * accessor, whose setter an assignment runs instead (a getter alone swallows it); a setter that names
- * `this`, which writes as it likes. A spread or a name that is computed leaves it a value.
+ * `this`, which writes as it likes. A spread may give the name a value, and a field whose name is
+ * computed may be any field: such a field adds what it may make of the field to what it may have
+ * been, and the fields written after it, by name, make what they make of each.
  */
-function slotOf(literal: ObjectLiteralExpression | undefined, name: string): Slot {
-  if (literal === undefined) return 'data';
-  let slot = 'absent' as Slot;
+function slotsOf(literal: ObjectLiteralExpression | undefined, name: string): ReadonlySet<Slot> {
+  if (literal === undefined) return new Set<Slot>(['data']);
+  let slots = new Set<Slot>(['absent']);
   for (const property of literal.properties) {
     const key = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
-    if (key === undefined) return 'data';
-    if (key === name) slot = slotAfter(slot, property);
+    if (key !== name && key !== undefined) continue;
+    const made = [...slots].map((each) => slotAfter(each, property));
+    if (key === name) slots = new Set(made);
+    else if (isSpreadAssignment(property)) slots.add('data');
+    else for (const each of made) slots.add(each);
   }
-  return slot;
+  return slots;
 }
 
 /** The slot a field makes of one that was: a setter or a getter makes an accessor, any other a value. */
@@ -135,7 +137,7 @@ export function getterUnfollowed(
   return writes.some((each) => {
     return each.name === undefined
       ? hasWritingSetter(literal)
-      : slotOf(literal, each.name) === 'setter';
+      : slotsOf(literal, each.name).has('setter');
   });
 }
 
@@ -160,7 +162,7 @@ export function getterWrittenValues(
       return runsBeforeSlot(name, index) && !overwritten;
     }
     const stored = possibleKey(written, index) && runsBefore(name, written);
-    return stored && !hidden.has(written) && slotOf(literal, written) === 'data';
+    return stored && !hidden.has(written) && slotsOf(literal, written).has('data');
   };
   return (getterWrites(property) ?? [])
     .filter((each) => reaches(each.name))
