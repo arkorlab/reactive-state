@@ -46,6 +46,7 @@ import {
   ELEMENT_RETURNING,
   DESCRIPTOR_FIELDS,
   callsBack,
+  copiesElements,
   handsArray,
   isFirstArgument,
   LIST_FIELDS,
@@ -371,12 +372,13 @@ function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): 
   if (subject === 'echo' && MUTATING.has(name)) return UNKNOWN;
   if (ELEMENT_RETURNING.has(name) && elementWritten(call)) return UNKNOWN;
   const answer = SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
-  return handsElements(call, name) ? { ...answer, spreads: true } : answer;
+  return handsElements(call, name) || copiesElements(name) ? { ...answer, spreads: true } : answer;
 }
 
 /**
  * Whether a method gives the elements of the array to a function: a callback, a comparator. An array
- * that holds itself in an element hands itself to the function through it.
+ * that holds itself in an element hands itself to the function through it, and answers itself in the
+ * elements of an answer (`copiesElements`).
  */
 function handsElements(call: Node, name: string): boolean {
   return isCallExpression(call) && call.arguments.length > 0 && callsBack(name);
@@ -628,7 +630,8 @@ function borrowedUse(call: CallExpression, borrowed: Borrowed, subject: Subject)
   if (!isArray(subject) || (subject === 'echo' && MUTATING.has(name))) return UNKNOWN;
   if (apply ? callsBack(name) : handsArray(call, name, 1)) return UNKNOWN;
   const answer = SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
-  return call.arguments.length > 1 && callsBack(name) ? { ...answer, spreads: true } : answer;
+  const hands = call.arguments.length > 1 && callsBack(name);
+  return hands || copiesElements(name) ? { ...answer, spreads: true } : answer;
 }
 
 /**
