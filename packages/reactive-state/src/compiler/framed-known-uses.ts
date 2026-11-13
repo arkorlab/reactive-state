@@ -627,6 +627,7 @@ function borrowedUse(call: CallExpression, borrowed: Borrowed, subject: Subject)
   const { name, apply } = borrowed;
   if (!isArray(subject) || (subject === 'echo' && MUTATING.has(name))) return UNKNOWN;
   if (apply ? callsBack(name) : handsArray(call, name, 1)) return UNKNOWN;
+  if (ELEMENT_RETURNING.has(name) && elementWritten(call)) return UNKNOWN;
   const answer = SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
   return call.arguments.length > 1 && callsBack(name) ? { ...answer, spreads: true } : answer;
 }
