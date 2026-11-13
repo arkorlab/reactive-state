@@ -31,6 +31,7 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTaggedTemplateExpression,
+  isTypeNode,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -42,6 +43,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { frameMemberName } from './framed-bindings.ts';
+import { readsBinding } from './scope.ts';
 
 /** What a getter the copy of a spread runs writes into the object it runs on. */
 
@@ -164,6 +166,7 @@ function accessorUses(
         (each) => each === undefined || name === undefined || each === name,
       );
       if (invoked && !run.has(setter)) {
+        if (readsArgument(setter)) return undefined;
         run.add(setter);
         pending.push(setter);
       }
@@ -183,6 +186,30 @@ function accessorUses(
     named: found.flatMap((each) => each.named),
     deleted: found.flatMap((each) => each.deleted),
   };
+}
+
+/**
+ * Whether a setter reads the value it is given: a name its parameter binds, or `arguments`. What the
+ * write that ran it assigned goes where the setter takes it, which the compile does not follow.
+ */
+function readsArgument(setter: SetAccessorDeclaration): boolean {
+  const names = new Set(['arguments']);
+  const binding: Node[] = setter.parameters.map((each) => each.name);
+  for (let node = binding.pop(); node !== undefined; node = binding.pop()) {
+    if (isIdentifier(node)) names.add(node.text);
+    node.forEachChild((child) => {
+      binding.push(child);
+    });
+  }
+  const pending: Node[] = setter.body === undefined ? [] : [setter.body];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (isIdentifier(node) && names.has(node.text) && readsBinding(node)) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /** Whether a write is certain to be the argument of a setter: its name is known, and a setter has it. */
@@ -332,7 +359,8 @@ function runsPrototypeSetter(
   if (!sets) return false;
   const own = new Set(
     object.properties.flatMap((each) => {
-      const name = isSpreadAssignment(each) ? undefined : accessorName(each.name);
+      if (isSpreadAssignment(each)) return [...surelyCopied(each.expression)];
+      const name = accessorName(each.name);
       return name === undefined ? [] : [name];
     }),
   );
