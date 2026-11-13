@@ -33,6 +33,7 @@ import {
 import { writtenArrayKey } from './framed-array-functions.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
+import { callbackTakesList } from './framed-callback-lists.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { ANY_FIELD, fromKey, suffixStart } from './framed-pattern-members.ts';
@@ -252,7 +253,11 @@ function onlyReads(name: Identifier): boolean {
   if (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) return false;
   const used = parent.parent;
   if (isCallExpression(used) && used.expression === parent)
-    return isPropertyAccessExpression(parent) && !CHANGING.has(parent.name.text);
+    return (
+      isPropertyAccessExpression(parent) &&
+      !CHANGING.has(parent.name.text) &&
+      !callbackTakesList(parent.name.text, used)
+    );
   if (isBinaryExpression(used))
     return !(used.left === parent && isAssignmentOperator(used.operatorToken.kind));
   return !(
