@@ -258,26 +258,48 @@ function declaresValue(node: Identifier): boolean {
   );
 }
 
+/** `node` within the parentheses, casts and `!` that wrap it, which `uncast` reads past. */
+function wrapperOf(node: Node): Node {
+  let at = node;
+  while (
+    isParenthesizedExpression(at) ||
+    isAsExpression(at) ||
+    isSatisfiesExpression(at) ||
+    isNonNullExpression(at) ||
+    isTypeAssertion(at)
+  ) {
+    at = at.parent;
+  }
+  return at;
+}
+
+/** Whether `node` is a call of `useCallback` that is handed `fn`, past casts, as its function. */
+function isCallbackOf(node: Node, fn: Node): boolean {
+  const [first] = isCallExpression(node) ? node.arguments : [];
+  return (
+    isCallExpression(node) &&
+    first !== undefined &&
+    uncast(first) === fn &&
+    namesHook(node.expression, CALLBACKS)
+  );
+}
+
 /**
  * Whether `node` is the name of a function or class expression that the constant of that name
  * holds, `const handler = function handler() {}`, past the parentheses, casts and `!` that
- * `constantBody` reads past: within it, it is that value, as the constant's name is — one name, one
- * value.
+ * `constantBody` reads past, and the call of `useCallback` it is handed to, `const handler =
+ * useCallback(function handler() {}, [])`: within it, it is that value, as the constant's name is
+ * — one name, one value. None of a function another call is handed, or one `useCallback` is given
+ * among its dependencies, whose answer is not the function.
  */
 function namesItsHolder(node: Identifier): boolean {
   const { parent } = node;
   if (!(isFunctionExpression(parent) || isClassExpression(parent)) || parent.name !== node) {
     return false;
   }
-  let holder = parent.parent;
-  while (
-    isParenthesizedExpression(holder) ||
-    isAsExpression(holder) ||
-    isSatisfiesExpression(holder) ||
-    isNonNullExpression(holder) ||
-    isTypeAssertion(holder)
-  ) {
-    holder = holder.parent;
+  let holder = wrapperOf(parent.parent);
+  if (isFunctionExpression(parent) && isCallbackOf(holder, parent)) {
+    holder = wrapperOf(holder.parent);
   }
   return (
     isVariableDeclaration(holder) && isIdentifier(holder.name) && holder.name.text === node.text
