@@ -338,7 +338,7 @@ function fieldValues(
   if (isGetAccessorDeclaration(property))
     return returnedBy(property).map((value) => ({ value, keys: [] }));
   if (!isSpreadAssignment(property)) return [];
-  const copied = { ...reading, getters: reading.data, inherited: false };
+  const copied = { ...reading, getters: reading.data, inherited: false, setters: [] };
   return fieldsOf([{ value: property.expression, keys: [] }], copied);
 }
 

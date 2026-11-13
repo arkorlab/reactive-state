@@ -1393,6 +1393,35 @@ const CASES = [
       '0:',
     ],
   },
+  {
+    id: 'spread-getter-write-runs-a-setter-that-a-later-spread-may-keep',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, ...{ get 0() { delete this.activate; return 0; }, activate: 5 }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', '0:', '5:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-runs-a-setter-a-later-spread-of-accessors-replaces-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, ...{ get activate() { return 1; } }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', '1:'],
+  },
+  {
+    id: 'spread-getter-write-runs-a-setter-a-later-spread-replaces-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, ...{ activate: 5 }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', '5:'],
+  },
+  {
+    id: 'inherited-setters-are-not-given-to-a-spread-source-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { __proto__: { ...{ get trigger() { this.activate = 0; return 0; }, field: 'kept' } }, set activate(value: unknown) { mutate(this); } })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      "{ ...{ get trigger() { this.activate = 0; return 0; }, field: 'kept' } }:",
+      '0:',
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

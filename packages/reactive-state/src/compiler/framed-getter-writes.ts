@@ -81,14 +81,17 @@ export function getterWrites(getter: {
 interface ThisUses {
   readonly writes: readonly GetterWrite[];
   readonly named: readonly (string | undefined)[];
+  /** The names it deletes from the object, none known where the name is computed. */
+  readonly deleted: readonly (string | undefined)[];
 }
 
-const NOTHING: ThisUses = { writes: [], named: [] };
+const NOTHING: ThisUses = { writes: [], named: [], deleted: [] };
 
 /** What the mentions of `this` in a body come to; none where `this` is given on. */
 function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | undefined {
   const writes: GetterWrite[] = [];
   const named: (string | undefined)[] = [];
+  const deleted: (string | undefined)[] = [];
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (node.kind === SyntaxKind.ThisKeyword) {
@@ -96,6 +99,7 @@ function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | unde
       if (used === undefined) return undefined;
       writes.push(...used.writes);
       named.push(...used.named);
+      deleted.push(...used.deleted);
     }
     const rebinds =
       (isFunctionLikeDeclaration(node) && !isArrowFunction(node)) ||
@@ -106,7 +110,7 @@ function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | unde
         pending.push(child);
       });
   }
-  return { writes, named };
+  return { writes, named, deleted };
 }
 
 /** The name a field of a written object is set under, none where it is computed. */
@@ -130,17 +134,26 @@ export function accessorWrites(
   getter: GetAccessorDeclaration,
   receiving: readonly SetAccessorDeclaration[] = [],
 ): readonly GetterWrite[] | undefined {
+  return accessorUses(object, getter, receiving)?.writes;
+}
+
+/** What running a getter does to the object it runs on, the setters its assignments run included. */
+function accessorUses(
+  object: ObjectLiteralExpression,
+  getter: GetAccessorDeclaration,
+  receiving: readonly SetAccessorDeclaration[],
+): ThisUses | undefined {
   const setters = [
     ...object.properties.filter((each, at, all) => isLiveSetter(each, all.slice(at + 1))),
     ...receiving,
   ].filter((each) => isSetAccessorDeclaration(each));
-  const found: GetterWrite[] = [];
+  const found: ThisUses[] = [];
   const run = new Set<Node>([getter]);
   const pending: { readonly body?: Node | undefined }[] = [getter];
   for (let accessor = pending.pop(); accessor !== undefined; accessor = pending.pop()) {
     const uses = thisUses(accessor);
     if (uses === undefined || runsPrototypeSetter(object, uses.named)) return undefined;
-    found.push(...uses.writes);
+    found.push(uses);
     for (const setter of setters) {
       const name = accessorName(setter.name);
       const invoked = uses.named.some(
@@ -152,7 +165,105 @@ export function accessorWrites(
       }
     }
   }
-  return found;
+  return {
+    writes: found.flatMap((each) => each.writes),
+    named: found.flatMap((each) => each.named),
+    deleted: found.flatMap((each) => each.deleted),
+  };
+}
+
+/**
+ * The names a spread of an expression surely copies as own fields of its own: those of a written
+ * object, a setter's among them (a spread reads it as `undefined`), and those of the spreads it holds,
+ * but for the names a getter among its fields may delete before the copy reaches them. Another getter
+ * than the ones written out, or a getter that gives `this` on, may delete any: none is sure.
+ */
+export function surelyCopied(copied: Expression): ReadonlySet<string> {
+  const value = unwrapped(copied);
+  const names = new Set<string>();
+  if (!isObjectLiteralExpression(value)) return names;
+  const deleted: (string | undefined)[] = [];
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) {
+      for (const each of surelyCopied(property.expression)) names.add(each);
+      continue;
+    }
+    if (isGetAccessorDeclaration(property))
+      deleted.push(...(accessorUses(value, property, [])?.deleted ?? [undefined]));
+    const name =
+      isPropertyAssignment(property) && setsProto(property)
+        ? undefined
+        : accessorName(property.name);
+    if (name !== undefined) names.add(name);
+  }
+  return deleted.includes(undefined)
+    ? new Set()
+    : new Set([...names].filter((each) => !deleted.includes(each)));
+}
+
+/** Whether a written field sets the prototype of the object: `__proto__: value`. */
+function setsProto(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    (isIdentifier(property.name) || isStringLiteral(property.name)) &&
+    property.name.text === '__proto__'
+  );
+}
+
+/** The last array index: a larger integer names an ordinary property. */
+const LAST_INDEX = 4_294_967_294;
+
+/**
+ * The names of a written object in the order a copy reaches them: an array index first, in order, then
+ * the others as they were first written. None where a spread of what is no written object, or a name
+ * that is computed, leaves the order unknown.
+ */
+export function copyOrder(object: ObjectLiteralExpression): readonly string[] | undefined {
+  const names: string[] = [];
+  for (const property of object.properties) {
+    if (setsProto(property)) continue;
+    const found = isSpreadAssignment(property)
+      ? spreadOrder(property.expression)
+      : namesOf(property);
+    if (found === undefined) return undefined;
+    for (const each of found) if (!names.includes(each)) names.push(each);
+  }
+  return [
+    ...names.filter((each) => isIndex(each)).toSorted((one, two) => Number(one) - Number(two)),
+    ...names.filter((each) => !isIndex(each)),
+  ];
+}
+
+/** Whether a name is the text of an array index. */
+function isIndex(name: string): boolean {
+  return /^(?:0|[1-9]\d*)$/u.test(name) && Number(name) <= LAST_INDEX;
+}
+
+/** The name of a written field, none known where it is computed. */
+function namesOf(property: ObjectLiteralElementLike): readonly string[] | undefined {
+  if (isSpreadAssignment(property)) return undefined;
+  const name = accessorName(property.name);
+  return name === undefined ? undefined : [name];
+}
+
+/** The names a spread of a written object puts among the fields, none known for any other. */
+function spreadOrder(copied: Expression): readonly string[] | undefined {
+  const value = unwrapped(copied);
+  return isObjectLiteralExpression(value) ? copyOrder(value) : undefined;
+}
+
+/**
+ * Whether a copy reaches the field after the getter named `getter` has run: the field is among the
+ * names, and comes after it. Any, where the order is unknown or the getter's name is computed.
+ */
+export function copiedAfter(
+  order: readonly string[] | undefined,
+  getter: string | undefined,
+  field: string,
+): boolean {
+  if (order === undefined || getter === undefined) return true;
+  const at = order.indexOf(field);
+  return at !== -1 && at > order.indexOf(getter);
 }
 
 /** Whether a field is a setter that no field after it replaces with a value or a method. */
@@ -165,14 +276,9 @@ function isLiveSetter(
   return name === undefined || after.every((each) => !replaces(each, name));
 }
 
-/** Whether a field gives the name a value that is no accessor: a field, a method, a spread that holds it. */
+/** Whether a field gives the name a value that is no accessor: a field, a method, a spread that surely copies it. */
 function replaces(property: ObjectLiteralElementLike, name: string): boolean {
-  if (isSpreadAssignment(property)) {
-    const value = unwrapped(property.expression);
-    return (
-      isObjectLiteralExpression(value) && value.properties.some((each) => replaces(each, name))
-    );
-  }
+  if (isSpreadAssignment(property)) return surelyCopied(property.expression).has(name);
   if (isGetAccessorDeclaration(property) || isSetAccessorDeclaration(property)) return false;
   return accessorName(property.name) === name;
 }
@@ -182,12 +288,7 @@ function runsPrototypeSetter(
   object: ObjectLiteralExpression,
   named: readonly (string | undefined)[],
 ): boolean {
-  const sets = object.properties.some((each) => {
-    if (!isPropertyAssignment(each)) return false;
-    return (
-      (isIdentifier(each.name) || isStringLiteral(each.name)) && each.name.text === '__proto__'
-    );
-  });
+  const sets = object.properties.some((each) => setsProto(each));
   if (!sets) return false;
   const own = new Set(
     object.properties.flatMap((each) => {
@@ -223,9 +324,12 @@ function memberUse(
   if (isTaggedTemplateExpression(user)) return user.tag === member ? undefined : NOTHING;
   if ((isCallExpression(user) || isNewExpression(user)) && user.expression === member)
     return undefined;
-  if (isDeleteExpression(user)) return NOTHING;
+  if (isDeleteExpression(user))
+    return { writes: [], named: [], deleted: [frameMemberName(access)] };
   if (isPrefixUnaryExpression(user) || isPostfixUnaryExpression(user))
-    return changes(user.operator) ? { writes: [], named: [frameMemberName(access)] } : NOTHING;
+    return changes(user.operator)
+      ? { writes: [], named: [frameMemberName(access)], deleted: [] }
+      : NOTHING;
   if (isBinaryExpression(user) && user.left === member) return assignment(user, access);
   return isTarget(member) ? undefined : NOTHING;
 }
@@ -245,8 +349,8 @@ function assignment(
   if (kind < SyntaxKind.FirstAssignment || kind > SyntaxKind.LastAssignment) return NOTHING;
   const name = frameMemberName(access);
   return VALUE_WRITES.has(kind)
-    ? { writes: [{ name, value: user.right }], named: [name] }
-    : { writes: [], named: [name] };
+    ? { writes: [{ name, value: user.right }], named: [name], deleted: [] }
+    : { writes: [], named: [name], deleted: [] };
 }
 
 /** Whether a node is a place in a pattern that is assigned, or the head of a loop. */
