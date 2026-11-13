@@ -128,9 +128,9 @@ const ARRAY_PARAMETER: ReadonlyMap<string, number> = new Map([
   ['some', 2],
 ]);
 
-/** Whether a method calls a function back, and may hand it the array. */
+/** Whether a method calls a function back, and may hand it the array, or the elements it holds (a comparator). */
 export function callsBack(name: string): boolean {
-  return ARRAY_PARAMETER.has(name);
+  return ARRAY_PARAMETER.has(name) || name === 'sort' || name === 'toSorted';
 }
 
 /**

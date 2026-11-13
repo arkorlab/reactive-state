@@ -110,7 +110,7 @@ export interface Use {
   readonly contained?: boolean;
   readonly echo?: boolean;
   readonly carries?: boolean;
-  /** An object spread copies the mention: the copy holds what the array holds, itself among them. */
+  /** A spread, a loop, a native or a callback takes the mention's elements: an array that holds itself hands itself on. */
   readonly spreads?: boolean;
 }
 
@@ -375,7 +375,16 @@ function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): 
   if (isCallExpression(call) && handsArray(call, name)) return UNKNOWN;
   if (subject === 'echo' && MUTATING.has(name)) return UNKNOWN;
   if (ELEMENT_RETURNING.has(name) && elementWritten(call)) return UNKNOWN;
-  return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+  const answer = SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+  return handsElements(call, name) ? { ...answer, spreads: true } : answer;
+}
+
+/**
+ * Whether a method gives the elements of the array to a function: a callback, a comparator. An array
+ * that holds itself in an element hands itself to the function through it.
+ */
+function handsElements(call: Node, name: string): boolean {
+  return isCallExpression(call) && call.arguments.length > 0 && callsBack(name);
 }
 
 /**
@@ -623,7 +632,8 @@ function borrowedUse(call: CallExpression, borrowed: Borrowed, subject: Subject)
   const { name, apply } = borrowed;
   if (!isArray(subject) || (subject === 'echo' && MUTATING.has(name))) return UNKNOWN;
   if (apply ? callsBack(name) : handsArray(call, name, 1)) return UNKNOWN;
-  return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+  const answer = SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+  return call.arguments.length > 1 && callsBack(name) ? { ...answer, spreads: true } : answer;
 }
 
 /**

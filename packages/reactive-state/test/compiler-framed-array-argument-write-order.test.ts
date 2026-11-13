@@ -1587,6 +1587,26 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); Array.prototype.push.call(r, error); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'callback-on-an-array-that-holds-itself-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = []; Object.assign(a, { 0: Object.assign(a, {}) }); const r: any = Object.assign(a, {}); r.forEach((x: any) => { x[0] = error; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callback-on-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = []; Object.assign(a, { 0: Object.assign(a, {}) }); a.forEach((x: any) => { x[0] = error; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callback-with-no-array-parameter-on-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; a.forEach((x: any) => { void x; }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-callback-on-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = []; Object.assign(a, { 0: Object.assign(a, {}) }); Array.prototype.forEach.call(a, (x: any) => { x[0] = error; }); return String(a); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
