@@ -3596,6 +3596,41 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(Object.assign(a, {}), null, 2); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'replaced-alias-of-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; let alias = values; alias = [error]; return String(alias); }`,
+    converts: true,
+  },
+  {
+    id: 'replaced-alias-through-a-chain-is-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; const first = values; let alias = first; alias = [error]; return String(alias); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-replaced-after-a-read-is-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; let alias = values; const text = String(alias); alias = [error]; return text + String(alias); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-replaced-in-a-branch-is-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; let alias = values; if (flag) { alias = [error]; } return String(alias); }`,
+    converts: true,
+  },
+  {
+    id: 'replaced-alias-with-a-mutator-target-is-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; let alias = values; alias = [error]; Object.assign(alias, {}); return String(alias); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-replaced-by-the-array-itself-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; let alias = values; alias = values; return String(alias); }`,
+    converts: true,
+  },
+  {
+    id: 'constant-alias-of-an-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; const alias = values; return String(alias); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
