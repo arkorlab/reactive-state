@@ -1629,6 +1629,177 @@ const ELEMENTS = [
     elements: ['error:', "'safe':"],
   },
   {
+    id: 'assign-getter-increment-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x++; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x++; return 'safe'; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-prefix-increment-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { ++this.x; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { ++this.x; return 'safe'; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-prefix-decrement-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { --this.x; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { --this.x; return 'safe'; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-arithmetic-assignment-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x += 1; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x += 1; return 'safe'; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-exponent-assignment-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x **= 2; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x **= 2; return 'safe'; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-increment-runs-a-writing-setter-of-its-own-object',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this.x++; return 'safe'; }, set x(v: unknown) { this[1] = error; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ get 0() { this.x++; return 'safe'; }, set x(v: unknown) { this[1] = error; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-increment-of-an-own-field-with-a-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x++; return 'safe'; }, x: 1, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-getter-increment-with-a-null-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: null, get 0() { this.x++; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-getter-increment-of-a-computed-name-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this[k]++; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this[k]++; return 'safe'; }, 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-deletes-an-own-field-then-assigns-to-meet-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this.x; this.x = 0; return 'safe'; }, x: 'own', 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this.x; this.x = 0; return 'safe'; }, x: 'own', 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-deletes-an-own-field-an-earlier-getter-assigns-to-meet-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[2] = error; } }, get 0() { delete this.x; return 'x'; }, get 1() { this.x = 0; return 'safe'; }, x: 'own', 2: 'safe' }); return values; }`,
+    index: 2,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[2] = error; } }, get 0() { delete this.x; return 'x'; }, get 1() { this.x = 0; return 'safe'; }, x: 'own', 2: 'safe' }:2",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-deletes-a-computed-name-then-assigns-to-meet-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this[k]; this.x = 0; return 'safe'; }, x: 'own', 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this[k]; this.x = 0; return 'safe'; }, x: 'own', 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-deletes-an-own-field-then-increments-it-to-meet-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this.x; this.x++; return 'safe'; }, x: 'own', 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this.x; this.x++; return 'safe'; }, x: 'own', 1: 'safe' }:1",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-assigns-an-own-field-with-a-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { this.x = 0; return 'safe'; }, x: 'own', 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-getter-deletes-another-name-with-a-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.assign(values, { __proto__: { set x(v: unknown) { this[1] = error; } }, get 0() { delete this.other; this.x = 0; return 'safe'; }, x: 'own', 1: 'safe' }); return values; }`,
+    index: 1,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-map-getter-deletes-an-own-field-then-assigns-to-meet-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperties(values, { __proto__: { set x(v: unknown) { this[1] = { value: error }; } }, get 0() { delete this.x; this.x = 0; return { value: 'safe' }; }, x: 'own', 1: { value: 'safe' } }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = { value: error }; } }, get 0() { delete this.x; this.x = 0; return { value: 'safe' }; }, x: 'own', 1: { value: 'safe' } }:1.value",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'define-map-getter-increment-may-run-a-setter-of-the-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperties(values, { __proto__: { set x(v: unknown) { this[1] = { value: error }; } }, get 0() { this.x++; return { value: 'safe' }; }, 1: { value: 'safe' } }); return values; }`,
+    index: 1,
+    elements: [
+      "{ __proto__: { set x(v: unknown) { this[1] = { value: error }; } }, get 0() { this.x++; return { value: 'safe' }; }, 1: { value: 'safe' } }:1.value",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'define-descriptor-increment-runs-a-writing-setter',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { this.writable++; return true; }, set writable(v: unknown) { this.value = error; } }); return values; }`,
+    index: 0,
+    elements: [
+      '{ get enumerable() { this.writable++; return true; }, set writable(v: unknown) { this.value = error; } }:value',
+    ],
+  },
+  {
+    id: 'define-descriptor-prefix-increment-runs-a-writing-setter',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { ++this.writable; return true; }, set writable(v: unknown) { this.value = error; } }); return values; }`,
+    index: 0,
+    elements: [
+      '{ get enumerable() { ++this.writable; return true; }, set writable(v: unknown) { this.value = error; } }:value',
+    ],
+  },
+  {
+    id: 'define-descriptor-arithmetic-assignment-runs-a-writing-setter',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { this.writable -= 1; return true; }, set writable(v: unknown) { this.value = error; } }); return values; }`,
+    index: 0,
+    elements: [
+      '{ get enumerable() { this.writable -= 1; return true; }, set writable(v: unknown) { this.value = error; } }:value',
+    ],
+  },
+  {
+    id: 'define-descriptor-increment-of-an-own-field-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { this.writable++; return true; }, writable: 1 }); return values; }`,
+    index: 0,
+    elements: [],
+  },
+  {
     id: 'assign-spread-before-an-accessor-pair-hides-the-write',
     source: `function frames(error: Error, name: string) { const values: unknown[] = ['safe']; Object.assign(values, { ...{}, get 0() { this[1] = error; return 'safe'; }, get 1() { return 'safe'; }, set 1(value: unknown) {} }); return values; }`,
     index: 1,

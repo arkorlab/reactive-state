@@ -11,7 +11,12 @@ import {
 
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { deletedNames, getterWrites, settingPrototype } from './framed-getter-writes.ts';
+import {
+  assignedNames,
+  deletedNames,
+  getterWrites,
+  settingPrototype,
+} from './framed-getter-writes.ts';
 import { isSymbolKey, possibleKey, slotKey } from './framed-mutator-keys.ts';
 import { namesThis } from './framed-this-functions.ts';
 
@@ -75,7 +80,7 @@ type Slot = 'absent' | 'accessor' | 'data' | 'setter';
  * computed may be any field: such a field adds what it may make of the field to what it may have
  * been, and the fields written after it, by name, make what they make of each. An accessor of the
  * object that deletes the name, or any name, may have removed the field before the assignment, which
- * then makes a value.
+ * then makes a value, or meets the prototype: the name may be absent as well.
  */
 function slotsOf(literal: ObjectLiteralExpression | undefined, name: string): ReadonlySet<Slot> {
   if (literal === undefined) return new Set<Slot>(['data']);
@@ -89,7 +94,10 @@ function slotsOf(literal: ObjectLiteralExpression | undefined, name: string): Re
     else for (const each of made) slots.add(each);
   }
   const deleted = deletedNames(literal);
-  if (deleted.includes(undefined) || deleted.includes(name)) slots.add('data');
+  if (deleted.includes(undefined) || deleted.includes(name)) {
+    slots.add('data');
+    slots.add('absent');
+  }
   return slots;
 }
 
@@ -120,15 +128,13 @@ export function getterUnfollowed(
 ): boolean {
   if (!isGetAccessorDeclaration(property) || symbolKeyed(property)) return false;
   if (!runsBeforeSlot(name, index)) return false;
-  const writes = getterWrites(property);
-  if (writes === undefined) return true;
+  const assigned = assignedNames(property);
+  if (assigned === undefined) return true;
   const literal = isObjectLiteralExpression(property.parent) ? property.parent : undefined;
-  return writes.some((each) => {
+  return assigned.some((written) => {
     const setter =
-      each.name === undefined
-        ? hasWritingSetter(literal)
-        : slotsOf(literal, each.name).has('setter');
-    return setter || reachesPrototype(literal, each.name);
+      written === undefined ? hasWritingSetter(literal) : slotsOf(literal, written).has('setter');
+    return setter || reachesPrototype(literal, written);
   });
 }
 

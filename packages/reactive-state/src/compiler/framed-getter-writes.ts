@@ -82,6 +82,16 @@ export function getterWrites(getter: {
   return thisUses(getter)?.writes;
 }
 
+/**
+ * Every name a getter assigns to through `this`, which runs a setter: `=`, an arithmetic or a
+ * logical assignment, an increment; none known where a name is computed. None where `this` is given on.
+ */
+export function assignedNames(getter: {
+  readonly body?: Node | undefined;
+}): readonly (string | undefined)[] | undefined {
+  return thisUses(getter)?.named;
+}
+
 /** What a body does with `this`: the values it writes, and every name it assigns to, which runs a setter. */
 interface ThisUses {
   readonly writes: readonly GetterWrite[];
@@ -450,7 +460,11 @@ export function settingPrototype(object: ObjectLiteralExpression): boolean {
   return object.properties.some((each) => setsProto(each) && !nullPrototype(each));
 }
 
-/** Whether a write the object does not hold may reach a setter of the prototype the object sets. */
+/**
+ * Whether a write the object does not hold may reach a setter of the prototype the object sets. A
+ * name an accessor of the object may delete is not held: the assignment after the deletion meets the
+ * prototype.
+ */
 function runsPrototypeSetter(
   object: ObjectLiteralExpression,
   named: readonly (string | undefined)[],
@@ -463,7 +477,10 @@ function runsPrototypeSetter(
       return name === undefined ? [] : [name];
     }),
   );
-  return named.some((each) => each === undefined || !own.has(each));
+  const deleted = deletedNames(object);
+  const held = (name: string): boolean =>
+    own.has(name) && !deleted.includes(undefined) && !deleted.includes(name);
+  return named.some((each) => each === undefined || !held(each));
 }
 
 /** The node that stands for the same value as `node`, through parentheses and assertions. */

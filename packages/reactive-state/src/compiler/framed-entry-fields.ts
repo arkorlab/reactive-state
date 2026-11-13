@@ -60,6 +60,8 @@ interface Seen {
 interface Hiding {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
+  /** The objects the read ran on: what a getter's write meets decides which setters take it. */
+  readonly receivers: readonly ObjectLiteralExpression[];
 }
 
 /**
@@ -95,18 +97,41 @@ function fieldsOf(
 }
 
 /**
- * Whether the way of reading has not yet read the object under names hidden at least as much: one
- * read under fewer hidden names reads everything a read under more would, so the second is skipped.
+ * Whether the way of reading has not yet read the object under names hidden at least as much, and
+ * on the same receivers: one read under fewer hidden names reads everything a read under more would,
+ * so the second is skipped. A getter's write meets the receivers' fields, which hide the setters of
+ * its prototype, so a read on other receivers is no repeat. An object that a read of its own
+ * prototype chain comes back to is read already.
  */
 function firstRead(reading: Reading, node: Node): boolean {
   const table = reading.inherited ? reading.seen.full : reading.seen.own;
   const earlier = table.get(node) ?? [];
-  const covered = earlier.some(
-    (each) => isSubset(each.data, reading.data) && isSubset(each.getters, reading.getters),
-  );
+  if (isObjectLiteralExpression(node) && reading.receivers.includes(node)) return false;
+  const covered = earlier.some((each) => {
+    return (
+      isSubset(each.data, reading.data) &&
+      isSubset(each.getters, reading.getters) &&
+      sameObjects(each.receivers, reading.receivers)
+    );
+  });
   if (covered) return false;
-  table.set(node, [...earlier, { data: new Set(reading.data), getters: new Set(reading.getters) }]);
+  table.set(node, [
+    ...earlier,
+    {
+      data: new Set(reading.data),
+      getters: new Set(reading.getters),
+      receivers: reading.receivers,
+    },
+  ]);
   return true;
+}
+
+/** Whether two chains of receivers are the same objects in the same order. */
+function sameObjects(
+  first: readonly ObjectLiteralExpression[],
+  second: readonly ObjectLiteralExpression[],
+): boolean {
+  return first.length === second.length && first.every((each, at) => each === second[at]);
 }
 
 function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {
