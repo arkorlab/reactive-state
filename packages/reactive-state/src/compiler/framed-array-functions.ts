@@ -54,15 +54,19 @@ import {
   frameMemberName,
   type FrameBinding,
 } from './framed-bindings.ts';
+import { namesThis } from './framed-this-functions.ts';
 import { constantValue } from './numbers.ts';
 import { readsBinding } from './scope.ts';
 
 /** Source identity proofs for custom array text methods. */
 
-/** A source-written function body, excluding references that may denote the native implementation. */
+/**
+ * A source-written function body, excluding references that may denote the native implementation, and
+ * a function that names `this`: it runs as a method of the array, which it may write through `this`.
+ */
 export function writtenArrayFunction(expression: Expression): boolean {
   const value = unwrapped(expression);
-  return isArrowFunction(value) || isFunctionExpression(value);
+  return isArrowFunction(value) || (isFunctionExpression(value) && !namesThis(value));
 }
 
 type FunctionValue = Expression | FunctionDeclaration | MethodDeclaration;
@@ -100,7 +104,7 @@ function sourceFunctionValues(start: FunctionValue): boolean {
 /** Each possible written function value, or no proof when one may be native or unknown. */
 function sourceFunctions(value: FunctionValue): readonly FunctionValue[] | undefined {
   if (isFunctionDeclaration(value) || isMethodDeclaration(value))
-    return value.body === undefined ? undefined : [];
+    return value.body === undefined || namesThis(value) ? undefined : [];
   const expression = unwrapped(value);
   if (writtenArrayFunction(expression)) return [];
   if (isConditionalExpression(expression)) return [expression.whenTrue, expression.whenFalse];

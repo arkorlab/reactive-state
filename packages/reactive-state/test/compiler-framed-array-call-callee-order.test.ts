@@ -37,9 +37,10 @@ const CASES = [
     converts: false,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer of a definition is handed to the method the call selected, which may be a function of the program.
     id: 'definition-argument',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return values.join(Object.defineProperty(values, 'join', { value: Array.prototype.join })); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'element-access-callee',
@@ -47,9 +48,10 @@ const CASES = [
     converts: false,
   },
   {
+    // Refused since the array is followed only where each mention is known: a function of the program returns the array, to whoever calls it.
     id: 'sort-argument',
     source: `function frames(error: Error) { const values = [error]; values.sort = () => values; return values.sort(delete values.sort); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'to-string-reads-join-pin',

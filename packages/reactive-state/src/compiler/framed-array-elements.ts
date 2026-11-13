@@ -3,6 +3,7 @@ import {
   type Expression,
   type CallExpression,
   type Node,
+  type VariableDeclaration,
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
@@ -10,6 +11,7 @@ import {
   isIdentifier,
   isPropertyAccessExpression,
   isSpreadElement,
+  isVariableDeclaration,
   isTypeNode,
   isSourceFile,
   SyntaxKind,
@@ -19,6 +21,7 @@ import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { emptyArrayFill } from './framed-array-fill-ranges.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
+import { arrayIdentity } from './framed-array-identity.ts';
 import { framedLogicalElementSkipped } from './framed-array-logical-writes.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
@@ -26,6 +29,10 @@ import { arrayPatternSources } from './framed-array-pattern-writes.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { heldMemberWrites } from './framed-held-member-writes.ts';
+import { consultedKnown } from './framed-known-forms.ts';
+import { knownUsesOnly } from './framed-known-mentions.ts';
+import { type MutatorInvocation, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { possibleKey } from './framed-mutator-keys.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -45,21 +52,7 @@ export function writtenArrayElements(
 ): readonly WrittenArrayElement[] {
   const root = literalArrayBinding(value);
   if (root === undefined) return [];
-  const owner = executionOwner(read);
-  const candidates: Node[] = [];
-  const pending: Node[] = [read.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (
-      !isSourceFile(node) &&
-      possibleBefore(node, read, owner, root) &&
-      framedPossibleBranch(node)
-    )
-      candidates.push(node);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
+  const candidates = candidatesOf(root, read);
   const selected =
     index !== undefined && index >= 0 && candidates.every((node) => !positionsMove(node, root))
       ? index
@@ -76,6 +69,98 @@ export function writtenArrayElements(
       }),
     ];
   });
+}
+
+/** The nodes that may run before the read and may write the array: the program's, as its branches allow. */
+function candidatesOf(root: FrameBinding, read: Node): readonly Node[] {
+  const owner = executionOwner(read);
+  const candidates: Node[] = [];
+  const pending: Node[] = [read.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeNode(node)) continue;
+    if (
+      !isSourceFile(node) &&
+      possibleBefore(node, read, owner, root) &&
+      framedPossibleBranch(node)
+    )
+      candidates.push(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return candidates;
+}
+
+/**
+ * Whether every mention of the array that may run before the read is a use the compile knows. The
+ * mention the read selects from, where it is given, hands the array on only after it has read.
+ */
+function arrayUsesKnown(
+  root: VariableDeclaration,
+  {
+    read,
+    owner,
+    receiver,
+  }: { readonly read: Node; readonly owner: Node; readonly receiver?: Expression },
+): boolean {
+  return knownUsesOnly(root, 'array', (name) => {
+    return (
+      (receiver === undefined || unwrapped(receiver) !== name) &&
+      possibleBefore(name, read, owner, root) &&
+      framedPossibleBranch(name)
+    );
+  });
+}
+
+/**
+ * Whether the compile does not follow every write to the array a read names: a mention of it, or of a
+ * name that stands for it, that may run before the read and is no use the compile knows, or a native
+ * mutator of it that is handed an argument written in a form no reader follows, or a name of the chain
+ * the read goes by that is written as a whole elsewhere, which may hold another array than the one it
+ * was given. Such an array holds what the compile cannot show, and the read is refused.
+ */
+export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
+  const root = literalArrayBinding(value);
+  if (root === undefined || !isVariableDeclaration(root)) return false;
+  if (arrayIdentity(value) === undefined) return true;
+  const owner = executionOwner(read);
+  if (!arrayUsesKnown(root, { read, owner, receiver: value })) return true;
+  const held: VariableDeclaration[] = [];
+  const known = candidatesOf(root, read).every((node) => {
+    const invoked = isCallExpression(node) ? mutatorInvocation(node) : undefined;
+    const target = invoked?.args[0];
+    if (invoked === undefined || target === undefined) return true;
+    return (
+      literalArrayBinding(target) !== root ||
+      argumentsKnown(invoked, (declaration) => {
+        held.push(declaration);
+      })
+    );
+  });
+  return !known || held.some((declaration) => writtenValuesUnknown(declaration, read));
+}
+
+/** Whether a value written to a member of a held object is in a form no reader follows. */
+function writtenValuesUnknown(declaration: VariableDeclaration, read: Node): boolean {
+  const { name } = declaration;
+  if (!isIdentifier(name)) return false;
+  return heldMemberWrites(name, [name], read).some(
+    (write) => !consultedKnown(write.value, 'pattern'),
+  );
+}
+
+/** Whether the sources, the descriptor or the map a native mutator is handed are written in forms followed. */
+function argumentsKnown(
+  invoked: MutatorInvocation,
+  held: (declaration: VariableDeclaration) => void,
+): boolean {
+  const [, ...rest] = invoked.args;
+  if (rest.some((each) => isSpreadElement(each))) return false;
+  if (invoked.path === PATHS.assign)
+    return rest.every((each) => consultedKnown(each, 'source', held));
+  const argument = invoked.path === PATHS.property ? rest[1] : rest[0];
+  const role = invoked.path === PATHS.property ? 'descriptor' : 'map';
+  return argument === undefined || consultedKnown(argument, role, held);
 }
 
 /**

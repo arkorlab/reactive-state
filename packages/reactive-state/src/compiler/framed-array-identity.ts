@@ -26,6 +26,11 @@ export function arrayIdentity(value: Expression): FrameBinding | undefined {
   return followed.written ? undefined : followed.root;
 }
 
+/** Whether a file writes the binding as a whole, so that it may hold another array than it was given. */
+export function writtenAsWhole(binding: FrameBinding): boolean {
+  return writtenWhole(binding.getSourceFile()).has(binding);
+}
+
 /**
  * Whether a write to a member of `value` may write the array `root`: a name of its chain that is
  * written as a whole elsewhere may hold any array, and so may its member be one of the array's.
