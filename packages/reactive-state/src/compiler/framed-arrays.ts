@@ -29,7 +29,7 @@ import {
 import { callMethodWrites } from './framed-array-call-writes.ts';
 import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
+import { arrayIdentity, mayBeArray, writtenAsWhole } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
@@ -45,6 +45,7 @@ import {
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
+import { mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { afterDeletion, deletedFrom, deletedReceiver } from './framed-deleted-methods.ts';
@@ -598,7 +599,19 @@ function deletedMethod(
   else if (OWN_METHODS.has(key)) own.set(key, deletedFrom(member.expression, root, prior.get(key)));
 }
 
-/** Initializer traversal still requires whole binding identity after the selected type was checked. */
+/**
+ * Whether a name that starts as a written array, or as a name that stands for one, is written as a
+ * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
+ * ends at a value that is no array (a scalar, a function, an object) is no array the compile started from.
+ */
+function rewrittenArray(binding: FrameBinding): boolean {
+  return mayStartAsArray(binding) && writtenAsWhole(binding);
+}
+
+/**
+ * Initializer traversal still requires whole binding identity after the selected type was checked: a
+ * name written as a whole elsewhere may hold another array than its initializer, and is refused.
+ */
 function bindingArrayWords(
   reading: ArrayReading,
   context: {
@@ -611,7 +624,8 @@ function bindingArrayWords(
   const { call, words, pending, seen } = context;
   const binding = unseenArrayBinding(reading.value, seen);
   if (binding === undefined) return false;
-  if (writtenElementErrors(reading.value, call, words, pending)) return true;
+  if (rewrittenArray(binding) || writtenElementErrors(reading.value, call, words, pending))
+    return true;
   if (binding.initializer !== undefined)
     pending.push({ value: binding.initializer, text: reading.text });
   return false;
