@@ -15,13 +15,13 @@ const HEAD =
 const CASES = [
   {
     id: 'assign-source-written-before',
-    source: `${HEAD} const source: any = make(); source[1] = error; Object.assign(values, source); return values; }`,
-    elements: ['error:', 'source:0', 'source:array'],
+    source: `${HEAD} const held: any = make(); held[1] = error; Object.assign(values, held); return values; }`,
+    elements: ['error:', 'held:0', 'held:array'],
   },
   {
     id: 'assign-source-written-through-an-alias',
-    source: `${HEAD} const source: any = make(); const same = source; same[1] = error; Object.assign(values, source); return values; }`,
-    elements: ['error:', 'source:0', 'source:array'],
+    source: `${HEAD} const held: any = make(); const same = held; same[1] = error; Object.assign(values, held); return values; }`,
+    elements: ['error:', 'held:0', 'held:array'],
   },
   {
     id: 'assign-parameter-source-written-before',
@@ -30,18 +30,18 @@ const CASES = [
   },
   {
     id: 'assign-source-written-in-a-branch',
-    source: `${HEAD} const source: any = make(); if (flag) source[1] = error; Object.assign(values, source); return values; }`,
-    elements: ['error:', 'source:0', 'source:array'],
+    source: `${HEAD} const held: any = make(); if (flag) held[1] = error; Object.assign(values, held); return values; }`,
+    elements: ['error:', 'held:0', 'held:array'],
   },
   {
     id: 'assign-source-written-after-pin',
-    source: `${HEAD} const source: any = make(); Object.assign(values, source); source[1] = error; return values; }`,
-    elements: ['source:0', 'source:array'],
+    source: `${HEAD} const held: any = make(); Object.assign(values, held); held[1] = error; return values; }`,
+    elements: ['held:0', 'held:array'],
   },
   {
     id: 'assign-source-written-under-another-name-pin',
-    source: `${HEAD} const source: any = make(); source.other = error; Object.assign(values, source); return values; }`,
-    elements: ['source:0', 'source:array'],
+    source: `${HEAD} const held: any = make(); held.other = error; Object.assign(values, held); return values; }`,
+    elements: ['held:0', 'held:array'],
   },
   {
     id: 'define-properties-map-written-before',
