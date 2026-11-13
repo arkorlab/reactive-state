@@ -1,18 +1,14 @@
 import {
   type Expression,
   isArrayLiteralExpression,
-  isArrowFunction,
-  isFunctionExpression,
+  isBinaryExpression,
+  isConditionalExpression,
   isIdentifier,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
-  isTemplateExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -42,20 +38,85 @@ export function mayStartAsArray(binding: FrameBinding): boolean {
   return true;
 }
 
-/** Whether an expression is written as a value that is no array. */
+/** The written values that are no array, whatever their operands are: literals, and what an operator makes of any. */
+const NO_ARRAY_KINDS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrowFunction,
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.DeleteExpression,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.FunctionExpression,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.ObjectLiteralExpression,
+  SyntaxKind.PostfixUnaryExpression,
+  SyntaxKind.PrefixUnaryExpression,
+  SyntaxKind.RegularExpressionLiteral,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.TemplateExpression,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.TypeOfExpression,
+  SyntaxKind.VoidExpression,
+]);
+
+/** The binary operators whose result is a string, a number, a bigint or a boolean, whatever the operands are. */
+const SCALAR_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandToken,
+  SyntaxKind.AsteriskAsteriskToken,
+  SyntaxKind.AsteriskToken,
+  SyntaxKind.BarToken,
+  SyntaxKind.CaretToken,
+  SyntaxKind.EqualsEqualsEqualsToken,
+  SyntaxKind.EqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsToken,
+  SyntaxKind.GreaterThanEqualsToken,
+  SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+  SyntaxKind.GreaterThanGreaterThanToken,
+  SyntaxKind.GreaterThanToken,
+  SyntaxKind.InKeyword,
+  SyntaxKind.InstanceOfKeyword,
+  SyntaxKind.LessThanEqualsToken,
+  SyntaxKind.LessThanLessThanToken,
+  SyntaxKind.LessThanToken,
+  SyntaxKind.MinusToken,
+  SyntaxKind.PercentToken,
+  SyntaxKind.PlusToken,
+  SyntaxKind.SlashToken,
+]);
+
+/** The binary operators whose result is one of the operands. */
+const CHOOSING_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/**
+ * Whether an expression is written as a value that is no array: a literal, what an operator makes of
+ * its operands (a number, a string, a boolean), or a choice or a sequence that ends at such a value
+ * on every path. A name, a member, an element and a call may hold an array, and are none of these.
+ */
 function isNoArray(value: Expression): boolean {
-  return (
-    isStringLiteral(value) ||
-    isNumericLiteral(value) ||
-    isNoSubstitutionTemplateLiteral(value) ||
-    isTemplateExpression(value) ||
-    isObjectLiteralExpression(value) ||
-    isArrowFunction(value) ||
-    isFunctionExpression(value) ||
-    value.kind === SyntaxKind.TrueKeyword ||
-    value.kind === SyntaxKind.FalseKeyword ||
-    value.kind === SyntaxKind.NullKeyword
-  );
+  const pending = [value];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const written = unwrapped(each);
+    if (NO_ARRAY_KINDS.has(written.kind)) continue;
+    const ends = endsOf(written);
+    if (ends === undefined) return false;
+    pending.push(...ends);
+  }
+  return true;
+}
+
+/** The expressions a choice or a sequence may end at, and none for an operator that makes a scalar; undefined where it is neither. */
+function endsOf(value: Expression): readonly Expression[] | undefined {
+  if (isConditionalExpression(value)) return [value.whenTrue, value.whenFalse];
+  if (!isBinaryExpression(value)) return undefined;
+  const operator = value.operatorToken.kind;
+  if (SCALAR_OPERATORS.has(operator)) return [];
+  if (operator === SyntaxKind.CommaToken) return [value.right];
+  return CHOOSING_OPERATORS.has(operator) ? [value.left, value.right] : undefined;
 }
 
 /** What a pattern selects from a written array or object, none where it cannot be read. */

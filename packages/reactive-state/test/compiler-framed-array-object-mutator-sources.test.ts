@@ -3095,6 +3095,71 @@ const CONVERSIONS = [
     source: `function frames(error: Error, original: unknown[]) { const { inner } = { inner: [] as any[] }; let values = inner; values = [error]; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'negative-number-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let count = -1; count = 2; return String([count]); }`,
+    converts: false,
+  },
+  {
+    id: 'typed-negative-number-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let count: number = -1; count = 0; return String([count]); }`,
+    converts: false,
+  },
+  {
+    id: 'bigint-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let count = 1n; count = 2n; return String([count]); }`,
+    converts: false,
+  },
+  {
+    id: 'arithmetic-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let count = 1 + 2 * 3; count = 0; return String([count]); }`,
+    converts: false,
+  },
+  {
+    id: 'typeof-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let kind = typeof original; kind = 'other'; return String([kind]); }`,
+    converts: false,
+  },
+  {
+    id: 'comparison-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let same = original === original; same = false; return String([same]); }`,
+    converts: false,
+  },
+  {
+    id: 'conditional-of-scalars-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let count = flag ? 1 : -1; count = 2; return String([count]); }`,
+    converts: false,
+  },
+  {
+    id: 'choice-of-scalars-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let text = 'safe' || 'other'; text = 'still safe'; return String([text]); }`,
+    converts: false,
+  },
+  {
+    id: 'sequence-ending-at-a-scalar-reassigned-pin',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let count = (original.length, 0); count = 1; return String([count]); }`,
+    converts: false,
+  },
+  {
+    id: 'conditional-with-an-unknown-branch-reassigned-converts',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let values = flag ? 'safe' : original; values = 'other'; return String([values]); }`,
+    converts: true,
+  },
+  {
+    id: 'choice-with-an-unknown-operand-reassigned-converts',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let values = 'safe' && original; values = 'other'; return String([values]); }`,
+    converts: true,
+  },
+  {
+    id: 'sequence-ending-at-an-unknown-reassigned-converts',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let values = (0, original); values = 'other'; return String([values]); }`,
+    converts: true,
+  },
+  {
+    id: 'member-read-reassigned-stays-refused',
+    source: `function frames(error: Error, original: unknown[], flag: boolean) { let size = original.length; size = 0; return String([size]); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
