@@ -20,6 +20,7 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTypeNode,
+  type NewExpression,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -86,7 +87,10 @@ export function iteratorMemberName(member: Expression): string | undefined {
   return name === DEFAULT_ITERATOR ? undefined : name;
 }
 
-/** Every ignored invocation argument still executes before a native iterator answers its first value. */
+/**
+ * Every ignored invocation argument still executes before a native iterator answers its first value. A
+ * collection built from a name iterates what the name holds as it is built: that is application code.
+ */
 export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   const { source, acquisition, next } = boundary;
   if (!iteratorQuietValues(acquisition.arguments) || !iteratorQuietValues(next.arguments))
@@ -94,7 +98,28 @@ export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   if (!iteratorPrefixQuiet(acquisition, next)) return false;
   if (!iteratorPrefixQuiet(source.value, acquisition, boundary)) return false;
   const values = isNewExpression(source.value) ? (source.value.arguments ?? []) : [source.value];
-  return iteratorQuietValues(values);
+  return (
+    values.every((each) => !(isNewExpression(source.value) && isIdentifier(unwrapped(each)))) &&
+    (!isNewExpression(source.value) || entriesWritten(source.value)) &&
+    iteratorQuietValues(values)
+  );
+}
+
+/** The constructors of a map, which read the first two slots of each entry they are built from. */
+const MAPS: ReadonlySet<string> = new Set(['Map', 'WeakMap']);
+
+/**
+ * Whether a map is built from entries written out: an entry that is a name, a call or an object
+ * may have a getter at a slot, which the constructor reads. A collection that is no map reads none.
+ */
+function entriesWritten(source: NewExpression): boolean {
+  if (!framedNativeConstructor(source.expression, MAPS)) return true;
+  const [first] = source.arguments ?? [];
+  const list = first === undefined ? undefined : unwrapped(first);
+  if (list === undefined || !isArrayLiteralExpression(list)) return true;
+  return list.elements.every(
+    (each) => isOmittedExpression(each) || isArrayLiteralExpression(unwrapped(each)),
+  );
 }
 
 /** Literal data creation invokes neither application calls, getters nor unresolved spread iterators. */
