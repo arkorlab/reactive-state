@@ -171,21 +171,31 @@ function memberWrites(
       return select(write.value, write.keys, captured).map((each) => ({ ...each, inList: true }));
     const later = copy ? { ...captured, own: true } : { ...reading, following };
     return select(write.value, took.path, captured).flatMap((each) => {
+      if (took.tail[0] !== undefined && each.without?.includes(took.tail[0]) === true) return [];
       const handed =
         each.keys.length === 0
           ? select(each.value, took.tail, later)
           : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
       const inList = each.inList === true && took.tail.length === 0;
-      const left = leftOut(each, write, copy && took.tail.length === 0);
+      const left = leftOut(each, write, copy, took.tail.length === 0);
       const kept = left.length === 0 ? handed : handed.map((one) => withExclusions(one, left));
       return inList ? kept.map((one) => ({ ...one, inList })) : kept;
     });
   });
 }
 
-/** The names a whole value handed over is a copy without: what it was already, and this rest's. */
-function leftOut(each: SelectedSource, write: HeldWrite, whole: boolean): readonly string[] {
-  return [...(each.without ?? []), ...(whole ? (write.without ?? []) : [])];
+/**
+ * The names the value handed over is a copy without: what it was already, and this rest's. They
+ * belong to the copy and not to a field of it, so a selection that goes into a field has none.
+ */
+function leftOut(
+  each: SelectedSource,
+  write: HeldWrite,
+  copy: boolean,
+  whole: boolean,
+): readonly string[] {
+  if (!whole) return [];
+  return [...(each.without ?? []), ...(copy ? (write.without ?? []) : [])];
 }
 
 /** A value the selection hands over whole, with the names it was copied without. */

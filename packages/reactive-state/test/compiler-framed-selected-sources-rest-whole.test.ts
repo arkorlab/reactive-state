@@ -43,6 +43,31 @@ const CASES = [
     source: `${HEAD} const inner: any = {}; ({ get: y, ...inner.m } = { get: () => error }); ({ ...holder.m } = inner.m); ({ m: maps[0] } = holder); Object.defineProperties(a, maps); return String(a); }`,
     converts: false,
   },
+  {
+    id: 'field-of-a-copy-keeps-its-own-getter',
+    source: `${HEAD} const bridge: any = {}; ({ get: y, ...holder.m } = { child: { get: () => error } }); ({ m: bridge.n } = holder); ({ n: { child: maps[0] } } = bridge); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'field-of-a-copy-keeps-its-own-getter-beside-another-field',
+    source: `${HEAD} const next: any = {}; ({ get: y, ...holder.m } = { get: 0, nested: { get: () => error } }); ({ m: next.n } = holder); ({ n: { nested: maps[0] } } = next); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'field-of-a-copy-held-by-another-holder-keeps-its-own-getter',
+    source: `${HEAD} const inner: any = {}; const bridge: any = {}; ({ get: y, ...inner.m } = { child: { get: () => error } }); ({ m: bridge.n } = inner); ({ n: { child: maps[0] } } = bridge); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'field-the-copy-left-out-is-not-read-pin',
+    source: `${HEAD} const bridge: any = {}; ({ get: y, ...holder.m } = { get: () => error }); ({ m: bridge.n } = holder); ({ n: { get: maps[0] } } = bridge); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'field-of-a-copy-the-copy-kept-pin',
+    source: `${HEAD} const bridge: any = {}; ({ get: y, ...holder.m } = { value: error }); ({ m: bridge.n } = holder); ({ n: { value: maps[0] } } = bridge); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('a rest copy a descriptor map entry is', () => {
