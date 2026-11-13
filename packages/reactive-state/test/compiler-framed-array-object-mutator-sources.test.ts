@@ -2839,6 +2839,71 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'descriptor-declared-without-a-value-and-assigned-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let d: any; d = { get: () => error }; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-declared-with-var-and-assigned-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; var d: any; d = { get: () => error }; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'map-declared-without-a-value-and-assigned-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let m: any; m = { 0: { get: () => error } }; Object.defineProperties(a, m); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'source-declared-without-a-value-and-assigned-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let s: any; s = { 0: error }; Object.assign(a, s); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-for-of-head-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; for (const d of [{ get: () => error }]) { Object.defineProperty(a, 0, d); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-for-of-head-with-let-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; for (let d of [{ get: () => error }]) { Object.defineProperty(a, 0, d); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'name-of-a-for-in-head-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; for (const d in { x: 1 }) { Object.defineProperty(a, 0, d as any); } return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-assigned-by-a-pattern-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let d: any; ({ d } = { d: { get: () => error } }); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-assigned-in-a-branch-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let d: any; if (flag) { d = { get: () => error }; } Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-assigned-by-a-logical-assignment-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let d: any; d ??= { get: () => error }; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-assigned-in-a-closure-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let d: any; const set = () => { d = { get: () => error }; }; set(); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-declared-without-a-value-and-never-assigned-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; let d: any; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-parameter-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, original); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'define-array-rest-member-index-offset-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const holder: any = {}; let ignored: unknown; [ignored, ...holder.items] = [error, 'safe']; ({ items: [descriptor.value] } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,

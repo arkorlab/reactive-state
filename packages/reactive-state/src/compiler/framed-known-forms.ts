@@ -5,6 +5,8 @@ import {
   isArrowFunction,
   isBinaryExpression,
   isConditionalExpression,
+  isForInStatement,
+  isForOfStatement,
   isFunctionExpression,
   isIdentifier,
   isMethodDeclaration,
@@ -18,6 +20,7 @@ import {
   isSpreadElement,
   isStringLiteral,
   isVariableDeclaration,
+  isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -26,6 +29,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { writtenAsWhole } from './framed-array-identity.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { knownUsesOnly } from './framed-known-mentions.ts';
 import { LOGICAL } from './framed-known-uses.ts';
@@ -159,6 +163,19 @@ function entryOf(element: Expression, role: Role): readonly Consulted[] {
   return role === 'descriptor' || role === 'pattern' ? [{ node: element, role }] : [];
 }
 
+/**
+ * Whether a declaration without an initializer is given a value elsewhere: a loop head gives it one
+ * for each turn, and an assignment, a pattern or a declaration again gives the others one. A value
+ * given so is no form the compile has read.
+ */
+function givenLater(declaration: VariableDeclaration): boolean {
+  const list = declaration.parent;
+  const head =
+    isVariableDeclarationList(list) &&
+    (isForOfStatement(list.parent) || isForInStatement(list.parent));
+  return head || writtenAsWhole(declaration);
+}
+
 /** The initializer a name stands for, once, where it is a constant followed and read as known. */
 function named(name: Identifier, role: Role, context: Context): readonly Consulted[] | undefined {
   if (!readsBinding(name)) return name.text === 'undefined' ? [] : undefined;
@@ -169,7 +186,8 @@ function named(name: Identifier, role: Role, context: Context): readonly Consult
   if (!isVariableDeclaration(declaration) || context.seen.has(declaration)) return [];
   context.seen.add(declaration);
   const { initializer } = declaration;
-  if (initializer === undefined || atom(unwrapped(initializer))) return [];
+  if (initializer === undefined) return givenLater(declaration) ? undefined : [];
+  if (atom(unwrapped(initializer))) return [];
   if (!knownUsesOnly(declaration, 'held')) return undefined;
   context.held?.(declaration);
   return [{ node: initializer, role }];
