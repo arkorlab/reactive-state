@@ -49,7 +49,7 @@ import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
-import { mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
+import { invokedTarget, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
@@ -381,7 +381,8 @@ function unprovenWrites(
 /** Whether the members a write names are the array's own, not those of a name that may hold another. */
 function writesExactly(node: Node, root: FrameBinding): boolean {
   if (isCallExpression(node)) {
-    const target = mutatorInvocation(node)?.args[0] ?? node.arguments[0];
+    const invoked = mutatorInvocation(node);
+    const target = invoked === undefined ? node.arguments[0] : invokedTarget(invoked);
     return target !== undefined && arrayIdentity(target) === root;
   }
   return framedWrittenTargets(node).every((target) => {
@@ -451,7 +452,7 @@ function definedMethods(
 ): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const invoked = mutatorInvocation(node);
-  const target = invoked?.args[0];
+  const target = invoked === undefined ? undefined : invokedTarget(invoked);
   if (
     invoked === undefined ||
     target === undefined ||

@@ -11,7 +11,11 @@ import {
   type OwnMethods,
 } from './framed-array-own-methods.ts';
 import type { FrameBinding } from './framed-bindings.ts';
-import { type MutatorInvocation, mutatorInvocation } from './framed-mutator-calls.ts';
+import {
+  invokedTarget,
+  type MutatorInvocation,
+  mutatorInvocation,
+} from './framed-mutator-calls.ts';
 
 /**
  * What a write that may be of another array leaves of a method: its value unproven, and an attribute
@@ -42,7 +46,7 @@ function possibleOverride(
 export function callMethodWrites(node: Expression, root: FrameBinding, own: OwnMethods): void {
   if (!isCallExpression(node)) return;
   const invoked = mutatorInvocation(node);
-  const target = invoked?.args[0];
+  const target = invoked === undefined ? undefined : invokedTarget(invoked);
   if (invoked === undefined || target === undefined || !mayBeArray(target, root)) return;
   if (arrayIdentity(target) === root && invoked.silent !== true) {
     mutatorWrites(invoked, own);

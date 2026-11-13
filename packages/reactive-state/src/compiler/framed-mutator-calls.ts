@@ -183,3 +183,9 @@ export function returnedTarget(target: Expression): Expression {
     at = first;
   }
 }
+
+/** The array or object a native object mutator writes, past the natives that hand back their target. */
+export function invokedTarget(invoked: MutatorInvocation): Expression | undefined {
+  const [target] = invoked.args;
+  return target === undefined ? undefined : returnedTarget(target);
+}
