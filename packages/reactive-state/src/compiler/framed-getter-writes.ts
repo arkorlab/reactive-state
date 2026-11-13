@@ -131,33 +131,37 @@ function accessorName(name: PropertyName): string | undefined {
  * What running a getter of a written object writes into it: its own writes, and those of the
  * setters of the object that its writes run, and of the setters those run in turn. Any assignment
  * to a member of `this` runs a setter: `=`, an arithmetic or a logical one, an increment. A write
- * that may name any field runs every setter. The setters of the objects a getter that is inherited
- * runs on are `receiving`; a write the object does not hold itself may run a setter of the
- * prototype it sets. None where any of them gives `this` on, or where a setter that cannot be
+ * that may name any field runs every setter. The objects a getter that is inherited runs on are
+ * the `receivers`, the nearest first, and their setters may run as well; a write the object does not
+ * hold itself may run a setter of the prototype it sets. None where any of them gives `this` on, or where a setter that cannot be
  * read may run.
  */
 export function accessorWrites(
   object: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
-  receiving: readonly SetAccessorDeclaration[] = [],
+  receivers: readonly ObjectLiteralExpression[] = [],
 ): readonly GetterWrite[] | undefined {
-  return accessorUses(object, getter, receiving)?.writes;
+  return accessorUses(object, getter, receivers)?.writes;
 }
 
 /**
  * What running a getter does to the object it runs on, the setters its assignments run included. A
  * value assigned to a field that has a setter is the setter's argument, and is stored nowhere, where
- * the name is known and no getter or setter deletes members (a deletion may have removed the setter).
+ * the setter is known to apply (no field of an object the write meets first may hold the name, and no
+ * later field of its own object may replace it) and no getter or setter deletes members (a deletion
+ * may have removed the setter).
  */
 function accessorUses(
   object: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
-  receiving: readonly SetAccessorDeclaration[],
+  receivers: readonly ObjectLiteralExpression[],
 ): ThisUses | undefined {
+  const receiving = receivers.flatMap((each) => each.properties);
   const setters = [
     ...object.properties.filter((each, at, all) => isLiveSetter(each, all.slice(at + 1))),
     ...receiving,
   ].filter((each) => isSetAccessorDeclaration(each));
+  const applying = setters.filter((each) => appliesTo(each, object, receivers));
   const found: ThisUses[] = [];
   const run = new Set<Node>([getter]);
   const pending: { readonly body?: Node | undefined }[] = [getter];
@@ -178,15 +182,16 @@ function accessorUses(
     }
   }
   const keep = found.some((each) => each.deleted.length > 0) || deletedNames(object).length > 0;
+  const deleting = receivers.some((each) => deletedNames(each).length > 0);
   const consumed = new Set(
-    setters.flatMap((each) => {
+    applying.flatMap((each) => {
       const name = accessorName(each.name);
       return name === undefined ? [] : [name];
     }),
   );
   return {
     writes: found.flatMap((each) =>
-      keep ? each.writes : each.writes.filter((write) => !consumedBy(consumed, write)),
+      keep || deleting ? each.writes : each.writes.filter((write) => !consumedBy(consumed, write)),
     ),
     named: found.flatMap((each) => each.named),
     deleted: found.flatMap((each) => each.deleted),
@@ -235,6 +240,52 @@ function readsArgument(setter: SetAccessorDeclaration): boolean {
     });
   }
   return false;
+}
+
+/**
+ * Whether the setter is certain to take an assignment to its name from the getter that runs: the
+ * name is known; no field after it in its own object may replace it with a value; and no field of an
+ * object the assignment meets first, the nearer receivers where the setter is a prototype's or the
+ * receivers all where it is the getter's own, may hold the name, which hides the setter.
+ */
+function appliesTo(
+  setter: SetAccessorDeclaration,
+  object: ObjectLiteralExpression,
+  receivers: readonly ObjectLiteralExpression[],
+): boolean {
+  const name = accessorName(setter.name);
+  const owner = setter.parent;
+  if (name === undefined || !isObjectLiteralExpression(owner)) return false;
+  const after = owner.properties.slice(owner.properties.indexOf(setter) + 1);
+  if (after.some((each) => mayReplace(each, name))) return false;
+  const nearer = owner === object ? receivers : receivers.slice(0, receivers.indexOf(owner));
+  return nearer.every((each) => !mayOwn(each, name));
+}
+
+/** Whether a field after a setter may give its name a value: an accessor of the name does not. */
+function mayReplace(property: ObjectLiteralElementLike, name: string): boolean {
+  if (isGetAccessorDeclaration(property) || isSetAccessorDeclaration(property)) return false;
+  return mayName(property, name);
+}
+
+/** Whether a written object may hold a field of the name: its own, a computed one, or a spread of what may. */
+function mayOwn(object: ObjectLiteralExpression, name: string): boolean {
+  return object.properties.some((each) => mayName(each, name));
+}
+
+/**
+ * Whether a field may set the name: one written with it, one with a name that is computed, or a
+ * spread of what is no written object or of one that may. A written `__proto__: value` sets the
+ * prototype and no field.
+ */
+function mayName(property: ObjectLiteralElementLike, name: string): boolean {
+  if (isSpreadAssignment(property)) {
+    const copied = unwrapped(property.expression);
+    return !isObjectLiteralExpression(copied) || mayOwn(copied, name);
+  }
+  if (isPropertyAssignment(property) && setsProto(property)) return false;
+  const own = accessorName(property.name);
+  return own === undefined || own === name;
 }
 
 /** Whether a write is certain to be the argument of a setter: its name is known, and a setter has it. */
@@ -375,13 +426,17 @@ function replaces(property: ObjectLiteralElementLike, name: string): boolean {
   return !setsProto(property) && accessorName(property.name) === name;
 }
 
+/** Whether a written object sets a prototype that is not `null`: an assignment to a name it lacks may meet a setter of it. */
+export function settingPrototype(object: ObjectLiteralExpression): boolean {
+  return object.properties.some((each) => setsProto(each) && !nullPrototype(each));
+}
+
 /** Whether a write the object does not hold may reach a setter of the prototype the object sets. */
 function runsPrototypeSetter(
   object: ObjectLiteralExpression,
   named: readonly (string | undefined)[],
 ): boolean {
-  const sets = object.properties.some((each) => setsProto(each) && !nullPrototype(each));
-  if (!sets) return false;
+  if (!settingPrototype(object)) return false;
   const own = new Set(
     object.properties.flatMap((each) => {
       if (isSpreadAssignment(each)) return [...surelyCopied(each.expression)];

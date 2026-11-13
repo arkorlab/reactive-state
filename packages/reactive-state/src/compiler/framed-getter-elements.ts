@@ -11,7 +11,7 @@ import {
 
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { deletedNames, getterWrites } from './framed-getter-writes.ts';
+import { deletedNames, getterWrites, settingPrototype } from './framed-getter-writes.ts';
 import { isSymbolKey, possibleKey, slotKey } from './framed-mutator-keys.ts';
 import { namesThis } from './framed-this-functions.ts';
 
@@ -124,10 +124,25 @@ export function getterUnfollowed(
   if (writes === undefined) return true;
   const literal = isObjectLiteralExpression(property.parent) ? property.parent : undefined;
   return writes.some((each) => {
-    return each.name === undefined
-      ? hasWritingSetter(literal)
-      : slotsOf(literal, each.name).has('setter');
+    const setter =
+      each.name === undefined
+        ? hasWritingSetter(literal)
+        : slotsOf(literal, each.name).has('setter');
+    return setter || reachesPrototype(literal, each.name);
   });
+}
+
+/**
+ * Whether an assignment to a name may run a setter of the prototype the written object sets: the
+ * object does not hold the name (or the name is computed), and the prototype is not `null`. What
+ * that setter writes is not read.
+ */
+function reachesPrototype(
+  literal: ObjectLiteralExpression | undefined,
+  name: string | undefined,
+): boolean {
+  if (literal === undefined || !settingPrototype(literal)) return false;
+  return name === undefined || slotsOf(literal, name).has('absent');
 }
 
 /**

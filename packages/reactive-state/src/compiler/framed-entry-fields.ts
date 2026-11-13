@@ -17,7 +17,6 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
-  type SetAccessorDeclaration,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -47,8 +46,8 @@ interface Reading {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
   readonly inherited: boolean;
-  /** The setters of the objects an inherited getter runs on, which its writes may run. */
-  readonly setters: readonly SetAccessorDeclaration[];
+  /** The objects an inherited getter runs on, the nearest first: their setters may run, and their fields hide those of the prototypes. */
+  readonly receivers: readonly ObjectLiteralExpression[];
   readonly seen: Seen;
 }
 
@@ -76,7 +75,7 @@ export function possibleFields(
     data: new Set(),
     getters: new Set(),
     inherited: true,
-    setters: [],
+    receivers: [],
     seen,
   });
 }
@@ -279,7 +278,7 @@ function getterEffects(
   getter: GetAccessorDeclaration,
   reading: Reading,
 ): readonly AssignedFrameSource[] {
-  const written = accessorWrites(object, getter, reading.setters);
+  const written = accessorWrites(object, getter, reading.receivers);
   if (written === undefined) throw new UnfollowableError();
   return written
     .filter((each) => each.name === undefined || reading.inherited || !reading.data.has(each.name))
@@ -302,10 +301,7 @@ function inheritedValues(
     ...reading,
     data: withNames(reading.data, own),
     getters: withNames(reading.getters, own),
-    setters: [
-      ...reading.setters,
-      ...object.properties.filter((each) => isSetAccessorDeclaration(each)),
-    ],
+    receivers: [...reading.receivers, object],
   };
   const value = unwrapped(proto.initializer);
   const container = { value: proto.initializer, keys: [] };
@@ -338,7 +334,7 @@ function fieldValues(
   if (isGetAccessorDeclaration(property))
     return returnedBy(property).map((value) => ({ value, keys: [] }));
   if (!isSpreadAssignment(property)) return [];
-  const copied = { ...reading, getters: reading.data, inherited: false, setters: [] };
+  const copied = { ...reading, getters: reading.data, inherited: false, receivers: [] };
   return fieldsOf([{ value: property.expression, keys: [] }], copied);
 }
 
