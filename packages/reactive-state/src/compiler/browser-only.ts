@@ -259,6 +259,54 @@ function declaresValue(node: Identifier): boolean {
   );
 }
 
+/** `node` within the parentheses, casts and `!` that wrap it, which `uncast` reads past. */
+function wrapperOf(node: Node): Node {
+  let at = node;
+  while (
+    isParenthesizedExpression(at) ||
+    isAsExpression(at) ||
+    isSatisfiesExpression(at) ||
+    isNonNullExpression(at) ||
+    isTypeAssertion(at)
+  ) {
+    at = at.parent;
+  }
+  return at;
+}
+
+/** Whether `node` is a call of `useCallback` that is handed `fn`, past casts, as its function. */
+function isCallbackOf(node: Node, fn: Node): boolean {
+  const [first] = isCallExpression(node) ? node.arguments : [];
+  return (
+    isCallExpression(node) &&
+    first !== undefined &&
+    uncast(first) === fn &&
+    namesHook(node.expression, CALLBACKS)
+  );
+}
+
+/**
+ * Whether `node` is the name of a function or class expression that the constant of that name
+ * holds, `const handler = function handler() {}`, past the parentheses, casts and `!` that
+ * `constantBody` reads past, and the call of `useCallback` it is handed to, `const handler =
+ * useCallback(function handler() {}, [])`: within it, it is that value, as the constant's name is
+ * — one name, one value. None of a function another call is handed, or one `useCallback` is given
+ * among its dependencies, whose answer is not the function.
+ */
+function namesItsHolder(node: Identifier): boolean {
+  const { parent } = node;
+  if (!(isFunctionExpression(parent) || isClassExpression(parent)) || parent.name !== node) {
+    return false;
+  }
+  let holder = wrapperOf(parent.parent);
+  if (isFunctionExpression(parent) && isCallbackOf(holder, parent)) {
+    holder = wrapperOf(holder.parent);
+  }
+  return (
+    isVariableDeclaration(holder) && isIdentifier(holder.name) && holder.name.text === node.text
+  );
+}
+
 /** Whether `statement` is exported: `export`, `export default`. */
 function isExported(statement: FunctionDeclaration | VariableStatement): boolean {
   return statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
@@ -358,7 +406,9 @@ function namesOf(sourceFile: SourceFile): Names {
       names.candidates.push(candidate);
     }
     if (isIdentifier(node) && declaresValue(node)) {
-      names.declared.set(node.text, (names.declared.get(node.text) ?? 0) + 1);
+      if (!namesItsHolder(node)) {
+        names.declared.set(node.text, (names.declared.get(node.text) ?? 0) + 1);
+      }
     } else if (isIdentifier(node) && readsBinding(node)) {
       names.reads.set(node.text, [...(names.reads.get(node.text) ?? []), node]);
     }
