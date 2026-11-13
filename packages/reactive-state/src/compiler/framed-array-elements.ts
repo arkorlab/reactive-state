@@ -104,7 +104,8 @@ function arrayUsesKnown(
   return knownUsesOnly(root, 'array', (name) => {
     return (
       (receiver === undefined || unwrapped(receiver) !== name) &&
-      possibleBefore(name, read, owner, root)
+      possibleBefore(name, read, owner, root) &&
+      framedPossibleBranch(name)
     );
   });
 }

@@ -1,4 +1,5 @@
 import {
+  type CallExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -42,7 +43,15 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
-import { handsArray } from './framed-array-callbacks.ts';
+import {
+  ARRAY_METHODS,
+  borrowedMethod,
+  CONVERTERS,
+  callsBack,
+  handsArray,
+  READERS,
+  type Borrowed,
+} from './framed-array-callbacks.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
 import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
@@ -125,48 +134,12 @@ const LIST_FIELDS: ReadonlySet<string> = new Set(['length']);
 /** A literal that holds a followed object holds it in every field. */
 const NO_FIELDS: ReadonlySet<string> = new Set();
 
-/** The natives that read their arguments and run no application code on them. */
-const READERS: ReadonlySet<string> = new Set([
-  'Array.isArray',
-  'Number.isFinite',
-  'Number.isInteger',
-  'Number.isNaN',
-  'Object.getOwnPropertyDescriptor',
-  'Object.getOwnPropertyDescriptors',
-  'Object.getOwnPropertyNames',
-  'Object.isExtensible',
-  'Object.isFrozen',
-  'Object.isSealed',
-  'Object.keys',
-]);
-
-/** The natives that convert an array to text or copy its elements, running its own methods. */
-const CONVERTERS: ReadonlySet<string> = new Set([
-  'Array.from',
-  'Boolean',
-  'JSON.stringify',
-  'Number',
-  'Object.entries',
-  'Object.values',
-  'String',
-]);
-
 /** The operators that hand over one of their operands. */
 export const LOGICAL: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AmpersandAmpersandToken,
   SyntaxKind.BarBarToken,
   SyntaxKind.QuestionQuestionToken,
 ]);
-
-/** The methods of an array that the language gives it: those a call of which runs no code of the program. */
-const ARRAY_METHODS: ReadonlySet<string> = new Set(
-  Object.getOwnPropertyNames(Array.prototype).filter((name) => {
-    return (
-      name !== 'constructor' &&
-      typeof (Array.prototype as unknown as Record<string, unknown>)[name] === 'function'
-    );
-  }),
-);
 
 /** The methods of an array that change it in place: a name that is no name the readers follow may not call them. */
 const MUTATING: ReadonlySet<string> = new Set([
@@ -298,7 +271,7 @@ function takenApart(subject: Subject): boolean {
 
 /**
  * Whether a mention of an array is read: converted to text by a template, an operator or a native
- * that does, spread into a list, or iterated by a loop. The array's own methods run through the
+ * that does with it as its first argument (a later one is coerced, and runs the methods of what it is), spread into a list, or iterated by a loop. The array's own methods run through the
  * conversion, and what a read gives is followed by the readers.
  */
 function readsArray(at: Node): boolean {
@@ -307,7 +280,7 @@ function readsArray(at: Node): boolean {
   if (isForOfStatement(parent) && parent.expression === at) return true;
   if (isSpreadElement(parent)) return true;
   if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) return true;
-  if (!isCallExpression(parent) || !parent.arguments.includes(at as Expression)) return false;
+  if (!isFirstArgument(parent, at)) return false;
   const path = nativePath(parent.expression);
   return path !== undefined && (READERS.has(path) || CONVERTERS.has(path));
 }
@@ -500,10 +473,17 @@ function dataFields(subject: Subject): ReadonlySet<string> {
   return subject === 'list' || isArray(subject) ? LIST_FIELDS : NO_FIELDS;
 }
 
+/** Whether a node is the first argument of a call: the position a native reads, and a later one it coerces. */
+function isFirstArgument(call: Node, at: Node): call is CallExpression {
+  if (!isCallExpression(call)) return false;
+  const first: Node | undefined = call.arguments[0];
+  return first === at;
+}
+
 /** Whether a node is an argument of a native that reads and runs no application code. */
 function readerArgument(at: Node): boolean {
   const { parent } = at;
-  if (!isCallExpression(parent) || !parent.arguments.includes(at as Expression)) return false;
+  if (!isFirstArgument(parent, at)) return false;
   const path = nativePath(parent.expression);
   return path !== undefined && READERS.has(path);
 }
@@ -609,6 +589,18 @@ function targetUse(call: Node, flowing: Flowing, subject: Subject): Use {
 }
 
 /**
+ * A borrowed method called on the array: the array is the receiver the readers of mutations follow, and a
+ * method that calls back hands it to a function unless the callback is written out and takes no
+ * parameter for it. The arguments of `apply` are a list, which may hold any callback.
+ */
+function borrowedUse(call: CallExpression, borrowed: Borrowed, subject: Subject): Use {
+  const { name, apply } = borrowed;
+  if (subject !== 'array') return UNKNOWN;
+  if (apply ? callsBack(name) : handsArray(call, name, 1)) return UNKNOWN;
+  return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
+}
+
+/**
  * A mention in the arguments of a call. A native mutator of a written array follows its target, its
  * sources, its descriptors and its maps; a mutator of any other object copies or writes, which the
  * compile does not follow for a held object. Another call may do anything with it, but for a native
@@ -616,6 +608,9 @@ function targetUse(call: Node, flowing: Flowing, subject: Subject): Use {
  */
 function argumentUse(call: Node, flowing: Flowing, subject: Subject): Use {
   if (!isCallExpression(call)) return UNKNOWN;
+  const borrowed = borrowedMethod(call);
+  if (borrowed !== undefined && !flowing.inLiteral && outermost(borrowed.receiver) === flowing.top)
+    return borrowedUse(call, borrowed, subject);
   const invoked = mutatorInvocation(call);
   if (invoked === undefined)
     return flowing.inLiteral || !readerArgument(flowing.top) ? UNKNOWN : KNOWN;

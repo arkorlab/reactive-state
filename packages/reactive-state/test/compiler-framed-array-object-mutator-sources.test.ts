@@ -3321,6 +3321,51 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; values.filter(Boolean); return String(values); }`,
     converts: false,
   },
+  {
+    id: 'native-reader-given-the-object-as-a-key-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return 'key'; }, get: () => 'safe' }; Object.getOwnPropertyDescriptor({}, d); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'native-reader-given-the-object-first-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { get: () => 'safe' }; Object.getOwnPropertyDescriptor(d, 'get'); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'write-through-a-choice-of-receivers-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { get: () => 'safe' }; (flag ? d : d).get = undefined; d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-join-of-the-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; return Array.prototype.join.call(a); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-push-onto-the-array',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Array.prototype.push.call(a, error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-map-handing-the-array-to-a-callback-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Array.prototype.map.call(a, (_: any, __: any, arr: any[]) => arr.push(error)); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-apply-with-a-callback-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Array.prototype.forEach.apply(a, [(_: any, __: any, arr: any[]) => { arr.push(error); }] as any); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-slice-of-the-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const copy = Array.prototype.slice.call(a); void copy; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'unknown-use-in-a-branch-that-cannot-run-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const write = (x: any[]) => x.push(error); if (false) write(a); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
