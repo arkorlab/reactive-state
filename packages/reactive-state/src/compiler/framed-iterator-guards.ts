@@ -97,10 +97,11 @@ export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
     return false;
   if (!iteratorPrefixQuiet(acquisition, next)) return false;
   if (!iteratorPrefixQuiet(source.value, acquisition, boundary)) return false;
+  if (isObjectLiteralExpression(unwrapped(source.value))) return false;
   const values = isNewExpression(source.value) ? (source.value.arguments ?? []) : [source.value];
   return (
     values.every((each) => !(isNewExpression(source.value) && isIdentifier(unwrapped(each)))) &&
-    (!isNewExpression(source.value) || entriesWritten(source.value)) &&
+    (!isNewExpression(source.value) || iterableWritten(source.value)) &&
     iteratorQuietValues(values)
   );
 }
@@ -108,17 +109,29 @@ export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
 /** The constructors of a map, which read the first two slots of each entry they are built from. */
 const MAPS: ReadonlySet<string> = new Set(['Map', 'WeakMap']);
 
+/** The constructors of a collection, which iterate their first argument as they are built. */
+const COLLECTIONS: ReadonlySet<string> = new Set(['Map', 'Set', 'WeakMap', 'WeakSet']);
+
 /**
- * Whether a map is built from entries written out: an entry that is a name, a call or an object
- * may have a getter at a slot, which the constructor reads. A collection that is no map reads none.
+ * Whether a collection is built from an iterable written out. The constructor takes the iterator
+ * its argument has, reads the next step of it, and, for a map, the first two slots of each entry:
+ * an argument that is a name, a call or an object, which inherits an iterator through `__proto__`
+ * or has none, may run application code; only a list, a text or none at all does not, and a map's
+ * entries are lists in turn. Any other constructor does not iterate its argument.
  */
-function entriesWritten(source: NewExpression): boolean {
-  if (!framedNativeConstructor(source.expression, MAPS)) return true;
+function iterableWritten(source: NewExpression): boolean {
+  if (!framedNativeConstructor(source.expression, COLLECTIONS)) return true;
   const [first] = source.arguments ?? [];
   const list = first === undefined ? undefined : unwrapped(first);
-  if (list === undefined || !isArrayLiteralExpression(list)) return true;
-  return list.elements.every(
-    (each) => isOmittedExpression(each) || isArrayLiteralExpression(unwrapped(each)),
+  if (list === undefined || list.kind === SyntaxKind.NullKeyword) return true;
+  const map = framedNativeConstructor(source.expression, MAPS);
+  if (!isArrayLiteralExpression(list))
+    return !map && (isStringLiteral(list) || isNoSubstitutionTemplateLiteral(list));
+  return (
+    !map ||
+    list.elements.every(
+      (each) => isOmittedExpression(each) || isArrayLiteralExpression(unwrapped(each)),
+    )
   );
 }
 

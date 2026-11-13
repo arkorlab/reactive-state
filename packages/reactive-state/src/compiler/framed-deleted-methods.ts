@@ -1,8 +1,19 @@
-import type { Expression } from 'typescript/ast';
+import {
+  type Expression,
+  isDeleteExpression,
+  isElementAccessExpression,
+  isPropertyAccessExpression,
+  type Node,
+} from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
-import type { ArrayMethodOverride } from './framed-array-own-methods.ts';
-import type { FrameBinding } from './framed-bindings.ts';
+import {
+  type ArrayMethodOverride,
+  afterPossibleWrite,
+  afterSureWrite,
+} from './framed-array-own-methods.ts';
+import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { prototypeMayChange } from './framed-prototype-changes.ts';
 
 /**
@@ -20,4 +31,29 @@ export function deletedFrom(
   const gone =
     arrayIdentity(receiver) === root && deletable && !prototypeMayChange(root.getSourceFile());
   return gone ? { own: false, inherited: true } : { own: false };
+}
+
+/** The array a deletion that names its method deletes from, none where the key is not written out. */
+export function deletedReceiver(node: Node): Expression | undefined {
+  if (!isDeleteExpression(node)) return undefined;
+  const member = unwrapped(node.expression);
+  const named = isPropertyAccessExpression(member) || isElementAccessExpression(member);
+  return named && frameMemberName(member) !== undefined ? member.expression : undefined;
+}
+
+/**
+ * What a deletion that is part of another expression leaves of a method. One that runs gives the
+ * inherited method back where it deletes a property it can, as a statement of its own does; one that
+ * may not run leaves it as it was where nothing wrote it or it already was inherited, and unproven
+ * where a custom one may stay.
+ */
+export function afterDeletion(
+  how: { readonly sure: boolean; readonly deleted: Expression | undefined },
+  previous: ArrayMethodOverride | undefined,
+  root: FrameBinding,
+): ArrayMethodOverride {
+  const gone = how.deleted === undefined ? undefined : deletedFrom(how.deleted, root, previous);
+  const known = how.sure || previous === undefined || previous.inherited === true;
+  if (known && gone?.inherited === true) return gone;
+  return how.sure ? afterSureWrite(undefined) : afterPossibleWrite(previous, undefined);
 }
