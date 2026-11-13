@@ -2939,6 +2939,8 @@ const CONVERSIONS = [
     id: 'define-logical-nullish-on-missing-member-runs-pin',
     source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.reader ??= () => error; ({ reader: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: true,
+  },
+  {
     id: 'callee-reflect-define-property',
     source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty(a, 0, { get: () => error }); return String(a); }`,
     converts: true,
