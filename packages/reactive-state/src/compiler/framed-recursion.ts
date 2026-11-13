@@ -340,7 +340,7 @@ function unreachedClass(declaration: Node, referenced: ReadonlySet<string>): boo
 
 /**
  * Whether a class may be built with no name of it read: a decorator is handed the class, or its
- * static code reads `this`, which is the class there.
+ * static code reads `this` or `super`, which hand it the class.
  */
 function buildsItself(declaration: Node): boolean {
   const { modifiers, members } = declaration as {
@@ -348,7 +348,7 @@ function buildsItself(declaration: Node): boolean {
     readonly members?: readonly Node[];
   };
   if (modifiers?.some((each) => each.kind === SyntaxKind.Decorator) === true) return true;
-  return (members ?? []).some((member) => isStaticCode(member) && readsThis(member));
+  return (members ?? []).some((member) => isStaticCode(member) && exposesClass(member));
 }
 
 /** Whether a member of a class runs when the class is defined: a static block, a static field. */
@@ -361,12 +361,15 @@ function isStaticCode(member: Node): boolean {
   );
 }
 
-/** Whether a node holds a `this`, whichever function it is in. */
-function readsThis(node: Node): boolean {
-  if (node.kind === SyntaxKind.ThisKeyword) return true;
+/**
+ * Whether a node holds a `this` or a `super`, whichever function it is in: in static code, `this` is
+ * the class, and `super.make()` calls a method of the parent with the class as its `this`.
+ */
+function exposesClass(node: Node): boolean {
+  if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) return true;
   let found = false;
   node.forEachChild((child) => {
-    found ||= readsThis(child);
+    found ||= exposesClass(child);
   });
   return found;
 }

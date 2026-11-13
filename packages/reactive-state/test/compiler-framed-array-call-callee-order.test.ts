@@ -2057,6 +2057,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'class-built-by-a-static-super-call-in-a-static-block',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Base { static make() { new this(); } } class Unused extends Base { static { super.make(); } constructor() { super(); saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-built-by-a-static-super-call-in-a-static-field',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(pass: number): string { class Base { static make() { return new this(); } } class Unused extends Base { static made = super.make(); constructor() { super(); saved = read; } } ${SAFE} if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
+    converts: true,
+  },
+  {
+    id: 'class-with-a-static-super-call-that-builds-nothing-is-refused-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Base { static note() {} } class Unused extends Base { static { super.note(); } constructor() { super(); saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: true,
+  },
+  {
+    id: 'class-that-extends-and-is-never-built-pin',
+    source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Base { } class Unused extends Base { constructor() { super(); saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
+    converts: false,
+  },
+  {
     id: 'loop-continue-before-exit-pin',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { values.join = Array.prototype.join; if (pass++ < 1) continue; break; } }`,
     converts: true,
