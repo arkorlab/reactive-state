@@ -26,6 +26,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   isSpreadElement,
+  type NewExpression,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -42,6 +43,7 @@ import {
   loopHeadDefault,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { calledArrayElements } from './framed-called-elements.ts';
 import { possibleFields } from './framed-entry-fields.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
@@ -158,6 +160,9 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
       if (write.slot === undefined || write.slot === '0') key = true;
       if (write.slot === undefined || write.slot === '1') values.push(...write.sources);
     }
+    const called = calledWrites(node, call, entry, aliases);
+    key ||= called.key;
+    values.push(...called.values);
   }
   return {
     key,
@@ -165,6 +170,53 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
       (each, at) => values.findIndex((other) => sameSource(other, each)) === at,
     ),
   };
+}
+
+/**
+ * What a call the argument list makes does to the tuple it is given: a native mutator or insertion
+ * writes the slots it names, and any other call may write what is not written out, which is not
+ * followed, as is a call that moves elements or hands an array whose elements it cannot tell.
+ */
+function calledWrites(
+  node: Node,
+  call: CallExpression,
+  entry: Expression,
+  aliases: ReadonlySet<FrameBinding>,
+): TupleWrites {
+  const none = { key: false, values: [] };
+  if (node === call || !reachedWrite(node, call)) return none;
+  if (isNewExpression(node)) {
+    if (handsTuple(node, aliases)) throw new UnfollowableError();
+    return none;
+  }
+  if (!isCallExpression(node)) return none;
+  const named = calledArrayElements(node, entry, 0);
+  const valued = calledArrayElements(node, entry, 1);
+  const unread = [named, valued].some(
+    (each) => each.moves || each.elements.some((element) => element.array === true),
+  );
+  if (unread || (!named.tracked && handsTuple(node, aliases))) throw new UnfollowableError();
+  return {
+    key: named.elements.length > 0,
+    values: valued.elements.map(({ value, keys }) => ({ value, keys })),
+  };
+}
+
+/** Whether the call is given one of the tuple's bindings whole, as an argument or as a method's receiver. */
+function handsTuple(
+  node: CallExpression | NewExpression,
+  aliases: ReadonlySet<FrameBinding>,
+): boolean {
+  const callee = unwrapped(node.expression);
+  const receiver =
+    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
+      ? [callee.expression]
+      : [];
+  return [...(node.arguments ?? []), ...receiver].some((each) => {
+    const value = unwrapped(isSpreadElement(each) ? each.expression : each);
+    const selected = isIdentifier(value) ? frameBindingOf(value) : undefined;
+    return selected?.keys.length === 0 && aliases.has(selected.binding);
+  });
 }
 
 /**
