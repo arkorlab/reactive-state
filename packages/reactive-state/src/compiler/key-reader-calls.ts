@@ -291,11 +291,19 @@ function spreadsIn(call: CallExpression): readonly SpreadElement[] {
   return found;
 }
 
-/** Whether `call` writes a reader of the language's, which a spread past `SPREADS` leaves no way to follow. */
+/**
+ * Whether `call` writes a reader of the language's, which a spread past `SPREADS` leaves no way to
+ * follow: any expression of it that `pathOf` says is one — as a member, in brackets, past an optional
+ * chain, parentheses, a comma, a cast, or the global object — past the functions it holds. A reader
+ * kept by a name, or taken apart by a pattern, is not written here.
+ */
 function writesReader(call: CallExpression, reading: Reading): boolean {
   let found = false;
   const visit = (node: Node): void => {
-    const path = isPropertyAccessExpression(node) ? reading.pathOf(node) : undefined;
+    if (isFunctionLikeDeclaration(node) || isClassExpression(node)) {
+      return;
+    }
+    const path = reading.pathOf(node);
     found ||= path !== undefined && KEY_READERS.has(path);
     node.forEachChild(visit);
   };

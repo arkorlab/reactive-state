@@ -186,6 +186,120 @@ const CASES = [
     source: "const keys = [run, 'constructor'];\n  return Reflect.get(...keys);",
     what: 'a list kept by a name, spread',
   },
+  // More spreads than are laid out: a call that writes a reader, however the code spells it, is read.
+  {
+    reads: ["Reflect.get(...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return Reflect.get(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written as a member, past more spreads than are laid out',
+  },
+  {
+    reads: ["Reflect['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return Reflect['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written in brackets, past more spreads than are laid out',
+  },
+  {
+    reads: ["Reflect?.get(...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return Reflect?.get(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written past an optional chain, past more spreads than are laid out',
+  },
+  {
+    reads: ["(Reflect).get(...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return (Reflect).get(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written past parentheses, past more spreads than are laid out',
+  },
+  {
+    reads: ["(0, Reflect.get)(...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return (0, Reflect.get)(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written past a comma, past more spreads than are laid out',
+  },
+  {
+    reads: ["(0, Reflect)['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return (0, Reflect)['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader in brackets past a comma, past more spreads than are laid out',
+  },
+  {
+    reads: ["globalThis.Reflect.get(...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source:
+      "return globalThis.Reflect.get(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written of the global object, past more spreads than are laid out',
+  },
+  {
+    reads: [
+      "globalThis['Reflect']['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor')",
+    ],
+    source:
+      "return globalThis['Reflect']['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader written of the global object in brackets, past more spreads than are laid out',
+  },
+  {
+    reads: [
+      "Object.getOwnPropertyDescriptor(...rest, ...args, ...fn, ...obj, ...text, 'constructor')",
+    ],
+    source:
+      "return Object.getOwnPropertyDescriptor(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: '`Object.getOwnPropertyDescriptor`, past more spreads than are laid out',
+  },
+  {
+    reads: [
+      "Object['getOwnPropertyDescriptor'](...rest, ...args, ...fn, ...obj, ...text, 'constructor')",
+    ],
+    source:
+      "return Object['getOwnPropertyDescriptor'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: '`Object.getOwnPropertyDescriptor` in brackets, past more spreads than are laid out',
+  },
+  {
+    reads: [
+      "Reflect.getOwnPropertyDescriptor(...rest, ...args, ...fn, ...obj, ...text, 'constructor')",
+    ],
+    source:
+      "return Reflect.getOwnPropertyDescriptor(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: '`Reflect.getOwnPropertyDescriptor`, past more spreads than are laid out',
+  },
+  {
+    reads: ["(<any>Reflect.get)(...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source: "return (<any>Reflect.get)(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader in a cast in angle brackets, past more spreads than are laid out',
+  },
+  {
+    reads: ["Reflect['get'].call(null, ...rest, ...args, ...fn, ...obj, ...text, 'constructor')"],
+    source:
+      "return Reflect['get'].call(null, ...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader in brackets, borrowed, past more spreads than are laid out',
+  },
+  {
+    reads: [],
+    source: "return reader['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a function of the module past more spreads than are laid out',
+  },
+  {
+    reads: [],
+    source: "return Reflect['set'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a function that is no reader, past more spreads than are laid out',
+  },
+  {
+    reads: [],
+    source:
+      "const { get } = Reflect;\n  return get(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader taken apart by a pattern, past more spreads than are laid out',
+  },
+  {
+    reads: [],
+    source:
+      "const get = Reflect.get;\n  return get(...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a reader kept by a name, past more spreads than are laid out',
+  },
+  {
+    reads: [],
+    source:
+      "const kept = Reflect;\n  return kept['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'the global kept by a name, past more spreads than are laid out',
+  },
+  {
+    reads: [],
+    source:
+      "const Reflect = { get: (target: unknown, key: string) => key };\n  return Reflect['get'](...rest, ...args, ...fn, ...obj, ...text, 'constructor');",
+    what: 'a global the code declares again, past more spreads than are laid out',
+  },
 ] as const;
 
 describe('a spread among the arguments a reader of the language is given', () => {
