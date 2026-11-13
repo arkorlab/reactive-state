@@ -27,7 +27,7 @@ import {
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { isTrackedCall } from './framed-called-elements.ts';
-import { convertedToName } from './framed-entry-keys.ts';
+import { convertedToName, runsOwnCode } from './framed-entry-keys.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { readsBinding } from './scope.ts';
@@ -125,7 +125,8 @@ function isArgument(call: CallExpression, node: Node): boolean {
 }
 
 /**
- * Whether a function the list makes is held only as data the call's own arguments hold. A function an
+ * Whether a function the list makes is held only as data the call's own arguments hold: no object
+ * that holds it has an accessor, or a prototype with one, which may call it as `this.run()`. A function an
  * object holds that is converted to the name of an entry (the first of a list, the field `0` of an
  * object, wherever the entry stands) is no such data: the call runs its `Symbol.toPrimitive`, its
  * `toString` or its `valueOf`, or those of the prototype it writes.
@@ -135,6 +136,7 @@ function onlyStored(made: Node, call: CallExpression): boolean {
   for (;;) {
     const { parent } = at;
     if (parent === call) return isArgument(call, at) && !convertedToName(made, call);
+    if (isObjectLiteralExpression(parent) && runsOwnCode(parent)) return false;
     const holds =
       passesValue(parent, at) ||
       isArrayLiteralExpression(parent) ||

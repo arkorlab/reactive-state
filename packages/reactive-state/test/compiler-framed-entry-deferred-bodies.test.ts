@@ -549,6 +549,160 @@ const CASES = [
     key: 'message',
     values: undefined,
   },
+  {
+    id: 'spread-getter-calls-a-sibling-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), get 0() { this.run(); return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-calls-a-sibling-function-by-a-text-key',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), get 0() { this['run'](); return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-calls-a-sibling-function-through-call',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), get 0() { this.run.call(this); return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-takes-a-sibling-function-apart',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), get 0() { const { run } = this; run(); return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-reads-a-sibling-function-by-reflect',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), get 0() { Reflect.get(this, 'run')(); return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-reads-another-getter-that-calls',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), get 0() { return this.k; }, get k() { this.run(); return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-setter-holds-a-sibling-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), set 0(value: unknown) { this.run(); } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'nested-spread-with-a-getter-and-a-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ ...{ run: () => reviewed(entry), get 0() { this.run(); return 'unused'; } } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-in-a-list-spread-with-a-getter-and-a-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([...[{ ...{ run: () => reviewed(entry), get 0() { this.run(); return 'unused'; } }, 1: 0 }], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'entry-getter-calls-a-sibling-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ get 0() { this.run(); return 'unused'; }, run: () => reviewed(entry), 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'entry-getter-of-the-value-calls-a-sibling-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ get 1() { this.run(); return 0; }, run: () => reviewed(entry), 0: 'unused' }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'entry-getter-calls-a-function-of-a-field',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ get 0() { this.n.run(); return 'unused'; }, n: { run: () => reviewed(entry) }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'prototype-getter-calls-a-function-the-entry-holds',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ __proto__: { get 0() { this.run(); return 'unused'; } }, run: () => reviewed(entry), 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'prototype-of-a-prototype-getter-calls-a-function-the-entry-holds',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ __proto__: { __proto__: { get 0() { this.run(); return 'unused'; } } }, run: () => reviewed(entry), 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'prototype-given-by-a-name-and-a-function-the-entry-holds',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ __proto__: proto, run: () => reviewed(entry), 1: 0 }, entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'accessor-in-the-object-of-a-value-holding-a-function',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([['unused', { get x() { return this.run(); }, run: () => reviewed(entry) }], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-of-an-object-without-accessors-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), 0: 'unused' }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'spread-of-an-object-with-a-method-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry), m() { return this.run; }, 0: 'unused' }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'spread-of-an-object-whose-accessors-are-in-another-object-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ ...{ run: () => reviewed(entry) }, ...{ get 0() { return 'unused'; } }, 1: 0 }, entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'prototype-without-accessors-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ __proto__: { 0: 'unused' }, run: () => reviewed(entry), 1: 0 }, entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'prototype-null-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ __proto__: null, run: () => reviewed(entry), 0: 'unused', 1: 0 }, entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-in-another-entry-from-the-accessor-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([{ get 0() { return 'unused'; }, 1: 0 }, ['b', { run: () => reviewed(entry) }], entry]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
 ] as const;
 
 describe('entry tuples a function of the argument list is given', () => {

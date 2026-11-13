@@ -7,8 +7,10 @@ import {
   isBinaryExpression,
   isConditionalExpression,
   isExpression,
+  isGetAccessorDeclaration,
   isObjectLiteralExpression,
   isPropertyAssignment,
+  isSetAccessorDeclaration,
   isSpreadAssignment,
   isSpreadElement,
   type Node,
@@ -134,5 +136,23 @@ export function convertedToName(made: Node, call: CallExpression): boolean {
   return nameSlots(call).some((slot) => {
     const values = isExpression(slot) ? valuesOf(slot) : [slot];
     return values.some((value) => value !== made && within(made, value));
+  });
+}
+
+/**
+ * Whether an object written out holds code that runs when it is read, or when an object it is the
+ * prototype of is: an accessor, which runs with the object it is read from as its `this`, or a
+ * prototype the compile does not show whole. Such code may call any function the object holds.
+ */
+export function runsOwnCode(object: ObjectLiteralExpression, depth = 0): boolean {
+  if (depth > PROTOTYPES) return true;
+  return object.properties.some((property) => {
+    if (isGetAccessorDeclaration(property) || isSetAccessorDeclaration(property)) return true;
+    if (!isPropertyAssignment(property) || writtenArrayKey(property.name) !== '__proto__')
+      return false;
+    return valuesOf(property.initializer).some((value) => {
+      if (value.kind === SyntaxKind.NullKeyword || isArrayLiteralExpression(value)) return false;
+      return !isObjectLiteralExpression(value) || runsOwnCode(value, depth + 1);
+    });
   });
 }
