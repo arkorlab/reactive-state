@@ -1541,9 +1541,9 @@ const CONVERSIONS = [
     converts: true,
   },
   {
-    id: 'define-reassigned-alias-write-safe',
+    id: 'define-reassigned-alias-write-refused-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; let alias = descriptor; alias = {}; alias.get = () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-conditional-descriptor-converts',
@@ -2431,9 +2431,9 @@ const CONVERSIONS = [
     converts: true,
   },
   {
-    id: 'define-logical-copied-to-assign-pin',
+    id: 'define-logical-copied-to-assign-refused-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; const copy = Object.assign({}, descriptor); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-rest-copy-of-selected-field-before-later-write',
@@ -2751,14 +2751,14 @@ const CONVERSIONS = [
     converts: false,
   },
   {
-    id: 'define-array-rest-member-captured-is-no-descriptor',
+    id: 'define-array-rest-member-captured-refused-pin',
     source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const other: any = {}; const maps: any = {}; [...holder.items] = [{ get: () => error }]; ({ items: other.nested } = holder); Object.defineProperties(a, { 0: other.nested }); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'define-array-rest-member-captured-copy-is-no-descriptor',
+    id: 'define-array-rest-member-captured-copy-refused-pin',
     source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const other: any = {}; const maps: any = {}; [...holder.items] = [{ get: () => error }]; other.nested = holder.items; Object.defineProperties(a, { 0: other.nested }); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-logical-after-apply-list-call',
@@ -2841,9 +2841,9 @@ const CONVERSIONS = [
     converts: false,
   },
   {
-    id: 'define-logical-in-apply-list-source-pin',
+    id: 'define-logical-in-apply-list-source-refused-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; Reflect.apply(Object.assign, null, [{}, descriptor]); descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-logical-in-descriptor-map-pin',
@@ -2994,6 +2994,206 @@ const CONVERSIONS = [
     id: 'callee-safe-descriptor-through-reflect-pin',
     source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty(a, 0, { get: () => 'safe' }); return String(a); }`,
     converts: false,
+  },
+  {
+    id: 'refused-descriptor-copied-through-assign',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = { get: () => error }; const c = Object.assign({}, d); Object.defineProperty(a, 0, c); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-map-copied-through-assign',
+    source: `function frames(error: Error) { const a = ['safe']; const m: any = { 0: { get: () => error } }; Object.defineProperties(a, Object.assign({}, m)); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-safe-descriptor-copied-through-assign-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = { get: () => 'safe' }; const c = Object.assign({}, d); Object.defineProperty(a, 0, c); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-descriptor-in-a-destructured-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = { get: () => error }; const [x] = [d]; Object.defineProperty(a, 0, x); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-descriptor-in-an-object-destructured-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = { get: () => error }; const { y } = { y: d }; Object.defineProperty(a, 0, y); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-assign-to-a-held-descriptor',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; Object.assign(d, { get: () => error }); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-define-on-a-held-descriptor',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; Object.defineProperty(d, 'get', { value: () => error }); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-call-on-a-held-list',
+    source: `function frames(error: Error) { const a = ['safe']; const am: any[] = []; am.push({ get: () => error }); Object.defineProperties(a, am); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-assign-to-a-held-map',
+    source: `function frames(error: Error) { const a = ['safe']; const m: any = {}; Object.assign(m, { 0: { get: () => error } }); Object.defineProperties(a, m); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-write-through-a-member-of-a-held-map',
+    source: `function frames(error: Error) { const a = ['safe']; const m: any = {}; m[0] = {}; m[0].get = () => error; Object.defineProperties(a, m); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-write-through-an-entry-of-a-held-list',
+    source: `function frames(error: Error) { const a = ['safe']; const l: any[] = [{}]; l[0].get = () => error; Object.defineProperties(a, l); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-member-of-a-held-map-as-a-descriptor',
+    source: `function frames(error: Error) { const a = ['safe']; const m: any = { 0: { get: () => error } }; Object.defineProperty(a, 0, m[0]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-member-of-a-held-map-in-a-list',
+    source: `function frames(error: Error) { const a = ['safe']; const m: any = { 0: { get: () => error } }; Object.defineProperties(a, [m[0]]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-array-handed-to-a-bound-mutator',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign.bind(null)(a, { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-array-handed-to-a-function-of-the-program',
+    source: `function frames(error: Error) { const a = ['safe']; const write = (list: unknown[]) => { list[0] = error; }; write(a); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-array-held-by-a-literal',
+    source: `function frames(error: Error) { const a = ['safe']; const holder = [a]; (holder[0] as unknown[])[0] = error; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-array-in-a-destructured-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const [alias] = [a]; alias[0] = error; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-array-handed-to-reflect-set',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.set(a, 0, error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-array-returned-by-a-mutator-to-a-function',
+    source: `function frames(error: Error) { const a = ['safe']; ((list: unknown[]) => { list[0] = error; })(Object.defineProperty(a, 1, { value: 'safe' })); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-safe-array-handed-to-a-function-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const note = (list: unknown[]) => list.length; note(a); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'known-text-conversion-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; String(a); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; a.push('safe'); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-spread-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const b = [...a]; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-length-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const n = a.length; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-iteration-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; for (const each of a) { void each; } return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-reader-native-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const keys = Object.keys(a); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-test-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; if (a) { void 0; } return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-mutator-of-an-array-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { 0: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-mutator-through-a-comma-pin',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.defineProperty)(a, 0, { value: 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-use-after-the-read-pin',
+    source: `function frames(error: Error, write: (list: unknown[]) => void) { const a = ['safe']; const text = String(a); write(a); return text; }`,
+    converts: false,
+  },
+  {
+    id: 'refused-pattern-source-with-a-method',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; ({ f: d.get } = { f() { return error; } }); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-pattern-source-from-a-call',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; ({ f: d.get } = Object.freeze({ f: () => error })); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-pattern-source-copied-through-assign',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; ({ f: d.get } = Object.assign({}, { f: () => error })); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-member-of-a-literal-as-a-written-value',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; d.get = ({ f: () => error }).f; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-member-of-a-list-as-a-written-value',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; d.get = [() => error][0]; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-member-of-a-literal-in-a-pattern-source',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; ({ x: d.get } = { x: ({ f: () => error }).f }); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'known-pattern-source-literal-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; ({ f: d.get } = { f: () => 'safe' }); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-pattern-source-held-constant-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; const s = { f: () => 'safe' }; ({ f: d.get } = s); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-written-function-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; const read = () => 'safe'; d.get = read; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'known-written-function-through-error-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const d: any = {}; const read = () => error; d.get = read; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
   },
 ] as const;
 

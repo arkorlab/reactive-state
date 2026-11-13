@@ -41,7 +41,7 @@ export interface MutatorInvocation {
  * a constant that holds it (`const define = Object.defineProperty`), and through `.call` or `.apply`
  * of such a name. None for a callee that is any other expression, a bound function among them.
  */
-function nativePath(callee: Expression): string | undefined {
+export function nativePath(callee: Expression): string | undefined {
   const seen = new Set<Node>();
   const suffixes: string[] = [];
   let value = unwrapped(callee);

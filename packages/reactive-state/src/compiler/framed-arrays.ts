@@ -27,7 +27,7 @@ import {
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
 import { callMethodWrites } from './framed-array-call-writes.ts';
-import { writtenArrayElements } from './framed-array-elements.ts';
+import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
@@ -192,6 +192,7 @@ function writtenElementErrors(
   words: ArrayWords,
   pending: ArrayReading[],
 ): boolean {
+  if (arrayWritesUnfollowed(value, call)) return true;
   for (const source of writtenArrayElements(value, call)) {
     if (source.array === true) {
       pending.push({ value: source.value, text: false });
