@@ -246,13 +246,15 @@ function otherChanges(node: Node, bindings: ReadonlySet<unknown>): readonly (str
 
 /**
  * Whether a node is a mention of a held object that may change it: any mention that is no use the
- * compile knows. The uses are named in `framed-known-uses`: the same for every reader of a held
- * object.
+ * compile knows, or that gives the object to a name this reader does not follow (a name written as
+ * a whole, a literal that holds it). The uses are named in `framed-known-uses`: the same for every
+ * reader of a held object.
  */
 function handedToChange(node: Node, bindings: ReadonlySet<unknown>): boolean {
   if (!isIdentifier(node) || isDeclaredName(node)) return false;
   if (!bindings.has(frameBindingOf(node)?.binding)) return false;
-  return !classify(node, 'held').known;
+  const use = classify(node, 'held');
+  return !use.known || (use.alias !== undefined && !bindings.has(use.alias));
 }
 
 /** Whether an identifier only names: a property, a parameter, a variable, a binding. */

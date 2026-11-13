@@ -3239,6 +3239,23 @@ const CONVERSIONS = [
   {
     id: 'descriptor-held-by-an-array-destructured-constant-refused',
     source: `function frames(error: Error) { const a: any[] = ['safe']; const [descriptor] = [{ get: () => error }]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    id: 'alias-write-then-logical-assign-runs',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const s: any = { f: () => 'safe' }; let alias = s; alias.f = undefined; alias = {}; s.f ||= () => error; const { f: read } = s; Object.defineProperty(a, 0, { get: read }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'followed-alias-write-then-logical-assign-runs',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const s: any = { f: () => 'safe' }; const alias = s; alias.f = undefined; s.f ||= () => error; const { f: read } = s; Object.defineProperty(a, 0, { get: read }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-never-written-logical-assign-skipped-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const s: any = { f: () => 'safe' }; const alias = s; void alias; s.f ||= () => error; const { f: read } = s; Object.defineProperty(a, 0, { get: read }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'container-holds-the-object-logical-assign-runs',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const s: any = { f: () => 'safe' }; const holder = { s }; holder.s.f = undefined; s.f ||= () => error; const { f: read } = s; Object.defineProperty(a, 0, { get: read }); return String(a); }`,
     converts: true,
   },
 ] as const;
