@@ -125,7 +125,11 @@ function tupleEscapes(
  * within it that is its own, and a function that is not the call's own and is not known never to
  * run, which names the tuple.
  */
-function tupleRunsElsewhere(call: CallExpression, aliases: ReadonlySet<FrameBinding>): boolean {
+function tupleRunsElsewhere(
+  call: CallExpression,
+  aliases: ReadonlySet<FrameBinding>,
+  reached: (node: Node) => boolean,
+): boolean {
   const file = call.getSourceFile();
   const owner = executionOwner(call);
   let runs = false;
@@ -134,7 +138,8 @@ function tupleRunsElsewhere(call: CallExpression, aliases: ReadonlySet<FrameBind
     runs =
       node !== call &&
       (isCallExpression(node) || isNewExpression(node)) &&
-      executionOwner(node) === owner;
+      executionOwner(node) === owner &&
+      reached(node);
     node.forEachChild((child) => {
       inside.push(child);
     });
@@ -165,5 +170,5 @@ export function checkedTuple(
 ): boolean {
   if (aliases.size === 0) return false;
   if (tupleEscapes(call, entry, aliases, reached)) throw new UnfollowableError();
-  return tupleRunsElsewhere(call, aliases);
+  return tupleRunsElsewhere(call, aliases, reached);
 }
