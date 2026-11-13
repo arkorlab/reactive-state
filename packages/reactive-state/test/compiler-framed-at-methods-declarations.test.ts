@@ -28,6 +28,30 @@ const CASES = [
     result: undefined,
   },
   {
+    id: 'declaration-written-by-a-pattern-of-an-unknown-key-is-no-own-method',
+    source: `function frames(holder: any, error: Error, key: string) { function at() { return 'safe'; } ({ [key]: at } = { at: () => error }); holder.at = at; }`,
+    own: false,
+    result: undefined,
+  },
+  {
+    id: 'declaration-written-by-an-array-pattern-is-no-own-method',
+    source: `function frames(holder: any, error: Error, list: unknown[]) { function at() { return 'safe'; } [at] = list; holder.at = at; }`,
+    own: false,
+    result: undefined,
+  },
+  {
+    id: 'declaration-written-by-a-loop-head-is-no-own-method',
+    source: `function frames(holder: any, error: Error, list: unknown[]) { function at() { return 'safe'; } for (at of list) {} holder.at = at; }`,
+    own: false,
+    result: undefined,
+  },
+  {
+    id: 'declaration-shadowed-where-the-name-is-written-pin',
+    source: `function frames(holder: any, error: Error) { function at() { return 'safe'; } const other = () => { let at = () => error; at = () => 'x'; return at; }; holder.at = at; void other; }`,
+    own: true,
+    result: false,
+  },
+  {
     id: 'declaration-returning-the-error',
     source: `function frames(holder: any, error: Error) { function at() { return error; } holder.at = at; }`,
     own: true,

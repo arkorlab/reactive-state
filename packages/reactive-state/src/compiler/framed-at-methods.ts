@@ -33,7 +33,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { iteratorQuietValues } from './framed-iterator-guards.ts';
 import { framedCondition } from './framed-sources.ts';
-import { framedAssignedValues } from './framed-writes.ts';
+import { framedWrittenTargets } from './framed-written-targets.ts';
 import { constantValue } from './numbers.ts';
 
 /** Result-sensitive selectors inspect only source-proven synchronous own method bodies. */
@@ -182,7 +182,7 @@ function nextFunction(value: Node): Node | undefined {
   if (isIdentifier(value)) {
     const declared = frameDeclarationOf(value);
     if (declared !== undefined && isAnswering(declared))
-      return framedAssignedValues(value).length === 0 ? declared : undefined;
+      return writtenElsewhere(declared) ? undefined : declared;
     const initializer = constantInitializer(value);
     return initializer === undefined ? undefined : unwrapped(initializer);
   }
@@ -190,6 +190,25 @@ function nextFunction(value: Node): Node | undefined {
   const member = writtenMember(value);
   if (member === undefined || isMethodDeclaration(member)) return member;
   return unwrapped(member);
+}
+
+/**
+ * Whether the file writes the name of a function declaration, by an assignment or a pattern whose
+ * value or key the compile cannot read as well: the name may hold what was written instead.
+ */
+function writtenElsewhere(declared: Node): boolean {
+  const pending: Node[] = [declared.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    for (const target of framedWrittenTargets(node)) {
+      const name = unwrapped(target);
+      const found: Node | undefined = isIdentifier(name) ? frameDeclarationOf(name) : undefined;
+      if (found === declared) return true;
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /** A fixed plain data literal stays data behind an assertion; opaque receivers retain assertions. */
