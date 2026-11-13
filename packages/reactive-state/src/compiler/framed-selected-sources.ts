@@ -77,6 +77,8 @@ interface Reading {
   readonly at: Node | undefined;
   /** The values of the writes the selection is inside of, which it does not follow into again. */
   readonly following: ReadonlySet<Node>;
+  /** The names the copy a field is asked of was made without, which a key for any field leaves out. */
+  readonly without: readonly string[];
 }
 
 /**
@@ -89,7 +91,13 @@ export function selectedValues(
   keys: readonly string[],
   at?: Node,
 ): readonly SelectedSource[] {
-  return select(value, keys, { visited: new Map(), own: false, at, following: new Set() });
+  return select(value, keys, {
+    visited: new Map(),
+    own: false,
+    at,
+    following: new Set(),
+    without: [],
+  });
 }
 
 function select(
@@ -175,9 +183,10 @@ function memberWrites(
     const later = copy ? { ...captured, own: true } : { ...reading, following };
     return select(write.value, took.path, captured).flatMap((each) => {
       if (took.tail[0] !== undefined && each.without?.includes(took.tail[0]) === true) return [];
+      const read = { ...later, without: leftOutOfAny(each, write, copy, took.tail[0]) };
       const handed =
         each.keys.length === 0
-          ? select(each.value, took.tail, later)
+          ? select(each.value, took.tail, read)
           : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
       const inList = each.inList === true && took.tail.length === 0;
       const left = leftOut(each, write, copy, took.tail.length === 0);
@@ -199,6 +208,16 @@ function leftOut(
 ): readonly string[] {
   if (!whole) return [];
   return [...(each.without ?? []), ...(copy ? (write.without ?? []) : [])];
+}
+
+/** The names a key for any field of a copy leaves out: what it was made without, as the copy it is a copy of was. */
+function leftOutOfAny(
+  each: SelectedSource,
+  write: HeldWrite,
+  copy: boolean,
+  key: string | undefined,
+): readonly string[] {
+  return key === ANY_FIELD ? [...(each.without ?? []), ...(copy ? (write.without ?? []) : [])] : [];
 }
 
 /** A value the selection hands over whole, with the names it was copied without. */
@@ -249,7 +268,9 @@ export function writtenList(expression: Expression): ArrayLiteralExpression | un
 
 /** What reads below the first step of a path read: the fields of a copy are no copy. */
 function below(reading: Reading): Reading {
-  return reading.own ? { ...reading, own: false } : reading;
+  return reading.own || reading.without.length > 0
+    ? { ...reading, own: false, without: [] }
+    : reading;
 }
 
 /** The methods that change a list, or the order of its entries. */
@@ -461,6 +482,13 @@ function asksAny(key: string | undefined): boolean {
   return key === ANY_FIELD || (key !== undefined && suffixStart(key) !== undefined);
 }
 
+/** Whether a field is named by one of the names a copy was made without. */
+function isLeftOut(property: ObjectLiteralElementLike, without: readonly string[]): boolean {
+  if (isSpreadAssignment(property)) return false;
+  const name = writtenArrayKey(property.name);
+  return name !== undefined && without.includes(name);
+}
+
 /** Whether a field may be the key: a spread, a name the compile cannot read, or the name itself. */
 function mayHold(property: ObjectLiteralElementLike, key: string | undefined): boolean {
   if (asksAny(key) || isSpreadAssignment(property)) return true;
@@ -480,13 +508,21 @@ interface Taken {
  * it, and each field after which a spread, or a name the compile cannot read, may have set it. A
  * setter hands over nothing and replaces the data before it, not a getter.
  */
-function takenFields(object: ObjectLiteralExpression, key: string | undefined): Taken {
+function takenFields(
+  object: ObjectLiteralExpression,
+  key: string | undefined,
+  without: readonly string[],
+): Taken {
   const fields: ObjectLiteralElementLike[] = [];
   let owned = false;
   let replaced = false;
-  const candidates = object.properties
-    .toReversed()
-    .filter((property) => writtenPrototype(property) === undefined && mayHold(property, key));
+  const candidates = object.properties.toReversed().filter((property) => {
+    return (
+      writtenPrototype(property) === undefined &&
+      mayHold(property, key) &&
+      !isLeftOut(property, without)
+    );
+  });
   for (const property of candidates) {
     if (isSpreadAssignment(property)) {
       fields.push(property);
@@ -517,7 +553,7 @@ function fieldOf(
   reading: Reading,
 ): readonly AssignedFrameSource[] {
   const [key, ...rest] = keys;
-  const { fields, owned } = takenFields(object, key);
+  const { fields, owned } = takenFields(object, key, key === ANY_FIELD ? reading.without : []);
   const copied = { ...reading, own: true };
   const found = fields.flatMap((property) => {
     return isSpreadAssignment(property)
