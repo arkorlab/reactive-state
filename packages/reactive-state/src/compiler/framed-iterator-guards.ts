@@ -75,7 +75,10 @@ export function iteratorMemberName(member: Expression): string | undefined {
   return name === DEFAULT_ITERATOR ? undefined : name;
 }
 
-/** Every ignored invocation argument still executes before a native iterator answers its first value. */
+/**
+ * Every ignored invocation argument still executes before a native iterator answers its first value. A
+ * collection built from a name iterates what the name holds as it is built: that is application code.
+ */
 export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   const { source, acquisition, next } = boundary;
   if (!iteratorQuietValues(acquisition.arguments) || !iteratorQuietValues(next.arguments))
@@ -83,7 +86,10 @@ export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   if (!iteratorPrefixQuiet(acquisition, next)) return false;
   if (!iteratorPrefixQuiet(source.value, acquisition, boundary)) return false;
   const values = isNewExpression(source.value) ? (source.value.arguments ?? []) : [source.value];
-  return iteratorQuietValues(values);
+  return (
+    values.every((each) => !(isNewExpression(source.value) && isIdentifier(unwrapped(each)))) &&
+    iteratorQuietValues(values)
+  );
 }
 
 /** Literal data creation invokes neither application calls, getters nor unresolved spread iterators. */
