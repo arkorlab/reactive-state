@@ -1,5 +1,6 @@
 import {
   type Expression,
+  isComputedPropertyName,
   isExpression,
   isGetAccessorDeclaration,
   isObjectLiteralExpression,
@@ -198,19 +199,24 @@ function reachedBy(counting: Counting, getter: string | undefined, field: string
 type Slot = 'absent' | 'accessor' | 'data' | 'setter';
 
 /**
- * What the field a getter assigns to is: a value, which the assignment replaces; an accessor, whose
- * setter an assignment runs instead (a getter alone swallows it); a setter that names `this`, which
- * writes as it likes; or none, which the assignment creates. A spread or a name that is computed
- * leaves it a value.
+ * What the field a getter assigns to may be: a value, which the assignment replaces; an accessor,
+ * whose setter an assignment runs instead (a getter alone swallows it); a setter that names `this`,
+ * which writes as it likes; or none, which the assignment creates. A spread may give the name a
+ * value, and a field whose name is computed may be any field: such a field adds what it may make of
+ * the field to what it may have been, and the fields written after it, by name, make what they make
+ * of each.
  */
-function slotOf(descriptor: ObjectLiteralExpression, name: string): Slot {
-  let slot = 'absent' as Slot;
+function slotsOf(descriptor: ObjectLiteralExpression, name: string): ReadonlySet<Slot> {
+  let slots = new Set<Slot>(['absent']);
   for (const property of descriptor.properties) {
     const key = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
-    if (key === undefined) return 'data';
-    if (key === name) slot = slotAfter(slot, property);
+    if (key !== name && key !== undefined) continue;
+    const made = [...slots].map((each) => slotAfter(each, property));
+    if (key === name) slots = new Set(made);
+    else if (isSpreadAssignment(property)) slots.add('data');
+    else for (const each of made) slots.add(each);
   }
-  return slot;
+  return slots;
 }
 
 /** The slot a field makes of one that was: a setter or a getter makes an accessor, any other a value. */
@@ -236,8 +242,8 @@ function namesThis(fn: Node): boolean {
 
 /** Whether an assignment to the field leaves the descriptor the value written: no accessor swallows it. */
 function stores(descriptor: ObjectLiteralExpression, field: string): boolean {
-  const slot = slotOf(descriptor, field);
-  return slot === 'data' || slot === 'absent';
+  const slots = slotsOf(descriptor, field);
+  return slots.has('data') || slots.has('absent');
 }
 
 /**
@@ -299,11 +305,15 @@ function rewrites(
     : found;
 }
 
-/** Whether a field sets the prototype of the descriptor (`__proto__: value`), which is no own field. */
+/**
+ * Whether a field sets the prototype of the descriptor (`__proto__: value`), which is no own field.
+ * A computed `['__proto__']`, a shorthand and a method are own fields.
+ */
 function setsProto(property: ObjectLiteralElementLike): boolean {
   return (
     !isSpreadAssignment(property) &&
     isPropertyAssignment(property) &&
+    !isComputedPropertyName(property.name) &&
     writtenArrayKey(property.name) === '__proto__'
   );
 }
@@ -318,7 +328,7 @@ function runsWritingSetter(
     if (
       name === undefined
         ? setters.some((one) => namesThis(one))
-        : slotOf(descriptor, name) === 'setter'
+        : slotsOf(descriptor, name).has('setter')
     )
       return true;
   }

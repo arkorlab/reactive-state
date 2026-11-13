@@ -1386,6 +1386,38 @@ const ELEMENTS = [
       "{ get probe() { Object.assign(this, { value: error }); return true; }, value: 'safe' }:value",
     ],
   },
+  {
+    id: 'define-descriptor-writing-setter-gets-the-write-pin',
+    source: `function frames(error: Error, key: string) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { this.writable = 1; return true; }, set writable(v: unknown) { this.value = error; } }); return values; }`,
+    index: 0,
+    elements: [
+      '{ get enumerable() { this.writable = 1; return true; }, set writable(v: unknown) { this.value = error; } }:value',
+    ],
+  },
+  {
+    id: 'define-descriptor-spread-before-a-writing-setter',
+    source: `function frames(error: Error, key: string) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { ...{}, get enumerable() { this.writable = 1; return true; }, set writable(v: unknown) { this.value = error; } }); return values; }`,
+    index: 0,
+    elements: [
+      '{ ...{}, get enumerable() { this.writable = 1; return true; }, set writable(v: unknown) { this.value = error; } }:value',
+    ],
+  },
+  {
+    id: 'define-descriptor-writing-setter-before-a-spread',
+    source: `function frames(error: Error, key: string) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { this.writable = 1; return true; }, set writable(v: unknown) { this.value = error; }, ...{} }); return values; }`,
+    index: 0,
+    elements: [
+      '{ get enumerable() { this.writable = 1; return true; }, set writable(v: unknown) { this.value = error; }, ...{} }:value',
+    ],
+  },
+  {
+    id: 'define-descriptor-computed-setter-may-be-the-written-field',
+    source: `function frames(error: Error, key: string) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { get enumerable() { this.writable = 1; return true; }, set [key](v: unknown) { this.value = error; } }); return values; }`,
+    index: 0,
+    elements: [
+      '{ get enumerable() { this.writable = 1; return true; }, set [key](v: unknown) { this.value = error; } }:value',
+    ],
+  },
 ] as const;
 
 describe('descriptors built from constants that spread each other', () => {
@@ -3168,6 +3200,16 @@ const CONVERSIONS = [
     id: 'descriptor-unknown-key-write-before-the-value-is-read',
     source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { this[key] = error; return true; }, value: 'safe' }); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'descriptor-spread-before-a-value-accessor-swallows-the-write',
+    source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{}, get enumerable() { this.value = error; return true; }, get value() { return 'safe'; }, set value(v: unknown) {} }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-computed-proto-spread-replaces-the-getter',
+    source: `function frames(error: Error, key: string) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { ...{ get __proto__() { this.value = error; return 0; }, value: 'safe', ...{ ['__proto__']: 0 } } }); return String(a); }`,
+    converts: false,
   },
 ] as const;
 
