@@ -51,6 +51,12 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'assign-getter-constant-local',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { const held = error; return held; } }); return values; }`,
+    index: undefined,
+    elements: ['held:'],
+  },
+  {
     id: 'define-getter-constant-local',
     source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { const held = error; return held; } }); return values; }`,
     index: undefined,
@@ -75,10 +81,28 @@ const ELEMENTS = [
     elements: [],
   },
   {
+    id: 'assign-getter-mutable-local',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let held = error; held = error; return held; } }); return values; }`,
+    index: undefined,
+    elements: ['held:'],
+  },
+  {
+    id: 'assign-getter-try',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { try { return error; } finally { touch(); } } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'define-getter-call-first',
     source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { touch(); return error; } }); return values; }`,
     index: undefined,
     elements: ['error:'],
+  },
+  {
+    id: 'assign-getter-nested-function',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let later = () => { return error; }; later = later; return 'safe'; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
   },
   {
     id: 'assign-last-index-pin',
@@ -207,6 +231,18 @@ const ELEMENTS = [
     elements: ['error:'],
   },
   {
+    id: 'define-map-getter-descriptor-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { get: () => error }; } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
+    id: 'define-map-getter-other-key-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get label() { return { value: error }; } }); return values; }`,
+    index: undefined,
+    elements: [],
+  },
+  {
     id: 'define-known-spread-label',
     source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, ...['label'] as const, { value: error }); return values; }`,
     index: undefined,
@@ -246,7 +282,7 @@ const ELEMENTS = [
     id: 'define-two-spreads-then-descriptor',
     source: `function frames(error: Error, keys: [number], more: PropertyDescriptor[]) { ${VALUES} Object.defineProperty(values, ...keys, ...more, { value: error }); return values; }`,
     index: undefined,
-    elements: ['keys:1.value', 'more:0.value', 'error:'],
+    elements: ['keys:1.value', 'more:0.value', 'more:1.value', 'error:'],
   },
   {
     id: 'define-spread-then-extra-arguments',
@@ -963,6 +999,12 @@ const ELEMENTS = [
     elements: ["'safe':"],
   },
   {
+    id: 'assign-getter-then-setter-keeps-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { return error; }, set 0(value: Error) {} }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
+  },
+  {
     id: 'assign-spread-getter-then-setter-hides',
     source: `function frames(error: Error) { ${VALUES} Object.assign(values, { ...{ get 0() { return error; } }, set 0(value: Error) {} }); return values; }`,
     index: undefined,
@@ -1015,6 +1057,12 @@ const ELEMENTS = [
     source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { 0: { value: error }, ...{ 0: { value: 'safe' } } }); return values; }`,
     index: undefined,
     elements: ["'safe':"],
+  },
+  {
+    id: 'define-map-getter-then-setter-keeps-getter',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { value: error }; }, set 0(value: unknown) {} }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
   },
   {
     id: 'define-map-spread-getter-then-setter-hides',
@@ -1297,60 +1345,6 @@ const ELEMENTS = [
     elements: [],
   },
   {
-    id: 'define-getter-pin',
-    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { return error; } }); return values; }`,
-    index: undefined,
-    elements: ['error:'],
-  },
-  {
-    id: 'assign-getter-constant-local',
-    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { const held = error; return held; } }); return values; }`,
-    index: undefined,
-    elements: ['held:'],
-  },
-  {
-    id: 'assign-getter-mutable-local',
-    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let held = error; held = error; return held; } }); return values; }`,
-    index: undefined,
-    elements: ['held:'],
-  },
-  {
-    id: 'assign-getter-try',
-    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { try { return error; } finally { touch(); } } }); return values; }`,
-    index: undefined,
-    elements: ['error:'],
-  },
-  {
-    id: 'assign-getter-nested-function',
-    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let later = () => { return error; }; later = later; return 'safe'; } }); return values; }`,
-    index: undefined,
-    elements: ["'safe':"],
-  },
-  {
-    id: 'define-map-getter-descriptor-getter',
-    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { get: () => error }; } }); return values; }`,
-    index: undefined,
-    elements: ['error:'],
-  },
-  {
-    id: 'define-map-getter-other-key-pin',
-    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get label() { return { value: error }; } }); return values; }`,
-    index: undefined,
-    elements: [],
-  },
-  {
-    id: 'assign-getter-then-setter-keeps-getter',
-    source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { return error; }, set 0(value: Error) {} }); return values; }`,
-    index: undefined,
-    elements: ['error:'],
-  },
-  {
-    id: 'define-map-getter-then-setter-keeps-getter',
-    source: `function frames(error: Error) { ${VALUES} Object.defineProperties(values, { get 0() { return { value: error }; }, set 0(value: unknown) {} }); return values; }`,
-    index: undefined,
-    elements: ['error:'],
-  },
-  {
     id: 'assign-getter-nested-setter',
     source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { let later = { set field(value: number) { return error; } }; later = later; return 'safe'; } }); return values; }`,
     index: undefined,
@@ -1361,6 +1355,12 @@ const ELEMENTS = [
     source: `function frames(error: Error) { ${VALUES} Object.assign(values, { get 0() { class Holder { constructor() { return error; } } return 'safe'; } }); return values; }`,
     index: undefined,
     elements: ["'safe':"],
+  },
+  {
+    id: 'define-getter-pin',
+    source: `function frames(error: Error) { ${VALUES} Object.defineProperty(values, 0, { get() { return error; } }); return values; }`,
+    index: undefined,
+    elements: ['error:'],
   },
   {
     id: 'assign-getter-unknown-key-after-indices-pin',
@@ -1595,8 +1595,18 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-map-getter-converts',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { get 0() { return { value: error }; } }); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-known-spread-label-safe',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty(a, ...['label'] as const, { value: error }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'assign-getter-nested-setter-converts',
+    source: `function frames(error: Error) { const a = ['plain']; Object.assign(a, { get 0() { let later = { set field(value: number) { return error; } }; later = later; return 'safe'; } }); return String(a); }`,
     converts: false,
   },
   {
@@ -3055,6 +3065,111 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'define-logical-and-on-inherited-member-runs',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.constructor &&= () => error; ({ constructor: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-and-on-inherited-to-string-runs',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.toString &&= () => error; ({ toString: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-or-on-inherited-member-stays-possible-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.constructor ||= () => error; ({ constructor: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'define-logical-and-on-missing-member-skips-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.reader &&= () => error; ({ reader: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'define-logical-nullish-on-missing-member-runs-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const holder: any = {}; const descriptor: PropertyDescriptor = {}; holder.reader ??= () => error; ({ reader: descriptor.get } = holder); Object.defineProperty(a, 0, descriptor); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.defineProperty)(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-assign',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.assign)(a, { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; define(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-of-reflect-define-property',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Reflect.defineProperty; define(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-of-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const first = Object.defineProperty; const define = first; define(a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-call',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; define.call(Object, a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-constant-alias-apply',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; define.apply(Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-define-property-call',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty.call(Reflect, a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-apply-of-alias',
+    source: `function frames(error: Error) { const a = ['safe']; const define = Object.defineProperty; Reflect.apply(define, Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-call-form-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty.call(Object, a, 0, { get: () => error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-apply-form-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperty.apply(Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-reflect-apply-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.apply(Object.defineProperty, Object, [a, 0, { get: () => error }]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callee-comma-of-a-reader-adds-nothing-pin',
+    source: `function frames(error: Error) { const a = ['safe']; (0, Object.keys)(a); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'callee-alias-of-a-reader-adds-nothing-pin',
+    source: `function frames(error: Error) { const a = ['safe']; const keys = Object.keys; keys(a); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'callee-safe-descriptor-through-reflect-pin',
+    source: `function frames(error: Error) { const a = ['safe']; Reflect.defineProperty(a, 0, { get: () => 'safe' }); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'assign-getter-writes-later-slot',
     source: `function frames(error: Error) { const a = ['safe']; Object.assign(a, { get 0() { this[1] = error; return 'safe'; }, 1: 'safe' }); return String(a); }`,
     converts: true,
@@ -3117,16 +3232,6 @@ const CONVERSIONS = [
   {
     id: 'define-map-string-named-getter-adds-nothing-pin',
     source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { get probe() { this[1] = { value: error }; return { value: 'safe' }; }, 1: { value: 'safe' } }); return String(a); }`,
-    converts: false,
-  },
-  {
-    id: 'define-map-getter-converts',
-    source: `function frames(error: Error) { const a = ['safe']; Object.defineProperties(a, { get 0() { return { value: error }; } }); return String(a); }`,
-    converts: true,
-  },
-  {
-    id: 'assign-getter-nested-setter-converts',
-    source: `function frames(error: Error) { const a = ['plain']; Object.assign(a, { get 0() { let later = { set field(value: number) { return error; } }; later = later; return 'safe'; } }); return String(a); }`,
     converts: false,
   },
 ] as const;
