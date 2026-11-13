@@ -1117,6 +1117,21 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; let other: any[] = []; other = values; delete other.toString; values.toString = Array.prototype.join; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'to-string-deleted-after-a-prototype-write-stays-possible',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; (values as any).__proto__ = { toString: Array.prototype.join }; delete values.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-after-set-prototype-of-stays-possible',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; Object.setPrototypeOf(values, { toString: Array.prototype.join }); delete values.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-twice-delegates-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; delete values.toString; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

@@ -48,6 +48,7 @@ import {
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { deletedFrom } from './framed-deleted-methods.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
@@ -590,17 +591,6 @@ function deletedMethod(
   const key = frameMemberName(member);
   if (key === undefined) forgetMethods(own);
   else if (OWN_METHODS.has(key)) own.set(key, deletedFrom(member.expression, root, prior.get(key)));
-}
-
-/** What a deletion leaves: the inherited method, where it deletes from the array itself a property it can. */
-function deletedFrom(
-  receiver: Expression,
-  root: FrameBinding,
-  before: ArrayMethodOverride | undefined,
-): ArrayMethodOverride {
-  const gone =
-    arrayIdentity(receiver) === root && (before === undefined || before.configurable === true);
-  return gone ? { own: false, inherited: true } : { own: false };
 }
 
 /** Initializer traversal still requires whole binding identity after the selected type was checked. */
