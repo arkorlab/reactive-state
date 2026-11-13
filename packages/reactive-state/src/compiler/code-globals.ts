@@ -1,6 +1,4 @@
 import {
-  type CallExpression,
-  type Expression,
   type Identifier,
   type ImportDeclaration,
   isArrayLiteralExpression,
@@ -50,6 +48,7 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
+import { readsConstructorKey, type Reading } from './key-reader-calls.ts';
 import { holdsValues, mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 
@@ -81,19 +80,6 @@ const CODE_PATHS: ReadonlySet<string> = new Set([
 
 /** The globals that hold what makes code of text, by a member of a name: the global object, `process`. */
 const HOLDERS: ReadonlySet<string> = new Set([...GLOBAL_OBJECTS, 'process']);
-
-/** The functions of globals that read a member of what they are given by the key given next. */
-const KEY_READERS: ReadonlySet<string> = new Set([
-  'Object.getOwnPropertyDescriptor',
-  'Reflect.get',
-  'Reflect.getOwnPropertyDescriptor',
-]);
-
-/**
- * The methods of a function that call it, or `bind` it for a call, on what they are given after the
- * `this` they take.
- */
-const BORROWING: ReadonlySet<string> = new Set(['apply', 'bind', 'call']);
 
 /** The operators that compare what they are given, which hold neither. */
 const COMPARING: ReadonlySet<SyntaxKind> = new Set([
@@ -423,134 +409,18 @@ function readsConstructor(node: Node): boolean {
   return !(isNamed || (isBinaryExpression(parent) && COMPARING.has(parent.operatorToken.kind)));
 }
 
+/** What `readsConstructorKey` reads a global and a written text by: this module's own. */
+const READING: Reading = { pathOf: (node) => globalPathOf(node)?.join('.'), textOf };
+
 /**
  * Whether `node` is a read of the language's that reads a member by the key it is given — of what
  * made what it is given: `Reflect.get(fn, 'constructor')`, borrowed too, `Reflect.get.call(null, fn,
- * 'constructor')`, and bound, `Reflect.get.bind(null, fn, 'constructor')`, `Reflect.get.bind(null,
- * fn)('constructor')`, borrowed too, `Reflect.get.bind(null, fn).call(null, 'constructor')`. A
- * global holder's own read is checked where it is handed on; the same key on
- * another object is that object's ordinary entry.
+ * 'constructor')`, bound, `Reflect.get.bind(null, fn)('constructor')` — however the call is written
+ * (`key-reader-calls.ts`). A global holder's own read is checked where it is handed on; the same key
+ * on another object is that object's ordinary entry.
  */
 function readsCodeKey(node: Node): boolean {
-  if (!isCallExpression(node)) {
-    return false;
-  }
-  const { given, reader } = readerCall(node);
-  const key = given[1];
-  return (
-    reader !== undefined &&
-    KEY_READERS.has(reader) &&
-    key !== undefined &&
-    textOf(unwrapped(key)) === 'constructor'
-  );
-}
-
-/** A call's reader of the language, by the names its global goes by, and what it is given. */
-interface ReaderCall {
-  readonly reader: string | undefined;
-  readonly given: readonly Expression[];
-}
-
-/** The reader a call calls, the call of a function `bind` made of it, or one borrowed. */
-function readerCall(call: CallExpression): ReaderCall {
-  const callee = calledOf(call.expression);
-  if (isCallExpression(callee)) {
-    return boundCall(callee, untilSpread(call.arguments));
-  }
-  const borrowed = borrowedBound(call, callee);
-  if (borrowed !== undefined) {
-    return borrowed;
-  }
-  const path = globalPathOf(callee);
-  const last = path?.at(-1) ?? '';
-  const borrowing = BORROWING.has(last) ? last : undefined;
-  return {
-    given: givenTo(call, borrowing),
-    reader: (borrowing === undefined ? path : path?.slice(0, -1))?.join('.'),
-  };
-}
-
-/**
- * What a call calls, past the parentheses, the casts and a comma's first operands around it — `(0,
- * Reflect.get.bind(null, fn))`, `(<any>Reflect.get.bind(null, fn))`, which `unwrapped` leaves.
- */
-function calledOf(expression: Expression): Expression {
-  let each = unwrapped(expression);
-  for (;;) {
-    if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
-      each = unwrapped(each.right);
-    } else if (isTypeAssertion(each)) {
-      each = unwrapped(each.expression);
-    } else {
-      return each;
-    }
-  }
-}
-
-/**
- * The call of a bound reader that is borrowed, `Reflect.get.bind(null, fn).call(null,
- * 'constructor')`, and what it is given; none of another call.
- */
-function borrowedBound(call: CallExpression, callee: Expression): ReaderCall | undefined {
-  let method: string | undefined;
-  let receiver: Expression | undefined;
-  if (isPropertyAccessExpression(callee)) {
-    method = callee.name.text;
-    receiver = calledOf(callee.expression);
-  } else if (isElementAccessExpression(callee)) {
-    method = textOf(unwrapped(callee.argumentExpression));
-    receiver = calledOf(callee.expression);
-  }
-  return receiver !== undefined &&
-    isCallExpression(receiver) &&
-    (method === 'call' || method === 'apply')
-    ? boundCall(receiver, givenTo(call, method))
-    : undefined;
-}
-
-/**
- * What a call of a bound reader, `Reflect.get.bind(null, fn)('constructor')`, is given: what `bind`
- * was given after its `this`, then what the call hands (`handed`), each up to a spread, past which
- * where a value stands is for the code to tell. A key `bind` is given is read at `bind`, not again
- * at the call.
- */
-function boundCall(bound: CallExpression, handed: readonly Expression[]): ReaderCall {
-  const path = globalPathOf(unwrapped(bound.expression));
-  const kept = untilSpread(bound.arguments);
-  const given = kept.slice(1);
-  if (path?.at(-1) !== 'bind' || kept.length < bound.arguments.length || given.length > 1) {
-    return { given: [], reader: undefined };
-  }
-  return { given: [...given, ...handed], reader: path.slice(0, -1).join('.') };
-}
-
-/**
- * What a call hands to the function it calls: its arguments; of one borrowed, `call` or `apply`,
- * what follows the `this` it takes, up to a spread — of `apply`, the elements of the array written
- * there, past the casts around it, up to a spread as well; none of an array the code gives by a
- * name, nor where a spread comes before the array. Of `bind`, what it keeps for the call, as `call`
- * is given it.
- */
-function givenTo(call: CallExpression, borrowing: string | undefined): readonly Expression[] {
-  if (borrowing === undefined) {
-    return call.arguments;
-  }
-  if (borrowing !== 'apply') {
-    return untilSpread(call.arguments).slice(1);
-  }
-  const [, list] = untilSpread(call.arguments);
-  let array = list === undefined ? undefined : unwrapped(list);
-  // `unwrapped` leaves a cast in angle brackets: `<any>[run, 'constructor']` is the array within.
-  while (array !== undefined && isTypeAssertion(array)) {
-    array = unwrapped(array.expression);
-  }
-  return array !== undefined && isArrayLiteralExpression(array) ? untilSpread(array.elements) : [];
-}
-
-/** `items` up to the first spread, past which where a value stands is for the code to tell. */
-function untilSpread(items: readonly Expression[]): readonly Expression[] {
-  const spread = items.findIndex((each) => isSpreadElement(each));
-  return spread === -1 ? items : items.slice(0, spread);
+  return isCallExpression(node) && readsConstructorKey(node, READING);
 }
 
 /**
