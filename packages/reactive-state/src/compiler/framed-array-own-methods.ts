@@ -57,6 +57,7 @@ import { arrayIdentity } from './framed-array-identity.ts';
 import { instanceInitializer, invokedAtOnce } from './framed-array-mutations.ts';
 import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { neverRuns } from './framed-descriptor-rewrites.ts';
 import { constantValue } from './numbers.ts';
 
 /** The names an array's own methods may take, and what a direct write of one declares. */
@@ -599,6 +600,26 @@ function descriptorValue(value: ObjectLiteralExpression): ArrayMethodOverride {
   return rewritten ? { own: false } : custom;
 }
 
+/** The names a getter of a descriptor may have to run before an attribute is read: it may change it. */
+const READ_BEFORE_ATTRIBUTE: Record<'configurable' | 'writable', ReadonlySet<string>> = {
+  configurable: new Set(['enumerable']),
+  writable: new Set(['configurable', 'enumerable', 'value']),
+};
+
+/** Whether a field is a getter that runs before the attribute is read, and may give it another word. */
+function readsBefore(
+  descriptor: ObjectLiteralExpression,
+  at: number,
+  attribute: 'configurable' | 'writable',
+): boolean {
+  const property = descriptor.properties[at];
+  if (property === undefined || !isGetAccessorDeclaration(property)) return false;
+  const key = writtenArrayKey(property.name);
+  return (
+    key !== undefined && READ_BEFORE_ATTRIBUTE[attribute].has(key) && !neverRuns(descriptor, at)
+  );
+}
+
 type AttributeSaid = 'omitted' | 'other' | 'true';
 
 /**
@@ -611,10 +632,11 @@ function descriptorSays(
   attribute: 'configurable' | 'writable',
 ): AttributeSaid {
   let says: AttributeSaid = 'omitted';
-  for (const property of descriptor.properties) {
+  for (const [at, property] of descriptor.properties.entries()) {
     if (isSpreadAssignment(property)) return 'other';
     const key = writtenArrayKey(property.name);
-    if (key === undefined || setsPrototype(property)) return 'other';
+    if (key === undefined || setsPrototype(property) || readsBefore(descriptor, at, attribute))
+      return 'other';
     if (attribute === 'writable' && ACCESSOR_KEYS.has(key)) return 'other';
     if (key === attribute)
       says =

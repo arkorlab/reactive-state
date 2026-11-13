@@ -5,17 +5,15 @@ import {
   isObjectLiteralExpression,
   isSetAccessorDeclaration,
   isSpreadAssignment,
-  isTypeNode,
-  type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { getterWrites } from './framed-getter-writes.ts';
 import { isSymbolKey, possibleKey, slotKey } from './framed-mutator-keys.ts';
+import { namesThis } from './framed-this-functions.ts';
 
 /** The values the getters of a source write through `this` before the fields after them are read. */
 
@@ -97,19 +95,6 @@ function slotAfter(slot: Slot, property: ObjectLiteralElementLike): Slot {
     return slot === 'setter' || namesThis(property) ? 'setter' : 'accessor';
   if (isGetAccessorDeclaration(property)) return slot === 'setter' ? 'setter' : 'accessor';
   return 'data';
-}
-
-/** Whether a function names `this` anywhere in its body. */
-function namesThis(fn: Node): boolean {
-  const pending: Node[] = [fn];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (node.kind === SyntaxKind.ThisKeyword) return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
 }
 
 /** Whether a written object has a setter that names `this`. */

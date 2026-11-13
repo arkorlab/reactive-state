@@ -9,7 +9,14 @@ import type { Node } from 'typescript/ast';
 export interface Hidden {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
+  /**
+   * The names the descriptor that inherits the one read sets itself: they hide its getters, not what
+   * they write. Present only for the read of a prototype, whose getters run on another descriptor.
+   */
+  readonly own?: ReadonlySet<string> | undefined;
 }
+
+const NO_NAMES: ReadonlySet<string> = new Set();
 
 /** No name hidden: the state a read of a source starts from. */
 export const NOTHING_HIDDEN: Hidden = { data: new Set(), getters: new Set() };
@@ -41,9 +48,25 @@ export function readUnderSlot(
 
 /** Whether one of the reads hid no more names than now. */
 function coveredBy(earlier: readonly Hidden[], hidden: Hidden): boolean {
-  return earlier.some(
-    (each) => isSubset(each.data, hidden.data) && isSubset(each.getters, hidden.getters),
-  );
+  return earlier.some((each) => {
+    return (
+      isSubset(each.data, hidden.data) &&
+      isSubset(each.getters, hidden.getters) &&
+      coversOwn(each.own, hidden.own)
+    );
+  });
+}
+
+/**
+ * Whether a read under the own names `earlier` reads all a read under `now` does: its getters are
+ * hidden no more, and a prototype's getters, which count whatever they write, are not read less.
+ */
+function coversOwn(
+  earlier: ReadonlySet<string> | undefined,
+  now: ReadonlySet<string> | undefined,
+): boolean {
+  if (earlier === undefined) return now === undefined;
+  return isSubset(earlier, now ?? NO_NAMES);
 }
 
 /**
@@ -60,7 +83,8 @@ export function readUnder(
   const earlier = table.get(held) ?? [];
   if (coveredBy(earlier, hidden)) return undefined;
   const used = hiddenFor(earlier, hidden);
-  table.set(held, [...earlier, { data: new Set(used.data), getters: new Set(used.getters) }]);
+  const own = used.own === undefined ? undefined : new Set(used.own);
+  table.set(held, [...earlier, { data: new Set(used.data), getters: new Set(used.getters), own }]);
   return used;
 }
 
@@ -82,7 +106,9 @@ function hiddenInEvery(reads: readonly Hidden[]): Hidden {
     for (const name of pick(first)) if (rest.every((each) => pick(each).has(name))) kept.add(name);
     return kept;
   };
-  return { data: common((each) => each.data), getters: common((each) => each.getters) };
+  const inherited = reads.some((each) => each.own !== undefined);
+  const own = inherited ? common((each) => each.own ?? NO_NAMES) : undefined;
+  return { data: common((each) => each.data), getters: common((each) => each.getters), own };
 }
 
 function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {

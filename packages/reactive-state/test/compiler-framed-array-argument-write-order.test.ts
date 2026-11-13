@@ -1222,6 +1222,26 @@ const CASES = [
     converts: false,
   },
   {
+    id: 'define-descriptor-getter-before-attributes-makes-an-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { delete this.value; delete this.writable; this.get = () => Array.prototype.join; this.set = () => {}; return false; }, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-never-read-keeps-attributes-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get probe() { delete this.value; delete this.writable; this.get = () => Array.prototype.join; this.set = () => {}; return false; }, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-getter-before-attributes-nested-in-an-assign-source',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { get enumerable() { delete this.value; delete this.writable; Object.assign(this, { get: () => Array.prototype.join, set: () => {} }); return false; }, value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-replaced-by-a-later-attribute-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { return false; }, enumerable: true, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
     id: 'refused-method-proof-after-reflect-set',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.set(values, 'join', Array.prototype.join); return String(values); }`,
     converts: true,

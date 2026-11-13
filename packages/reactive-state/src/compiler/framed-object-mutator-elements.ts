@@ -26,6 +26,7 @@ import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
+import { descriptorRewrites } from './framed-descriptor-rewrites.ts';
 import { getterElements, getterUnfollowed, getterWrittenValues } from './framed-getter-elements.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
@@ -39,6 +40,7 @@ import {
   returnedValues,
 } from './framed-mutator-getters.ts';
 import { keyMayBeSlot, nameMayBeSlot, possibleKey, slotKey } from './framed-mutator-keys.ts';
+import { withNames } from './framed-name-sets.ts';
 import {
   type Hidden,
   NOTHING_HIDDEN,
@@ -262,7 +264,7 @@ function fieldsAfter(
   ) => WrittenArrayElement[],
 ): WrittenArrayElement[] {
   const found: (readonly WrittenArrayElement[])[] = [];
-  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters) };
+  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters), own: hidden.own };
   const replacing = new Set<string>();
   for (const property of object.properties.toReversed()) {
     const name = sourceName(property);
@@ -499,9 +501,10 @@ function descriptorFields(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
-  return fieldsAfter(object, hidden, (property, later) =>
-    descriptorEntry(property, reading, later),
-  );
+  return [
+    ...fieldsAfter(object, hidden, (property, later) => descriptorEntry(property, reading, later)),
+    ...descriptorRewrites(object, hidden, !reading.inherited),
+  ];
 }
 
 /**
@@ -534,15 +537,12 @@ function copiedFields(
   const own = isObjectLiteralExpression(property.parent)
     ? property.parent.properties.flatMap((each) => sourceNames(each))
     : [];
-  const shadowed = { data: withNames(later.data, own), getters: withNames(later.getters, own) };
+  const shadowed = {
+    data: withNames(later.data, own),
+    getters: withNames(later.getters, own),
+    own: withNames(later.own ?? new Set<string>(), own),
+  };
   return descriptorValues(prototype, reading, shadowed);
-}
-
-/** The names of a set, and more. */
-function withNames(names: ReadonlySet<string>, more: readonly string[]): Set<string> {
-  const merged = new Set(names);
-  for (const each of more) merged.add(each);
-  return merged;
 }
 
 /**
