@@ -30,7 +30,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf, frameTypeOf, type FrameDeclaration } from './framed-bindings.ts';
-import { accessorWrites } from './framed-getter-writes.ts';
+import { accessorWrites, copiedAfter, copyOrder, surelyCopied } from './framed-getter-writes.ts';
 import { localArrayIterationKeys } from './local-type-reading.ts';
 import { constantValue } from './numbers.ts';
 
@@ -281,7 +281,8 @@ function spreadSource(
 /**
  * What the getters of a written object write into the entry of a key that it has, before a copy
  * of it reaches the entry: the getters it still holds, those a later field or a later spread of
- * the object replaces having gone, and the setters their writes run. The path for a getter that
+ * the object replaces having gone, and the setters their writes run. A getter counts only where the
+ * copy reaches the entry after it has run: a field copied before it is not changed in the copy. The path for a getter that
  * gives `this` on, which the compile does not read.
  */
 function copiedWrites(
@@ -291,29 +292,19 @@ function copiedWrites(
 ): readonly AssignedFrameSource[] {
   const replaced = new Set<string>();
   const found: AssignedFrameSource[] = [];
+  const order = copyOrder(value);
   for (const property of value.properties.toReversed()) {
     if (isSpreadAssignment(property)) {
-      for (const each of spreadNames(property.expression)) replaced.add(each);
+      for (const each of surelyCopied(property.expression)) replaced.add(each);
       continue;
     }
     const name = literalKey(property.name);
     const live = name === undefined || !replaced.has(name);
-    if (live && isGetAccessorDeclaration(property))
+    if (live && isGetAccessorDeclaration(property) && copiedAfter(order, name, key))
       found.push(...gettersWrites(value, property, key, opaque));
     if (name !== undefined && !isSetAccessorDeclaration(property)) replaced.add(name);
   }
   return found;
-}
-
-/** The names a spread of a written object copies as values, a setter's and those of the spreads it holds included. */
-function spreadNames(copied: Expression): readonly string[] {
-  const value = unwrapped(copied);
-  if (!isObjectLiteralExpression(value)) return [];
-  return value.properties.flatMap((each) => {
-    if (isSpreadAssignment(each)) return spreadNames(each.expression);
-    const name = setsPrototype(each) ? undefined : literalKey(each.name);
-    return name === undefined ? [] : [name];
-  });
 }
 
 /** What running one getter of a written object writes into the entry of a key. */
