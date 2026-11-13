@@ -33,6 +33,7 @@ import { heldMemberWrites } from './framed-held-member-writes.ts';
 import { consultedKnown } from './framed-known-forms.ts';
 import { knownUsesOnly } from './framed-known-mentions.ts';
 import {
+  invokedTargets,
   type MutatorInvocation,
   mutatorInvocation,
   PATHS,
@@ -137,7 +138,7 @@ export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
     const target = invoked?.args[0];
     if (invoked === undefined || target === undefined) return true;
     return (
-      literalArrayBinding(target) !== root ||
+      invokedTargets(invoked).every((each) => literalArrayBinding(each) !== root) ||
       argumentsKnown(invoked, (declaration) => {
         held.push(declaration);
       })
