@@ -43,6 +43,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { frameMemberName } from './framed-bindings.ts';
+import { framedPossibleBranch } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
 
 /** What a getter the copy of a spread runs writes into the object it runs on. */
@@ -96,6 +97,7 @@ function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | unde
   const deleted: (string | undefined)[] = [];
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (!framedPossibleBranch(node)) continue;
     if (node.kind === SyntaxKind.ThisKeyword) {
       const used = use(node);
       if (used === undefined) return undefined;
