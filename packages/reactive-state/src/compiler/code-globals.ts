@@ -427,7 +427,8 @@ function readsConstructor(node: Node): boolean {
  * Whether `node` is a read of the language's that reads a member by the key it is given — of what
  * made what it is given: `Reflect.get(fn, 'constructor')`, borrowed too, `Reflect.get.call(null, fn,
  * 'constructor')`, and bound, `Reflect.get.bind(null, fn, 'constructor')`, `Reflect.get.bind(null,
- * fn)('constructor')`. A global holder's own read is checked where it is handed on; the same key on
+ * fn)('constructor')`, borrowed too, `Reflect.get.bind(null, fn).call(null, 'constructor')`. A
+ * global holder's own read is checked where it is handed on; the same key on
  * another object is that object's ordinary entry.
  */
 function readsCodeKey(node: Node): boolean {
@@ -454,7 +455,11 @@ interface ReaderCall {
 function readerCall(call: CallExpression): ReaderCall {
   const callee = calledOf(call.expression);
   if (isCallExpression(callee)) {
-    return boundCall(call, callee);
+    return boundCall(callee, untilSpread(call.arguments));
+  }
+  const borrowed = borrowedBound(call, callee);
+  if (borrowed !== undefined) {
+    return borrowed;
   }
   const path = globalPathOf(callee);
   const last = path?.at(-1) ?? '';
@@ -483,18 +488,40 @@ function calledOf(expression: Expression): Expression {
 }
 
 /**
- * What a call of a bound reader, `Reflect.get.bind(null, fn)('constructor')`, is given: what `bind`
- * was given after its `this`, then what the call is, each up to a spread, past which where a value
- * stands is for the code to tell. A key `bind` is given is read at `bind`, not again at the call.
+ * The call of a bound reader that is borrowed, `Reflect.get.bind(null, fn).call(null,
+ * 'constructor')`, and what it is given; none of another call.
  */
-function boundCall(call: CallExpression, bound: CallExpression): ReaderCall {
+function borrowedBound(call: CallExpression, callee: Expression): ReaderCall | undefined {
+  let method: string | undefined;
+  let receiver: Expression | undefined;
+  if (isPropertyAccessExpression(callee)) {
+    method = callee.name.text;
+    receiver = calledOf(callee.expression);
+  } else if (isElementAccessExpression(callee)) {
+    method = textOf(unwrapped(callee.argumentExpression));
+    receiver = calledOf(callee.expression);
+  }
+  return receiver !== undefined &&
+    isCallExpression(receiver) &&
+    (method === 'call' || method === 'apply')
+    ? boundCall(receiver, givenTo(call, method))
+    : undefined;
+}
+
+/**
+ * What a call of a bound reader, `Reflect.get.bind(null, fn)('constructor')`, is given: what `bind`
+ * was given after its `this`, then what the call hands (`handed`), each up to a spread, past which
+ * where a value stands is for the code to tell. A key `bind` is given is read at `bind`, not again
+ * at the call.
+ */
+function boundCall(bound: CallExpression, handed: readonly Expression[]): ReaderCall {
   const path = globalPathOf(unwrapped(bound.expression));
   const kept = untilSpread(bound.arguments);
   const given = kept.slice(1);
   if (path?.at(-1) !== 'bind' || kept.length < bound.arguments.length || given.length > 1) {
     return { given: [], reader: undefined };
   }
-  return { given: [...given, ...untilSpread(call.arguments)], reader: path.slice(0, -1).join('.') };
+  return { given: [...given, ...handed], reader: path.slice(0, -1).join('.') };
 }
 
 /**
