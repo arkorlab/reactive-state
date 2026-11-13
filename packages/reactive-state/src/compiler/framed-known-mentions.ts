@@ -9,6 +9,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { writtenAsWhole } from './framed-array-identity.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { classify, isArray, type Subject, type Use } from './framed-known-uses.ts';
 import { readsBinding } from './scope.ts';
@@ -40,7 +41,7 @@ function scan(
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const base = kinds.get(at) ?? subject;
     const kind = base === 'held' && holdsList(at) ? 'list' : base;
-    const uses = usesOf(at, kind, relevant);
+    const uses = usesOf(at, kind, relevant, at === declaration);
     if (uses === undefined) return 'unknown';
     carries ||= uses.some((use) => use.carries === true);
     for (const { alias, ...use } of uses) {
@@ -52,13 +53,19 @@ function scan(
   return carries && subject === 'array' ? 'carries' : 'known';
 }
 
-/** The uses the mentions of a name make, none where one is not known, or a name that holds no array is no constant. */
+/**
+ * The uses the mentions of a name make, none where one is not known, a name that holds no array is
+ * no constant, or the name the array is read by is written as a whole elsewhere and may hold
+ * another array (an alias written so only holds another, which the writes through it are not).
+ */
 function usesOf(
   declaration: VariableDeclaration,
   kind: Subject,
   relevant: (name: Identifier) => boolean,
+  root: boolean,
 ): readonly Use[] | undefined {
   if (!isArray(kind) && !constant(declaration)) return undefined;
+  if (root && isArray(kind) && writtenAsWhole(declaration)) return undefined;
   const seen = mentions(declaration).filter((name) => relevant(name));
   const uses = seen.map((name) => classify(name, kind));
   return uses.every((use) => use.known) ? uses : undefined;

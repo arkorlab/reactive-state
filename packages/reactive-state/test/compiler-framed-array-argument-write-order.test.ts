@@ -1466,6 +1466,36 @@ const CASES = [
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get get() { return () => this; } }); return String(values); }`,
     converts: false,
   },
+  {
+    id: 'wrapped-getter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: (function (this: any) { this.join = Array.prototype.join; return 1; }) }); void (values as any).x; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'asserted-getter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: function (this: any) { this.join = Array.prototype.join; return 1; } as () => number }); void (values as any).x; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'whole-write-of-the-read-name-converts',
+    source: `function frames(error: Error, flag: boolean) { let a: any[] = ['safe']; a = [error]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'whole-write-of-the-read-name-after-a-method-converts',
+    source: `function frames(error: Error, flag: boolean) { let a: any[] = [error]; a.join = () => 'safe'; a = [error]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'whole-write-of-an-alias-keeps-the-proof-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = [error]; a.join = () => 'safe'; let b = a; b = []; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'wrapped-value-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { valueOf: (function (this: any) { this.join = Array.prototype.join; return this; }) }); void ((values as any) + ''); return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

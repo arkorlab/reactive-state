@@ -9,6 +9,8 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
+
 /**
  * A function that names `this`, anywhere in its body. Stored on an array as a method, a getter or a
  * setter, it runs with the array as `this` where a native reads, converts or iterates the array, and
@@ -34,6 +36,6 @@ export function namesThis(fn: Node): boolean {
 export function fieldNamesThis(field: ObjectLiteralElementLike): boolean {
   if (isMethodDeclaration(field)) return namesThis(field);
   if (!isPropertyAssignment(field)) return false;
-  const value = field.initializer;
+  const value = unwrapped(field.initializer);
   return isFunctionExpression(value) && !isArrowFunction(value) && namesThis(value);
 }
