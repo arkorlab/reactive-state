@@ -65,6 +65,7 @@ import {
 } from './framed-array-callbacks.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
+import { iterates } from './framed-iterated-uses.ts';
 import { mutatorInvocation, nativePath } from './framed-mutator-calls.ts';
 import { readsBinding } from './scope.ts';
 
@@ -201,6 +202,7 @@ export function classify(name: Identifier, subject: Subject): Use {
     handed = true;
   }
   const { parent } = at;
+  if ((handed || subject === 'held' || subject === 'box') && iterates(at)) return UNKNOWN;
   if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at, subject);
   if (isSpreadAssignment(parent) || isExpressionStatement(parent)) return KNOWN;
   if (subject === 'array' && readsArray(at)) return KNOWN;
