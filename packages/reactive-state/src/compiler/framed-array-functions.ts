@@ -346,7 +346,11 @@ function bindsNoHolder(pattern: ObjectBindingPattern, holder: ObjectLiteralExpre
   });
 }
 
-/** Other function bodies, a setter's too, are deferred, but their computed names are evaluated now. */
+/**
+ * Other function bodies, a setter's too, are deferred, but their computed names are evaluated now:
+ * the name itself is walked, for a key that is no written constant converts an object where the
+ * class is defined.
+ */
 function deferredBefore(node: Node, reference: Identifier, pending: Node[]): boolean {
   if (!(isAnswering(node) || isSetAccessorDeclaration(node)) || !completed(node, reference))
     return false;
@@ -356,7 +360,7 @@ function deferredBefore(node: Node, reference: Identifier, pending: Node[]): boo
       isSetAccessorDeclaration(node)) &&
     isComputedPropertyName(node.name)
   )
-    pending.push(node.name.expression);
+    pending.push(node.name);
   return true;
 }
 
