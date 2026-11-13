@@ -1087,6 +1087,36 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = Array.prototype.toString; return String(values); }`,
     converts: true,
   },
+  {
+    id: 'to-string-deleted-after-an-assignment-delegates-to-custom-join-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-after-a-custom-function-delegates-to-custom-join-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = () => 'x'; delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-though-never-written-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-after-a-configurable-definition-delegates-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'toString', { value: Array.prototype.join, configurable: true }); delete values.toString; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'to-string-deleted-then-written-native',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; delete values.toString; values.toString = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'to-string-deleted-through-an-alias-stays-possible',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; let other: any[] = []; other = values; delete other.toString; values.toString = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {
