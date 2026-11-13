@@ -2553,6 +2553,61 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'object-field-a-later-spread-overrides-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item }: any = { item: 'safe', ...{ item: [] } }; let list = item; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-a-computed-name-may-override-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const key = flag ? 'item' : 'item'; const { item }: any = { item: 'safe', [key]: [] }; let list = item; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-an-unknown-spread-may-override-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item }: any = { item: 'safe', ...original }; let list = item; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-a-later-getter-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item }: any = { item: 'safe', get item() { return []; } }; let list = item; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-with-an-array-default-over-undefined-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item = [] }: any = { item: undefined }; let list = item; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'array-element-with-an-array-default-over-undefined-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const [first = []]: any[] = [undefined]; let list = first; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-field-a-later-spread-overrides-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { inner: { item } }: any = { inner: { item: 'safe', ...{ item: [] } } }; let list = item; list = [error]; return String(list); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-last-of-its-name-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item }: any = { item: [], other: 1 }; let list = item; list = 'x'; return String([list]); }`,
+    converts: true,
+  },
+  {
+    id: 'object-field-scalar-with-a-scalar-default-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item = 'd' }: any = { item: 'safe' }; let list = item; list = 'x'; return String([list]); }`,
+    converts: false,
+  },
+  {
+    id: 'object-field-scalar-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item }: any = { item: 'safe' }; let list = item; list = 'other'; return String([list]); }`,
+    converts: false,
+  },
+  {
+    id: 'object-field-scalar-with-an-earlier-spread-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { item }: any = { ...{ item: [] }, item: 'safe' }; let list = item; list = 'x'; return String([list]); }`,
+    converts: false,
+  },
+  {
     id: 'define-array-rest-suffix-is-no-getter',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; let ignored: unknown; [ignored, ...descriptor.get] = [() => 'safe', () => error]; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
