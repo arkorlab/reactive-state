@@ -1,7 +1,6 @@
 import {
   type CallExpression,
   type Expression,
-  type Identifier,
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
@@ -10,8 +9,6 @@ import {
   isNewExpression,
   isPropertyAccessExpression,
   isSpreadElement,
-  isVariableDeclaration,
-  isVariableDeclarationList,
   type NewExpression,
   type Node,
   SyntaxKind,
@@ -20,8 +17,10 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
-import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
-import { framedAppliedArguments } from './framed-keys.ts';
+import { frameMemberName } from './framed-bindings.ts';
+import { calledNative, constantInitializer } from './framed-native-calls.ts';
+import { methodMayBeOverridden } from './framed-overridden-methods.ts';
+import { prototypeMayChange } from './framed-prototype-changes.ts';
 
 /** The native object mutators, and the arguments a call of one hands them, borrowed or not. */
 
@@ -41,86 +40,32 @@ export interface MutatorInvocation {
   readonly silent?: boolean;
 }
 
-/** A native a callee names, and the arguments a `bind` of it gave it before the call's own. */
-interface NativeCallee {
-  readonly path: string;
-  readonly bound: readonly Expression[];
-}
-
 /**
  * The native a callee names: by its global path, through parentheses and a comma (`(0, f)`), through
- * a constant that holds it (`const define = Object.defineProperty`), through `.call` or `.apply`
- * of such a name, and through one `.bind` of it, whose arguments come first. None for a callee that
- * is any other expression.
+ * a constant that holds it (`const define = Object.defineProperty`), and through `.call` or `.apply`
+ * of such a name. None for a callee that is any other expression, a bound function among them.
  */
-function nativeCallee(callee: Expression, allowBound: boolean): NativeCallee | undefined {
+export function nativePath(callee: Expression): string | undefined {
   const seen = new Set<Node>();
-  const passed: { suffixes: string[]; bound?: readonly Expression[] } = { suffixes: [] };
+  const suffixes: string[] = [];
   let value = unwrapped(callee);
   for (;;) {
+    if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken) {
+      value = unwrapped(value.right);
+      continue;
+    }
     const global = globalPathOf(value)?.join('.');
-    if (global !== undefined)
-      return { path: [global, ...passed.suffixes].join('.'), bound: passed.bound ?? [] };
-    const next = through(value, passed, allowBound) ?? heldBy(value, seen);
-    if (next === undefined) return undefined;
-    value = unwrapped(next);
+    if (global !== undefined) return [global, ...suffixes].join('.');
+    if (isPropertyAccessExpression(value) && ['apply', 'call'].includes(value.name.text)) {
+      suffixes.unshift(value.name.text);
+      value = unwrapped(value.expression);
+      continue;
+    }
+    const held = isIdentifier(value) && !seen.has(value) ? constantInitializer(value) : undefined;
+    if (held === undefined || !isIdentifier(value)) return undefined;
+    seen.add(value);
+    value = unwrapped(held);
   }
-}
-
-/** The native a callee names, by the forms above but a `bind`: the path alone. */
-export function nativePath(callee: Expression): string | undefined {
-  return nativeCallee(callee, false)?.path;
-}
-
-/** What a callee that is a comma, a `.call` or `.apply`, or a `bind` of another is called through. */
-function through(
-  value: Expression,
-  passed: { suffixes: string[]; bound?: readonly Expression[] },
-  allowBound: boolean,
-): Expression | undefined {
-  if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken)
-    return value.right;
-  if (isPropertyAccessExpression(value) && ['apply', 'call'].includes(value.name.text)) {
-    passed.suffixes.unshift(value.name.text);
-    return value.expression;
-  }
-  const binding =
-    allowBound && isCallExpression(value) && passed.bound === undefined
-      ? bindingOf(value)
-      : undefined;
-  if (binding === undefined) return undefined;
-  passed.bound = binding.bound;
-  return binding.target;
-}
-
-/** The initializer of the constant a name stands for, once. */
-function heldBy(value: Expression, seen: Set<Node>): Expression | undefined {
-  if (!isIdentifier(value) || seen.has(value)) return undefined;
-  seen.add(value);
-  return constantInitializer(value);
-}
-
-/** The function a call of `bind` binds, and the arguments it binds, if they are written out. */
-function bindingOf(
-  call: CallExpression,
-): { readonly target: Expression; readonly bound: readonly Expression[] } | undefined {
-  const callee = unwrapped(call.expression);
-  if (!isPropertyAccessExpression(callee)) return undefined;
-  const [, ...bound] = writtenArguments(call);
-  return callee.name.text !== 'bind' || bound.some((each) => isSpreadElement(each))
-    ? undefined
-    : { target: callee.expression, bound };
-}
-
-/** The initializer of the constant a name stands for whole. */
-function constantInitializer(name: Identifier): Expression | undefined {
-  const held = frameBindingOf(name);
-  const declaration = held?.keys.length === 0 ? held.binding : undefined;
-  if (declaration === undefined || !isVariableDeclaration(declaration)) return undefined;
-  const list = declaration.parent;
-  const constant =
-    isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
-  return constant ? declaration.initializer : undefined;
 }
 
 /** `Reflect.defineProperty` takes the arguments of `Object.defineProperty`, and answers instead of throwing. */
@@ -140,103 +85,27 @@ export function mutatorInvocation(call: CallExpression): MutatorInvocation | und
   return nativeInvocation(call, MUTATORS);
 }
 
-/** The natives that call their first argument, with a receiver and the arguments or a list of them. */
-const FORWARDING: ReadonlyMap<string, 'apply' | 'call'> = new Map([
-  ['Function.prototype.apply.call', 'apply'],
-  ['Function.prototype.call.call', 'call'],
-  ['Reflect.apply', 'apply'],
-]);
-
-/** The call of one of the natives `known` names, in the forms a mutator is called in. */
+/** The call of one of the natives `known` names, however the code writes the call. */
 function nativeInvocation(
   call: CallExpression,
   known: ReadonlySet<string>,
 ): MutatorInvocation | undefined {
-  const callee = nativeCallee(call.expression, true);
-  if (callee === undefined) return undefined;
-  const { bound } = callee;
-  const path = normalized(callee.path);
-  const silent = callee.path !== path;
-  if (known.has(path)) return { path, args: [...bound, ...writtenArguments(call)], silent };
-  const forwarding = FORWARDING.get(path);
-  if (forwarding !== undefined) return forwarded(call, forwarding, known);
-  const split = path.lastIndexOf('.');
-  const native = path.slice(0, split);
-  if (!known.has(native)) return undefined;
-  const how = path.slice(split + 1);
-  if (how === 'apply') return withSilence(applied(call, native, call.arguments[1], bound), silent);
-  if (how !== 'call') return undefined;
-  const [receiver, ...rest] = writtenArguments(call);
-  return receiver === undefined || isSpreadElement(receiver)
-    ? undefined
-    : { path: native, args: [...bound, ...rest], silent };
+  const called = calledNative(call, tracked(known));
+  if (called === undefined) return undefined;
+  const path = normalized(called.path);
+  return known.has(path) ? { path, args: called.args, silent: called.path !== path } : undefined;
 }
 
-/** A call that forwards to one of the natives `known` names: `Reflect.apply(Object.assign, null, [a])`. */
-function forwarded(
-  call: CallExpression,
-  how: 'apply' | 'call',
-  known: ReadonlySet<string>,
-): MutatorInvocation | undefined {
-  const [target, , list] = call.arguments;
-  const native = target === undefined ? undefined : nativeCallee(target, true);
-  const aimed = native === undefined ? undefined : normalized(native.path);
-  if (native === undefined || aimed === undefined || !known.has(aimed)) return undefined;
-  const silent = native.path !== aimed;
-  if (how === 'apply') return withSilence(applied(call, aimed, list, native.bound), silent);
-  const [first, second, ...rest] = writtenArguments(call);
-  return first === undefined ||
-    second === undefined ||
-    isSpreadElement(first) ||
-    isSpreadElement(second)
-    ? undefined
-    : { path: aimed, args: [...native.bound, ...rest], silent };
-}
+const TRACKED = new WeakMap<ReadonlySet<string>, ReadonlySet<string>>();
 
-/** An invocation, marked as the one that fails silently where it does. */
-function withSilence(
-  invoked: MutatorInvocation | undefined,
-  silent: boolean,
-): MutatorInvocation | undefined {
-  return invoked === undefined ? undefined : { ...invoked, silent };
-}
-
-/** A mutator called with the entries of a written list, after the arguments bound to it. */
-function applied(
-  call: CallExpression,
-  path: string,
-  list: Expression | undefined,
-  bound: readonly Expression[],
-): MutatorInvocation | undefined {
-  const listed = list === undefined ? undefined : framedAppliedArguments(call, list);
-  return listed === undefined
-    ? undefined
-    : { path, args: [...bound, ...writtenArguments(call, listed)] };
-}
-
-/**
- * The call's arguments in order, each spread of a written list, or of a constant list nothing
- * changes, replaced by the entries it stands for; a spread the compile cannot read stays one. A
- * list is expanded each time it is spread, but never within itself.
- */
-export function writtenArguments(
-  call: CallExpression,
-  given: readonly Expression[] = call.arguments,
-): readonly Expression[] {
-  type Listed = readonly (readonly Expression[])[];
-  const written: Expression[] = [];
-  const pending = given.toReversed().map((node) => ({ node, within: [] as Listed }));
-  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const listed = isSpreadElement(each.node)
-      ? framedAppliedArguments(call, each.node.expression)
-      : undefined;
-    if (listed === undefined || each.within.includes(listed)) written.push(each.node);
-    else {
-      const within = [...each.within, listed];
-      for (const node of listed.toReversed()) pending.push({ node, within });
-    }
-  }
-  return written;
+/** The natives the language's own names stand for: those `known` names, and the `Reflect` one that answers instead of throwing. */
+function tracked(known: ReadonlySet<string>): ReadonlySet<string> {
+  const found = TRACKED.get(known);
+  if (found !== undefined) return found;
+  const all = new Set(known);
+  if (known.has(PATHS.property)) all.add('Reflect.defineProperty');
+  TRACKED.set(known, all);
+  return all;
 }
 
 /** The natives that hand back the object they were given first; `Object(a)` hands back an object. */
@@ -283,11 +152,10 @@ export function returnedTargets(target: Expression): readonly Expression[] {
   const pending = [target];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const inner = unwrapped(at);
-    if (seen.has(inner)) continue;
+    const next = seen.has(inner) ? undefined : handedBack(inner);
     seen.add(inner);
-    const next = handedBack(inner);
-    if (next === undefined) found.push(at);
-    else pending.push(...next.toReversed());
+    if (next !== undefined) pending.push(...next.toReversed());
+    else if (found.every((each) => unwrapped(each) !== inner)) found.push(at);
   }
   return found;
 }
@@ -311,19 +179,33 @@ function handedOver(call: NewExpression): readonly Expression[] | undefined {
   return native && first !== undefined && !isSpreadElement(first) ? [first] : undefined;
 }
 
+/** The array method a call names, of one of those that return the array they are called on, and the array. */
+function receiverMethod(
+  call: CallExpression,
+): { readonly name: string; readonly receiver: Expression } | undefined {
+  const callee = unwrapped(call.expression);
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return undefined;
+  const name = frameMemberName(callee);
+  return name !== undefined && HANDS_RECEIVER.has(name)
+    ? { name, receiver: callee.expression }
+    : undefined;
+}
+
 /** What a call returns of what it was given: its first argument, or the array it was called on. */
 function handedOverBy(call: CallExpression): readonly Expression[] | undefined {
   const borrowed = borrowedArrayMutation(call);
-  if (borrowed !== undefined)
-    return HANDS_RECEIVER.has(borrowed.method) && !isSpreadElement(borrowed.receiver)
-      ? [borrowed.receiver]
-      : undefined;
-  const callee = unwrapped(call.expression);
-  if (
-    (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) &&
-    HANDS_RECEIVER.has(frameMemberName(callee) ?? '')
-  )
-    return [callee.expression];
+  if (borrowed !== undefined) {
+    if (!HANDS_RECEIVER.has(borrowed.method) || isSpreadElement(borrowed.receiver))
+      return undefined;
+    return prototypeMayChange(call.getSourceFile())
+      ? [borrowed.receiver, call]
+      : [borrowed.receiver];
+  }
+  const method = receiverMethod(call);
+  if (method !== undefined)
+    return methodMayBeOverridden(call.getSourceFile(), method.name, mutatorInvocation)
+      ? [method.receiver, call]
+      : [method.receiver];
   const invoked = nativeInvocation(call, HANDS_BACK);
   if (invoked === undefined || invoked.silent === true) return undefined;
   const [first] = invoked.args;

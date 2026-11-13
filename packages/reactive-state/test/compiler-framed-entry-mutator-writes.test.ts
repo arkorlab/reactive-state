@@ -242,6 +242,48 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'call-bound-with-a-this-and-the-tuple',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.assign.call.bind(Object.assign, null, entry)({ 1: error })); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'call-bound-to-the-callee-with-another-array-first-pin',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const other: unknown[] = []; return Object.fromEntries([entry], Object.assign.call.bind(Object.assign, entry)(other, { 1: error })); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'call-method-bound-to-the-callee',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Function.prototype.call.bind(Object.assign)(null, entry, { 1: error })); }",
+    key: 'message',
+    values: ["'safe':", 'error:'],
+  },
+  {
+    id: 'reflect-apply-bound-to-the-callee',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Reflect.apply.bind(null, Object.assign, null)([entry, { 1: error }])); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'bound-twice-with-the-tuple-first',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const other: unknown[] = []; return Object.fromEntries([entry], Object.assign.bind(null, entry).bind(null, other)({ 1: error })); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'fill-given-another-result-by-an-assignment',
+    source:
+      "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const other: unknown[] = []; (entry as any).fill = () => other; return Object.fromEntries([entry], Object.assign(entry.fill(0), { 1: error })); }",
+    key: 'message',
+    values: ['0:', 'entry:1', 'error:'],
+  },
 ] as const;
 
 describe('entry tuples the argument list mutates by a native', () => {
