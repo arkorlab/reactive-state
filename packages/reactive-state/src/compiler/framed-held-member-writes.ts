@@ -397,7 +397,10 @@ interface State {
 const NULLISH: State = { truthy: false, nullish: true };
 const PRESENT: State = { truthy: true, nullish: false };
 
-/** The state of a field an object literal writes: none where a spread, a prototype or a name is unknown. */
+/**
+ * The state of a field an object literal writes: none where a spread, a prototype or a name is
+ * unknown. A name no field gives is missing, unless `Object.prototype` has it, which gives it a value.
+ */
 function fieldState(object: ObjectLiteralExpression, key: string): State | undefined {
   for (const property of object.properties.toReversed()) {
     if (isSpreadAssignment(property)) return undefined;
@@ -409,7 +412,7 @@ function fieldState(object: ObjectLiteralExpression, key: string): State | undef
     if (name !== key) continue;
     return isPropertyAssignment(property) ? stateOf(property.initializer) : undefined;
   }
-  return { truthy: false, nullish: true };
+  return Object.hasOwn(Object.prototype, key) ? undefined : { truthy: false, nullish: true };
 }
 
 /** The name of a field written as an identifier, a string or a number. */

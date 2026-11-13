@@ -16,7 +16,6 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import {
   mayRunAgain,
@@ -51,6 +50,7 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { deletedFrom } from './framed-deleted-methods.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
+import { mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
@@ -390,7 +390,7 @@ function unprovenWrites(
 /** Whether the members a write names are the array's own, not those of a name that may hold another. */
 function writesExactly(node: Node, root: FrameBinding): boolean {
   if (isCallExpression(node)) {
-    const target = node.arguments[0];
+    const target = mutatorInvocation(node)?.args[0] ?? node.arguments[0];
     return target !== undefined && arrayIdentity(target) === root;
   }
   return framedWrittenTargets(node).every((target) => {
@@ -459,12 +459,13 @@ function definedMethods(
   { previous, exact = false }: { readonly previous?: OwnMethods; readonly exact?: boolean } = {},
 ): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
-  const target = node.arguments[0];
-  const path = globalPathOf(unwrapped(node.expression))?.join('.');
+  const invoked = mutatorInvocation(node);
+  const target = invoked?.args[0];
   if (
+    invoked === undefined ||
     target === undefined ||
     !(exact ? arrayIdentity(target) === root : mayBeArray(target, root)) ||
-    (path !== 'Object.defineProperty' && path !== 'Object.defineProperties')
+    (invoked.path !== PATHS.property && invoked.path !== PATHS.properties)
   )
     return undefined;
   const defined: OwnMethods = new Map(previous);

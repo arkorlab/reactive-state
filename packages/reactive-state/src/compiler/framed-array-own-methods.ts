@@ -501,15 +501,15 @@ function propertyOverride(property: Node): ArrayMethodOverride {
   return { own: knownNonNative(initializer), value: initializer, ...PLAIN_PROPERTY };
 }
 
-/** One statically named data descriptor, including restoration to the native implementation. */
-export function defineMethod(call: CallExpression, own: OwnMethods): void {
-  const keyNode = call.arguments[1];
+/** One statically named data descriptor (after the target, its key and descriptor), including restoration to the native implementation. */
+export function defineMethod(args: readonly Expression[], own: OwnMethods): void {
+  const keyNode = args[1];
   const key = keyNode === undefined ? undefined : constantValue(keyNode);
   if (typeof key !== 'string') {
     forgetMethods(own);
     return;
   }
-  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(call.arguments[2], own.get(key)));
+  if (OWN_METHODS.has(key)) own.set(key, descriptorFunction(args[2], own.get(key)));
 }
 
 /**

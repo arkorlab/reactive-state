@@ -5,6 +5,7 @@ import {
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
+  isConstructorDeclaration,
   isElementAccessExpression,
   isFunctionDeclaration,
   isForOfStatement,
@@ -229,6 +230,7 @@ function refersToFunction(name: Identifier, fn: Node): boolean {
 interface FileFunctions {
   readonly byName: ReadonlyMap<string, readonly Node[]>;
   readonly implicit: readonly Node[];
+  readonly referenced: ReadonlySet<string>;
 }
 
 const FUNCTIONS = new WeakMap<SourceFile, FileFunctions>();
@@ -249,12 +251,13 @@ function register(
 function functionsOf(file: SourceFile): FileFunctions {
   const known = FUNCTIONS.get(file);
   if (known !== undefined) return known;
-  const found: { byName: Map<string, Node[]>; implicit: Node[] } = {
+  const referenced = new Set<string>();
+  const found: { byName: Map<string, Node[]>; implicit: Node[]; referenced: Set<string> } = {
     byName: new Map(),
     implicit: [],
+    referenced,
   };
   const reachedBy = new Map<Node, FunctionNames>();
-  const referenced = new Set<string>();
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node) || (node !== file && !framedPossibleBranch(node))) continue;
@@ -308,6 +311,9 @@ function neverCreated(node: Node, referenced: ReadonlySet<string>): boolean {
 function unreachedFunction(fn: Node, node: Node, referenced: ReadonlySet<string>): boolean {
   if (!isFunctionCode(fn) || !isNested(fn) || runsAtOnce(fn, node) || reachedByProperty(fn))
     return false;
+  if (isConstructorDeclaration(fn) && buildsItself(fn.parent)) return false;
+  if (definitionParts(fn).some((part) => node.pos >= part.pos && node.end <= part.end))
+    return false;
   const { names, computed } = namesOf(fn);
   if (computed) return false;
   if (names.every((name) => !referenced.has(name))) return true;
@@ -333,16 +339,38 @@ function unreachedClass(declaration: Node, referenced: ReadonlySet<string>): boo
 }
 
 /**
- * Whether a class may be built with no name of it read: a decorator is handed the class, or its
- * static code reads `this`, which is the class there.
+ * Whether a class may be built with no name of it read: a decorator is handed the class, or what
+ * leads to it, the prototype, whichever its member is, a parameter of one among them; or its static
+ * code reads `this` or `super`, which hand it the class.
  */
 function buildsItself(declaration: Node): boolean {
   const { modifiers, members } = declaration as {
     readonly modifiers?: readonly Node[];
     readonly members?: readonly Node[];
   };
-  if (modifiers?.some((each) => each.kind === SyntaxKind.Decorator) === true) return true;
-  return (members ?? []).some((member) => isStaticCode(member) && readsThis(member));
+  return (
+    isDecorated(modifiers) ||
+    (members ?? []).some((member) => isDecoratedMember(member) || isStaticExposure(member))
+  );
+}
+
+/** Whether a list of modifiers has a decorator. */
+function isDecorated(modifiers: readonly Node[] | undefined): boolean {
+  return modifiers?.some((each) => each.kind === SyntaxKind.Decorator) === true;
+}
+
+/** Whether a member of a class, or a parameter of it, has a decorator. */
+function isDecoratedMember(member: Node): boolean {
+  const { modifiers, parameters } = member as {
+    readonly modifiers?: readonly Node[];
+    readonly parameters?: readonly { readonly modifiers?: readonly Node[] }[];
+  };
+  return isDecorated(modifiers) || (parameters ?? []).some((each) => isDecorated(each.modifiers));
+}
+
+/** Whether a member of a class runs when it is defined and reads `this` or `super`. */
+function isStaticExposure(member: Node): boolean {
+  return isStaticCode(member) && exposesClass(member);
 }
 
 /** Whether a member of a class runs when the class is defined: a static block, a static field. */
@@ -355,12 +383,15 @@ function isStaticCode(member: Node): boolean {
   );
 }
 
-/** Whether a node holds a `this`, whichever function it is in. */
-function readsThis(node: Node): boolean {
-  if (node.kind === SyntaxKind.ThisKeyword) return true;
+/**
+ * Whether a node holds a `this` or a `super`, whichever function it is in: in static code, `this` is
+ * the class, and `super.make()` calls a method of the parent with the class as its `this`.
+ */
+function exposesClass(node: Node): boolean {
+  if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) return true;
   let found = false;
   node.forEachChild((child) => {
-    found ||= readsThis(child);
+    found ||= exposesClass(child);
   });
   return found;
 }
@@ -454,6 +485,7 @@ function reachedByProperty(fn: Node): boolean {
 
 /** Whether the file uses one of the names otherwise than by calling it or giving it a value. */
 function escapes(file: SourceFile, names: ReadonlySet<string>): boolean {
+  const { referenced } = functionsOf(file);
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
@@ -464,7 +496,8 @@ function escapes(file: SourceFile, names: ReadonlySet<string>): boolean {
       !written(node) &&
       !called(node) &&
       !isDeclarationName(node) &&
-      framedPossibleBranch(node)
+      framedPossibleBranch(node) &&
+      !neverCreated(node, referenced)
     )
       return true;
     node.forEachChild((child) => {
@@ -481,19 +514,22 @@ function isDeclarationName(node: Node): boolean {
 }
 
 /**
- * The parts of a function that run where it is written: a computed name, its decorators, and the
- * parameters of a generator that is called there, whose body waits for its iterator.
+ * The parts of a function that run where it is written: a computed name, its decorators and those of
+ * its parameters, and the parameters of a generator that is called there, whose body waits for its
+ * iterator.
  */
 function definitionParts(fn: Node): readonly Node[] {
   const { name, modifiers, parameters } = fn as {
     readonly name?: Node;
     readonly modifiers?: readonly Node[];
-    readonly parameters?: readonly Node[];
+    readonly parameters?: readonly (Node & { readonly modifiers?: readonly Node[] })[];
   };
-  const decorators = modifiers?.filter((each) => each.kind === SyntaxKind.Decorator) ?? [];
+  const decorators = (each: readonly Node[] | undefined): readonly Node[] =>
+    each?.filter((one) => one.kind === SyntaxKind.Decorator) ?? [];
   const run = isGenerator(fn) && madeInPlace(fn) ? (parameters ?? []) : [];
   const named = name !== undefined && isComputedPropertyName(name) ? [name] : [];
-  return [...named, ...decorators, ...run];
+  const given = (parameters ?? []).flatMap((each) => decorators(each.modifiers));
+  return [...named, ...decorators(modifiers), ...given, ...run];
 }
 
 /** Whether code that runs in the range reaches what the language may call by itself. */
