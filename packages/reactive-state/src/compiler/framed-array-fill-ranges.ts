@@ -16,7 +16,7 @@ import { unwrapped } from './bounded.ts';
 import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
@@ -43,8 +43,20 @@ export function emptyArrayFill(given: readonly Expression[], context: FillContex
   const length = unexposedLength(context);
   if (length === undefined || start === undefined) return false;
   if (equalOrReversed) return true;
+  if (exportedBefore(context)) return false;
   const stop = fillBound(given[2], length);
   return stop !== undefined && relativeBound(start, length) >= relativeBound(stop, length);
+}
+
+/**
+ * Whether an importing module can change the length of the array before the fill runs: the module
+ * exports it where it is declared, and the fill is in a body that runs later.
+ */
+function exportedBefore(context: FillContext): boolean {
+  return (
+    exportedDeclaration(context.root) &&
+    executionOwner(context.call) !== executionOwner(context.root)
+  );
 }
 
 /** Monotone bounds on one side of zero clamp together without knowing the receiver length. */
