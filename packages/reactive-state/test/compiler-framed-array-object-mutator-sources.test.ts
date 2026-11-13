@@ -2303,6 +2303,46 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'map-with-math-max-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.map(Math.max); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'for-each-with-math-min-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.forEach(Math.min); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'filter-with-math-hypot-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.filter(Math.hypot); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'reduce-with-math-max-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1, 2]; a.reduce(Math.max); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'map-with-math-atan2-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; a.map(Math.atan2); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'map-with-math-pow-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; a.map(Math.pow); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'map-with-a-held-math-max-hands-the-array-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const max = Math.max; a.map(max); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'map-with-number-parse-int-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['1']; a.map(Number.parseInt); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'map-with-string-pin',
     source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a.map(String); return String(a); }`,
     converts: false,

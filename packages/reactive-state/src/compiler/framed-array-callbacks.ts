@@ -146,9 +146,11 @@ export function callsBack(name: string): boolean {
 }
 
 /**
- * The natives that read no more of the arguments of a callback than its first two, and so are given
- * the array without taking it. Another native may use it: a callback gets the array as its third
- * argument, or fourth for a reducer, and `Reflect.set` writes through it as the receiver of the write.
+ * The natives that take no more than two arguments, and so ignore the third argument of a callback,
+ * which is the array, and the fourth of a reducer. Another native may use it: a callback gets the
+ * array as its third argument, or fourth for a reducer, and `Reflect.set` writes through it as the
+ * receiver of the write, and a native that takes any number of arguments (`Math.max`, `Math.min`,
+ * `Math.hypot`) converts each of them, which runs the methods of the array.
  */
 const NON_RECEIVING: ReadonlySet<string> = new Set([
   'Array.isArray',
@@ -156,6 +158,39 @@ const NON_RECEIVING: ReadonlySet<string> = new Set([
   'Boolean',
   'isFinite',
   'isNaN',
+  'Math.abs',
+  'Math.acos',
+  'Math.acosh',
+  'Math.asin',
+  'Math.asinh',
+  'Math.atan',
+  'Math.atan2',
+  'Math.atanh',
+  'Math.cbrt',
+  'Math.ceil',
+  'Math.clz32',
+  'Math.cos',
+  'Math.cosh',
+  'Math.exp',
+  'Math.expm1',
+  'Math.f16round',
+  'Math.floor',
+  'Math.fround',
+  'Math.imul',
+  'Math.log',
+  'Math.log1p',
+  'Math.log2',
+  'Math.log10',
+  'Math.pow',
+  'Math.random',
+  'Math.round',
+  'Math.sign',
+  'Math.sin',
+  'Math.sinh',
+  'Math.sqrt',
+  'Math.tan',
+  'Math.tanh',
+  'Math.trunc',
   'Number',
   'Number.isFinite',
   'Number.isInteger',
@@ -174,9 +209,6 @@ const NON_RECEIVING: ReadonlySet<string> = new Set([
   'parseFloat',
   'parseInt',
   'String',
-  ...Object.getOwnPropertyNames(Math)
-    .filter((name) => typeof (Math as unknown as Record<string, unknown>)[name] === 'function')
-    .map((name) => `Math.${name}`),
 ]);
 
 /**
