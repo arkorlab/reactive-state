@@ -1,8 +1,6 @@
 import {
   type Identifier,
   type ImportDeclaration,
-  isArrayLiteralExpression,
-  isAsExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
@@ -12,8 +10,6 @@ import {
   isEnumDeclaration,
   isExportDeclaration,
   isExpressionWithTypeArguments,
-  isForInStatement,
-  isForOfStatement,
   isFunctionDeclaration,
   isIdentifier,
   isImportDeclaration,
@@ -22,24 +18,17 @@ import {
   isModuleBlock,
   isModuleDeclaration,
   isNamespaceImport,
-  isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
   isObjectBindingPattern,
-  isObjectLiteralExpression,
-  isParenthesizedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
-  isSatisfiesExpression,
   isShorthandPropertyAssignment,
-  isSpreadAssignment,
-  isSpreadElement,
   isStringLiteral,
   isTypeAliasDeclaration,
   isTypeAssertion,
   isTypeNode,
   isTypeOfExpression,
   isTypeParameterDeclaration,
-  isVariableDeclaration,
   isVariableStatement,
   type ModuleDeclaration,
   type Node,
@@ -49,10 +38,11 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
+import { heldInitializer } from './held-constants.ts';
 import { readsConstructorKey, type Reading } from './key-reader-calls.ts';
-import { localClassValueBinding } from './local-type-aliases.ts';
 import { holdsValues, mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
+import { isTakenApart, useOf } from './uses.ts';
 
 /**
  * What of a module's code makes code of the text it is given — the globals `eval` and `Function`,
@@ -336,24 +326,6 @@ function importedNames(declaration: ImportDeclaration): readonly string[] {
 }
 
 /**
- * Where `node` is used: past what wraps it alike — parentheses, a cast, `!` — what it stands in
- * (`parent`), as `at`.
- */
-export function useOf(node: Node): { readonly at: Node; readonly parent: Node } {
-  let at = node;
-  while (
-    isParenthesizedExpression(at.parent) ||
-    isAsExpression(at.parent) ||
-    isSatisfiesExpression(at.parent) ||
-    isNonNullExpression(at.parent) ||
-    isTypeAssertion(at.parent)
-  ) {
-    at = at.parent;
-  }
-  return { at, parent: at.parent };
-}
-
-/**
  * The reads in `node` of a name no declaration inside it gives: none a function's, a block's or a
  * `catch`'s (`freeReads`), nor, where `node` is a namespace, its body's or a nested one's
  * (`namespaceReads`) — what reads a constant of the module, where nothing inside declares it again.
@@ -413,12 +385,7 @@ function readsConstructor(node: Node): boolean {
 
 /** What `readsConstructorKey` reads a global and a written text by: this module's own. */
 const READING: Reading = {
-  initializerOf: (name) => {
-    const binding = isIdentifier(name) ? localClassValueBinding(name) : undefined;
-    return binding !== undefined && binding !== null && isVariableDeclaration(binding)
-      ? binding.initializer
-      : undefined;
-  },
+  initializerOf: heldInitializer,
   pathOf: (node) => globalPathOf(node)?.join('.'),
   textOf,
 };
@@ -481,36 +448,4 @@ function textOf(node: Node): string | undefined {
     : undefined;
 }
 
-/**
- * Whether `literal`, an object written, is a pattern: what an assignment takes apart, `({ eval:
- * run } = globalThis)` — within another, a default's target too — or a loop.
- */
-export function isTakenApart(literal: Node): boolean {
-  let at = literal;
-  for (;;) {
-    const { parent } = at;
-    if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.EqualsToken) {
-      return parent.left === at;
-    }
-    if (isForOfStatement(parent) || isForInStatement(parent)) {
-      return parent.initializer === at;
-    }
-    if (!holdsPart(parent)) {
-      return false;
-    }
-    at = parent;
-  }
-}
-
-/** Whether `node` may hold a part of a pattern: parentheses, an array or an object, an entry, a spread. */
-function holdsPart(node: Node): boolean {
-  return (
-    isParenthesizedExpression(node) ||
-    isArrayLiteralExpression(node) ||
-    isObjectLiteralExpression(node) ||
-    isPropertyAssignment(node) ||
-    isShorthandPropertyAssignment(node) ||
-    isSpreadElement(node) ||
-    isSpreadAssignment(node)
-  );
-}
+export { isTakenApart, useOf } from './uses.ts';

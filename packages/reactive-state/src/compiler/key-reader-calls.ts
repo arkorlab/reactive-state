@@ -1,19 +1,26 @@
 import {
   type CallExpression,
   type Expression,
+  type Identifier,
   isArrayLiteralExpression,
+  isArrowFunction,
   isBinaryExpression,
   isCallExpression,
+  isClassExpression,
+  isComputedPropertyName,
   isElementAccessExpression,
+  isFunctionExpression,
   isIdentifier,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
+  isMethodDeclaration,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
   isTypeAssertion,
   type Node,
+  type ObjectLiteralElementLike,
+  type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -48,8 +55,8 @@ export interface Reading {
   readonly pathOf: (node: Node) => string | undefined;
   /** The text a node writes, a string; none of another node. */
   readonly textOf: (node: Node) => string | undefined;
-  /** What a constant of the name `name` the code declares is initialized by; none of another binding. */
-  readonly initializerOf: (name: Node) => Expression | undefined;
+  /** What a constant of the name `name` the code declares is initialized by, where nothing changes it or hands it on. */
+  readonly initializerOf: (name: Identifier) => Expression | undefined;
 }
 
 /** What a call is given up to a spread; `open`: no spread, past which where a value stands is unknown. */
@@ -187,8 +194,8 @@ class Calls {
 
   /**
    * The method of a function `callee` reads of what it stands on, `call` of `fn.call` — where that
-   * stands on a function, or what may be one: none of a member of an object or an array the code
-   * writes, `helper.call`, which is its own.
+   * stands on a function, or what may be one: none of a member the object it stands on has of its
+   * own, `helper.call`, which is no function's.
    */
   #methodOf(
     callee: Expression,
@@ -204,28 +211,64 @@ class Calls {
       !METHODS.has(method) ||
       !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) ||
       this.#reading.pathOf(callee) === 'Reflect.apply' ||
-      this.#isPlain(callee.expression, 0)
+      this.#owns(callee.expression, method, 0)
     ) {
       return undefined;
     }
     return { method, receiver: callee.expression };
   }
 
-  /** Whether `expression` is a value the code writes that is no function: an object, an array, a literal, a constant of one. */
-  #isPlain(expression: Expression, depth: number): boolean {
+  /**
+   * Whether the code shows that `expression` has the member `method` of its own, which is no
+   * function's: an object written, or a constant of one, with a function written for it — or none,
+   * inherited from what has none.
+   */
+  #owns(expression: Expression, method: string, depth: number): boolean {
     const each = calledOf(expression);
-    if (
-      isObjectLiteralExpression(each) ||
-      isArrayLiteralExpression(each) ||
-      isStringLiteral(each) ||
-      isNoSubstitutionTemplateLiteral(each) ||
-      isNumericLiteral(each)
-    ) {
-      return true;
+    if (isObjectLiteralExpression(each)) {
+      return this.#literalOwns(each, method);
     }
     const initializer =
       isIdentifier(each) && depth < FOLLOWED ? this.#reading.initializerOf(each) : undefined;
-    return initializer !== undefined && this.#isPlain(initializer, depth + 1);
+    return initializer !== undefined && this.#owns(initializer, method, depth + 1);
+  }
+
+  /**
+   * Whether an object written has `method` of its own that is no function's: a function written for
+   * it, a method; or none, where nothing else brings one — a prototype set, `__proto__: fn`, a
+   * spread, a name it computes — which is the function's, or may be.
+   */
+  #literalOwns(literal: ObjectLiteralExpression, method: string): boolean {
+    const names = literal.properties.map((property) => this.#nameOf(property));
+    const own = literal.properties[names.indexOf(method)];
+    if (own !== undefined) {
+      return (
+        isMethodDeclaration(own) ||
+        (isPropertyAssignment(own) && this.#isWrittenFunction(own.initializer))
+      );
+    }
+    return literal.properties.every(
+      (property, index) =>
+        !isSpreadAssignment(property) && names[index] !== undefined && names[index] !== '__proto__',
+    );
+  }
+
+  /** The name an entry of an object written gives, where the code writes it; none of a computed one. */
+  #nameOf(property: ObjectLiteralElementLike): string | undefined {
+    if (isSpreadAssignment(property)) {
+      return undefined;
+    }
+    const { name } = property;
+    if (isIdentifier(name)) {
+      return name.text;
+    }
+    return this.#reading.textOf(isComputedPropertyName(name) ? unwrapped(name.expression) : name);
+  }
+
+  /** Whether `expression` is a function the code writes, which is not the function's own method. */
+  #isWrittenFunction(expression: Expression): boolean {
+    const each = calledOf(expression);
+    return isFunctionExpression(each) || isArrowFunction(each) || isClassExpression(each);
   }
 
   /**

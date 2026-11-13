@@ -341,6 +341,124 @@ const CASES = [
     source: "return fn.call.call(Reflect.get, null, run, 'constructor')(text)();",
     what: '`call` of a function the code is given, called on the reader',
   },
+  // An object whose `call`, `apply` or `bind` may still be a function's own: inherited, or the method itself.
+  {
+    reads: ["({ __proto__: run }).call.call(Reflect.get, null, run, 'constructor')"],
+    source: "return ({ __proto__: run }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'an object written in place that inherits from a function',
+  },
+  {
+    reads: ["({ '__proto__': run }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ '__proto__': run }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'an object that inherits from a function, the key written as text',
+  },
+  {
+    reads: ["({ __proto__: fn, other: 1 }).apply.call(Reflect.get, null, [run, 'constructor'])"],
+    source:
+      "return ({ __proto__: fn, other: 1 }).apply.call(Reflect.get, null, [run, 'constructor'])(text)();",
+    what: 'an object that inherits from a function, beside another member, `apply`',
+  },
+  {
+    reads: ["({ __proto__: run }).bind.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ __proto__: run }).bind.call(Reflect.get, null, run, 'constructor')()(text)();",
+    what: 'an object that inherits from a function, `bind`',
+  },
+  {
+    reads: ["inheriting.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const inheriting = { __proto__: run };\n  return inheriting.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of an object that inherits from a function',
+  },
+  {
+    reads: ["made.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const made = Object.create(run);\n  return made.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of what `Object.create` made of a function',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held = {};\n  Object.setPrototypeOf(held, run);\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of an object whose prototype is set to a function',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held = {};\n  Reflect.setPrototypeOf(held, run);\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of an object whose prototype `Reflect.setPrototypeOf` sets',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held: any = {};\n  held.__proto__ = run;\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of an object whose `__proto__` is assigned a function',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held: any = {};\n  held.call = run.call;\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of an object whose `call` is assigned the method',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held = {};\n  Object.assign(held, { call: run.call });\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant of an object that is handed on',
+  },
+  {
+    reads: ["({ call: run.call }).call.call(Reflect.get, null, run, 'constructor')"],
+    source: "return ({ call: run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'an object whose own `call` is the method',
+  },
+  {
+    reads: ["({ ...{ call: run.call } }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ ...{ call: run.call } }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'an object whose members a spread gives',
+  },
+  {
+    reads: [
+      "({ get call() { return run.call; } }).call.call(Reflect.get, null, run, 'constructor')",
+    ],
+    source:
+      "return ({ get call() { return run.call; } }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'an object whose `call` is a getter',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ __proto__: run, call: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'an object that inherits from a function, with a `call` of its own',
+  },
+  {
+    reads: [],
+    source: "return ({ call() { return 42; } }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'an object written in place with a method `call`',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ ['call']: function () { return 42; } }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'an object written in place with a computed `call`',
+  },
+  {
+    reads: [],
+    source: "return ({}).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'an object written in place with no `call`',
+  },
+  {
+    reads: [],
+    source:
+      "const own = { call: () => 42 };\n  return own.call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant of an object with a `call` of its own',
+  },
+  {
+    reads: [],
+    source: "const none = {};\n  return none.call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant of an object with no `call`',
+  },
   // Optional chains and wrappers.
   {
     reads: ["Reflect.get?.bind(null, run)?.('constructor')"],
