@@ -17,6 +17,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  type SetAccessorDeclaration,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -46,6 +47,8 @@ interface Reading {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
   readonly inherited: boolean;
+  /** The setters of the objects an inherited getter runs on, which its writes may run. */
+  readonly setters: readonly SetAccessorDeclaration[];
   readonly seen: Seen;
 }
 
@@ -69,7 +72,13 @@ export function possibleFields(
   sources: readonly AssignedFrameSource[],
 ): readonly AssignedFrameSource[] {
   const seen = { full: new Map(), own: new Map() };
-  return fieldsOf(sources, { data: new Set(), getters: new Set(), inherited: true, seen });
+  return fieldsOf(sources, {
+    data: new Set(),
+    getters: new Set(),
+    inherited: true,
+    setters: [],
+    seen,
+  });
 }
 
 /** The fields of the sources: of a written object as it holds them, of the rest as they resolve. */
@@ -262,15 +271,15 @@ function setNames(
  * The values a getter that runs writes into the object it runs on, each under the name it writes:
  * a copy of the object runs it wherever a later field hides its result, and a later field of that
  * name hides what it wrote; the names of an object's own fields hide the fields it inherits, not
- * what an inherited getter writes into it. A write that runs a setter of the object counts for the
- * setter's own. The entries are refused where `this` is given on.
+ * what an inherited getter writes into it. A write that runs a setter of the object, or of an object the
+ * getter is inherited by, counts for the setter's own. The entries are refused where `this` is given on.
  */
 function getterEffects(
   object: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
   reading: Reading,
 ): readonly AssignedFrameSource[] {
-  const written = accessorWrites(object, getter);
+  const written = accessorWrites(object, getter, reading.setters);
   if (written === undefined) throw new UnfollowableError();
   return written
     .filter((each) => each.name === undefined || reading.inherited || !reading.data.has(each.name))
@@ -293,6 +302,10 @@ function inheritedValues(
     ...reading,
     data: withNames(reading.data, own),
     getters: withNames(reading.getters, own),
+    setters: [
+      ...reading.setters,
+      ...object.properties.filter((each) => isSetAccessorDeclaration(each)),
+    ],
   };
   const value = unwrapped(proto.initializer);
   const container = { value: proto.initializer, keys: [] };

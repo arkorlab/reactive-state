@@ -1374,6 +1374,73 @@ const CASES = [
     key: 'message',
     values: ["'kept':", "'safe':", '0:', '1:'],
   },
+  {
+    id: 'spread-getter-increment-runs-a-setter',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate++; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-compound-assignment-runs-a-setter',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate += 1; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-prefix-decrement-runs-a-setter',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { --this.activate; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-runs-a-setter-of-its-prototype',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ __proto__: { set activate(value: unknown) { this.field = error; } }, get trigger() { this.activate = 0; return 0; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'spread-getter-comparison-runs-no-setter-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { return this.activate === 1; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", 'this.activate === 1:'],
+  },
+  {
+    id: 'spread-getter-write-replaced-setter-runs-nothing-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, ...{ activate: 5 }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', '5:'],
+  },
+  {
+    id: 'spread-getter-write-replaced-setter-that-gives-this-on-is-followed-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { mutate(this); }, activate: 5, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', '5:'],
+  },
+  {
+    id: 'spread-inherited-getter-write-runs-a-setter-of-the-object-it-runs-on',
+    source: `function frames(error: Error, name: string, first: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; return Object.fromEntries([entry], ({ [first]: sink, [name]: entry[1] } = { __proto__: { get trigger() { this.activate = 0; return 0; } }, set activate(value: unknown) { this.field = error; }, field: 'kept' })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      '{ get trigger() { this.activate = 0; return 0; } }:',
+      '0:',
+      '0:',
+      'error:',
+    ],
+  },
+  {
+    id: 'spread-inherited-getter-write-runs-no-setter-pin',
+    source: `function frames(error: Error, name: string, first: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; return Object.fromEntries([entry], ({ [first]: sink, [name]: entry[1] } = { __proto__: { get trigger() { this.activate = 0; return 0; } }, field: 'kept' })); }`,
+    key: 'message',
+    values: [
+      "'kept':",
+      "'safe':",
+      '{ get trigger() { this.activate = 0; return 0; } }:',
+      '0:',
+      '0:',
+    ],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
