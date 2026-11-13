@@ -33,6 +33,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { iteratorQuietValues } from './framed-iterator-guards.ts';
 import { framedCondition } from './framed-sources.ts';
+import { framedAssignedValues } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 
 /** Result-sensitive selectors inspect only source-proven synchronous own method bodies. */
@@ -180,7 +181,8 @@ function nextFunctions(value: Node): readonly Node[] | undefined {
 function nextFunction(value: Node): Node | undefined {
   if (isIdentifier(value)) {
     const declared = frameDeclarationOf(value);
-    if (declared !== undefined && isAnswering(declared)) return declared;
+    if (declared !== undefined && isAnswering(declared))
+      return framedAssignedValues(value).length === 0 ? declared : undefined;
     const initializer = constantInitializer(value);
     return initializer === undefined ? undefined : unwrapped(initializer);
   }
