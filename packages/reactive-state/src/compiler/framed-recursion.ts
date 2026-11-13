@@ -1,4 +1,5 @@
 import {
+  type FunctionDeclaration,
   isAwaitExpression,
   type Identifier,
   isArrowFunction,
@@ -24,7 +25,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { isAnswering } from './answers.ts';
+import { isAnswering, overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
@@ -205,6 +206,13 @@ function shadowedByParameter(node: Node, scope: Node): boolean {
   return true;
 }
 
+/** Whether a declaration is a signature of the function, which is declared with overloads. */
+function overloadOf(declared: Node | undefined, fn: FunctionDeclaration): boolean {
+  return (
+    declared !== undefined && isFunctionDeclaration(declared) && overloadsOf(fn).includes(declared)
+  );
+}
+
 /**
  * Whether a name read inside the function resolves to the function: no parameter, no local, and no
  * function or class within it that is named alike takes the name first. A name that is not the
@@ -215,7 +223,7 @@ function refersToFunction(name: Identifier, fn: Node): boolean {
   if (isFunctionExpression(fn) && fn.name?.text === name.text) {
     if (declared !== undefined) return false;
   } else if (isFunctionDeclaration(fn) && fn.name?.text === name.text) {
-    if (declared !== fn) return false;
+    if (declared !== fn && !overloadOf(declared, fn)) return false;
   } else if (boundVariable(fn)?.name.getText() === name.text && declared !== boundVariable(fn)) {
     return false;
   }
