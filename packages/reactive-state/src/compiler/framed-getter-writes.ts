@@ -139,7 +139,8 @@ export function accessorWrites(
 
 /**
  * What running a getter does to the object it runs on, the setters its assignments run included. A
- * value assigned to a field that has a setter is the setter's argument, and is stored nowhere.
+ * value assigned to a field that has a setter is the setter's argument, and is stored nowhere, where
+ * the name is known and no getter or setter deletes members (a deletion may have removed the setter).
  */
 function accessorUses(
   object: ObjectLiteralExpression,
@@ -168,12 +169,25 @@ function accessorUses(
       }
     }
   }
-  const consumed = new Set(setters.map((each) => accessorName(each.name)));
+  const keep = found.some((each) => each.deleted.length > 0);
+  const consumed = new Set(
+    setters.flatMap((each) => {
+      const name = accessorName(each.name);
+      return name === undefined ? [] : [name];
+    }),
+  );
   return {
-    writes: found.flatMap((each) => each.writes.filter((write) => !consumed.has(write.name))),
+    writes: found.flatMap((each) =>
+      keep ? each.writes : each.writes.filter((write) => !consumedBy(consumed, write)),
+    ),
     named: found.flatMap((each) => each.named),
     deleted: found.flatMap((each) => each.deleted),
   };
+}
+
+/** Whether a write is certain to be the argument of a setter: its name is known, and a setter has it. */
+function consumedBy(consumed: ReadonlySet<string>, write: GetterWrite): boolean {
+  return write.name !== undefined && consumed.has(write.name);
 }
 
 const NO_NAMES: ReadonlySet<string> = new Set();
