@@ -2945,6 +2945,21 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; return String(values); }`,
     converts: false,
   },
+  {
+    id: 'reassigned-alias-of-an-empty-array-converts',
+    source: `function frames(error: Error) { const original: any[] = []; let values = original; values = [error]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'reassigned-alias-of-a-reassigned-name-converts',
+    source: `function frames(error: Error) { let one: any[] = []; let two = one; two = [error]; return String(two); }`,
+    converts: true,
+  },
+  {
+    id: 'alias-never-reassigned-pin',
+    source: `function frames(error: Error) { const original: any[] = ['safe']; let values = original; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

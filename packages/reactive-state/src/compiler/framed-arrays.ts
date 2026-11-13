@@ -579,14 +579,15 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
 }
 
-/** Whether a name that starts as a written array is written as a whole elsewhere: it may hold another. */
+/**
+ * Whether a name that starts as a written array, or as another name, is written as a whole
+ * elsewhere: it may hold another array than the one the chain of names ends at.
+ */
 function rewrittenArray(binding: FrameBinding): boolean {
   const { initializer } = binding;
-  return (
-    initializer !== undefined &&
-    isArrayLiteralExpression(unwrapped(initializer)) &&
-    writtenAsWhole(binding)
-  );
+  if (initializer === undefined) return false;
+  const start = unwrapped(initializer);
+  return (isArrayLiteralExpression(start) || isIdentifier(start)) && writtenAsWhole(binding);
 }
 
 /**
