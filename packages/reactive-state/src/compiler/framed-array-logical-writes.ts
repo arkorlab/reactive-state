@@ -22,7 +22,7 @@ import { unwrapped } from './bounded.ts';
 import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -45,7 +45,8 @@ export function framedLogicalElementSkipped(
 ): boolean {
   if (!LOGICAL_ASSIGNMENTS.has(node.operatorToken.kind)) return false;
   const slot = initialSlot(node, root);
-  if (slot === undefined || !unchangedBefore(node, root, sameArray)) return false;
+  if (slot === undefined || exportedBefore(node, root) || !unchangedBefore(node, root, sameArray))
+    return false;
   const value = slot.value === undefined ? undefined : logicalInitialValue(slot.value);
   const nullish =
     value === undefined ||
@@ -74,6 +75,14 @@ function initialSlot(
     return undefined;
   const value = array.elements[index];
   return { value: value === undefined || isOmittedExpression(value) ? undefined : value };
+}
+
+/**
+ * Whether an importing module can write to the array `root` before the assignment runs: the module
+ * exports it where it is declared, and the assignment is in a body that runs later.
+ */
+function exportedBefore(node: BinaryExpression, root: FrameBinding): boolean {
+  return exportedDeclaration(root) && executionOwner(node) !== executionOwner(root);
 }
 
 /** Prior uses or referenced deferred uses lose the initial slot; whole const aliases retain it. */
