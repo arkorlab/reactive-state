@@ -12,7 +12,6 @@ import {
   isPropertyAccessExpression,
   isSourceFile,
   isSpreadElement,
-  isVariableDeclaration,
   type Node,
 } from 'typescript/ast';
 
@@ -28,11 +27,7 @@ import {
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
 import { callMethodWrites } from './framed-array-call-writes.ts';
-import {
-  arrayUsesKnown,
-  arrayWritesUnfollowed,
-  writtenArrayElements,
-} from './framed-array-elements.ts';
+import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
@@ -288,8 +283,7 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
     definite: undefined,
   });
   deferredMethodWrites(call, root, own, statement.parent);
-  if (isVariableDeclaration(root) && !arrayUsesKnown(root, { read: call, owner, receiver }))
-    forgetMethods(own);
+  if (arrayWritesUnfollowed(receiver, call)) forgetMethods(own);
   return own;
 }
 

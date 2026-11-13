@@ -1261,6 +1261,176 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.map((item: unknown, index: number) => [item, index]); return String(values); }`,
     converts: false,
   },
+  {
+    id: 'container-member-alias-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; const x = holder[0]; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-object-alias-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = { a: values }; const x = holder.a; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-foreach-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; holder.forEach((a: any) => { a.join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-for-of-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; for (const a of holder) a.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-destructured-alias-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; const [first] = holder; first.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'tagged-template-argument-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const tag = (_: any, a: any) => { a.join = Array.prototype.join; }; tag\`\${values}\`; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'conditional-receiver-write-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (flag ? values : []).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'logical-receiver-write-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values || []).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'comma-receiver-write-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (0, values).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'literal-source-of-a-copy-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.assign({}, { values }); r.values.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'literal-source-of-a-copy-member-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.assign({}, { values }); const x = r.values; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-assign-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.assign(values, { x: 1 }); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-define-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.defineProperty(values, 'x', { value: 1 }); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-sort-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = values.sort(); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-returned-by-an-iife-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = (() => Object.assign(values, { x: 1 }))(); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'array-held-by-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { self: Object.assign(values, { y: 1 }) }); const x = (values as any).self; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-through-comma-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = (0, Object.assign(values, { x: 1 })); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-reverse-written-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.reverse().join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-define-written-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (Object.defineProperty(values, 'x', { value: 1 }) as any).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-destructured-by-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; const [first] = holder; first.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-object-destructured-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = { a: values }; const { a } = holder; a.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-destructured-by-an-assignment-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; let first: any; [first] = holder; first.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'known-element-destructuring-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const [first] = values; void first; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-field-destructuring-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const { length } = values; void length; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-spread-into-a-call-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; ((...a: any[]) => a)(...values); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-conditional-receiver-read-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; void (flag ? values : []).length; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'method-of-the-array-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any).m = function (this: any) { this.join = Array.prototype.join; }; (values as any).m(); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iterator-of-the-array-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any)[Symbol.iterator] = function (this: any) { this.join = Array.prototype.join; return [][Symbol.iterator](); }; [...values]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'custom-join-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any).join = function (this: any) { this.join = Array.prototype.join; return 'x'; }; values.toString(); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get() { this.join = Array.prototype.join; return 1; } }); void (values as any).x; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'setter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { set(v: any) { this.join = Array.prototype.join; } }); (values as any).x = 1; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'own-valueof-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any).valueOf = function (this: any) { this.join = Array.prototype.join; return this; }; void ((values as any) + ''); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'source-method-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { toJSON() { this.join = Array.prototype.join; return 1; } }); JSON.stringify(values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-arrow-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: () => 1 }); void (values as any).x; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('writes a definite method write evaluates first', () => {

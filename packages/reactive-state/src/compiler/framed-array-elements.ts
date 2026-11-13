@@ -30,7 +30,7 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
 import { consultedKnown } from './framed-known-forms.ts';
-import { knownUsesOnly } from './framed-known-uses.ts';
+import { knownUsesOnly } from './framed-known-mentions.ts';
 import { type MutatorInvocation, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -93,7 +93,7 @@ function candidatesOf(root: FrameBinding, read: Node): readonly Node[] {
  * Whether every mention of the array that may run before the read is a use the compile knows. The
  * mention the read selects from, where it is given, hands the array on only after it has read.
  */
-export function arrayUsesKnown(
+function arrayUsesKnown(
   root: VariableDeclaration,
   {
     read,
@@ -119,7 +119,7 @@ export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
   const root = literalArrayBinding(value);
   if (root === undefined || !isVariableDeclaration(root)) return false;
   const owner = executionOwner(read);
-  if (!arrayUsesKnown(root, { read, owner })) return true;
+  if (!arrayUsesKnown(root, { read, owner, receiver: value })) return true;
   const held: VariableDeclaration[] = [];
   const known = candidatesOf(root, read).every((node) => {
     const invoked = isCallExpression(node) ? mutatorInvocation(node) : undefined;

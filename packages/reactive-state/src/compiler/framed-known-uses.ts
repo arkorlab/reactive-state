@@ -34,7 +34,6 @@ import {
   isTypeNode,
   isTypeOfExpression,
   isVariableDeclaration,
-  isVariableDeclarationList,
   isVoidExpression,
   isWhileStatement,
   type Node,
@@ -48,7 +47,7 @@ import { arrayIdentity } from './framed-array-identity.ts';
 import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { mutatorInvocation, nativePath } from './framed-mutator-calls.ts';
-import { readsBinding } from './scope.ts';
+import { namesThis } from './framed-this-functions.ts';
 
 /**
  * The uses of an array, a descriptor, a map or a list that the compile follows, and nothing else.
@@ -60,29 +59,51 @@ import { readsBinding } from './scope.ts';
  * argument of a native mutator it knows, a call of a native method of an array that hands the array
  * to no function of the program, a write to one of its own members that the readers of writes
  * collect. Any other mention may write it in a way no reader follows (an unknown callee, a literal
- * that holds it, a return, a destructured alias, a callback that is given it, a write through a
- * member of a member), and the compile refuses what it cannot show safe. A program that uses these
- * forms is refused too. The arguments of a native mutator are judged by `framed-known-forms`.
+ * that holds it, a return, a destructured alias, a callback that is given it, a choice between it
+ * and another value, a write through a member of a member), and the compile refuses what it cannot
+ * show safe. A program that uses these forms is refused too. The names that stand for an object are
+ * walked by `framed-known-mentions`, the arguments of a native mutator are judged by
+ * `framed-known-forms`.
  *
  * Not covered: `eval` and `Function`, a `Proxy` whose trap runs application code, a `with` scope,
- * and code of other files. What a getter or a setter of a written literal runs is read by the
- * readers of that literal.
+ * code of other files, and `Array.prototype` or `Object.prototype` written by the program. A function
+ * that names `this` is refused where it is written out as a method, an accessor or a value stored on
+ * the array (it runs with the array as `this`); one the program reaches by a name (a declared
+ * function, a constant) is not followed. What a getter or a setter of a written literal runs is
+ * read by the readers of that literal.
  */
 
 /**
  * What is followed: an array whose methods and elements are read, a held object that feeds one, or a
  * held list, whose entries a spread places by position and whose writes no reader of a spread collects.
+ * An `echo` is a name that stands for an array without being the name the readers of writes follow (a
+ * constant an answer of a mutator is kept in): what is written through it is not collected. A `carrier`
+ * is an array that holds itself, so that a member of it may be the array. A `box` is a literal that holds
+ * one of the objects followed, so that a member of it, or a name that takes one apart, is such an object.
  */
-export type Subject = 'array' | 'held' | 'list';
+export type Subject = 'array' | 'box' | 'carrier' | 'echo' | 'held' | 'list';
 
-/** What a mention is: a use the compile knows or not, and the constant it names the same, if any. */
+/**
+ * What a mention is: a use the compile knows or not, and the constant it names the same, if any. A
+ * name that `contains` the mention holds it in a literal; one that is an `echo` holds the array itself,
+ * and a use that `carries` stores the array in itself.
+ */
 export interface Use {
   readonly known: boolean;
   readonly alias?: VariableDeclaration;
+  readonly contained?: boolean;
+  readonly echo?: boolean;
+  readonly carries?: boolean;
 }
 
 const KNOWN: Use = { known: true };
 const UNKNOWN: Use = { known: false };
+const CARRIES: Use = { known: true, carries: true };
+
+/** Whether the subject is an array, however it is named. */
+export function isArray(subject: Subject): boolean {
+  return subject === 'array' || subject === 'carrier' || subject === 'echo';
+}
 
 /** The fields whose values are functions and data, no object the compile follows: a descriptor's, a list's length. */
 const DESCRIPTOR_FIELDS: ReadonlySet<string> = new Set([
@@ -160,6 +181,9 @@ const ARRAY_PARAMETER: ReadonlyMap<string, number> = new Map([
   ['some', 2],
 ]);
 
+/** The subjects whose writes to their own members the readers of writes collect. */
+const FOLLOWED: ReadonlySet<Subject> = new Set(['array', 'carrier', 'held']);
+
 /** The nodes that a `return` leaves: a function, a method, an accessor, a constructor, a static block. */
 const FUNCTIONS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ArrowFunction,
@@ -185,62 +209,6 @@ export function outermost(node: Node): Node {
   return at;
 }
 
-/**
- * Whether every mention of the constant, and of each constant that only names it, is a use the
- * compile knows for the subject, among those `relevant` keeps. A name that is written as a whole
- * elsewhere is not followed.
- */
-export function knownUsesOnly(
-  declaration: VariableDeclaration,
-  subject: Subject,
-  relevant: (name: Identifier) => boolean = () => true,
-): boolean {
-  const tracked = new Set<VariableDeclaration>([declaration]);
-  const pending: VariableDeclaration[] = [declaration];
-  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (subject !== 'array' && !constant(at)) return false;
-    const seen = mentions(at).filter((each) => relevant(each));
-    const kind = subject === 'held' && holdsList(at) ? 'list' : subject;
-    for (const name of seen) {
-      const use = classify(name, kind);
-      if (!use.known) return false;
-      if (use.alias === undefined || tracked.has(use.alias)) continue;
-      tracked.add(use.alias);
-      pending.push(use.alias);
-    }
-  }
-  return true;
-}
-
-/** Whether a constant starts as a written list. */
-function holdsList(declaration: VariableDeclaration): boolean {
-  const { initializer } = declaration;
-  return initializer !== undefined && isArrayLiteralExpression(unwrapped(initializer));
-}
-
-/** Whether a declaration is a constant, which no later write gives another value. */
-function constant(declaration: VariableDeclaration): boolean {
-  const list = declaration.parent;
-  return isVariableDeclarationList(list) && /^const\b/u.test(list.getText(list.getSourceFile()));
-}
-
-/** The identifiers that read the binding, apart from the name that declares it. */
-function mentions(declaration: VariableDeclaration): Identifier[] {
-  const found: Identifier[] = [];
-  const pending: Node[] = [declaration.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (isIdentifier(node) && node !== declaration.name && readsBinding(node)) {
-      const selected = frameBindingOf(node);
-      if (selected?.binding === declaration && selected.keys.length === 0) found.push(node);
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return found;
-}
-
 /** What one mention of a name is. */
 export function classify(name: Identifier, subject: Subject): Use {
   let at = outermost(name);
@@ -250,14 +218,14 @@ export function classify(name: Identifier, subject: Subject): Use {
     handed = true;
   }
   const { parent } = at;
-  if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at);
-  if (isSpreadAssignment(parent) || isExpressionStatement(parent)) return KNOWN;
-  if (subject === 'array' && readsArray(at)) return KNOWN;
-  if (isBinaryExpression(parent) && parent.right === at && takesApart(parent.left)) return KNOWN;
-  if (overwritten(at)) return KNOWN;
-  if (tested(at)) return KNOWN;
+  if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at, subject);
+  if (discarded(at)) return KNOWN;
+  if (isArray(subject) && readsArray(at)) return KNOWN;
+  const given = assigned(at, subject);
+  if (given !== undefined) return given;
   const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
-  if (member && parent.expression === at) return memberUse(parent, subject);
+  if (member && parent.expression === at)
+    return memberUse(parent, handed ? handedKind(subject) : subject);
   return flowUse(at, subject);
 }
 
@@ -271,10 +239,25 @@ function passed(at: Node): boolean {
 }
 
 /** A constant that a mention is the initializer of names the same thing; a pattern takes it apart. */
-function aliased(declaration: VariableDeclaration, at: Node): Use {
+function aliased(declaration: VariableDeclaration, at: Node, subject: Subject): Use {
   const initializer: Node | undefined = declaration.initializer;
-  if (initializer !== at || !isIdentifier(declaration.name)) return KNOWN;
-  return { known: true, alias: declaration };
+  if (initializer !== at) return KNOWN;
+  if (isIdentifier(declaration.name)) return { known: true, alias: declaration };
+  return takenApart(subject) ? KNOWN : UNKNOWN;
+}
+
+/** A mention on either side of an assignment: the source a pattern takes apart, or the name given a value. */
+function assigned(at: Node, subject: Subject): Use | undefined {
+  const { parent } = at;
+  if (!isBinaryExpression(parent)) return undefined;
+  if (parent.right === at && isPattern(parent.left)) return takenApart(subject) ? KNOWN : UNKNOWN;
+  return overwritten(at) ? KNOWN : undefined;
+}
+
+/** Whether a mention is only dropped or compared: copied by a spread, a statement, a test. */
+function discarded(at: Node): boolean {
+  const { parent } = at;
+  return isSpreadAssignment(parent) || isExpressionStatement(parent) || tested(at);
 }
 
 /** Whether a name is the left of a plain assignment: it is given a value, and nothing reads it. */
@@ -288,9 +271,19 @@ function overwritten(at: Node): boolean {
 }
 
 /** Whether the left of an assignment takes a value apart: a pattern, not a name or a member. */
-function takesApart(left: Node): boolean {
+function isPattern(left: Node): boolean {
   const target = isExpression(left) ? unwrapped(left) : left;
   return isObjectLiteralExpression(target) || isArrayLiteralExpression(target);
+}
+
+/**
+ * Whether a pattern takes no more from a mention than it is followed in: the elements of an array, or
+ * the values a held object or list holds, which the reader of the pattern's source reads in turn. A
+ * literal that holds a followed object and an array that holds itself have members that are objects,
+ * and a name that is given one is no name the readers follow.
+ */
+function takenApart(subject: Subject): boolean {
+  return subject !== 'box' && subject !== 'carrier';
 }
 
 /**
@@ -300,17 +293,18 @@ function takesApart(left: Node): boolean {
  */
 function readsArray(at: Node): boolean {
   const { parent } = at;
-  if (isTemplateSpan(parent) || (isForOfStatement(parent) && parent.expression === at)) return true;
-  if (
-    isSpreadElement(parent) &&
-    !isCallExpression(parent.parent) &&
-    !isNewExpression(parent.parent)
-  )
-    return true;
+  if (isTemplateSpan(parent)) return !isTaggedTemplateExpression(parent.parent.parent);
+  if (isForOfStatement(parent) && parent.expression === at) return true;
+  if (isSpreadElement(parent)) return true;
   if (isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.PlusToken) return true;
   if (!isCallExpression(parent) || !parent.arguments.includes(at as Expression)) return false;
   const path = nativePath(parent.expression);
   return path !== undefined && (READERS.has(path) || CONVERTERS.has(path));
+}
+
+/** What a name stands for where it is one of the values a choice may hand over: not the one readers follow. */
+function handedKind(subject: Subject): Subject {
+  return isArray(subject) ? 'echo' : 'box';
 }
 
 /** Whether a mention is only tested: a condition, a negation, `typeof`, an identity or an `in`. */
@@ -362,8 +356,17 @@ function memberResult(
   if (isTaggedTemplateExpression(user)) return UNKNOWN;
   if ((isCallExpression(user) || isNewExpression(user)) && user.expression === result)
     return methodCall(access, user, { subject, depth });
-  if (written(result)) return depth === 1 && subject !== 'list' ? KNOWN : UNKNOWN;
+  if (written(result))
+    return depth === 1 && FOLLOWED.has(subject) && !keepsThis(result) ? KNOWN : UNKNOWN;
   return subject === 'array' ? KNOWN : resultUse(result, memberName(access), depth);
+}
+
+/** Whether a member is given a function that names `this`, which runs with the array as `this`. */
+function keepsThis(result: Node): boolean {
+  const { parent } = result;
+  if (!isBinaryExpression(parent) || parent.left !== result) return false;
+  const value = unwrapped(parent.right);
+  return isFunctionExpression(value) && namesThis(value);
 }
 
 /**
@@ -376,9 +379,10 @@ function methodCall(
   call: Node,
   { subject, depth }: { readonly subject: Subject; readonly depth: number },
 ): Use {
-  if (depth > 1) return subject === 'array' ? KNOWN : UNKNOWN;
+  if (depth > 1) return isArray(subject) ? KNOWN : UNKNOWN;
+  if (!isArray(subject)) return UNKNOWN;
   const name = memberName(access);
-  if (subject !== 'array' || name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
+  if (name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
   if (isCallExpression(call) && handsArray(call, name)) return UNKNOWN;
   return SELF_RETURNING.has(name) ? answerUse(call) : KNOWN;
 }
@@ -422,19 +426,21 @@ function mentionsArguments(fn: Node): boolean {
  */
 function answerUse(answer: Node): Use {
   let at = outermost(answer);
+  let handed = false;
   for (;;) {
     const { parent } = at;
     if (isExpressionStatement(parent) || tested(at)) return KNOWN;
     const comma = isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.CommaToken;
-    if (!comma) break;
-    if (parent.left === at) return KNOWN;
+    if (comma && parent.left === at) return KNOWN;
+    if (!passed(at)) break;
     at = outermost(parent);
+    handed = true;
   }
   if (readsArray(at)) return KNOWN;
   const { parent } = at;
   const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
-  if (member && parent.expression === at) return memberUse(parent, 'array');
-  return stored(at) ?? returned(at) ?? chained(at);
+  if (member && parent.expression === at) return memberUse(parent, 'echo');
+  return handed ? UNKNOWN : (stored(at) ?? returned(at) ?? chained(at));
 }
 
 /** An answer that a constant is initialized with, or a name is assigned: that name stands for the array. */
@@ -443,7 +449,7 @@ function stored(at: Node): Use | undefined {
   if (isVariableDeclaration(parent)) {
     const initializer: Node | undefined = parent.initializer;
     return initializer === at && isIdentifier(parent.name)
-      ? { known: true, alias: parent }
+      ? { known: true, alias: parent, echo: true }
       : UNKNOWN;
   }
   const assignment =
@@ -453,7 +459,7 @@ function stored(at: Node): Use | undefined {
   if (!assignment) return undefined;
   const declaration = namedVariable(parent.left);
   return declaration !== undefined && answerUse(parent).known
-    ? { known: true, alias: declaration }
+    ? { known: true, alias: declaration, echo: true }
     : UNKNOWN;
 }
 
@@ -483,7 +489,7 @@ function chained(at: Node): Use {
   const flowing = containing(at);
   const user = flowing.top.parent;
   if (!isCallExpression(user) || !onArray(user)) return UNKNOWN;
-  if (flowing.inLiteral) return KNOWN;
+  if (flowing.inLiteral) return CARRIES;
   const first = mutatorInvocation(user)?.args[0];
   const target: Node | undefined = first === undefined ? undefined : outermost(first);
   return target !== undefined && target === flowing.top ? answerUse(user) : UNKNOWN;
@@ -550,18 +556,36 @@ function flowUse(at: Node, subject: Subject): Use {
   return container(user, flowing);
 }
 
-/** A literal that holds the mention and is the initializer of a constant: that constant holds it in turn. */
-function container(user: Node, flowing: { readonly top: Node; readonly inLiteral: boolean }): Use {
-  if (!flowing.inLiteral || !isVariableDeclaration(user) || !isIdentifier(user.name))
-    return UNKNOWN;
+/**
+ * A literal that holds the mention: discarded where a statement is all it is, kept by the constant it
+ * is the initializer of, which holds the mention in turn.
+ */
+function container(user: Node, flowing: Flowing): Use {
+  if (!flowing.inLiteral) return UNKNOWN;
+  if (isExpressionStatement(user)) return KNOWN;
+  if (!isVariableDeclaration(user) || !isIdentifier(user.name)) return UNKNOWN;
   const initializer: Node | undefined = user.initializer;
-  return initializer === flowing.top ? { known: true, alias: user } : UNKNOWN;
+  if (initializer !== flowing.top) return UNKNOWN;
+  return flowing.direct
+    ? { known: true, alias: user, contained: true }
+    : { known: true, alias: user };
+}
+
+/**
+ * Where a node goes: the outermost literal it is written in, through fields, entries and spreads, and
+ * whether that literal holds the node itself, not only what a spread copies out of it.
+ */
+interface Flowing {
+  readonly top: Node;
+  readonly inLiteral: boolean;
+  readonly direct: boolean;
 }
 
 /** The outermost literal a node is written in, through fields, entries and spreads. */
-function containing(node: Node): { readonly top: Node; readonly inLiteral: boolean } {
+function containing(node: Node): Flowing {
   let top: Node = node;
-  let inLiteral = false;
+  let literals = 0;
+  const copied = isSpreadElement(node.parent) || isSpreadAssignment(node.parent);
   for (;;) {
     const { parent } = top;
     const within =
@@ -571,8 +595,9 @@ function containing(node: Node): { readonly top: Node; readonly inLiteral: boole
       isSpreadAssignment(parent) ||
       isParenthesizedExpression(parent);
     const literal = isObjectLiteralExpression(parent) || isArrayLiteralExpression(parent);
-    if (!within && !literal) return { top: outermost(top), inLiteral };
-    inLiteral ||= literal;
+    if (!within && !literal)
+      return { top: outermost(top), inLiteral: literals > 0, direct: !copied || literals > 1 };
+    if (literal) literals += 1;
     top = parent;
   }
 }
@@ -584,25 +609,27 @@ function onArray(call: Node): boolean {
   return target !== undefined && arrayIdentity(target) !== undefined;
 }
 
+/** An array that is the target of a native mutator, whose answer goes where it is known. */
+function targetUse(call: Node, flowing: Flowing, subject: Subject): Use {
+  const followed = subject === 'array' || subject === 'carrier';
+  return followed && !flowing.inLiteral ? answerUse(call) : UNKNOWN;
+}
+
 /**
  * A mention in the arguments of a call. A native mutator of a written array follows its target, its
  * sources, its descriptors and its maps; a mutator of any other object copies or writes, which the
  * compile does not follow for a held object. Another call may do anything with it, but for a native
  * that reads.
  */
-function argumentUse(
-  call: Node,
-  flowing: { readonly top: Node; readonly inLiteral: boolean },
-  subject: Subject,
-): Use {
+function argumentUse(call: Node, flowing: Flowing, subject: Subject): Use {
   if (!isCallExpression(call)) return UNKNOWN;
   const invoked = mutatorInvocation(call);
   if (invoked === undefined)
-    return !flowing.inLiteral && readerArgument(flowing.top) ? KNOWN : UNKNOWN;
+    return flowing.inLiteral || !readerArgument(flowing.top) ? UNKNOWN : KNOWN;
   const position = invoked.args.findIndex((each) => outermost(each) === flowing.top);
   if (position === -1) return UNKNOWN;
-  if (position === 0) return subject === 'array' && !flowing.inLiteral ? answerUse(call) : UNKNOWN;
+  if (position === 0) return targetUse(call, flowing, subject);
+  if (isArray(subject)) return flowing.inLiteral ? UNKNOWN : KNOWN;
   const target = invoked.args[0];
-  if (target !== undefined && arrayIdentity(target) !== undefined) return KNOWN;
-  return subject === 'array' ? KNOWN : UNKNOWN;
+  return target === undefined || arrayIdentity(target) === undefined ? UNKNOWN : KNOWN;
 }

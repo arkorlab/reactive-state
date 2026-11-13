@@ -19,6 +19,7 @@ import {
   isStringLiteral,
   isVariableDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   SyntaxKind,
   type VariableDeclaration,
@@ -26,7 +27,9 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { knownUsesOnly, LOGICAL } from './framed-known-uses.ts';
+import { knownUsesOnly } from './framed-known-mentions.ts';
+import { LOGICAL } from './framed-known-uses.ts';
+import { fieldNamesThis } from './framed-this-functions.ts';
 import { readsBinding } from './scope.ts';
 
 /**
@@ -115,8 +118,27 @@ function atom(value: Expression): boolean {
   );
 }
 
-/** What a literal object stands for: none for a method of a pattern's source, which no reader follows. */
+/** The fields of a descriptor that hold what the array keeps: its getter, its setter and its value. */
+const KEPT: ReadonlySet<string> = new Set(['get', 'set', 'value']);
+
+/**
+ * Whether a field is a function that names `this` and is kept by the array, so that it runs with the
+ * array as `this`: any field of a source, the getter, the setter or the value of a descriptor. Another
+ * field of a descriptor is only read, with the descriptor as `this`.
+ */
+function runsOnArray(field: ObjectLiteralElementLike, role: Role): boolean {
+  if (isSpreadAssignment(field) || !fieldNamesThis(field)) return false;
+  if (role !== 'descriptor') return true;
+  const { name } = field;
+  return !(isIdentifier(name) || isStringLiteral(name)) || KEPT.has(name.text);
+}
+
+/**
+ * What a literal object stands for: none for a method of a pattern's source, which no reader follows,
+ * nor for a function that names `this`, which runs with the array as `this`.
+ */
 function objectOf(value: ObjectLiteralExpression, role: Role): readonly Consulted[] | undefined {
+  if (value.properties.some((each) => runsOnArray(each, role))) return undefined;
   if (role === 'pattern' && value.properties.some((each) => isMethodDeclaration(each)))
     return undefined;
   const inner: Role = role === 'map' ? 'descriptor' : role;

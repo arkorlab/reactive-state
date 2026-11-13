@@ -2471,9 +2471,10 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    // Refused since a literal that holds a followed object is followed no further: `two` holds `one`.
     id: 'define-mutual-write-back-terminates',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = {}; const one: any = { f: () => 'safe' }; const two: any = { f: one }; ({ f: one.f } = two); ({ f: two.f } = one); ({ f: descriptor.get } = one); Object.defineProperty(a, 0, descriptor); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-rest-left-out-field-stays-out',
