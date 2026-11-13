@@ -1418,6 +1418,75 @@ const ELEMENTS = [
       "'safe':",
     ],
   },
+  {
+    id: 'assign-getter-writes-a-key-the-source-lacks-pin',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this[1] = error; return 'safe'; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-map-getter-writes-a-key-the-map-lacks-pin',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.defineProperties(values, { get 0() { this[1] = { value: error }; return { value: 'safe' }; } }); return values; }`,
+    index: undefined,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'assign-getter-writes-an-accessor-slot-pin',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this[1] = error; return 'safe'; }, get 1() { return 'safe'; }, set 1(value: unknown) {} }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", "'safe':"],
+  },
+  {
+    id: 'define-map-getter-writes-an-accessor-slot-pin',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.defineProperties(values, { get 0() { this[1] = { value: error }; return { value: 'safe' }; }, get 1() { return { value: 'safe' }; }, set 1(value: unknown) {} }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", "'safe':"],
+  },
+  {
+    id: 'assign-getter-writes-a-slot-whose-setter-writes',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this[1] = 0; return 'safe'; }, get 1() { return 'safe'; }, set 1(value: unknown) { this[2] = error; }, 2: 'safe' }); return values; }`,
+    index: undefined,
+    elements: [
+      "{ get 0() { this[1] = 0; return 'safe'; }, get 1() { return 'safe'; }, set 1(value: unknown) { this[2] = error; }, 2: 'safe' }:0",
+      "'safe':",
+      "'safe':",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-runs-a-named-setter-that-writes',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { this.activate = 0; return 'safe'; }, set activate(value: unknown) { this[1] = error; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: [
+      "{ get 0() { this.activate = 0; return 'safe'; }, set activate(value: unknown) { this[1] = error; }, 1: 'safe' }:0",
+      "'safe':",
+      "'safe':",
+    ],
+  },
+  {
+    id: 'assign-getter-write-in-a-dead-branch-pin',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { if (false) this[1] = error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ["'safe':", "'safe':"],
+  },
+  {
+    id: 'assign-getter-write-in-a-live-branch',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { get 0() { if (true) this[1] = error; return 'safe'; }, 1: 'safe' }); return values; }`,
+    index: undefined,
+    elements: ['error:', "'safe':", "'safe':"],
+  },
+  {
+    id: 'assign-getter-computed-write-overwritten-pin',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { ...{ get 0() { this[key] = error; return 'safe'; }, 1: 'safe', 2: 'safe' }, 1: 'kept', 2: 'kept' }); return values; }`,
+    index: 1,
+    elements: ["'kept':"],
+  },
+  {
+    id: 'assign-getter-computed-write-not-overwritten',
+    source: `function frames(error: Error, key: '1' | '2') { const values: unknown[] = ['safe']; Object.assign(values, { ...{ get 0() { this[key] = error; return 'safe'; }, 1: 'safe', 2: 'safe' }, 1: 'kept' }); return values; }`,
+    index: 1,
+    elements: ["'kept':"],
+  },
 ] as const;
 
 describe('descriptors built from constants that spread each other', () => {

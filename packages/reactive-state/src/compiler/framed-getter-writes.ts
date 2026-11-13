@@ -32,6 +32,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { frameMemberName } from './framed-bindings.ts';
+import { framedPossibleBranch } from './framed-writes.ts';
 
 /** What a getter the copy of a spread runs writes into the object it runs on. */
 
@@ -65,6 +66,7 @@ export function getterWrites(getter: GetAccessorDeclaration): readonly GetterWri
   const writes: GetterWrite[] = [];
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (!framedPossibleBranch(node)) continue;
     if (node.kind === SyntaxKind.ThisKeyword) {
       const used = use(node);
       if (used === undefined) return undefined;
