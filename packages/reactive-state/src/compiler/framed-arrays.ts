@@ -47,7 +47,7 @@ import {
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { deletedFrom } from './framed-deleted-methods.ts';
+import { afterDeletion, deletedFrom, deletedReceiver } from './framed-deleted-methods.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
@@ -381,7 +381,7 @@ function unprovenWrites(
     : definedMethods(node, writes.root, { previous: writes.own });
   const deleting = isDeleteExpression(node);
   const assigns = sure && !deleting && defined === undefined && writesExactly(node, writes.root);
-  const how = { sure, assigns, deleting, defined };
+  const how = { sure, assigns, deleting, defined, deleted: deletedReceiver(node) };
   for (const key of keys)
     if (selected === undefined || !writtenAfterSelection(node, key, selected))
       writes.own.set(key, afterWrite(key, how, writes));
@@ -408,12 +408,14 @@ function afterWrite(
     readonly assigns: boolean;
     readonly deleting: boolean;
     readonly defined: OwnMethods | undefined;
+    readonly deleted: Expression | undefined;
   },
   writes: MethodWrites,
 ): ArrayMethodOverride {
   const previous = writes.own.get(key);
   if (how.assigns && writes.held?.has(key) !== true) return afterAssignment(previous);
-  const written = how.deleting ? undefined : (how.defined ?? writes.own).get(key);
+  if (how.deleting) return afterDeletion(how, previous, writes.root);
+  const written = (how.defined ?? writes.own).get(key);
   return how.sure ? afterSureWrite(written) : afterPossibleWrite(previous, written);
 }
 
