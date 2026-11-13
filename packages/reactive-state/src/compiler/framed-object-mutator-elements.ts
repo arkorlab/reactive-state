@@ -195,6 +195,17 @@ function definedProperty(
 }
 
 /**
+ * Where a spread may hold the descriptor: at the second place of the arguments, where the key is a
+ * written one before it, the first place; a spread the first of those that were written out may be
+ * empty, and the key is there, the second place is the descriptor's, and where one before it holds
+ * the key alone, the first.
+ */
+function spreadSlots(written: number, spread: boolean): readonly string[] {
+  if (written > 0) return ['0'];
+  return spread ? ['0', '1'] : ['1'];
+}
+
+/**
  * Every argument that may take the descriptor's position: a spread may be empty, so each argument
  * up to the second written one may be preceded by the key alone.
  */
@@ -208,8 +219,8 @@ function descriptorCandidates(
   for (const argument of args) {
     if (written > 1) break;
     if (isSpreadElement(argument)) {
-      const keys = [written === 0 && !spread ? '1' : '0', 'value'];
-      found.push({ value: argument.expression, keys });
+      for (const slot of spreadSlots(written, spread))
+        found.push({ value: argument.expression, keys: [slot, 'value'] });
       spread = true;
     } else {
       if (spread || written === 1) found.push(...descriptorValues(argument, reading));

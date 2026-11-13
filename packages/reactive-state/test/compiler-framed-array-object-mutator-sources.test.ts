@@ -282,7 +282,7 @@ const ELEMENTS = [
     id: 'define-two-spreads-then-descriptor',
     source: `function frames(error: Error, keys: [number], more: PropertyDescriptor[]) { ${VALUES} Object.defineProperty(values, ...keys, ...more, { value: error }); return values; }`,
     index: undefined,
-    elements: ['keys:1.value', 'more:0.value', 'error:'],
+    elements: ['keys:1.value', 'more:0.value', 'more:1.value', 'error:'],
   },
   {
     id: 'define-spread-then-extra-arguments',
