@@ -1,6 +1,7 @@
 import {
   type BinaryExpression,
   type Expression,
+  type Identifier,
   type CallExpression,
   type Node,
   type VariableDeclaration,
@@ -98,7 +99,9 @@ export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
   const root = literalArrayBinding(value);
   if (root === undefined || !isVariableDeclaration(root)) return false;
   const owner = executionOwner(read);
-  if (!knownUsesOnly(root, 'array', (name) => possibleBefore(name, read, owner, root))) return true;
+  const relevant = (name: Identifier): boolean =>
+    possibleBefore(name, read, owner, root) && framedPossibleBranch(name);
+  if (!knownUsesOnly(root, 'array', relevant)) return true;
   const held: VariableDeclaration[] = [];
   const known = candidatesOf(root, read).every((node) => {
     const invoked = isCallExpression(node) ? mutatorInvocation(node) : undefined;

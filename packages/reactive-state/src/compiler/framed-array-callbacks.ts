@@ -1,5 +1,6 @@
 import {
   type CallExpression,
+  type Expression,
   isArrowFunction,
   isFunctionExpression,
   isIdentifier,
@@ -9,6 +10,65 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { nativePath } from './framed-mutator-calls.ts';
+
+/** The methods of an array that the language gives it: those a call of which runs no code of the program. */
+export const ARRAY_METHODS: ReadonlySet<string> = new Set(
+  Object.getOwnPropertyNames(Array.prototype).filter((name) => {
+    return (
+      name !== 'constructor' &&
+      typeof (Array.prototype as unknown as Record<string, unknown>)[name] === 'function'
+    );
+  }),
+);
+
+/** The natives that read their arguments and run no application code on them. */
+export const READERS: ReadonlySet<string> = new Set([
+  'Array.isArray',
+  'Number.isFinite',
+  'Number.isInteger',
+  'Number.isNaN',
+  'Object.getOwnPropertyDescriptor',
+  'Object.getOwnPropertyDescriptors',
+  'Object.getOwnPropertyNames',
+  'Object.isExtensible',
+  'Object.isFrozen',
+  'Object.isSealed',
+  'Object.keys',
+]);
+
+/** The natives that convert an array to text or copy its elements, running its own methods. */
+export const CONVERTERS: ReadonlySet<string> = new Set([
+  'Array.from',
+  'Boolean',
+  'JSON.stringify',
+  'Number',
+  'Object.entries',
+  'Object.values',
+  'String',
+]);
+
+/** The parts of the path of a borrowed method: `Array.prototype.join.call`. */
+const BORROWED_PATH = 4;
+
+/** A native method of an array a call borrows: `Array.prototype.join.call(array, …)` or `.apply`. */
+export interface Borrowed {
+  readonly name: string;
+  readonly apply: boolean;
+  readonly receiver: Expression;
+}
+
+/** The method a call borrows from the array prototype, and the receiver it is given. */
+export function borrowedMethod(call: CallExpression): Borrowed | undefined {
+  const path = nativePath(call.expression)?.split('.');
+  const [receiver] = call.arguments;
+  if (receiver === undefined || path?.length !== BORROWED_PATH) return undefined;
+  const [owner, prototype, name, how] = path;
+  if (name === undefined || !ARRAY_METHODS.has(name)) return undefined;
+  const borrows = owner === 'Array' && prototype === 'prototype';
+  return borrows && (how === 'call' || how === 'apply')
+    ? { name, apply: how === 'apply', receiver }
+    : undefined;
+}
 
 /** The place of the array among the parameters of a reducer: after the accumulator, the element and the index. */
 const REDUCER_ARRAY = 3;
@@ -29,18 +89,23 @@ const ARRAY_PARAMETER: ReadonlyMap<string, number> = new Map([
   ['some', 2],
 ]);
 
+/** Whether a method calls a function back, and may hand it the array. */
+export function callsBack(name: string): boolean {
+  return ARRAY_PARAMETER.has(name);
+}
+
 /**
  * Whether a method calls a function back with the array as an argument: a function of the program
  * that has a parameter for it (a rest parameter or `arguments` among them), or any callback that is
- * not written out, which may be one.
+ * not written out, which may be one. The callback is the argument at `from`.
  */
-export function handsArray(call: CallExpression, name: string): boolean {
+export function handsArray(call: CallExpression, name: string, from = 0): boolean {
   const position = ARRAY_PARAMETER.get(name);
-  const [first] = call.arguments;
+  const first = call.arguments[from];
   if (position === undefined || first === undefined) return false;
   const callback = unwrapped(first);
   if (!isArrowFunction(callback) && !isFunctionExpression(callback))
-    return call.arguments.length > 1 || nativePath(first) === undefined;
+    return call.arguments.length > from + 1 || nativePath(first) === undefined;
   return (
     callback.parameters.length > position ||
     callback.parameters.some((each) => each.dotDotDotToken !== undefined) ||
