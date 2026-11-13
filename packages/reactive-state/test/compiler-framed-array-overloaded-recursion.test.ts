@@ -37,6 +37,51 @@ const CASES = [
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const read = (again: number) => ''; if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
     converts: false,
   },
+  {
+    id: 'overloads-in-a-switch-case',
+    source: `function frames(error: Error) { const values = [error]; switch (0) { case 0: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
+    converts: true,
+  },
+  {
+    id: 'overloads-in-a-switch-default',
+    source: `function frames(error: Error) { const values = [error]; switch (1) { default: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
+    converts: true,
+  },
+  {
+    id: 'overloads-in-a-later-switch-case',
+    source: `function frames(error: Error) { const values = [error]; switch (2) { case 1: break; case 2: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
+    converts: true,
+  },
+  {
+    id: 'overloads-in-a-block',
+    source: `function frames(error: Error) { const values = [error]; { function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } }`,
+    converts: true,
+  },
+  {
+    id: 'overloads-in-a-class-static-block',
+    source: `declare const error: Error; const values: unknown[] = [error]; class Holder { static { function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } read(0); } }`,
+    converts: true,
+  },
+  {
+    id: 'overloads-in-a-namespace',
+    source: `declare const error: Error; const values: unknown[] = [error]; namespace Reader { export function read(pass: number): string; export function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } }`,
+    converts: true,
+  },
+  {
+    id: 'overloads-exported',
+    source: `declare const error: Error; const values: unknown[] = [error]; export function read(pass: number): string; export function read(pass: number, extra?: number): string { ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; }`,
+    converts: true,
+  },
+  {
+    id: 'switch-overloads-that-do-not-call-themselves-pin',
+    source: `function frames(error: Error) { const values = [error]; switch (0) { case 0: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
+    converts: false,
+  },
+  {
+    id: 'switch-overloads-whose-name-a-local-takes-pin',
+    source: `function frames(error: Error) { const values = [error]; switch (0) { case 0: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const read = (again: number) => ''; if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
+    converts: false,
+  },
 ] as const;
 
 describe('a function declared with overloads', () => {
