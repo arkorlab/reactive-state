@@ -28,6 +28,7 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { possibleKey } from './framed-mutator-keys.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
+import { madeWithin } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -85,11 +86,22 @@ export function writtenArrayElements(
 function possibleBefore(node: Node, read: Node, owner: Node, root: FrameBinding): boolean {
   const writer = executionOwner(node);
   return writer === owner
-    ? node.pos < read.pos ||
+    ? (node.pos < read.pos && !writesAfterOperands(node, read, root, owner)) ||
         evaluatedWithin(node, read) ||
         destructuredFirst(node, read) ||
         repeatedFrameRead(node, read, root, owner)
     : !unreferencedLocalFunction(writer, owner);
+}
+
+/**
+ * Whether a write that holds the read among its operands runs after it: the operands of a call or an
+ * assignment run before the write the call or the assignment makes, as `a.push(String(a), error)`
+ * reads the array as it was. A function that is run again, or a loop, brings an earlier pass's write
+ * back to the read, so the array must be one each run makes, and the loop not repeat it.
+ */
+function writesAfterOperands(node: Node, read: Node, root: FrameBinding, owner: Node): boolean {
+  const holds = node !== read && node.pos <= read.pos && read.end <= node.end;
+  return holds && madeWithin(root, owner) && !repeatedFrameRead(node, read, root, owner);
 }
 
 /** A write the read evaluates first, unless a written left operand short-circuits past it. */
