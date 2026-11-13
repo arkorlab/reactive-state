@@ -62,6 +62,7 @@ import {
 import { arrayIdentity } from './framed-array-identity.ts';
 import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
+import { iterates } from './framed-iterated-uses.ts';
 import { mutatorInvocation, nativePath } from './framed-mutator-calls.ts';
 import { namesThis } from './framed-this-functions.ts';
 
@@ -187,6 +188,7 @@ export function classify(name: Identifier, subject: Subject): Use {
     handed = true;
   }
   const { parent } = at;
+  if ((handed || subject === 'held' || subject === 'box') && iterates(at)) return UNKNOWN;
   if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at, subject);
   if (isSpreadAssignment(parent)) return SPREADS;
   if (discarded(at)) return KNOWN;
