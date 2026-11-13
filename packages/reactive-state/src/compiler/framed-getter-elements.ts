@@ -11,7 +11,7 @@ import {
 
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { getterWrites } from './framed-getter-writes.ts';
+import { deletedNames, getterWrites } from './framed-getter-writes.ts';
 import { isSymbolKey, possibleKey, slotKey } from './framed-mutator-keys.ts';
 import { namesThis } from './framed-this-functions.ts';
 
@@ -73,7 +73,9 @@ type Slot = 'absent' | 'accessor' | 'data' | 'setter';
  * accessor, whose setter an assignment runs instead (a getter alone swallows it); a setter that names
  * `this`, which writes as it likes. A spread may give the name a value, and a field whose name is
  * computed may be any field: such a field adds what it may make of the field to what it may have
- * been, and the fields written after it, by name, make what they make of each.
+ * been, and the fields written after it, by name, make what they make of each. An accessor of the
+ * object that deletes the name, or any name, may have removed the field before the assignment, which
+ * then makes a value.
  */
 function slotsOf(literal: ObjectLiteralExpression | undefined, name: string): ReadonlySet<Slot> {
   if (literal === undefined) return new Set<Slot>(['data']);
@@ -86,6 +88,8 @@ function slotsOf(literal: ObjectLiteralExpression | undefined, name: string): Re
     else if (isSpreadAssignment(property)) slots.add('data');
     else for (const each of made) slots.add(each);
   }
+  const deleted = deletedNames(literal);
+  if (deleted.includes(undefined) || deleted.includes(name)) slots.add('data');
   return slots;
 }
 
