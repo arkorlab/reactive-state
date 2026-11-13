@@ -3486,6 +3486,41 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const k: any[] = ['safe']; Object.defineProperty(a, k, { value: 'x' }); return String(k); }`,
     converts: false,
   },
+  {
+    id: 'json-replacer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a, (k: string, v: any) => { if (k === '') v[0] = error; return v; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-replacer-held-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r = (k: string, v: any) => { if (k === '') v[0] = error; return v; }; JSON.stringify(a, r); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-replacer-function-expression-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a, function (this: any, k: string, v: any) { if (k === '') v[0] = error; return v; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-undefined-replacer-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a, undefined, 2); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-allowlist-replacer-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a, ['0']); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'json-null-replacer-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a, null, 2); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'json-plain-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; JSON.stringify(a); return String(a); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {

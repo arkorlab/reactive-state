@@ -7,6 +7,7 @@ import {
   isIdentifier,
   isTypeNode,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -71,6 +72,17 @@ export function isFirstArgument(call: Node, at: Node): call is CallExpression {
   if (!isCallExpression(call)) return false;
   const first: Node | undefined = call.arguments[0];
   return first === at;
+}
+
+/**
+ * Whether a native reads or converts its first argument and calls no function of the program with it:
+ * the replacer of `JSON.stringify`, its second argument, is called with the value it converts.
+ */
+export function readsWithoutCallback(call: CallExpression, path: string): boolean {
+  if (!READERS.has(path) && !CONVERTERS.has(path)) return false;
+  const replacer: Expression | undefined =
+    path === 'JSON.stringify' ? call.arguments[1] : undefined;
+  return replacer === undefined || unwrapped(replacer).kind === SyntaxKind.NullKeyword;
 }
 
 /** The parts of the path of a borrowed method: `Array.prototype.join.call`. */
