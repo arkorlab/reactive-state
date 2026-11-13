@@ -61,16 +61,10 @@ const CASES = [
     values: undefined,
   },
   {
-    id: 'super-in-an-inherited-getter-writes-over-own-field',
+    id: 'super-in-an-inherited-getter-refuses',
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} let sink: unknown; return Object.fromEntries([entry], ({ [first]: sink, [name]: entry[1] } = { __proto__: { get trigger() { super.field = error; return 0; } }, field: 'kept' })); }`,
     key: 'message',
-    values: [
-      "'kept':",
-      "'safe':",
-      '{ get trigger() { super.field = error; return 0; } }:',
-      '0:',
-      'error:',
-    ],
+    values: undefined,
   },
   {
     id: 'super-read-pin',
@@ -83,6 +77,30 @@ const CASES = [
     source: `function frames(error: Error, name: string, first: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { const inner = { method() { super.field = error; } }; return inner; } } })); }`,
     key: 'message',
     values: ["'kept':", "'safe':", 'inner:'],
+  },
+  {
+    id: 'super-write-where-the-prototype-has-a-setter-refuses',
+    source: `function frames(error: Error, name: string, first: string) { ${ENTRY} let sink: unknown; return Object.fromEntries([entry], ({ [first]: sink, [name]: entry[1] } = { __proto__: { set field(value: unknown) { this.other = error; } }, other: 'kept', get trigger() { super.field = 0; return 0; } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'super-write-where-the-file-may-change-the-prototype-refuses',
+    source: `function frames(error: Error, name: string, proto: object) { ${ENTRY} Object.setPrototypeOf(entry, proto); return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { super.field = error; return 0; } } })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'super-read-where-the-prototype-may-have-a-getter-refuses',
+    source: `function frames(error: Error, name: string, key: string) { ${ENTRY} return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', ...{ get trigger() { return super[key]; } }, ['__proto__']: null })); }`,
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'super-write-where-the-prototype-is-computed-refuses',
+    source: `function frames(error: Error, name: string) { ${ENTRY} const holder: any = {}; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: 'kept', get trigger() { super.field = error; return 0; }, ...Object[name](holder) })); }`,
+    key: 'message',
+    values: undefined,
   },
 ] as const;
 

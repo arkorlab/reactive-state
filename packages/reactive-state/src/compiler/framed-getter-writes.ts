@@ -32,6 +32,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { frameMemberName } from './framed-bindings.ts';
+import { prototypeMayChange } from './framed-prototype-changes.ts';
 
 /** What a getter the copy of a spread runs writes into the object it runs on. */
 
@@ -60,12 +61,15 @@ export interface GetterWrite {
  * to a member of `this`, under the name of the member. A deletion writes none, and an arithmetic
  * assignment or an increment writes a number or a text, which is no object. None where `this` is
  * given to anything else: a call, a method, a pattern, a loop head, a list, the result of the
- * getter.
+ * getter. None where `super` is used and the file may give an object another prototype: what a
+ * member of `super` reads or sets is then a getter or a setter that runs with the same receiver.
  */
 export function getterWrites(getter: GetAccessorDeclaration): readonly GetterWrite[] | undefined {
   const writes: GetterWrite[] = [];
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (node.kind === SyntaxKind.SuperKeyword && prototypeMayChange(node.getSourceFile()))
+      return undefined;
     if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) {
       const used = use(node);
       if (used === undefined) return undefined;
