@@ -100,6 +100,21 @@ const CASES = [
     source: `${HEAD} values.join = () => 'safe'; delete values.toString; return String(values); }`,
     converts: false,
   },
+  {
+    id: 'delete-after-a-native-method-is-given-to-the-array-prototype-pin',
+    source: `${HEAD} Array.prototype.toString = Array.prototype.join; values.join = () => 'safe'; delete values.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-delete-after-a-native-method-is-given-to-the-array-prototype-pin',
+    source: `${HEAD} Array.prototype.toString = Array.prototype.join; values.join = () => 'safe'; void delete values.toString; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'delete-after-a-definition-on-the-array-prototype-pin',
+    source: `${HEAD} Object.defineProperty(Array.prototype, 'toString', { value: Array.prototype.join, configurable: true }); values.join = () => 'safe'; void delete values.toString; return String(values); }`,
+    converts: true,
+  },
 ] as const;
 
 describe('a deletion of a method nested in another expression', () => {

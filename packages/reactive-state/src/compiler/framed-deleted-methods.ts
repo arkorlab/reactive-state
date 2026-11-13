@@ -2,11 +2,8 @@ import {
   type Expression,
   isDeleteExpression,
   isElementAccessExpression,
-  isIdentifier,
   isPropertyAccessExpression,
-  isStringLiteral,
   type Node,
-  type SourceFile,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -17,6 +14,7 @@ import {
   afterSureWrite,
 } from './framed-array-own-methods.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { prototypeMayChange } from './framed-prototype-changes.ts';
 
 /**
  * What a deletion leaves: the inherited method, where it deletes from the array itself a property it can
@@ -33,25 +31,6 @@ export function deletedFrom(
   const gone =
     arrayIdentity(receiver) === root && deletable && !prototypeMayChange(root.getSourceFile());
   return gone ? { own: false, inherited: true } : { own: false };
-}
-
-const PROTOTYPE_CHANGES = new WeakMap<SourceFile, boolean>();
-
-/** Whether a file may give an array another prototype: it names `__proto__` or `setPrototypeOf`. */
-function prototypeMayChange(file: SourceFile): boolean {
-  const known = PROTOTYPE_CHANGES.get(file);
-  if (known !== undefined) return known;
-  let found = false;
-  const pending: Node[] = [file];
-  for (let node = pending.pop(); node !== undefined && !found; node = pending.pop()) {
-    const name = isIdentifier(node) || isStringLiteral(node) ? node.text : undefined;
-    found = name === '__proto__' || name === 'setPrototypeOf';
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  PROTOTYPE_CHANGES.set(file, found);
-  return found;
 }
 
 /** The array a deletion that names its method deletes from, none where the key is not written out. */
