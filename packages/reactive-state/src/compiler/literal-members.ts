@@ -1,17 +1,25 @@
 import {
   type Expression,
   isArrowFunction,
+  isBinaryExpression,
   isClassExpression,
   isComputedPropertyName,
+  isAsExpression,
+  isConditionalExpression,
   isFunctionExpression,
   isIdentifier,
   isMethodDeclaration,
+  isSatisfiesExpression,
+  isParenthesizedExpression,
+  isNonNullExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  isTypeAssertion,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -25,6 +33,53 @@ import { unwrapped } from './bounded.ts';
  */
 export type Member = 'absent' | 'function' | 'unknown';
 
+/**
+ * What `expression` evaluates to, past what hands its value on as it is: the parentheses, the casts
+ * — in angle brackets too, which `unwrapped` leaves — the `!`, and a comma's first operands. This is
+ * the one place that decides it: what a call calls, what an object's entry holds, what names it.
+ */
+export function peeled(expression: Expression): Expression {
+  let each = unwrapped(expression);
+  for (;;) {
+    if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
+      each = unwrapped(each.right);
+    } else if (isTypeAssertion(each)) {
+      each = unwrapped(each.expression);
+    } else {
+      return each;
+    }
+  }
+}
+
+/**
+ * Where the value of `node` goes, the counterpart of `peeled`: what it stands in (`parent`), as `at`,
+ * past what hands it on — the parentheses, the casts, the `!`, a comma's last operand — and what
+ * chooses it or another, a condition's branches, `||`, `??`, `&&`.
+ */
+export function valueUse(node: Node): { readonly at: Node; readonly parent: Node } {
+  let at = node;
+  for (;;) {
+    const { parent } = at;
+    const kind = isBinaryExpression(parent) ? parent.operatorToken.kind : undefined;
+    const hands =
+      isParenthesizedExpression(parent) ||
+      isAsExpression(parent) ||
+      isSatisfiesExpression(parent) ||
+      isNonNullExpression(parent) ||
+      isTypeAssertion(parent) ||
+      (isConditionalExpression(parent) && parent.condition !== at) ||
+      (isBinaryExpression(parent) &&
+        (kind === SyntaxKind.BarBarToken ||
+          kind === SyntaxKind.QuestionQuestionToken ||
+          kind === SyntaxKind.AmpersandAmpersandToken ||
+          (kind === SyntaxKind.CommaToken && parent.right === at)));
+    if (!hands) {
+      return { at, parent };
+    }
+    at = parent;
+  }
+}
+
 /** The name an entry of an object written gives, where the code writes it; none of a computed one or a spread. */
 function nameOf(
   property: ObjectLiteralElementLike,
@@ -37,12 +92,27 @@ function nameOf(
   if (isIdentifier(name)) {
     return name.text;
   }
-  return textOf(isComputedPropertyName(name) ? unwrapped(name.expression) : name);
+  return textOf(isComputedPropertyName(name) ? peeled(name.expression) : name);
 }
 
-/** Whether `expression` is a function the code writes, which is not the function's own method. */
+/**
+ * Whether `expression` is a function the code writes, whichever way it gives it: past what hands a
+ * value on (`peeled`), and either of two it chooses between — a condition, `||`, `??` — both of which
+ * are; not `&&`, which gives its second where its first is a function, which is no function written.
+ */
 function isWrittenFunction(expression: Expression): boolean {
-  const each = unwrapped(expression);
+  const each = peeled(expression);
+  if (isConditionalExpression(each)) {
+    return isWrittenFunction(each.whenTrue) && isWrittenFunction(each.whenFalse);
+  }
+  if (isBinaryExpression(each)) {
+    const { kind } = each.operatorToken;
+    return (
+      (kind === SyntaxKind.BarBarToken || kind === SyntaxKind.QuestionQuestionToken) &&
+      isWrittenFunction(each.left) &&
+      isWrittenFunction(each.right)
+    );
+  }
   return isFunctionExpression(each) || isArrowFunction(each) || isClassExpression(each);
 }
 

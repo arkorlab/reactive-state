@@ -27,11 +27,10 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
-import { memberOf, setsPrototype } from './literal-members.ts';
+import { memberOf, peeled, setsPrototype, valueUse } from './literal-members.ts';
 import { localClassValueBinding } from './local-type-aliases.ts';
 import { readsBinding } from './scope.ts';
-import { isTakenApart, useOf } from './uses.ts';
+import { isTakenApart } from './uses.ts';
 
 /** What a constant the code declares is, where nothing changes it or hands it on: what it was made of. */
 
@@ -75,7 +74,7 @@ function mayChange(
   if (isPropertyAccessExpression(member)) {
     name = member.name.text;
   } else if (isElementAccessExpression(member)) {
-    name = textOf(unwrapped(member.argumentExpression));
+    name = textOf(peeled(member.argumentExpression));
   }
   const own = name === undefined ? 'unknown' : memberOf(literal, name, textOf);
   return called ? own === 'unknown' : own !== 'function' && setsPrototype(literal, textOf);
@@ -91,14 +90,14 @@ function readsMember(
   literal: ObjectLiteralExpression | undefined,
   textOf: TextOf,
 ): boolean {
-  const { at, parent } = useOf(read);
+  const { at, parent } = valueUse(read);
   if (
     !(isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) ||
     parent.expression !== at
   ) {
     return false;
   }
-  const { at: member, parent: outer } = useOf(parent);
+  const { at: member, parent: outer } = valueUse(parent);
   const called =
     ((isCallExpression(outer) || isNewExpression(outer)) && outer.expression === member) ||
     (isTaggedTemplateExpression(outer) && outer.tag === member);
@@ -128,7 +127,7 @@ function isExported(declaration: VariableDeclaration): boolean {
  */
 function isHeld(declaration: VariableDeclaration, name: string, textOf: TextOf): boolean {
   const initializer =
-    declaration.initializer === undefined ? undefined : unwrapped(declaration.initializer);
+    declaration.initializer === undefined ? undefined : peeled(declaration.initializer);
   const literal =
     initializer !== undefined && isObjectLiteralExpression(initializer) ? initializer : undefined;
   let scope: Node = declaration.parent;

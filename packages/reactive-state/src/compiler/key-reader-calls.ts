@@ -3,21 +3,17 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
-  isTypeAssertion,
   type Node,
   type ObjectLiteralExpression,
-  SyntaxKind,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
-import { memberOf } from './literal-members.ts';
+import { memberOf, peeled } from './literal-members.ts';
 
 /**
  * Where a call reads a member of what it is given by a key the code writes: of a function of the
@@ -100,27 +96,10 @@ function joined(given: Args, args: Args): Args {
   return given.open ? { items: [...given.items, ...args.items], open: args.open } : given;
 }
 
-/**
- * What a call calls, past the parentheses, the casts and a comma's first operands around it — `(0,
- * Reflect.get.bind(null, fn))`, `(<any>Reflect.get.bind(null, fn))`, which `unwrapped` leaves.
- */
-function calledOf(expression: Expression): Expression {
-  let each = unwrapped(expression);
-  for (;;) {
-    if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
-      each = unwrapped(each.right);
-    } else if (isTypeAssertion(each)) {
-      each = unwrapped(each.expression);
-    } else {
-      return each;
-    }
-  }
-}
-
 /** The keys written in `items`, given to a call, past what `apply` takes apart: `'constructor'` of `[fn, 'constructor']`. */
 function written(items: readonly Expression[], reading: Reading, found: Set<Node>): void {
   for (const item of items) {
-    const each = calledOf(item);
+    const each = peeled(item);
     if (reading.textOf(each) === 'constructor') {
       found.add(item);
     } else if (isArrayLiteralExpression(each)) {
@@ -160,7 +139,7 @@ class Calls {
     if (list === undefined) {
       return { items: [], open };
     }
-    const array = calledOf(list);
+    const array = peeled(list);
     return isArrayLiteralExpression(array) ? argsOf(array.elements) : { items: [], open: false };
   }
 
@@ -169,7 +148,7 @@ class Calls {
     if (expression === undefined) {
       return undefined;
     }
-    const each = calledOf(expression);
+    const each = peeled(expression);
     if (isCallExpression(each)) {
       const made = this.madeBy(each);
       return made?.kind === 'made' ? made.fn : undefined;
@@ -197,7 +176,7 @@ class Calls {
     if (isPropertyAccessExpression(callee)) {
       method = callee.name.text;
     } else if (isElementAccessExpression(callee)) {
-      method = this.#reading.textOf(unwrapped(callee.argumentExpression));
+      method = this.#reading.textOf(peeled(callee.argumentExpression));
     }
     if (
       method === undefined ||
@@ -217,7 +196,7 @@ class Calls {
    * inherited from what has none.
    */
   #owns(expression: Expression, method: string, depth: number): boolean {
-    const each = calledOf(expression);
+    const each = peeled(expression);
     if (isObjectLiteralExpression(each)) {
       return this.#literalOwns(each, method);
     }
@@ -272,7 +251,7 @@ class Calls {
 
   /** What a call comes to, where the code writes the function it calls and the `this` of it. */
   madeBy(call: CallExpression): Outcome | undefined {
-    const callee = calledOf(call.expression);
+    const callee = peeled(call.expression);
     const args = argsOf(call.arguments);
     const method = this.#methodOf(callee);
     if (method !== undefined) {

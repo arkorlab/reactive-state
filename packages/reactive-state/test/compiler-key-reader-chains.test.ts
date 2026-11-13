@@ -502,6 +502,139 @@ const CASES = [
       "return ({ ...{ call: run.call }, call: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
     what: 'the method of an earlier spread that a later function overrides',
   },
+  // A function an object writes for the member, wrapped as the language runs through: it is the member's own.
+  {
+    reads: [],
+    source: "return ({ call: (() => 42) }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function in parentheses',
+  },
+  {
+    reads: [],
+    source: "return ({ call: (0, () => 42) }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function past a comma',
+  },
+  {
+    reads: [],
+    source: "return ({ call: <any>(() => 42) }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function in a cast in angle brackets',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ call: (() => 42) as any }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function in a cast',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ call: ((() => 42) satisfies () => number)! }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function past `satisfies` and a non-null assertion',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ call: text ? () => 42 : () => 43 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function either of two a condition gives',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ call: (() => 42) || (() => 43) }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function either of two `||` gives',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ call: (() => 42) ?? (() => 43) }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function either of two `??` gives',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ [(0, 'call')]: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function for a name written past a comma',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ [<any>'call']: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a function for a name in a cast in angle brackets',
+  },
+  {
+    reads: ["({ call: (0, run.call) }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ call: (0, run.call) }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'the method past a comma',
+  },
+  {
+    reads: ["({ call: <any>run.call }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ call: <any>run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'the method in a cast in angle brackets',
+  },
+  {
+    reads: ["({ call: (() => 42) && run.call }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ call: (() => 42) && run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'the method a function and `&&` give',
+  },
+  {
+    reads: ["({ call: run.call || (() => 42) }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ call: run.call || (() => 42) }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'the method or a function, `||`',
+  },
+  {
+    reads: [
+      "({ call: text ? () => 42 : run.call }).call.call(Reflect.get, null, run, 'constructor')",
+    ],
+    source:
+      "return ({ call: text ? () => 42 : run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a function or the method, a condition gives',
+  },
+  {
+    reads: ["({ [(0, 'call')]: run.call }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ [(0, 'call')]: run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'the method for a name written past a comma',
+  },
+  // A constant read through what hands its value on: it is the constant, read or handed on.
+  {
+    reads: [],
+    source:
+      "const helper = { call: () => 42 };\n  return (0, helper).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant read for a member past a comma',
+  },
+  {
+    reads: [],
+    source:
+      "const helper = { call: () => 42 };\n  return (<any>helper).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant read for a member in a cast in angle brackets',
+  },
+  {
+    reads: [],
+    source:
+      "const helper = { call: () => 42 };\n  return ((helper) as any).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant read for a member in a cast and parentheses',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held: any = { call: () => 42 };\n  const copy = (0, held);\n  copy.call = run.call;\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant handed on past a comma, and changed by what it was handed to',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held: any = { call: () => 42 };\n  const copy = text ? held : obj;\n  copy.call = run.call;\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant handed on by a condition, and changed by what it was handed to',
+  },
+  {
+    reads: ["held.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const held: any = { call: () => 42 };\n  const copy = held || obj;\n  copy.call = run.call;\n  return held.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant handed on by `||`, and changed by what it was handed to',
+  },
   // A constant whose methods change what it is, or may: its members are not read as it was written.
   {
     reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
