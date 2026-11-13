@@ -32,7 +32,12 @@ import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
 import { consultedKnown } from './framed-known-forms.ts';
 import { knownUsesOnly } from './framed-known-mentions.ts';
-import { type MutatorInvocation, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
+import {
+  type MutatorInvocation,
+  mutatorInvocation,
+  PATHS,
+  soleTarget,
+} from './framed-mutator-calls.ts';
 import { possibleKey } from './framed-mutator-keys.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -229,7 +234,9 @@ function elementSources(
   if (!isCallExpression(node)) return [];
   const mutated = objectMutatorElements(node, index);
   if (mutated !== undefined)
-    return literalArrayBinding(mutated.target) === root ? mutated.elements : [];
+    return mutated.targets.some((target) => literalArrayBinding(target) === root)
+      ? mutated.elements
+      : [];
   const borrowed = borrowedElements(node, root);
   if (borrowed !== undefined) return borrowed;
   const member = unwrapped(node.expression);
@@ -313,7 +320,7 @@ function literalArrayBinding(node: Expression): FrameBinding | undefined {
     root = selected.binding;
     seen.add(root);
     if (root.initializer === undefined) return undefined;
-    value = unwrapped(root.initializer);
+    value = soleTarget(unwrapped(root.initializer));
   }
   return isArrayLiteralExpression(value) ? root : undefined;
 }
