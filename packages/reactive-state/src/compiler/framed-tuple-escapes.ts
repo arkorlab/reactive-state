@@ -2,17 +2,21 @@ import {
   type CallExpression,
   type Expression,
   isArrayLiteralExpression,
+  isArrowFunction,
   isAssertionExpression,
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
   isExpression,
+  isFunctionExpression,
   isIdentifier,
   isNewExpression,
   isNonNullExpression,
+  isObjectLiteralExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
   isSatisfiesExpression,
   isSpreadElement,
   type Node,
@@ -98,6 +102,38 @@ function held(at: Node, call: CallExpression, entry: Expression): boolean {
 }
 
 /**
+ * Whether a node lies in a function that the argument list only makes, and puts where no call of
+ * the list takes it: an element of a list, the value of a field, a branch, as the arguments of the
+ * call are. A function that is called, passed to a call, assigned, or returned may run there.
+ */
+function neverRuns(node: Node, call: CallExpression): boolean {
+  for (let at = node; at !== call; at = at.parent)
+    if ((isArrowFunction(at) || isFunctionExpression(at)) && onlyStored(at, call)) return true;
+  return false;
+}
+
+/** Whether a node is one of the arguments of the call. */
+function isArgument(call: CallExpression, node: Node): boolean {
+  return call.arguments.some((each) => each === node);
+}
+
+/** Whether a function the list makes is held only as data the call's own arguments hold. */
+function onlyStored(made: Node, call: CallExpression): boolean {
+  let at = made;
+  for (;;) {
+    const { parent } = at;
+    if (parent === call) return isArgument(call, at);
+    const holds =
+      passesValue(parent, at) ||
+      isArrayLiteralExpression(parent) ||
+      isObjectLiteralExpression(parent) ||
+      (isPropertyAssignment(parent) && parent.initializer === at);
+    if (!holds) return false;
+    at = parent;
+  }
+}
+
+/**
  * Whether the argument list of the call lets the tuple go: through a call the compile does not
  * follow, a variable, a list or a new object. A node the call's evaluation never reaches does not.
  */
@@ -112,7 +148,7 @@ function tupleEscapes(
     node.forEachChild((child) => {
       pending.push(child);
     });
-    if (!namesTuple(node, aliases) || !reached(node)) continue;
+    if (!namesTuple(node, aliases) || !reached(node) || neverRuns(node, call)) continue;
     let at = node;
     while (passesValue(at.parent, at)) at = at.parent;
     if (!discardsValue(at.parent, at) && !held(at, call, entry)) return true;
