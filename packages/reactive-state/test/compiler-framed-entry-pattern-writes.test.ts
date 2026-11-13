@@ -1093,6 +1093,36 @@ const CASES = [
     values: ["'kept':", "'safe':", '{ get trigger() { this.field = error; return 0; } }:', '1:'],
   },
   {
+    id: 'spread-getter-write-runs-a-setter-that-writes',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-runs-a-setter-chain',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.first = 0; return 0; }, set first(value: unknown) { this.second = 0; }, set second(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-of-an-unknown-name-runs-every-setter',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this[name] = 0; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
+    id: 'spread-getter-write-runs-no-setter-of-another-name-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.other = 0; return 0; }, set activate(value: unknown) { this.field = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:'],
+  },
+  {
+    id: 'spread-getter-write-runs-a-setter-that-writes-another-field-stays-possible-pin',
+    source: `function frames(error: Error, name: string) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.activate = 0; return 0; }, set activate(value: unknown) { this.label = error; }, field: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
     id: 'computed-key-getter-replaced-by-method-overwrites',
     source: `function frames(error: Error, list: unknown[], name: string) { const entry: [string, unknown] = ['message', 'safe']; let sink: unknown; let other: unknown; return Object.fromEntries([entry], ({ [name]: entry[1] } = { field: error, ...{ get trigger() { return 0; }, trigger() {}, field: 'kept' } })); }`,
     key: 'message',

@@ -30,7 +30,7 @@ import {
   setsPrototype,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { getterWrites, UnfollowableError } from './framed-getter-writes.ts';
+import { accessorWrites, UnfollowableError } from './framed-getter-writes.ts';
 import { framedCondition } from './framed-sources.ts';
 
 /** The values a computed key may select from what a destructuring assignment reads. */
@@ -239,7 +239,7 @@ function survivingFields(object: ObjectLiteralExpression, reading: Reading): Ass
     if (!hides) found.push(...fieldValues(property, { ...reading, ...later }));
     const replaced = name !== undefined && getter && replacing.getters.has(name);
     if (getter && !replaced && (!hides || !reading.inherited))
-      found.push(...getterEffects(property, reading));
+      found.push(...getterEffects(object, property, reading));
     setNames(property, later);
     setNames(property, replacing);
   }
@@ -262,13 +262,15 @@ function setNames(
  * The values a getter that runs writes into the object it runs on, each under the name it writes:
  * a copy of the object runs it wherever a later field hides its result, and a later field of that
  * name hides what it wrote; the names of an object's own fields hide the fields it inherits, not
- * what an inherited getter writes into it. The entries are refused where `this` is given on.
+ * what an inherited getter writes into it. A write that runs a setter of the object counts for the
+ * setter's own. The entries are refused where `this` is given on.
  */
 function getterEffects(
+  object: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
   reading: Reading,
 ): readonly AssignedFrameSource[] {
-  const written = getterWrites(getter);
+  const written = accessorWrites(object, getter);
   if (written === undefined) throw new UnfollowableError();
   return written
     .filter((each) => each.name === undefined || reading.inherited || !reading.data.has(each.name))

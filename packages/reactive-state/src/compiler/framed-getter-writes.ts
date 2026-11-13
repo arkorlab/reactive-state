@@ -15,18 +15,25 @@ import {
   isForInStatement,
   isForOfStatement,
   isFunctionLikeDeclaration,
+  isIdentifier,
   isNewExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectLiteralExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
+  isStringLiteral,
   isTaggedTemplateExpression,
   type Node,
+  type ObjectLiteralExpression,
   type PropertyAccessExpression,
+  type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -61,7 +68,9 @@ export interface GetterWrite {
  * which is no object. None where `this` is given to anything else: a call, a method, a pattern, a
  * loop head, a list, the result of the getter.
  */
-export function getterWrites(getter: GetAccessorDeclaration): readonly GetterWrite[] | undefined {
+export function getterWrites(getter: {
+  readonly body?: Node | undefined;
+}): readonly GetterWrite[] | undefined {
   const writes: GetterWrite[] = [];
   const pending: Node[] = getter.body === undefined ? [] : [getter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -80,6 +89,44 @@ export function getterWrites(getter: GetAccessorDeclaration): readonly GetterWri
       });
   }
   return writes;
+}
+
+/** The name a field of a written object is set under, none where it is computed. */
+function accessorName(name: PropertyName): string | undefined {
+  if (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name))
+    return name.text;
+  return isNumericLiteral(name) ? String(Number(name.text)) : undefined;
+}
+
+/**
+ * What running a getter of a written object writes into it: its own writes, and those of the
+ * setters of the object that its writes run, and of the setters those run in turn. A write that
+ * may name any field runs every setter. None where any of them gives `this` on.
+ */
+export function accessorWrites(
+  object: ObjectLiteralExpression,
+  getter: GetAccessorDeclaration,
+): readonly GetterWrite[] | undefined {
+  const setters = object.properties.filter((each) => isSetAccessorDeclaration(each));
+  const found: GetterWrite[] = [];
+  const run = new Set<Node>([getter]);
+  const pending: { readonly body?: Node | undefined }[] = [getter];
+  for (let accessor = pending.pop(); accessor !== undefined; accessor = pending.pop()) {
+    const writes = getterWrites(accessor);
+    if (writes === undefined) return undefined;
+    found.push(...writes);
+    for (const setter of setters) {
+      const name = accessorName(setter.name);
+      const invoked = writes.some(
+        (each) => each.name === undefined || name === undefined || each.name === name,
+      );
+      if (invoked && !run.has(setter)) {
+        run.add(setter);
+        pending.push(setter);
+      }
+    }
+  }
+  return found;
 }
 
 /** The node that stands for the same value as `node`, through parentheses and assertions. */
