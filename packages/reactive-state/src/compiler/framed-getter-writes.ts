@@ -219,6 +219,25 @@ export function deletedNames(object: ObjectLiteralExpression): readonly (string 
 }
 
 /**
+ * What may be deleted from a written object where something reads the fields it inherits (a
+ * conversion of a descriptor): the names its own accessors delete, and those the accessors of the
+ * prototype it sets delete on it, any name where the prototype is no written object.
+ */
+export function inheritedDeletions(
+  object: ObjectLiteralExpression,
+): readonly (string | undefined)[] {
+  const inherited = object.properties.find(
+    (each) => isPropertyAssignment(each) && setsProto(each) && !nullPrototype(each),
+  );
+  if (inherited === undefined || !isPropertyAssignment(inherited)) return deletedNames(object);
+  const proto = unwrapped(inherited.initializer);
+  return [
+    ...deletedNames(object),
+    ...(isObjectLiteralExpression(proto) ? inheritedDeletions(proto) : [undefined]),
+  ];
+}
+
+/**
  * Whether a setter reads the value it is given: a name its parameter binds, or `arguments`. What the
  * write that ran it assigned goes where the setter takes it, which the compile does not follow.
  */

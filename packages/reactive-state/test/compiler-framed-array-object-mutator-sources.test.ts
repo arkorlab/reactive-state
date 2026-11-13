@@ -2089,6 +2089,36 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'descriptor-accessor-deleted-by-a-getter-of-its-prototype-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { delete this.value; return true; } }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-may-be-deleted-by-an-unknown-prototype-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: original, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-a-getter-of-the-prototype-of-its-prototype-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { __proto__: { get enumerable() { delete this.value; return true; } } }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-with-a-prototype-that-deletes-nothing-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { return true; } }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-with-a-null-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: null, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-a-getter-of-a-held-prototype-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const p: any = { get enumerable() { delete this.value; return true; } }; Object.defineProperty(a, 0, { __proto__: p, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-descriptor-alias-in-loop-converts',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { configurable: true }; for (let at = 0; at < 2; at += 1) { const alias = descriptor; Object.defineProperty(a, 0, alias); descriptor.get = () => error; } return String(a); }`,
     converts: true,
