@@ -30,7 +30,7 @@ import {
 import { callMethodWrites } from './framed-array-call-writes.ts';
 import { writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
+import { arrayIdentity, mayBeArray, writtenAsWhole } from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
@@ -579,7 +579,20 @@ function deletedMethod(node: Expression, root: FrameBinding, own: OwnMethods, ex
   else if (OWN_METHODS.has(key)) own.set(key, { own: false });
 }
 
-/** Initializer traversal still requires whole binding identity after the selected type was checked. */
+/** Whether a name that starts as a written array is written as a whole elsewhere: it may hold another. */
+function rewrittenArray(binding: FrameBinding): boolean {
+  const { initializer } = binding;
+  return (
+    initializer !== undefined &&
+    isArrayLiteralExpression(unwrapped(initializer)) &&
+    writtenAsWhole(binding)
+  );
+}
+
+/**
+ * Initializer traversal still requires whole binding identity after the selected type was checked: a
+ * name written as a whole elsewhere may hold another array than its initializer, and is refused.
+ */
 function bindingArrayWords(
   reading: ArrayReading,
   context: {
@@ -592,7 +605,8 @@ function bindingArrayWords(
   const { call, words, pending, seen } = context;
   const binding = unseenArrayBinding(reading.value, seen);
   if (binding === undefined) return false;
-  if (writtenElementErrors(reading.value, call, words, pending)) return true;
+  if (rewrittenArray(binding) || writtenElementErrors(reading.value, call, words, pending))
+    return true;
   if (binding.initializer !== undefined)
     pending.push({ value: binding.initializer, text: reading.text });
   return false;

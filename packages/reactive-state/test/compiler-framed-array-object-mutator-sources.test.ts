@@ -2915,6 +2915,36 @@ const CONVERSIONS = [
     source: `function frames(error: Error) { const a = ['safe']; const src: any = {}; [...src[1]] = [error]; Object.assign(a, src); return String(a); }`,
     converts: true,
   },
+  {
+    id: 'reassigned-let-array-holds-the-error-written-later',
+    source: `function frames(error: Error) { let values: unknown[] = []; values = [error]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'reassigned-let-array-holds-the-error-written-in-a-branch',
+    source: `function frames(error: Error) { let values: unknown[] = []; if (error.message) values = [error]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'let-array-never-reassigned-pin',
+    source: `function frames(error: Error) { let values: unknown[] = ['safe']; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'let-array-pushed-never-reassigned-pin',
+    source: `function frames(error: Error) { let values: unknown[] = ['safe']; values.push('also safe'); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'reassigned-let-array-of-safe-values-stays-possible-pin',
+    source: `function frames(error: Error) { let values: unknown[] = ['safe']; values = ['also safe']; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'constant-array-pin',
+    source: `function frames(error: Error) { const values: unknown[] = ['safe']; return String(values); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
