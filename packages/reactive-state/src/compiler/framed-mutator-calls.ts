@@ -156,6 +156,15 @@ export function writtenArguments(
   return written;
 }
 
+/**
+ * Whether a mutator coerces the argument at the place: the key of `Object.defineProperty` becomes a
+ * property key, and an object runs its `toString` or `Symbol.toPrimitive` to become one. Every other
+ * argument is read for its fields, which the readers of the form follow.
+ */
+export function coercesArgument(path: string, position: number): boolean {
+  return path === PATHS.property && position === 1;
+}
+
 /** The natives that hand back the object they were given first. */
 const RETURNS_TARGET: ReadonlySet<string> = new Set([
   'Object.freeze',

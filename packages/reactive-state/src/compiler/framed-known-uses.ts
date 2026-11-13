@@ -9,7 +9,6 @@ import {
   isCallExpression,
   isConditionalExpression,
   isDeleteExpression,
-  isDoStatement,
   isElementAccessExpression,
   isExpression,
   isExpressionStatement,
@@ -18,7 +17,6 @@ import {
   isForStatement,
   isFunctionExpression,
   isIdentifier,
-  isIfStatement,
   isNewExpression,
   isObjectLiteralExpression,
   isParenthesizedExpression,
@@ -33,10 +31,7 @@ import {
   isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateSpan,
-  isTypeOfExpression,
   isVariableDeclaration,
-  isVoidExpression,
-  isWhileStatement,
   type Node,
   type PropertyAccessExpression,
   SyntaxKind,
@@ -63,7 +58,13 @@ import { arrayIdentity } from './framed-array-identity.ts';
 import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { iterates } from './framed-iterated-uses.ts';
-import { mutatorInvocation, nativePath } from './framed-mutator-calls.ts';
+import {
+  coercesArgument,
+  mutatorInvocation,
+  nativePath,
+  type MutatorInvocation,
+} from './framed-mutator-calls.ts';
+import { tested } from './framed-tested-uses.ts';
 import { namesThis } from './framed-this-functions.ts';
 
 /**
@@ -166,12 +167,6 @@ const FUNCTIONS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.SetAccessor,
 ]);
 
-/** The comparisons that read no more than the identity of their operands. */
-const IDENTITY: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.EqualsEqualsEqualsToken,
-  SyntaxKind.ExclamationEqualsEqualsToken,
-]);
-
 /** The node that stands for the same value as `node`, through parentheses and assertions. */
 export function outermost(node: Node): Node {
   let at = node;
@@ -188,18 +183,29 @@ export function classify(name: Identifier, subject: Subject): Use {
     handed = true;
   }
   const { parent } = at;
-  if ((handed || subject === 'held' || subject === 'box') && iterates(at)) return UNKNOWN;
+  if (runsIterator(at, subject, handed)) return UNKNOWN;
   if (isVariableDeclaration(parent)) return handed ? UNKNOWN : aliased(parent, at, subject);
   if (isSpreadAssignment(parent)) return SPREADS;
   if (discarded(at)) return KNOWN;
-  if (isArray(subject) && copiesOut(at)) return SPREADS;
-  if (isArray(subject) && readsArray(at)) return KNOWN;
+  const read = isArray(subject) ? arrayRead(at) : undefined;
+  if (read !== undefined) return read;
   const given = assigned(at, subject);
   if (given !== undefined) return given;
   const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
   if (member && parent.expression === at)
     return memberUse(parent, handed ? handedKind(subject) : subject);
   return flowUse(at, subject);
+}
+
+/** What an array does where it is spread, iterated or converted: it is copied out, or it is read; none for another use. */
+function arrayRead(at: Node): Use | undefined {
+  if (copiesOut(at)) return SPREADS;
+  return readsArray(at) ? KNOWN : undefined;
+}
+
+/** Whether a held object, or a literal that holds one or may, is iterated at the mention: application code runs. */
+function runsIterator(at: Node, subject: Subject, handed: boolean): boolean {
+  return (handed || subject === 'held' || subject === 'box') && iterates(at);
 }
 
 /** Whether an expression hands its value on as the value of the one that holds it: a branch, an operand. */
@@ -296,19 +302,6 @@ function copiesOut(at: Node): boolean {
 /** What a name stands for where it is one of the values a choice may hand over: not the one readers follow. */
 function handedKind(subject: Subject): Subject {
   return isArray(subject) ? 'echo' : 'box';
-}
-
-/** Whether a mention is only tested: a condition, a negation, `typeof`, an identity or an `in`. */
-function tested(at: Node): boolean {
-  const { parent } = at;
-  if (isIfStatement(parent) || isWhileStatement(parent) || isDoStatement(parent))
-    return parent.expression === at;
-  if (isConditionalExpression(parent)) return parent.condition === at;
-  if (isPrefixUnaryExpression(parent)) return parent.operator === SyntaxKind.ExclamationToken;
-  if (isTypeOfExpression(parent) || isVoidExpression(parent)) return true;
-  if (!isBinaryExpression(parent)) return false;
-  const { kind } = parent.operatorToken;
-  return IDENTITY.has(kind) || (kind === SyntaxKind.InKeyword && parent.right === at);
 }
 
 /** The name a member reads, where it is written out. */
@@ -656,6 +649,12 @@ function argumentUse(call: Node, flowing: Flowing, subject: Subject): Use {
   if (position === -1) return UNKNOWN;
   if (position === 0) return targetUse(call, flowing, subject);
   if (isArray(subject)) return flowing.inLiteral ? UNKNOWN : KNOWN;
+  return followedArgument(invoked, position) ? KNOWN : UNKNOWN;
+}
+
+/** Whether a mutator of a written array reads the argument at the place for its fields, and coerces it to nothing. */
+function followedArgument(invoked: MutatorInvocation, position: number): boolean {
   const target = invoked.args[0];
-  return target === undefined || arrayIdentity(target) === undefined ? UNKNOWN : KNOWN;
+  const toArray = target !== undefined && arrayIdentity(target) !== undefined;
+  return toArray && !coercesArgument(invoked.path, position);
 }

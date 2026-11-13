@@ -3481,6 +3481,56 @@ const CONVERSIONS = [
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; [...a]; return String(a); }`,
     converts: false,
   },
+  {
+    id: 'held-key-of-a-choice-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Object.defineProperty(a, flag ? d : d, { value: 'safe', configurable: true }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Object.defineProperty(a, d, { value: 'safe', configurable: true }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-with-a-value-of-method-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { valueOf() { this.get = undefined; return 0; }, get: () => 'safe' }; Object.defineProperty(a, d, { value: 'safe', configurable: true }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-with-a-to-primitive-method-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { [Symbol.toPrimitive]() { this.get = undefined; return '0'; }, get: () => 'safe' }; Object.defineProperty(a, d, { value: 'safe', configurable: true }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-through-call-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Object.defineProperty.call(Object, a, d, { value: 'safe', configurable: true }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-through-apply-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Object.defineProperty.apply(Object, [a, d, { value: 'safe', configurable: true }]); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-through-reflect-apply-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Reflect.apply(Object.defineProperty, Object, [a, d, { value: 'safe', configurable: true }]); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-key-of-reflect-define-property-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Reflect.defineProperty(a, d, { value: 'safe', configurable: true }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'held-descriptor-in-a-map-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { toString() { this.get = undefined; return '0'; }, get: () => 'safe' }; Object.defineProperties(a, { 0: d }); d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'array-as-a-key-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const k: any[] = ['safe']; Object.defineProperty(a, k, { value: 'x' }); return String(k); }`,
+    converts: false,
+  },
 ] as const;
 
 describe('text conversion of an array a native object mutator wrote an error to', () => {
