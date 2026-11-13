@@ -459,6 +459,98 @@ const CASES = [
     source: "const none = {};\n  return none.call.call(Reflect.get, null, obj, 'constructor');",
     what: 'a constant of an object with no `call`',
   },
+  // A member an object writes again, or a later entry overrides: the last of them is the member.
+  {
+    reads: [
+      "({ call() { return 42; }, ...{ call: Reflect.get.call } }).call.call(Reflect.get, null, run, 'constructor')",
+    ],
+    source:
+      "return ({ call() { return 42; }, ...{ call: Reflect.get.call } }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a method that a later spread of the method overrides',
+  },
+  {
+    reads: [
+      "({ call: () => 42, call: run.call }).call.call(Reflect.get, null, run, 'constructor')",
+    ],
+    source:
+      "return ({ call: () => 42, call: run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a function that a later entry of the name overrides with the method',
+  },
+  {
+    reads: [
+      "({ call: () => 42, ['ca' + 'll']: run.call }).call.call(Reflect.get, null, run, 'constructor')",
+    ],
+    source:
+      "return ({ call: () => 42, ['ca' + 'll']: run.call }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a function that a later entry of a name it computes may override',
+  },
+  {
+    reads: ["({ call() { return 42; }, ...obj }).call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "return ({ call() { return 42; }, ...obj }).call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a method that a later spread of an object may override',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ call: run.call, call: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'the method that a later function of the name overrides',
+  },
+  {
+    reads: [],
+    source:
+      "return ({ ...{ call: run.call }, call: () => 42 }).call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'the method of an earlier spread that a later function overrides',
+  },
+  // A constant whose methods change what it is, or may: its members are not read as it was written.
+  {
+    reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const helper = { call() { return 42; }, setup() { Object.assign(this, { call: run.call }); } };\n  helper.setup();\n  return helper.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant whose method gives `this` the method',
+  },
+  {
+    reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const helper: any = { call() { return 42; }, setup() { this.call = run.call; } };\n  helper.setup();\n  return helper.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant whose method assigns `this` the method',
+  },
+  {
+    reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const helper = { call: () => 42, get touch() { Object.assign(this, { call: run.call }); return 1; } };\n  helper.touch;\n  return helper.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant whose getter gives `this` the method, read',
+  },
+  {
+    reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const base = { setup() { Object.assign(this, { call: run.call }); } };\n  const helper = { __proto__: base, call: () => 42 };\n  helper.setup();\n  return helper.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant that inherits a method that gives `this` the method',
+  },
+  {
+    reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const base = { get touch() { Object.assign(this, { call: run.call }); return 1; } };\n  const helper = { __proto__: base, call: () => 42 };\n  helper.touch;\n  return helper.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant that inherits a getter that gives `this` the method, read',
+  },
+  {
+    reads: ["helper.call.call(Reflect.get, null, run, 'constructor')"],
+    source:
+      "const helper = { call: () => 42, setup: run.bind(null) };\n  helper.setup();\n  return helper.call.call(Reflect.get, null, run, 'constructor')(text)();",
+    what: 'a constant whose member is called, which the code does not show',
+  },
+  {
+    reads: [],
+    source:
+      "const helper = { call: () => 42, other() { return 1; } };\n  helper.other();\n  return helper.call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant whose own method, which gives `this` nothing, is called',
+  },
+  {
+    reads: [],
+    source:
+      "const helper = { call: () => 42 };\n  helper.call(Reflect.get, null, obj, 'constructor');\n  return helper.call.call(Reflect.get, null, obj, 'constructor');",
+    what: 'a constant whose own `call` is called',
+  },
   // Optional chains and wrappers.
   {
     reads: ["Reflect.get?.bind(null, run)?.('constructor')"],

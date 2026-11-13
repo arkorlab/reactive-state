@@ -385,7 +385,7 @@ function readsConstructor(node: Node): boolean {
 
 /** What `readsConstructorKey` reads a global and a written text by: this module's own. */
 const READING: Reading = {
-  initializerOf: heldInitializer,
+  initializerOf: (name) => heldInitializer(name, textOf),
   pathOf: (node) => globalPathOf(node)?.join('.'),
   textOf,
 };

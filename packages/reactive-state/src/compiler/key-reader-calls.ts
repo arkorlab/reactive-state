@@ -3,28 +3,21 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isArrowFunction,
   isBinaryExpression,
   isCallExpression,
-  isClassExpression,
-  isComputedPropertyName,
   isElementAccessExpression,
-  isFunctionExpression,
   isIdentifier,
-  isMethodDeclaration,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
   isTypeAssertion,
   type Node,
-  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { memberOf } from './literal-members.ts';
 
 /**
  * Where a call reads a member of what it is given by a key the code writes: of a function of the
@@ -234,41 +227,12 @@ class Calls {
   }
 
   /**
-   * Whether an object written has `method` of its own that is no function's: a function written for
-   * it, a method; or none, where nothing else brings one — a prototype set, `__proto__: fn`, a
-   * spread, a name it computes — which is the function's, or may be.
+   * Whether an object written has `method` of its own that is no function's: a function written
+   * for it, the last entry of the name, a spread or a computed name after it giving none; or none,
+   * where nothing else brings one (`memberOf`).
    */
   #literalOwns(literal: ObjectLiteralExpression, method: string): boolean {
-    const names = literal.properties.map((property) => this.#nameOf(property));
-    const own = literal.properties[names.indexOf(method)];
-    if (own !== undefined) {
-      return (
-        isMethodDeclaration(own) ||
-        (isPropertyAssignment(own) && this.#isWrittenFunction(own.initializer))
-      );
-    }
-    return literal.properties.every(
-      (property, index) =>
-        !isSpreadAssignment(property) && names[index] !== undefined && names[index] !== '__proto__',
-    );
-  }
-
-  /** The name an entry of an object written gives, where the code writes it; none of a computed one. */
-  #nameOf(property: ObjectLiteralElementLike): string | undefined {
-    if (isSpreadAssignment(property)) {
-      return undefined;
-    }
-    const { name } = property;
-    if (isIdentifier(name)) {
-      return name.text;
-    }
-    return this.#reading.textOf(isComputedPropertyName(name) ? unwrapped(name.expression) : name);
-  }
-
-  /** Whether `expression` is a function the code writes, which is not the function's own method. */
-  #isWrittenFunction(expression: Expression): boolean {
-    const each = calledOf(expression);
-    return isFunctionExpression(each) || isArrowFunction(each) || isClassExpression(each);
+    return memberOf(literal, method, this.#reading.textOf) !== 'unknown';
   }
 
   /**
