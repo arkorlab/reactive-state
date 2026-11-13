@@ -208,6 +208,9 @@ function accessorUses(
   };
 }
 
+/** How deep the walks of written objects that nest go before they take the rest for unknown. */
+const NESTING = 32;
+
 /** What the accessors of each written object delete from it, judged once. */
 const DELETED = new WeakMap<ObjectLiteralExpression, readonly (string | undefined)[]>();
 
@@ -235,7 +238,9 @@ export function deletedNames(object: ObjectLiteralExpression): readonly (string 
  */
 export function inheritedDeletions(
   object: ObjectLiteralExpression,
+  depth = 0,
 ): readonly (string | undefined)[] {
+  if (depth > NESTING) return [undefined];
   const inherited = object.properties.find(
     (each) => isPropertyAssignment(each) && setsProto(each) && !nullPrototype(each),
   );
@@ -243,7 +248,7 @@ export function inheritedDeletions(
   const proto = unwrapped(inherited.initializer);
   return [
     ...deletedNames(object),
-    ...(isObjectLiteralExpression(proto) ? inheritedDeletions(proto) : [undefined]),
+    ...(isObjectLiteralExpression(proto) ? inheritedDeletions(proto, depth + 1) : [undefined]),
   ];
 }
 
@@ -294,12 +299,12 @@ function appliesTo(
 /** Whether a field after a setter may give its name a value: an accessor of the name does not. */
 function mayReplace(property: ObjectLiteralElementLike, name: string): boolean {
   if (isGetAccessorDeclaration(property) || isSetAccessorDeclaration(property)) return false;
-  return mayName(property, name);
+  return mayName(property, name, 0);
 }
 
 /** Whether a written object may hold a field of the name: its own, a computed one, or a spread of what may. */
-function mayOwn(object: ObjectLiteralExpression, name: string): boolean {
-  return object.properties.some((each) => mayName(each, name));
+function mayOwn(object: ObjectLiteralExpression, name: string, depth = 0): boolean {
+  return depth > NESTING || object.properties.some((each) => mayName(each, name, depth));
 }
 
 /**
@@ -307,10 +312,10 @@ function mayOwn(object: ObjectLiteralExpression, name: string): boolean {
  * spread of what is no written object or of one that may. A written `__proto__: value` sets the
  * prototype and no field.
  */
-function mayName(property: ObjectLiteralElementLike, name: string): boolean {
+function mayName(property: ObjectLiteralElementLike, name: string, depth: number): boolean {
   if (isSpreadAssignment(property)) {
     const copied = unwrapped(property.expression);
-    return !isObjectLiteralExpression(copied) || mayOwn(copied, name);
+    return !isObjectLiteralExpression(copied) || mayOwn(copied, name, depth + 1);
   }
   if (isPropertyAssignment(property) && setsProto(property)) return false;
   const own = accessorName(property.name);

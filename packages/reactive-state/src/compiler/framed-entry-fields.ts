@@ -3,6 +3,7 @@ import {
   type Expression,
   isBinaryExpression,
   isConditionalExpression,
+  isExpression,
   type GetAccessorDeclaration,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -55,7 +56,16 @@ interface Reading {
 interface Seen {
   readonly full: Map<Node, readonly Hiding[]>;
   readonly own: Map<Node, readonly Hiding[]>;
+  /** How many reads the consultation has made: past `LIMITS.reads` it is refused. */
+  readonly budget: { reads: number };
 }
+
+/**
+ * How far a read goes before it is refused as no form the compile follows: the prototypes a getter
+ * may be inherited through, and the reads of objects a consultation makes in all. Whatever way a
+ * cycle of prototypes is written, a read ends at these.
+ */
+const LIMITS = { receivers: 16, reads: 4096 } as const;
 
 interface Hiding {
   readonly data: ReadonlySet<string>;
@@ -72,7 +82,7 @@ interface Hiding {
 export function possibleFields(
   sources: readonly AssignedFrameSource[],
 ): readonly AssignedFrameSource[] {
-  const seen = { full: new Map(), own: new Map() };
+  const seen = { full: new Map(), own: new Map(), budget: { reads: 0 } };
   return fieldsOf(sources, {
     data: new Set(),
     getters: new Set(),
@@ -106,7 +116,8 @@ function fieldsOf(
 function firstRead(reading: Reading, node: Node): boolean {
   const table = reading.inherited ? reading.seen.full : reading.seen.own;
   const earlier = table.get(node) ?? [];
-  if (isObjectLiteralExpression(node) && reading.receivers.includes(node)) return false;
+  const object = isExpression(node) ? unwrapped(node) : node;
+  if (isObjectLiteralExpression(object) && reading.receivers.includes(object)) return false;
   const covered = earlier.some((each) => {
     return (
       isSubset(each.data, reading.data) &&
@@ -115,6 +126,8 @@ function firstRead(reading: Reading, node: Node): boolean {
     );
   });
   if (covered) return false;
+  reading.seen.budget.reads += 1;
+  if (reading.seen.budget.reads > LIMITS.reads) throw new UnfollowableError();
   table.set(node, [
     ...earlier,
     {
@@ -321,6 +334,8 @@ function inheritedValues(
 ): readonly AssignedFrameSource[] {
   const proto = object.properties.find((each) => setsPrototype(each));
   if (proto === undefined || !isPropertyAssignment(proto)) return [];
+  if (reading.receivers.includes(object)) return [];
+  if (reading.receivers.length >= LIMITS.receivers) throw new UnfollowableError();
   const own = object.properties.flatMap((each) => fieldNames(each));
   const hidden = {
     ...reading,
