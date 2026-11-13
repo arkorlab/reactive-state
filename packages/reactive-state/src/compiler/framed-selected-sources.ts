@@ -139,6 +139,8 @@ function valueOf(expression: Expression, names: Identifier[]): Expression | Func
  */
 export interface SelectedSource extends AssignedFrameSource {
   readonly inList?: boolean;
+  /** The names a pattern left out of the rest copy this is, which a field read of it must not find. */
+  readonly without?: readonly string[];
 }
 
 /**
@@ -174,9 +176,21 @@ function memberWrites(
           ? select(each.value, took.tail, later)
           : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
       const inList = each.inList === true && took.tail.length === 0;
-      return inList ? handed.map((one) => ({ ...one, inList })) : handed;
+      const left = leftOut(each, write, copy && took.tail.length === 0);
+      const kept = left.length === 0 ? handed : handed.map((one) => withExclusions(one, left));
+      return inList ? kept.map((one) => ({ ...one, inList })) : kept;
     });
   });
+}
+
+/** The names a whole value handed over is a copy without: what it was already, and this rest's. */
+function leftOut(each: SelectedSource, write: HeldWrite, whole: boolean): readonly string[] {
+  return [...(each.without ?? []), ...(whole ? (write.without ?? []) : [])];
+}
+
+/** A value the selection hands over whole, with the names it was copied without. */
+function withExclusions(source: SelectedSource, without: readonly string[]): SelectedSource {
+  return source.keys.length === 0 ? { ...source, without } : source;
 }
 
 /** The path a write captures, and the path below what it captured. */
