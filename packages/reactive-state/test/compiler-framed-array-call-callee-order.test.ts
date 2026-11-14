@@ -204,14 +204,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'single-iife-selection-pin',
+    id: 'single-iife-with-an-argument-selection',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(pass: number, text = values.join((values.join = Array.prototype.join, ''))): string { return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'named-iife-calling-another-pin',
+    id: 'named-iife-with-an-argument-calling-another',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} const other = (pass: number) => pass; return (function read(pass: number, text = values.join((values.join = Array.prototype.join, ''))): string { return text + other(pass); })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'shadowed-name-iife-pin',
