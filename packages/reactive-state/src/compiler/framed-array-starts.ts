@@ -42,22 +42,43 @@ export function mayBecomeArray(binding: FrameBinding): boolean {
   return givenValues(binding).some((value) => value === undefined || mayBeArray(value, binding));
 }
 
-/** Whether the value a name is given, followed through the names it passes, may be an array. */
+/**
+ * Whether the value a name is given, followed through the names it passes, may be an array. A name it
+ * passes is read as the name asked about is: by the value it starts as and by the values it is given as
+ * a whole elsewhere, each name once.
+ */
 function mayBeArray(given: Expression | undefined, binding: FrameBinding): boolean {
   const seen = new Set<FrameBinding>([binding]);
-  let value = given;
-  while (value !== undefined) {
-    const start = unwrapped(value);
-    if (isArrayLiteralExpression(start)) return true;
-    if (!isIdentifier(start)) return !isNoArray(start);
-    const selected = frameBindingOf(start);
-    if (selected === undefined) return start.text !== 'undefined';
-    if (seen.has(selected.binding)) return true;
-    seen.add(selected.binding);
-    if (defaultMayBeArray(start)) return true;
-    value = selectedValue(selected.binding.initializer, selected.keys);
+  const pending: (Expression | undefined)[] = [given];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    const next = value === undefined ? undefined : leadsOf(value, seen);
+    if (next === undefined) return true;
+    pending.push(...next);
   }
-  return true;
+  return false;
+}
+
+/**
+ * The values a value leads to, none where it may be an array: a name leads to what it starts as and to what
+ * it is given as a whole, once; a value that is none of an array, a name or a scalar the compile knows is one.
+ */
+function leadsOf(
+  value: Expression,
+  seen: Set<FrameBinding>,
+): readonly (Expression | undefined)[] | undefined {
+  const start = unwrapped(value);
+  if (isArrayLiteralExpression(start)) return undefined;
+  if (!isIdentifier(start)) return isNoArray(start) ? [] : undefined;
+  const selected = frameBindingOf(start);
+  if (selected === undefined) return start.text === 'undefined' ? [] : undefined;
+  if (seen.has(selected.binding)) return [];
+  seen.add(selected.binding);
+  if (defaultMayBeArray(start)) return undefined;
+  return [
+    selectedValue(selected.binding.initializer, selected.keys),
+    ...givenValues(selected.binding),
+  ];
 }
 
 /** The written values that are no array, whatever their operands are: literals, and what an operator makes of any. */

@@ -137,11 +137,12 @@ function givenBy(node: Node, count: number): readonly WholeValue[] {
   return LOGICAL_ASSIGNMENTS.has(kind) ? [node.right] : [];
 }
 
-/** What a declaration of a name again gives it: its initializer, none known for a loop head. */
+/** What a declaration of a name again gives it: its initializer, none known for a loop head or a pattern, which selects a part. */
 function redeclaredValue(declaration: VariableDeclaration): readonly WholeValue[] {
   const loop = declaration.parent.parent;
   if (isForInStatement(loop)) return [];
-  return [isForOfStatement(loop) ? undefined : declaration.initializer];
+  const whole = !isForOfStatement(loop) && isIdentifier(declaration.name);
+  return [whole ? declaration.initializer : undefined];
 }
 
 /**
