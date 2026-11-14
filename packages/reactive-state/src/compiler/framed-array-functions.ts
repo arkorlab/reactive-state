@@ -35,6 +35,7 @@ import {
   type FunctionDeclaration,
   type Identifier,
   type MethodDeclaration,
+  NodeFlags,
   type Node,
   type ObjectBindingPattern,
   type ObjectLiteralExpression,
@@ -408,15 +409,18 @@ function outermostPattern(pattern: Node): Node {
 /**
  * Implicit calls, conversions, mutation and deferred completion also invalidate a mutable proof:
  * the evaluation that can run the application's code (`APPLICATION_WORK`, which holds a call, a
- * construction, a spread, a loop's iteration and the spread of a JSX attribute), a class, and the
- * spread of a JSX child, which iterates.
+ * construction, a spread, a loop's iteration and the spread of a JSX attribute), a class, the
+ * spread of a JSX child, which iterates, and a `using` or an `await using` declaration, which runs
+ * its resource's disposal where its scope is left.
  */
 function implicitEffect(node: Node): boolean {
   return (
     APPLICATION_WORK.has(node.kind) ||
     isClassDeclaration(node) ||
     isClassExpression(node) ||
-    (isJsxExpression(node) && node.dotDotDotToken !== undefined)
+    (isJsxExpression(node) && node.dotDotDotToken !== undefined) ||
+    // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
+    (isVariableDeclarationList(node) && (node.flags & NodeFlags.Using) !== 0)
   );
 }
 
