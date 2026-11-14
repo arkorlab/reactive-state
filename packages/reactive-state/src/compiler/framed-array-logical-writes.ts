@@ -13,7 +13,6 @@ import {
   isOmittedExpression,
   isSpreadElement,
   isVariableDeclaration,
-  isVariableDeclarationList,
   isVoidExpression,
   type Node,
   SyntaxKind,
@@ -174,16 +173,16 @@ function commaResult(value: Expression): Expression | undefined {
     : undefined;
 }
 
-/** A whole constant alias does not read or replace any stored array entry. */
+/**
+ * A whole constant alias that the module does not export does not read or replace any stored array
+ * entry: an importing module can write through an exported one before a later body runs.
+ */
 function wholeAlias(node: Expression): boolean {
   const { parent } = useOf(node);
+  if (!isVariableDeclaration(parent) || !isIdentifier(parent.name)) return false;
+  const initializer = constantInitializer(parent);
   return (
-    isVariableDeclaration(parent) &&
-    isIdentifier(parent.name) &&
-    isVariableDeclarationList(parent.parent) &&
-    /^const\s/u.test(parent.parent.getText(parent.getSourceFile())) &&
-    parent.initializer !== undefined &&
-    unwrapped(parent.initializer) === node
+    initializer !== undefined && !exportedDeclaration(parent) && unwrapped(initializer) === node
   );
 }
 
@@ -217,16 +216,10 @@ function logicalInitialValue(expression: Expression): Expression {
     const selected = frameBindingOf(value);
     if (selected === undefined || selected.keys.length > 0) break;
     const { binding } = selected;
-    if (
-      seen.has(binding) ||
-      !isVariableDeclaration(binding) ||
-      !isVariableDeclarationList(binding.parent) ||
-      binding.initializer === undefined ||
-      !/^const\s/u.test(binding.parent.getText(binding.getSourceFile()))
-    )
-      break;
+    const initializer = seen.has(binding) ? undefined : constantInitializer(binding);
+    if (initializer === undefined) break;
     seen.add(binding);
-    value = unwrapped(binding.initializer);
+    value = unwrapped(initializer);
   }
   return value;
 }
