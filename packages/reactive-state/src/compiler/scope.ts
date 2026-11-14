@@ -28,6 +28,7 @@ import {
   isComputedPropertyName,
   isConstructorDeclaration,
   isContinueStatement,
+  isDecorator,
   isEnumDeclaration,
   isEnumMember,
   isExpressionWithTypeArguments,
@@ -62,7 +63,6 @@ import {
   isSetAccessorDeclaration,
   isStringLiteral,
   isTypeAliasDeclaration,
-  isTypeNode,
   isTypeParameterDeclaration,
   isTypeQueryNode,
   isTypeReferenceNode,
@@ -80,6 +80,7 @@ import {
 } from 'typescript/ast';
 
 import type { Fail } from './errors.ts';
+import { isTypeSyntax } from './type-syntax.ts';
 
 /**
  * Names, followed lexically through a part of the component — the code before the state, the
@@ -171,7 +172,7 @@ export function walk(root: Node, names: Names, visitor: Visitor, fail: Fail): vo
     }
     visitor.global?.(identifier);
   };
-  const visit = (node: Node, scope: ReadonlySet<string>): void => {
+  const visit = (node: Node, scope: ReadonlySet<string>, outside?: ReadonlySet<string>): void => {
     // A type is erased from what runs, and a signature of no body with it (`isTypeOnly`), so the
     // names in either are no reads, nor declarations; but each output names the types it uses, and
     // so is told of them.
@@ -183,7 +184,7 @@ export function walk(root: Node, names: Names, visitor: Visitor, fail: Fail): vo
     if (isIdentifier(node)) {
       identify(node, scope);
     }
-    eachInScope(node, scope, visit);
+    eachInScope(node, scope, visit, outside);
   };
   visit(
     root,
@@ -196,15 +197,13 @@ function declaredAgain(name: string): string {
 }
 
 /**
- * Whether `node` is erased from what runs, with the types: a type — but `f<T>`, an instantiation
- * expression, and a class's `extends`, which TypeScript counts among the type nodes but which read
- * their expression — an alias, an interface, a type parameter, or a signature of no body: an
- * overload's, an abstract method's, a class's index signature. A parameter of any of them declares
- * nothing that runs, whatever it is named.
+ * Whether `node` is erased from what runs, with the types (`isTypeSyntax`): an alias, an interface, a
+ * type parameter, or a signature of no body: an overload's, an abstract method's, a class's index
+ * signature. A parameter of any of them declares nothing that runs, whatever it is named.
  */
 export function isTypeOnly(node: Node): boolean {
   return (
-    (isTypeNode(node) && !isExpressionWithTypeArguments(node)) ||
+    isTypeSyntax(node) ||
     isTypeAliasDeclaration(node) ||
     isInterfaceDeclaration(node) ||
     isTypeParameterDeclaration(node) ||
@@ -350,7 +349,7 @@ function isFunctionNode(node: Node): node is FunctionNode {
  */
 export function freeReads(root: Node): readonly Identifier[] {
   const found: Identifier[] = [];
-  const visit = (node: Node, scope: ReadonlySet<string>): void => {
+  const visit = (node: Node, scope: ReadonlySet<string>, outside?: ReadonlySet<string>): void => {
     if (isTypeOnly(node)) {
       return;
     }
@@ -360,7 +359,7 @@ export function freeReads(root: Node): readonly Identifier[] {
       }
       return;
     }
-    eachInScope(node, scope, visit);
+    eachInScope(node, scope, visit, outside);
   };
   visit(root, new Set());
   return found;
@@ -370,16 +369,19 @@ export function freeReads(root: Node): readonly Identifier[] {
  * Visits each child of `node` in the scope it is in: `scope`, or, within a function, a block, a
  * loop or a `catch`, what it declares as well — a function's `var`s within its body alone, its
  * parameters' defaults being read before the body runs, where a `var` of the body does not reach;
- * and a method's computed name in `scope`, where the method is defined.
+ * a method's computed name in `scope`, where the method is defined; and a decorator in `scope` as
+ * well, where the class is defined, outside the parameters of the method it decorates — a
+ * parameter's too, which `outside` is the scope of, where `node` is the parameter.
  */
 function eachInScope(
   node: Node,
   scope: ReadonlySet<string>,
-  visit: (child: Node, scope: ReadonlySet<string>) => void,
+  visit: (child: Node, scope: ReadonlySet<string>, outside?: ReadonlySet<string>) => void,
+  outside?: ReadonlySet<string>,
 ): void {
   if (!opensScope(node)) {
     node.forEachChild((child) => {
-      visit(child, scope);
+      visit(child, outside !== undefined && isDecorator(child) ? outside : scope);
     });
     return;
   }
@@ -390,8 +392,10 @@ function eachInScope(
   node.forEachChild((child) => {
     if (child === bodyNode) {
       visit(child, body);
+    } else if (child === keyNode || isDecorator(child)) {
+      visit(child, scope);
     } else {
-      visit(child, child === keyNode ? scope : inner);
+      visit(child, inner, isParameterDeclaration(child) ? scope : undefined);
     }
   });
 }

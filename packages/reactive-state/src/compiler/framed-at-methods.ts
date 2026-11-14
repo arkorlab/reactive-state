@@ -10,6 +10,7 @@ import {
   isConditionalExpression,
   isElementAccessExpression,
   isExpressionStatement,
+  isHeritageClause,
   isIdentifier,
   isMethodDeclaration,
   isObjectLiteralExpression,
@@ -18,7 +19,6 @@ import {
   isReturnStatement,
   isSetAccessorDeclaration,
   isSpreadAssignment,
-  isTypeNode,
   isVariableDeclaration,
   isVariableStatement,
   type MethodDeclaration,
@@ -33,7 +33,9 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { iteratorQuietValues } from './framed-iterator-guards.ts';
 import { framedCondition } from './framed-sources.ts';
+import { framedWrittenTargets } from './framed-written-targets.ts';
 import { constantValue } from './numbers.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** Result-sensitive selectors inspect only source-proven synchronous own method bodies. */
 
@@ -67,12 +69,15 @@ export function framedReceiverDispatch(
   return writtenFunctions(value)?.some((fn) => receiverUsed(fn, receiver)) === true;
 }
 
-/** An arrow has no `this` of its own; a nested function, accessor or class binds a new one. */
+/**
+ * An arrow has no `this` of its own; a nested function, accessor or class binds a new one, but not
+ * for the expression a class extends.
+ */
 function receiverUsed(fn: Answering, receiver: (node: Identifier) => boolean): boolean {
   const pending: ReceiverReading[] = [{ node: fn, nested: false, own: !isArrowFunction(fn) }];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const { node, nested, own } = at;
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     const used =
       (own && node.kind === SyntaxKind.ThisKeyword) || (isIdentifier(node) && receiver(node));
     if (used && (nested || !returnedBy(node, fn))) return true;
@@ -84,7 +89,11 @@ function receiverUsed(fn: Answering, receiver: (node: Identifier) => boolean): b
         isClassExpression(node));
     const binds = inner && !isArrowFunction(node);
     node.forEachChild((child) => {
-      pending.push({ node: child, nested: nested || inner, own: own && !binds });
+      pending.push({
+        node: child,
+        nested: nested || inner,
+        own: own && (!binds || isHeritageClause(child)),
+      });
     });
   }
   return false;
@@ -180,7 +189,8 @@ function nextFunctions(value: Node): readonly Node[] | undefined {
 function nextFunction(value: Node): Node | undefined {
   if (isIdentifier(value)) {
     const declared = frameDeclarationOf(value);
-    if (declared !== undefined && isAnswering(declared)) return declared;
+    if (declared !== undefined && isAnswering(declared))
+      return writtenElsewhere(declared) ? undefined : declared;
     const initializer = constantInitializer(value);
     return initializer === undefined ? undefined : unwrapped(initializer);
   }
@@ -188,6 +198,25 @@ function nextFunction(value: Node): Node | undefined {
   const member = writtenMember(value);
   if (member === undefined || isMethodDeclaration(member)) return member;
   return unwrapped(member);
+}
+
+/**
+ * Whether the file writes the name of a function declaration, by an assignment or a pattern whose
+ * value or key the compile cannot read as well: the name may hold what was written instead.
+ */
+function writtenElsewhere(declared: Node): boolean {
+  const pending: Node[] = [declared.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    for (const target of framedWrittenTargets(node)) {
+      const name = unwrapped(target);
+      const found: Node | undefined = isIdentifier(name) ? frameDeclarationOf(name) : undefined;
+      if (found === declared) return true;
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /** A fixed plain data literal stays data behind an assertion; opaque receivers retain assertions. */

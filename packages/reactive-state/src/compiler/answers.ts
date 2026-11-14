@@ -75,13 +75,16 @@ export function overloadsOf(fn: Answering): readonly Answering[] {
     return [fn];
   }
   const { name, parent } = fn;
-  if (!isSourceFile(parent) && !isBlock(parent) && !isModuleBlock(parent)) {
+  const clause = parent.kind === SyntaxKind.CaseClause || parent.kind === SyntaxKind.DefaultClause;
+  if (!clause && !isSourceFile(parent) && !isBlock(parent) && !isModuleBlock(parent)) {
     return [fn];
   }
-  return parent.statements.filter(
-    (each): each is FunctionDeclaration =>
-      isFunctionDeclaration(each) && each.name?.text === name.text,
-  );
+  // A clause of a switch lists its statements after the case expression, as its children.
+  const found: FunctionDeclaration[] = [];
+  parent.forEachChild((each) => {
+    if (isFunctionDeclaration(each) && each.name?.text === name.text) found.push(each);
+  });
+  return found;
 }
 
 /** The function that answers what a module declares is called: one written, a method, a getter. */
@@ -325,7 +328,11 @@ export function localsOf(fn: Answering): Locals {
       node.forEachChild(visit);
     }
   };
-  fn.body?.forEachChild(visit);
+  // The body itself is visited, not only what it holds: a body that is a function or a class, as of
+  // `(a) => (b) => …`, declares nothing of `fn`'s.
+  if (fn.body !== undefined) {
+    visit(fn.body);
+  }
   const locals: Locals = {
     constants: new Map([...constants].filter(([name]) => counts.get(name) === 1)),
     declared: new Set(counts.keys()),

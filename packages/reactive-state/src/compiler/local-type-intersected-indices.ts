@@ -3,6 +3,7 @@ import {
   isExpressionWithTypeArguments,
   isIntersectionTypeNode,
   isLiteralTypeNode,
+  isNoSubstitutionTemplateLiteral,
   isParenthesizedTypeNode,
   isUnionTypeNode,
   isTemplateLiteralTypeNode,
@@ -136,14 +137,20 @@ function indexOperands(at: TypeReading, resolve: Resolve): readonly TypeReading[
   return result;
 }
 
-/** String and numeric literal identities remain distinct until the final property selection. */
+/**
+ * String and numeric literal identities remain distinct until the final property selection; a
+ * template without substitutions, `` `a` ``, is the string `'a'`, as a finite template key is.
+ */
 function literalDomain(at: TypeReading, resolve: Resolve): Domain | undefined {
   const { type } = at;
   if (isExpressionWithTypeArguments(type)) return undefined;
   if (type.kind === SyntaxKind.NeverKeyword) return new Map();
   if (isLiteralTypeNode(type)) {
     const key = literalKey(type);
-    return key === undefined ? undefined : new Map([[`${literalKind(type)}:${key}`, at]]);
+    const kind = isNoSubstitutionTemplateLiteral(type.literal)
+      ? SyntaxKind.StringKeyword
+      : literalKind(type);
+    return key === undefined ? undefined : new Map([[`${kind}:${key}`, at]]);
   }
   if (!isTemplateLiteralTypeNode(type)) return undefined;
   const keys = finiteIndexKeys(at, (reading) => indexOperands(reading, resolve));

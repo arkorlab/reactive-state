@@ -238,13 +238,20 @@ function emptyAssignSource(node: Expression): boolean {
   );
 }
 
-/** A native error constructor keeps its identity through immutable lexical value aliases. */
+/**
+ * A native error constructor keeps its identity through immutable lexical value aliases, and
+ * through a comma, whose value is its last operand's: `(0, Reflect.get)` is `Reflect.get`.
+ */
 export function framedNativeConstructor(node: Expression, names: ReadonlySet<string>): boolean {
   const seen = new Set<Node>();
   let value = unwrapped(node);
   while (!seen.has(value)) {
     seen.add(value);
     if (names.has(globalPathOf(value)?.join('.') ?? '')) return true;
+    if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken) {
+      value = unwrapped(value.right);
+      continue;
+    }
     if (!isIdentifier(value)) return false;
     const initializer = constantInitializer(value);
     if (initializer === undefined) return false;

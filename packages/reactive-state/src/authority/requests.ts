@@ -44,8 +44,16 @@ function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * Whether `value` is one a field is sent: text, a boolean, or a number JSON carries — a finite one.
+ * JSON writes any other as `null`, which no field is sent either.
+ */
 function isValue(value: unknown): value is Value {
-  return typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string';
+  return (
+    typeof value === 'boolean' ||
+    typeof value === 'string' ||
+    (typeof value === 'number' && Number.isFinite(value))
+  );
 }
 
 function invalid(code: string, message: string): Error {
@@ -99,9 +107,12 @@ function carriedObject(record: Readonly<Record<string, Json | undefined>>): Reco
   return copied;
 }
 
-/** JSON carries signed zero as zero and non-finite field numbers as null. */
-function normalizedNumber(value: number): number | null {
-  return Number.isFinite(value) ? value + 0 : null;
+/**
+ * JSON carries signed zero as zero. Every number copied is finite: a field's value (`isValue`) as
+ * any number of JSON (`isCarriedJson`).
+ */
+function normalizedNumber(value: number): number {
+  return value + 0;
 }
 
 /** The root a page renders: `{ component, props, build }`, its props copied as JSON carries them. */

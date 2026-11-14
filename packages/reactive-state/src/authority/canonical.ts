@@ -78,6 +78,13 @@ interface Walk {
   readonly seen: Set<WeakKey>;
   /** Whether a hole of an array is taken, which JSON carries as `null` (`isCarriedJson`). */
   readonly holes: boolean;
+  /**
+   * Each object already read as JSON in this walk, by the deepest it was read at. An object the value
+   * holds more than once — no cycle: shared — is read again only where it stands deeper, and fits a
+   * shallower place as it fits that one, so a small graph of shared objects, as a structured clone
+   * carries one, takes work of its objects and depths rather than of the JSON it writes.
+   */
+  readonly read: Map<WeakKey, number>;
 }
 
 /** An array's own data slots, without consulting its prototype for holes or traversal methods. */
@@ -118,6 +125,9 @@ function jsonWithin(value: unknown, depth: number, walk: Walk): boolean {
   ) {
     return false;
   }
+  if ((walk.read.get(value) ?? -1) >= depth) {
+    return true;
+  }
   // An entry a symbol keys, which no JSON holds: copied without it, the value would be another.
   if (Object.getOwnPropertySymbols(value).length > 0) {
     return false;
@@ -130,6 +140,9 @@ function jsonWithin(value: unknown, depth: number, walk: Walk): boolean {
     ? arrayJsonWithin(value, depth, walk)
     : Object.values(value).every((item) => item === undefined || jsonWithin(item, depth + 1, walk));
   walk.seen.delete(value);
+  if (json) {
+    walk.read.set(value, depth);
+  }
   return json;
 }
 
@@ -139,7 +152,7 @@ function jsonWithin(value: unknown, depth: number, walk: Walk): boolean {
  * property holding `undefined` is one JSON leaves out — nested no deeper than 64 and with no cycle.
  */
 export function isJson(value: unknown): value is Json {
-  return jsonWithin(value, 0, { holes: false, seen: new Set() });
+  return jsonWithin(value, 0, { holes: false, read: new Map(), seen: new Set() });
 }
 
 /**
@@ -150,7 +163,7 @@ export function isJson(value: unknown): value is Json {
  * reach the page as JSON alone, as React carries them.
  */
 export function isCarriedJson(value: unknown): value is Json {
-  return jsonWithin(value, 0, { holes: true, seen: new Set() });
+  return jsonWithin(value, 0, { holes: true, read: new Map(), seen: new Set() });
 }
 
 function written(value: unknown, out: string[]): void {

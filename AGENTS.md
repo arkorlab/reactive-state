@@ -12,6 +12,7 @@ to the code.
   the way to the first byte.
 - **Refuse rather than guess.** What the compiler cannot show safe to take, it refuses, with a
   message that says what it read. A refusal is a feature; taking code it cannot check is the bug.
+  The checks are a diagnostic for honest mistakes, not a sandbox: see "Scope of the checks".
 - **No new application-facing API** without an issue agreeing its shape first.
 - Commits are signed; `main` refuses unsigned ones. A pushed branch is never rebased or
   force-pushed: when `main` moves, merge it in.
@@ -50,8 +51,10 @@ to the code.
 ## The compiler's syntax trees
 
 The compiler reads TypeScript 7.1's syntax trees (`typescript/ast`, through `typescript.ts`), and no
-types but those the code writes. In that API a node's `parameters` may be missing
-(`node.parameters ?? []`), a `BindingElement`'s `name` may be `undefined`, and a
+types but those the code writes. In that API every node has a getter for every child, so
+`'parameters' in node` or `'name' in node` is true of any node and tells no kind apart: test the
+kind (`isSignatureDeclaration`, `isBlock`). A signature's `parameters` is a list, an empty one too,
+so it needs no `?? []`. A `BindingElement`'s `name` may be `undefined`, and a
 `ShorthandPropertyAssignment`'s `name` needs `isIdentifier` before `.text`.
 
 ## Where a change lands
@@ -92,6 +95,35 @@ In `packages/reactive-state/src/compiler/` unless named otherwise:
   table says so (`COMPRESSION_FORMATS`).
 - Only states the authority evaluates are checked for JSON: a test's state must read a prop
   (`first`), or the check never runs.
+
+## Scope of the checks
+
+The compiler tells an application's honest mistakes from what the language gives each side. It is a
+diagnostic for them, not a sandbox against code written to defeat it. A finding is fixed when:
+
+- a program an application plausibly writes reaches it: a type a generic component writes, a cast,
+  a class the application extends, a helper that assigns; or
+- the analysis hangs, or takes time that grows faster than the program does, on a program of that
+  kind; or
+- it is a security finding.
+
+A finding that needs code made to get past the checks is a known limit, not a defect: a getter, a
+hook or a prototype that rewrites what the program reads, a type that refers to itself through
+several steps, thousands of members, a cycle of modules whose cleanup code writes. It goes under
+"Known limits" below, or into the pull request's Standing decisions, and the checks do not grow to
+follow it. Where a form cannot be followed cheaply, refuse it rather than add machinery to follow
+it: a refusal is a message the developer can act on.
+
+## Known limits
+
+- A value query that a path of indexes enters again more than four times is read as unreadable, so a
+  path of five steps through a type that refers to itself does not name its `Error`.
+- Unfilled type parameters that each constrain another through an index (`T0 extends { a:
+  T1['a'] | … }`) cost work that grows faster than their count.
+- `{ [key: string]: Error }[string]`, and `ReturnType<T>` for a `T` constrained to `() => Error`,
+  are not read as naming an `Error`.
+- An angle-bracket assertion `<T>expr` is not peeled: what it wraps is read as a value the reader
+  cannot see into.
 
 ## Settled decisions
 

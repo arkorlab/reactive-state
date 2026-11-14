@@ -157,16 +157,27 @@ function isActionRef(value: unknown): value is ActionRef {
 
 /**
  * Whether `value` holds a node anywhere in it: a node is a plain object of JSON itself, which only
- * this tells from JSON a prop holds.
+ * this tells from JSON a prop holds. An object is looked in again only where it is reached shallower
+ * than it was looked in at (`looked`): from there it is looked in as deep as may be, where reached
+ * deeper first it was looked in less deep. Looked in each way it is reached, one that holds itself
+ * twice would be looked in twice as often at each depth, before what follows could refuse it as no
+ * JSON; so, each object is looked in at most once at each depth, and what holds itself once.
  */
-function holdsNode(value: unknown, depth = 0): boolean {
+function holdsNode(value: unknown, depth = 0, looked?: Map<WeakKey, number>): boolean {
   if (isNode(value)) {
     return true;
   }
   if (typeof value !== 'object' || value === null || depth >= MAX_DEPTH) {
     return false;
   }
-  return Object.values(value).some((item) => holdsNode(item, depth + 1));
+  const shallowest = looked?.get(value);
+  if (shallowest !== undefined && shallowest <= depth) {
+    return false;
+  }
+  // Made as the first object is looked in: none for the text and numbers most props are.
+  const depths = looked ?? new Map<WeakKey, number>();
+  depths.set(value, depth);
+  return Object.values(value).some((item) => holdsNode(item, depth + 1, depths));
 }
 
 /**
@@ -216,13 +227,45 @@ function isLeaf(value: unknown): value is Child {
   );
 }
 
+/**
+ * What a list says its `length` is, as `map` reads it (`ToLength`): an integer, of `NaN` and of what
+ * is below one none, and at most 2^53 - 1. Only a Proxy says another than an array's own.
+ */
+function lengthOf(stated: number): number {
+  const length = Math.trunc(stated);
+  return length > 0 ? Math.min(length, Number.MAX_SAFE_INTEGER) : 0;
+}
+
+/**
+ * What `each` makes of each element of `list`, by its positions — as React reads a list of children
+ * — in a frozen array of the language's own: never through a `map` the list holds, nor one of the
+ * kind its constructor makes (`Symbol.species`), either of which is the application's code. As many
+ * positions are read as it held as it was first read, as `map` reads them: what reading one adds to
+ * it is not read, and a list that adds one at each read ends. Each position is read as `map` reads
+ * it, and React a list's (`children[i]`): whether the list holds one there, of its own or of a
+ * prototype's (`HasProperty`), and then what it holds (`Get`) — a hole a prototype holds a child at
+ * shows that child, as it did. One held nowhere is kept a hole, as `map` keeps one.
+ */
+function positionally<T>(list: readonly unknown[], each: (item: unknown) => T): readonly T[] {
+  const length = lengthOf(list.length);
+  // Past 2^32 - 1, which no array is as long as, this throws, as `map` does as it makes its own.
+  const items: T[] = [];
+  items.length = length;
+  for (let index = 0; index < length; index += 1) {
+    if (Reflect.has(list, index)) {
+      items[index] = each(list[index]);
+    }
+  }
+  return Object.freeze(items);
+}
+
 /** What a reactive component is handed, as the tree keeps it: an `undefined` kept apart. */
 function givenChildOf(value: unknown): GivenChild {
   let given: GivenChild;
   if (value === undefined) {
     given = UNDEFINED_CHILD;
   } else if (Array.isArray(value)) {
-    given = Object.freeze((value as readonly unknown[]).map((item) => givenChildOf(item)));
+    given = positionally(value as readonly unknown[], (item) => givenChildOf(item));
   } else {
     given = childOf(value);
   }
@@ -237,7 +280,7 @@ function childOf(value: unknown): Child {
   } else if (isLeaf(value)) {
     child = value;
   } else if (Array.isArray(value)) {
-    child = Object.freeze((value as readonly unknown[]).map((item) => childOf(item)));
+    child = positionally(value as readonly unknown[], (item) => childOf(item));
   } else {
     throw new TypeError(
       'A component rendered what no child is: text, a number, an element, or a list of them.',

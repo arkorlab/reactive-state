@@ -15,18 +15,54 @@ import { fileFor, isFile, packageDirectory, typescriptFor } from '../authority/a
 /** The side of a component a module is read on. */
 export type Side = 'authority' | 'browser';
 
-/** How one of what loads an output resolves a package: under which conditions, by which fields. */
+/** How one of what loads an output resolves a package: under which conditions, to which entry. */
 interface Consumer {
   /** The conditions it resolves `exports` and `imports` under. */
   readonly conditions: readonly string[];
-  /** The fields it takes a package of no `exports` to name its entry by, the first that does. */
-  readonly mainFields: readonly string[];
+  /** The file it takes for the entry of the package of no `exports` in `directory`: Node's, or a bundler's. */
+  readonly entry: (directory: string, manifest: Json) => string | undefined;
   /** Whether it reads a package's `browser` field as a map of its files to others, as a bundler for the browser does. */
   readonly browserMap: boolean;
 }
 
 /** How a bundler for the browser — Rolldown's `browser` platform, Next.js's — reads an entry. */
 const BUNDLER_MAIN_FIELDS = ['browser', 'module', 'main'] as const;
+
+/**
+ * What Node tries for the entry of a package of no `exports` (`legacyMainResolve`), in its order:
+ * its `main`, a path from the package's directory, as written, with `.js`, `.json` or `.node`, or a
+ * directory's `index` of one of them; and then the package's own `index` of one of them.
+ */
+const NODE_MAIN = ['', '.js', '.json', '.node', '/index.js', '/index.json', '/index.node'] as const;
+const NODE_INDEX = ['index.js', 'index.json', 'index.node'] as const;
+
+/**
+ * The file Node takes for the entry of a package of no `exports` (`NODE_MAIN`), as it alone finds
+ * it: never its TypeScript, which a bundler takes first — though an `index.ts` stands beside the
+ * `index.js` Node runs — nor what a directory's own `package.json` names; and, where `main` names
+ * no file, or there is none, the package's own `index.js`.
+ */
+function nodeEntry(directory: string, manifest: Json): string | undefined {
+  const { main } = manifest;
+  const named = typeof main === 'string' ? path.resolve(directory, main) : undefined;
+  const candidates = [
+    ...(named === undefined ? [] : NODE_MAIN.map((suffix) => `${named}${suffix}`)),
+    ...NODE_INDEX.map((index) => path.join(directory, index)),
+  ];
+  return candidates.find((file) => isFile(file));
+}
+
+/**
+ * The file a bundler takes for the entry of a package of no `exports`: the entry the first of its
+ * fields that names one names — a `browser` field that maps files names none — or else its
+ * `index`, found as a path is, its TypeScript first.
+ */
+function bundlerEntry(directory: string, manifest: Json): string | undefined {
+  const entry = BUNDLER_MAIN_FIELDS.map((field) => manifest[field]).find(
+    (value) => typeof value === 'string',
+  );
+  return fileFor(path.join(directory, typeof entry === 'string' ? entry : 'index'));
+}
 
 /**
  * A bundler's ways of reading a package: as it is, and in each mode a build may run in, whose
@@ -53,18 +89,18 @@ const CONSUMERS: Readonly<Record<Side, readonly Consumer[]>> = {
       browserMap: false,
       // Node's own: `node-addons` among them, which it holds unless it runs with `--no-addons`.
       conditions: ['node', 'node-addons', 'import', 'module-sync', 'default'],
-      mainFields: ['main'],
+      entry: nodeEntry,
     },
     ...inEachMode({
       browserMap: true,
       conditions: ['workerd', 'worker', 'browser', 'import', 'default'],
-      mainFields: BUNDLER_MAIN_FIELDS,
+      entry: bundlerEntry,
     }),
   ],
   browser: inEachMode({
     browserMap: true,
     conditions: ['browser', 'import', 'module', 'default'],
-    mainFields: BUNDLER_MAIN_FIELDS,
+    entry: bundlerEntry,
   }),
 };
 
@@ -216,15 +252,12 @@ function exportedFile(
   const { exports } = manifest;
   // Absent, or `null`, which Node takes for absent.
   if (exports === undefined || exports === null) {
-    // A package of no `exports`: the entry the first of the consumer's fields names that names
-    // one — a `browser` field that maps files names none — or the file the subpath names as it lies;
-    // to a bundler for the browser, through what the `browser` field maps it to.
-    const entry = consumer.mainFields
-      .map((field) => manifest[field])
-      .find((value) => typeof value === 'string');
-    const main = typeof entry === 'string' ? entry : 'index';
-    const named = subpath === '.' ? main : subpath;
-    const file = fileFor(path.join(directory, named));
+    // A package of no `exports`: the file the consumer takes for its entry, or the file the subpath
+    // names as it lies; to a bundler for the browser, through what the `browser` field maps it to.
+    const file =
+      subpath === '.'
+        ? consumer.entry(directory, manifest)
+        : fileFor(path.join(directory, subpath));
     return consumer.browserMap ? remapped(directory, manifest, file) : file;
   }
   const map = isSugar(exports) ? { '.': exports } : (exports as Json);

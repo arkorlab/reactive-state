@@ -24,6 +24,10 @@ const config: KnipConfig = {
       entry: ['test/cloudflare/worker.ts'],
       ignore: ['test/support/app/actions/**'],
       ignoreDependencies: ['cloudflare'],
+      // The one module `src/compiler/answers.ts` imports that a later pull request brings, which
+      // `typecheck-expected.txt` allows `tsc` to miss in the same way; both go with that pull
+      // request.
+      ignoreUnresolved: ['./exported-values.ts'],
     },
   },
 };

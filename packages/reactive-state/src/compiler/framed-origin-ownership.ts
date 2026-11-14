@@ -4,7 +4,6 @@ import {
   isCatchClause,
   isIdentifier,
   isParameterDeclaration,
-  isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -15,7 +14,7 @@ import { framedMapKey } from './framed-map-keys.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Added native origins do not cross captured object bindings into another execution owner. */
 
@@ -36,7 +35,7 @@ export function framedOriginCoowned(
   const pending: Node[] = [source];
   const seen = new Set<Node>();
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (seen.has(node) || isTypeNode(node)) continue;
+    if (seen.has(node) || isTypeOnly(node)) continue;
     seen.add(node);
     if (isIdentifier(node) && readsBinding(node)) {
       const next = coownedBinding(node, consumer, localSource);

@@ -80,6 +80,21 @@ function buildMismatch(): Error {
   return refusal(HTTP_CONFLICT, BUILD_MISMATCH, 'The application was updated. Reload the page.');
 }
 
+/** The clock each engine was opened with, which the streams read without the engine offering it. */
+const CLOCKS = new WeakMap<AuthorityEngine, () => number>();
+
+/**
+ * The time by the clock `engine` was opened with — `Date.now` unless given — in epoch milliseconds:
+ * what it judges whether a session has expired by, which a stream reads to tell a refusal for the
+ * expiry of an asserted session's `expires` from one for its end. A function of this module and not
+ * a method of the engine: the package's entries export the class by name and not this, so no
+ * application reaches it. A stand-in for an engine that no constructor ran for, as a test makes,
+ * has the wall clock.
+ */
+export function engineNow(engine: AuthorityEngine): number {
+  return (CLOCKS.get(engine) ?? Date.now)();
+}
+
 /** The refusal of a request of no session, or of one that ended: sign in first (401). */
 function signInFirst(): Error {
   return refusal(HTTP_UNAUTHORIZED, 'UNAUTHENTICATED', 'Sign in first.');
@@ -154,6 +169,7 @@ export class AuthorityEngine {
     const externalPollMs = pollIntervalOf(options.externalPollMs);
     this.#publishes = publishes(this.#definition);
     this.#clock = options.clock ?? Date.now;
+    CLOCKS.set(this, this.#clock);
     this.#memo = new Memo(this.#clock);
     const timeoutMs = timeoutOf(options.timeoutMs);
     this.#db = new Database(options.sql);

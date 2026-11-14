@@ -1,48 +1,28 @@
 import {
   type Expression,
-  type ObjectLiteralElementLike,
-  type PropertyName,
-  type ArrayLiteralExpression,
-  isParameterDeclaration,
-  isArrayBindingPattern,
-  isArrayLiteralExpression,
   isArrowFunction,
-  isElementAccessExpression,
   isFunctionExpression,
-  isGetAccessorDeclaration,
-  isReturnStatement,
-  isStringLiteral,
-  isNumericLiteral,
-  isNoSubstitutionTemplateLiteral,
-  isIdentifier,
-  isObjectBindingPattern,
-  isObjectLiteralExpression,
-  isOmittedExpression,
-  isPropertyAccessExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
-  isSpreadElement,
-  isTypeNode,
+  isJsxExpression,
   type Node,
-  SyntaxKind,
   type ParameterDeclaration,
+  SyntaxKind,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
-import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
-import { framedDefaultTaken } from './framed-constructor-defaults.ts';
+import { isTypeOnly } from './scope.ts';
 
-/** Added constructor-default paths require finite, quiet source-written default evaluation. */
+/**
+ * Whether a constructor's defaults, and the expressions evaluated beside them, run nothing the
+ * application wrote. The scan is as coarse as it can be: it does not follow what a construction
+ * supplies, so a read that may run the application's code is work wherever it is written.
+ */
 
-interface Input {
-  readonly value: Expression;
-  readonly keys: readonly string[];
-  readonly any?: boolean;
-}
-
-type Inputs = readonly (readonly Input[])[];
-
+/**
+ * The kinds that run, or may run, the application's code. A member read, an element access and a
+ * pattern take their value from what the construction supplies, which may be a getter, a proxy or an
+ * iterator the compile does not follow: they are work, not data.
+ */
 const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrayBindingPattern,
   SyntaxKind.AwaitExpression,
   SyntaxKind.BinaryExpression,
   SyntaxKind.CallExpression,
@@ -50,11 +30,15 @@ const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ClassExpression,
   SyntaxKind.ComputedPropertyName,
   SyntaxKind.DeleteExpression,
+  SyntaxKind.ElementAccessExpression,
   SyntaxKind.GetAccessor,
+  SyntaxKind.JsxSpreadAttribute,
   SyntaxKind.MethodDeclaration,
   SyntaxKind.NewExpression,
+  SyntaxKind.ObjectBindingPattern,
   SyntaxKind.PostfixUnaryExpression,
   SyntaxKind.PrefixUnaryExpression,
+  SyntaxKind.PropertyAccessExpression,
   SyntaxKind.SetAccessor,
   SyntaxKind.SpreadAssignment,
   SyntaxKind.SpreadElement,
@@ -63,187 +47,27 @@ const OPAQUE_EVALUATION: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.YieldExpression,
 ]);
 
-/** Application calls and unknown member getters in any parameter keep the earlier scan. */
+/** A JSX child spread, `{...items}`, which iterates what it spreads; an attribute spread is none. */
+function spreadChild(node: Node): boolean {
+  return isJsxExpression(node) && node.dotDotDotToken !== undefined;
+}
+
+/**
+ * Whether the defaults of `parameters` and the expressions `evaluated` hold no work: names, literals
+ * and what is written of them alone. A function written in a default is not run by it, and a type
+ * is erased.
+ */
 export function framedConstructorDefaultEvaluation(
   parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
   evaluated: readonly Expression[],
 ): boolean {
   const pending: Node[] = [...parameters, ...evaluated];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node) || isArrowFunction(node) || isFunctionExpression(node)) continue;
-    if (OPAQUE_EVALUATION.has(node.kind)) return false;
-    if (!quietSelection(node, parameters, slots)) return false;
+    if (isTypeOnly(node) || isArrowFunction(node) || isFunctionExpression(node)) continue;
+    if (OPAQUE_EVALUATION.has(node.kind) || spreadChild(node)) return false;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return true;
-}
-
-/** A top-level parameter pattern reads only a shown literal source rather than opaque getters. */
-function knownPattern(
-  parameter: ParameterDeclaration,
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): boolean {
-  const source = parameterInput(parameters.indexOf(parameter), parameters, slots);
-  if (source === undefined) return false;
-  const value = defaultSource(source.value, source.keys, parameters, slots);
-  return (
-    value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
-  );
-}
-
-/** A parameter's definite supplied root or its definite selected default. */
-function parameterInput(
-  index: number,
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): Input | undefined {
-  const given = slots[index] ?? [];
-  const parameter = parameters[index];
-  if (parameter === undefined) return undefined;
-  if (framedDefaultTaken(given))
-    return parameter.initializer === undefined
-      ? undefined
-      : { keys: [], value: parameter.initializer };
-  return given.length === 1 ? given[0] : undefined;
-}
-
-/** Original parameter/member chains select only finite own literal fields, without call inference. */
-function defaultSource(
-  expression: Expression,
-  keys: readonly string[],
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): Expression | undefined {
-  let value = unwrapped(expression);
-  let remaining = [...keys];
-  const seen = new Set<Node>();
-  for (;;) {
-    if (seen.has(value)) return undefined;
-    seen.add(value);
-    const next = defaultStep(value, remaining, parameters, slots);
-    if (next === null) return value;
-    if (next === undefined) return undefined;
-    value = unwrapped(next.value);
-    remaining = [...next.keys];
-  }
-}
-
-/** A default's member read reaches one ordinary own field or a present ordinary array slot. */
-function literalField(value: Expression, key: string): Expression | undefined {
-  if (isArrayLiteralExpression(value)) return literalElement(value, key);
-  if (!isObjectLiteralExpression(value)) return undefined;
-  let field: Expression | undefined;
-  for (const property of value.properties) {
-    if (
-      !isPropertyAssignment(property) &&
-      !isShorthandPropertyAssignment(property) &&
-      !isGetAccessorDeclaration(property)
-    )
-      return undefined;
-    if (literalName(property.name) !== key) continue;
-    field = fieldResult(property);
-  }
-  return field;
-}
-
-/** Each source-written member or top-level pattern reads only a shown ordinary literal. */
-function quietSelection(
-  node: Node,
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): boolean {
-  if (isPropertyAccessExpression(node) || isElementAccessExpression(node))
-    return defaultSource(node, [], parameters, slots) !== undefined;
-  if (!isObjectBindingPattern(node) && !isArrayBindingPattern(node)) return true;
-  const parameter = parameters.find((each) => each.name === node);
-  return parameter === undefined || knownPattern(parameter, parameters, slots);
-}
-
-/** One parameter, member or literal field advances the finite default's original source. */
-function defaultStep(
-  value: Expression,
-  keys: readonly string[],
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): Input | null | undefined {
-  if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
-    const key = frameMemberName(value) ?? suppliedKey(value, parameters, slots);
-    return key === undefined ? undefined : { value: value.expression, keys: [key, ...keys] };
-  }
-  if (isIdentifier(value)) return selectedParameter(value, keys, parameters, slots);
-  const [key, ...rest] = keys;
-  if (key === undefined) return null;
-  const field = literalField(value, key);
-  return field === undefined ? undefined : { value: field, keys: rest };
-}
-
-/** A prior constructor parameter retains the definite actual source that its default can read. */
-function selectedParameter(
-  value: Expression,
-  keys: readonly string[],
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): Input | null | undefined {
-  if (!isIdentifier(value)) return undefined;
-  const selected = frameBindingOf(value);
-  const binding = selected?.binding;
-  const index =
-    binding !== undefined && isParameterDeclaration(binding) ? parameters.indexOf(binding) : -1;
-  if (index === -1) return keys.length === 0 ? null : undefined;
-  const input = parameterInput(index, parameters, slots);
-  return input === undefined || input.any === true
-    ? undefined
-    : { value: input.value, keys: [...input.keys, ...(selected?.keys ?? []), ...keys] };
-}
-
-/** A present finite native array position performs no unknown indexed getter evaluation. */
-function literalElement(value: ArrayLiteralExpression, key: string): Expression | undefined {
-  if (value.elements.some((each) => isSpreadElement(each))) return undefined;
-  const index = Number(key);
-  if (!Number.isSafeInteger(index) || index < 0 || String(index) !== key) return undefined;
-  const field = value.elements[index];
-  return field === undefined || isOmittedExpression(field) ? undefined : field;
-}
-
-/** A constructor key parameter may prove a quiet actual literal without changing unknown-key origins. */
-function suppliedKey(
-  value: Expression,
-  parameters: readonly ParameterDeclaration[],
-  slots: Inputs,
-): string | undefined {
-  if (!isElementAccessExpression(value)) return undefined;
-  const name = unwrapped(value.argumentExpression);
-  if (!isIdentifier(name)) return undefined;
-  const selected = frameBindingOf(name);
-  const binding = selected?.binding;
-  if (binding === undefined || !isParameterDeclaration(binding) || selected?.keys.length !== 0)
-    return undefined;
-  const input = parameterInput(parameters.indexOf(binding), parameters, slots);
-  if (input === undefined || input.any === true || input.keys.length > 0) return undefined;
-  const key = unwrapped(input.value);
-  return isIdentifier(key) ? undefined : literalName(key);
-}
-
-/** A direct source-return getter performs no other application work before selecting the field. */
-function fieldResult(property: ObjectLiteralElementLike): Expression | undefined {
-  if (isPropertyAssignment(property)) return property.initializer;
-  if (isShorthandPropertyAssignment(property))
-    return isIdentifier(property.name) ? property.name : undefined;
-  if (!isGetAccessorDeclaration(property)) return undefined;
-  const statements = property.body?.statements;
-  const first = statements?.[0];
-  return first !== undefined && statements?.length === 1 && isReturnStatement(first)
-    ? first.expression
-    : undefined;
-}
-
-/** Literal own names and supplied primitive keys have their original native spelling. */
-function literalName(name: PropertyName | Expression): string | undefined {
-  if (isIdentifier(name)) return name.text;
-  if (isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name)) return name.text;
-  return isNumericLiteral(name) ? String(Number(name.text)) : undefined;
 }

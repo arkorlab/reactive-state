@@ -35,6 +35,13 @@ export interface TypeReading {
 const IDENTITIES = new WeakMap<Node, number>();
 const SEQUENCE = { identity: 0 };
 
+/**
+ * The longest alias path read. Arguments made of inferred tuple positions (`[H, H, ...R]`) grow
+ * without any syntax repeating, so a recursion of them never meets an environment it has met; and
+ * what it costs to read one more level grows with the path. A path this long ends as a repeat does.
+ */
+const ALIAS_PATH = { limit: 32 } as const;
+
 /** A syntax node's identity, without retaining the tree after its compile. */
 function identityOf(node: Node): number {
   const previous = IDENTITIES.get(node);
@@ -138,13 +145,20 @@ function parameterValue(node: Node, reading: TypeReading): TypeReading | undefin
     : undefined;
 }
 
+const CONSTRAINT_KEY = 'constraint:';
+
+/** The entries of a path that stand for generic parameters whose constraints it has been read through. */
+export function constraintKeys(at: TypeReading): string[] {
+  return [...at.aliases].filter((key) => key.startsWith(CONSTRAINT_KEY));
+}
+
 /** A generic parameter's explicit constraint, with unresolved constraint cycles cut on this path. */
 export function constraintReading(
   parameter: TypeParameterDeclaration,
   at: TypeReading,
 ): TypeReading | undefined {
   const { constraint } = parameter;
-  const key = `constraint:${identityOf(parameter)}`;
+  const key = `${CONSTRAINT_KEY}${identityOf(parameter)}`;
   return constraint === undefined || at.aliases.has(key)
     ? undefined
     : { ...at, aliases: new Set([...at.aliases, key]), type: constraint };
@@ -157,7 +171,8 @@ export function initialTypeReading(type: TypeNode): TypeReading {
 
 /**
  * A declaration's parameters bound to caller arguments, or defaults in its own scope. Explicit
- * nested uses and re-entry with changed arguments may be finite; repeated environments are cycles.
+ * nested uses and re-entry with changed arguments may be finite; repeated environments, and paths
+ * longer than `ALIAS_PATH`, are cycles.
  */
 export function boundTypeBody(
   declaration: GenericDeclaration,
@@ -180,7 +195,7 @@ export function boundTypeBody(
     }
   }
   const key = typeBindingKey(declaration, bindings);
-  if (at.aliases.has(key)) return undefined;
+  if (at.aliases.has(key) || at.aliases.size >= ALIAS_PATH.limit) return undefined;
   aliases.add(key);
   return { aliases, bindings };
 }

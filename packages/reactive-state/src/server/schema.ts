@@ -87,9 +87,14 @@ export type Where<F extends Fields> = {
 /** The fields a query answers of each record, its `id` among them where it is named. */
 export type Select<F extends Fields> = Partial<Readonly<Record<keyof F | 'id', true>>>;
 
-/** A record as a query that selects `S` answers it: the fields it selects, and nothing else. */
+/**
+ * A record as a query that selects `S` answers it: the fields it selects, and nothing else. A field
+ * `S` may leave out — any, of a selection typed `Select<F>` — is one the record may not hold.
+ */
 export type Selected<F extends Fields, S> = {
-  readonly [K in (keyof F | 'id') & keyof S]: K extends 'id' ? string : FieldType<F[K & keyof F]>;
+  readonly [K in keyof S as K extends keyof F | 'id' ? K : never]: K extends 'id'
+    ? string
+    : FieldType<F[K & keyof F]>;
 };
 
 type Sortable<F extends Fields> = (Comparable<F> & string) | 'id';
@@ -323,7 +328,7 @@ function uniqueOf(fields: Fields, unique: unknown): readonly (readonly string[])
  * store's name that is none.
  */
 function checkExternal(
-  external: string | undefined,
+  external: unknown,
   options: {
     readonly public?: readonly unknown[] | undefined;
     readonly unique?: readonly unknown[] | undefined;
@@ -331,6 +336,11 @@ function checkExternal(
 ): void {
   if (external === undefined) {
     return;
+  }
+  // Text alone, as a caller in JavaScript, or through `any`, may give another value: `NAME` would
+  // test the text it converts to, and take `null`, `true` or `['store']` for a name.
+  if (typeof external !== 'string') {
+    fail("a store's name is text: a letter, then letters, digits or _");
   }
   if (!NAME.test(external)) {
     fail(`\`${external}\` is not a store's name: a letter, then letters, digits or _`);

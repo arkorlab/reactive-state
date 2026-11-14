@@ -6,6 +6,7 @@ import {
   isNoSubstitutionTemplateLiteral,
   isPropertyAccessExpression,
   isStringLiteral,
+  isTypeAssertion,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -13,7 +14,7 @@ import { globalPathOf } from './code-globals.ts';
 
 /**
  * What of the code makes an iterator, as the language does (`retained.ts`, `kept.ts`): a method
- * that answers one, `Iterator.from`, a generator called, a helper of one called on it.
+ * that answers one, `Iterator.from` and its kin, a generator called, a helper of one called on it.
  */
 
 /** The methods of a value that answer an iterator of it, which no JSON holds. */
@@ -30,11 +31,39 @@ export const ITERATING: ReadonlySet<string> = new Set([
 /** The methods of an iterator that answer another of what it is of — of an array, its own. */
 const ITERATOR_HELPERS: ReadonlySet<string> = new Set(['drop', 'filter', 'flatMap', 'map', 'take']);
 
+/** The functions of `Iterator` that make one: of what they are given, of several in turn, at once. */
+const ITERATOR_MAKERS: ReadonlySet<string> = new Set([
+  'Iterator.concat',
+  'Iterator.from',
+  'Iterator.zip',
+  'Iterator.zipKeyed',
+]);
+
+/** The methods of a function that call it on what they are given first. */
+const BORROWING: ReadonlySet<string> = new Set(['apply', 'call']);
+
+/** The functions of a global that answer an array, by the names of the methods that answer an iterator. */
+const ANSWERING_ARRAYS: ReadonlySet<string> = new Set([
+  'Object.entries',
+  'Object.keys',
+  'Object.values',
+]);
+
+/** `node` past what `unwrapped` strips and the casts in angle brackets it leaves, `<any>items.values`. */
+function uncast(node: Expression): Expression {
+  let each = unwrapped(node);
+  while (isTypeAssertion(each)) {
+    each = unwrapped(each.expression);
+  }
+  return each;
+}
+
 /**
  * Whether `node` is an iterator, where the code makes one: of a method that answers one
- * (`ITERATING`), `items.values()`; of `Iterator.from(…)`; of a call `isGenerator` says calls a
- * generator; of a method of one that answers another (`ITERATOR_HELPERS`) — a name read as what
- * `reach` says it holds.
+ * (`ITERATING`), `items.values()`; of a global's function that makes one (`makesIterator`),
+ * `Iterator.from(…)`; of a call `isGenerator` says calls a generator, whatever it is named; of a
+ * method of one that answers another (`ITERATOR_HELPERS`), read by its name or by text in brackets,
+ * `['map']` — a name read as what `reach` says it holds.
  */
 export function isIterator(
   node: Expression,
@@ -42,23 +71,82 @@ export function isIterator(
   isGenerator: (call: CallExpression) => boolean,
 ): boolean {
   const seen = new Set<Expression>();
-  for (let value = reach(node); isCallExpression(value) && !seen.has(value);) {
+  for (let value = uncast(reach(node)); isCallExpression(value) && !seen.has(value);) {
     seen.add(value);
-    const callee = unwrapped(value.expression);
-    const path = globalPathOf(callee);
-    if (path !== undefined) {
-      return path.join('.') === 'Iterator.from';
+    const callee = uncast(value.expression);
+    const path = globalPathOf(callee) ?? borrowedSymbolPath(callee);
+    const made = path === undefined ? undefined : makesIterator(path);
+    if (made !== undefined) {
+      return made;
     }
     const name = calledName(callee);
     if (name !== undefined && ITERATING.has(name)) {
       return true;
     }
-    if (name === undefined || !ITERATOR_HELPERS.has(name) || !isPropertyAccessExpression(callee)) {
-      return isGenerator(value);
+    // A generator the code writes answers an iterator whatever it is named, `source.map()` of
+    // `{ *map() { … } }`: asked before the call is read as a helper of the iterator it is called on.
+    if (isGenerator(value)) {
+      return true;
     }
-    value = reach(callee.expression);
+    if (
+      name === undefined ||
+      !ITERATOR_HELPERS.has(name) ||
+      !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
+    ) {
+      return false;
+    }
+    value = uncast(reach(callee.expression));
   }
   return false;
+}
+
+/**
+ * Whether a call of the global `path` makes an iterator: of a function of `Iterator`'s that makes
+ * one (`ITERATOR_MAKERS`), or of a method of a prototype that answers one (`ITERATING`) — or of
+ * `Iterator.prototype`'s, another (`ITERATOR_HELPERS`) — by its name or a symbol's
+ * (`borrowedSymbolPath`), called on the prototype, or on what `call` or `apply` is given first,
+ * `Array.prototype.values.call(items)`; none of a function that answers an array, `Object.keys(…)`
+ * (`ANSWERING_ARRAYS`); `undefined` of any other path, which the name of the method tells, as of
+ * `items.values()` — `process.argv.values()` calls a method of a value a global holds.
+ */
+function makesIterator(path: readonly string[]): boolean | undefined {
+  const called = BORROWING.has(path.at(-1) ?? '') ? path.slice(0, -1) : path;
+  if (ITERATOR_MAKERS.has(called.join('.'))) {
+    return true;
+  }
+  const [root, prototype, method, ...more] = called;
+  if (
+    prototype === 'prototype' &&
+    method !== undefined &&
+    more.length === 0 &&
+    (ITERATING.has(method) || (root === 'Iterator' && ITERATOR_HELPERS.has(method)))
+  ) {
+    return true;
+  }
+  return ANSWERING_ARRAYS.has(called.join('.')) ? false : undefined;
+}
+
+/**
+ * The names of a global's method keyed by a symbol the language knows, called through `call` or
+ * `apply` — `Array.prototype[Symbol.iterator].call(items)` — as `globalPathOf` reads one by its
+ * name: the global's first, the symbol's, then `call`'s or `apply`'s; none of another callee.
+ */
+function borrowedSymbolPath(callee: Expression): readonly string[] | undefined {
+  const borrowing = calledName(callee);
+  if (
+    borrowing === undefined ||
+    !BORROWING.has(borrowing) ||
+    !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
+  ) {
+    return undefined;
+  }
+  const method = uncast(callee.expression);
+  const symbol = calledName(method);
+  if (symbol?.startsWith('Symbol.') !== true || !isElementAccessExpression(method)) {
+    return undefined;
+  }
+  const of = globalPathOf(uncast(method.expression));
+  return of === undefined ? undefined : [...of, symbol, borrowing];
 }
 
 /**
@@ -72,7 +160,7 @@ function calledName(callee: Expression): string | undefined {
   if (!isElementAccessExpression(callee)) {
     return undefined;
   }
-  const key = unwrapped(callee.argumentExpression);
+  const key = uncast(callee.argumentExpression);
   if (isStringLiteral(key) || isNoSubstitutionTemplateLiteral(key)) {
     return key.text;
   }

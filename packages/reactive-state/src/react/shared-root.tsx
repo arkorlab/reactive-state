@@ -31,7 +31,11 @@ export interface SharedRootProps {
   readonly view: SharedView;
   /** Where the view's event stream is read from (`?view=` is added). */
   readonly events: string;
-  readonly status?: RenderStatus | undefined;
+  /**
+   * How the authority answered the render of the view: the tree is shown where it is `rendered`
+   * alone, so a root is always told — one told nothing would guess.
+   */
+  readonly status: RenderStatus;
   readonly children?: ReactNode;
 }
 
@@ -232,7 +236,10 @@ function FollowedView(props: SharedRootProps): ReactNode {
     follower.start();
     return () => {
       follower.stop();
+      // A refresh on its way is let go of with its timer, which would else hold back every refresh
+      // after it: a root hidden, as a page the router keeps is, and shown again asks anew.
       clearTimeout(refreshing.current);
+      refreshing.current = undefined;
     };
     // The stream follows the view, whatever generation of it is shown — anew once the route
     // rendered another after its stream was ended for good.

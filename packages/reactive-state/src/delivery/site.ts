@@ -327,11 +327,16 @@ async function pause(ms: number, signal: AbortSignal | undefined): Promise<void>
   }
 }
 
-/** GETs `url` and answers its JSON; anything but a 2xx answer is an error naming the status. */
+/**
+ * GETs `url` and answers its JSON; anything but a 2xx answer is an error naming the status, its
+ * body canceled unread: left to come in, it would hold its connection past the request's time limit
+ * and its caller's signal, which go with the request.
+ */
 export async function getJson<T>(url: string, request: SiteRequest): Promise<T> {
   return within(request.timeoutMs, request.signal, async (signal) => {
     const response = await fetch(url, { headers: { ...request.headers }, signal });
     if (!response.ok) {
+      await response.body?.cancel();
       throw new Error(`${url}: HTTP ${String(response.status)}`);
     }
     return (await response.json()) as T;
@@ -372,24 +377,29 @@ export function answeredBy(answer: unknown): string | undefined {
   return typeof deployment === 'string' ? deployment : undefined;
 }
 
-/** One request for a page, read whole: its status, and what it rendered. */
+/**
+ * One request for a page: what it rendered, read whole. A page that does not answer 2xx is an
+ * error naming the status, at once, its body canceled unread: read whole, it would hold the request
+ * until it ended, or until the request's time ran out and failed it as a timeout.
+ */
 async function readPage(
   page: string,
   headers: Readonly<Record<string, string>> | undefined,
   signal: AbortSignal,
-): Promise<{ readonly ok: boolean; readonly status: number; readonly html: string }> {
+): Promise<string> {
   const response = await fetch(page, { cache: 'no-store', headers: { ...headers }, signal });
-  return { html: await response.text(), ok: response.ok, status: response.status };
+  if (!response.ok) {
+    await response.body?.cancel();
+    throw new Error(`${page}: HTTP ${String(response.status)}`);
+  }
+  return response.text();
 }
 
 /** What `page` shows now, from one request; a page that does not answer 2xx is an error. */
 export async function pageShown(page: string, request: SiteRequest): Promise<Shown> {
-  const { html, ok, status } = await within(request.timeoutMs, request.signal, async (signal) =>
+  const html = await within(request.timeoutMs, request.signal, async (signal) =>
     readPage(page, request.headers, signal),
   );
-  if (!ok) {
-    throw new Error(`${page}: HTTP ${String(status)}`);
-  }
   return shownIn(html);
 }
 
@@ -416,14 +426,12 @@ export async function settle(
     const remaining = Math.max(0, deadline - Date.now());
     const limit = Math.min(remaining, options.requestTimeoutMs ?? remaining);
     try {
-      const { html, ok, status } = await within(limit, signal, async (limited) =>
+      // A page answered with a failure fails the settle as a request that fails does, at once
+      // (`readPage`): asked for again until the time is up, it would hold every delivery after it
+      // that long.
+      const html = await within(limit, signal, async (limited) =>
         readPage(page, options.headers, limited),
       );
-      // A page answered with a failure fails the settle as a request that fails does, at once:
-      // asked for again until the time is up, it would hold every delivery after it that long.
-      if (!ok) {
-        throw new Error(`${page}: HTTP ${String(status)}`);
-      }
       const rendered = shownIn(html);
       shown = oldestShown(rendered, options.records);
       if (shown >= revision) {
@@ -434,9 +442,15 @@ export async function settle(
         throw error;
       }
     }
-    if (Date.now() >= deadline) {
+    // A wait ends where the time does, rather than hold the deliveries after the settle past it, and
+    // no request is made once the time is up, which would have none of it left to be answered in.
+    const left = deadline - Date.now();
+    const wait = options.pollMs ?? DEFAULT_POLL_MS;
+    if (left > 0) {
+      await pause(Math.min(wait, left), signal);
+    }
+    if (wait >= left || Date.now() >= deadline) {
       throw new Error(`${page} still shows revision ${String(shown)}, not ${String(revision)}`);
     }
-    await pause(options.pollMs ?? DEFAULT_POLL_MS, signal);
   }
 }

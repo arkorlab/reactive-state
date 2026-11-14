@@ -34,6 +34,7 @@ import { type CallResultSelection, singleCallResultReading } from './local-type-
 import { capturedTypeReading } from './local-type-captured-sequences.ts';
 import { heritageReference } from './local-type-class-bases.ts';
 import { conditionalUtilityReadings, literalValue } from './local-type-conditional-utilities.ts';
+import { constrainedOperands, onConstraintPath } from './local-type-constrained-operands.ts';
 import { conditionalChecks } from './local-type-distribution.ts';
 import {
   constraintReading,
@@ -78,10 +79,8 @@ export function namesLocalMemberType(
   keys: readonly string[],
   names: ReadonlySet<string>,
 ): boolean {
-  const readings =
-    type === undefined
-      ? []
-      : memberReadings(initialReading(type), keys, (at) => operandReadings(at, names));
+  const operands = constrainedOperands((at) => operandReadings(at, names));
+  const readings = type === undefined ? [] : memberReadings(initialReading(type), keys, operands);
   return namesReadings(readings, names);
 }
 
@@ -124,7 +123,7 @@ export function namesLocalMemberArrayType(
     type !== undefined &&
     selectedArrayReadings(initialReading(type), keys, selection, {
       matches: (reading) => namesReadings([reading], names),
-      operands: (reading) => operandReadings(reading, names),
+      operands: constrainedOperands((reading) => operandReadings(reading, names)),
     })
   );
 }
@@ -142,10 +141,15 @@ export function namesLocalTypeArgument(
   });
 }
 
-const iterationOperands = (reading: Reading): Reading[] =>
-  operandReadings(reading, STANDARD_ERRORS);
+const iterationOperands = constrainedOperands((reading) =>
+  operandReadings(reading, STANDARD_ERRORS),
+);
 
-/** Literal positions of finite required iteration tuples, retaining each original type environment. */
+/**
+ * Literal places of the iteration tuples a type may be, retaining each original type environment. A
+ * type parameter no actual argument fills stands for its written constraint, as it does where
+ * members and elements are selected.
+ */
 export function localArrayIterationKeys(
   type: TypeNode,
   keys: readonly string[],
@@ -212,30 +216,36 @@ function constituentsOf(
   return utility === undefined ? undefined : [{ ...at, type: utility }];
 }
 
-/** Explicit members selected from each possible written object and index result. */
+/**
+ * Explicit members selected from each possible written object and index result. A type parameter no
+ * actual argument fills reads as its written constraint wherever the access names it, as it does
+ * where a member is selected directly, and what is selected from an object keeps the constraints
+ * that object was read through, so a constraint that names its own parameter ends as a cycle.
+ */
 function indexedReadings(
   indexed: IndexedAccessTypeNode,
   at: Reading,
   names: ReadonlySet<string>,
 ): Reading[] {
   const operands = (reading: Reading, intersections?: boolean) =>
-    operandReadings(reading, names, intersections);
+    constrainedOperands((each) => operandReadings(each, names, intersections))(reading);
+  const single = (each: Reading) => [operandOf(each, true)].filter((read) => read !== undefined);
+  const resolve = (reading: Reading) => constrainedOperands(single)(reading)[0];
   const objects = operands({ ...at, type: indexed.objectType });
   const indexReading = { ...at, type: indexed.indexType };
-  const finite = intersectedIndexReadings(indexReading, (reading) => operandOf(reading, true));
+  const finite = intersectedIndexReadings(indexReading, resolve);
   const indices = finite ?? operands(indexReading);
-  const result: Reading[] = [];
-  for (const object of objects) {
-    if (isExpressionWithTypeArguments(object.type)) continue;
-    for (const index of indices) {
+  return objects.flatMap((object) => {
+    const selected: Reading[] = [];
+    const sources = isExpressionWithTypeArguments(object.type) ? [] : indices;
+    for (const index of sources) {
       if (isExpressionWithTypeArguments(index.type)) continue;
-      result.push(
-        ...indexedMemberReadings(object, index, operands, (each) => operandOf(each, true)),
-      );
+      selected.push(...indexedMemberReadings(object, index, operands, resolve));
     }
-  }
-  if (finite === undefined) result.push(...intrinsicIndexReadings(indexReading, objects, operands));
-  return result;
+    if (finite === undefined)
+      selected.push(...intrinsicIndexReadings(indexReading, [object], operands));
+    return onConstraintPath(selected, object);
+  });
 }
 
 /** Transparent operands of a selected member, keeping each result's actual argument environment. */

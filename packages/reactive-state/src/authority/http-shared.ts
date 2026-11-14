@@ -9,8 +9,9 @@ import {
   GENERATION_HEADER,
   type SharedEvent,
 } from '../routing.ts';
-import { HTTP_OK } from '../status.ts';
+import { HTTP_BAD_REQUEST, HTTP_OK } from '../status.ts';
 import type { AuthorityEngine as Engine } from './engine.ts';
+import { refusal } from './errors.ts';
 import { json, presentedSession, readJson } from './respond.ts';
 import { SHARED_HEARTBEAT, SHARED_OPENING, SharedBacklog } from './shared-events.ts';
 
@@ -53,10 +54,19 @@ function headerOf(req: IncomingMessage, name: string): string | undefined {
 
 /**
  * The visitor's request the edge forwarded, as a gate's question: of the deployment the edge says
- * it is of (`GATE_DEPLOYMENT_HEADER`), where it says one.
+ * it is of (`GATE_DEPLOYMENT_HEADER`), where it says one. A URL that reads as no URL — `//`, `//:80`,
+ * `/\`, which the parser takes for a host, empty or invalid — is refused as a question of no URL is
+ * (`gateRequestOf`), not thrown by the parser, which the authority would answer as a fault of its own.
  */
 function forwardedQuestion(req: IncomingMessage, method: string): unknown {
-  const visitor = new URL(headerOf(req, GATE_URL_HEADER) ?? '/', 'https://gate.invalid');
+  const visitor = URL.parse(headerOf(req, GATE_URL_HEADER) ?? '/', 'https://gate.invalid');
+  if (visitor === null) {
+    throw refusal(
+      HTTP_BAD_REQUEST,
+      'INVALID_GATE',
+      'A gate is asked of a route, a URL, a method and headers.',
+    );
+  }
   const headers: Record<string, string> = {};
   for (const name of GATE_HEADERS) {
     const value = headerOf(req, name);

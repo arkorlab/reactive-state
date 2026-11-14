@@ -3,14 +3,18 @@ import {
   type Expression,
   type CallExpression,
   type Node,
+  type VariableDeclaration,
+  type ArrayLiteralExpression,
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
+  isForOfStatement,
   isIdentifier,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
-  isTypeNode,
+  isVariableDeclaration,
   isSourceFile,
   SyntaxKind,
 } from 'typescript/ast';
@@ -19,6 +23,7 @@ import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { emptyArrayFill } from './framed-array-fill-ranges.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
+import { arrayIdentity, isRootLiteral } from './framed-array-identity.ts';
 import { framedLogicalElementSkipped } from './framed-array-logical-writes.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
@@ -26,37 +31,67 @@ import { arrayPatternSources } from './framed-array-pattern-writes.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { UnfollowableError } from './framed-getter-writes.ts';
+import { knownUsesOnly } from './framed-known-mentions.ts';
+import type { Subject } from './framed-known-uses.ts';
+import {
+  invokedTargets,
+  mutatorInvocation,
+  returnedTargets,
+  soleTarget,
+} from './framed-mutator-calls.ts';
+import { possibleKey } from './framed-mutator-keys.ts';
+import { holdsLists } from './framed-nested-lists.ts';
+import { madeWithin } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
+import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
+import { isTypeOnly } from './scope.ts';
 
 export interface WrittenArrayElement extends AssignedFrameSource {
   readonly array?: boolean;
 }
 
-/** Source-written element assignments and native mutator inputs for one lexical literal-array identity. */
+/** What was written for each array expression, read and index, found once: a walk of the file each. */
+const WRITTEN = new WeakMap<
+  Expression,
+  WeakMap<Node, Map<number | undefined, readonly WrittenArrayElement[]>>
+>();
+
+/**
+ * Source-written element assignments and insertion arguments for one lexical literal-array
+ * identity. It does not return where a native object mutator may write the array, whose
+ * descriptors and sources nothing here reads: it throws `UnfollowableError`, so that no reader of
+ * the elements takes the array for one it followed (`arrayWritesUnfollowed` says so first).
+ */
 export function writtenArrayElements(
   value: Expression,
   read: Node,
   index?: number,
 ): readonly WrittenArrayElement[] {
+  const byRead =
+    WRITTEN.get(value) ??
+    new WeakMap<Node, Map<number | undefined, readonly WrittenArrayElement[]>>();
+  WRITTEN.set(value, byRead);
+  const byIndex = byRead.get(read) ?? new Map<number | undefined, readonly WrittenArrayElement[]>();
+  byRead.set(read, byIndex);
+  const known = byIndex.get(index);
+  if (known !== undefined) return known;
+  const found = collectWrittenElements(value, read, index);
+  byIndex.set(index, found);
+  return found;
+}
+
+/** The element assignments and insertion arguments that may run before the read, in one walk of the file. */
+function collectWrittenElements(
+  value: Expression,
+  read: Node,
+  index: number | undefined,
+): readonly WrittenArrayElement[] {
   const root = literalArrayBinding(value);
   if (root === undefined) return [];
-  const owner = executionOwner(read);
-  const candidates: Node[] = [];
-  const pending: Node[] = [read.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
-    if (
-      !isSourceFile(node) &&
-      possibleBefore(node, read, owner, root) &&
-      framedPossibleBranch(node)
-    )
-      candidates.push(node);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
+  const candidates = candidatesOf(root, read);
   const selected =
     index !== undefined && index >= 0 && candidates.every((node) => !positionsMove(node, root))
       ? index
@@ -75,6 +110,111 @@ export function writtenArrayElements(
   });
 }
 
+/** The nodes that may run before the read and may write the array: the program's, as its branches allow. */
+function candidatesOf(root: FrameBinding, read: Node): readonly Node[] {
+  const owner = executionOwner(read);
+  const candidates: Node[] = [];
+  const pending: Node[] = [read.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    if (
+      !isSourceFile(node) &&
+      possibleBefore(node, read, owner, root) &&
+      framedPossibleBranch(node)
+    )
+      candidates.push(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return candidates;
+}
+
+/**
+ * Whether every mention of the array that may run before the read is a use the compile knows. The
+ * mention the read selects from, where it is given, hands the array on only after it has read.
+ */
+function arrayUsesKnown(
+  root: VariableDeclaration,
+  {
+    read,
+    owner,
+    receiver,
+    subject,
+  }: {
+    readonly read: Node;
+    readonly owner: Node;
+    readonly receiver?: Expression;
+    readonly subject: Subject;
+  },
+): boolean {
+  return knownUsesOnly(root, subject, (name) => {
+    return (
+      (receiver === undefined || unwrapped(receiver) !== name) &&
+      possibleBefore(name, read, owner, root) &&
+      framedPossibleBranch(name)
+    );
+  });
+}
+
+/**
+ * Whether the compile does not follow every write to the array a read names: a mention of it, or of a
+ * name that stands for it, that may run before the read and is no use the compile knows, or a native
+ * object mutator of it (`Object.assign`, `Object.defineProperty`, `Object.defineProperties`),
+ * whatever it is handed, or a name of the chain the read goes by that is written as a whole
+ * elsewhere, which may hold another array than the one it was given. Such an array holds what the
+ * compile cannot show, and the read is refused, as is the read of an array a parameter holds the
+ * default literal of. Where the elements of the array may be lists (`scalar` tells those that are
+ * not), every use that hands an element out is refused as well: a write through the copy or the
+ * callback's parameter is a write to the list the array holds.
+ */
+export function arrayWritesUnfollowed(
+  value: Expression,
+  read: Node,
+  scalar?: (element: Expression, keys: readonly string[]) => boolean,
+): boolean {
+  const root = literalArrayBinding(value);
+  if (root === undefined) return false;
+  // A parameter holds the array it is called with, and the literal of its default only where none is
+  // given: what is written to it in the function is not every write to it.
+  if (!isVariableDeclaration(root)) return true;
+  if (arrayIdentity(value) === undefined) return true;
+  if (candidatesOf(root, read).some((node) => mutatesRoot(node, root))) return true;
+  const owner = executionOwner(read);
+  const lists =
+    scalar !== undefined &&
+    holdsLists(value, {
+      scalar,
+      literal: arrayLiteralOf,
+      written: (each) => writtenOrList(each, read),
+    });
+  const subject = lists ? 'carrier' : 'array';
+  return !arrayUsesKnown(root, { read, owner, receiver: value, subject });
+}
+
+/** What is written to an array, or, where the writes are not followed, a list it may hold. */
+function writtenOrList(array: Expression, read: Node): readonly WrittenArrayElement[] {
+  try {
+    return writtenArrayElements(array, read);
+  } catch (error) {
+    if (error instanceof UnfollowableError) return [{ value: array, keys: [], array: true }];
+    throw error;
+  }
+}
+
+/** Whether a node is a call of a native object mutator whose target may be the array. */
+function mutatesRoot(node: Node, root: FrameBinding): boolean {
+  const invoked = isCallExpression(node) ? mutatorInvocation(node) : undefined;
+  return invoked !== undefined && invokedTargets(invoked).some((each) => isRootArray(each, root));
+}
+
+const ELEMENT_WRITES = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 /**
  * Same-owner prefixes constrain writes, including those the read or copy evaluates in its own
  * receiver, key or arguments before it reads; other referenced execution owners remain possible.
@@ -82,11 +222,42 @@ export function writtenArrayElements(
 function possibleBefore(node: Node, read: Node, owner: Node, root: FrameBinding): boolean {
   const writer = executionOwner(node);
   return writer === owner
-    ? node.pos < read.pos ||
+    ? (node.pos < read.pos && !writesAfterOperands(node, read, root, owner)) ||
         evaluatedWithin(node, read) ||
         destructuredFirst(node, read) ||
         repeatedFrameRead(node, read, root, owner)
     : !unreferencedLocalFunction(writer, owner);
+}
+
+/**
+ * Whether a write that holds the read among its operands runs after it: the operands of a call or an
+ * assignment run before the write the call or the assignment makes, as `a.push(String(a), error)`
+ * reads the array as it was. A function that is run again, or a loop, brings an earlier pass's write
+ * back to the read, so the array must be one each run makes, and the loop not repeat it.
+ */
+function writesAfterOperands(node: Node, read: Node, root: FrameBinding, owner: Node): boolean {
+  const holds = node !== read && node.pos <= read.pos && read.end <= node.end;
+  return (
+    holds &&
+    madeWithin(root, owner) &&
+    evaluatesBeforeWriting(node, read) &&
+    !repeatedFrameRead(node, read, root, owner)
+  );
+}
+
+/** Whether a node, a call, an assignment or a loop head, makes its write only after the part the read lies in. */
+function evaluatesBeforeWriting(node: Node, read: Node): boolean {
+  if (isCallExpression(node)) return true;
+  if (isForOfStatement(node)) return within(read, node.expression);
+  if (!isBinaryExpression(node) || !ELEMENT_WRITES.has(node.operatorToken.kind)) return false;
+  const target = unwrapped(node.left);
+  const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
+  return !pattern || within(read, node.right);
+}
+
+/** Whether a node lies within another. */
+function within(node: Node, container: Node): boolean {
+  return node.pos >= container.pos && node.end <= container.end;
 }
 
 /** A write the read evaluates first, unless a written left operand short-circuits past it. */
@@ -110,15 +281,11 @@ function shortCircuits(node: BinaryExpression): boolean {
   );
 }
 
-const ELEMENT_WRITES = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
-
-/** Only indexed assignment positions and the insertion arguments of native mutators become elements. */
-function elementSources(
+/**
+ * Only indexed assignment positions and the insertion arguments of native array mutators become
+ * elements. A native object mutator of the array is not read: it throws `UnfollowableError`.
+ */
+export function elementSources(
   node: Node,
   root: FrameBinding,
   index: number | undefined,
@@ -136,12 +303,18 @@ function elementSources(
       : [{ value: node.right, keys: [] }];
   }
   if (!isCallExpression(node)) return [];
+  if (mutatorInvocation(node) !== undefined) {
+    // What a native object mutator installs depends on its descriptors, sources and getters, none of
+    // which is read: the array is one the compile does not follow.
+    if (mutatesRoot(node, root)) throw new UnfollowableError();
+    return [];
+  }
   const borrowed = borrowedElements(node, root);
   if (borrowed !== undefined) return borrowed;
   const member = unwrapped(node.expression);
   if (
     (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) ||
-    literalArrayBinding(member.expression) !== root ||
+    !mayBeArrayOf(member.expression, root) ||
     sourceArrayFunction(member)
   )
     return [];
@@ -157,55 +330,81 @@ function elementSources(
     })
   )
     return [];
-  const inserted = insertedArguments(method, node.arguments);
+  const inserted = insertedArguments(method, node.arguments, node);
   return inserted.map((value) => ({ value, keys: [] }));
 }
 
-/** Native insertion positions exclude splice's start/delete count and fill's range arguments. */
+/**
+ * Native insertion positions exclude splice's start/delete count and fill's range arguments; a
+ * written argument before the first spread keeps its position, later ones may be inserted. Fill
+ * writes its first runtime argument, which a spread may supply or leave to a later one.
+ */
 function insertedArguments(
   method: string | undefined,
   given: readonly Expression[],
+  call: CallExpression,
 ): readonly Expression[] {
   if (method !== 'push' && method !== 'unshift' && method !== 'splice' && method !== 'fill')
     return [];
-  if (method === 'fill') return given.slice(0, 1);
+  if (method === 'fill') return framedConsumedArguments(call, given, 1);
   if (method !== 'splice') return given;
-  return given.some((each) => isSpreadElement(each)) ? given : given.slice(2);
+  const spread = given.findIndex((each) => isSpreadElement(each));
+  return given.slice(spread === -1 ? 2 : Math.min(spread, 2));
 }
 
 const MOVING = new Set(['copyWithin', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
 
+/** Whether an expression is the array a binding holds: its name, or the literal it was initialized with. */
+export function isRootArray(expression: Expression, root: FrameBinding): boolean {
+  return literalArrayBinding(expression) === root || isRootLiteral(expression, root);
+}
+
+/**
+ * Whether the array a method is called on may be this one: the name of it, or any of the arrays the
+ * expression stands for, a condition, a comma, a logical operand, an assignment, a call that
+ * returns what it was called on.
+ */
+export function mayBeArrayOf(receiver: Expression, root: FrameBinding): boolean {
+  return returnedTargets(receiver).some((each) => isRootArray(each, root));
+}
+
 /** A possible position-moving mutator leaves every assigned numeric entry reachable. */
-function positionsMove(node: Node, root: FrameBinding): boolean {
+export function positionsMove(node: Node, root: FrameBinding): boolean {
   if (!isCallExpression(node)) return false;
   const borrowed = borrowedArrayMutation(node);
   if (borrowed !== undefined)
-    return literalArrayBinding(borrowed.receiver) === root && MOVING.has(borrowed.method);
+    return mayBeArrayOf(borrowed.receiver, root) && MOVING.has(borrowed.method);
   const member = unwrapped(node.expression);
   if (
     (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) ||
-    literalArrayBinding(member.expression) !== root ||
+    !mayBeArrayOf(member.expression, root) ||
     sourceArrayFunction(member)
   )
     return false;
   return MOVING.has(frameMemberName(member) ?? '');
 }
 
-/** Unknown computed positions may be numeric; known non-index own names are not joined elements. */
+/**
+ * Unknown computed positions may be numeric; known non-index own names are not joined elements, and
+ * neither is an integer past the greatest array index, which names an ordinary property.
+ */
 function possibleIndex(key: Expression, index: number | undefined): boolean {
   const value = constantValue(unwrapped(key));
   if (value === undefined) return true;
-  if (typeof value === 'number')
-    return Number.isSafeInteger(value) && value >= 0 && (index === undefined || value === index);
-  return (
-    typeof value === 'string' &&
-    /^(?:0|[1-9]\d*)$/u.test(value) &&
-    (index === undefined || Number(value) === index)
-  );
+  return (typeof value === 'number' || typeof value === 'string') && possibleKey(value, index);
+}
+
+/** The array literal an array expression is, or stands for through the names that only hold it. */
+function arrayLiteralOf(value: Expression): ArrayLiteralExpression | undefined {
+  const each = unwrapped(value);
+  if (isArrayLiteralExpression(each)) return each;
+  const root = literalArrayBinding(value);
+  const initial = root?.initializer === undefined ? undefined : unwrapped(root.initializer);
+  return initial !== undefined && isArrayLiteralExpression(initial) ? initial : undefined;
 }
 
 /** A written literal array behind lexical whole-value aliases, excluding destructured projections. */
-function literalArrayBinding(node: Expression): FrameBinding | undefined {
+export function literalArrayBinding(node: Expression): FrameBinding | undefined {
   let value = unwrapped(node);
   let root: FrameBinding | undefined;
   const seen = new Set<FrameBinding>();
@@ -216,7 +415,7 @@ function literalArrayBinding(node: Expression): FrameBinding | undefined {
     root = selected.binding;
     seen.add(root);
     if (root.initializer === undefined) return undefined;
-    value = unwrapped(root.initializer);
+    value = soleTarget(unwrapped(root.initializer));
   }
   return isArrayLiteralExpression(value) ? root : undefined;
 }
@@ -228,7 +427,7 @@ function borrowedElements(
 ): readonly WrittenArrayElement[] | undefined {
   const borrowed = borrowedArrayMutation(node);
   if (borrowed === undefined) return undefined;
-  if (literalArrayBinding(borrowed.receiver) !== root) return [];
+  if (!mayBeArrayOf(borrowed.receiver, root)) return [];
   if (
     borrowed.method === 'fill' &&
     emptyArrayFill(borrowed.given, {
@@ -240,7 +439,7 @@ function borrowedElements(
     })
   )
     return [];
-  const values = insertedArguments(borrowed.method, borrowed.given);
+  const values = insertedArguments(borrowed.method, borrowed.given, node);
   const possibleArray = ['fill', 'push', 'splice', 'unshift'].includes(borrowed.method)
     ? borrowed.unknownList
     : undefined;
