@@ -1,5 +1,7 @@
 import {
+  type CallExpression,
   type Expression,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
@@ -9,6 +11,7 @@ import {
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -141,9 +144,33 @@ function writtenValues(
     globalPathOf(unwrapped(node.expression))?.join('.') !== 'Object.assign'
   )
     return [];
-  const [target, ...sources] = framedArgumentPrefix(node, node.arguments, Infinity).values;
+  const [target, ...sources] = callArguments(node);
   if (target === undefined || !sameDescriptor(unwrapped(target), aliases)) return [];
+  if (framedArgumentPrefix(node).values[0] !== target) return [];
   return sources.flatMap((source) => sourceValues(source));
+}
+
+/**
+ * The arguments of a call in order, with the lists its spreads hold: a written list is read
+ * through, nested spreads too, and a held list as far as the call's argument prefix reads it. A
+ * spread the compile cannot expand leaves out what it holds and no more: the arguments after it are
+ * still there, so a source written after it still writes its `value`, wherever it stands. Which
+ * argument is the target is not told from here: a spread before it that is not expanded leaves
+ * that unknown, and `writtenValues` asks the prefix, which never shifts arguments past one.
+ */
+function callArguments(call: CallExpression): readonly Expression[] {
+  const values: Expression[] = [];
+  const pending = call.arguments.toReversed();
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (!isSpreadElement(each)) {
+      values.push(each);
+      continue;
+    }
+    const list = unwrapped(each.expression);
+    if (isArrayLiteralExpression(list)) pending.push(...list.elements.toReversed());
+    else values.push(...framedArgumentPrefix(call, [each], Infinity).values);
+  }
+  return values;
 }
 
 /**

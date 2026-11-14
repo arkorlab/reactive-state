@@ -82,6 +82,56 @@ const CASES = [
     values: ['e'],
   },
   {
+    id: 'unread-spread-then-literal',
+    source: 'Object.assign(d, ...extras, { value: e });',
+    values: ['e'],
+  },
+  {
+    id: 'two-unread-spreads-then-literal',
+    source: 'Object.assign(d, ...extras, ...more, { value: e });',
+    values: ['e'],
+  },
+  {
+    id: 'literal-spread-literal',
+    source: 'Object.assign(d, { value: first }, ...extras, { value: e });',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'unread-spread-in-a-written-list',
+    source: 'Object.assign(d, ...[{ value: first }, ...extras, { value: e }]);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'unread-spread-in-the-target-list',
+    source: 'Object.assign(...[d, ...extras, { value: e }]);',
+    values: ['e'],
+  },
+  {
+    id: 'held-list-then-unread-spread',
+    source: 'const held = [{ value: first }]; Object.assign(d, ...held, ...extras, { value: e });',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'written-list-spread-pin',
+    source: 'Object.assign(d, ...[{ value: first }, ...[{ value: e }]]);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'trailing-unread-spread-pin',
+    source: 'Object.assign(d, { value: e }, ...extras);',
+    values: ['e'],
+  },
+  {
+    id: 'unread-spread-before-the-target',
+    source: 'Object.assign(...extras, d, { value: e });',
+    values: [],
+  },
+  {
+    id: 'unread-spread-before-a-literal',
+    source: 'Object.assign(...extras, { value: e });',
+    values: [],
+  },
+  {
     id: 'later-source-unread',
     source: 'Object.assign(d, { value: e }, other);',
     values: ['e'],
@@ -135,7 +185,7 @@ describe('native Object.assign sources written into a descriptor', () => {
     using parsed = parseModule(
       api,
       'descriptor-assign-sources.ts',
-      `declare const source: object; declare const e: Error; declare const first: Error; declare const extra: object; declare const other: object; declare const name: string; declare function make(): object; declare function use(value: unknown): void;\n${DESCRIBED}\n${source}\nuse(d.value);`,
+      `declare const source: object; declare const e: Error; declare const first: Error; declare const extra: object; declare const extras: object[]; declare const more: object[]; declare const other: object; declare const name: string; declare function make(): object; declare function use(value: unknown): void;\n${DESCRIBED}\n${source}\nuse(d.value);`,
     );
     const read = descriptorRead(parsed.sourceFile);
 
