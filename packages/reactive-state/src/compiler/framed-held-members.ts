@@ -66,10 +66,14 @@ export interface HeldValues {
   readonly held: readonly Held[];
 }
 
-/** A source-written change reaching a read: where it stands and what it leaves on the path. */
+/**
+ * A source-written change reaching a read: where it stands and what it leaves on the path. The
+ * writes of one call stand at one node and run in turn, in the order of their `order`.
+ */
 interface Change {
   readonly node: Node;
   readonly held: Held;
+  readonly order: number;
 }
 
 /** The settings a definite change is looked for in. */
@@ -143,6 +147,7 @@ export function framedHeldValues(
     return {
       node: each.value,
       held: { value: each.value, keys: [...each.keys, ...path] },
+      order: 0,
     };
   });
   const { initializer } = selected.binding;
@@ -165,7 +170,7 @@ export function framedHeldValues(
       holder.initializer === undefined ? undefined : { value: holder.initializer, keys: path };
     return { initial, held: changes.map((each) => each.held) };
   }
-  const later = changes.filter((each) => !replacedBy(each.node, cut.node, point));
+  const later = changes.filter((each) => !replacedBy(each, cut, point));
   return { initial: undefined, held: [cut.held, ...later.map((each) => each.held)] };
 }
 
@@ -291,13 +296,14 @@ function memberChanges(
   point: Node,
 ): readonly Change[] {
   const reached: Change[] = [];
-  for (const write of framedMemberWrites(name.getSourceFile())) {
+  for (const [order, write] of framedMemberWrites(name.getSourceFile()).entries()) {
     if (write.holder !== holder || write.path.length > path.length) continue;
     if (write.path.some((names, index) => names?.includes(path[index] ?? '') === false)) continue;
     if (!reaches(write.node, name, point)) continue;
     reached.push({
       node: write.node,
       held: { value: write.value, keys: path.slice(write.path.length) },
+      order,
     });
   }
   return reached;
@@ -319,7 +325,7 @@ function lastDefinite(search: DefiniteSearch): Change | undefined {
   const candidates: readonly Change[] = [...reassignments(search), ...overwrites(search)];
   for (const candidate of candidates) {
     if (!definitelyBefore(candidate.node, search.point)) continue;
-    if (last === undefined || candidate.node.pos > last.node.pos) last = candidate;
+    if (last === undefined || stands(candidate, last)) last = candidate;
   }
   return last;
 }
@@ -329,22 +335,24 @@ function reassignments({ holder, path, point, direct }: DefiniteSearch): readonl
   if (!direct) return [];
   return framedVariableWrites(point.getSourceFile())
     .filter((write) => write.binding === holder)
-    .map((write) => ({ node: write.node, held: { value: write.value, keys: path } }));
+    .map((write) => ({ node: write.node, held: { value: write.value, keys: path }, order: 0 }));
 }
 
 /** Member writes on the path into the fresh ordinary object a variable assigned nothing anew holds. */
 function overwrites({ holder, path, point, assigned }: DefiniteSearch): readonly Change[] {
   const { initializer } = holder;
   if (initializer === undefined || assigned > 0 || !ordinaryObject(initializer)) return [];
-  const writes = framedMemberWrites(point.getSourceFile()).filter(
-    (write) => write.holder === holder,
+  const own = [...framedMemberWrites(point.getSourceFile()).entries()].filter(
+    ([, write]) => write.holder === holder,
   );
-  return writes
-    .filter((write) => exactPrefix(write, path) && replacesMember(initializer, write, writes))
-    .map((write) => {
+  const writes = own.map(([, write]) => write);
+  return own
+    .filter(([, write]) => exactPrefix(write, path) && replacesMember(initializer, write, writes))
+    .map(([order, write]) => {
       return {
         node: write.node,
         held: { value: write.value, keys: path.slice(write.path.length) },
+        order,
       };
     });
 }
@@ -438,11 +446,18 @@ function definitelyBefore(change: Node, point: Node): boolean {
   return false;
 }
 
-/** The definite change itself, and same-function changes before it, do not reach past it. */
-function replacedBy(change: Node, cut: Node, point: Node): boolean {
-  return (
-    change === cut || (change.pos < cut.pos && executionOwner(change) === executionOwner(point))
-  );
+/** Whether a definite change comes after another: later in the file, or later in one call. */
+function stands(change: Change, other: Change): boolean {
+  return change.node === other.node ? change.order > other.order : change.node.pos > other.node.pos;
+}
+
+/**
+ * The definite change itself, the writes of its own call that ran before it, and same-function
+ * changes before it, do not reach past it; what the same call writes after it does.
+ */
+function replacedBy(change: Change, cut: Change, point: Node): boolean {
+  if (change.node === cut.node) return change.order <= cut.order;
+  return change.node.pos < cut.node.pos && executionOwner(change.node) === executionOwner(point);
 }
 
 /** Whether a variable is declared whole with `const`, which nothing assigns anew. */
