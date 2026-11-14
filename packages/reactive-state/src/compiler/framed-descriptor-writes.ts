@@ -38,7 +38,7 @@ import { isTypeOnly } from './scope.ts';
 export function framedDescriptorWrites(node: Expression): readonly Expression[] {
   const aliases = descriptorAliases(node);
   if (aliases.size === 0) return [];
-  const values: Expression[] = [];
+  const values = new Set<Expression>();
   const owner = executionOwner(node);
   const pending: Node[] = [node.getSourceFile()];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
@@ -53,12 +53,12 @@ export function framedDescriptorWrites(node: Expression): readonly Expression[] 
         repeatsBefore(at, node, aliases, owner)) &&
       framedPossibleBranch(at)
     )
-      values.push(...written);
+      for (const each of written) values.add(each);
     at.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return values;
+  return [...values];
 }
 
 /**
@@ -138,13 +138,14 @@ const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
 
 /**
  * Direct value assignments and native Object.assign data entries keep their written RHS. The
- * `seen` objects are those whose own writes are being read: a source that writes another is read
- * through it once.
+ * `seen` objects are those whose writes have been read in this walk, by whichever source reached
+ * them first: nothing here replaces a value, so an object read once has given all it gives, and
+ * the walk follows each object once however many sources name it.
  */
 function writtenValues(
   node: Node,
   aliases: ReadonlySet<VariableDeclaration>,
-  seen: ReadonlySet<VariableDeclaration> = new Set(),
+  seen = new Set<VariableDeclaration>(),
 ): readonly Expression[] {
   if (isBinaryExpression(node) && VALUE_WRITES.has(node.operatorToken.kind)) {
     const target = unwrapped(node.left);
@@ -196,10 +197,7 @@ function callArguments(call: CallExpression): readonly Expression[] {
  * knows, and neither does a change of the object that is no write the walk reads: a call that is
  * handed it, a pattern or a loop head that targets a member of it.
  */
-function sourceValues(
-  source: Expression,
-  seen: ReadonlySet<VariableDeclaration>,
-): readonly Expression[] {
+function sourceValues(source: Expression, seen: Set<VariableDeclaration>): readonly Expression[] {
   const held = constantLiteral(source);
   if (held === undefined) return [];
   const entries =
@@ -234,7 +232,7 @@ function constantLiteral(expression: Expression): HeldLiteral | undefined {
  */
 function possibleValues(
   literal: ObjectLiteralExpression,
-  seen: ReadonlySet<VariableDeclaration>,
+  seen: Set<VariableDeclaration>,
 ): readonly Expression[] {
   const values: Expression[] = [];
   const read = new Set([literal]);
@@ -249,7 +247,7 @@ function possibleValues(
       if (held === undefined || read.has(held.literal)) continue;
       read.add(held.literal);
       pending.push(held.literal);
-      values.push(...writtenThrough(held.holders, seen));
+      for (const each of writtenThrough(held.holders, seen)) values.push(each);
     }
   }
   return values;
@@ -272,11 +270,12 @@ const FILE_WRITES = new WeakMap<SourceFile, FileWrites>();
  * it: `object.value = error`, `object[key] = error`, `object.value ??= error`, and a source of an
  * `Object.assign` into it, wherever they stand (a write after the copy comes back in a loop or a
  * call made again, so it counts). The writes are found by the variable a name resolves to, among
- * the writes of the module that name a variable of that text, and an object being read is read once.
+ * the writes of the module that name a variable of that text, and an object is read once in a walk:
+ * a second source that names it, on any path, finds it in `seen` and adds nothing new.
  */
 function writtenThrough(
   holders: readonly VariableDeclaration[],
-  seen: ReadonlySet<VariableDeclaration>,
+  seen: Set<VariableDeclaration>,
 ): readonly Expression[] {
   const root = holders.at(-1);
   if (root === undefined || seen.has(root)) return [];
@@ -293,12 +292,11 @@ function writtenThrough(
       pending.push(alias);
     }
   }
-  const reading = new Set(seen);
-  for (const alias of aliases) reading.add(alias);
+  for (const alias of aliases) seen.add(alias);
   const names = new Set([...aliases].map((each) => holderName(each)));
   return [...names]
     .flatMap((name) => index.writes.get(name) ?? [])
-    .flatMap((node) => writtenValues(node, aliases, reading));
+    .flatMap((node) => writtenValues(node, aliases, seen));
 }
 
 /** The text of a constant's name; none of a pattern's. */
