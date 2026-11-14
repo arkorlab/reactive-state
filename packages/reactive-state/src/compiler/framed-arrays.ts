@@ -50,7 +50,7 @@ import {
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
-import { mayStartAsArray } from './framed-array-starts.ts';
+import { mayBecomeArray, mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { afterDeletion, deletedMethod, deletedReceiver } from './framed-deleted-methods.ts';
@@ -596,10 +596,11 @@ function assignedMethods(target: Expression, root: FrameBinding): readonly strin
 /**
  * Whether a name that starts as a written array, or as a name that stands for one, is written as a
  * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
- * ends at a value that is no array (a scalar, a function, an object) is no array the compile started from.
+ * ends at a value that is no array (a scalar, a function, an object) is no array the compile started
+ * from, but a name that is given an array elsewhere holds it afterwards, and is refused alike.
  */
 function rewrittenArray(binding: FrameBinding): boolean {
-  return mayStartAsArray(binding) && writtenAsWhole(binding);
+  return writtenAsWhole(binding) && (mayStartAsArray(binding) || mayBecomeArray(binding));
 }
 
 /**

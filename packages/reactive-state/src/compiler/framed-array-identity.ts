@@ -1,19 +1,23 @@
 import {
   type Expression,
   isArrayLiteralExpression,
+  isBinaryExpression,
   isForInStatement,
   isForOfStatement,
+  type Identifier,
   isIdentifier,
+  isParameterDeclaration,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
   type SourceFile,
+  SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
-import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
 import { soleTarget } from './framed-mutator-calls.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { bindingIdentifiers, isBlockScoped } from './scope.ts';
@@ -29,7 +33,7 @@ export function arrayIdentity(value: Expression): FrameBinding | undefined {
 
 /** Whether a file writes the binding as a whole, so that it may hold another array than it was given. */
 export function writtenAsWhole(binding: FrameBinding): boolean {
-  return writtenWhole(binding.getSourceFile()).has(binding);
+  return wholeWrites(binding.getSourceFile()).has(binding);
 }
 
 /**
@@ -93,7 +97,7 @@ function followedIdentity(value: Expression): FollowedIdentity {
     if (selected === undefined || selected.keys.length > 0 || seen.has(selected.binding))
       return { root: undefined, written };
     root = selected.binding;
-    written ||= writtenWhole(root.getSourceFile()).has(root);
+    written ||= wholeWrites(root.getSourceFile()).has(root);
     seen.add(root);
     if (root.initializer === undefined) return { root, written };
     each = soleTarget(unwrapped(root.initializer));
@@ -101,30 +105,85 @@ function followedIdentity(value: Expression): FollowedIdentity {
   return { root: isArrayLiteralExpression(each) ? root : undefined, written };
 }
 
-const WRITTEN_WHOLE = new WeakMap<SourceFile, ReadonlySet<FrameBinding>>();
+/** The value a whole write gives, none known where a pattern, a loop head or an operator that is no assignment of it does. */
+type WholeValue = Expression | undefined;
+
+const WHOLE_WRITES = new WeakMap<SourceFile, ReadonlyMap<FrameBinding, readonly WholeValue[]>>();
 
 /**
  * The bindings a file writes as a whole — by an assignment, a destructuring target, a loop head or
- * a `var` that declares a name again — found in one walk of the file.
+ * a `var` that declares a name again — each with the values it is given, found in one walk of the
+ * file. An arithmetic assignment, an increment and a `for…in` head give a number or a text: no value
+ * is kept for them, and the binding is among those written.
  */
-function writtenWhole(file: SourceFile): ReadonlySet<FrameBinding> {
-  const known = WRITTEN_WHOLE.get(file);
+function wholeWrites(file: SourceFile): ReadonlyMap<FrameBinding, readonly WholeValue[]> {
+  const known = WHOLE_WRITES.get(file);
   if (known !== undefined) return known;
-  const found = new Set<FrameBinding>();
+  const found = new Map<FrameBinding, WholeValue[]>();
+  const record = (binding: FrameBinding, ...given: readonly WholeValue[]): void => {
+    found.set(binding, [...(found.get(binding) ?? []), ...given]);
+  };
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    for (const target of framedWrittenTargets(node)) {
-      const name = unwrapped(target);
-      const selected = isIdentifier(name) ? frameBindingOf(name) : undefined;
-      if (selected?.keys.length === 0) found.add(selected.binding);
-    }
-    if (isVariableDeclaration(node)) for (const binding of redeclared(node)) found.add(binding);
+    const targets = framedWrittenTargets(node);
+    for (const target of targets) writtenBy(node, targets.length, unwrapped(target), record);
+    if (isVariableDeclaration(node))
+      for (const binding of redeclared(node)) record(binding, ...redeclaredValue(node));
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  WRITTEN_WHOLE.set(file, found);
+  WHOLE_WRITES.set(file, found);
   return found;
+}
+
+/** Records what a node that writes a target gives the name it is, under the declaration of the name. */
+function writtenBy(
+  node: Node,
+  count: number,
+  name: Node,
+  record: (binding: FrameBinding, ...given: readonly WholeValue[]) => void,
+): void {
+  if (!isIdentifier(name)) return;
+  const selected = frameBindingOf(name);
+  if (selected?.keys.length === 0) record(selected.binding, ...givenBy(node, count));
+  else {
+    const part = declaredByPattern(name);
+    if (part !== undefined) record(part, undefined);
+  }
+}
+
+/** The assignments that keep the old value or give the right: a logical one. */
+const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** What a node that writes a name as a whole gives it: none kept for a number or a text, none known for a pattern. */
+function givenBy(node: Node, count: number): readonly WholeValue[] {
+  if (isForInStatement(node)) return [];
+  if (!isBinaryExpression(node)) return [undefined];
+  const { kind } = node.operatorToken;
+  if (kind === SyntaxKind.EqualsToken)
+    return count === 1 && isIdentifier(unwrapped(node.left)) ? [node.right] : [undefined];
+  return LOGICAL_ASSIGNMENTS.has(kind) ? [node.right] : [];
+}
+
+/** What a declaration of a name again gives it: its initializer, none known for a loop head or a pattern, which selects a part. */
+function redeclaredValue(declaration: VariableDeclaration): readonly WholeValue[] {
+  const loop = declaration.parent.parent;
+  if (isForInStatement(loop)) return [];
+  const whole = !isForOfStatement(loop) && isIdentifier(declaration.name);
+  return [whole ? declaration.initializer : undefined];
+}
+
+/**
+ * The values a name is given where it is written as a whole elsewhere than its declaration: the right
+ * of an assignment, none known (`undefined`) where a pattern or a loop head gives it one.
+ */
+export function givenValues(binding: FrameBinding): readonly WholeValue[] {
+  return wholeWrites(binding.getSourceFile()).get(binding) ?? [];
 }
 
 /**
@@ -139,9 +198,19 @@ function redeclared(declaration: VariableDeclaration): readonly FrameBinding[] {
   if (!head && declaration.initializer === undefined) return [];
   const bound: FrameBinding[] = [];
   for (const name of bindingIdentifiers(declaration.name)) {
-    const selected = frameBindingOf(name);
-    if (selected?.keys.length === 0 && selected.binding !== declaration)
-      bound.push(selected.binding);
+    const earlier = frameBindingOf(name)?.binding ?? declaredByPattern(name);
+    if (earlier !== undefined && earlier !== declaration) bound.push(earlier);
   }
   return bound;
+}
+
+/**
+ * The declaration a pattern gives a name, a part of it (a field, an element, a rest): the declaration
+ * stands for every name of its pattern, so a write of one of them is a write it cannot tell from another's.
+ */
+function declaredByPattern(name: Identifier): FrameBinding | undefined {
+  const declared = frameDeclarationOf(name);
+  const bound =
+    declared !== undefined && (isVariableDeclaration(declared) || isParameterDeclaration(declared));
+  return bound && !isIdentifier(declared.name) ? declared : undefined;
 }

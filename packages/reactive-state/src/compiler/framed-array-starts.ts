@@ -5,6 +5,7 @@ import {
   isBindingElement,
   isBinaryExpression,
   isConditionalExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
   isObjectLiteralExpression,
   isOmittedExpression,
@@ -12,11 +13,13 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   type Node,
+  type ObjectLiteralElementLike,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
+import { givenValues } from './framed-array-identity.ts';
 import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -27,19 +30,68 @@ import { bindingIdentifiers } from './scope.ts';
  * object) starts as none.
  */
 export function mayStartAsArray(binding: FrameBinding): boolean {
-  const seen = new Set<FrameBinding>([binding]);
-  let value: Expression | undefined = binding.initializer;
-  while (value !== undefined) {
-    const start = unwrapped(value);
-    if (isArrayLiteralExpression(start)) return true;
-    if (!isIdentifier(start)) return !isNoArray(start);
-    const selected = frameBindingOf(start);
-    if (selected === undefined) return start.text !== 'undefined';
-    if (seen.has(selected.binding)) return true;
-    seen.add(selected.binding);
-    if (defaultMayBeArray(start)) return true;
-    value = selectedValue(selected.binding.initializer, selected.keys);
+  return mayBeArray(binding.initializer, binding);
+}
+
+/**
+ * Whether a name that is written as a whole elsewhere may be given an array there: the right of an
+ * assignment, read as the initializer is, or a pattern or a loop head, whose value is not read. A name
+ * that starts as a number or a text and is given a list holds the list afterwards.
+ */
+export function mayBecomeArray(binding: FrameBinding): boolean {
+  return givenValues(binding).some((value) => value === undefined || mayBeArray(value, binding));
+}
+
+/**
+ * Whether the value a name is given, followed through the names it passes, may be an array. A name it
+ * passes is read as the name asked about is: by the value it starts as and by the values it is given as
+ * a whole elsewhere, each name once.
+ */
+function mayBeArray(given: Expression | undefined, binding: FrameBinding): boolean {
+  const seen = new Map<FrameBinding, Set<string>>([[binding, new Set([''])]]);
+  const pending: (Expression | undefined)[] = [given];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    const next = value === undefined ? undefined : leadsOf(value, seen);
+    if (next === undefined) return true;
+    pending.push(...next);
   }
+  return false;
+}
+
+/**
+ * The values a value leads to, none where it may be an array: a name leads to what it starts as and to what
+ * it is given as a whole, once for each part of a pattern it names; a value that is none of an array, a name
+ * or a scalar the compile knows is one.
+ */
+function leadsOf(
+  value: Expression,
+  seen: Map<FrameBinding, Set<string>>,
+): readonly (Expression | undefined)[] | undefined {
+  const start = unwrapped(value);
+  if (isArrayLiteralExpression(start)) return undefined;
+  if (!isIdentifier(start)) return isNoArray(start) ? [] : undefined;
+  const selected = frameBindingOf(start);
+  if (selected === undefined) return start.text === 'undefined' ? [] : undefined;
+  if (!firstVisit(seen, selected.binding, selected.keys)) return [];
+  if (defaultMayBeArray(start)) return undefined;
+  return [
+    selectedValue(selected.binding.initializer, selected.keys),
+    ...givenValues(selected.binding),
+  ];
+}
+
+/** Whether a part of a declaration is met for the first time: the fields of one pattern are different names. */
+function firstVisit(
+  seen: Map<FrameBinding, Set<string>>,
+  binding: FrameBinding,
+  keys: readonly string[],
+): boolean {
+  const parts = seen.get(binding) ?? new Set<string>();
+  seen.set(binding, parts);
+  const part = keys.join('\0');
+  if (parts.has(part)) return false;
+  parts.add(part);
   return true;
 }
 
@@ -154,6 +206,15 @@ function selectedValue(
 }
 
 /**
+ * Whether a field of a written object may change another when the object is taken apart: a getter
+ * runs where its name is read, and may assign a field read after it; a written prototype may hold one.
+ */
+function runsOnRead(property: ObjectLiteralElementLike): boolean {
+  if (isGetAccessorDeclaration(property)) return true;
+  return isPropertyAssignment(property) && writtenArrayKey(property.name) === '__proto__';
+}
+
+/**
  * The field or the element a written object or array has under the key: the last field of the name,
  * where no spread and no name the compile cannot read comes after it, which may give the name another value.
  */
@@ -165,7 +226,8 @@ function selectedField(value: Expression, key: string): Expression | undefined {
     );
     return element === undefined || spread ? undefined : unwrapped(element);
   }
-  if (!isObjectLiteralExpression(value)) return undefined;
+  if (!isObjectLiteralExpression(value) || value.properties.some((each) => runsOnRead(each)))
+    return undefined;
   for (const each of value.properties.toReversed()) {
     if (isSpreadAssignment(each)) return undefined;
     const name = writtenArrayKey(each.name);
