@@ -138,15 +138,59 @@ export function frameTypeOf(node: Expression): FrameTypeSelection | undefined {
       continue;
     }
     if (!isIdentifier(value)) return undefined;
-    const selected = frameBindingOf(value);
+    const selected = selectedWith(value, keys);
     if (selected === undefined || seen.has(selected.binding)) return undefined;
     const { binding } = selected;
     seen.add(binding);
-    keys = [...selected.keys, ...keys];
+    ({ keys } = selected);
     if (binding.type !== undefined) return { keys, type: binding.type };
     if (binding.initializer === undefined) return undefined;
     value = unwrapped(binding.initializer);
   }
+}
+
+/**
+ * A name's binding and the keys that reach what is read of it, after the name: its own path, then
+ * `read`. The rest of an array pattern after its first position holds the tail of what the pattern
+ * takes apart, so its first index read is that many places further on.
+ */
+function selectedWith(name: Identifier, read: readonly string[]): FrameSelection | undefined {
+  const selected = frameBindingOf(name);
+  if (selected !== undefined)
+    return { binding: selected.binding, keys: [...selected.keys, ...read] };
+  const tail = arrayTailOf(name);
+  if (tail === undefined) return undefined;
+  const [first, ...later] = read;
+  const index = first !== undefined && /^(?:0|[1-9]\d*)$/u.test(first) ? Number(first) : undefined;
+  const moved = index === undefined ? read : [String(index + tail.from), ...later];
+  return { binding: tail.selection.binding, keys: [...tail.selection.keys, ...moved] };
+}
+
+/** What an array pattern's rest after its first position takes the tail of, and where it starts. */
+function arrayTailOf(
+  name: Identifier,
+): { readonly selection: FrameSelection; readonly from: number } | undefined {
+  const binding = frameDeclarationOf(name);
+  if (binding === undefined || !(isParameterDeclaration(binding) || isVariableDeclaration(binding)))
+    return undefined;
+  const element = bindingIdentifiers(binding.name).find(
+    (bound) => bound.text === name.text,
+  )?.parent;
+  if (
+    element === undefined ||
+    !isBindingElement(element) ||
+    element.dotDotDotToken === undefined ||
+    !isArrayBindingPattern(element.parent)
+  )
+    return undefined;
+  const from = element.parent.elements.indexOf(element);
+  const owner = element.parent.parent;
+  let selection: FrameSelection | undefined;
+  if (isBindingElement(owner)) selection = elementSelection(owner);
+  else if (isParameterDeclaration(owner) || isVariableDeclaration(owner))
+    selection = { binding: owner, keys: [] };
+  if (selection === undefined || from === 0) return undefined;
+  return { from, selection };
 }
 
 /** A constant key follows only const variables, with parameter and block shadows left intact. */

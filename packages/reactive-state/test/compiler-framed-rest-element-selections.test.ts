@@ -15,9 +15,10 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * read through it is a member read of what the pattern takes apart: `rest.error` of
  * `{ a, ...rest }: { a: number; error: Error }` is the `error` of the parameter, whose type names an
  * error, as `error.stack` of `{ a, error }` is. The old paths said nothing of a rest (`undefined`), so
- * the member read was no read of an error. An array's rest after its first position holds the tail
- * at shifted indexes, which a path of keys does not say: it still says nothing. The rows marked a pin
- * answer the same before this change as after it.
+ * the member read was no read of an error. An array's rest after its first position holds the tail,
+ * so the type route moves the first index read by the places before it, and the binding route, which
+ * has no place for the move, still says nothing. The rows marked a pin answer the same before this
+ * change as after it.
  */
 const PARAMETER = 'declare const target: (value: unknown) => void;';
 const OPTIONS = '{ a: number; error: Error }';
@@ -90,6 +91,36 @@ const TYPES = [
     expected: { keys: ['0'], type: 'Error[]' },
     id: 'an-element-of-the-rest-of-an-array-from-its-first-position',
     source: `function f([...rest]: Error[]) { target(rest[0]); }`,
+  },
+  {
+    expected: { keys: ['1'], type: 'Error[]' },
+    id: 'an-element-of-the-rest-of-an-array-after-its-first-position',
+    source: `function f([first, ...rest]: Error[]) { target(rest[0]); }`,
+  },
+  {
+    expected: { keys: ['1'], type: '[string, Error]' },
+    id: 'the-first-element-of-the-tail-of-a-tuple',
+    source: `function f([first, ...rest]: [string, Error]) { target(rest[0]); }`,
+  },
+  {
+    expected: { keys: ['3'], type: 'Error[]' },
+    id: 'the-second-element-of-a-tail-after-two',
+    source: `function f([a, b, ...rest]: Error[]) { target(rest[1]); }`,
+  },
+  {
+    expected: { keys: ['list', '1'], type: '{ list: Error[] }' },
+    id: 'an-element-of-a-tail-in-a-nested-pattern',
+    source: `function f({ list: [first, ...rest] }: { list: Error[] }) { target(rest[0]); }`,
+  },
+  {
+    expected: { keys: ['length'], type: 'Error[]' },
+    id: 'a-member-of-a-tail-that-is-no-index-is-not-moved',
+    source: `function f([first, ...rest]: Error[]) { target(rest.length); }`,
+  },
+  {
+    expected: { keys: [], type: 'Error[]' },
+    id: 'the-tail-itself-is-the-whole-pattern-source',
+    source: `function f([first, ...rest]: Error[]) { target(rest); }`,
   },
   {
     expected: undefined,
