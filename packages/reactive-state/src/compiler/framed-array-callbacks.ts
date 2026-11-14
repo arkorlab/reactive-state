@@ -41,20 +41,9 @@ export const LIST_FIELDS: ReadonlySet<string> = new Set(['length']);
 /** A literal that holds a followed object holds it in every field. */
 export const NO_FIELDS: ReadonlySet<string> = new Set();
 
-/** The natives that read their arguments and run no application code on them. */
-export const READERS: ReadonlySet<string> = new Set([
-  'Array.isArray',
-  'Number.isFinite',
-  'Number.isInteger',
-  'Number.isNaN',
-  'Object.getOwnPropertyDescriptor',
-  'Object.getOwnPropertyDescriptors',
-  'Object.getOwnPropertyNames',
-  'Object.isExtensible',
-  'Object.isFrozen',
-  'Object.isSealed',
-  'Object.keys',
-]);
+/** The natives that answer the entries and the values of an object, which are the parts of it. */
+const ENTRIES = 'Object.entries';
+const VALUES = 'Object.values';
 
 /**
  * The readers that answer the fields of their argument themselves: the descriptor of a field holds
@@ -65,15 +54,40 @@ export const GIVING_READERS: ReadonlySet<string> = new Set([
   'Object.getOwnPropertyDescriptors',
 ]);
 
+/** The natives that read their arguments and run no application code on them. */
+export const READERS: ReadonlySet<string> = new Set([
+  'Array.isArray',
+  'Number.isFinite',
+  'Number.isInteger',
+  'Number.isNaN',
+  'Object.getOwnPropertyNames',
+  'Object.isExtensible',
+  'Object.isFrozen',
+  'Object.isSealed',
+  'Object.keys',
+  ...GIVING_READERS,
+]);
+
+/**
+ * The natives that give the elements of an array to a new object: a new list, or the descriptors of its
+ * fields, whose `value` is the element itself.
+ */
+export const COPIERS: ReadonlySet<string> = new Set([
+  'Array.from',
+  ENTRIES,
+  VALUES,
+  ...GIVING_READERS,
+]);
+
 /** The natives that convert an array to text or copy its elements, running its own methods. */
 export const CONVERTERS: ReadonlySet<string> = new Set([
   'Array.from',
   'Boolean',
+  ENTRIES,
   'JSON.stringify',
   'Number',
-  'Object.entries',
-  'Object.values',
   'String',
+  VALUES,
 ]);
 
 /** Whether a node is the first argument of a call: the position a native reads, and a later one it coerces. */
@@ -225,6 +239,7 @@ const NON_RECEIVING: ReadonlySet<string> = new Set([
   'Array.isArray',
   'BigInt',
   'Boolean',
+  ENTRIES,
   'isFinite',
   'isNaN',
   'Math.abs',
@@ -267,17 +282,16 @@ const NON_RECEIVING: ReadonlySet<string> = new Set([
   'Number.isSafeInteger',
   'Number.parseFloat',
   'Number.parseInt',
-  'Object.entries',
   'Object.getOwnPropertyNames',
   'Object.getOwnPropertySymbols',
   'Object.isExtensible',
   'Object.isFrozen',
   'Object.isSealed',
   'Object.keys',
-  'Object.values',
   'parseFloat',
   'parseInt',
   'String',
+  VALUES,
 ]);
 
 /**

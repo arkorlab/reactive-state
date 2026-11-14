@@ -47,6 +47,7 @@ import {
   GIVING_READERS,
   DESCRIPTOR_FIELDS,
   callsBack,
+  COPIERS,
   copiesElements,
   handsArray,
   isFirstArgument,
@@ -148,18 +149,6 @@ const MUTATING: ReadonlySet<string> = new Set([
   'sort',
   'splice',
   'unshift',
-]);
-
-/**
- * The natives that give the elements of an array to a new object: a new list, or the descriptors of its
- * fields, whose `value` is the element itself.
- */
-const COPIERS: ReadonlySet<string> = new Set([
-  'Array.from',
-  'Object.entries',
-  'Object.getOwnPropertyDescriptor',
-  'Object.getOwnPropertyDescriptors',
-  'Object.values',
 ]);
 
 /** The methods of an array that answer the array itself. */

@@ -7,7 +7,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { isFirstArgument, readsWithoutCallback } from './framed-array-callbacks.ts';
+import { COPIERS, isFirstArgument, readsWithoutCallback } from './framed-array-callbacks.ts';
 import { nativePath } from './framed-mutator-calls.ts';
 
 /** The operators that read both operands as numbers or as texts and answer a number, a text or a boolean. */
@@ -35,8 +35,9 @@ const OPERANDS: ReadonlySet<SyntaxKind> = new Set([
 /**
  * Whether a member read of an array is consumed where it stands: converted to text by a template, an
  * operator that answers a number, a text or a boolean, a minus or a plus before it, or a native that
- * reads it and runs no function of the program. What it gives is not kept, handed to a function or
- * written through, so a list the member holds stays where the readers of the writes follow it.
+ * reads it and runs no function of the program and answers none of it (a native that copies, or
+ * answers the descriptors, gives the parts of what it reads on). What it gives is not kept, handed to a
+ * function or written through, so a list the member holds stays where the readers of the writes follow it.
  */
 export function consumed(result: Node): boolean {
   const { parent } = result;
@@ -48,5 +49,5 @@ export function consumed(result: Node): boolean {
     );
   if (!isFirstArgument(parent, result)) return false;
   const path = nativePath(parent.expression);
-  return path !== undefined && readsWithoutCallback(parent, path);
+  return path !== undefined && !COPIERS.has(path) && readsWithoutCallback(parent, path);
 }
