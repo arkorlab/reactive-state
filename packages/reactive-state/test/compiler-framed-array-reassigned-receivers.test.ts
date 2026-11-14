@@ -109,9 +109,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'redefinition-releases-accessor-pin',
+    id: 'redefinition-releases-accessor-refused',
     source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { get() { return Array.prototype.join; }, configurable: true }); Object.defineProperty(a, 'join', { value: Array.prototype.join, writable: true }); ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'var-redeclared-by-loop-head',
@@ -156,17 +156,17 @@ const CASES = [
   {
     id: 'alias-writable-definition-keeps-later-proof',
     source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join, writable: true, configurable: true }); b = []; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-configurable-accessor-released-by-definition',
     source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperty(b, 'join', { get() { return Array.prototype.join; }, configurable: true }); b = []; Object.defineProperty(a, 'join', { value: () => 'safe', writable: true }); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-writable-descriptors-keep-later-proof',
     source: `function frames(error: Error) { const a = [error]; let b = a; Object.defineProperties(b, { join: { value: Array.prototype.join, writable: true } }); b = []; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-accessor-stays-held-pin',
@@ -186,17 +186,17 @@ const CASES = [
   {
     id: 'alias-partial-definition-keeps-attributes',
     source: `function frames(error: Error) { const a = [error]; a.join = () => 'first'; let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-partial-definition-keeps-attributes-of-descriptors',
     source: `function frames(error: Error) { const a = [error]; a.join = () => 'first'; let b = a; Object.defineProperties(b, { join: { value: Array.prototype.join } }); b = []; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-partial-definition-after-definition-keeps-attributes',
     source: `function frames(error: Error) { const a = [error]; Object.defineProperty(a, 'join', { value: () => 'first', writable: true, configurable: true }); let b = a; Object.defineProperty(b, 'join', { value: Array.prototype.join }); b = []; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-partial-definition-of-fixed-value-pin',

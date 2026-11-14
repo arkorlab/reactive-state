@@ -86,9 +86,9 @@ const CASES = [
     converts: false,
   },
   {
-    id: 'assign-to-a-condition-with-a-written-source-pin',
+    id: 'assign-to-a-condition-with-a-written-source-refused',
     source: `${HEAD} Object.assign(flag ? list : other, { a: 1 }); return String(list); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

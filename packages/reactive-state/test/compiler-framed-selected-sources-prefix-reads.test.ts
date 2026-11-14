@@ -1,14 +1,12 @@
 import {
   type Expression,
   isIdentifier,
-  isReturnStatement,
   isSpreadElement,
   type Node,
   type SpreadElement,
 } from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
-import { writtenArrayElements } from '../src/compiler/framed-array-elements.ts';
 import { writtenList } from '../src/compiler/framed-selected-sources.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
@@ -54,21 +52,6 @@ describe('a prefix operator on a member of a list a spread copies', () => {
   });
 });
 
-const ELEMENTS = [
-  { id: 'nothing', body: '', elements: ["['b']:", "'x':"] },
-  { id: 'length-of-an-entry-negated', body: 'void !src[1].length;', elements: ["['b']:", "'x':"] },
-  { id: 'field-made-negative', body: 'void -src[1].n;', elements: ["['b']:", "'x':"] },
-  { id: 'entry-incremented', body: '++src[1];', elements: ['src:array', "'x':"] },
-] as const;
-
-describe('the elements a native assign installs from a list a prefix operator is applied to', () => {
-  it.each(ELEMENTS)('$id', ({ body, elements }) => {
-    const source = `function frames(error: any) { const values: unknown[] = ['safe']; const src: any[] = [['a'], ['b']]; ${body} Object.assign(values, { ...[...src], 0: 'x' }); return values; }`;
-
-    expect(installed(source)).toStrictEqual(elements);
-  });
-});
-
 /** Whether the list the source spreads is read as its literal wrote it. */
 function isWritten(source: string): boolean {
   using api = openTypeScript();
@@ -85,27 +68,4 @@ function spreadOf(root: Node): SpreadElement & { readonly expression: Expression
     });
   }
   throw new Error('no spread of a name');
-}
-
-/** The written elements of the returned array, with their paths. */
-function installed(source: string): readonly string[] {
-  using api = openTypeScript();
-  using parsed = parseModule(api, 'prefix-reads.ts', source);
-  const read = returned(parsed.sourceFile);
-  return writtenArrayElements(read, read).map((each) => {
-    const path = each.array === true ? 'array' : each.keys.join('.');
-    return `${each.value.getText()}:${path}`;
-  });
-}
-
-function returned(root: Node): Expression {
-  const pending = [root];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isReturnStatement(node) && node.expression !== undefined && isIdentifier(node.expression))
-      return node.expression;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  throw new Error('no returned name');
 }

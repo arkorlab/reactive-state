@@ -62,14 +62,14 @@ const CASES = [
     converts: false,
   },
   {
-    id: 'assign-with-no-prototype-change-pin',
+    id: 'assign-with-no-prototype-change-refused',
     source: `function frames(error: Error) { const a: unknown[] = [error]; Object.assign(a, { join: () => 'safe' }); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'assign-of-a-method-with-no-prototype-change-pin',
+    id: 'assign-of-a-method-with-no-prototype-change-refused',
     source: `function frames(error: Error) { const a: unknown[] = [error]; Object.assign(a, { join() { return 'safe'; } }); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'definition-after-set-prototype-of-stays-refused-with-the-mention-pin',

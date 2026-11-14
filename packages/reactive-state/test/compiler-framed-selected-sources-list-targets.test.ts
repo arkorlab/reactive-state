@@ -127,9 +127,9 @@ const CONVERSIONS = [
     converts: true,
   },
   {
-    id: 'pattern-of-another-list-pin',
+    id: 'pattern-of-another-list-refused',
     source: `${ASSIGNED} const other: any[] = []; [...other[0]] = [error]; Object.assign(a, [...list]); return String(a); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

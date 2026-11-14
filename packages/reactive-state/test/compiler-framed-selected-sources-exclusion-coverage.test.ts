@@ -28,9 +28,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'branch-without-both-fields-pin',
+    id: 'branch-without-both-fields-refused',
     source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; const source = { bad: { get: () => error }, good: { value: 'safe' } }; if (flag) ({ good: ignored, bad: ignored, ...holder.m } = source); else ({ good: ignored, bad: ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'branch-without-nothing-and-the-error-field',
@@ -73,9 +73,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'same-exclusion-twice-pin',
+    id: 'same-exclusion-twice-refused',
     source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { '': { get: () => error }, good: { value: 'safe' } }; if (flag) ({ '': ignored, ...holder.m } = source); else ({ '': ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

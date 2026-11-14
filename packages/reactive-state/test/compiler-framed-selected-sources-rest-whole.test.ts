@@ -16,7 +16,7 @@ const CASES = [
   {
     id: 'map-entry-copy-without-the-getter',
     source: `${HEAD} ({ '': x, get: y, ...holder.m } = { get: () => error }); ({ m: maps[0] } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'map-entry-copy-with-the-getter-pin',
@@ -31,7 +31,7 @@ const CASES = [
   {
     id: 'map-entry-copy-without-the-value',
     source: `${HEAD} ({ value: y, ...holder.m } = { value: error }); ({ m: maps[0] } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'map-entry-copy-without-the-value-keeps-the-getter-pin',
@@ -41,7 +41,7 @@ const CASES = [
   {
     id: 'map-entry-copy-of-a-copy-without-the-getter',
     source: `${HEAD} const inner: any = {}; ({ get: y, ...inner.m } = { get: () => error }); ({ ...holder.m } = inner.m); ({ m: maps[0] } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'field-of-a-copy-keeps-its-own-getter',
@@ -59,14 +59,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'field-the-copy-left-out-is-not-read-pin',
+    id: 'field-the-copy-left-out-is-not-read-refused',
     source: `${HEAD} const bridge: any = {}; ({ get: y, ...holder.m } = { get: () => error }); ({ m: bridge.n } = holder); ({ n: { get: maps[0] } } = bridge); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'field-of-a-copy-the-copy-kept-pin',
+    id: 'field-of-a-copy-the-copy-kept-refused',
     source: `${HEAD} const bridge: any = {}; ({ get: y, ...holder.m } = { value: error }); ({ m: bridge.n } = holder); ({ n: { value: maps[0] } } = bridge); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

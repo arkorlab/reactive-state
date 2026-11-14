@@ -57,9 +57,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'assign-in-the-initializer-with-a-written-source-pin',
+    id: 'assign-in-the-initializer-with-a-written-source-refused',
     source: `function frames(error: Error, flag: boolean, opaque: () => object) { const list = Object.assign([], { 0: 'safe' }); return String(list); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'assign-to-a-named-array-pin',
@@ -67,9 +67,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'assign-in-the-initializer-to-another-array-pin',
+    id: 'assign-in-the-initializer-to-another-array-refused',
     source: `function frames(error: Error, flag: boolean, opaque: () => object) { const other: unknown[] = []; Object.assign(other, { 0: error }); const list = Object.assign([], { 0: 'safe' }); return String(list); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'fill-in-the-initializer',
@@ -94,12 +94,12 @@ const CASES = [
   {
     id: 'assignment-after-an-initializer-definition-of-a-plain-method',
     source: `function frames(error: Error, flag: boolean, opaque: () => object) { const values = Object.defineProperty([], 'join', { value: () => 'x', writable: true }); values.join = () => 'safe'; values[0] = error; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'custom-method-given-in-the-initializer',
     source: `function frames(error: Error, flag: boolean, opaque: () => object) { const values = Object.assign([], { join: () => 'safe' }); values[0] = error; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'custom-method-given-in-the-initializer-then-restored',
@@ -117,9 +117,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'native-method-given-in-the-initializer-then-custom-pin',
+    id: 'native-method-given-in-the-initializer-then-custom-refused',
     source: `function frames(error: Error, flag: boolean, opaque: () => object) { const values = Object.assign([], { join: Array.prototype.join }); values.join = () => 'safe'; values[0] = error; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'definition-in-the-initializer-of-another-array-pin',

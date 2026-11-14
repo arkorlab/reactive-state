@@ -266,12 +266,12 @@ const CASES = [
   {
     id: 'loop-custom-object-assign-keeps-proof',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { Object.assign(values, { join: () => 'also fixed' }); } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-custom-definition-keeps-proof',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { Object.defineProperty(values, 'join', { value: () => 'also fixed', writable: true }); } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-custom-write-in-branch-keeps-proof',

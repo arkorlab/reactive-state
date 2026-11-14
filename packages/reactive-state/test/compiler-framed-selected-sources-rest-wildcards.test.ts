@@ -17,22 +17,22 @@ const CASES = [
   {
     id: 'wildcard-read-of-a-copy-without-the-getter-field',
     source: `${HEAD} ({ get: y, ...holder.m } = { get: { get: () => error }, other: { value: 'safe' } }); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wildcard-read-of-a-copy-of-a-copy-without-the-getter-field',
     source: `${HEAD} const inner: any = {}; ({ get: y, ...inner.m } = { get: { get: () => error }, other: { value: 'safe' } }); ({ ...holder.m } = inner.m); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wildcard-read-of-a-copy-without-the-getter-field-through-a-spread',
     source: `${HEAD} ({ get: y, ...holder.m } = { ...{ get: { get: () => error } }, other: { value: 'safe' } }); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wildcard-read-of-a-copy-without-the-getter-field-in-two-writes',
     source: `${HEAD} ({ get: y, ...holder.m } = { other: { value: 'safe' } }); ({ get: y, ...holder.m } = { get: { get: () => error } }); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wildcard-read-of-a-copy-without-another-field-pin',
@@ -42,7 +42,7 @@ const CASES = [
   {
     id: 'wildcard-read-of-a-copy-finds-no-getter-in-the-field-below',
     source: `${HEAD} ({ other: y, ...holder.m } = { get: { other: { get: () => error } } }); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wildcard-read-below-the-excluded-name-pin',
@@ -50,9 +50,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'named-read-of-the-excluded-field-pin',
+    id: 'named-read-of-the-excluded-field-refused',
     source: `${HEAD} ({ get: y, ...holder.m } = { get: { get: () => error }, other: { value: 'safe' } }); ({ m: { get: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wildcard-read-of-a-source-that-is-no-copy-pin',

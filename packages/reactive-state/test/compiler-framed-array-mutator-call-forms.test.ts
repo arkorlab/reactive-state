@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import { unwrapped } from '../src/compiler/bounded.ts';
 import { writtenArrayElements } from '../src/compiler/framed-array-elements.ts';
 import { framedArrayString } from '../src/compiler/framed-arrays.ts';
+import { UnfollowableError } from '../src/compiler/framed-getter-writes.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
@@ -204,57 +205,57 @@ const ELEMENTS = [
   {
     id: 'assign-through-call-method',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.assign(Object.assign.call(null, values, {}), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-reflect-apply',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.assign(Reflect.apply(Object.assign, null, [values, {}]), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-a-constant-alias',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; const assign = Object.assign; Object.assign(assign(values, {}), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-a-bound-alias',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; const assign = Object.assign.bind(null); Object.assign(assign(values, {}), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-a-sort',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.assign(values.sort(), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-new-object',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.assign(new Object(values), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-a-comma',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.assign((0, values), { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-a-condition',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; const enabled = process.argv.length > 0; Object.assign(enabled ? values : other, { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'define-through-call-method',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.defineProperty.call(null, values, 1, { value: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-an-alias-of-the-result',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; const done = Object.assign(values, {}); Object.assign(done, { 1: error }); return values; }`,
-    elements: ['error:'],
+    outcome: ['refused'],
   },
   {
     id: 'assign-through-the-result-of-another-array-pin',
     source: `function frames(error: Error) { const values: unknown[] = ['safe']; const other: unknown[] = []; Object.assign(Object.assign.call(null, other, {}), { 1: error }); return values; }`,
-    elements: [],
+    outcome: [],
   },
 ] as const;
 
@@ -264,9 +265,9 @@ describe('the method a mutator restores through what another call hands back', (
   });
 });
 
-describe('the elements a mutator installs through what another call hands back', () => {
-  it.each(ELEMENTS)('$id', ({ source, elements }) => {
-    expect(writtenElements(source)).toStrictEqual(elements);
+describe('the array a mutator writes through what another call hands back', () => {
+  it.each(ELEMENTS)('$id', ({ source, outcome }) => {
+    expect(writtenOutcome(source)).toStrictEqual(outcome);
   });
 });
 
@@ -308,6 +309,16 @@ function writtenElements(source: string): readonly string[] {
     const path = each.array === true ? 'array' : each.keys.join('.');
     return `${each.value.getText()}:${path}`;
   });
+}
+
+/** The elements written to the returned array, or `['refused']` where the array is not followed. */
+function writtenOutcome(source: string): readonly string[] {
+  try {
+    return writtenElements(source);
+  } catch (error) {
+    if (error instanceof UnfollowableError) return ['refused'];
+    throw error;
+  }
 }
 
 function returned(root: Node): Expression {
