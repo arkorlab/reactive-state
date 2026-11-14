@@ -47,8 +47,11 @@ const PROXY: ReadonlySet<string> = new Set(['Proxy']);
 /** One entry of a written handler, as an object literal holds it. */
 type HandlerEntry = ObjectLiteralExpression['properties'][number];
 
-/** A written trap, or native forwarding through `Reflect.get` or an absent nullish trap. */
-type Trap = Answering | 'forward' | 'absent';
+/**
+ * A written trap, or native forwarding through `Reflect.get` or an absent nullish trap, or a trap of
+ * a handler too large to follow, which may answer a read with anything.
+ */
+type Trap = Answering | 'forward' | 'absent' | 'unknown';
 
 /**
  * What a forwarding trap's own target or key parameter may hold where it returns: the original
@@ -67,6 +70,10 @@ type TrapResult =
   | { readonly kind: 'value'; readonly value: Expression };
 
 const ORIGINAL: Replacements = { any: false, original: true, values: [] };
+const ANYTHING: Replacements = { any: true, original: true, values: [] };
+
+/** The spreads one handler's walk visits: handlers that share handlers grow with their product. */
+const SPREAD_VISITS = 1000;
 
 /** A native Proxy's written target and the `get` traps its handler may hold. */
 interface ProxyTraps {
@@ -203,6 +210,7 @@ function anyMember(
  * what writes in the trap may have put in them (`framedParameterWrites`), or a value.
  */
 function trapResults(trap: Trap): readonly TrapResult[] {
+  if (trap === 'unknown') return [{ keys: ANYTHING, kind: 'member', targets: ANYTHING }];
   if (trap === 'forward' || trap === 'absent')
     return [{ keys: ORIGINAL, kind: 'member', targets: ORIGINAL }];
   const [target, key] = parametersOf(trap);
@@ -309,10 +317,11 @@ function writtenArguments(
     : { target, handler };
 }
 
-/** A written literal whose entries are being read, the entries still to come last. */
-interface Expansion {
-  readonly entries: HandlerEntry[];
-  readonly literal: ObjectLiteralExpression;
+/** The literals a handler's walk is inside of, with the entries of each still to read. */
+interface Walk {
+  readonly active: Set<Node>;
+  readonly open: { readonly entries: HandlerEntry[]; readonly literal: ObjectLiteralExpression }[];
+  visits: number;
 }
 
 /**
@@ -322,22 +331,25 @@ interface Expansion {
  * already, by itself or through others (`const handler = { ...handler, get }`, which throws where
  * it runs: a constant read before its initializer), is one it cannot follow; the same literal
  * spread again once its first expansion is done is followed again, as it replaces what lies between.
+ * Handlers that spread handlers that spread handlers, each twice (`{ ...h, ...h }`), cost the product
+ * of their spreads: past `SPREAD_VISITS` the handler is read as holding a trap of anything.
  */
 function handlerTraps(handler: ObjectLiteralExpression): readonly Trap[] {
   let traps: Trap[] = [];
-  const open: Expansion[] = [{ entries: handler.properties.toReversed(), literal: handler }];
-  const active = new Set<Node>([handler]);
-  for (let inside = open.at(-1); inside !== undefined; inside = open.at(-1)) {
+  const walk: Walk = {
+    active: new Set<Node>([handler]),
+    open: [{ entries: handler.properties.toReversed(), literal: handler }],
+    visits: 0,
+  };
+  for (let inside = walk.open.at(-1); inside !== undefined; inside = walk.open.at(-1)) {
     const entry = inside.entries.pop();
     if (entry === undefined) {
-      active.delete(inside.literal);
-      open.pop();
+      walk.active.delete(inside.literal);
+      walk.open.pop();
       continue;
     }
     if (isSpreadAssignment(entry)) {
-      const spread = expandable(entry, active);
-      if (spread !== undefined)
-        open.push({ entries: spread.properties.toReversed(), literal: spread });
+      if (!enterSpread(entry, walk)) return ['unknown'];
       continue;
     }
     if (isSetAccessorDeclaration(entry)) continue;
@@ -350,15 +362,18 @@ function handlerTraps(handler: ObjectLiteralExpression): readonly Trap[] {
   return traps;
 }
 
-/** The literal a spread entry holds, marked as being expanded; none for one that is already. */
-function expandable(
-  entry: SpreadAssignment,
-  active: Set<Node>,
-): ObjectLiteralExpression | undefined {
+/**
+ * Takes a spread entry into the walk: the literal it holds, marked as being expanded, is read next,
+ * unless it is one that is being expanded already. Whether the walk is within its visits.
+ */
+function enterSpread(entry: SpreadAssignment, walk: Walk): boolean {
+  walk.visits += 1;
+  if (walk.visits > SPREAD_VISITS) return false;
   const spread = constantSource(entry.expression);
-  if (!isObjectLiteralExpression(spread) || active.has(spread)) return undefined;
-  active.add(spread);
-  return spread;
+  if (!isObjectLiteralExpression(spread) || walk.active.has(spread)) return true;
+  walk.active.add(spread);
+  walk.open.push({ entries: spread.properties.toReversed(), literal: spread });
+  return true;
 }
 
 /** An entry's written names; none of a computed name the compile cannot read. */
