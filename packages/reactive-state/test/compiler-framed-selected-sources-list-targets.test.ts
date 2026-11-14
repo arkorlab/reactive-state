@@ -106,9 +106,9 @@ const CASES = [
     written: true,
   },
   {
-    id: 'pattern-target-in-an-element-pin',
+    id: 'pattern-target-in-a-field-of-an-element',
     source: `${HEAD} const box: any = {}; [list[0].field] = [error]; void box; return [...list]; }`,
-    written: true,
+    written: false,
   },
 ] as const;
 
