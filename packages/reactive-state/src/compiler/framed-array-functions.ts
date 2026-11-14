@@ -3,7 +3,6 @@ import {
   type CallExpression,
   isArrayBindingPattern,
   isArrowFunction,
-  isAwaitExpression,
   isBinaryExpression,
   isBindingElement,
   isBlock,
@@ -12,37 +11,31 @@ import {
   isClassExpression,
   isConditionalExpression,
   isComputedPropertyName,
-  isDeleteExpression,
   isElementAccessExpression,
   isExpression,
   isIdentifier,
   isFunctionExpression,
   isFunctionDeclaration,
   isGetAccessorDeclaration,
+  isJsxExpression,
   isMethodDeclaration,
-  isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
   isReturnStatement,
   isSetAccessorDeclaration,
-  isSpreadElement,
   isSpreadAssignment,
   isStringLiteral,
-  isTaggedTemplateExpression,
-  isTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
-  isYieldExpression,
   type FunctionDeclaration,
   type Identifier,
   type MethodDeclaration,
+  NodeFlags,
   type Node,
   type ObjectBindingPattern,
   type ObjectLiteralExpression,
@@ -63,6 +56,7 @@ import {
   frameMemberName,
   type FrameBinding,
 } from './framed-bindings.ts';
+import { APPLICATION_WORK } from './framed-tuple-work.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
@@ -402,12 +396,7 @@ function priorEffect(node: Node, reference: Identifier): boolean {
       completed(parent, reference)
     );
   }
-  return (
-    isCallExpression(node) ||
-    isNewExpression(node) ||
-    isBinaryExpression(node) ||
-    implicitEffect(node)
-  );
+  return implicitEffect(node);
 }
 
 /** The outermost pattern `pattern` is part of: an element of a pattern holds a pattern of its own. */
@@ -417,20 +406,21 @@ function outermostPattern(pattern: Node): Node {
   return at;
 }
 
-/** Implicit calls, conversions, mutation and deferred completion also invalidate a mutable proof. */
+/**
+ * Implicit calls, conversions, mutation and deferred completion also invalidate a mutable proof:
+ * the evaluation that can run the application's code (`APPLICATION_WORK`, which holds a call, a
+ * construction, a spread, a loop's iteration and the spread of a JSX attribute), a class, the
+ * spread of a JSX child, which iterates, and a `using` or an `await using` declaration, which runs
+ * its resource's disposal where its scope is left.
+ */
 function implicitEffect(node: Node): boolean {
   return (
-    isTaggedTemplateExpression(node) ||
-    isTemplateExpression(node) ||
-    isSpreadAssignment(node) ||
-    isSpreadElement(node) ||
-    isAwaitExpression(node) ||
-    isYieldExpression(node) ||
-    isDeleteExpression(node) ||
-    isPrefixUnaryExpression(node) ||
-    isPostfixUnaryExpression(node) ||
+    APPLICATION_WORK.has(node.kind) ||
     isClassDeclaration(node) ||
-    isClassExpression(node)
+    isClassExpression(node) ||
+    (isJsxExpression(node) && node.dotDotDotToken !== undefined) ||
+    // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
+    (isVariableDeclarationList(node) && (node.flags & NodeFlags.Using) !== 0)
   );
 }
 
