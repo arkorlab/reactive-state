@@ -1,4 +1,5 @@
 import {
+  type Expression,
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
@@ -17,7 +18,9 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-/** Where a node stands: what it is used as, and what is taken apart by a pattern. */
+import { unwrapped } from './bounded.ts';
+
+/** Where a node stands and what a value is: what it is used as, what a pattern takes apart, what it comes to past its wrappers. */
 
 /**
  * Where `node` is used: past what wraps it alike — parentheses, a cast, `!` — what it stands in
@@ -69,4 +72,21 @@ function holdsPart(node: Node): boolean {
     isSpreadElement(node) ||
     isSpreadAssignment(node)
   );
+}
+
+/**
+ * What `expression` evaluates to, past what hands its value on as it is: the parentheses, the casts
+ * — in angle brackets too, which `unwrapped` leaves — the `!`, and a comma's first operands.
+ */
+export function peeled(expression: Expression): Expression {
+  let each = unwrapped(expression);
+  for (;;) {
+    if (isBinaryExpression(each) && each.operatorToken.kind === SyntaxKind.CommaToken) {
+      each = unwrapped(each.right);
+    } else if (isTypeAssertion(each)) {
+      each = unwrapped(each.expression);
+    } else {
+      return each;
+    }
+  }
 }

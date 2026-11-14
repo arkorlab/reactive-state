@@ -38,7 +38,6 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
-import { heldInitializer } from './held-constants.ts';
 import { readsConstructorKey, type Reading } from './key-reader-calls.ts';
 import { holdsValues, mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
@@ -385,7 +384,6 @@ function readsConstructor(node: Node): boolean {
 
 /** What `readsConstructorKey` reads a global and a written text by: this module's own. */
 const READING: Reading = {
-  initializerOf: (name) => heldInitializer(name, textOf),
   pathOf: (node) => globalPathOf(node)?.join('.'),
   textOf,
 };

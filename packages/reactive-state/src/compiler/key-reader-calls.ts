@@ -1,22 +1,18 @@
 import {
   type CallExpression,
   type Expression,
-  type Identifier,
   isArrayLiteralExpression,
   isCallExpression,
   isClassExpression,
   isElementAccessExpression,
   isFunctionLikeDeclaration,
-  isIdentifier,
-  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
   type Node,
-  type ObjectLiteralExpression,
   type SpreadElement,
 } from 'typescript/ast';
 
-import { memberOf, peeled } from './literal-members.ts';
+import { peeled } from './uses.ts';
 
 /**
  * Where a call reads a member of what it is given by a key the code writes: of a function of the
@@ -27,7 +23,9 @@ import { memberOf, peeled } from './literal-members.ts';
  * spread of an array written is the elements it writes, and one of a list the code gives by a name
  * has a length it does not show — each length the code may give it (`LONGEST`) is read, so that a
  * key written past it is read where it may be the key; and a function the code does not show is not
- * followed.
+ * followed. `call`, `apply` and `bind` are read by their names, of whatever they are read of: an
+ * object that writes one of its own is not told from a function — the code that gives a reader's key
+ * past such a method is refused, which is rare, and no object's members are followed to tell.
  */
 
 /** The functions of globals that read a member of what they are given by the key given next. */
@@ -40,7 +38,7 @@ const KEY_READERS: ReadonlySet<string> = new Set([
 /** The methods of a function that call it, or `bind` it for a call, on what they are given after the `this`. */
 const METHODS: ReadonlySet<string> = new Set(['apply', 'bind', 'call']);
 
-/** How many constants deep a value is followed to be one of the code's own, and how many functions made of functions. */
+/** How many functions made of functions are followed, each called with nothing more. */
 const FOLLOWED = 4;
 
 /**
@@ -52,14 +50,12 @@ const FOLLOWED = 4;
 const LONGEST = 4;
 const SPREADS = 4;
 
-/** How the code-globals module reads a global, a written text and a constant, so as not to read each other. */
+/** How the code-globals module reads a global and a written text, so as not to read each other. */
 export interface Reading {
   /** The names a read of a global goes by, joined by dots; none of another node. */
   readonly pathOf: (node: Node) => string | undefined;
   /** The text a node writes, a string; none of another node. */
   readonly textOf: (node: Node) => string | undefined;
-  /** What a constant of the name `name` the code declares is initialized by, where nothing changes it or hands it on. */
-  readonly initializerOf: (name: Identifier) => Expression | undefined;
 }
 
 /** What a call is given, each spread of a list written or of a length it is given (`LONGEST`) laid out. */
@@ -179,9 +175,9 @@ class Calls {
   }
 
   /**
-   * The method of a function `callee` reads of what it stands on, `call` of `fn.call` — where that
-   * stands on a function, or what may be one: none of a member the object it stands on has of its
-   * own, `helper.call`, which is no function's.
+   * The method of a function `callee` reads of what it stands on, `call` of `fn.call`, by its name:
+   * of what may be a function, which is anything the code does not show to be none — an object that
+   * writes a `call` of its own is read as a function's all the same, its code too much to follow.
    */
   #methodOf(
     callee: Expression,
@@ -196,36 +192,11 @@ class Calls {
       method === undefined ||
       !METHODS.has(method) ||
       !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) ||
-      this.#reading.pathOf(callee) === 'Reflect.apply' ||
-      this.#owns(callee.expression, method, 0)
+      this.#reading.pathOf(callee) === 'Reflect.apply'
     ) {
       return undefined;
     }
     return { method, receiver: callee.expression };
-  }
-
-  /**
-   * Whether the code shows that `expression` has the member `method` of its own, which is no
-   * function's: an object written, or a constant of one, with a function written for it — or none,
-   * inherited from what has none.
-   */
-  #owns(expression: Expression, method: string, depth: number): boolean {
-    const each = peeled(expression);
-    if (isObjectLiteralExpression(each)) {
-      return this.#literalOwns(each, method);
-    }
-    const initializer =
-      isIdentifier(each) && depth < FOLLOWED ? this.#reading.initializerOf(each) : undefined;
-    return initializer !== undefined && this.#owns(initializer, method, depth + 1);
-  }
-
-  /**
-   * Whether an object written has `method` of its own that is no function's: a function written
-   * for it, the last entry of the name, a spread or a computed name after it giving none; or none,
-   * where nothing else brings one (`memberOf`).
-   */
-  #literalOwns(literal: ObjectLiteralExpression, method: string): boolean {
-    return memberOf(literal, method, this.#reading.textOf) !== 'unknown';
   }
 
   /**
