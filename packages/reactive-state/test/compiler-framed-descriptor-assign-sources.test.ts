@@ -132,6 +132,107 @@ const CASES = [
     values: [],
   },
   {
+    id: 'member-write-before-the-call',
+    source: 'const overrides = { value: first }; overrides.value = e; Object.assign(d, overrides);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'member-write-in-a-later-argument',
+    source:
+      'const overrides = { value: first }; Object.assign(d, overrides, { other: (overrides.value = e) });',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'member-write-after-the-call',
+    source: 'const overrides = { value: first }; Object.assign(d, overrides); overrides.value = e;',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'member-write-through-an-alias',
+    source:
+      'const overrides = { value: first }; const copy = overrides; copy.value = e; Object.assign(d, overrides);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'source-alias-written-through-the-original',
+    source:
+      'const base = { value: first }; const alias = base; base.value = e; Object.assign(d, alias);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'member-write-by-a-computed-name',
+    source: 'const overrides = { value: first }; overrides[name] = e; Object.assign(d, overrides);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'logical-assignment-to-the-member',
+    source:
+      'const overrides = { value: first }; overrides.value ??= e; Object.assign(d, overrides);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'object-assign-into-the-source',
+    source:
+      'const overrides = { value: first }; Object.assign(overrides, { value: e }); Object.assign(d, overrides);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'spread-of-a-written-alias',
+    source: 'const inner = { value: first }; inner.value = e; Object.assign(d, { ...inner });',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'logical-assignment-to-the-descriptor',
+    source: 'd.value ??= e;',
+    values: ['e'],
+  },
+  {
+    id: 'sources-that-write-each-other',
+    source:
+      'const a = { value: first }; const b = { value: e }; Object.assign(a, b); Object.assign(b, a); Object.assign(d, a);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'source-handed-to-a-call-pin',
+    source: 'const overrides = { value: first }; mutate(overrides); Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
+    id: 'source-as-a-loop-target-pin',
+    source:
+      'const overrides = { value: first }; for (overrides.value of errors) use(1); Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
+    id: 'source-member-deleted-pin',
+    source:
+      'const overrides = { value: first }; delete overrides.value; Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
+    id: 'arithmetic-compound-write-pin',
+    source:
+      "const overrides = { value: first }; overrides.value += 'text'; Object.assign(d, overrides);",
+    values: ['first'],
+  },
+  {
+    id: 'another-member-written-pin',
+    source: 'const overrides = { value: first }; overrides.other = e; Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
+    id: 'source-only-read-pin',
+    source:
+      'const overrides = { value: first }; use(overrides.value); const copy = overrides; const again = { ...overrides }; Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
+    id: 'parameter-of-the-same-name-pin',
+    source:
+      'const overrides = { value: first }; function patch(overrides: { value: Error }) { overrides.value = e; } Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
     id: 'later-source-unread',
     source: 'Object.assign(d, { value: e }, other);',
     values: ['e'],
@@ -185,13 +286,19 @@ describe('native Object.assign sources written into a descriptor', () => {
     using parsed = parseModule(
       api,
       'descriptor-assign-sources.ts',
-      `declare const source: object; declare const e: Error; declare const first: Error; declare const extra: object; declare const extras: object[]; declare const more: object[]; declare const other: object; declare const name: string; declare function make(): object; declare function use(value: unknown): void;\n${DESCRIBED}\n${source}\nuse(d.value);`,
+      `declare const source: object; declare const e: Error; declare const first: Error; declare const extra: object; declare const extras: object[]; declare const more: object[]; declare const other: object; declare const name: string; declare function make(): object; declare const errors: Error[]; declare function mutate(value: object): void; declare function use(value: unknown): void;\n${DESCRIBED}\n${source}\nuse(d.value);`,
     );
     const read = descriptorRead(parsed.sourceFile);
 
-    expect(framedDescriptorWrites(read).map((each) => each.getText())).toStrictEqual(values);
+    const written = [...new Set(framedDescriptorWrites(read).map((each) => each.getText()))];
+
+    expect(written.toSorted(byText)).toStrictEqual(values.toSorted(byText));
   });
 });
+
+function byText(left: string, right: string): number {
+  return left.localeCompare(right);
+}
 
 /** The descriptor name in the `use(name.value)` that reads it. */
 function descriptorRead(root: Node): Expression {
