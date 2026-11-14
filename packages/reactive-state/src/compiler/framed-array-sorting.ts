@@ -7,7 +7,6 @@ import {
   isIdentifier,
   isOmittedExpression,
   isSpreadElement,
-  isTypeNode,
   isVariableDeclaration,
   isParameterDeclaration,
   isVariableDeclarationList,
@@ -20,7 +19,7 @@ import { sourceArrayFunction } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** A native default sort can convert elements only when a comparator may be absent and two defined values may compare. */
 export function defaultArrayComparison(
@@ -93,7 +92,7 @@ function exposedArray(
 ): boolean {
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (node !== receiver && isIdentifier(node) && readsBinding(node)) {
       const binding = frameDeclarationOf(node);
       if (

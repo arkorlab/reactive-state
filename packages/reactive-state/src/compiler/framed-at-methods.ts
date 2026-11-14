@@ -18,7 +18,6 @@ import {
   isReturnStatement,
   isSetAccessorDeclaration,
   isSpreadAssignment,
-  isTypeNode,
   isVariableDeclaration,
   isVariableStatement,
   type MethodDeclaration,
@@ -35,6 +34,7 @@ import { iteratorQuietValues } from './framed-iterator-guards.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { constantValue } from './numbers.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** Result-sensitive selectors inspect only source-proven synchronous own method bodies. */
 
@@ -73,7 +73,7 @@ function receiverUsed(fn: Answering, receiver: (node: Identifier) => boolean): b
   const pending: ReceiverReading[] = [{ node: fn, nested: false, own: !isArrowFunction(fn) }];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const { node, nested, own } = at;
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     const used =
       (own && node.kind === SyntaxKind.ThisKeyword) || (isIdentifier(node) && receiver(node));
     if (used && (nested || !returnedBy(node, fn))) return true;

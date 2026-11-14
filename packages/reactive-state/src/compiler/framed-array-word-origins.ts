@@ -12,7 +12,6 @@ import {
   isSpreadAssignment,
   isPropertyAccessExpression,
   isSpreadElement,
-  isTypeNode,
   isVariableDeclaration,
   isVariableStatement,
   type Node,
@@ -27,7 +26,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Positive closed literal origins keep locally written error words and custom array text methods. */
 
@@ -136,7 +135,7 @@ function bindingReads(source: Node): readonly Identifier[] {
   const names: Identifier[] = [];
   const pending = [source];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (isIdentifier(node) && readsBinding(node)) names.push(node);
     node.forEachChild((child) => {
       pending.push(child);
