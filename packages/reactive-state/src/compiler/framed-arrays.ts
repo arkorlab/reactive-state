@@ -57,6 +57,7 @@ import { afterDeletion, deletedMethod, deletedReceiver } from './framed-deleted-
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { invokedTargets, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
+import { destructuredList } from './framed-nested-lists.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
@@ -180,6 +181,8 @@ export function arrayError(value: Expression, words: ArrayWords, call: Node): bo
     }
     if (
       words.typed(each) ||
+      (isIdentifier(each) &&
+        destructuredList(each, (element, keys) => words.error(element, keys))) ||
       bindingArrayWords({ ...reading, value: each }, { call, words, pending, seen })
     )
       return true;
@@ -199,7 +202,8 @@ function writtenElementErrors(
   words: ArrayWords,
   pending: ArrayReading[],
 ): boolean {
-  if (arrayWritesUnfollowed(value, call)) return true;
+  if (arrayWritesUnfollowed(value, call, (element, keys) => words.error(element, keys)))
+    return true;
   for (const source of writtenArrayElements(value, call)) {
     if (source.array === true) {
       pending.push({ value: source.value, text: false });

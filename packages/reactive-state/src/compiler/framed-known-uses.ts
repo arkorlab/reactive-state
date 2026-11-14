@@ -375,10 +375,10 @@ function keepsThis(result: Node): boolean {
  * number, and a read-only method of a text, a number or an array changes nothing it is called on. Any
  * other method may write what the member holds, a list among them, through a name no reader follows.
  */
-function memberCallRuns(access: Node, subject: Subject, base: string | undefined): boolean {
+function memberCallRuns(access: Node, base: string | undefined): boolean {
   if (base === 'length') return true;
   const name = memberName(access);
-  return subject === 'array' && name !== undefined && READ_ONLY_METHODS.has(name);
+  return name !== undefined && READ_ONLY_METHODS.has(name);
 }
 
 /**
@@ -387,7 +387,7 @@ function memberCallRuns(access: Node, subject: Subject, base: string | undefined
  * of something else.
  */
 function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): Use {
-  if (depth > 1) return isArray(subject) && memberCallRuns(access, subject, base) ? KNOWN : UNKNOWN;
+  if (depth > 1) return isArray(subject) && memberCallRuns(access, base) ? KNOWN : UNKNOWN;
   if (!isArray(subject)) return UNKNOWN;
   const name = memberName(access);
   if (name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
@@ -683,7 +683,7 @@ function argumentUse(call: Node, flowing: Flowing, subject: Subject): Use {
   const position = invoked.args.findIndex((each) => outermost(each) === flowing.top);
   if (position === -1) return UNKNOWN;
   if (position === 0) return targetUse(call, flowing, subject);
-  if (isArray(subject)) return flowing.inLiteral ? UNKNOWN : KNOWN;
+  if (isArray(subject)) return flowing.inLiteral ? UNKNOWN : SPREADS;
   return followedArgument(invoked, position) ? KNOWN : UNKNOWN;
 }
 
