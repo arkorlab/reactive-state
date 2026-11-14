@@ -2333,6 +2333,36 @@ const CASES = [
     key: 'message',
     values: ["'safe':", "'safe':"],
   },
+  {
+    id: 'copy-order-spread-whose-getter-runs-a-prototype-setter-that-deletes',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ __proto__: { set drop(_v: unknown) { delete this.value; } }, get 0() { this.drop = 0; return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-nested-spread-with-a-prototype-setter-that-deletes',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ ...{ __proto__: { set drop(_v: unknown) { delete this.value; } }, get 0() { this.drop = 0; return 0; }, value: 'old' } }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-with-a-prototype-and-no-getter-is-unknown',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ __proto__: { x: 1 }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-with-an-unknown-prototype-is-unknown',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ __proto__: other, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-with-a-null-prototype-keeps-its-order-pin',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ __proto__: null, get 0() { return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
