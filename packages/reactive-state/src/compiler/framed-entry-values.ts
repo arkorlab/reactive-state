@@ -138,6 +138,9 @@ interface TupleWrites {
   readonly values: readonly AssignedFrameSource[];
 }
 
+/** The member of a tuple whose write may cut it short, its key slot with it. */
+const LENGTH = 'length';
+
 const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AmpersandAmpersandEqualsToken,
   SyntaxKind.BarBarEqualsToken,
@@ -147,7 +150,8 @@ const VALUE_WRITES: ReadonlySet<SyntaxKind> = new Set([
 
 /**
  * The call evaluates its whole argument list before native iteration reads an entry, so a slot
- * that evaluation writes on the entry's tuple may be its key or value; an opaque slot may be either.
+ * that evaluation writes on the entry's tuple may be its key or value; an opaque slot may be either,
+ * and a write to its length may cut the key off.
  */
 function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrites {
   const aliases = tupleAliases(entry);
@@ -163,7 +167,7 @@ function argumentTupleWrites(call: CallExpression, entry: Expression): TupleWrit
     if (executionOwner(node) !== owner) continue;
     for (const write of slotWrites(node, aliases)) {
       if (!reachedWrite(node, call)) break;
-      if (write.slot === undefined || write.slot === '0') key = true;
+      if (write.slot === undefined || write.slot === '0' || write.slot === LENGTH) key = true;
       if (write.slot === undefined || write.slot === '1') values.push(...write.sources);
     }
     const called = calledWrites(node, call, entry);
