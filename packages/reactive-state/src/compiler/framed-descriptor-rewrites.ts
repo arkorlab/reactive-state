@@ -209,25 +209,41 @@ type Slot = 'absent' | 'accessor' | 'data' | 'setter';
  * which writes as it likes; or none, which the assignment creates. A spread may give the name a
  * value, and a field whose name is computed may be any field: such a field adds what it may make of
  * the field to what it may have been, and the fields written after it, by name, make what they make
- * of each. An accessor of the descriptor that deletes the name, or any name, may have removed the
- * field before the assignment, which then makes a value.
+ * of each. A written `__proto__: value` sets the prototype and is no field of the name. An accessor of the
+ * descriptor that deletes the name, or any name, may have removed the field before the assignment,
+ * which then makes a value.
  */
 function slotsOf(descriptor: ObjectLiteralExpression, name: string): ReadonlySet<Slot> {
   let slots = new Set<Slot>(['absent']);
-  for (const property of descriptor.properties) {
-    const key = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
-    if (key !== name && key !== undefined) continue;
-    const made = [...slots].map((each) => slotAfter(each, property));
-    if (key === name) slots = new Set(made);
-    else if (isSpreadAssignment(property)) slots.add('data');
-    else for (const each of made) slots.add(each);
-  }
-  const deleted = inheritedDeletions(descriptor);
-  if (deleted.includes(undefined) || deleted.includes(name)) {
-    slots.add('data');
-    slots.add('absent');
-  }
-  return slots;
+  for (const property of descriptor.properties) slots = slotsAfter(slots, property, name);
+  return afterDeletions(inheritedDeletions(descriptor), name, slots);
+}
+
+/** The slots a field makes of those that were: a spread may give the name a value, a computed name may be it. */
+function slotsAfter(
+  slots: ReadonlySet<Slot>,
+  property: ObjectLiteralElementLike,
+  name: string,
+): Set<Slot> {
+  if (setsProto(property)) return new Set(slots);
+  const key = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
+  if (key !== name && key !== undefined) return new Set(slots);
+  const made = [...slots].map((each) => slotAfter(each, property));
+  if (key === name) return new Set(made);
+  const kept = new Set(slots);
+  if (isSpreadAssignment(property)) kept.add('data');
+  else for (const each of made) kept.add(each);
+  return kept;
+}
+
+/** The slots once an accessor that may delete the name has run: the field may be gone, or made again. */
+function afterDeletions(
+  deleted: readonly (string | undefined)[],
+  name: string,
+  slots: ReadonlySet<Slot>,
+): ReadonlySet<Slot> {
+  if (!deleted.includes(undefined) && !deleted.includes(name)) return slots;
+  return new Set<Slot>([...slots, 'absent', 'data']);
 }
 
 /** The slot a field makes of one that was: a setter or a getter makes an accessor, any other a value. */

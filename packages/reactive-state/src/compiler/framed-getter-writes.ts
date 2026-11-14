@@ -379,7 +379,7 @@ function nullPrototype(property: ObjectLiteralElementLike): boolean {
 }
 
 /** Whether a written field sets the prototype of the object: `__proto__: value`. */
-function setsProto(property: ObjectLiteralElementLike): boolean {
+export function setsProto(property: ObjectLiteralElementLike): boolean {
   return (
     isPropertyAssignment(property) &&
     (isIdentifier(property.name) || isStringLiteral(property.name)) &&
