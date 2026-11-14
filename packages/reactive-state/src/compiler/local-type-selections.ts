@@ -278,7 +278,9 @@ function expandedRest(readings: readonly TypeReading[]): boolean {
 
 /**
  * Every place of a written tuple may be produced by source iteration, as may the elements of any
- * other iterable, which one place stands for. Undefined where no source is a tuple.
+ * other iterable, which one place stands for. A tuple a count could not finish is read at the places
+ * a spread leaves a tuple and at each member written after, never at fewer. Undefined where no
+ * source is a tuple.
  */
 export function arrayIterationKeys(
   readings: readonly TypeReading[],
