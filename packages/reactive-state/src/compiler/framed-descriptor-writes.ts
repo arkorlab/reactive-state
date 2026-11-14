@@ -15,11 +15,11 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
 import { framedArgumentPrefix, framedMemberNames } from './framed-keys.ts';
-import { framedPossibleBranch } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Source-written replacements of a native descriptor's mutable data value. */
@@ -31,17 +31,39 @@ export function framedDescriptorWrites(node: Expression): readonly Expression[] 
   const pending: Node[] = [node.getSourceFile()];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (isTypeOnly(at)) continue;
+    const written =
+      isBinaryExpression(at) || isCallExpression(at) ? writtenValues(at, aliases) : [];
     if (
-      (isBinaryExpression(at) || isCallExpression(at)) &&
-      (executionOwner(at) !== owner || at.pos < node.pos || destructuredFirst(at, node)) &&
+      written.length > 0 &&
+      (executionOwner(at) !== owner ||
+        at.pos < node.pos ||
+        destructuredFirst(at, node) ||
+        repeatsBefore(at, node, aliases, owner)) &&
       framedPossibleBranch(at)
     )
-      values.push(...writtenValues(at, aliases));
+      values.push(...written);
     at.forEachChild((child) => {
       pending.push(child);
     });
   }
   return values;
+}
+
+/**
+ * Whether a write after the read comes back to it: a loop around both passes again, or the function
+ * that holds both is called again, with a descriptor made outside the repeated part as the last pass
+ * left it. A descriptor made inside it is made anew each time, as `repeatedFrameRead` and
+ * `repeatsAround` ask of each name that stands for it.
+ */
+function repeatsBefore(
+  write: Node,
+  read: Node,
+  aliases: ReadonlySet<VariableDeclaration>,
+  owner: Node,
+): boolean {
+  for (const alias of aliases)
+    if (repeatedFrameRead(write, read, alias, owner) || repeatsAround(owner, alias)) return true;
+  return false;
 }
 
 /** Whole const aliases preserve the same descriptor, including aliases used only for a write. */
