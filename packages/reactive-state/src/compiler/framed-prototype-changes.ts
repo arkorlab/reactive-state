@@ -1,5 +1,6 @@
 import {
   type ElementAccessExpression,
+  type Expression,
   type Identifier,
   isAssertionExpression,
   isBinaryExpression,
@@ -19,7 +20,9 @@ import {
   isSatisfiesExpression,
   isSourceFile,
   isStringLiteral,
+  isTemplateExpression,
   isTypeAliasDeclaration,
+  isTypeAssertion,
   isTypeOfExpression,
   type NoSubstitutionTemplateLiteral,
   type Node,
@@ -31,6 +34,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { constantInitializer } from './framed-native-calls.ts';
 import { isTypeOnly } from './framed-references.ts';
 import { isWrittenMember } from './framed-written-members.ts';
 
@@ -61,6 +65,10 @@ const PROTOTYPE_CHANGES = new WeakMap<SourceFile, boolean>();
  * - a member of the prototype of the arrays, the objects or the functions that is read by its name
  *   (`Array.prototype.join`), whose own members are not written, deleted or given away;
  * - a comparison of a holder or of a constructor: `x.constructor === Array`.
+ *
+ * A name written as text that the code joins (`'__pro' + 'to__'`, a template whose substitutions are
+ * texts, a constant of such) is read as the name it makes. A name made at run time (a call, a variable
+ * the code assigns, a parameter) is not read: the file does not write it.
  */
 export function prototypeMayChange(file: SourceFile): boolean {
   const known = PROTOTYPE_CHANGES.get(file);
@@ -152,10 +160,51 @@ const COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
 
 /** Whether a node, where it is read, may reach a prototype in a way the list of uses does not name. */
 function escapes(node: Node): boolean {
+  if (isBinaryExpression(node) || isTemplateExpression(node))
+    return !inType(node) && foldsToName(node);
   if (!isIdentifier(node) && !isStringLiteral(node) && !isNoSubstitutionTemplateLiteral(node))
     return false;
   if (REACHING.has(node.text)) return !inType(node) && nameEscapes(node);
   return isIdentifier(node) && !inType(node) && escapesAsHolder(node);
+}
+
+/** How many constants of constants a text is followed through. */
+const FOLDED_DEPTH = 8;
+
+/**
+ * Whether an expression is a name that reaches a prototype, written as text alone: a `+` of texts, a
+ * template whose substitutions are texts, a constant of such (`'__pro' + 'to__'`). Any such name is a
+ * mention, whatever it is used for; a name that a call or a variable the code assigns makes is not read.
+ */
+function foldsToName(expression: Expression): boolean {
+  const text = foldedText(expression, 0);
+  return text !== undefined && REACHING.has(text);
+}
+
+/** The text an expression is written as of text alone, none where any part is known only when the code runs. */
+function foldedText(expression: Expression, depth: number): string | undefined {
+  let value = unwrapped(expression);
+  while (isTypeAssertion(value)) value = unwrapped(value.expression);
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text;
+  if (depth > FOLDED_DEPTH) return undefined;
+  if (isTemplateExpression(value)) {
+    let text = value.head.text;
+    for (const span of value.templateSpans) {
+      const part = foldedText(span.expression, depth + 1);
+      if (part === undefined) return undefined;
+      text += part + span.literal.text;
+    }
+    return text;
+  }
+  if (isIdentifier(value)) {
+    const initializer = constantInitializer(value);
+    return initializer === undefined ? undefined : foldedText(initializer, depth + 1);
+  }
+  if (!isBinaryExpression(value) || value.operatorToken.kind !== SyntaxKind.PlusToken)
+    return undefined;
+  const left = foldedText(value.left, depth + 1);
+  const right = left === undefined ? undefined : foldedText(value.right, depth + 1);
+  return right === undefined ? undefined : `${left}${right}`;
 }
 
 /**
