@@ -129,6 +129,11 @@ it: a refusal is a message the developer can act on.
 - A key reader of the language (`Reflect.get`) that the code keeps under a name of its own
   (`const get = Reflect.get`) or takes apart by a pattern is not followed: only a call that holds the
   reader, and writes `'constructor'` among its arguments, is read.
+- The rest of an array pattern after its first position holds the tail of what the pattern takes
+  apart. An index or a member path read of it is moved by the places before the rest (`rest[0]` of
+  `[first, ...rest]` is slot one), but only by type: a value the pattern takes apart is not followed
+  into such a rest, and a method that names an element (`rest.at(0)`) reads the type of the whole at
+  that index, so the tail of a tuple may be read at another slot than the one it holds.
 
 ## Settled decisions
 
