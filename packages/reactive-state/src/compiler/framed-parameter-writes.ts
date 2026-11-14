@@ -46,7 +46,11 @@ const CONTAINERS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TypeAssertionExpression,
 ]);
 
-/** Every write of a function's parameter in its own code, nested functions included. */
+/**
+ * Every write of a function's parameter in its own code, nested functions included: the code of its
+ * parameters (their initializers, and the defaults and computed keys of their patterns) as well as
+ * its body.
+ */
 export function framedParameterWrites(
   fn: Answering,
   parameter: ParameterDeclaration,
@@ -55,7 +59,8 @@ export function framedParameterWrites(
   const values: Expression[] = [];
   const writes: Node[] = [];
   let unknown = false;
-  const pending: Node[] = fn.body === undefined ? [] : [fn.body];
+  const pending: Node[] = [...fn.parameters];
+  if (fn.body !== undefined) pending.push(fn.body);
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     node.forEachChild((child) => {
       pending.push(child);

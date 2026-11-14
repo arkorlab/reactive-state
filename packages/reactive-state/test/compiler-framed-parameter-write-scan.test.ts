@@ -13,10 +13,11 @@ import { framedParameterWrites } from '../src/compiler/framed-parameter-writes.t
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * A default inside a pattern that assigns the parameter is a write of whatever the pattern's source
- * gives it: the default runs only where that source is `undefined`. A plain assignment, wherever an
- * expression may stand (an element of a list, a member of a literal, an argument), is still one value
- * the parameter may take.
+ * What a function's own code writes into a parameter is read from its whole code, its parameters'
+ * initializers and patterns included, and a default inside a pattern that assigns the parameter is a
+ * write of whatever the pattern's source gives it: the default runs only where that source is
+ * `undefined`. A plain assignment, wherever an expression may stand (an element of a list, a member
+ * of a literal, an argument), is still one value the parameter may take.
  */
 const FUNCTION = 'function frames(target: unknown, key: string, extra?: unknown) {';
 
@@ -81,6 +82,24 @@ const UNKNOWN = [
     id: 'plain-pattern-pin',
     source: `${FUNCTION} [target] = [new Error()]; return target; }`,
   },
+  {
+    id: 'compound-write-in-a-default',
+    source: 'function frames(target: number, extra = (target += 1)) { return target; }',
+  },
+  {
+    id: 'increment-in-a-default',
+    source: 'function frames(target: number, extra = target++) { return target; }',
+  },
+  {
+    id: 'pattern-in-a-default',
+    source:
+      'function frames(target: unknown, extra = ([target] = [new Error()])) { return target; }',
+  },
+  {
+    id: 'pattern-default-in-a-default',
+    source:
+      'function frames(target: unknown, extra = ([target = {}] = [new Error()])) { return target; }',
+  },
 ] as const;
 
 const VALUES = [
@@ -125,6 +144,70 @@ const VALUES = [
     source: `${FUNCTION} const [first = target] = [undefined]; void first; return target; }`,
     values: [],
     definite: false,
+  },
+  {
+    id: 'default-of-another-parameter',
+    source: 'function frames(target: unknown, extra = (target = new Error())) { return target; }',
+    values: ['new Error()'],
+    definite: false,
+  },
+  {
+    id: 'default-of-another-parameter-in-parentheses-twice',
+    source: 'function frames(target: unknown, extra = ((target = new Error()))) { return target; }',
+    values: ['new Error()'],
+    definite: false,
+  },
+  {
+    id: 'default-of-a-later-pattern-parameter',
+    source:
+      'function frames(target: unknown, { cause = (target = new Error()) }: { cause?: unknown } = {}) { return target; }',
+    values: ['new Error()'],
+    definite: false,
+  },
+  {
+    id: 'default-in-the-computed-key-of-a-parameter-pattern',
+    source:
+      "function frames(target: unknown, { [(target = new Error(), 'cause')]: cause }: { cause?: unknown } = {}) { return target; }",
+    values: ['new Error()'],
+    definite: false,
+  },
+  {
+    id: 'default-of-another-parameter-beside-a-body-write',
+    source:
+      'function frames(target: unknown, extra = (target = new Error())) { target = 1; return target; }',
+    values: ['new Error()', '1'],
+    definite: false,
+  },
+  {
+    id: 'default-of-the-parameter-itself',
+    source: 'function frames(target: unknown = (target = new Error())) { return target; }',
+    values: ['new Error()'],
+    definite: false,
+  },
+  {
+    id: 'default-reading-the-parameter-pin',
+    source: 'function frames(target: unknown, extra = target) { return extra; }',
+    values: [],
+    definite: false,
+  },
+  {
+    id: 'default-writing-another-parameter-pin',
+    source:
+      'function frames(target: unknown, key = String(target), extra = (key = "k")) { return target; }',
+    values: [],
+    definite: false,
+  },
+  {
+    id: 'default-without-a-write-pin',
+    source: 'function frames(target: unknown, extra = new Error()) { return target; }',
+    values: [],
+    definite: false,
+  },
+  {
+    id: 'body-write-pin',
+    source: 'function frames(target: unknown, extra = 1) { target = new Error(); return target; }',
+    values: ['new Error()'],
+    definite: true,
   },
 ] as const;
 
