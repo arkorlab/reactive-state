@@ -41,6 +41,10 @@ class Follower {
   readonly #stream: EventStream;
   readonly #heartbeat: ReturnType<typeof setInterval>;
   readonly #expiry: ReturnType<typeof setTimeout>;
+  /** Whether the session is one the application's server asserts, whose stream is renewed. */
+  readonly #asserted: boolean;
+  /** When the session expires, by this process's clock: what the expiry's timer is set for. */
+  readonly #expiresAt: number;
   readonly #unsubscribe: () => void;
   /** Ends this stream's following of the external stores' logs (`AuthorityEngine.following`). */
   readonly #unfollow: () => void;
@@ -83,11 +87,12 @@ class Follower {
     // that ended answers with `revoked`, and ends whatever the read says. An asserted session's is
     // renewed instead, read again by nobody here: its page opens the stream again at once, through
     // the application's route, which asks the application whether its session still stands.
-    const renews = assertedSessionOf(stream.sessionId) !== undefined;
+    this.#asserted = assertedSessionOf(stream.sessionId) !== undefined;
+    this.#expiresAt = Date.now() + Math.max(stream.expiresIn, 0);
     this.#expiry = setTimeout(
       () => {
         this.#queue(async () => {
-          if (renews) {
+          if (this.#asserted) {
             this.send('renew', {});
           } else {
             await this.#read();
@@ -137,9 +142,16 @@ class Follower {
       this.show(watched);
     } catch (error) {
       // Only a refusal of the session ends the subscription for good; anything else — a fault of
-      // the application's code too — only ends this stream, which the browser opens again.
+      // the application's code too — only ends this stream, which the browser opens again. A read
+      // waits in the engine's queue, so one queued before the expiry can run after it, where the
+      // engine refuses the session as it refuses one that ended: an asserted session's refusal
+      // once its expiry has come is renewed (`renew`), as its expiry's own step would have.
       if (error instanceof AuthorityError && REVOKING_STATUSES.has(error.status)) {
-        this.send('revoked', { code: error.code, error: error.message });
+        if (this.#asserted && Date.now() >= this.#expiresAt) {
+          this.send('renew', {});
+        } else {
+          this.send('revoked', { code: error.code, error: error.message });
+        }
       }
       this.close();
     } finally {
