@@ -128,16 +128,18 @@ const OPAQUE = [
     source: `namespace NS { ${ERROR_BASE} }\nclass Local extends NS.Base {}`,
   },
   {
-    what: 'a member that is an interface',
-    source: `namespace NS { export interface Base {} }\nclass Local extends NS.Base {}`,
-  },
-  {
     what: 'a member that is a constant',
     source: `namespace NS { export const Base = class extends Error {}; }\nclass Local extends NS.Base {}`,
   },
 ] as const;
 
 const GLOBALS = [
+  {
+    // A namespace of types alone emits no value, so the name is the global's, whatever the member.
+    what: 'a member that is an interface, of a namespace that emits no value',
+    source: `namespace NS { export interface Base {} }\nclass Local extends NS.Base {}`,
+    builtin: 'NS.Base',
+  },
   {
     what: 'a global namespace member (a pin)',
     source: 'class Local extends Intl.DateTimeFormat {}',
