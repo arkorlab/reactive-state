@@ -382,6 +382,41 @@ const PATTERNS = [
     "const source: any[] = [name, 'x']; const [item] = source; return String([item]);",
     false,
   ],
+  [
+    'source-object-whose-getter-writes-a-field-read-after',
+    "const source: any = { get first() { (this as any).item = [error]; return 0; }, item: 'safe' }; const { first, item } = source; return String([item]);",
+    true,
+  ],
+  [
+    'literal-whose-getter-writes-a-field-read-after',
+    "const { first, item }: any = { get first() { (this as any).item = [error]; return 0; }, item: 'safe' }; return String([item]);",
+    true,
+  ],
+  [
+    'literal-whose-getter-follows-the-field-stays-refused',
+    "const { item, first }: any = { item: 'safe', get first() { return 0; } }; return String([item]);",
+    true,
+  ],
+  [
+    'source-nested-literal-whose-getter-writes-a-field',
+    "const source: any = { inner: { get first() { (this as any).item = [error]; return 0; }, item: 'safe' } }; const { inner: { first, item } } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-array-of-an-object-whose-getter-writes-a-field',
+    "const source: any[] = [{ get first() { (this as any).item = [error]; return 0; }, item: 'safe' }]; const [{ first, item }] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-with-a-setter-stays-refused',
+    "const source: any = { set first(value: unknown) { void value; }, item: 'safe' }; const { item } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-of-plain-fields-read-in-either-order-pin',
+    "const source: any = { item: 'safe', other: 'x' }; const { other, item } = source; return String([item]);",
+    false,
+  ],
 ] as const;
 
 /** Arrays of texts, typed names and error words stay followed as before; one of unknown elements hands them out. */
@@ -479,6 +514,26 @@ const ELEMENTS = [
   [
     'a name never written after its text is no list',
     "let v: any = 'safe'; const a: any[] = [v]; [...a]; return String(a);",
+    false,
+  ],
+  [
+    'a type declared in the file under the name of a built-in is a list that is handed out',
+    'type Date = any[]; const inner: Date = []; const a: any[] = [inner]; [...a]; return String(a);',
+    true,
+  ],
+  [
+    'an interface declared under the name of a built-in is a list that is handed out',
+    'interface RegExp extends Array<any> {} const inner: RegExp = []; const a: any[] = [inner]; [...a]; return String(a);',
+    true,
+  ],
+  [
+    'a class declared under the name of a built-in is a list that is handed out',
+    'class Error extends Array<any> {} const inner: Error = new Error(); const a: any[] = [inner]; [...a]; return String(a);',
+    true,
+  ],
+  [
+    'a built-in type the file does not declare is no list',
+    'const when: Date = other; const a: any[] = [when]; [...a]; return String(a);',
     false,
   ],
 ] as const;

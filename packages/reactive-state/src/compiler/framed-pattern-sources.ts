@@ -19,7 +19,7 @@ import { writtenAsWhole } from './framed-array-identity.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
 import { knownUsesOnly } from './framed-known-mentions.ts';
-import { mayBeList } from './framed-nested-lists.ts';
+import { hasAccessor, mayBeList } from './framed-nested-lists.ts';
 
 /**
  * What a pattern takes apart may have been written since its literal was: a name a pattern takes apart
@@ -32,7 +32,8 @@ const CHAIN = 32;
 
 /**
  * Whether the name a pattern is given may hold something else than the literal it stands for: a name of
- * the chain is written as a whole, an element or a member of the literal is written, or an array that is
+ * the chain is written as a whole, the literal has a getter or a setter (which runs where its name is read,
+ * with the object as `this`), an element or a member of the literal is written, or an array that is
  * reordered or resized (`reverse`, `sort`, `splice`, `shift`, `unshift`, `copyWithin`, `fill`, `pop`,
  * `push`), or a use of the name is not one the compile follows, anywhere in the file. A literal written
  * where the pattern is, and a name that stands for no literal, are left as they are.
@@ -50,6 +51,7 @@ export function sourceChanged(
   if (chain.some((binding) => writtenAsWhole(binding))) return true;
   const literal = last.initializer === undefined ? undefined : unwrapped(last.initializer);
   if (literal === undefined) return false;
+  if (hasAccessor(literal)) return true;
   if (isArrayLiteralExpression(literal))
     return (
       holdsContainers(literal, scalar) ||

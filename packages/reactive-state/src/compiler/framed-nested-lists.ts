@@ -15,6 +15,7 @@ import {
   isParameterDeclaration,
   isParenthesizedTypeNode,
   isPropertyAssignment,
+  isSetAccessorDeclaration,
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
@@ -36,6 +37,7 @@ import { writtenAsWhole } from './framed-array-identity.ts';
 import { isNoArray } from './framed-array-starts.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
+import { localTypeBinding } from './local-type-aliases.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /**
@@ -87,11 +89,15 @@ function scalarType(type: TypeNode): boolean {
   return true;
 }
 
-/** Whether a type that is no union or parenthesis says its value is no list. */
+/**
+ * Whether a type that is no union or parenthesis says its value is no list: a keyword, a literal, or the
+ * name of a built-in error or object that the file does not declare itself (`type Date = any[]` makes it a list).
+ */
 function scalarLeaf(type: TypeNode): boolean {
   if (SCALAR_TYPES.has(type.kind) || isLiteralTypeNode(type) || isTemplateLiteralTypeNode(type))
     return true;
-  return isTypeReferenceNode(type) && SCALAR_NAMES.has(type.typeName.getText(type.getSourceFile()));
+  if (!isTypeReferenceNode(type) || !isIdentifier(type.typeName)) return false;
+  return SCALAR_NAMES.has(type.typeName.text) && localTypeBinding(type.typeName) === undefined;
 }
 
 /** Whether the value an element is written as is, or holds, an array: where it is no scalar the compile knows. */
@@ -289,14 +295,29 @@ function literalSource(initializer: Expression): Expression | undefined {
 function picked(value: Expression, key: string): Expression | undefined {
   const written = unwrapped(value);
   if (isArrayLiteralExpression(written)) return pickedElement(written, key);
-  if (!isObjectLiteralExpression(written)) return undefined;
+  if (!isObjectLiteralExpression(written) || hasAccessor(written)) return undefined;
   for (const each of written.properties.toReversed()) {
-    if (isSpreadAssignment(each) || isGetAccessorDeclaration(each)) return undefined;
+    if (isSpreadAssignment(each)) return undefined;
     const field = writtenArrayKey(each.name);
     if (field === undefined) return undefined;
     if (field === key) return isPropertyAssignment(each) ? each.initializer : undefined;
   }
   return undefined;
+}
+
+/**
+ * Whether a literal, or a literal in it, has a getter or a setter: an accessor runs where its name is
+ * read, with the object as `this`, and may write a field the pattern reads after it.
+ */
+export function hasAccessor(literal: Node): boolean {
+  const pending: Node[] = [literal];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isGetAccessorDeclaration(node) || isSetAccessorDeclaration(node)) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /** What a written array holds at an index, none known where a spread or a hole may move it. */
