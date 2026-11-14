@@ -121,7 +121,9 @@ function wholeWrites(file: SourceFile): ReadonlyMap<FrameBinding, readonly Whole
   if (known !== undefined) return known;
   const found = new Map<FrameBinding, WholeValue[]>();
   const record = (binding: FrameBinding, ...given: readonly WholeValue[]): void => {
-    found.set(binding, [...(found.get(binding) ?? []), ...given]);
+    const values = found.get(binding);
+    if (values === undefined) found.set(binding, [...given]);
+    else values.push(...given);
   };
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
