@@ -52,11 +52,13 @@ export type Constant = number | string;
 interface Names {
   readonly resolve: Resolve | undefined;
   readonly following: ReadonlySet<string>;
-  /** What each constant read holds, kept so a constant that many others read is read once. */
+  /** What each constant read as a value holds, kept so a constant that many others read is read once. */
   readonly known: Map<Expression, Constant | undefined>;
+  /** The same of each constant read as a date: the time it holds. */
+  readonly times: Map<Expression, number | undefined>;
   /** How many times a name followed on the way was met: a value read through one is of the way, not kept. */
   readonly cuts: { count: number };
-  /** How many constants may still be read, which no source that is not made to need more does. */
+  /** How many constants may still be read, of either kind, which no source not made to need more does. */
   readonly work: { left: number };
 }
 
@@ -69,6 +71,7 @@ function startNames(resolve: Resolve | undefined): Names {
     resolve,
     following: new Set(),
     known: new Map(),
+    times: new Map(),
     cuts: { count: 0 },
     work: { left: NAMES_READ },
   };
@@ -174,22 +177,36 @@ function nameOperand(name: Identifier, names: Names): Constant | undefined {
   return global ?? heldOperand(name, names);
 }
 
-/** What the constant a name stands for holds, read once however many others read it. */
-function heldOperand(name: Identifier, names: Names): Constant | undefined {
+/**
+ * What the constant a name stands for holds, as `read` reads it, once however many others read it:
+ * the one place a name is followed, for a value (`heldOperand`) and for a date (`timeOf`) alike, so
+ * that every way to a constant spends the same bounded work and keeps what it reads in the same way.
+ */
+function followed<Value>(
+  name: Identifier,
+  names: Names,
+  kept: Map<Expression, Value | undefined>,
+  read: (held: Expression, names: Names) => Value | undefined,
+): Value | undefined {
   if (names.following.has(name.text) || names.work.left <= 0) {
     names.cuts.count += 1;
     return undefined;
   }
   const held = names.resolve?.(name);
   if (held === undefined) return undefined;
-  if (names.known.has(held)) return names.known.get(held);
+  if (kept.has(held)) return kept.get(held);
   names.work.left -= 1;
   const before = names.cuts.count;
   const following = new Set([...names.following, name.text]);
-  const value = constantOperand(held, { ...names, following });
+  const value = read(held, { ...names, following });
   // A value read with no name cut short is the constant's own, whichever way it was reached.
-  if (names.cuts.count === before) names.known.set(held, value);
+  if (names.cuts.count === before) kept.set(held, value);
   return value;
+}
+
+/** What the constant a name stands for holds as a value. */
+function heldOperand(name: Identifier, names: Names): Constant | undefined {
+  return followed(name, names, names.known, constantOperand);
 }
 
 /** The language's functions that answer a number of what they are given alone, by their names. */
@@ -456,12 +473,7 @@ function timeOf(node: Expression, names: Names): number | undefined {
   if (isNewExpression(value)) {
     return dateTime(value, names);
   }
-  if (!isIdentifier(value) || names.following.has(value.text)) {
-    return undefined;
-  }
-  const held = names.resolve?.(value);
-  const following = new Set([...names.following, value.text]);
-  return held === undefined ? undefined : timeOf(held, { ...names, following });
+  return isIdentifier(value) ? followed(value, names, names.times, timeOf) : undefined;
 }
 
 /**
