@@ -31,6 +31,7 @@ import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { entriesRunCode, runsCode } from './framed-implicit-code.ts';
 import { namesInType } from './framed-references.ts';
+import { outermost } from './framed-written-targets.ts';
 import { readsBinding } from './scope.ts';
 
 /** Whether the identifier names one of the bindings, whole, as a value. */
@@ -84,9 +85,10 @@ function isIterable(array: Node, call: CallExpression): boolean {
 
 /**
  * Whether the tuple's value is held in a way that leaves it where the compile can see: the object
- * of a member read or write, a method call a native mutator is, a spread, an element of the
- * iterable, an argument of a native mutator. Any other place hands it to code the compile does not
- * follow, or keeps it where a later write could reach it.
+ * of a member read or write, a method call a native mutator is (under the parentheses or the cast
+ * that wrap the callee, as without), a spread, an element of the iterable, an argument of a native
+ * mutator. Any other place hands it to code the compile does not follow, or keeps it where a later
+ * write could reach it.
  */
 function held(at: Node, call: CallExpression, entry: Expression): boolean {
   const { parent } = at;
@@ -94,8 +96,9 @@ function held(at: Node, call: CallExpression, entry: Expression): boolean {
     (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
     parent.expression === at
   ) {
-    const outer = parent.parent;
-    return !(isCallExpression(outer) && outer.expression === parent) || isTrackedCall(outer, entry);
+    const callee = outermost(parent);
+    const outer = callee.parent;
+    return !(isCallExpression(outer) && outer.expression === callee) || isTrackedCall(outer, entry);
   }
   if (isSpreadElement(parent)) return true;
   if (isArrayLiteralExpression(parent)) return isIterable(parent, call);
