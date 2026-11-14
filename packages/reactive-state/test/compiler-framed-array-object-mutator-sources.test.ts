@@ -3205,6 +3205,76 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'scalar-name-given-an-array-by-a-name-a-pattern-declared-and-rewritten-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let [x]: any = ['safe']; x = [error]; let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-field-name-rewritten-to-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let { x }: any = { x: 'safe' }; x = [error]; let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-rest-name-rewritten-to-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let [...x]: any = ['safe']; x = [error]; let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-nested-pattern-name-rewritten-to-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let [[x]]: any = [['safe']]; x = [error]; let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-pattern-name-rewritten-to-a-text-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let [x]: any = ['safe']; x = 'text'; let v: any = 'safe'; v = x; return String([v]); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-pattern-name-never-written-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const [x]: any = ['safe']; let v: any = 'safe'; v = x; return String([v]); }`,
+    converts: false,
+  },
+  {
+    id: 'scalar-name-given-a-pattern-name-declared-again-with-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { var [x]: any = ['safe']; var x: any = [error]; let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-pattern-name-that-a-pattern-gives-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let [x]: any = ['safe']; [x] = [[error]]; let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-a-pattern-name-that-a-for-of-head-gives-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { let [x]: any = ['safe']; for (x of [[error]]) { break; } let v: any = 'safe'; v = x; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-one-of-two-fields-of-a-pattern-that-is-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { bad, good }: any = { bad: [error], good: 'safe' }; let source: any = bad; if (flag) source = good; let v: any = 'safe'; v = source; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-the-other-of-two-fields-of-a-pattern-that-is-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { bad, good }: any = { bad: [error], good: 'safe' }; let source: any = good; if (flag) source = bad; let v: any = 'safe'; v = source; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-one-of-two-elements-of-a-pattern-that-is-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const [bad, good]: any = [[error], 'safe']; let source: any = good; if (flag) source = bad; let v: any = 'safe'; v = source; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-fields-of-nested-patterns-one-of-which-is-an-array-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { a: { bad }, b: { good } }: any = { a: { bad: [error] }, b: { good: 'safe' } }; let source: any = good; source = bad; let v: any = 'safe'; v = source; return String(v); }`,
+    converts: true,
+  },
+  {
+    id: 'scalar-name-given-two-fields-of-a-pattern-that-are-texts-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const { one, two }: any = { one: 'a', two: 'b' }; let source: any = one; if (flag) source = two; let v: any = 'safe'; v = source; return String([v]); }`,
+    converts: false,
+  },
+  {
     id: 'field-selected-before-a-getter-assigns-it-stays-refused-when-rewritten-to-a-text',
     source: `function frames(error: Error, flag: boolean, original: any) { const { trigger, item }: any = { item: 'safe', get trigger() { (this as any).item = []; return 0; } }; let list: any = item; list = 'x'; return String([list]); }`,
     converts: true,
