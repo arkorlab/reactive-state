@@ -2,6 +2,7 @@ import {
   type CallExpression,
   type Expression,
   isCallExpression,
+  isIdentifier,
   isNewExpression,
   isPropertyAccessExpression,
   type Node,
@@ -153,6 +154,81 @@ const CASES = [
     source: 'const picked = [0].flatMap(() => { const out = [new Error()]; return out; }).at(0);',
     selected: true,
   },
+  {
+    id: 'outer-first-parameter-held-by-an-outer-constant',
+    source:
+      'function pick(error: Error) { const out = true ? error : []; return [0].flatMap(() => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-held-beside-a-callback-parameter',
+    source:
+      'function pick(error: Error) { const out = true ? error : []; return [0].flatMap((input) => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-held-under-a-shadowing-callback-parameter',
+    source:
+      'function pick(error: Error) { const out = true ? error : []; return [0].flatMap((error) => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-held-beside-a-destructured-callback-parameter',
+    source:
+      'function pick(error: Error) { const out = true ? error : []; return [0].flatMap(({ length }: { length?: number }) => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-held-by-a-logical-constant',
+    source:
+      'function pick(error: Error) { const out = true && error; return [0].flatMap(() => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-held-by-a-comma-constant',
+    source:
+      'function pick(error: Error) { const out = (0, error); return [0].flatMap(() => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-held-through-two-constants',
+    source:
+      'function pick(error: Error) { const first = true ? error : []; const out = first; return [0].flatMap(() => out).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-returned-by-a-conditional-pin',
+    source: 'function pick(error: Error) { return [0].flatMap(() => true ? error : []).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'outer-first-parameter-returned-by-name-pin',
+    source: 'function pick(error: Error) { return [0].flatMap(() => error).at(0); }',
+    selected: true,
+  },
+  {
+    id: 'callback-parameter-shadowing-an-outer-name-pin',
+    source:
+      'function pick(error: Error) { return [0].flatMap((error) => true ? error : []).at(0); }',
+    selected: false,
+  },
+  {
+    id: 'callback-parameter-held-by-a-local-constant-pin',
+    source:
+      'const picked = [0].flatMap((value) => { const out = true ? value : []; return out; }).at(0);',
+    selected: false,
+  },
+  {
+    id: 'callback-parameter-error-held-by-a-local-constant-pin',
+    source:
+      'const picked = [new Error()].flatMap((value) => { const out = true ? value : []; return out; }).at(0);',
+    selected: true,
+  },
+  {
+    id: 'callback-parameter-returned-by-a-conditional-pin',
+    source: 'const picked = [new Error()].flatMap((value) => true ? value : []).at(0);',
+    selected: true,
+  },
 ] as const;
 
 /** Constants that each hold the one before in both branches, a doubling of the names a return reaches. */
@@ -181,7 +257,10 @@ function atCall(root: Node): CallExpression {
 const PROOF = {
   error: (value: Expression, keys?: readonly string[]) => {
     const each = unwrapped(value);
-    return (keys === undefined || keys.length === 0) && isNewExpression(each);
+    return (
+      (keys === undefined || keys.length === 0) &&
+      (isNewExpression(each) || (isIdentifier(each) && each.text === 'error'))
+    );
   },
   typed: () => false,
 };

@@ -325,15 +325,16 @@ function flatMappedViews(
   if (known === undefined) return undefined;
   const alternatives = returned.flatMap((each) => flatReturnAlternatives(each));
   const sole = alternatives[0];
+  const soleOwner = sole === undefined ? undefined : answeringOwner(sole.from.parent);
   if (sole !== undefined && alternatives.length === 1) {
     const packed = mapperRestFlatViews(
       sole.value,
       { ...mapping, index, stable, capture: call },
-      answeringOwner(sole.from.parent),
+      soleOwner,
     );
     if (packed !== undefined) return packed;
   }
-  if (sole !== undefined && alternatives.length === 1 && directMappedInput(sole.value))
+  if (sole !== undefined && alternatives.length === 1 && directMappedInput(sole.value, soleOwner))
     return identityMappedViews(sole.value, { ...mapping, index, stable, capture: call });
   return alternatives.flatMap(({ value, from }) => {
     return flatReturnViews(value, {
@@ -530,14 +531,18 @@ function singleMapInput(receiver: Expression): boolean {
   );
 }
 
-/** A direct first-parameter return is native identity flattening rather than array text conversion. */
-function directMappedInput(returned: Expression): boolean {
+/**
+ * A direct first-parameter return is native identity flattening rather than array text conversion.
+ * The parameter is the callback's own: a value a return reaches through a constant stands where that
+ * constant does, so its owner is the callback the return belongs to, not the function it is written in.
+ */
+function directMappedInput(returned: Expression, owner: Answering | undefined): boolean {
   const value = unwrapped(returned);
   if (!isIdentifier(value)) return false;
   const binding = frameBindingOf(value);
   return (
     binding?.keys.length === 0 &&
     isParameterDeclaration(binding.binding) &&
-    binding.binding === answeringOwner(value.parent)?.parameters[0]
+    binding.binding === owner?.parameters[0]
   );
 }
