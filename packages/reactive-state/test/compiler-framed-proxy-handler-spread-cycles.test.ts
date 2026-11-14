@@ -10,8 +10,11 @@ import { describe, expect, it } from 'vitest';
  * expanded it for ever (it never returned, or grew without end where the cycle held a trap). The
  * same literal spread twice, one after the other, is no cycle: the later spread still replaces what
  * the entries between them wrote. Each row runs in a process of its own, killed after a few
- * seconds, so a reader that does not return fails its row and no more.
+ * seconds, so a reader that does not return fails its row and no more. The process starts in the
+ * package's own directory, where `typescript/ast` is the package's TypeScript, whichever directory
+ * the tests are run from.
  */
+const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const PROXY = fileURLToPath(
   new URL('../src/compiler/framed-proxy-get-results.ts', import.meta.url),
 );
@@ -104,7 +107,7 @@ describe('a Proxy handler made of object spreads', () => {
     '$id',
     ({ answers, source }) => {
       const ran = spawnSync(process.execPath, ['--input-type=module', '--eval', SCRIPT, source], {
-        cwd: process.cwd(),
+        cwd: PACKAGE,
         encoding: 'utf8',
         timeout: SECONDS,
       });
