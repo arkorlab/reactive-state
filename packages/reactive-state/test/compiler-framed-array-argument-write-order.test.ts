@@ -1137,9 +1137,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'nested-callee-data-definition-lets-the-assignment-replace-pin',
+    id: 'nested-callee-data-definition-lets-the-assignment-replace-refused-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.call(Object, values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'other-key-accessor-stays-possible-pin',
