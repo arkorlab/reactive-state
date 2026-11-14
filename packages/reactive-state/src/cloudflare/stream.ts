@@ -1,5 +1,5 @@
 import { assertedSessionOf } from '../asserted.ts';
-import type { AuthorityEngine } from '../authority/engine.ts';
+import { type AuthorityEngine, engineNow } from '../authority/engine.ts';
 import { AuthorityError } from '../authority/errors.ts';
 import type { CommitEvent, Watched } from '../authority/model.ts';
 import type { SessionId } from '../client/contract.ts';
@@ -259,7 +259,7 @@ class Follower {
    * own expiry has come, which `renew`s. The render waited in the engine's queue, and the engine
    * refuses a session from the instant it expires as it refuses one that ended; the clock tells
    * them apart, and the page asks the application whether the session stands in either case. The
-   * session's `expires` decides, by the engine's own clock (`AuthorityEngine.now`), the one it
+   * session's `expires` decides, by the engine's own clock (`engineNow`), the one it
    * refused by, which is not always `Date.now`: not `#expiresAt`, which is the `expiresIn` the
    * engine sampled added to this isolate's clock when the stream opened, so it comes later than the
    * session's expiry by what passed between, and earlier where the page asks again before the
@@ -268,7 +268,7 @@ class Follower {
   #refused(error: AuthorityError): string {
     const { engine, sessionId } = this.#following;
     const asserted = assertedSessionOf(sessionId);
-    return asserted !== undefined && engine.now() >= asserted.expires
+    return asserted !== undefined && engineNow(engine) >= asserted.expires
       ? event('renew', {})
       : event('revoked', { code: error.code, error: error.message });
   }

@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { type AssertedSession, assertedSessionOf } from '../asserted.ts';
 import type { SessionId } from '../client/contract.ts';
 import { HTTP_OK, REVOKING_STATUSES } from '../status.ts';
-import type { AuthorityEngine as Engine } from './engine.ts';
+import { type AuthorityEngine as Engine, engineNow } from './engine.ts';
 import { AuthorityError } from './errors.ts';
 import type { CommitEvent, Watched } from './model.ts';
 
@@ -147,7 +147,7 @@ class Follower {
       // by, which is not always `Date.now`: not the stream's `expiresIn` added to the clock now,
       // which was sampled in the engine, earlier, so it ends later than the session does.
       if (error instanceof AuthorityError && REVOKING_STATUSES.has(error.status)) {
-        if (this.#asserted !== undefined && engine.now() >= this.#asserted.expires) {
+        if (this.#asserted !== undefined && engineNow(engine) >= this.#asserted.expires) {
           this.send('renew', {});
         } else {
           this.send('revoked', { code: error.code, error: error.message });

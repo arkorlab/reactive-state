@@ -178,7 +178,8 @@ function refusing(row: Row): () => Promise<Watched> {
 
 /**
  * An authority as a stream sees one: it renders the root as `SHOWN` until `refuse` says its next
- * render is the one refused, as `row` says, and announces each commit as changing `READ`.
+ * render is the one refused, as `row` says, and announces each commit as changing `READ`. It is no
+ * engine that a constructor opened, so its clock is the wall clock the test moves (`engineNow`).
  */
 function authority(row: Row): {
   readonly commit: () => void;
@@ -201,8 +202,6 @@ function authority(row: Row): {
         listeners.delete(listener);
       };
     },
-    // The authority's clock is the one the test moves.
-    now: () => Date.now(),
     revision: () => 0,
     watch: async () => render(),
   } as unknown as Engine;
