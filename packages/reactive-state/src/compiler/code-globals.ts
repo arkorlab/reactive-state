@@ -52,7 +52,12 @@ import { isTakenApart, useOf } from './uses.ts';
  */
 
 /** The objects whose members are the globals: `globalThis`, `self`, `window`, Node's `global`. */
-const GLOBAL_OBJECTS: ReadonlySet<string> = new Set(['global', 'globalThis', 'self', 'window']);
+export const GLOBAL_OBJECTS: ReadonlySet<string> = new Set([
+  'global',
+  'globalThis',
+  'self',
+  'window',
+]);
 
 /**
  * What makes code of text, or loads a module of a name, by the names a global's read goes by:
