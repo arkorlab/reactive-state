@@ -113,9 +113,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'read-of-the-prototype-of-a-class-pin',
+    id: 'read-of-the-prototype-of-a-class-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { class Table {} void Table['prototype']; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'alias-of-the-array-constructor',
@@ -213,9 +213,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'function-new-pin',
+    id: 'function-new-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void new Function('return 1'); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'get-prototype-of-compared-pin',
@@ -228,9 +228,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'constructor-prototype-read-of-a-member-pin',
+    id: 'constructor-prototype-read-of-a-member-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void a.constructor.prototype.join; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'array-prototype-read-by-a-bracket-in-a-compare-pin',
