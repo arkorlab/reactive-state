@@ -211,7 +211,11 @@ function quietField(
     pending.push(source);
   } else if (isPropertyAssignment(property) && quietName(property.name))
     pending.push(property.initializer);
-  else if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
+  else if (
+    isShorthandPropertyAssignment(property) &&
+    isIdentifier(property.name) &&
+    quietName(property.name)
+  )
     pending.push(property.name);
   else if (isGetAccessorDeclaration(property) && quietName(property.name)) {
     const result = framedQuietGetter(property);
