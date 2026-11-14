@@ -4,13 +4,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 /**
- * Sources that copy one another, each into the next from the two before it or twice from the one
- * before, make a program that grows by a line a level and names one value. The walk of what is
- * written into a descriptor follows each object once, however many sources name it, so its work
- * and what it returns grow with the program: a chain run in a child process, which is killed where
- * a walk down every path would still be running.
+ * A chain of constants that name one another, and sources that copy one another (each into the next
+ * from the two before it, or twice from the one before), make a program that grows by a line a
+ * level and names one value. The walk of what is written into a descriptor follows each constant
+ * and each object once, however many name it, so its work and what it returns grow with the
+ * program: a chain is run in a child process, which is killed where a walk that repeats work would
+ * still be running.
  */
-const LIMITS = { depth: 30, fibonacci: 40, kill: 30_000, wait: 60_000 } as const;
+const LIMITS = { depth: 30, fibonacci: 40, aliases: 6000, kill: 30_000, wait: 60_000 } as const;
 const COMPILER = fileURLToPath(new URL('../src/compiler/', import.meta.url));
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 
@@ -33,6 +34,14 @@ function fibonacci(depth: number): string {
       `const s${level} = { value: e }; Object.assign(s${level}, s${level - 1}, s${level - 2});`,
     );
   lines.push(`Object.assign(d, s${depth});`);
+  return lines.join('\n');
+}
+
+/** Each constant names the one before it, the first the descriptor; the last is written. */
+function aliasing(count: number): string {
+  const lines = ['const a1 = d;'];
+  for (let level = 2; level <= count; level += 1) lines.push(`const a${level} = a${level - 1};`);
+  lines.push(`a${count}.value = e;`);
   return lines.join('\n');
 }
 
@@ -73,7 +82,7 @@ function reported(source: string): ReturnType<typeof spawnSync> {
   });
 }
 
-describe('descriptor writes through sources that copy one another', () => {
+describe('descriptor writes through chains of constants and of copies', () => {
   it(
     'follows a source copied twice at each of thirty levels once',
     () => {
@@ -98,6 +107,28 @@ describe('descriptor writes through sources that copy one another', () => {
         texts: ['e'],
         nodes: LIMITS.fibonacci + 1,
       });
+    },
+    LIMITS.wait,
+  );
+
+  it(
+    'finds a write through the last of six thousand aliases of the descriptor',
+    () => {
+      const ran = reported(aliasing(LIMITS.aliases));
+
+      expect(ran.signal).toBeNull();
+      expect(JSON.parse(String(ran.stdout))).toStrictEqual({ texts: ['e'], nodes: 1 });
+    },
+    LIMITS.wait,
+  );
+
+  it(
+    'finds a write through the last of three aliases of the descriptor',
+    () => {
+      const ran = reported(aliasing(3));
+
+      expect(ran.signal).toBeNull();
+      expect(JSON.parse(String(ran.stdout))).toStrictEqual({ texts: ['e'], nodes: 1 });
     },
     LIMITS.wait,
   );
