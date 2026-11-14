@@ -302,6 +302,86 @@ const PATTERNS = [
     "const source: any[] = ['safe']; void source.length; const [item] = source; return String([item]);",
     false,
   ],
+  [
+    'source-of-lists-copied-by-slice',
+    "const source: any[] = [['safe']]; source.slice()[0][0] = error; const [[item]] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-of-lists-copied-by-a-spread',
+    "const source: any = { inner: ['safe'] }; ({ ...source }).inner[0] = error; const { inner: [item] } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-of-objects-copied-by-assign',
+    "const source: any = { inner: { x: 'safe' } }; (Object.assign({}, source) as any).inner.x = error; const { inner: { x } } = source; return String([x]);",
+    true,
+  ],
+  [
+    'source-of-objects-copied-by-a-spread',
+    "const source: any[] = [{ x: 'safe' }]; [...source][0].x = error; const [{ x }] = source; return String([x]);",
+    true,
+  ],
+  [
+    'source-of-lists-copied-by-map',
+    "const source: any[] = [['safe']]; source.map((each: any) => each)[0][0] = error; const [[item]] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-of-lists-copied-by-from',
+    "const source: any[] = [['safe']]; Array.from(source)[0][0] = error; const [[item]] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-of-lists-copied-by-values',
+    "const source: any = { inner: ['safe'] }; Object.values(source)[0][0] = error; const { inner: [item] } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-of-a-named-list-copied-by-slice',
+    "const inner: any[] = ['safe']; const source: any[] = [inner]; source.slice()[0][0] = error; const [[item]] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-of-lists-never-written-stays-refused',
+    "const source: any[] = [['safe']]; const [[item]] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-with-an-unknown-spread-stays-refused',
+    'const source: any[] = [...other]; const [item] = source; return String([item]);',
+    true,
+  ],
+  [
+    'source-object-with-an-unknown-spread-stays-refused',
+    'const source: any = { ...other }; const { item } = source; return String([item]);',
+    true,
+  ],
+  [
+    'source-of-texts-and-numbers-pin',
+    "const source: any[] = ['safe', 'x', 1]; const [item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-of-texts-copied-pin',
+    "const source: any[] = ['safe', 'x']; source.slice(); const [item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-object-of-texts-and-numbers-pin',
+    "const source: any = { item: 'safe', other: 2 }; const { item } = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-of-error-words-and-texts-pin',
+    "const source: any[] = [error, 'x']; const [, item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-of-typed-names-and-texts-pin',
+    "const source: any[] = [name, 'x']; const [item] = source; return String([item]);",
+    false,
+  ],
 ] as const;
 
 /** Arrays of texts, typed names and error words stay followed as before; one of unknown elements hands them out. */

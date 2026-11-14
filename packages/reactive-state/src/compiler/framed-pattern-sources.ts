@@ -1,10 +1,17 @@
 import {
+  type ArrayLiteralExpression,
   type Expression,
   isArrayLiteralExpression,
   isIdentifier,
   isObjectLiteralExpression,
+  isOmittedExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
+  isSpreadElement,
   isVariableDeclaration,
   type Node,
+  type ObjectLiteralExpression,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -12,6 +19,7 @@ import { writtenAsWhole } from './framed-array-identity.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
 import { knownUsesOnly } from './framed-known-mentions.ts';
+import { mayBeList } from './framed-nested-lists.ts';
 
 /**
  * What a pattern takes apart may have been written since its literal was: a name a pattern takes apart
@@ -29,7 +37,11 @@ const CHAIN = 32;
  * `push`), or a use of the name is not one the compile follows, anywhere in the file. A literal written
  * where the pattern is, and a name that stands for no literal, are left as they are.
  */
-export function sourceChanged(source: Expression, read: Node): boolean {
+export function sourceChanged(
+  source: Expression,
+  read: Node,
+  scalar: (value: Expression, keys: readonly string[]) => boolean,
+): boolean {
   const named = unwrapped(source);
   if (!isIdentifier(named)) return false;
   const chain = bindingsOf(named);
@@ -37,10 +49,48 @@ export function sourceChanged(source: Expression, read: Node): boolean {
   if (chain === undefined || last === undefined) return false;
   if (chain.some((binding) => writtenAsWhole(binding))) return true;
   const literal = last.initializer === undefined ? undefined : unwrapped(last.initializer);
-  if (literal !== undefined && isArrayLiteralExpression(literal))
-    return !isVariableDeclaration(last) || !knownUsesOnly(last, 'echo');
-  if (literal === undefined || !isObjectLiteralExpression(literal)) return false;
-  return objectChanged(last, read);
+  if (literal === undefined) return false;
+  if (isArrayLiteralExpression(literal))
+    return (
+      holdsContainers(literal, scalar) ||
+      !isVariableDeclaration(last) ||
+      !knownUsesOnly(last, 'echo')
+    );
+  if (!isObjectLiteralExpression(literal)) return false;
+  return holdsContainers(literal, scalar) || objectChanged(last, read);
+}
+
+/**
+ * Whether a literal holds an array or an object, or what may be one (an element or a member of an unknown
+ * value, a spread): a copy of it (a spread, `slice`, `map`, `Object.assign`) shares what it holds, and a
+ * write through the copy is a write to the array or the object the pattern selects from.
+ */
+function holdsContainers(
+  literal: ArrayLiteralExpression | ObjectLiteralExpression,
+  scalar: (value: Expression, keys: readonly string[]) => boolean,
+): boolean {
+  if (isArrayLiteralExpression(literal))
+    return literal.elements.some(
+      (each) =>
+        isSpreadElement(each) || (!isOmittedExpression(each) && mayBeContainer(each, scalar)),
+    );
+  return literal.properties.some((each) => {
+    if (isSpreadAssignment(each)) return true;
+    if (isShorthandPropertyAssignment(each))
+      return !isIdentifier(each.name) || mayBeContainer(each.name, scalar);
+    return isPropertyAssignment(each) && mayBeContainer(each.initializer, scalar);
+  });
+}
+
+/** Whether a value is, or may be, an array or an object: a literal of either, a name of one, or what may be a list. */
+function mayBeContainer(
+  value: Expression,
+  scalar: (value: Expression, keys: readonly string[]) => boolean,
+): boolean {
+  const written = unwrapped(value);
+  if (isArrayLiteralExpression(written) || isObjectLiteralExpression(written)) return true;
+  if (isIdentifier(written) && bindingsOf(written) !== undefined) return true;
+  return mayBeList(value, scalar);
 }
 
 /** The declarations a chain of names passes to the literal it ends at, none where it ends at no literal. */
