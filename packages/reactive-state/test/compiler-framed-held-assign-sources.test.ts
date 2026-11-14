@@ -260,6 +260,141 @@ const CASES = [
     source: `function frames(error: Error, sources: { x: unknown }[]) { const box = { x: error }; Object.assign(box, { x: 0 }); Object.assign(box, ...sources); return box.x; }`,
     selects: false,
   },
+  {
+    id: 'changed-source-member-written-before',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; source.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-spread-member-written-before',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; source.x = error; Object.assign(box, { ...source }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-written-in-a-later-argument',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, source, { y: (source.x = error) }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-written-after-the-call',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, source); source.x = error; return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-written-through-an-alias',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const alias = source; alias.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-written-in-a-function',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const run = () => { source.x = error; }; run(); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-written-in-a-loop',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; for (let turn = 0; turn < 2; turn += 1) { Object.assign(box, source); if (turn > 0) { return box.x; } source.x = error; } return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-handed-to-a-call',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; touch(source); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-method-called',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; source.update(); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-member-deleted',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; delete source.x; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-member-compound-assigned',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; source.x += 'a'; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-pattern-written',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; [source.x] = [error]; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-object-pattern-written',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; ({ a: source.x } = { a: error }); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-loop-head-written',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; for (source.x of [error]) { /* written */ } Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-named-by-a-variable',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; let other = source; other.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-assign-target',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(source, { x: error }); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-defined-on',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.defineProperty(source, "x", { value: error }); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-returned',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const again = () => source; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-in-an-array',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const all = [source]; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-in-a-literal',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const wrap = { source }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'changed-source-after-explicit-entry',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, { x: 0 }, source); touch(source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'read-source-member',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const seen = source.x; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'read-source-copied-twice',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, source); const other = { y: 1 }; Object.assign(other, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'read-source-spread',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, { ...source }); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'read-source-through-constant-alias',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const alias = source; Object.assign(box, alias); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'read-source-after-explicit-entry',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, { x: error }, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'changed-source-keeps-its-literal-error',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: 0 }; const source = { x: error } as { x: unknown }; touch(source); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
 ] as const;
 
 describe('what the sources of one Object.assign leave in a member', () => {

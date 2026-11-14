@@ -15,7 +15,6 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
-  isVariableDeclarationList,
   type NewExpression,
   type Node,
   type ObjectLiteralExpression,
@@ -30,6 +29,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
 import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
+import { isConstantDeclaration, sourceChanged } from './framed-source-changes.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** What a module's code writes into the members of its variables, read once a module. */
@@ -252,18 +252,21 @@ function assignedEntries(node: Expression): readonly MemberWrite[] {
 /**
  * The entries of an `Object.assign` source in the order it writes them: those of a literal, or of
  * the literal a whole constant alias chain ends in, and of the literals it spreads, each read once
- * (a second spread of one is a part the walk does not read). A part it cannot read is `undefined`.
+ * (a second spread of one is a part the walk does not read). A part it cannot read is `undefined`,
+ * and so is the end of a constant that code may have changed (`sourceChanged`): it may hold other
+ * entries than its literal wrote.
  */
 function sourceEntries(source: Expression): readonly (WrittenEntry | undefined)[] {
-  const literal = constantLiteral(source);
-  if (literal === undefined) return [undefined];
+  const first = constantLiteral(source);
+  if (first === undefined) return [undefined];
   const entries: (WrittenEntry | undefined)[] = [];
-  const seen = new Set([literal]);
-  const pending = [literal.properties.values()];
+  const seen = new Set([first.literal]);
+  const pending = [{ properties: first.literal.properties.values(), changed: first.changed }];
   for (let at = pending.at(-1); at !== undefined; at = pending.at(-1)) {
-    const next = at.next();
+    const next = at.properties.next();
     if (next.done === true) {
       pending.pop();
+      if (at.changed) entries.push(undefined);
       continue;
     }
     const property = next.value;
@@ -272,34 +275,33 @@ function sourceEntries(source: Expression): readonly (WrittenEntry | undefined)[
       continue;
     }
     const spread = constantLiteral(property.expression);
-    if (spread === undefined || seen.has(spread)) {
+    if (spread === undefined || seen.has(spread.literal)) {
       entries.push(undefined);
     } else {
-      seen.add(spread);
-      pending.push(spread.properties.values());
+      seen.add(spread.literal);
+      pending.push({ properties: spread.literal.properties.values(), changed: spread.changed });
     }
   }
   return entries;
 }
 
+/** An object literal a source is, with whether code may have changed the constant it was named by. */
+interface SourceLiteral {
+  readonly literal: ObjectLiteralExpression;
+  readonly changed: boolean;
+}
+
 /** The object literal an expression is, or a whole constant alias chain of it ends in. */
-function constantLiteral(expression: Expression): ObjectLiteralExpression | undefined {
+function constantLiteral(expression: Expression): SourceLiteral | undefined {
   const value = unwrapped(expression);
-  if (isObjectLiteralExpression(value)) return value;
+  if (isObjectLiteralExpression(value)) return { literal: value, changed: false };
   const declared = isIdentifier(value) ? frameDeclarationOf(value) : undefined;
   if (declared === undefined || !isVariableDeclaration(declared)) return undefined;
   const holder = framedHeldVariable(declared);
   const initial = holder.initializer === undefined ? undefined : unwrapped(holder.initializer);
   if (initial === undefined || !isObjectLiteralExpression(initial)) return undefined;
-  return isIdentifier(holder.name) && isConstant(holder) ? initial : undefined;
-}
-
-/** Whether a variable is declared whole with `const`, which nothing assigns anew. */
-function isConstant(declared: VariableDeclaration): boolean {
-  return (
-    isVariableDeclarationList(declared.parent) &&
-    /^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
-  );
+  if (!isIdentifier(holder.name) || !isConstantDeclaration(holder)) return undefined;
+  return { literal: initial, changed: sourceChanged(holder) };
 }
 
 /** `Object.defineProperty(holder, key, { value })`: the descriptor's written value under the key. */
@@ -397,7 +399,7 @@ export function framedHeldVariable(declared: VariableDeclaration): VariableDecla
       value === undefined ||
       !isIdentifier(value) ||
       !isIdentifier(holder.name) ||
-      !isConstant(holder)
+      !isConstantDeclaration(holder)
     )
       return holder;
     const next = frameDeclarationOf(value);
