@@ -4451,6 +4451,41 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'member-of-a-box-handed-to-a-tag-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const mutate = (s: any, v: any) => { v.get = () => error; }; const a: any[] = ['safe']; mutate\`\${box.d}\`; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-of-a-box-handed-to-a-tag-held-by-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const t = { mutate(s: any, v: any) { v.get = () => error; } }; const a: any[] = ['safe']; t.mutate\`\${box.d}\`; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-of-a-box-converted-by-a-template-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { toString() { this.get = () => error; return 's'; }, get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; const s = \`\${box.d}\`; void s; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-of-a-box-converted-by-string-raw-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { toString() { this.get = () => error; return 's'; }, get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; String.raw\`\${box.d}\`; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-of-a-member-of-a-box-converted-by-a-template-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { toString() { this.get = () => error; return 's'; }, get: () => 'safe' }; const box = { inner: { d } }; const a: any[] = ['safe']; const s = \`\${box.inner.d}\`; void s; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'field-of-a-descriptor-handed-to-a-tag-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const mutate = (s: any, v: any) => { d.get = () => error; }; const a: any[] = ['safe']; mutate\`\${d.get}\`; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'field-of-a-descriptor-converted-by-a-template-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const a: any[] = ['safe']; const s = \`\${d.get}\`; void s; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'known-test-of-an-array-pin',
     source: `function frames(error: Error) { const a = ['safe']; if (a) { void 0; } return String(a); }`,
     converts: false,

@@ -497,7 +497,9 @@ function chained(at: Node): Use {
 /**
  * What a member read hands over: a field of a descriptor, the length of a list, a read, or nothing
  * the compile follows. A literal that holds a followed object holds it under any name, `value` and
- * `length` among them: what its members give is that object.
+ * `length` among them: what its members give is that object. Converted by a template, that object runs
+ * its `toString`, and a tag is given it whole: only a field of data is known there, in a template
+ * no tag takes.
  */
 function resultUse(
   result: Node,
@@ -506,11 +508,13 @@ function resultUse(
 ): Use {
   const { parent } = result;
   if (isSpreadAssignment(parent)) return SPREADS;
-  if (discarded(result) || isTemplateSpan(parent)) return KNOWN;
+  if (discarded(result)) return KNOWN;
+  const data = depth === 1 && field !== undefined && dataFields(subject).has(field);
+  if (isTemplateSpan(parent))
+    return data && !isTaggedTemplateExpression(parent.parent.parent) ? KNOWN : UNKNOWN;
   if (isVariableDeclaration(parent)) {
     const initializer: Node | undefined = parent.initializer;
-    const direct = initializer === result && depth === 1 && field !== undefined;
-    return direct && dataFields(subject).has(field) ? KNOWN : UNKNOWN;
+    return initializer === result && data ? KNOWN : UNKNOWN;
   }
   return readerArgument(result) ? KNOWN : UNKNOWN;
 }
