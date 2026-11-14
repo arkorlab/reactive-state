@@ -120,7 +120,7 @@ export function frameDeclarationOf(name: Identifier): FrameDeclaration | undefin
 
 /** The container a binding element selects from, before it reads its own final member. */
 export function frameBindingContainer(element: BindingElement): FrameSelection | undefined {
-  const selected = elementSelection(element);
+  const selected = element.dotDotDotToken === undefined ? elementSelection(element) : undefined;
   return selected === undefined ? undefined : { ...selected, keys: selected.keys.slice(0, -1) };
 }
 
@@ -310,22 +310,36 @@ function selectedBinding(binding: FrameBinding, name: string): FrameSelection | 
     : undefined;
 }
 
-/** The literal object and tuple keys from a binding's declared whole to one selected field. */
+/**
+ * The literal object and tuple keys from a binding's declared whole to one selected field. A rest
+ * element holds copies of the members of the pattern it stands in, so it selects that pattern itself:
+ * a member read through it is a member read of what the pattern takes apart, whatever the rest was
+ * left to hold, as an error kept among them is one still. An array's rest after the first position
+ * holds its elements at shifted indexes, which a path of keys does not say, so it selects nothing.
+ */
 function elementSelection(element: BindingElement): FrameSelection | undefined {
   const keys: string[] = [];
   let each = element;
   for (;;) {
-    if (each.dotDotDotToken !== undefined) return undefined;
     const pattern = each.parent;
-    const key = isArrayBindingPattern(pattern)
-      ? String(pattern.elements.indexOf(each))
-      : frameMemberName(each);
+    const key = elementKey(each, pattern);
     if (key === undefined) return undefined;
-    keys.unshift(key);
+    if (key !== null) keys.unshift(key);
     const owner = pattern.parent;
     if (isParameterDeclaration(owner) || isVariableDeclaration(owner))
       return { binding: owner, keys };
     if (!isBindingElement(owner)) return undefined;
     each = owner;
   }
+}
+
+/** The key a binding element reads from its pattern: `null` for a rest, `undefined` if unreadable. */
+function elementKey(
+  element: BindingElement,
+  pattern: BindingElement['parent'],
+): string | null | undefined {
+  const index = isArrayBindingPattern(pattern) ? pattern.elements.indexOf(element) : undefined;
+  if (element.dotDotDotToken !== undefined)
+    return index === undefined || index === 0 ? null : undefined;
+  return index === undefined ? frameMemberName(element) : String(index);
 }
