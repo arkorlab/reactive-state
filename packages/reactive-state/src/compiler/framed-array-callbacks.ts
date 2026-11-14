@@ -5,7 +5,6 @@ import {
   isCallExpression,
   isFunctionExpression,
   isIdentifier,
-  isTypeNode,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -13,6 +12,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { nativePath } from './framed-mutator-calls.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** The methods of an array that the language gives it: those a call of which runs no code of the program. */
 export const ARRAY_METHODS: ReadonlySet<string> = new Set(
@@ -317,7 +317,7 @@ export function handsArray(call: CallExpression, name: string, from = 0): boolea
 function mentionsArguments(fn: Node): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (isIdentifier(node) && node.text === 'arguments') return true;
     node.forEachChild((child) => {
       pending.push(child);

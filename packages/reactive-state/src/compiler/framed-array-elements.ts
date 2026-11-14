@@ -15,7 +15,6 @@ import {
   isPropertyAccessExpression,
   isSpreadElement,
   isVariableDeclaration,
-  isTypeNode,
   isSourceFile,
   SyntaxKind,
 } from 'typescript/ast';
@@ -52,6 +51,7 @@ import { framedCondition } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
+import { isTypeOnly } from './scope.ts';
 
 export interface WrittenArrayElement extends AssignedFrameSource {
   readonly array?: boolean;
@@ -115,7 +115,7 @@ function candidatesOf(root: FrameBinding, read: Node): readonly Node[] {
   const candidates: Node[] = [];
   const pending: Node[] = [read.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (
       !isSourceFile(node) &&
       possibleBefore(node, read, owner, root) &&

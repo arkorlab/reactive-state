@@ -2,7 +2,6 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isIdentifier,
-  isTypeNode,
   isVariableDeclarationList,
   type Node,
   type VariableDeclaration,
@@ -12,7 +11,7 @@ import { unwrapped } from './bounded.ts';
 import { writtenAsWhole } from './framed-array-identity.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { classify, isArray, type Subject, type Use } from './framed-known-uses.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /**
  * Whether every mention of the constant, and of each constant that only names it, is a use the
@@ -100,7 +99,7 @@ function mentions(declaration: VariableDeclaration): Identifier[] {
   const found: Identifier[] = [];
   const pending: Node[] = [declaration.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (isIdentifier(node) && node !== declaration.name && readsBinding(node)) {
       const selected = frameBindingOf(node);
       if (selected?.binding === declaration && selected.keys.length === 0) found.push(node);

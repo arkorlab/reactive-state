@@ -19,7 +19,6 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
-  isTypeNode,
   type NewExpression,
   type Node,
   SyntaxKind,
@@ -31,6 +30,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** New native iterator origins require quiet source creation and an unchanged first-step boundary. */
 
@@ -198,7 +198,7 @@ export function iteratorPrefixQuiet(
   const owner = executionOwner(to);
   const pending: Node[] = [to.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node) || unrelatedOwnMethod(node, boundary)) continue;
+    if (isTypeOnly(node) || unrelatedOwnMethod(node, boundary)) continue;
     if (
       node.pos >= from.end &&
       node.end <= to.pos &&

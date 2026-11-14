@@ -62,7 +62,6 @@ import {
   isSetAccessorDeclaration,
   isStringLiteral,
   isTypeAliasDeclaration,
-  isTypeNode,
   isTypeParameterDeclaration,
   isTypeQueryNode,
   isTypeReferenceNode,
@@ -80,6 +79,7 @@ import {
 } from 'typescript/ast';
 
 import type { Fail } from './errors.ts';
+import { isTypeSyntax } from './type-syntax.ts';
 
 /**
  * Names, followed lexically through a part of the component — the code before the state, the
@@ -196,15 +196,13 @@ function declaredAgain(name: string): string {
 }
 
 /**
- * Whether `node` is erased from what runs, with the types: a type — but `f<T>`, an instantiation
- * expression, and a class's `extends`, which TypeScript counts among the type nodes but which read
- * their expression — an alias, an interface, a type parameter, or a signature of no body: an
- * overload's, an abstract method's, a class's index signature. A parameter of any of them declares
- * nothing that runs, whatever it is named.
+ * Whether `node` is erased from what runs, with the types (`isTypeSyntax`): an alias, an interface, a
+ * type parameter, or a signature of no body: an overload's, an abstract method's, a class's index
+ * signature. A parameter of any of them declares nothing that runs, whatever it is named.
  */
 export function isTypeOnly(node: Node): boolean {
   return (
-    (isTypeNode(node) && !isExpressionWithTypeArguments(node)) ||
+    isTypeSyntax(node) ||
     isTypeAliasDeclaration(node) ||
     isInterfaceDeclaration(node) ||
     isTypeParameterDeclaration(node) ||

@@ -31,7 +31,6 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTaggedTemplateExpression,
-  isTypeNode,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -44,7 +43,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** What a getter the copy of a spread runs writes into the object it runs on. */
 
@@ -118,11 +117,10 @@ function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | unde
       named.push(...used.named);
       deleted.push(...used.deleted);
     }
-    const rebinds =
-      (isFunctionLikeDeclaration(node) && !isArrowFunction(node)) ||
-      isClassDeclaration(node) ||
-      isClassExpression(node);
-    if (!rebinds)
+    if (isClassDeclaration(node) || isClassExpression(node)) {
+      // The class binds a `this` of its own for its members, not for the expression it extends.
+      pending.push(...(node.heritageClauses ?? []));
+    } else if (!isFunctionLikeDeclaration(node) || isArrowFunction(node))
       node.forEachChild((child) => {
         pending.push(child);
       });
@@ -267,7 +265,7 @@ function readsArgument(setter: SetAccessorDeclaration): boolean {
   }
   const pending: Node[] = setter.body === undefined ? [] : [setter.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (isIdentifier(node) && names.has(node.text) && readsBinding(node)) return true;
     node.forEachChild((child) => {
       pending.push(child);

@@ -3,13 +3,13 @@ import {
   isFunctionExpression,
   isMethodDeclaration,
   isPropertyAssignment,
-  isTypeNode,
   type Node,
   type ObjectLiteralElementLike,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { isTypeOnly } from './scope.ts';
 
 /**
  * A function that names `this`, anywhere in its body. Stored on an array as a method, a getter or a
@@ -19,7 +19,7 @@ import { unwrapped } from './bounded.ts';
 export function namesThis(fn: Node): boolean {
   const pending: Node[] = [fn];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (node.kind === SyntaxKind.ThisKeyword) return true;
     node.forEachChild((child) => {
       pending.push(child);
