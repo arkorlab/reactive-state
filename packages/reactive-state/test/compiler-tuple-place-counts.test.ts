@@ -26,8 +26,11 @@ import { writtenTuplePlaces } from '../src/compiler/local-type-tuple-selections.
  * What a count reads is bounded. Shared aliases are met by every path that reaches them, and the
  * alternatives of each level of `type T1 = [...(T0 | [...T0])]` both reach the level before, so
  * twenty levels were a million counts of one place. One count reads the rests of at most 4096
- * tuples; the rests it has no more reads for count as the one place of a rest of unknown length,
- * as a cycle does, so that what one count costs does not grow with the ways to reach an alias.
+ * tuples. A count that needs more cannot say how many places there are, and a count that is short
+ * drops the place a loop may assign an `Error` at: iterating `[...T12, ...[string, Error]]` over
+ * twelve such levels counted two places, and left out `values.2`. It is the most places a tuple
+ * has, ten thousand (TypeScript refuses a tuple spread past that), so that every place is read,
+ * as every element is a candidate; what a count can finish within its reads keeps its own answer.
  */
 const MIXED = [
   {
@@ -185,28 +188,102 @@ const CYCLES = [
 /** Twenty levels of an alias that reaches the one before it by two alternatives or by two rests. */
 const LEVELS = 20;
 
+/** Each level reaches the one before it by both of two alternatives. */
+const SHARING = (at: number, before: number): string =>
+  `type T${String(at)} = [...(T${String(before)} | [...T${String(before)}])];`;
+
+/** The same, beside an array. */
+const MIXED_SHARING = (at: number, before: number): string =>
+  `type T${String(at)} = [...(string[] | T${String(before)} | [...T${String(before)}])];`;
+
 const SHARED = [
-  {
-    id: 'shared-alternatives',
-    level: (at: number, before: number): string =>
-      `type T${String(at)} = [...(T${String(before)} | [...T${String(before)}])];`,
-  },
-  {
-    id: 'shared-alternatives-beside-arrays',
-    level: (at: number, before: number): string =>
-      `type T${String(at)} = [...(string[] | T${String(before)} | [...T${String(before)}])];`,
-  },
+  { id: 'shared-alternatives', level: SHARING },
+  { id: 'shared-alternatives-beside-arrays', level: MIXED_SHARING },
 ] as const;
 
-/** One alias declaration for each level from the first to `levels`, above the one of `[Error]`. */
-function chainOf(levels: number, level: (at: number, before: number) => string): string {
+/** One alias declaration for each level from the first to `levels`, above the one of `[base]`. */
+function chainOf(
+  levels: number,
+  level: (at: number, before: number) => string,
+  base = 'Error',
+): string {
   const declarations = Array.from({ length: levels }, (_, index) => level(index + 1, index));
-  return `type T0 = [Error]; ${declarations.join(' ')}`;
+  return `type T0 = [${base}]; ${declarations.join(' ')}`;
 }
+
+/** The most places a tuple has, and the sources a loop over a count that has no reads left is given. */
+const TUPLE_PLACES = 10_000;
+const EVERY_PLACE = Array.from({ length: TUPLE_PLACES }, (_, place) => `values.${String(place)}`);
 
 /** Each level a rest of the one before it, twice. */
 const SEQUENCE = (at: number, before: number): string =>
   `type T${String(at)} = [...T${String(before)}, ...T${String(before)}];`;
+
+/**
+ * Rests of shared aliases no count can read in full, the `Error` at a place a short count leaves out:
+ * after the rest, beside a tuple that is longer, after a rest that repeats a rest, beside arrays.
+ */
+const EXHAUSTED = [
+  {
+    id: 'rest-after-the-exhausted-rest',
+    chain: (): string => chainOf(12, SHARING, 'string'),
+    type: '[...T12, ...[string, Error]]',
+  },
+  {
+    id: 'member-after-the-exhausted-rest',
+    chain: (): string => chainOf(12, SHARING, 'string'),
+    type: '[...T12, string, Error]',
+  },
+  {
+    id: 'tuple-beside-the-exhausted-rest',
+    chain: (): string => chainOf(12, SHARING, 'string'),
+    type: '[...(T12 | [string, string, Error])]',
+  },
+  {
+    id: 'exhausted-rest-of-arrays-and-tuples',
+    chain: (): string => chainOf(12, MIXED_SHARING, 'string'),
+    type: '[...T12, ...[string, Error]]',
+  },
+  {
+    id: 'rests-that-reach-an-alias-twice',
+    chain: (): string => chainOf(20, SEQUENCE, 'string'),
+    type: '[...T20, ...[string, Error]]',
+  },
+  {
+    id: 'exhausted-rest-in-an-alias',
+    chain: (): string =>
+      `${chainOf(12, SHARING, 'string')} type Values = [...T12, ...[string, Error]];`,
+    type: 'Values',
+  },
+] as const;
+
+/** The same shapes with levels enough for a count to finish: the places it has, and no more. */
+const FINISHED = [
+  {
+    id: 'rest-after-the-shared-rest',
+    chain: (): string => chainOf(8, SHARING, 'string'),
+    type: '[...T8, ...[string, Error]]',
+    sources: ['values.0', 'values.1', 'values.2'],
+  },
+  {
+    id: 'member-after-the-shared-rest',
+    chain: (): string => chainOf(8, SHARING, 'string'),
+    type: '[...T8, string, Error]',
+    sources: ['values.0', 'values.1', 'values.2'],
+  },
+  {
+    id: 'tuple-beside-the-shared-rest',
+    chain: (): string => chainOf(8, SHARING, 'string'),
+    type: '[...(T8 | [string, string, Error])]',
+    sources: ['values.0', 'values.1', 'values.2'],
+  },
+  {
+    id: 'shared-rest-of-arrays-and-tuples',
+    chain: (): string => chainOf(8, MIXED_SHARING, 'string'),
+    type: '[...T8, ...[string, Error]]',
+    sources: ['values.0', 'values.1', 'values.2'],
+  },
+] as const;
 
 describe('the places a written tuple is counted at', () => {
   let api: API;
@@ -291,16 +368,40 @@ describe('the places a written tuple is counted at', () => {
   it.each(SHARED)('reads shared aliases a bounded number of times: $id', ({ level }) => {
     const { asked, places } = counted(chainOf(LEVELS, level), `T${String(LEVELS)}`);
 
-    expect(places).toBe(1);
+    expect(places).toBe(TUPLE_PLACES);
     expect(asked).toBeLessThan(40_000);
   });
 
   it('reads rests that reach an alias twice a bounded number of times', () => {
     const { asked, places } = counted(chainOf(LEVELS, SEQUENCE), `T${String(LEVELS)}`);
 
-    expect(places).toBeGreaterThanOrEqual(1);
+    expect(places).toBe(TUPLE_PLACES);
     expect(asked).toBeLessThan(40_000);
   });
+
+  it('counts a small shared alias by the places it has', () => {
+    const { asked, places } = counted(chainOf(8, SHARING), 'T8');
+
+    expect(places).toBe(1);
+    expect(asked).toBeLessThan(2000);
+  });
+
+  it.each(EXHAUSTED)(
+    'reads every place where a count has no reads left: $id',
+    ({ chain, type }) => {
+      const sources = iterated(chain(), type);
+
+      expect(sources).toContain('values.2');
+      expect(sources).toStrictEqual(EVERY_PLACE);
+    },
+  );
+
+  it.each(FINISHED)(
+    'keeps the places of a count that finishes: $id',
+    ({ chain, type, sources }) => {
+      expect(iterated(chain(), type)).toStrictEqual(sources);
+    },
+  );
 
   it('counts the places of a shared alias in full while a count has reads left', () => {
     const { asked, places } = counted(chainOf(10, SEQUENCE), 'T10');
