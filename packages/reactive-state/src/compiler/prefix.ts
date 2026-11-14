@@ -13,6 +13,7 @@ import {
   isModuleBlock,
   isModuleDeclaration,
   isParameterDeclaration,
+  isPropertyDeclaration,
   isSourceFile,
   isTypeAliasDeclaration,
   isVariableStatement,
@@ -87,10 +88,13 @@ const PARAMETER_PROPERTY: ReadonlySet<SyntaxKind> = new Set([
 /**
  * Node runs the authority's program with its types stripped, and nothing more: what only a
  * transform turns into JavaScript — an `enum`, a parameter property — fails to load there
- * (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`), and a decorator is no JavaScript yet. The Durable Object's
+ * (`ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX`), and a decorator, and an `accessor` field, are no JavaScript
+ * yet: stripping leaves the field as written and the engine fails to parse it. The Durable Object's
  * bundler would transform them, and the browser's code is compiled by Next.js: the server part
- * alone is refused them. Within a `declare` all of it is erased: an `enum`, and a decorator of what
- * the declaration holds, though not one written before a `declare`d class, nor a parameter property.
+ * alone is refused them. Within a `declare` all of it is erased: an `enum`, an `accessor` field, and
+ * a decorator of what the declaration holds, though not one written before a `declare`d class, nor
+ * a parameter property. An `abstract` `accessor` field is erased wherever it is written, with the
+ * class's other abstract members.
  */
 function checkStrippable(node: Node, fail: Fail): void {
   if (isEnumDeclaration(node) && !ambient(node)) {
@@ -114,6 +118,27 @@ function checkStrippable(node: Node, fail: Fail): void {
       node,
     );
   }
+  if (isRunTimeAccessor(node)) {
+    fail(
+      'The server part is run with its types stripped, and an `accessor` field is not yet JavaScript: write a getter and a setter over a private field instead.',
+      node,
+    );
+  }
+}
+
+/**
+ * Whether `node` is an `accessor` field that stripping leaves in the program: not an `abstract`
+ * one, which goes with the class's abstract members, nor one within a `declare`d class or
+ * namespace. A `declare` written on the field alone erases nothing.
+ */
+function isRunTimeAccessor(node: Node): boolean {
+  if (!isPropertyDeclaration(node)) return false;
+  const kinds = node.modifiers?.map((modifier) => modifier.kind) ?? [];
+  return (
+    kinds.includes(SyntaxKind.AccessorKeyword) &&
+    !kinds.includes(SyntaxKind.AbstractKeyword) &&
+    !ambient(node)
+  );
 }
 
 /**
