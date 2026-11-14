@@ -27,6 +27,7 @@ import {
   type ObjectLiteralExpression,
   type ParameterDeclaration,
   type PropertyName,
+  type SpreadAssignment,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -308,18 +309,35 @@ function writtenArguments(
     : { target, handler };
 }
 
+/** A written literal whose entries are being read, the entries still to come last. */
+interface Expansion {
+  readonly entries: HandlerEntry[];
+  readonly literal: ObjectLiteralExpression;
+}
+
 /**
  * The traps a written handler may hold under `get`, in source order: a definite later entry replaces
  * earlier ones; a name the compile cannot read, a spread it cannot follow and a setter, which may
- * pair with a getter of the name, keep them possible.
+ * pair with a getter of the name, keep them possible. A spread of a literal that is being expanded
+ * already, by itself or through others (`const handler = { ...handler, get }`, which throws where
+ * it runs: a constant read before its initializer), is one it cannot follow; the same literal
+ * spread again once its first expansion is done is followed again, as it replaces what lies between.
  */
 function handlerTraps(handler: ObjectLiteralExpression): readonly Trap[] {
   let traps: Trap[] = [];
-  const pending: HandlerEntry[] = handler.properties.toReversed();
-  for (let entry = pending.pop(); entry !== undefined; entry = pending.pop()) {
+  const open: Expansion[] = [{ entries: handler.properties.toReversed(), literal: handler }];
+  const active = new Set<Node>([handler]);
+  for (let inside = open.at(-1); inside !== undefined; inside = open.at(-1)) {
+    const entry = inside.entries.pop();
+    if (entry === undefined) {
+      active.delete(inside.literal);
+      open.pop();
+      continue;
+    }
     if (isSpreadAssignment(entry)) {
-      const spread = constantSource(entry.expression);
-      if (isObjectLiteralExpression(spread)) pending.push(...spread.properties.toReversed());
+      const spread = expandable(entry, active);
+      if (spread !== undefined)
+        open.push({ entries: spread.properties.toReversed(), literal: spread });
       continue;
     }
     if (isSetAccessorDeclaration(entry)) continue;
@@ -330,6 +348,17 @@ function handlerTraps(handler: ObjectLiteralExpression): readonly Trap[] {
     else traps.push(...found);
   }
   return traps;
+}
+
+/** The literal a spread entry holds, marked as being expanded; none for one that is already. */
+function expandable(
+  entry: SpreadAssignment,
+  active: Set<Node>,
+): ObjectLiteralExpression | undefined {
+  const spread = constantSource(entry.expression);
+  if (!isObjectLiteralExpression(spread) || active.has(spread)) return undefined;
+  active.add(spread);
+  return spread;
 }
 
 /** An entry's written names; none of a computed name the compile cannot read. */
