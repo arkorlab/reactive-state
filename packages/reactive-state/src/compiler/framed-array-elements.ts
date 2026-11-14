@@ -21,7 +21,7 @@ import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { emptyArrayFill } from './framed-array-fill-ranges.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { arrayIdentity } from './framed-array-identity.ts';
+import { arrayIdentity, isRootLiteral } from './framed-array-identity.ts';
 import { framedLogicalElementSkipped } from './framed-array-logical-writes.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
@@ -139,7 +139,7 @@ export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
     const target = invoked?.args[0];
     if (invoked === undefined || target === undefined) return true;
     return (
-      invokedTargets(invoked).every((each) => literalArrayBinding(each) !== root) ||
+      invokedTargets(invoked).every((each) => !isRootArray(each, root)) ||
       argumentsKnown(invoked, (declaration) => {
         held.push(declaration);
       })
@@ -248,9 +248,7 @@ export function elementSources(
   if (!isCallExpression(node)) return [];
   const mutated = objectMutatorElements(node, index);
   if (mutated !== undefined)
-    return mutated.targets.some((target) => literalArrayBinding(target) === root)
-      ? mutated.elements
-      : [];
+    return mutated.targets.some((target) => isRootArray(target, root)) ? mutated.elements : [];
   const borrowed = borrowedElements(node, root);
   if (borrowed !== undefined) return borrowed;
   const member = unwrapped(node.expression);
@@ -296,13 +294,18 @@ function insertedArguments(
 
 const MOVING = new Set(['copyWithin', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
 
+/** Whether an expression is the array a binding holds: its name, or the literal it was initialized with. */
+export function isRootArray(expression: Expression, root: FrameBinding): boolean {
+  return literalArrayBinding(expression) === root || isRootLiteral(expression, root);
+}
+
 /**
  * Whether the array a method is called on may be this one: the name of it, or any of the arrays the
  * expression stands for, a condition, a comma, a logical operand, an assignment, a call that
  * returns what it was called on.
  */
 export function mayBeArrayOf(receiver: Expression, root: FrameBinding): boolean {
-  return returnedTargets(receiver).some((each) => literalArrayBinding(each) === root);
+  return returnedTargets(receiver).some((each) => isRootArray(each, root));
 }
 
 /** A possible position-moving mutator leaves every assigned numeric entry reachable. */
