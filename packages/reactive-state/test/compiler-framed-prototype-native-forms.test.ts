@@ -8,8 +8,8 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * (or of the objects and the functions), however it names it: `Array.prototype`, `Array['prototype']`, a
  * template or a computed key on `Array`, an alias or a destructuring of `Array`, `Reflect.get(Array,
  * 'prototype')`, `Object.getPrototypeOf(a)`, `a.constructor.prototype`, a name that is given to code or
- * has a member written or deleted. A read of a member of it, a comparison, a type, `new Array`,
- * `x instanceof Array` and `Array.from` do not.
+ * has a member written or deleted, and a read of a member of it. A type, `new Array`, `x instanceof
+ * Array` and `Array.from` do not.
  */
 const CASES = [
   {
@@ -98,14 +98,14 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'read-of-a-bracket-prototype-member-pin',
+    id: 'read-of-a-bracket-prototype-member-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Array['prototype']['join']; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'call-of-a-bracket-prototype-member-pin',
+    id: 'call-of-a-bracket-prototype-member-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Array['prototype'].join.call(a); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'read-of-another-member-of-the-array-constructor-pin',
@@ -193,9 +193,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'array-comparison-pin',
+    id: 'array-comparison-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void (a.constructor === Array); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'array-instanceof-pin',
@@ -208,9 +208,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'array-extends-pin',
+    id: 'array-extends-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { class Rows extends Array {} void Rows; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'function-new-refused-pin',
@@ -218,14 +218,14 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'get-prototype-of-compared-pin',
+    id: 'get-prototype-of-compared-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void (Object.getPrototypeOf(a) === Object.prototype); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'get-prototype-of-read-of-a-member-pin',
+    id: 'get-prototype-of-read-of-a-member-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Object.getPrototypeOf(a).join; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'constructor-prototype-read-of-a-member-refused-pin',
@@ -233,9 +233,9 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'array-prototype-read-by-a-bracket-in-a-compare-pin',
+    id: 'array-prototype-read-by-a-bracket-in-a-compare-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void (Array['prototype'] === Object.getPrototypeOf(a)); }`,
-    changes: false,
+    changes: true,
   },
 ] as const;
 

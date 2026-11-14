@@ -4,16 +4,16 @@ import { prototypeMayChange } from '../src/compiler/framed-prototype-changes.ts'
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * A file may give an array another prototype, or another inherited method, unless every mention of
- * what reaches a prototype is one of a short list of uses that reach none. The list: a name read by a
- * type; `Array.from`, `Array.isArray`, `Array.of`, `new Array`, `instanceof Array`, `extends Array` (and
- * `Object` as a constructor); a call, by its name, of `Object.keys`, `values`, `entries`, `fromEntries`,
- * `freeze`, `isFrozen`, `getOwnPropertyNames`, `is`, `Reflect.has`, `ownKeys`; the functions that write
- * an object (`Object.assign`, `defineProperty`, `defineProperties`, `Reflect.apply`, `defineProperty`,
- * `set`), called or held; `getPrototypeOf` called, its answer compared or its member read; a member of
- * `Array.prototype`, `Object.prototype` or `Function.prototype` read by its name; a comparison of a
- * constructor or its `name`. Any other mention is a change: a key the code computes, a member the code
- * writes on a holder, a holder in a variable, a list, an object, an argument or the `this` of a call.
+ * A file may give an array another prototype, or another inherited method, wherever a value mentions
+ * what reaches one: a name that does (`__proto__`, `constructor`, `prototype`, `getPrototypeOf`,
+ * `setPrototypeOf`, `__defineGetter__`, `__defineSetter__`, `__lookupGetter__`, `__lookupSetter__`) as a
+ * member, a key or a text of any object, or a global that holds one (`Object`, `Reflect`, `Array`,
+ * `Function`, the global objects). The mention is no change where it is a name read by a type, `typeof`,
+ * `x instanceof Array`, `new Array`, `new Object`, or a call, by its name, of `Array.from`,
+ * `Array.isArray`, `Array.of`, `Object.assign`, `entries`, `freeze`, `fromEntries`, `keys` or `values`.
+ * Any other is a change: a read of a member of a prototype, a comparison of a constructor, `getPrototypeOf`,
+ * `defineProperty` and `Reflect` included, a holder in a variable, a list, an object, an argument or the
+ * `this` of a call.
  */
 const CASES = [
   {
@@ -222,14 +222,14 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'extends-array-pin',
+    id: 'extends-array-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { class Rows extends Array {} void Rows; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'extends-object-pin',
+    id: 'extends-object-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { class Table extends Object {} void Table; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'type-names-pin',
@@ -267,19 +267,19 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'object-is-frozen-pin',
+    id: 'object-is-frozen-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Object.isFrozen(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-get-own-property-names-pin',
+    id: 'object-get-own-property-names-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Object.getOwnPropertyNames(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-is-pin',
+    id: 'object-is-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Object.is(a, a); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-keys-by-a-text-pin',
@@ -287,24 +287,24 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'object-keys-of-the-global-object-pin',
+    id: 'object-keys-of-the-global-object-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void globalThis.Object.keys(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-from-of-the-window-pin',
+    id: 'array-from-of-the-window-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void window.Array.from(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-has-pin',
+    id: 'reflect-has-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Reflect.has(a, 0); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-own-keys-pin',
+    id: 'reflect-own-keys-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Reflect.ownKeys(a); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-assign-pin',
@@ -312,49 +312,49 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'object-define-property-pin',
+    id: 'object-define-property-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Object.defineProperty(a, 'x', { value: 1 }); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-define-properties-pin',
+    id: 'object-define-properties-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Object.defineProperties(a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-define-property-pin',
+    id: 'reflect-define-property-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Reflect.defineProperty(a, 'x', { value: 1 }); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-apply-of-assign-pin',
+    id: 'reflect-apply-of-assign-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Reflect.apply(Object.assign, null, [a, {}]); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'assign-held-as-a-function-pin',
+    id: 'assign-held-as-a-function-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { const assign = Object.assign; assign(a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'assign-bound-pin',
+    id: 'assign-bound-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { const assign = Object.assign.bind(null); assign(a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'assign-called-pin',
+    id: 'assign-called-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Object.assign.call(null, a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'assign-through-a-function-method-pin',
+    id: 'assign-through-a-function-method-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { Function.prototype.call.call(Object.assign, null, a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'get-prototype-of-compared-pin',
+    id: 'get-prototype-of-compared-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void (Object.getPrototypeOf(a) === Array.prototype); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'get-prototype-of-answer-constructor-refused',
@@ -362,34 +362,34 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'prototype-member-read-pin',
+    id: 'prototype-member-read-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Array.prototype.join.call(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'prototype-member-read-by-a-text-pin',
+    id: 'prototype-member-read-by-a-text-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Array['prototype']['join']; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'function-prototype-member-read-pin',
+    id: 'function-prototype-member-read-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Function.prototype.call; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-prototype-member-read-pin',
+    id: 'object-prototype-member-read-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void Object.prototype.hasOwnProperty.call(a, 'x'); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'constructor-compared-pin',
+    id: 'constructor-compared-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void (a.constructor === Array); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'constructor-name-pin',
+    id: 'constructor-name-refused',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void a.constructor.name; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'class-constructor-declaration-pin',
@@ -512,29 +512,29 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'get-prototype-of-of-the-global-compared-pin',
+    id: 'get-prototype-of-of-the-global-compared-refused',
     source: `function frames(helper: any, a: unknown[], key: string) { void (Object.getPrototypeOf(a) === Array.prototype); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'get-prototype-of-of-the-global-member-read-pin',
+    id: 'get-prototype-of-of-the-global-member-read-refused',
     source: `function frames(helper: any, a: unknown[], key: string) { void Object.getPrototypeOf(a).join; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-get-prototype-of-compared-pin',
+    id: 'reflect-get-prototype-of-compared-refused',
     source: `function frames(helper: any, a: unknown[], key: string) { void (Reflect.getPrototypeOf(a) !== null); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'get-prototype-of-of-the-global-object-pin',
+    id: 'get-prototype-of-of-the-global-object-refused',
     source: `function frames(helper: any, a: unknown[], key: string) { void (globalThis.Object.getPrototypeOf(a) === null); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'get-prototype-of-of-the-global-bracket-compared-pin',
+    id: 'get-prototype-of-of-the-global-bracket-compared-refused',
     source: `function frames(helper: any, a: unknown[], key: string) { void (Object['getPrototypeOf'](a) === null); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'get-prototype-of-imported-by-name-refused',

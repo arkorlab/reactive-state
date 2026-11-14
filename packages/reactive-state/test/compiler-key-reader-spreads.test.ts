@@ -5,12 +5,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isErased, readsCodeGlobal } from '../src/compiler/code-globals.ts';
 
 /**
- * A spread among the arguments a reader of the language's is given lays them out as the language
- * runs them: of an array written, the elements it writes, so that a key is where they put it; of a
- * list the code gives by a name, as many arguments as the list has, which the code does not show —
- * each length it may have is read, so that a key written past it is read where it may be the key,
- * and not where the arguments before it are too many for it to be. A list kept by a name, and the
- * function it holds, are not followed.
+ * A spread among the arguments a reader of the language's is given does not hide the key: a call that
+ * writes the text `'constructor'` among its arguments and holds a reader reads it, whether the text
+ * comes before or after the spread, and where the arguments before it make it the receiver and not
+ * the key. A list the code gives by a name, and the function it holds, are not followed.
  */
 
 const CASES = [
@@ -61,17 +59,17 @@ const CASES = [
     what: 'a key an array written, spread, gives to `bind`',
   },
   {
-    reads: [],
+    reads: ["Reflect.get(...[run, 'name'], 'constructor')"],
     source: "return Reflect.get(...[run, 'name'], 'constructor');",
     what: 'a key past an array of two, spread',
   },
   {
-    reads: [],
+    reads: ["Reflect.get(...[...[run, 'name']], 'constructor')"],
     source: "return Reflect.get(...[...[run, 'name']], 'constructor');",
     what: 'a key past an array written in an array written, spread',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.call(null, ...[run, 'name'], 'constructor')"],
     source: "return Reflect.get.call(null, ...[run, 'name'], 'constructor');",
     what: 'a key past an array of two, spread, given to a borrowed call',
   },
@@ -127,22 +125,22 @@ const CASES = [
     what: 'a key past a spread in an array written, spread',
   },
   {
-    reads: [],
+    reads: ["Reflect.get(run, 'name', ...rest, 'constructor')"],
     source: "return Reflect.get(run, 'name', ...rest, 'constructor');",
     what: 'a key past two functions and a spread',
   },
   {
-    reads: [],
+    reads: ["Reflect.get(...rest, run, 'name', 'constructor')"],
     source: "return Reflect.get(...rest, run, 'name', 'constructor');",
     what: 'a key past a spread and two functions',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.call(null, run, 'name', ...rest, 'constructor')"],
     source: "return Reflect.get.call(null, run, 'name', ...rest, 'constructor');",
     what: 'a key past two functions and a spread, given to a borrowed call',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(null, [run, 'name', ...rest, 'constructor'])"],
     source: "return Reflect.get.apply(null, [run, 'name', ...rest, 'constructor']);",
     what: 'a key past two functions and a spread, in the array of `apply`',
   },
@@ -152,7 +150,7 @@ const CASES = [
     what: 'what a spread alone gives',
   },
   {
-    reads: [],
+    reads: ["Reflect.get(run, 'name', 'constructor', ...rest)"],
     source: "return Reflect.get(run, 'name', 'constructor', ...rest);",
     what: 'what a key past the key, before a spread, is',
   },

@@ -4,11 +4,11 @@ import { prototypeMayChange } from '../src/compiler/framed-prototype-changes.ts'
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * A member of a native prototype, or of what hands one back, is read by the name the code writes:
- * `Array.prototype.join`, `Array.prototype['join']`. A key the code computes, a number, a constant
- * or a joined text, a name in a variable, may be `__defineSetter__`, `constructor` or `__proto__`:
- * what it reads is another prototype, or a method that gives one a setter, called with the
- * prototype as its `this`. Any such access is a use that may reach a prototype.
+ * A member of a native prototype, read by the name the code writes (`Array.prototype.join`,
+ * `Array.prototype['join']`) or by a key it computes (a number, a constant, a joined text, a name in a
+ * variable), is a use that may reach a prototype: the file names `prototype`, and what a computed key
+ * reads may be `__defineSetter__`, `constructor` or `__proto__`, a method that gives one a setter, called
+ * with the prototype as its `this`.
  */
 const CASES = [
   {
@@ -112,39 +112,39 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'array-prototype-member-by-a-text-pin',
+    id: 'array-prototype-member-by-a-text-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void Array.prototype['join']; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-member-by-a-plain-template-pin',
+    id: 'array-prototype-member-by-a-plain-template-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void Array.prototype[\`join\`]; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-member-by-a-name-pin',
+    id: 'array-prototype-member-by-a-name-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void Array.prototype.join; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-member-by-a-text-in-parentheses-pin',
+    id: 'array-prototype-member-by-a-text-in-parentheses-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void Array.prototype[('join')]; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-prototype-member-by-a-text-called-pin',
+    id: 'object-prototype-member-by-a-text-called-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void Object.prototype['hasOwnProperty'].call(a, 'x'); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'prototype-answer-member-by-a-text-pin',
+    id: 'prototype-answer-member-by-a-text-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void (Object.getPrototypeOf(a) as any)['join']; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'prototype-answer-compared-pin',
+    id: 'prototype-answer-compared-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void (Object.getPrototypeOf(a) === Array.prototype); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'array-element-by-a-runtime-key-pin',
@@ -157,9 +157,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'member-of-a-called-prototype-member-by-a-runtime-key-pin',
+    id: 'member-of-a-called-prototype-member-by-a-runtime-key-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void) { void Array.prototype.join.call(a)[key]; }`,
-    changes: false,
+    changes: true,
   },
 ] as const;
 

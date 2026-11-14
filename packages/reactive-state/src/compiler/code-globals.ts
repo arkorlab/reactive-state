@@ -1,6 +1,8 @@
 import {
+  type Expression,
   type Identifier,
   type ImportDeclaration,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
@@ -23,6 +25,7 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isSpreadElement,
   isStringLiteral,
   isTypeAliasDeclaration,
   isTypeAssertion,
@@ -38,7 +41,6 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
-import { readsConstructorKey, type Reading } from './key-reader-calls.ts';
 import { holdsValues, mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
 import { isTakenApart, useOf } from './uses.ts';
@@ -387,21 +389,69 @@ function readsConstructor(node: Node): boolean {
   return !(isNamed || (isBinaryExpression(parent) && COMPARING.has(parent.operatorToken.kind)));
 }
 
-/** What `readsConstructorKey` reads a global and a written text by: this module's own. */
-const READING: Reading = {
-  pathOf: (node) => globalPathOf(node)?.join('.'),
-  textOf,
-};
+/** The functions of globals that read a member of what they are given by the key given next. */
+const KEY_READERS: ReadonlySet<string> = new Set([
+  'Object.getOwnPropertyDescriptor',
+  'Reflect.get',
+  'Reflect.getOwnPropertyDescriptor',
+]);
 
 /**
- * Whether `node` is a read of the language's that reads a member by the key it is given — of what
- * made what it is given: `Reflect.get(fn, 'constructor')`, borrowed too, `Reflect.get.call(null, fn,
- * 'constructor')`, bound, `Reflect.get.bind(null, fn)('constructor')` — however the call is written
- * (`key-reader-calls.ts`). A global holder's own read is checked where it is handed on; the same key
- * on another object is that object's ordinary entry.
+ * Whether `node` is a call that reads a member by the key `'constructor'` of a function of the
+ * language's that reads by key (`KEY_READERS`), read by names and not by how the code writes the
+ * call: it writes the text among its arguments, and holds a reader in its callee or in an
+ * argument — called, borrowed through `call`, `apply` or `bind`, handed to `Reflect.apply`, bound,
+ * in a list. `Reflect.get(fn, 'constructor')` is one, and so is `Reflect.get.call(fn, 'constructor')`
+ * though the text is the `this`. A key the code does not write is not read, and a reader the code
+ * holds by a name of its own is not followed. A global holder's own read is checked where it is
+ * handed on; the same key on another object is that object's ordinary entry.
  */
 function readsCodeKey(node: Node): boolean {
-  return isCallExpression(node) && readsConstructorKey(node, READING);
+  return (
+    isCallExpression(node) &&
+    node.arguments.some((each) => namesConstructor(each)) &&
+    [node.expression, ...node.arguments].some((each) => holdsReader(each))
+  );
+}
+
+/** Whether a node, or a part of it that runs, is the text `'constructor'`: a type names no key. */
+function namesConstructor(node: Node): boolean {
+  if (isErased(node)) {
+    return false;
+  }
+  let found = textOf(node) === 'constructor';
+  node.forEachChild((child) => {
+    found ||= namesConstructor(child);
+  });
+  return found;
+}
+
+/**
+ * Whether an expression is a key reader of the language's, or holds one as a member read of it, a
+ * call it is made by or is given to, a list, a comma or a cast.
+ */
+function holdsReader(expression: Expression): boolean {
+  let each = unwrapped(expression);
+  while (!KEY_READERS.has(globalPathOf(each)?.join('.') ?? '')) {
+    if (
+      isTypeAssertion(each) ||
+      isSpreadElement(each) ||
+      isPropertyAccessExpression(each) ||
+      isElementAccessExpression(each)
+    ) {
+      each = unwrapped(each.expression);
+    } else {
+      return partsOf(each).some((part) => holdsReader(part));
+    }
+  }
+  return true;
+}
+
+/** What a call, a list or a comma is made of: the function and its arguments, the elements, the operands. */
+function partsOf(expression: Expression): readonly Expression[] {
+  if (isCallExpression(expression)) return [expression.expression, ...expression.arguments];
+  if (isArrayLiteralExpression(expression)) return expression.elements;
+  return isBinaryExpression(expression) ? [expression.left, expression.right] : [];
 }
 
 /**
