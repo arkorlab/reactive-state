@@ -291,6 +291,12 @@ const CHANGING = new Set([
   'unshift',
 ]);
 
+/** The prefix operators that write what they are given; `!`, `-`, `+` and `~` only read it. */
+const STEPS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.MinusMinusToken,
+  SyntaxKind.PlusPlusToken,
+]);
+
 /**
  * The last member of the chain of members a name begins, as written: `list[0].x.y` for `list`, past
  * the parentheses and casts between its links. A write to the chain's end, or a call of its end,
@@ -338,7 +344,7 @@ function onlyReads(name: Identifier): boolean {
     return !(used.left === member && isAssignmentOperator(used.operatorToken.kind));
   return !(
     isDeleteExpression(used) ||
-    isPrefixUnaryExpression(used) ||
+    (isPrefixUnaryExpression(used) && STEPS.has(used.operator)) ||
     isPostfixUnaryExpression(used)
   );
 }
