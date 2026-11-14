@@ -6,7 +6,6 @@ import {
   isCallExpression,
   isElementAccessExpression,
   isExpressionStatement,
-  isExpressionWithTypeArguments,
   isIdentifier,
   isMetaProperty,
   isNewExpression,
@@ -18,7 +17,6 @@ import {
   isShorthandPropertyAssignment,
   isStringLiteral,
   isTaggedTemplateExpression,
-  isTypeNode,
   type Node,
   type NoSubstitutionTemplateLiteral,
   type NumericLiteral,
@@ -29,6 +27,7 @@ import {
 
 import { holderOf } from './framed-function-names.ts';
 import { readsBinding } from './scope.ts';
+import { isTypeSyntax } from './type-syntax.ts';
 
 /**
  * What a node reads and writes by a name: a variable, or a property by its name, written out as an
@@ -38,7 +37,7 @@ import { readsBinding } from './scope.ts';
 
 /** Whether a node is a type and no value: the expression a class extends is a value. */
 export function isTypeOnly(node: Node): boolean {
-  return isTypeNode(node) && !isExpressionWithTypeArguments(node);
+  return isTypeSyntax(node);
 }
 
 /**
