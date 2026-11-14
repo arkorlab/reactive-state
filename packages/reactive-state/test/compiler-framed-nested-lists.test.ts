@@ -190,6 +190,36 @@ const ELEMENTS = [
     'const a: any[] = [error.length as number]; [...a]; return String(a);',
     true,
   ],
+  [
+    'a name given a list after a text is a list that is handed out',
+    "const inner: any[] = []; let v: any = 'safe'; v = inner; const a: any[] = [v]; a.forEach((x: any) => { x.push(error); }); return String(a);",
+    true,
+  ],
+  [
+    'a name typed as a union and given a list is a list that is handed out',
+    "const inner: any[] = []; let v: string | any[] = 'safe'; v = inner; const a: any[] = [v]; a.forEach((x: any) => { x.push(error); }); return String(a);",
+    true,
+  ],
+  [
+    'a parameter with a default is a list that is handed out',
+    "function pass(v: any = 'x') { const a: any[] = [v]; a.forEach((x: any) => { x.push(error); }); return String(a); } return pass([]);",
+    true,
+  ],
+  [
+    'a name given a text again stays a list that is handed out',
+    "let v: any = 'safe'; v = 'other'; const a: any[] = [v]; [...a]; return String(a);",
+    true,
+  ],
+  [
+    'a name given a number by an arithmetic assignment stays a list that is handed out',
+    'let n: any = 1; n += 2; const a: any[] = [n]; [...a]; return String(a);',
+    true,
+  ],
+  [
+    'a name never written after its text is no list',
+    "let v: any = 'safe'; const a: any[] = [v]; [...a]; return String(a);",
+    false,
+  ],
 ] as const;
 
 describe('an array that holds a list, handed out', () => {

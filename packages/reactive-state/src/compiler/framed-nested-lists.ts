@@ -12,6 +12,7 @@ import {
   isLiteralTypeNode,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isParameterDeclaration,
   isParenthesizedTypeNode,
   isPropertyAssignment,
   isSpreadAssignment,
@@ -28,6 +29,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
+import { writtenAsWhole } from './framed-array-identity.ts';
 import { isNoArray } from './framed-array-starts.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { bindingIdentifiers } from './scope.ts';
@@ -135,7 +137,11 @@ function binaryLeads(
   return hands ? [written.left, written.right] : undefined;
 }
 
-/** What a name stands for: its initializer, none known where it is a parameter, a pattern or typed as a list. */
+/**
+ * What a name stands for: its initializer, none known where it is a parameter (a default is only what a
+ * call that gives none leaves), a pattern, or a name that is written as a whole elsewhere, which may be
+ * given a list there. A name typed as a scalar is one, whatever it is given.
+ */
 function named(name: Identifier, seen: Set<unknown>): readonly Expression[] | undefined {
   if (['Infinity', 'NaN', 'undefined'].includes(name.text) && frameBindingOf(name) === undefined)
     return [];
@@ -143,9 +149,11 @@ function named(name: Identifier, seen: Set<unknown>): readonly Expression[] | un
   if (selected === undefined || selected.keys.length > 0) return undefined;
   const { binding } = selected;
   if (binding.type !== undefined && scalarType(binding.type)) return [];
+  if (isParameterDeclaration(binding)) return undefined;
   if (seen.has(binding)) return [];
   seen.add(binding);
-  return binding.initializer === undefined ? undefined : [binding.initializer];
+  if (writtenAsWhole(binding) || binding.initializer === undefined) return undefined;
+  return [binding.initializer];
 }
 
 /** What the check of an array asks of its reader: which elements are no lists, the literal a name stands for, what is written to it. */

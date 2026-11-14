@@ -4891,6 +4891,41 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'self-held-array-given-a-method-named-trim-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = []; Object.assign(a, { self: Object.assign(a, {}), trim: Array.prototype.push }); (a as any).self.trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'self-held-array-given-a-method-named-join-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = []; Object.assign(a, { self: Object.assign(a, {}), join: Array.prototype.push }); (a as any).self.join(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-of-a-list-given-a-method-by-a-write-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; (inner as any).trim = Array.prototype.push; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-text-elsewhere-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; const label = 'join'; void label; a[0].join(','); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-of-a-read-only-method-nothing-names-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-named-by-a-field-elsewhere-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; const o = { join: 1 }; void o; a[0].join(','); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-of-another-name-by-a-field-elsewhere-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; const o = { trim: 1 }; void o; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'length-fixed-pin',
     source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; (a as any).length.toFixed(2); return String(a); }`,
     converts: false,

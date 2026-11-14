@@ -69,6 +69,7 @@ import {
   nativePath,
   type MutatorInvocation,
 } from './framed-mutator-calls.ts';
+import { methodMayBeOverridden } from './framed-overridden-methods.ts';
 import { tested } from './framed-tested-uses.ts';
 import { namesThis } from './framed-this-functions.ts';
 
@@ -361,13 +362,16 @@ function keepsThis(result: Node): boolean {
 
 /**
  * Whether a call on a member of a member of an array leaves the array as it was: the length is a
- * number, and a read-only method of a text, a number or an array changes nothing it is called on. Any
- * other method may write what the member holds, a list among them, through a name no reader follows.
+ * number, and a read-only method of a text, a number or an array changes nothing it is called on, unless
+ * the file may give a member that name (a field, a text or a write of it: the member may be a method
+ * that writes). Any other method may write what the member holds, a list among them, through a name
+ * no reader follows.
  */
 function memberCallRuns(access: Node, base: string | undefined): boolean {
   if (base === 'length') return true;
   const name = memberName(access);
-  return name !== undefined && READ_ONLY_METHODS.has(name);
+  if (name === undefined || !READ_ONLY_METHODS.has(name)) return false;
+  return !methodMayBeOverridden(access.getSourceFile(), name, mutatorInvocation);
 }
 
 /**
