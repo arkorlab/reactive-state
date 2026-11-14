@@ -432,10 +432,15 @@ function changed(member: Node): boolean {
   );
 }
 
-/** Whether a prototype, or what hands one back, is given away, or has a member written, not read. */
+/**
+ * Whether a prototype, or what hands one back, is given away, or has a member written, not read: a
+ * member read is read by the name the code writes (`.join`, `['join']`), for a key the code computes
+ * (`[key]`, `[0]`, `['jo' + 'in']`) may be a name that reaches another prototype or a method that sets one.
+ */
 function usedOtherwiseThanRead(node: Node): boolean {
   const site = outermost(node);
   const { parent } = site;
   if (isBinaryExpression(parent) && COMPARISONS.has(parent.operatorToken.kind)) return false;
-  return !isMemberAccess(parent) || parent.expression !== site || changed(parent);
+  if (!isMemberAccess(parent) || parent.expression !== site) return true;
+  return writtenMember(parent) === undefined || changed(parent);
 }
