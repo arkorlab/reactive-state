@@ -61,9 +61,9 @@ function uncast(node: Expression): Expression {
 /**
  * Whether `node` is an iterator, where the code makes one: of a method that answers one
  * (`ITERATING`), `items.values()`; of a global's function that makes one (`makesIterator`),
- * `Iterator.from(…)`; of a call `isGenerator` says calls a generator; of a method of one that
- * answers another (`ITERATOR_HELPERS`), read by its name or by text in brackets, `['map']` — a name
- * read as what `reach` says it holds.
+ * `Iterator.from(…)`; of a call `isGenerator` says calls a generator, whatever it is named; of a
+ * method of one that answers another (`ITERATOR_HELPERS`), read by its name or by text in brackets,
+ * `['map']` — a name read as what `reach` says it holds.
  */
 export function isIterator(
   node: Expression,
@@ -83,12 +83,17 @@ export function isIterator(
     if (name !== undefined && ITERATING.has(name)) {
       return true;
     }
+    // A generator the code writes answers an iterator whatever it is named, `source.map()` of
+    // `{ *map() { … } }`: asked before the call is read as a helper of the iterator it is called on.
+    if (isGenerator(value)) {
+      return true;
+    }
     if (
       name === undefined ||
       !ITERATOR_HELPERS.has(name) ||
       !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
     ) {
-      return isGenerator(value);
+      return false;
     }
     value = uncast(reach(callee.expression));
   }
