@@ -52,6 +52,26 @@ export type Constant = number | string;
 interface Names {
   readonly resolve: Resolve | undefined;
   readonly following: ReadonlySet<string>;
+  /** What each constant read holds, kept so a constant that many others read is read once. */
+  readonly known: Map<Expression, Constant | undefined>;
+  /** How many times a name followed on the way was met: a value read through one is of the way, not kept. */
+  readonly cuts: { count: number };
+  /** How many constants may still be read, which no source that is not made to need more does. */
+  readonly work: { left: number };
+}
+
+/** How many constants one reading follows, past which it takes the rest for no constant. */
+const NAMES_READ = 4096;
+
+/** The names a reading starts with, none followed, none read. */
+function startNames(resolve: Resolve | undefined): Names {
+  return {
+    resolve,
+    following: new Set(),
+    known: new Map(),
+    cuts: { count: 0 },
+    work: { left: NAMES_READ },
+  };
 }
 
 /**
@@ -60,7 +80,7 @@ interface Names {
  * holds (`+bad` of `const bad = 'x'`, `1 / zero`); none where it reads anything else.
  */
 export function constantNumber(node: Expression, resolve?: Resolve): number | undefined {
-  return numberOf(node, { following: new Set(), resolve });
+  return numberOf(node, startNames(resolve));
 }
 
 /**
@@ -68,7 +88,7 @@ export function constantNumber(node: Expression, resolve?: Resolve): number | un
  * names it reads as what `resolve` answers they hold; none of anything else.
  */
 export function constantValue(node: Expression, resolve?: Resolve): Constant | undefined {
-  return constantOperand(node, { following: new Set(), resolve });
+  return constantOperand(node, startNames(resolve));
 }
 
 function numberOf(node: Expression, names: Names): number | undefined {
@@ -151,12 +171,25 @@ function constantOperand(node: Expression, names: Names): Constant | undefined {
  */
 function nameOperand(name: Identifier, names: Names): Constant | undefined {
   const global = NUMBER_GLOBALS.get(globalOf(name) ?? '');
-  const held =
-    global !== undefined || names.following.has(name.text) ? undefined : names.resolve?.(name);
+  return global ?? heldOperand(name, names);
+}
+
+/** What the constant a name stands for holds, read once however many others read it. */
+function heldOperand(name: Identifier, names: Names): Constant | undefined {
+  if (names.following.has(name.text) || names.work.left <= 0) {
+    names.cuts.count += 1;
+    return undefined;
+  }
+  const held = names.resolve?.(name);
+  if (held === undefined) return undefined;
+  if (names.known.has(held)) return names.known.get(held);
+  names.work.left -= 1;
+  const before = names.cuts.count;
   const following = new Set([...names.following, name.text]);
-  return (
-    global ?? (held === undefined ? undefined : constantOperand(held, { ...names, following }))
-  );
+  const value = constantOperand(held, { ...names, following });
+  // A value read with no name cut short is the constant's own, whichever way it was reached.
+  if (names.cuts.count === before) names.known.set(held, value);
+  return value;
 }
 
 /** The language's functions that answer a number of what they are given alone, by their names. */
@@ -414,7 +447,7 @@ function dateTime(made: NewExpression, names: Names): number | undefined {
  * — as `dateTime` reads it, the names it reads as what `resolve` answers they hold; none of another.
  */
 export function writtenTime(node: Expression, resolve?: Resolve): number | undefined {
-  return timeOf(node, { following: new Set(), resolve });
+  return timeOf(node, startNames(resolve));
 }
 
 /** The time of a date the code writes (`writtenTime`), but of a name followed on the way already. */
