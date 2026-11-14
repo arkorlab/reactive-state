@@ -3,6 +3,7 @@ import {
   type Expression,
   isBinaryExpression,
   isConditionalExpression,
+  isExpression,
   type GetAccessorDeclaration,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -30,7 +31,7 @@ import {
   setsPrototype,
 } from './framed-assignment-patterns.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { getterWrites, UnfollowableError } from './framed-getter-writes.ts';
+import { accessorWrites, UnfollowableError } from './framed-getter-writes.ts';
 import { framedCondition } from './framed-sources.ts';
 
 /** The values a computed key may select from what a destructuring assignment reads. */
@@ -46,6 +47,8 @@ interface Reading {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
   readonly inherited: boolean;
+  /** The objects an inherited getter runs on, the nearest first: their setters may run, and their fields hide those of the prototypes. */
+  readonly receivers: readonly ObjectLiteralExpression[];
   readonly seen: Seen;
 }
 
@@ -53,11 +56,22 @@ interface Reading {
 interface Seen {
   readonly full: Map<Node, readonly Hiding[]>;
   readonly own: Map<Node, readonly Hiding[]>;
+  /** How many reads the consultation has made: past `LIMITS.reads` it is refused. */
+  readonly budget: { reads: number };
 }
+
+/**
+ * How far a read goes before it is refused as no form the compile follows: the prototypes a getter
+ * may be inherited through, and the reads of objects a consultation makes in all. Whatever way a
+ * cycle of prototypes is written, a read ends at these.
+ */
+const LIMITS = { receivers: 16, reads: 4096 } as const;
 
 interface Hiding {
   readonly data: ReadonlySet<string>;
   readonly getters: ReadonlySet<string>;
+  /** The objects the read ran on: what a getter's write meets decides which setters take it. */
+  readonly receivers: readonly ObjectLiteralExpression[];
 }
 
 /**
@@ -68,8 +82,14 @@ interface Hiding {
 export function possibleFields(
   sources: readonly AssignedFrameSource[],
 ): readonly AssignedFrameSource[] {
-  const seen = { full: new Map(), own: new Map() };
-  return fieldsOf(sources, { data: new Set(), getters: new Set(), inherited: true, seen });
+  const seen = { full: new Map(), own: new Map(), budget: { reads: 0 } };
+  return fieldsOf(sources, {
+    data: new Set(),
+    getters: new Set(),
+    inherited: true,
+    receivers: [],
+    seen,
+  });
 }
 
 /** The fields of the sources: of a written object as it holds them, of the rest as they resolve. */
@@ -87,18 +107,44 @@ function fieldsOf(
 }
 
 /**
- * Whether the way of reading has not yet read the object under names hidden at least as much: one
- * read under fewer hidden names reads everything a read under more would, so the second is skipped.
+ * Whether the way of reading has not yet read the object under names hidden at least as much, and
+ * on the same receivers: one read under fewer hidden names reads everything a read under more would,
+ * so the second is skipped. A getter's write meets the receivers' fields, which hide the setters of
+ * its prototype, so a read on other receivers is no repeat. An object that a read of its own
+ * prototype chain comes back to is read already.
  */
 function firstRead(reading: Reading, node: Node): boolean {
   const table = reading.inherited ? reading.seen.full : reading.seen.own;
   const earlier = table.get(node) ?? [];
-  const covered = earlier.some(
-    (each) => isSubset(each.data, reading.data) && isSubset(each.getters, reading.getters),
-  );
+  const object = isExpression(node) ? unwrapped(node) : node;
+  if (isObjectLiteralExpression(object) && reading.receivers.includes(object)) return false;
+  const covered = earlier.some((each) => {
+    return (
+      isSubset(each.data, reading.data) &&
+      isSubset(each.getters, reading.getters) &&
+      sameObjects(each.receivers, reading.receivers)
+    );
+  });
   if (covered) return false;
-  table.set(node, [...earlier, { data: new Set(reading.data), getters: new Set(reading.getters) }]);
+  reading.seen.budget.reads += 1;
+  if (reading.seen.budget.reads > LIMITS.reads) throw new UnfollowableError();
+  table.set(node, [
+    ...earlier,
+    {
+      data: new Set(reading.data),
+      getters: new Set(reading.getters),
+      receivers: reading.receivers,
+    },
+  ]);
   return true;
+}
+
+/** Whether two chains of receivers are the same objects in the same order. */
+function sameObjects(
+  first: readonly ObjectLiteralExpression[],
+  second: readonly ObjectLiteralExpression[],
+): boolean {
+  return first.length === second.length && first.every((each, at) => each === second[at]);
 }
 
 function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {
@@ -239,7 +285,7 @@ function survivingFields(object: ObjectLiteralExpression, reading: Reading): Ass
     if (!hides) found.push(...fieldValues(property, { ...reading, ...later }));
     const replaced = name !== undefined && getter && replacing.getters.has(name);
     if (getter && !replaced && (!hides || !reading.inherited))
-      found.push(...getterEffects(property, reading));
+      found.push(...getterEffects(object, property, reading));
     setNames(property, later);
     setNames(property, replacing);
   }
@@ -262,13 +308,15 @@ function setNames(
  * The values a getter that runs writes into the object it runs on, each under the name it writes:
  * a copy of the object runs it wherever a later field hides its result, and a later field of that
  * name hides what it wrote; the names of an object's own fields hide the fields it inherits, not
- * what an inherited getter writes into it. The entries are refused where `this` is given on.
+ * what an inherited getter writes into it. A write that runs a setter of the object, or of an object the
+ * getter is inherited by, counts for the setter's own. The entries are refused where `this` is given on.
  */
 function getterEffects(
+  object: ObjectLiteralExpression,
   getter: GetAccessorDeclaration,
   reading: Reading,
 ): readonly AssignedFrameSource[] {
-  const written = getterWrites(getter);
+  const written = accessorWrites(object, getter, reading.receivers);
   if (written === undefined) throw new UnfollowableError();
   return written
     .filter((each) => each.name === undefined || reading.inherited || !reading.data.has(each.name))
@@ -286,11 +334,14 @@ function inheritedValues(
 ): readonly AssignedFrameSource[] {
   const proto = object.properties.find((each) => setsPrototype(each));
   if (proto === undefined || !isPropertyAssignment(proto)) return [];
+  if (reading.receivers.includes(object)) return [];
+  if (reading.receivers.length >= LIMITS.receivers) throw new UnfollowableError();
   const own = object.properties.flatMap((each) => fieldNames(each));
   const hidden = {
     ...reading,
     data: withNames(reading.data, own),
     getters: withNames(reading.getters, own),
+    receivers: [...reading.receivers, object],
   };
   const value = unwrapped(proto.initializer);
   const container = { value: proto.initializer, keys: [] };
@@ -323,7 +374,7 @@ function fieldValues(
   if (isGetAccessorDeclaration(property))
     return returnedBy(property).map((value) => ({ value, keys: [] }));
   if (!isSpreadAssignment(property)) return [];
-  const copied = { ...reading, getters: reading.data, inherited: false };
+  const copied = { ...reading, getters: reading.data, inherited: false, receivers: [] };
   return fieldsOf([{ value: property.expression, keys: [] }], copied);
 }
 

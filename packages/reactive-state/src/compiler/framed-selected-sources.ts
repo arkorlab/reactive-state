@@ -38,6 +38,7 @@ import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-membe
 import { alternativesOf, returnedValues } from './framed-mutator-getters.ts';
 import { ANY_FIELD, fromKey, suffixStart } from './framed-pattern-members.ts';
 import { isWrittenMember } from './framed-written-members.ts';
+import { outermost } from './framed-written-targets.ts';
 
 /**
  * What a destructuring picks out of a source, read where the compile can; the rest is kept whole.
@@ -64,7 +65,12 @@ import { isWrittenMember } from './framed-written-members.ts';
  * is one the compile does not follow, not one it takes to be safe.
  */
 
-/** What a selection has read already: each object, for each path it was asked at. */
+/** The names, each once, in an order that does not depend on the order they were collected in. */
+function uniqueSorted(names: readonly string[]): readonly string[] {
+  return [...new Set(names)].toSorted((left, right) => left.localeCompare(right));
+}
+
+/** What a selection has read already: each object, for each path it was asked at, leaving out which names. */
 type Visited = Map<Node, Set<string>>;
 
 /** What a selection shares: what it has read, and whether it reads a copy, own fields only. */
@@ -76,6 +82,8 @@ interface Reading {
   readonly at: Node | undefined;
   /** The values of the writes the selection is inside of, which it does not follow into again. */
   readonly following: ReadonlySet<Node>;
+  /** The names the copy a field is asked of was made without, which a key for any field leaves out. */
+  readonly without: readonly string[];
 }
 
 /**
@@ -88,7 +96,13 @@ export function selectedValues(
   keys: readonly string[],
   at?: Node,
 ): readonly SelectedSource[] {
-  return select(value, keys, { visited: new Map(), own: false, at, following: new Set() });
+  return select(value, keys, {
+    visited: new Map(),
+    own: false,
+    at,
+    following: new Set(),
+    without: [],
+  });
 }
 
 function select(
@@ -102,7 +116,7 @@ function select(
   const held = valueOf(value, names);
   if (isFunctionDeclaration(held)) return whole;
   const paths = reading.visited.get(held) ?? new Set<string>();
-  const path = `${reading.own ? 'own' : 'all'}\0${keys.join('\0')}`;
+  const path = JSON.stringify([reading.own, uniqueSorted(reading.without), keys]);
   if (paths.has(path)) return [];
   reading.visited.set(held, paths.add(path));
   const alternatives = alternativesOf(held);
@@ -174,9 +188,10 @@ function memberWrites(
     const later = copy ? { ...captured, own: true } : { ...reading, following };
     return select(write.value, took.path, captured).flatMap((each) => {
       if (took.tail[0] !== undefined && each.without?.includes(took.tail[0]) === true) return [];
+      const read = { ...later, without: leftOutOfAny(each, write, copy, took.tail[0]) };
       const handed =
         each.keys.length === 0
-          ? select(each.value, took.tail, later)
+          ? select(each.value, took.tail, read)
           : [{ value: each.value, keys: [...each.keys, ...took.tail] }];
       const inList = each.inList === true && took.tail.length === 0;
       const left = leftOut(each, write, copy, took.tail.length === 0);
@@ -198,6 +213,16 @@ function leftOut(
 ): readonly string[] {
   if (!whole) return [];
   return [...(each.without ?? []), ...(copy ? (write.without ?? []) : [])];
+}
+
+/** The names a key for any field of a copy leaves out: what it was made without, as the copy it is a copy of was. */
+function leftOutOfAny(
+  each: SelectedSource,
+  write: HeldWrite,
+  copy: boolean,
+  key: string | undefined,
+): readonly string[] {
+  return key === ANY_FIELD ? [...(each.without ?? []), ...(copy ? (write.without ?? []) : [])] : [];
 }
 
 /** A value the selection hands over whole, with the names it was copied without. */
@@ -248,7 +273,9 @@ export function writtenList(expression: Expression): ArrayLiteralExpression | un
 
 /** What reads below the first step of a path read: the fields of a copy are no copy. */
 function below(reading: Reading): Reading {
-  return reading.own ? { ...reading, own: false } : reading;
+  return reading.own || reading.without.length > 0
+    ? { ...reading, own: false, without: [] }
+    : reading;
 }
 
 /** The methods that change a list, or the order of its entries. */
@@ -277,15 +304,16 @@ function onlyReads(name: Identifier): boolean {
     );
   if (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) return false;
   if (isWrittenMember(parent)) return false;
-  const used = parent.parent;
-  if (isCallExpression(used) && used.expression === parent)
+  const member = outermost(parent);
+  const used = member.parent;
+  if (isCallExpression(used) && used.expression === member)
     return (
       isPropertyAccessExpression(parent) &&
       !CHANGING.has(parent.name.text) &&
       !callbackTakesList(parent.name.text, used)
     );
   if (isBinaryExpression(used))
-    return !(used.left === parent && isAssignmentOperator(used.operatorToken.kind));
+    return !(used.left === member && isAssignmentOperator(used.operatorToken.kind));
   return !(
     isDeleteExpression(used) ||
     isPrefixUnaryExpression(used) ||
@@ -459,6 +487,13 @@ function asksAny(key: string | undefined): boolean {
   return key === ANY_FIELD || (key !== undefined && suffixStart(key) !== undefined);
 }
 
+/** Whether a field is named by one of the names a copy was made without. */
+function isLeftOut(property: ObjectLiteralElementLike, without: readonly string[]): boolean {
+  if (isSpreadAssignment(property)) return false;
+  const name = writtenArrayKey(property.name);
+  return name !== undefined && without.includes(name);
+}
+
 /** Whether a field may be the key: a spread, a name the compile cannot read, or the name itself. */
 function mayHold(property: ObjectLiteralElementLike, key: string | undefined): boolean {
   if (asksAny(key) || isSpreadAssignment(property)) return true;
@@ -478,13 +513,21 @@ interface Taken {
  * it, and each field after which a spread, or a name the compile cannot read, may have set it. A
  * setter hands over nothing and replaces the data before it, not a getter.
  */
-function takenFields(object: ObjectLiteralExpression, key: string | undefined): Taken {
+function takenFields(
+  object: ObjectLiteralExpression,
+  key: string | undefined,
+  without: readonly string[],
+): Taken {
   const fields: ObjectLiteralElementLike[] = [];
   let owned = false;
   let replaced = false;
-  const candidates = object.properties
-    .toReversed()
-    .filter((property) => writtenPrototype(property) === undefined && mayHold(property, key));
+  const candidates = object.properties.toReversed().filter((property) => {
+    return (
+      writtenPrototype(property) === undefined &&
+      mayHold(property, key) &&
+      !isLeftOut(property, without)
+    );
+  });
   for (const property of candidates) {
     if (isSpreadAssignment(property)) {
       fields.push(property);
@@ -515,7 +558,7 @@ function fieldOf(
   reading: Reading,
 ): readonly AssignedFrameSource[] {
   const [key, ...rest] = keys;
-  const { fields, owned } = takenFields(object, key);
+  const { fields, owned } = takenFields(object, key, key === ANY_FIELD ? reading.without : []);
   const copied = { ...reading, own: true };
   const found = fields.flatMap((property) => {
     return isSpreadAssignment(property)

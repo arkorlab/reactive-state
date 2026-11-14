@@ -14,6 +14,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { arrayRestBinding } from './framed-array-rest.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+import { soleTarget } from './framed-mutator-calls.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
 import { bindingIdentifiers, isBlockScoped } from './scope.ts';
 
@@ -24,6 +25,44 @@ import { bindingIdentifiers, isBlockScoped } from './scope.ts';
 export function arrayIdentity(value: Expression): FrameBinding | undefined {
   const followed = followedIdentity(value);
   return followed.written ? undefined : followed.root;
+}
+
+/** Whether a file writes the binding as a whole, so that it may hold another array than it was given. */
+export function writtenAsWhole(binding: FrameBinding): boolean {
+  return writtenWhole(binding.getSourceFile()).has(binding);
+}
+
+/**
+ * Whether a mutation that may reach any of the expressions may write the array `root`: or, as
+ * `sure`, whether it reaches that array and nothing else.
+ */
+export function reachesArray(
+  targets: readonly Expression[],
+  root: FrameBinding,
+  sure: boolean,
+): boolean {
+  if (!sure)
+    return targets.some((target) => mayBeArray(target, root) || isRootLiteral(target, root));
+  const [only] = targets;
+  return (
+    targets.length === 1 &&
+    only !== undefined &&
+    (arrayIdentity(only) === root || isRootLiteral(only, root))
+  );
+}
+
+/**
+ * Whether an expression is the literal a binding was initialized with, written inline in the
+ * initializer: the `[]` of `const list = Object.assign([], { 0: error })`, which the call writes and
+ * hands back, and which the binding then holds.
+ */
+export function isRootLiteral(expression: Expression, root: FrameBinding): boolean {
+  const value = unwrapped(expression);
+  return (
+    isArrayLiteralExpression(value) &&
+    root.initializer !== undefined &&
+    soleTarget(unwrapped(root.initializer)) === value
+  );
 }
 
 /**
@@ -57,7 +96,7 @@ function followedIdentity(value: Expression): FollowedIdentity {
     written ||= writtenWhole(root.getSourceFile()).has(root);
     seen.add(root);
     if (root.initializer === undefined) return { root, written };
-    each = unwrapped(root.initializer);
+    each = soleTarget(unwrapped(root.initializer));
   }
   return { root: isArrayLiteralExpression(each) ? root : undefined, written };
 }

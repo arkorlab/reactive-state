@@ -27,9 +27,14 @@ import {
   writtenAfterSelection,
 } from './framed-array-call-order.ts';
 import { callMethodWrites } from './framed-array-call-writes.ts';
-import { writtenArrayElements } from './framed-array-elements.ts';
+import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { arrayIdentity, mayBeArray } from './framed-array-identity.ts';
+import {
+  arrayIdentity,
+  mayBeArray,
+  reachesArray,
+  writtenAsWhole,
+} from './framed-array-identity.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import {
   type ArrayMethodOverride,
@@ -45,12 +50,15 @@ import {
   ownMethodAssignment,
 } from './framed-array-own-methods.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
+import { mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { afterDeletion, deletedFrom, deletedReceiver } from './framed-deleted-methods.ts';
+import { afterDeletion, deletedMethod, deletedReceiver } from './framed-deleted-methods.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedKeyNames } from './framed-keys.ts';
-import { mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
+import { invokedTargets, mutatorInvocation, PATHS } from './framed-mutator-calls.ts';
+import { destructuredList } from './framed-nested-lists.ts';
+import { sourceChanged } from './framed-pattern-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedPossibleBranch } from './framed-writes.ts';
 import { framedWrittenTargets } from './framed-written-targets.ts';
@@ -174,6 +182,12 @@ export function arrayError(value: Expression, words: ArrayWords, call: Node): bo
     }
     if (
       words.typed(each) ||
+      (isIdentifier(each) &&
+        destructuredList(
+          each,
+          (element, keys) => words.error(element, keys),
+          (source) => sourceChanged(source, call, (element, keys) => words.error(element, keys)),
+        )) ||
       bindingArrayWords({ ...reading, value: each }, { call, words, pending, seen })
     )
       return true;
@@ -193,6 +207,8 @@ function writtenElementErrors(
   words: ArrayWords,
   pending: ArrayReading[],
 ): boolean {
+  if (arrayWritesUnfollowed(value, call, (element, keys) => words.error(element, keys)))
+    return true;
   for (const source of writtenArrayElements(value, call)) {
     if (source.array === true) {
       pending.push({ value: source.value, text: false });
@@ -290,6 +306,7 @@ function ownMethods(receiver: Expression, call: Node, method?: string): OwnMetho
     definite: undefined,
   });
   deferredMethodWrites(call, root, own, statement.parent);
+  if (arrayWritesUnfollowed(receiver, call)) forgetMethods(own);
   return own;
 }
 
@@ -390,8 +407,9 @@ function unprovenWrites(
 /** Whether the members a write names are the array's own, not those of a name that may hold another. */
 function writesExactly(node: Node, root: FrameBinding): boolean {
   if (isCallExpression(node)) {
-    const target = mutatorInvocation(node)?.args[0] ?? node.arguments[0];
-    return target !== undefined && arrayIdentity(target) === root;
+    const invoked = mutatorInvocation(node);
+    const targets = invoked === undefined ? node.arguments.slice(0, 1) : invokedTargets(invoked);
+    return reachesArray(targets, root, true);
   }
   return framedWrittenTargets(node).every((target) => {
     const member = unwrapped(target);
@@ -462,11 +480,10 @@ function definedMethods(
 ): OwnMethods | undefined {
   if (!isCallExpression(node)) return undefined;
   const invoked = mutatorInvocation(node);
-  const target = invoked?.args[0];
+  const targets = invoked === undefined ? [] : invokedTargets(invoked);
   if (
     invoked === undefined ||
-    target === undefined ||
-    !(exact ? arrayIdentity(target) === root : mayBeArray(target, root)) ||
+    !reachesArray(targets, root, exact) ||
     (invoked.path !== PATHS.property && invoked.path !== PATHS.properties)
   )
     return undefined;
@@ -577,26 +594,18 @@ function assignedMethods(target: Expression, root: FrameBinding): readonly strin
 }
 
 /**
- * A completed deletion reveals an inherited method; an opaque key may remove either proof. It
- * deletes from what may be the array unless `exact` asks for the array itself.
+ * Whether a name that starts as a written array, or as a name that stands for one, is written as a
+ * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
+ * ends at a value that is no array (a scalar, a function, an object) is no array the compile started from.
  */
-function deletedMethod(
-  node: Expression,
-  root: FrameBinding,
-  own: OwnMethods,
-  { exact = false, prior = own }: { readonly exact?: boolean; readonly prior?: OwnMethods } = {},
-): void {
-  if (!isDeleteExpression(node)) return;
-  const member = unwrapped(node.expression);
-  if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return;
-  if (!(exact ? arrayIdentity(member.expression) === root : mayBeArray(member.expression, root)))
-    return;
-  const key = frameMemberName(member);
-  if (key === undefined) forgetMethods(own);
-  else if (OWN_METHODS.has(key)) own.set(key, deletedFrom(member.expression, root, prior.get(key)));
+function rewrittenArray(binding: FrameBinding): boolean {
+  return mayStartAsArray(binding) && writtenAsWhole(binding);
 }
 
-/** Initializer traversal still requires whole binding identity after the selected type was checked. */
+/**
+ * Initializer traversal still requires whole binding identity after the selected type was checked: a
+ * name written as a whole elsewhere may hold another array than its initializer, and is refused.
+ */
 function bindingArrayWords(
   reading: ArrayReading,
   context: {
@@ -609,7 +618,8 @@ function bindingArrayWords(
   const { call, words, pending, seen } = context;
   const binding = unseenArrayBinding(reading.value, seen);
   if (binding === undefined) return false;
-  if (writtenElementErrors(reading.value, call, words, pending)) return true;
+  if (rewrittenArray(binding) || writtenElementErrors(reading.value, call, words, pending))
+    return true;
   if (binding.initializer !== undefined)
     pending.push({ value: binding.initializer, text: reading.text });
   return false;

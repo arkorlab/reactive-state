@@ -178,9 +178,9 @@ const CONVERSIONS = [
     converts: true,
   },
   {
-    id: 'callback-that-takes-no-array-pin',
+    id: 'callback-that-takes-no-array-stays-refused-for-a-held-list-pin',
     source: `${ASSIGNED} list.forEach((value, at) => { void value; void at; }); ({ 0: maps[0] } = list); Object.defineProperties(a, maps); return String(a); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

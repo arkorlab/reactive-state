@@ -598,9 +598,10 @@ const CASES = [
     converts: true,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is held by a static field of a class.
     id: 'class-static-field-initializer-runs',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { first: Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), ignored: class { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); }, join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-computed-key-runs',
@@ -618,9 +619,10 @@ const CASES = [
     converts: true,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is held by a static field of a class.
     id: 'class-computed-then-static-key-order',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: class { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }); [(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }), 'key')] = 1; }, join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-static-block-after-computed-key',
@@ -843,9 +845,10 @@ const CASES = [
     converts: false,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is held by a static field of a class.
     id: 'class-declaration-static-field-replaces-accessor',
     source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }); class Unused { static field = Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true }); } values.join = () => 'safe'; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-declaration-computed-name-replaces-accessor',
@@ -1038,9 +1041,10 @@ const CASES = [
     converts: true,
   },
   {
+    // Refused since the array is followed only where each mention is known: the answer is handed to a parameter of a function.
     id: 'iife-argument-accessor-then-body-data-definition-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: ((unused: unknown) => Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true }))(Object.defineProperty(values, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true })), join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'iife-function-expression-argument-runs-before-body',
@@ -1133,9 +1137,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'nested-callee-data-definition-lets-the-assignment-replace-pin',
+    id: 'nested-callee-data-definition-lets-the-assignment-replace-refused-pin',
     source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty.call(Object, values, 'join', { value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'other-key-accessor-stays-possible-pin',
@@ -1216,6 +1220,487 @@ const CASES = [
     id: 'to-string-deleted-twice-delegates-pin',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; delete values.toString; return String(values); }`,
     converts: false,
+  },
+  {
+    id: 'define-descriptor-getter-before-attributes-makes-an-accessor',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { delete this.value; delete this.writable; this.get = () => Array.prototype.join; this.set = () => {}; return false; }, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-never-read-keeps-attributes-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get probe() { delete this.value; delete this.writable; this.get = () => Array.prototype.join; this.set = () => {}; return false; }, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'define-descriptor-getter-before-attributes-nested-in-an-assign-source',
+    source: `function frames(error: Error) { const values = [error]; Object.assign(values, { ignored: Object.defineProperty(values, 'join', { get enumerable() { delete this.value; delete this.writable; Object.assign(this, { get: () => Array.prototype.join, set: () => {} }); return false; }, value: Array.prototype.join, writable: true, configurable: true }), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'define-descriptor-getter-replaced-by-a-later-attribute-keeps-custom-pin',
+    source: `function frames(error: Error) { const values = [error]; Object.defineProperty(values, 'join', { get enumerable() { return false; }, enumerable: true, value: Array.prototype.join, writable: true, configurable: true }); values.join = () => 'safe'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'refused-method-proof-after-reflect-set',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.set(values, 'join', Array.prototype.join); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-reflect-delete',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Reflect.deleteProperty(values, 'join'); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-with-a-destructured-alias',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const [alias] = [values]; alias.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-with-an-object-destructured-alias',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { alias } = { alias: values }; alias.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-bound-mutator',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.defineProperty.bind(null)(values, 'join', { value: Array.prototype.join }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-function-of-the-program',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const swap = (list: any) => { list.join = Array.prototype.join; }; swap(values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-called-function-literal',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; ((array: any) => Object.defineProperty(array, 'join', { value: Array.prototype.join, writable: true, configurable: true }))(values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-with-the-array-in-a-literal',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const holder = [values]; (holder[0] as any).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-method-proof-after-a-called-function-handed-the-answer',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { ignored: ((array: any) => Object.defineProperty(array, 'join', { get: () => Array.prototype.join, set: () => {}, configurable: true }))(Object.defineProperty(values, 'join', { value: Array.prototype.join, writable: true, configurable: true })), join: () => 'safe' }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'known-method-proof-after-a-method-of-the-array-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.push('safe'); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-after-a-spread-of-the-array-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const copy = [...values]; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-after-a-second-custom-method-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.join = () => 'again'; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-after-a-native-mutator-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; Object.assign(values, { label: 'safe' }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-method-proof-with-a-handing-after-the-read-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const text = String(values); ((list: any) => { list.join = Array.prototype.join; })(values); return text; }`,
+    converts: false,
+  },
+  {
+    id: 'refused-callback-handed-the-array',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((_: unknown, __: unknown, array: any) => { Object.defineProperty(array, 'join', { value: Array.prototype.join, writable: true, configurable: true }); }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-map-callback-handed-the-array',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.map((_: unknown, __: unknown, array: any) => { array.join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-reduce-callback-handed-the-array',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.reduce((_: unknown, __: unknown, ___: unknown, array: any) => { array.join = Array.prototype.join; }, 0); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-callback-with-a-rest-parameter',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((...rest: any[]) => { rest[2].join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-function-callback-reading-arguments',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach(function () { arguments[2].join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'refused-callback-named-elsewhere',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const writeBack = (_: unknown, __: unknown, array: any) => { array.join = Array.prototype.join; }; values.forEach(writeBack); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'known-callback-without-the-array-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((item: unknown) => { void item; }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-callback-native-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.filter(Boolean); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-callback-with-two-parameters-pin',
+    source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.map((item: unknown, index: number) => [item, index]); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'container-member-alias-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; const x = holder[0]; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-object-alias-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = { a: values }; const x = holder.a; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-foreach-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; holder.forEach((a: any) => { a.join = Array.prototype.join; }); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-for-of-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; for (const a of holder) a.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-destructured-alias-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; const [first] = holder; first.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'tagged-template-argument-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const tag = (_: any, a: any) => { a.join = Array.prototype.join; }; tag\`\${values}\`; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'conditional-receiver-write-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (flag ? values : []).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'logical-receiver-write-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values || []).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'comma-receiver-write-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (0, values).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'literal-source-of-a-copy-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.assign({}, { values }); r.values.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'literal-source-of-a-copy-member-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.assign({}, { values }); const x = r.values; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-assign-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.assign(values, { x: 1 }); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-define-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = Object.defineProperty(values, 'x', { value: 1 }); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-sort-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = values.sort(); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-returned-by-an-iife-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = (() => Object.assign(values, { x: 1 }))(); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'array-held-by-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { self: Object.assign(values, { y: 1 }) }); const x = (values as any).self; x.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-through-comma-kept-in-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const r: any = (0, Object.assign(values, { x: 1 })); r.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-reverse-written-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.reverse().join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-of-define-written-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (Object.defineProperty(values, 'x', { value: 1 }) as any).join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-destructured-by-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; const [first] = holder; first.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-object-destructured-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = { a: values }; const { a } = holder; a.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'container-destructured-by-an-assignment-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const holder = [values]; let first: any; [first] = holder; first.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'known-element-destructuring-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const [first] = values; void first; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-field-destructuring-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const { length } = values; void length; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-spread-into-a-call-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; ((...a: any[]) => a)(...values); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'known-conditional-receiver-read-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; void (flag ? values : []).length; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'method-of-the-array-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any).m = function (this: any) { this.join = Array.prototype.join; }; (values as any).m(); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'iterator-of-the-array-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any)[Symbol.iterator] = function (this: any) { this.join = Array.prototype.join; return [][Symbol.iterator](); }; [...values]; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'custom-join-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any).join = function (this: any) { this.join = Array.prototype.join; return 'x'; }; values.toString(); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get() { this.join = Array.prototype.join; return 1; } }); void (values as any).x; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'setter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { set(v: any) { this.join = Array.prototype.join; } }); (values as any).x = 1; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'own-valueof-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (values as any).valueOf = function (this: any) { this.join = Array.prototype.join; return this; }; void ((values as any) + ''); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'source-method-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { toJSON() { this.join = Array.prototype.join; return 1; } }); JSON.stringify(values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-arrow-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: () => 1 }); void (values as any).x; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'nested-call-through-a-name-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; Object.assign(values, { self: Object.assign(values, { y: 1 }) }); const r: any = Object.assign(values, {}); r.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'answer-in-a-discarded-literal-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; [Object.assign(values, { y: 1 })]; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'answer-in-a-for-head-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; for (Object.assign(values, { y: 1 }); false; ) {} return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'answer-member-read-dropped-by-a-comma-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; (Object.assign(values, { y: 1 }).length, 0); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'destructured-alias-of-the-array-refused',
+    source: `function frames(error: Error) { const values: any[] = [error]; values.join = () => 'safe'; const [alias] = [values]; alias.join = Array.prototype.join; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'assign-called-through-call-restores-the-method',
+    source: `function frames(error: Error) { const a: any[] = [error]; a.join = () => 'safe'; Object.assign.call(null, a, { join: Array.prototype.join }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-field-naming-this-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get get() { return () => this; } }); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'wrapped-getter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: (function (this: any) { this.join = Array.prototype.join; return 1; }) }); void (values as any).x; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'asserted-getter-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.defineProperty(values, 'x', { get: function (this: any) { this.join = Array.prototype.join; return 1; } as () => number }); void (values as any).x; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'whole-write-of-the-read-name-converts',
+    source: `function frames(error: Error, flag: boolean) { let a: any[] = ['safe']; a = [error]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'whole-write-of-the-read-name-after-a-method-converts',
+    source: `function frames(error: Error, flag: boolean) { let a: any[] = [error]; a.join = () => 'safe'; a = [error]; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'whole-write-of-an-alias-keeps-the-proof-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = [error]; a.join = () => 'safe'; let b = a; b = []; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'wrapped-value-naming-this-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; Object.assign(values, { valueOf: (function (this: any) { this.join = Array.prototype.join; return this; }) }); void ((values as any) + ''); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'box-length-call-refused',
+    source: `function frames(error: Error, flag: boolean) { const d: any = { value: 'safe', mutate() { this.value = error; } }; const box = { length: d }; box.length.mutate(); const values: any[] = []; Object.defineProperty(values, '0', d); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-the-answer-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; const copy: any = { ...Object.assign(values, { self: Object.assign(values, {}) }) }; copy.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { self: Object.assign(values, {}) }); const copy: any = { ...values }; copy.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-through-a-name-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { self: Object.assign(values, {}) }); const r: any = Object.assign(values, {}); const copy: any = { ...r }; copy.self.push(error); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; const copy: any = { ...values }; void copy; return String(values); }`,
+    converts: false,
+  },
+  {
+    // Refused since an array that holds itself may hold itself in an element, which a spread copies out.
+    id: 'list-spread-of-an-array-that-holds-itself-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; Object.assign(values, { self: Object.assign(values, {}) }); const copy: any[] = [...values]; void copy; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'push-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); r.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'push-on-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; (Object.assign(a, {}) as any).push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'read-through-a-name-of-an-answer-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); void r.indexOf('safe'); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'fill-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); r.fill(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'chained-assignment-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; let outer: any, inner: any; outer = inner = Object.assign(values, {}); outer[0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'single-assignment-of-an-answer-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; let inner: any; inner = Object.assign(values, {}); void inner; return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'answer-assigned-and-declared-through-a-chain-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; let mid: any; const outer: any = (mid = Object.assign(values, {})); outer[0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-into-a-call-of-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { 0: Object.assign(values, {}) }); ((alias: any) => { alias[0] = error; })(...values); return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'loop-over-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { 0: Object.assign(values, {}) }); for (const each of values) each[0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'array-from-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = []; Object.assign(values, { 0: Object.assign(values, {}) }); const copy: any[] = Array.from(values); copy[0][0] = error; return String(values); }`,
+    converts: true,
+  },
+  {
+    id: 'spread-into-a-call-of-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const values: any[] = ['safe']; ((alias: any) => { void alias; })(...values); return String(values); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-push-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const r: any = Object.assign(a, {}); Array.prototype.push.call(r, error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callback-on-an-array-that-holds-itself-through-a-name-of-an-answer-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = []; Object.assign(a, { 0: Object.assign(a, {}) }); const r: any = Object.assign(a, {}); r.forEach((x: any) => { x[0] = error; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callback-on-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = []; Object.assign(a, { 0: Object.assign(a, {}) }); a.forEach((x: any) => { x[0] = error; }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'callback-with-no-array-parameter-on-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; a.forEach((x: any) => { void x; }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-callback-on-an-array-that-holds-itself-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = []; Object.assign(a, { 0: Object.assign(a, {}) }); Array.prototype.forEach.call(a, (x: any) => { x[0] = error; }); return String(a); }`,
+    converts: true,
   },
 ] as const;
 

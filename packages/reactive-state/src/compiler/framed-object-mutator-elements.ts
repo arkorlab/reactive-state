@@ -26,10 +26,12 @@ import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { type AssignedFrameSource, iteratedFrameSources } from './framed-assignment-patterns.ts';
+import { descriptorRewrites } from './framed-descriptor-rewrites.ts';
+import { getterElements, getterUnfollowed, getterWrittenValues } from './framed-getter-elements.ts';
 import { type HeldWrite, heldMemberWrites, heldValue } from './framed-held-member-writes.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { listSource } from './framed-list-sources.ts';
-import { mutatorInvocation, PATHS, returnedTarget } from './framed-mutator-calls.ts';
+import { mutatorInvocation, PATHS, returnedTargets } from './framed-mutator-calls.ts';
 import {
   accessedValues,
   alternativesOf,
@@ -38,12 +40,20 @@ import {
   returnedValues,
 } from './framed-mutator-getters.ts';
 import { keyMayBeSlot, nameMayBeSlot, possibleKey, slotKey } from './framed-mutator-keys.ts';
+import { withNames } from './framed-name-sets.ts';
+import {
+  type Hidden,
+  NOTHING_HIDDEN,
+  readUnder,
+  readUnderSlot,
+  type SlotReads,
+} from './framed-seen-reads.ts';
 import { selectedValues } from './framed-selected-sources.ts';
 
 /** Native object mutators install the values their written numeric keys carry on an array. */
 
 export interface MutatorElements {
-  readonly target: Expression;
+  readonly targets: readonly Expression[];
   readonly elements: readonly WrittenArrayElement[];
 }
 
@@ -61,17 +71,17 @@ export function objectMutatorElements(
   const [target, ...rest] = invoked.args;
   if (target === undefined || isSpreadElement(target)) return undefined;
   const reading = freshReading(call);
-  const mutated = returnedTarget(target);
+  const mutated = returnedTargets(target);
   if (path === PATHS.assign)
     return {
-      target: mutated,
+      targets: mutated,
       elements: rest.flatMap((source) => assignedValues(source, index, reading)),
     };
   const defined =
     path === PATHS.properties
       ? definedMaps(rest, index, reading)
       : definedProperty(rest, index, reading);
-  return { target: mutated, elements: defined };
+  return { targets: mutated, elements: defined };
 }
 
 /**
@@ -97,85 +107,6 @@ function freshReading(at: Node): Reading {
     inherited: true,
     seen: { full: new Map(), own: new Map(), maps: new Map(), sources: new Map() },
   };
-}
-
-/** No name hidden: the state a read of a source starts from. */
-const NOTHING_HIDDEN: Hidden = { data: new Set(), getters: new Set() };
-
-/** How many reads of one object are kept apart: past it, one read under their common names covers all. */
-const READS = { kept: 4 } as const;
-
-/** What reads of the objects a constant holds have covered, apart for each slot read: none is all of them. */
-type SlotReads = Map<number | undefined, Map<Node, readonly Hidden[]>>;
-
-/**
- * The names to read an object under for a slot, none where it has already been read for the slot, or
- * for every slot, under names hidden no more than now: a read of one slot reads no entry another
- * asks for, and a read of every slot reads what any slot does.
- */
-function readUnderSlot(
-  reads: SlotReads,
-  index: number | undefined,
-  held: Node,
-  hidden: Hidden,
-): Hidden | undefined {
-  const every = reads.get(undefined);
-  if (index !== undefined && every !== undefined && coveredBy(every.get(held) ?? [], hidden))
-    return undefined;
-  const table = reads.get(index) ?? new Map<Node, readonly Hidden[]>();
-  reads.set(index, table);
-  return readUnder(table, held, hidden);
-}
-
-/** Whether one of the reads hid no more names than now. */
-function coveredBy(earlier: readonly Hidden[], hidden: Hidden): boolean {
-  return earlier.some(
-    (each) => isSubset(each.data, hidden.data) && isSubset(each.getters, hidden.getters),
-  );
-}
-
-/**
- * The names to read an object under, none where it has already been read under names hidden no
- * more than now: a read under fewer hidden names reads everything a read under more would. Past a
- * few reads kept apart the object is read under the names every read hid, then under none: each
- * covers those before it, so the reads of one object are few however the paths to it multiply.
- */
-function readUnder(
-  table: Map<Node, readonly Hidden[]>,
-  held: Node,
-  hidden: Hidden,
-): Hidden | undefined {
-  const earlier = table.get(held) ?? [];
-  if (coveredBy(earlier, hidden)) return undefined;
-  const used = hiddenFor(earlier, hidden);
-  table.set(held, [...earlier, { data: new Set(used.data), getters: new Set(used.getters) }]);
-  return used;
-}
-
-/**
- * The names to read under once `earlier` reads are kept: the names hidden now while there is room;
- * past the room, those every read hid, which covers each of them; then, for good, none.
- */
-function hiddenFor(earlier: readonly Hidden[], hidden: Hidden): Hidden {
-  if (earlier.length < READS.kept) return hidden;
-  return earlier.length === READS.kept ? hiddenInEvery([...earlier, hidden]) : NOTHING_HIDDEN;
-}
-
-/** The names every one of the reads hid, for values and for getters apart. */
-function hiddenInEvery(reads: readonly Hidden[]): Hidden {
-  const [first, ...rest] = reads;
-  if (first === undefined) return NOTHING_HIDDEN;
-  const common = (pick: (each: Hidden) => ReadonlySet<string>): Set<string> => {
-    const kept = new Set<string>();
-    for (const name of pick(first)) if (rest.every((each) => pick(each).has(name))) kept.add(name);
-    return kept;
-  };
-  return { data: common((each) => each.data), getters: common((each) => each.getters) };
-}
-
-function isSubset(small: ReadonlySet<string>, large: ReadonlySet<string>): boolean {
-  for (const each of small) if (!large.has(each)) return false;
-  return true;
 }
 
 /**
@@ -265,9 +196,8 @@ function assignedValues(
       alternatives === undefined
         ? undefined
         : readUnderSlot(reading.seen.sources, index, held, hidden);
-    if (alternatives === undefined) return opaque;
     const written = sourceWrites(names, index, reading, hidden);
-    if (used === undefined) return [...opaque, ...written];
+    if (alternatives === undefined || used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
       ...alternatives.flatMap((each) => assignedValues(each, index, reading, used)),
@@ -310,8 +240,11 @@ function sourceFields(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
-  return fieldsAfter(object, hidden, (property, later) =>
-    propertyElements(property, index, reading, later),
+  return fieldsAfter(
+    object,
+    hidden,
+    (property, later) => propertyElements(property, index, reading, later),
+    (property, outer, name) => getterElements(property, name, index, outer.data),
   );
 }
 
@@ -323,28 +256,31 @@ function fieldsAfter(
   object: ObjectLiteralExpression,
   hidden: Hidden,
   read: (property: ObjectLiteralElementLike, later: Hidden) => WrittenArrayElement[],
+  effects?: (
+    property: ObjectLiteralElementLike,
+    outer: Hidden,
+    name: string | undefined,
+  ) => WrittenArrayElement[],
 ): WrittenArrayElement[] {
   const found: (readonly WrittenArrayElement[])[] = [];
-  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters) };
+  const later = { data: new Set(hidden.data), getters: new Set(hidden.getters), own: hidden.own };
+  const replacing = new Set<string>();
   for (const property of object.properties.toReversed()) {
     const name = sourceName(property);
-    const taken = isGetAccessorDeclaration(property) ? later.getters : later.data;
+    const getter = isGetAccessorDeclaration(property);
+    const taken = getter ? later.getters : later.data;
     if (name === undefined || !taken.has(name)) found.push(read(property, later));
+    if (effects !== undefined && getter && (name === undefined || !replacing.has(name)))
+      found.push(effects(property, hidden, name));
     for (const each of sourceNames(property)) {
       later.data.add(each);
-      if (!isSetAccessorDeclaration(property)) later.getters.add(each);
+      if (!isSetAccessorDeclaration(property)) {
+        later.getters.add(each);
+        replacing.add(each);
+      }
     }
   }
   return found.toReversed().flat();
-}
-
-/**
- * The names the fields after one have set: a setter after a getter completes its accessor, and a
- * setter hides a value written before it; every other field hides both.
- */
-interface Hidden {
-  readonly data: ReadonlySet<string>;
-  readonly getters: ReadonlySet<string>;
 }
 
 /**
@@ -428,17 +364,26 @@ function definedValues(
       alternatives === undefined
         ? undefined
         : readUnderSlot(reading.seen.maps, index, held, hidden);
-    if (alternatives === undefined) return opaque;
     const written = mapWrites(names, index, reading, hidden);
-    if (used === undefined) return [...opaque, ...written];
+    if (alternatives === undefined || used === undefined) return [...opaque, ...written];
     return [
       ...opaque,
       ...alternatives.flatMap((each) => definedValues(each, index, reading, used)),
       ...written,
     ];
   }
-  return fieldsAfter(value, hidden, (property, later) =>
-    mapElements(property, index, reading, later),
+  return fieldsAfter(
+    value,
+    hidden,
+    (property, later) => mapElements(property, index, reading, later),
+    (property, outer, name) => {
+      const written = getterWrittenValues(property, name, index, outer.data).flatMap((each) =>
+        descriptorValues(each, reading),
+      );
+      if (!getterUnfollowed(property, name, index) || !isObjectLiteralExpression(property.parent))
+        return written;
+      return [...written, { value: property.parent, keys: [slotKey(index), 'value'] }];
+    },
   );
 }
 
@@ -538,8 +483,8 @@ function descriptorValues(
   const table = reading.inherited ? reading.seen.full : reading.seen.own;
   const alternatives = isObjectLiteralExpression(held) ? [held] : alternativesOf(held);
   const used = alternatives === undefined ? undefined : readUnder(table, held, hidden);
-  if (alternatives === undefined) return opaque;
-  if (used === undefined) return [...opaque, ...descriptorWrites(names, hidden, reading)];
+  if (alternatives === undefined || used === undefined)
+    return [...opaque, ...descriptorWrites(names, hidden, reading)];
   const chosen = alternatives.flatMap((each) => {
     return isObjectLiteralExpression(each)
       ? descriptorFields(each, reading, used)
@@ -554,9 +499,10 @@ function descriptorFields(
   reading: Reading,
   hidden: Hidden,
 ): WrittenArrayElement[] {
-  return fieldsAfter(object, hidden, (property, later) =>
-    descriptorEntry(property, reading, later),
-  );
+  return [
+    ...fieldsAfter(object, hidden, (property, later) => descriptorEntry(property, reading, later)),
+    ...descriptorRewrites(object, hidden, !reading.inherited),
+  ];
 }
 
 /**
@@ -589,15 +535,12 @@ function copiedFields(
   const own = isObjectLiteralExpression(property.parent)
     ? property.parent.properties.flatMap((each) => sourceNames(each))
     : [];
-  const shadowed = { data: withNames(later.data, own), getters: withNames(later.getters, own) };
+  const shadowed = {
+    data: withNames(later.data, own),
+    getters: withNames(later.getters, own),
+    own: withNames(later.own ?? new Set<string>(), own),
+  };
   return descriptorValues(prototype, reading, shadowed);
-}
-
-/** The names of a set, and more. */
-function withNames(names: ReadonlySet<string>, more: readonly string[]): Set<string> {
-  const merged = new Set(names);
-  for (const each of more) merged.add(each);
-  return merged;
 }
 
 /**

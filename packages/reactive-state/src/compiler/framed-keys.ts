@@ -40,6 +40,7 @@ import {
   frameMemberName,
   type FrameSelection,
 } from './framed-bindings.ts';
+import { namesInType } from './framed-references.ts';
 import { framedCondition } from './framed-sources.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
@@ -269,6 +270,7 @@ function tupleBindingExposure(
     !isIdentifier(node) ||
     node === binding.name ||
     !readsBinding(node) ||
+    namesInType(node) ||
     frameBindingOf(node)?.binding !== binding
   )
     return false;

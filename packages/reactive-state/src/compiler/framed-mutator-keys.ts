@@ -50,7 +50,7 @@ const WELL_KNOWN_SYMBOLS: ReadonlySet<string> = new Set([
  * by `Symbol(...)` or `Symbol.for(...)`, through a constant that holds it. A symbol names no index;
  * other members of Symbol, `Symbol.length`, `Symbol.keyFor(...)`, read numbers and strings.
  */
-function isSymbolKey(key: Expression): boolean {
+export function isSymbolKey(key: Expression): boolean {
   const value = heldValue(key);
   if (isCallExpression(value)) {
     const made = globalPathOf(unwrapped(value.expression))?.join('.');
