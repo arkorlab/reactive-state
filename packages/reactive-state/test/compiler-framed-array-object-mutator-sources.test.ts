@@ -4926,6 +4926,71 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'member-call-named-by-a-method-of-a-class-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { trim(v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-property-of-a-class-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { trim: any = Array.prototype.push; } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-an-accessor-of-a-class-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { get trim() { return Array.prototype.push; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-method-of-a-class-expression-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const L: any = class extends Array<any> { trim(v: any) { this.push(v); return ''; } }; const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-method-written-as-a-text-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { 'trim'(v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-method-with-a-constant-computed-name-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { ['trim'](v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-beside-a-class-method-with-an-unknown-name-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { [key](v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-beside-a-class-with-only-a-static-of-another-name-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L { static trim() { return 1; } } void L; const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-beside-a-class-method-of-another-name-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { other() { return 1; } } void L; const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-named-by-a-method-of-an-object-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any = { trim(v: any) { (this as any).items.push(v); return ''; }, items: [] as any[] }; const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-getter-defined-on-the-list-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; Object.defineProperty(inner, 'trim', { get() { return Array.prototype.push; } }); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-getter-of-a-literal-given-to-the-list-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any = Object.assign([], { get trim() { return Array.prototype.push; } }); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-field-of-a-literal-given-to-the-list-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any = Object.assign([], { trim: Array.prototype.push }); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'length-fixed-pin',
     source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; (a as any).length.toFixed(2); return String(a); }`,
     converts: false,

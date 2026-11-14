@@ -147,6 +147,21 @@ const PATTERNS = [
     true,
   ],
   ['never-rewritten-pin', "let [item]: any = ['safe']; return String(item);", false],
+  [
+    'another-declaration-rewritten-leaves-this-one-pin',
+    "let [item]: any = ['safe']; const [other]: any = ['safe']; item = [error]; return String(other);",
+    false,
+  ],
+  [
+    'the-rewritten-one-beside-an-untouched-declaration',
+    "let [item]: any = ['safe']; const [other]: any = ['safe']; item = [error]; return String(item) + String(other);",
+    true,
+  ],
+  [
+    'many-declarations-read-in-one-file',
+    "const [a]: any = ['safe']; const [b]: any = ['safe']; const [c]: any = ['safe']; let [d]: any = ['safe']; d = [error]; return String(a) + String(b) + String(c);",
+    false,
+  ],
 ] as const;
 
 /** Arrays of texts, typed names and error words stay followed as before; one of unknown elements hands them out. */

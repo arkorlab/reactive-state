@@ -23,6 +23,7 @@ import {
   isUnionTypeNode,
   isVariableDeclaration,
   type Node,
+  type SourceFile,
   type TypeNode,
   type VariableDeclaration,
   SyntaxKind,
@@ -240,19 +241,31 @@ function selection(source: Expression, keys: readonly string[]): Expression | un
   return value;
 }
 
+const REWRITTEN = new WeakMap<SourceFile, ReadonlySet<Node>>();
+
 /** Whether a name of the declaration is written as a whole elsewhere: the declaration stands for every name of its pattern. */
 function rewritten(declared: VariableDeclaration): boolean {
-  const pending: Node[] = [declared.getSourceFile()];
+  return rewrittenDeclarations(declared.getSourceFile()).has(declared);
+}
+
+/** The declarations a file writes a name of as a whole, found in one walk of the file. */
+function rewrittenDeclarations(file: SourceFile): ReadonlySet<Node> {
+  const known = REWRITTEN.get(file);
+  if (known !== undefined) return known;
+  const found = new Set<Node>();
+  const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     for (const target of framedWrittenTargets(node)) {
       const name = unwrapped(target);
-      if (isIdentifier(name) && frameDeclarationOf(name) === declared) return true;
+      const declared = isIdentifier(name) ? frameDeclarationOf(name) : undefined;
+      if (declared !== undefined) found.add(declared);
     }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return false;
+  REWRITTEN.set(file, found);
+  return found;
 }
 
 /** The literal a constant's initializer is, or ends at, through the names that only hold it. */

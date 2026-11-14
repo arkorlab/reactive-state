@@ -55,11 +55,36 @@ export interface WrittenArrayElement extends AssignedFrameSource {
   readonly array?: boolean;
 }
 
+/** What was written for each array expression, read and index, found once: a walk of the file each. */
+const WRITTEN = new WeakMap<
+  Expression,
+  WeakMap<Node, Map<number | undefined, readonly WrittenArrayElement[]>>
+>();
+
 /** Source-written element assignments and native mutator inputs for one lexical literal-array identity. */
 export function writtenArrayElements(
   value: Expression,
   read: Node,
   index?: number,
+): readonly WrittenArrayElement[] {
+  const byRead =
+    WRITTEN.get(value) ??
+    new WeakMap<Node, Map<number | undefined, readonly WrittenArrayElement[]>>();
+  WRITTEN.set(value, byRead);
+  const byIndex = byRead.get(read) ?? new Map<number | undefined, readonly WrittenArrayElement[]>();
+  byRead.set(read, byIndex);
+  const known = byIndex.get(index);
+  if (known !== undefined) return known;
+  const found = collectWrittenElements(value, read, index);
+  byIndex.set(index, found);
+  return found;
+}
+
+/** The element assignments and native mutator inputs that may run before the read, in one walk of the file. */
+function collectWrittenElements(
+  value: Expression,
+  read: Node,
+  index: number | undefined,
 ): readonly WrittenArrayElement[] {
   const root = literalArrayBinding(value);
   if (root === undefined) return [];
