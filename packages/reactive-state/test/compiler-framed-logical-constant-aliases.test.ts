@@ -22,7 +22,9 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * where nothing outside can write through the alias: an alias the module exports is one an
  * importing module writes through before it calls a function that tests the slot (`alias[0] = 0;
  * update()` runs `g()` in Node). The declaration is read as a use then, wherever the assignment
- * is; so is the declaration of an alias that a `for` statement holds.
+ * is; so is the declaration of an alias that a `for` statement holds. A constant the slot is
+ * written with, which stands for `null` or `undefined`, is read through its initializer by the same
+ * rule: a `const` declaration statement and no other.
  */
 const DECLARATION = 'declare function g(): number;';
 
@@ -128,6 +130,36 @@ const CASES = [
     root: 'arr',
     source: `${DECLARATION} const arr = [1]; const alias = arr; arr[0] ||= g();`,
     skipped: true,
+  },
+  {
+    id: 'slot-through-a-nullish-constant-pin',
+    root: 'arr',
+    source: `${DECLARATION} const empty = null; const arr = [empty]; arr[0] ??= g();`,
+    skipped: false,
+  },
+  {
+    id: 'slot-through-a-present-constant-pin',
+    root: 'arr',
+    source: `${DECLARATION} const present = 1; const arr = [present]; arr[0] ??= g();`,
+    skipped: true,
+  },
+  {
+    id: 'slot-through-a-chain-of-constants-pin',
+    root: 'arr',
+    source: `${DECLARATION} const first = undefined; const second = first; const arr = [second]; arr[0] &&= g();`,
+    skipped: true,
+  },
+  {
+    id: 'slot-through-a-let-pin',
+    root: 'arr',
+    source: `${DECLARATION} let empty = null; const arr = [empty]; arr[0] &&= g();`,
+    skipped: false,
+  },
+  {
+    id: 'slot-through-a-constant-held-by-a-for-statement',
+    root: 'arr',
+    source: `${DECLARATION} for (const empty = null; ; ) { const arr = [empty]; arr[0] &&= g(); break; }`,
+    skipped: false,
   },
 ];
 

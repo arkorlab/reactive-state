@@ -12,7 +12,6 @@ import {
   isOmittedExpression,
   isSpreadElement,
   isVariableDeclaration,
-  isVariableDeclarationList,
   isVoidExpression,
   type Node,
   SyntaxKind,
@@ -204,16 +203,10 @@ function logicalInitialValue(expression: Expression): Expression {
     const selected = frameBindingOf(value);
     if (selected === undefined || selected.keys.length > 0) break;
     const { binding } = selected;
-    if (
-      seen.has(binding) ||
-      !isVariableDeclaration(binding) ||
-      !isVariableDeclarationList(binding.parent) ||
-      binding.initializer === undefined ||
-      !/^const\s/u.test(binding.parent.getText(binding.getSourceFile()))
-    )
-      break;
+    const initializer = seen.has(binding) ? undefined : constantInitializer(binding);
+    if (initializer === undefined) break;
     seen.add(binding);
-    value = unwrapped(binding.initializer);
+    value = unwrapped(initializer);
   }
   return value;
 }
