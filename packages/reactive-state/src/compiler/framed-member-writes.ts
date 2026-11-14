@@ -217,9 +217,9 @@ function assignedMember(node: BinaryExpression): readonly MemberWrite[] {
 
 /**
  * `Object.assign(holder, { member: value })`: each literal source's own written entries, in the
- * order the call writes them. What the walk cannot read of a source (a source that is not a
- * literal, a spread, an accessor) may write any name after the entries before it, which are then
- * no definite last write.
+ * order the call writes them. What the walk cannot read of the call (a source that is not a
+ * literal, a spread, an accessor, the arguments a spread it cannot follow ends) may write any name
+ * after the entries before it, which are then no definite last write.
  */
 function assignedEntries(node: Expression): readonly MemberWrite[] {
   if (
@@ -227,10 +227,12 @@ function assignedEntries(node: Expression): readonly MemberWrite[] {
     globalPathOf(unwrapped(node.expression))?.join('.') !== 'Object.assign'
   )
     return [];
-  const [target, ...sources] = framedArgumentPrefix(node, node.arguments, Infinity).values;
+  const prefix = framedArgumentPrefix(node, node.arguments, Infinity);
+  const [target, ...sources] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined) return [];
   const entries = sources.flatMap((source) => sourceEntries(source));
+  if (prefix.unknown) entries.push(undefined);
   const writes: MemberWrite[] = [];
   let reopened = false;
   for (const entry of entries.toReversed()) {

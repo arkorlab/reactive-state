@@ -235,6 +235,31 @@ const CASES = [
     source: `function frames(error: Error) { const box = { x: 0 }; let overrides = { x: error }; Object.assign(box, overrides); return box.x; }`,
     selects: false,
   },
+  {
+    id: 'argument-spread-after-explicit-sources',
+    source: `function frames(error: Error, sources: { x: unknown }[]) { const box = { x: 0 }; Object.assign(box, { x: error }, { x: 0 }, ...sources); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'argument-spread-after-one-explicit-source',
+    source: `function frames(error: Error, sources: { x: unknown }[]) { const box = { x: error }; Object.assign(box, { x: 0 }, ...sources); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'argument-spread-of-a-written-list',
+    source: `function frames(error: Error) { const box = { x: 0 }; Object.assign(box, ...[{ x: error }, { x: 0 }]); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'argument-spread-of-a-written-list-error-last',
+    source: `function frames(error: Error) { const box = { x: 0 }; Object.assign(box, ...[{ x: 0 }, { x: error }]); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'argument-spread-in-a-later-call',
+    source: `function frames(error: Error, sources: { x: unknown }[]) { const box = { x: error }; Object.assign(box, { x: 0 }); Object.assign(box, ...sources); return box.x; }`,
+    selects: false,
+  },
 ] as const;
 
 describe('what the sources of one Object.assign leave in a member', () => {
