@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
-import { assertedSessionOf } from '../asserted.ts';
+import { type AssertedSession, assertedSessionOf } from '../asserted.ts';
 import type { SessionId } from '../client/contract.ts';
 import { HTTP_OK, REVOKING_STATUSES } from '../status.ts';
-import type { AuthorityEngine as Engine } from './engine.ts';
+import { type AuthorityEngine as Engine, engineNow } from './engine.ts';
 import { AuthorityError } from './errors.ts';
 import type { CommitEvent, Watched } from './model.ts';
 
@@ -41,6 +41,8 @@ class Follower {
   readonly #stream: EventStream;
   readonly #heartbeat: ReturnType<typeof setInterval>;
   readonly #expiry: ReturnType<typeof setTimeout>;
+  /** The session, where it is one the application's server asserts, whose stream is renewed. */
+  readonly #asserted: AssertedSession | undefined;
   readonly #unsubscribe: () => void;
   /** Ends this stream's following of the external stores' logs (`AuthorityEngine.following`). */
   readonly #unfollow: () => void;
@@ -83,14 +85,14 @@ class Follower {
     // that ended answers with `revoked`, and ends whatever the read says. An asserted session's is
     // renewed instead, read again by nobody here: its page opens the stream again at once, through
     // the application's route, which asks the application whether its session still stands.
-    const renews = assertedSessionOf(stream.sessionId) !== undefined;
+    this.#asserted = assertedSessionOf(stream.sessionId);
     this.#expiry = setTimeout(
       () => {
         this.#queue(async () => {
-          if (renews) {
-            this.send('renew', {});
-          } else {
+          if (this.#asserted === undefined) {
             await this.#read();
+          } else {
+            this.send('renew', {});
           }
           this.close();
         });
@@ -137,9 +139,19 @@ class Follower {
       this.show(watched);
     } catch (error) {
       // Only a refusal of the session ends the subscription for good; anything else — a fault of
-      // the application's code too — only ends this stream, which the browser opens again.
+      // the application's code too — only ends this stream, which the browser opens again. A read
+      // waits in the engine's queue, so one queued before the expiry can run after it, where the
+      // engine refuses the session as it refuses one that ended: an asserted session's refusal
+      // once the session's own expiry has come is renewed (`renew`), as the expiry's own step
+      // would have. The session's `expires` is read, by the engine's own clock, the one it refused
+      // by, which is not always `Date.now`: not the stream's `expiresIn` added to the clock now,
+      // which was sampled in the engine, earlier, so it ends later than the session does.
       if (error instanceof AuthorityError && REVOKING_STATUSES.has(error.status)) {
-        this.send('revoked', { code: error.code, error: error.message });
+        if (this.#asserted !== undefined && engineNow(engine) >= this.#asserted.expires) {
+          this.send('renew', {});
+        } else {
+          this.send('revoked', { code: error.code, error: error.message });
+        }
       }
       this.close();
     } finally {

@@ -1,5 +1,5 @@
 import { assertedSessionOf } from '../asserted.ts';
-import type { AuthorityEngine } from '../authority/engine.ts';
+import { type AuthorityEngine, engineNow } from '../authority/engine.ts';
 import { AuthorityError } from '../authority/errors.ts';
 import type { CommitEvent, Watched } from '../authority/model.ts';
 import type { SessionId } from '../client/contract.ts';
@@ -29,6 +29,11 @@ import { REVOKING_STATUSES } from '../status.ts';
  * then instead (`renew`), rendered by nobody here: its page opens it again at once, through the
  * application's route, which asks the application whether its session still stands. It is the
  * same wait, for the soonest of the three, and no timer of its own keeps the object in memory.
+ *
+ * A render waits in the engine's queue, so one begun before the expiry can run after it, where the
+ * engine refuses the session as it refuses one that ended. An asserted session's render refused
+ * once the session's own expiry has come is the expiry's and not an end: the stream is renewed then
+ * as well.
  */
 
 /** How long a stream says nothing before it says it is alive, under what proxies close idle at. */
@@ -222,7 +227,8 @@ class Follower {
 
   /**
    * Renders the root as it is now, and says so where it shows something other than the page does;
-   * a refusal of the session ends the stream with `revoked`, and any other failure without it.
+   * a refusal of the session ends the stream with `revoked` — `renew` where an asserted session's
+   * refusal came once the session had expired (`#refused`) — and any other failure without it.
    * Answers whether the pull has its event: a frame was sent, or the stream ended.
    */
   async #render(controller: ReadableStreamDefaultController<Uint8Array>): Promise<boolean> {
@@ -235,7 +241,7 @@ class Follower {
       // Only a refusal of the session ends the subscription for good; anything else — a fault of
       // the application's code too — only ends this stream, which the browser opens again.
       if (error instanceof AuthorityError && REVOKING_STATUSES.has(error.status)) {
-        this.#say(controller, event('revoked', { code: error.code, error: error.message }));
+        this.#say(controller, this.#refused(error));
       }
       this.#finish(controller);
       return true;
@@ -246,6 +252,25 @@ class Follower {
     this.#dependsOn = watched.dependsOn;
     // A reader that went away while the root was rendered is sent nothing: its stream is cancelled.
     return this.#ended || this.#show(controller, watched);
+  }
+
+  /**
+   * What a refusal of the session is said as: `revoked`, except for an asserted session once its
+   * own expiry has come, which `renew`s. The render waited in the engine's queue, and the engine
+   * refuses a session from the instant it expires as it refuses one that ended; the clock tells
+   * them apart, and the page asks the application whether the session stands in either case. The
+   * session's `expires` decides, by the engine's own clock (`engineNow`), the one it
+   * refused by, which is not always `Date.now`: not `#expiresAt`, which is the `expiresIn` the
+   * engine sampled added to this isolate's clock when the stream opened, so it comes later than the
+   * session's expiry by what passed between, and earlier where the page asks again before the
+   * session ends.
+   */
+  #refused(error: AuthorityError): string {
+    const { engine, sessionId } = this.#following;
+    const asserted = assertedSessionOf(sessionId);
+    return asserted !== undefined && engineNow(engine) >= asserted.expires
+      ? event('renew', {})
+      : event('revoked', { code: error.code, error: error.message });
   }
 
   /** Says that there is a newer render, where it shows something other than the page does. */
