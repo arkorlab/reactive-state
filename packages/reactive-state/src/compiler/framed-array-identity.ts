@@ -41,9 +41,28 @@ export function reachesArray(
   root: FrameBinding,
   sure: boolean,
 ): boolean {
-  if (!sure) return targets.some((target) => mayBeArray(target, root));
+  if (!sure)
+    return targets.some((target) => mayBeArray(target, root) || isRootLiteral(target, root));
   const [only] = targets;
-  return targets.length === 1 && only !== undefined && arrayIdentity(only) === root;
+  return (
+    targets.length === 1 &&
+    only !== undefined &&
+    (arrayIdentity(only) === root || isRootLiteral(only, root))
+  );
+}
+
+/**
+ * Whether an expression is the literal a binding was initialized with, written inline in the
+ * initializer: the `[]` of `const list = Object.assign([], { 0: error })`, which the call writes and
+ * hands back, and which the binding then holds.
+ */
+export function isRootLiteral(expression: Expression, root: FrameBinding): boolean {
+  const value = unwrapped(expression);
+  return (
+    isArrayLiteralExpression(value) &&
+    root.initializer !== undefined &&
+    soleTarget(unwrapped(root.initializer)) === value
+  );
 }
 
 /**
