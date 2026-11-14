@@ -224,8 +224,11 @@ function literalFunctionMember(
   return undefined;
 }
 
-/** Only const declarations retain a function alias without assuming subsequent assignments away. */
-function constantInitializer(binding: FrameBinding): Expression | undefined {
+/**
+ * Only const declarations retain a function alias, or an array, without assuming subsequent
+ * assignments away.
+ */
+export function constantInitializer(binding: FrameBinding): Expression | undefined {
   if (!isVariableDeclaration(binding) || !isVariableDeclarationList(binding.parent))
     return undefined;
   return isVariableStatement(binding.parent.parent) &&
