@@ -54,6 +54,11 @@ export interface MemberWrite {
   readonly holder: VariableDeclaration;
   readonly path: readonly (readonly string[] | undefined)[];
   readonly value: Expression;
+  /**
+   * A later part of the same call, one the walk cannot read, may write the same name again: a
+   * source it does not follow, a spread it does not expand. The write is then no definite last one.
+   */
+  readonly reopened: boolean;
 }
 
 /** The member writes of each module, read once. */
@@ -199,7 +204,7 @@ function prototypeSet(node: CallExpression): readonly MemberWrite[] {
   const written = target === undefined ? undefined : writtenPath(target);
   return written === undefined || prototype === undefined
     ? []
-    : [{ node, ...written, value: prototype }];
+    : [{ node, ...written, value: prototype, reopened: false }];
 }
 
 /** `holder.member = value`, and its logical forms, of a variable's member path. */
@@ -207,10 +212,15 @@ function assignedMember(node: BinaryExpression): readonly MemberWrite[] {
   const target = unwrapped(node.left);
   if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) return [];
   const written = writtenPath(target);
-  return written === undefined ? [] : [{ node, ...written, value: node.right }];
+  return written === undefined ? [] : [{ node, ...written, value: node.right, reopened: false }];
 }
 
-/** `Object.assign(holder, { member: value })`: each literal source's own written entries. */
+/**
+ * `Object.assign(holder, { member: value })`: each literal source's own written entries, in the
+ * order the call writes them. What the walk cannot read of a source (a source that is not a
+ * literal, a spread, an accessor) may write any name after the entries before it, which are then
+ * no definite last write.
+ */
 function assignedEntries(node: Expression): readonly MemberWrite[] {
   if (
     !isCallExpression(node) ||
@@ -220,23 +230,31 @@ function assignedEntries(node: Expression): readonly MemberWrite[] {
   const [target, ...sources] = framedArgumentPrefix(node, node.arguments, Infinity).values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined) return [];
-  return sources.flatMap((source) => {
-    const object = unwrapped(source);
-    if (!isObjectLiteralExpression(object)) return [];
-    return object.properties.flatMap((property) => {
-      const entry = writtenEntry(property);
-      return entry === undefined
-        ? []
-        : [
-            {
-              node,
-              holder: written.holder,
-              path: [...written.path, entry.names],
-              value: entry.value,
-            },
-          ];
-    });
-  });
+  const entries = sources.flatMap((source) => sourceEntries(source));
+  const writes: MemberWrite[] = [];
+  let reopened = false;
+  for (const entry of entries.toReversed()) {
+    if (entry === undefined) reopened = true;
+    else
+      writes.push({
+        node,
+        holder: written.holder,
+        path: [...written.path, entry.names],
+        value: entry.value,
+        reopened,
+      });
+  }
+  return writes.toReversed();
+}
+
+/**
+ * The entries of an `Object.assign` source in the order it writes them; a part of it the walk cannot
+ * read is `undefined`.
+ */
+function sourceEntries(source: Expression): readonly (WrittenEntry | undefined)[] {
+  const object = unwrapped(source);
+  if (!isObjectLiteralExpression(object)) return [undefined];
+  return object.properties.map((property) => writtenEntry(property));
 }
 
 /** `Object.defineProperty(holder, key, { value })`: the descriptor's written value under the key. */
@@ -256,6 +274,7 @@ function definedEntry(node: CallExpression): readonly MemberWrite[] {
       holder: written.holder,
       path: [...written.path, names],
       value,
+      reopened: false,
     };
   });
 }
@@ -289,9 +308,15 @@ function assignedVariable(node: BinaryExpression): VariableDeclaration | undefin
 }
 
 /** A literal's data entry: its possible names, none of a computed one unread, and its value. */
+interface WrittenEntry {
+  readonly names: readonly string[] | undefined;
+  readonly value: Expression;
+}
+
+/** The data entry a literal's property writes; a spread, an accessor or a method is not one. */
 function writtenEntry(
   property: ObjectLiteralExpression['properties'][number],
-): { readonly names: readonly string[] | undefined; readonly value: Expression } | undefined {
+): WrittenEntry | undefined {
   let value: Expression | undefined;
   if (isPropertyAssignment(property)) value = property.initializer;
   else if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))

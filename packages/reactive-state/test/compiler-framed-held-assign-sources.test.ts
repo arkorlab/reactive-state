@@ -95,6 +95,61 @@ const CASES = [
     source: `function frames(error: Error) { const box = { x: error }; Object.assign(box, { x: 0 }); return box.x; }`,
     selects: false,
   },
+  {
+    id: 'trailing-spread-reopens-explicit-entry',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: 0 }; Object.assign(box, { x: error }, { x: 0, ...extra }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'leading-spread-explicit-entry-wins',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: 0 }; Object.assign(box, { x: error }, { ...extra, x: 0 }); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unread-source-after-explicit-entry',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: 0 }; Object.assign(box, { x: error }, { x: 0 }, extra); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'unread-source-before-explicit-entry',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, extra, { x: 0 }); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unread-source-keeps-initial',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, { x: 0 }, extra); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'unread-source-other-name',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, { y: 0 }, extra); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'call-result-source-after-explicit-entry',
+    source: `function frames(error: Error, extra: () => { x: unknown }) { const box = { x: 0 }; Object.assign(box, { x: error }, { x: 0 }, extra()); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'accessor-entry-after-explicit-entry',
+    source: `function frames(error: Error) { const box = { x: 0 }; Object.assign(box, { x: error }, { x: 0, set y(value: number) {} }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'one-source-spread-after-explicit-entry',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, { x: 0, ...extra }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'one-source-spread-before-explicit-entry',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, { ...extra, x: 0 }); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unread-source-in-a-later-call',
+    source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, { x: 0 }); Object.assign(box, extra); return box.x; }`,
+    selects: false,
+  },
 ] as const;
 
 describe('what the sources of one Object.assign leave in a member', () => {

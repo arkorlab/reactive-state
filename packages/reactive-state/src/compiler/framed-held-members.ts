@@ -436,10 +436,14 @@ function plainMember(literal: ObjectLiteralExpression, key: string): Expression 
   return isObjectLiteralExpression(value) || isArrayLiteralExpression(value) ? value : undefined;
 }
 
-/** A plain assignment, `Object.assign` entry or definition of known names on the read path. */
+/**
+ * A plain assignment, `Object.assign` entry or definition of known names on the read path, that
+ * nothing the walk cannot read in its own call may write over.
+ */
 function exactPrefix(write: MemberWrite, path: readonly string[]): boolean {
   const { node } = write;
   return (
+    !write.reopened &&
     write.path.length <= path.length &&
     write.path.every((names, index) => names?.length === 1 && names[0] === path[index]) &&
     (isCallExpression(node) ||
