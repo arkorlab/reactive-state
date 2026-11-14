@@ -10,7 +10,6 @@ import {
   isConstructorDeclaration,
   isDeleteExpression,
   isElementAccessExpression,
-  isExpression,
   isForInStatement,
   isForOfStatement,
   isFunctionDeclaration,
@@ -21,8 +20,8 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
   isPropertyDeclaration,
+  isPropertyAssignment,
   isSatisfiesExpression,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
@@ -110,7 +109,7 @@ function betweenPasses(
  */
 export function executionOwner(node: Node): Node {
   for (let parent = node.parent, within: Node = node; ; within = parent, parent = parent.parent) {
-    if (isSourceFile(parent) || instanceInitializer(parent, within)) return parent;
+    if (isSourceFile(parent) || instanceInitializer(parent) === within) return parent;
     if (
       !isAnswering(parent) &&
       !isConstructorDeclaration(parent) &&
@@ -119,10 +118,28 @@ export function executionOwner(node: Node): Node {
       continue;
     const regions: readonly (Node | undefined)[] = [parent.body, ...parent.parameters];
     if (!regions.includes(within)) continue;
-    const { parent: use } = useOf(parent);
-    if (!isCallExpression(use) || use.arguments.length > 0 || eagerBody(use) !== parent.body)
-      return parent;
+    if (!invokedAtOnce(parent) || callGivesArguments(parent)) return parent;
   }
+}
+
+/** Whether a function is called where it is written, and answers synchronously: its body runs now. */
+export function invokedAtOnce(fn: Node & { readonly body?: Node | undefined }): boolean {
+  const { parent: use } = useOf(fn);
+  return isCallExpression(use) && eagerBody(use) === fn.body;
+}
+
+/** Whether the call that invokes `fn` where it is written passes arguments, which run before its body. */
+function callGivesArguments(fn: Node): boolean {
+  const { parent: use } = useOf(fn);
+  return isCallExpression(use) && use.arguments.length > 0;
+}
+
+/** The initializer of an instance field, which runs when an instance is made. */
+export function instanceInitializer(node: Node): Node | undefined {
+  const instance =
+    isPropertyDeclaration(node) &&
+    node.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true;
+  return instance ? node.initializer : undefined;
 }
 
 /** Whether `binding` is exported where it is declared: `export const tuple = …`. */
@@ -141,16 +158,6 @@ export function exportedDeclaration(binding: FrameBinding): boolean {
  */
 export function repeatsAround(owner: Node, binding: FrameBinding): boolean {
   return !isSourceFile(owner) && executionOwner(binding) !== owner;
-}
-
-/** Whether `within` is the initializer of the instance field `parent`, which a construction runs. */
-function instanceInitializer(parent: Node, within: Node): boolean {
-  return (
-    isPropertyDeclaration(parent) &&
-    isExpression(within) &&
-    within === parent.initializer &&
-    parent.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true
-  );
 }
 
 /**

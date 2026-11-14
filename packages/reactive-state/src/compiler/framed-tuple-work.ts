@@ -24,6 +24,7 @@ import { BUILT_INS } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
 import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
+import { namesInType } from './framed-references.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
 
@@ -244,6 +245,7 @@ export function tupleBindingExposure(
     !isIdentifier(node) ||
     node === binding.name ||
     !readsBinding(node) ||
+    namesInType(node) ||
     frameBindingOf(node)?.binding !== binding
   )
     return false;
