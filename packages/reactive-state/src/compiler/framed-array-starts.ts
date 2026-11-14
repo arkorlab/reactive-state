@@ -1,6 +1,8 @@
 import {
   type Expression,
+  type Identifier,
   isArrayLiteralExpression,
+  isBindingElement,
   isBinaryExpression,
   isConditionalExpression,
   isIdentifier,
@@ -9,12 +11,14 @@ import {
   isPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
+  type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /**
  * Whether a name may start as an array: its initializer is a written array, or a chain of names, the
@@ -33,6 +37,7 @@ export function mayStartAsArray(binding: FrameBinding): boolean {
     if (selected === undefined) return start.text !== 'undefined';
     if (seen.has(selected.binding)) return true;
     seen.add(selected.binding);
+    if (defaultMayBeArray(start)) return true;
     value = selectedValue(selected.binding.initializer, selected.keys);
   }
   return true;
@@ -93,6 +98,22 @@ const CHOOSING_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
+ * Whether a name that a pattern takes apart has a default that may be an array, on the way to its
+ * field: a field that is `undefined` gives the name its default, whatever the field is written as.
+ */
+function defaultMayBeArray(name: Identifier): boolean {
+  const declared = frameDeclarationOf(name)?.name;
+  if (declared === undefined) return false;
+  const bound = bindingIdentifiers(declared).find((each) => each.text === name.text);
+  let at: Node | undefined = bound?.parent;
+  while (at !== undefined && isBindingElement(at)) {
+    if (at.initializer !== undefined && !isNoArray(at.initializer)) return true;
+    at = at.parent.parent;
+  }
+  return false;
+}
+
+/**
  * Whether an expression is written as a value that is no array: a literal, what an operator makes of
  * its operands (a number, a string, a boolean), or a choice or a sequence that ends at such a value
  * on every path. A name, a member, an element and a call may hold an array, and are none of these.
@@ -132,7 +153,10 @@ function selectedValue(
   return value;
 }
 
-/** The field or the element a written object or array has under the key. */
+/**
+ * The field or the element a written object or array has under the key: the last field of the name,
+ * where no spread and no name the compile cannot read comes after it, which may give the name another value.
+ */
 function selectedField(value: Expression, key: string): Expression | undefined {
   if (isArrayLiteralExpression(value)) {
     const element = value.elements.find((_, at) => String(at) === key);
@@ -142,10 +166,11 @@ function selectedField(value: Expression, key: string): Expression | undefined {
     return element === undefined || spread ? undefined : unwrapped(element);
   }
   if (!isObjectLiteralExpression(value)) return undefined;
-  const field = value.properties.findLast(
-    (each) => !isSpreadAssignment(each) && writtenArrayKey(each.name) === key,
-  );
-  return field !== undefined && isPropertyAssignment(field)
-    ? unwrapped(field.initializer)
-    : undefined;
+  for (const each of value.properties.toReversed()) {
+    if (isSpreadAssignment(each)) return undefined;
+    const name = writtenArrayKey(each.name);
+    if (name === undefined) return undefined;
+    if (name === key) return isPropertyAssignment(each) ? unwrapped(each.initializer) : undefined;
+  }
+  return undefined;
 }
