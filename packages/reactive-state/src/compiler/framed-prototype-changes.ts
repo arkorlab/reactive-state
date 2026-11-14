@@ -208,15 +208,26 @@ function passes(parent: Node, at: Node): boolean {
   );
 }
 
-/** Whether a node is the `this` a call of `call`, `apply` or `bind` gives, which a native does not read members of. */
+/** The methods of a function that call it, or bind it for a call, on a `this` they are given first. */
+const THIS_METHODS: ReadonlySet<string> = new Set(['apply', 'bind', 'call']);
+
+/**
+ * Whether a node is the `this` a call of `call`, `apply` or `bind` gives to a function of the language's
+ * own (a member of `Object`, `Reflect`, `Array`: `Object.assign.call(Object, a, {})`), which reads no
+ * member of it by a name it chooses. A function the code writes may read any member of it, as
+ * `this[key]` does, and the holder it is given is then let go.
+ */
 function isThisArgument(call: CallExpression, at: Node): boolean {
   const callee = unwrapped(call.expression);
-  return (
-    isPropertyAccessExpression(callee) &&
-    ['apply', 'bind', 'call'].includes(callee.name.text) &&
-    isExpression(at) &&
-    call.arguments[0] === at
-  );
+  if (
+    !isPropertyAccessExpression(callee) ||
+    !THIS_METHODS.has(callee.name.text) ||
+    !isExpression(at) ||
+    call.arguments[0] !== at
+  )
+    return false;
+  const path = globalPathOf(unwrapped(callee.expression));
+  return path !== undefined && path.length > 1 && HOLDERS.has(path[0] ?? '');
 }
 
 /**
