@@ -229,6 +229,40 @@ function itemKeyOf(key: unknown, site: string): string {
   return String(key);
 }
 
+/**
+ * The values `inputs` hold, each after its key, where they hold them as an object literal does —
+ * each its own, enumerated, and not computed, as `toJsonRecord` copies it — and nothing otherwise.
+ */
+function heldBy(inputs: Inputs): readonly unknown[] | undefined {
+  if (Object.getPrototypeOf(inputs) !== Object.prototype) {
+    return undefined;
+  }
+  const held: unknown[] = [];
+  for (const name of Reflect.ownKeys(inputs)) {
+    const descriptor = Object.getOwnPropertyDescriptor(inputs, name);
+    if (typeof name !== 'string' || descriptor?.enumerable !== true || !('value' in descriptor)) {
+      return undefined;
+    }
+    held.push(name, descriptor.value);
+  }
+  return held;
+}
+
+/** Whether two inputs held the very same values by the same keys (`heldBy`). */
+function heldAlike(a: readonly unknown[] | undefined, b: readonly unknown[] | undefined): boolean {
+  if (a === undefined || b === undefined) {
+    return false;
+  }
+  return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+}
+
+/** What a list site sends, as a render copied it for an item, and what was copied (`heldBy`). */
+interface Listed {
+  readonly inputs: readonly unknown[] | undefined;
+  readonly guarded: readonly unknown[] | undefined;
+  readonly made: Pick<SiteProps, 'inputs' | 'sent'>;
+}
+
 function SiteContent({ inputs, part, sent, site }: SiteProps): ReactNode {
   const rendered = renderedOf(part, site);
   const found =
@@ -265,6 +299,9 @@ export function useSites(part: ClientPart<ReactNode>): Sites {
   const { instance } = part;
   // The sites this render names, by id.
   const named: Record<string, SiteInputs> = {};
+  // The items of no key this render names, each keyed apart from the others — siblings, as items
+  // of one list are, which React keeps apart by their keys — though each of them fails at once.
+  let unkeyed = 0;
   useEffect(() => {
     if (controller !== null && instance !== undefined) {
       controller.commit(instance, named);
@@ -289,17 +326,50 @@ export function useSites(part: ClientPart<ReactNode>): Sites {
     own(named, site, sent);
     return { inputs: toJsonRecord(inputs, what), sent };
   };
+  // What each list site this render names sends, as it was copied for an item: every item of the
+  // part's `.map()` names it again, with the same array, which a long list would otherwise copy
+  // once for each of its items.
+  let listed: Map<string, Listed> | undefined;
+  /**
+   * What the list site `site` sends, as `sending` makes it: the copy made for an item before it in
+   * this render, where its inputs, and the states its conditions alone read, hold the very values
+   * they held then — which the render, as React's rules have it, changes nothing of.
+   */
+  const listing = (
+    site: string,
+    inputs: Inputs,
+    guarded: Inputs,
+  ): Pick<SiteProps, 'inputs' | 'sent'> => {
+    const held = { guarded: heldBy(guarded), inputs: heldBy(inputs) };
+    const last = listed?.get(site);
+    if (
+      last !== undefined &&
+      heldAlike(last.inputs, held.inputs) &&
+      heldAlike(last.guarded, held.guarded)
+    ) {
+      // Named as each call names its site.
+      own(named, site, last.made.sent);
+      return last.made;
+    }
+    const made = sending(site, inputs, guarded);
+    listed ??= new Map();
+    listed.set(site, { ...held, made });
+    return made;
+  };
   return {
     item: (site, inputs, entry, guarded = {}) => {
       const keyed = attempt(() => itemKeyOf(entry.key, site));
       if (!('made' in keyed)) {
-        return <Unsent error={keyed.error} key={site} />;
+        unkeyed += 1;
+        // Keyed by its place alone, of no colon: apart from every item of a key, which is keyed
+        // `site:key`, whatever its site and its key hold.
+        return <Unsent error={keyed.error} key={`#${String(unkeyed)}`} />;
       }
       const itemKey = keyed.made;
       const key = `${site}:${itemKey}`;
       const attempted = attempt(() => {
         const held = toJson(entry.item, `The item "${itemKey}" of the site "${site}"`);
-        return { held, ...sending(site, inputs, guarded) };
+        return { held, ...listing(site, inputs, guarded) };
       });
       if (!('made' in attempted)) {
         return <Unsent error={attempted.error} key={key} />;

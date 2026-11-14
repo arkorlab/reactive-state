@@ -1,6 +1,9 @@
 import {
   type Identifier,
+  isComputedPropertyName,
+  isDecorator,
   isIdentifier,
+  isParameterDeclaration,
   isParenthesizedTypeNode,
   isSourceFile,
   isTypeReferenceNode,
@@ -36,18 +39,24 @@ export function namesType(type: TypeNode | undefined, names: ReadonlySet<string>
 /**
  * The parameter that binds `name` where it is read, where no block around it declares the name
  * (`declarationOf`) — by its name alone: none of one of a pattern, `({ name }: Options)`, whose
- * type is the whole's.
+ * type is the whole's. A method's parameters are not in scope in its computed name or its
+ * decorators, nor in a parameter's decorator, which run where the class is defined.
  */
 export function parameterOf(name: Identifier): ParameterDeclaration | undefined {
-  for (let at: Node = name.parent; !isSourceFile(at); at = at.parent) {
-    // A node of no function holds no parameters, though it may hold a field of the name.
-    const parameters = isSignatureDeclaration(at) ? at.parameters : [];
+  let within: Node = name;
+  let inParameterDecorator = false;
+  for (let at: Node = name.parent; !isSourceFile(at); within = at, at = at.parent) {
+    // A node of no function holds no parameters, though it may hold a field of the name; nor does
+    // a method's computed name or decorator, which run outside them.
+    const outside = inParameterDecorator || isComputedPropertyName(within) || isDecorator(within);
+    const parameters = !outside && isSignatureDeclaration(at) ? at.parameters : [];
     const parameter = parameters.find((each) =>
       bindingIdentifiers(each.name).some((bound) => bound.text === name.text),
     );
     if (parameter !== undefined) {
       return isIdentifier(parameter.name) ? parameter : undefined;
     }
+    inParameterDecorator = isParameterDeclaration(at) && isDecorator(within);
   }
   return undefined;
 }

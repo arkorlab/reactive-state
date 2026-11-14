@@ -14,6 +14,8 @@ import { nextTurn } from './turns.ts';
 /** How often a store's log is read while anything needs it. */
 const EVERY_MS = 1000;
 const RETRY = { firstMs: 100, maxMs: 30_000 } as const;
+/** The longest a timer waits: one asked to wait longer, Node runs after 1 ms instead. */
+const LONGEST_TIMER_MS = 2_147_483_647;
 
 /** A host arming, or its delayed retry, whose completion belongs to this deadline alone. */
 interface Arming {
@@ -35,10 +37,16 @@ export interface ExternalTailOptions {
   readonly keep?: ((work: Promise<unknown>) => void) | undefined;
 }
 
-/** How often a store's log is read, as the host gives it: a second unless given. */
+/**
+ * How often a store's log is read, as the host gives it: a second unless given. A wait longer than
+ * a timer waits is refused as the authority is made, rather than read as another by each turn:
+ * Node would run the timer after 1 ms, and each turn would find the read not due, and wait again.
+ */
 export function pollIntervalOf(everyMs: number = EVERY_MS): number {
-  if (!Number.isSafeInteger(everyMs) || everyMs <= 0) {
-    throw new TypeError('externalPollMs must be a positive whole number of milliseconds.');
+  if (!Number.isSafeInteger(everyMs) || everyMs <= 0 || everyMs > LONGEST_TIMER_MS) {
+    throw new TypeError(
+      `externalPollMs must be a positive whole number of milliseconds, at most ${String(LONGEST_TIMER_MS)}.`,
+    );
   }
   return everyMs;
 }

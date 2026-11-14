@@ -223,8 +223,9 @@ function viewOf(value: unknown): PageView | undefined {
 
 /**
  * The claims every token of `kind` is checked for first: signed by this authority, of this kind,
- * for the session presenting it (403 otherwise); and for the build the authority runs (409,
- * `BUILD_MISMATCH`, otherwise: a page of another build, which a reload brings up to this one).
+ * for the session presenting it (403 otherwise); for the build the authority runs (409,
+ * `BUILD_MISMATCH`, otherwise: a page of another build, which a reload brings up to this one,
+ * whatever version of the claims its token holds); and of this version of them (403 otherwise).
  */
 function checked(
   secret: string,
@@ -233,11 +234,7 @@ function checked(
   check: TokenCheck,
 ): Readonly<Partial<Record<string, unknown>>> {
   const claims = claimsOf(secret, token);
-  if (
-    claims['t'] !== kind ||
-    claims['v'] !== TOKEN_VERSION ||
-    claims['session'] !== sessionTag(secret, check.session)
-  ) {
+  if (claims['t'] !== kind || claims['session'] !== sessionTag(secret, check.session)) {
     throw denied();
   }
   if (claims['build'] !== check.build) {
@@ -245,6 +242,9 @@ function checked(
       code: BUILD_MISMATCH,
       status: HTTP_CONFLICT,
     });
+  }
+  if (claims['v'] !== TOKEN_VERSION) {
+    throw denied();
   }
   return claims;
 }

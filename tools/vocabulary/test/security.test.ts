@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { errorAnnotation, plainDiagnostic } from '../src/annotate.ts';
-import { boundedFile, MAX_FILE_BYTES, readRepositoryFile } from '../src/read.ts';
+import { boundedFile, MAX_FILE_BYTES, readRepositoryFile, SNIFF_BYTES } from '../src/read.ts';
 import { hitsOfFile } from '../src/scan.ts';
 import { FIXTURE_ALLOWED, FIXTURE_TERMS } from './fixture-terms.ts';
 
@@ -65,7 +65,11 @@ describe('vocabulary security', () => {
       ]);
       writeFileSync(path.join(root, 'large.png'), png);
 
-      expect(readRepositoryFile(root, 'large.png').text).toBeUndefined();
+      const read = readRepositoryFile(root, 'large.png');
+
+      expect(read.text).toBeUndefined();
+      // Only the prefix that told it is binary was read, not the rest of the file.
+      expect(read.bytes).toBe(SNIFF_BYTES);
     });
 
     it('still refuses text past the bound, whatever the name says it is', () => {

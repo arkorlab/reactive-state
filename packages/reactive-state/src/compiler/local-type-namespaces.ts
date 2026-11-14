@@ -5,6 +5,7 @@ import {
   isCaseBlock,
   isClassDeclaration,
   isEnumDeclaration,
+  isExportDeclaration,
   isIdentifier,
   isImportDeclaration,
   isImportEqualsDeclaration,
@@ -15,6 +16,7 @@ import {
   isQualifiedName,
   isSourceFile,
   isTypeAliasDeclaration,
+  type ImportEqualsDeclaration,
   type ModuleBlock,
   type ModuleDeclaration,
   type Node,
@@ -39,16 +41,27 @@ export function qualifiedLocalTypeBinding(name: QualifiedName): LocalTypeBinding
     members.unshift(root.right.text);
     root = root.left;
   }
-  let namespaces = lexicalNamespaces(root);
+  return namespaceMemberBinding(lexicalNamespaces(root), members);
+}
+
+/**
+ * The local alias, interface or class `members` name below `namespaces`, member by member through
+ * the exported namespaces: `undefined` where one is not there, `null` where an import or enum is.
+ */
+export function namespaceMemberBinding(
+  namespaces: readonly ModuleDeclaration[] | null | undefined,
+  members: readonly string[],
+): LocalTypeBinding {
+  let below = namespaces;
   for (const [index, member] of members.entries()) {
-    if (namespaces === undefined || namespaces === null) {
-      return namespaces;
+    if (below === undefined || below === null) {
+      return below;
     }
-    const statements = exportedStatements(namespaces);
+    const statements = exportedStatements(below);
     if (index === members.length - 1) {
       return memberTypeBinding(statements, member);
     }
-    namespaces = namespacesIn(statements, member);
+    below = namespacesIn(statements, member);
   }
   return undefined;
 }
@@ -62,11 +75,19 @@ export function namespaceStatements(block: ModuleBlock): readonly Statement[] {
     return block.statements;
   }
   const statements = new Set<Statement>(block.statements);
-  const merged = exportedStatements(mergedNamespaces(block.parent));
-  for (const statement of merged) {
+  for (const statement of mergedExports(block.parent)) {
     statements.add(statement);
   }
   return [...statements];
+}
+
+/**
+ * What the bodies of the namespaces that merge with `namespace`, itself among them, export: what a
+ * body of the name sees of the others', and what `namespace A.B {}` sees of `A`'s — it is the only
+ * body `A` has there.
+ */
+export function mergedExports(namespace: ModuleDeclaration): readonly Statement[] {
+  return exportedStatements(mergedNamespaces(namespace));
 }
 
 /** The declarations that merge with `namespace`, through its exported enclosing namespace path. */
@@ -133,7 +154,20 @@ function lexicalNamespaces(name: Identifier): readonly ModuleDeclaration[] | nul
 
 /** The declarations of one lexical scope, including all clauses of a switch. */
 function statementsOf(node: Node): readonly Statement[] | undefined {
-  return isModuleBlock(node) ? namespaceStatements(node) : directStatementsOf(node);
+  return isModuleBlock(node)
+    ? namespaceStatements(node)
+    : (dottedStatements(node) ?? directStatementsOf(node));
+}
+
+/**
+ * What the outer namespace of a dotted name holds for the one within it: `A` of `namespace A.B {}`
+ * has no body but `B`, and what the bodies of `A` export is in scope there (`mergedExports`); none
+ * of another node.
+ */
+export function dottedStatements(node: Node): readonly Statement[] | undefined {
+  return isModuleDeclaration(node) && node.body !== undefined && isModuleDeclaration(node.body)
+    ? mergedExports(node)
+    : undefined;
 }
 
 /** The declarations written directly in one lexical scope. */
@@ -253,5 +287,35 @@ function importsName(statement: Statement, name: string): boolean {
     (isNamespaceImport(named)
       ? named.name.text === name
       : named.elements.some((element) => element.name.text === name))
+  );
+}
+
+/** Whether an alias is exported, `export import alias = …`, which makes the namespace emit. */
+function isExported(alias: ImportEqualsDeclaration): boolean {
+  return alias.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
+}
+
+/**
+ * Whether a namespace declares a value, as TypeScript emits it: one of types alone — interfaces,
+ * aliases, namespaces of them, an alias it does not export, an empty body — emits none, and the
+ * name it shares with a value around it is that value's.
+ */
+export function holdsValues(namespace: ModuleDeclaration): boolean {
+  let { body } = namespace;
+  while (body !== undefined && isModuleDeclaration(body)) {
+    ({ body } = body);
+  }
+  return (
+    body !== undefined &&
+    isModuleBlock(body) &&
+    body.statements.some((statement) => {
+      return !(
+        isInterfaceDeclaration(statement) ||
+        isTypeAliasDeclaration(statement) ||
+        (isExportDeclaration(statement) && statement.isTypeOnly) ||
+        (isImportEqualsDeclaration(statement) && !isExported(statement)) ||
+        (isModuleDeclaration(statement) && !holdsValues(statement))
+      );
+    })
   );
 }

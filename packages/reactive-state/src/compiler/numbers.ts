@@ -2,11 +2,16 @@ import {
   type CallExpression,
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
+  isArrowFunction,
   isBinaryExpression,
   isCallExpression,
+  isClassExpression,
+  isFunctionExpression,
   isIdentifier,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isObjectLiteralExpression,
   isPrefixUnaryExpression,
   isNewExpression,
   isPropertyAccessExpression,
@@ -18,6 +23,7 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 
 /**
  * What the code computes of numbers alone, as the language computes it — of literals, `NaN`,
@@ -48,15 +54,21 @@ export type Resolve = (name: Identifier) => Expression | undefined;
 /** A value the code writes of numbers and text alone. */
 export type Constant = number | string;
 
-/** How names are read: what `resolve` answers they hold, but those followed on the way already. */
+/**
+ * How names are read: what `resolve` answers they hold; the expressions the constants being computed
+ * hold (`following`), which one read again — a cycle — computes to nothing, kept by the expression
+ * and not by the name, so that a name a block gives again is no cycle with the one around it; and
+ * what each constant has computed to (`known`, `times`), once whoever reads it, so that one several
+ * others read is computed once; and how much work a reading may still do (`work`).
+ */
 interface Names {
   readonly resolve: Resolve | undefined;
-  readonly following: ReadonlySet<string>;
+  readonly following: ReadonlySet<Expression>;
   /** What each constant read as a value holds, kept so a constant that many others read is read once. */
   readonly known: Map<Expression, Constant | undefined>;
   /** The same of each constant read as a date: the time it holds. */
   readonly times: Map<Expression, number | undefined>;
-  /** How many times a name followed on the way was met: a value read through one is of the way, not kept. */
+  /** How many times a constant followed on the way was met: a value read through one is of the way, not kept. */
   readonly cuts: { count: number };
   /** How many constants may still be read, of either kind, which no source not made to need more does. */
   readonly work: { left: number };
@@ -170,7 +182,7 @@ function constantOperand(node: Expression, names: Names): Constant | undefined {
 
 /**
  * What the name `name` holds as a value: `NaN` or `Infinity`, the globals'; else what the constant it
- * names writes (`names.resolve`), but a name followed on the way to it already, which holds none.
+ * names writes (`names.resolve`), but a constant followed on the way to it already, which holds none.
  */
 function nameOperand(name: Identifier, names: Names): Constant | undefined {
   const global = NUMBER_GLOBALS.get(globalOf(name) ?? '');
@@ -181,6 +193,8 @@ function nameOperand(name: Identifier, names: Names): Constant | undefined {
  * What the constant a name stands for holds, as `read` reads it, once however many others read it:
  * the one place a name is followed, for a value (`heldOperand`) and for a date (`timeOf`) alike, so
  * that every way to a constant spends the same bounded work and keeps what it reads in the same way.
+ * A constant is followed by the expression it holds, not by its name, so that a name a block gives
+ * again is no cycle with the one around it.
  */
 function followed<Value>(
   name: Identifier,
@@ -188,18 +202,18 @@ function followed<Value>(
   kept: Map<Expression, Value | undefined>,
   read: (held: Expression, names: Names) => Value | undefined,
 ): Value | undefined {
-  if (names.following.has(name.text) || names.work.left <= 0) {
+  const held = names.resolve?.(name);
+  if (held === undefined) return undefined;
+  if (names.following.has(held) || names.work.left <= 0) {
     names.cuts.count += 1;
     return undefined;
   }
-  const held = names.resolve?.(name);
-  if (held === undefined) return undefined;
   if (kept.has(held)) return kept.get(held);
   names.work.left -= 1;
   const before = names.cuts.count;
-  const following = new Set([...names.following, name.text]);
+  const following = new Set([...names.following, held]);
   const value = read(held, { ...names, following });
-  // A value read with no name cut short is the constant's own, whichever way it was reached.
+  // A value read with no constant cut short is the constant's own, whichever way it was reached.
   if (names.cuts.count === before) kept.set(held, value);
   return value;
 }
@@ -225,14 +239,35 @@ const NUMBER_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => n
 ]);
 
 /**
- * The functions of `Date` that answer a number of what they are given alone: `Date.UTC`, as the
- * language defines it, and `Date.parse`, of text, as the engine reads it — the one the authority
- * and the compile both run, V8 — `NaN` of text it reads no time of.
+ * The time `Date.parse` reads of text as the engine reads it — the one the authority and the
+ * compile both run, V8 — where every time zone reads it alike (`fixedText`); none of other text,
+ * which it reads in the time zone where it runs.
  */
-const DATE_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => number> = new Map([
-  ['parse', (...given) => Date.parse(String(given[0]))],
-  ['UTC', (...given) => Reflect.apply(Date.UTC, Date, given.map(Number)) as number],
-]);
+function parsedTime(text: string): number | undefined {
+  const time = Date.parse(text);
+  return fixedText(text, time) ? time : undefined;
+}
+
+/**
+ * Whether every time zone reads `text` as the time `time` the compile reads of it: text in a form
+ * that names its offset or none (`zonelessText`), or text of no digit, which writes no year, day or
+ * time to read — and `NaN` of it alike. A time zone moves a reading by less than a day, so that
+ * other text of no time here may hold one elsewhere: a time within a day of the dates the language
+ * holds, `+275760-09-13T10:00`, is none in Tokyo and one in Kiritimati.
+ */
+function fixedText(text: string, time: number): boolean {
+  return zonelessText(text) || (Number.isNaN(time) && !/\d/u.test(text));
+}
+
+/**
+ * The functions of `Date` that answer a number of what they are given alone: `Date.UTC`, as the
+ * language defines it, and `Date.parse`, of text (`parsedTime`).
+ */
+const DATE_FUNCTIONS: ReadonlyMap<string, (...given: readonly Constant[]) => number | undefined> =
+  new Map([
+    ['parse', (...given) => parsedTime(String(given[0]))],
+    ['UTC', (...given) => Reflect.apply(Date.UTC, Date, given.map(Number)) as number],
+  ]);
 
 /**
  * The number `JSON.parse` makes of text the code writes alone — `Infinity` of `'1e400'` — as the
@@ -410,10 +445,14 @@ function textCall(
 }
 
 /**
- * The number a method of a date answers: of one the code writes, there or through a constant
- * (`timeOf`), as the engine computes it — but of what it reads or sets in the time zone where it
- * runs, `NaN` alone; of another, what a setter answers whatever the date — `NaN` of what is no
- * finite number, `setTime(Infinity)`, or of a time past the dates the language holds, `setTime(9e15)`.
+ * The number a method of a date answers: of one the code makes there, `new Date(0).getTime()`, of a
+ * time the same wherever and whenever the code runs (`fixedTime`), as the engine computes it — but
+ * of what it reads or sets in the time zone where it runs, `NaN` alone where no time zone holds a
+ * time (`localNaN`); of another, the clock's among them, and one a name holds, whose time a setter
+ * called on the name may have changed since, what a setter answers whatever the date — `NaN` of
+ * what is no finite number, `setTime(Infinity)`, or of a time past the dates the language holds,
+ * `setTime(9e15)` — but none of what the code writes as no date (`writtenOtherwise`), whose method
+ * is its own.
  */
 function dateCall(
   method: string,
@@ -421,23 +460,70 @@ function dateCall(
   given: readonly Constant[],
   names: Names,
 ): number | undefined {
-  const time = timeOf(target, names);
+  const value = unwrapped(target);
+  const time = isNewExpression(value) ? fixedTime(value, names) : undefined;
   if (time === undefined) {
-    return setsTime(method) ? setWhatever(method, given) : undefined;
+    return setsTime(method) && !writtenOtherwise(target, names)
+      ? setWhatever(method, given)
+      : undefined;
+  }
+  if (!DATE_TIMES.has(method) && !SETTING_UTC.has(method)) {
+    return localNaN(method, time, given) ? NaN : undefined;
   }
   const date = new Date(time);
   const read = Reflect.get(date, method) as (...given: readonly number[]) => number;
-  const answered = Reflect.apply(read, date, given.map(Number));
-  const isExact = DATE_TIMES.has(method) || SETTING_UTC.has(method);
-  return isExact || Number.isNaN(answered) ? answered : undefined;
+  return Reflect.apply(read, date, given.map(Number));
 }
 
+/** The setters of a date's local time that start a date of none over, of the epoch: of a year. */
+const RESTARTING: ReadonlySet<string> = new Set(['setFullYear', 'setYear']);
+
 /**
- * What a date's setter answers whatever the date: `NaN` of what is no finite number — nothing given
- * first among it — and of `setTime`, of a time past the dates the language holds; none told else.
+ * Whether a method of a date that reads or sets its time in the time zone where it runs answers
+ * `NaN` in every time zone: a read of a date of none, and a setting of one — but `setFullYear`,
+ * which starts it over — or of what is no finite number (`setWhatever`). A time zone moves a time
+ * by less than a day, so that a time near the dates the language holds is one in some time zones
+ * and none in others: of it, none here.
+ */
+function localNaN(method: string, time: number, given: readonly Constant[]): boolean {
+  if (LOCAL_TIMES.has(method)) {
+    return Number.isNaN(time);
+  }
+  return (
+    (Number.isNaN(time) && !RESTARTING.has(method)) || Number.isNaN(setWhatever(method, given) ?? 0)
+  );
+}
+
+/** How many parts a setter of a date reads, past which it ignores what it is given. */
+const PARTS = { one: 1, two: 2, three: 3, four: 4 } as const;
+
+/** The parts each setter of a date reads, of the first it is given on: `setHours` up to four. */
+const SETTER_PARTS: ReadonlyMap<string, number> = new Map([
+  ['setDate', PARTS.one],
+  ['setFullYear', PARTS.three],
+  ['setHours', PARTS.four],
+  ['setMilliseconds', PARTS.one],
+  ['setMinutes', PARTS.three],
+  ['setMonth', PARTS.two],
+  ['setSeconds', PARTS.two],
+  ['setTime', PARTS.one],
+  ['setUTCDate', PARTS.one],
+  ['setUTCFullYear', PARTS.three],
+  ['setUTCHours', PARTS.four],
+  ['setUTCMilliseconds', PARTS.one],
+  ['setUTCMinutes', PARTS.three],
+  ['setUTCMonth', PARTS.two],
+  ['setUTCSeconds', PARTS.two],
+  ['setYear', PARTS.one],
+]);
+
+/**
+ * What a date's setter answers whatever the date: `NaN` of what is no finite number among the parts
+ * it reads (`SETTER_PARTS`) — nothing given first among them — and of `setTime`, of a time past the
+ * dates the language holds; none told else. What it is given past its parts it ignores.
  */
 function setWhatever(method: string, given: readonly Constant[]): number | undefined {
-  const numbers = given.map(Number);
+  const numbers = given.slice(0, SETTER_PARTS.get(method) ?? given.length).map(Number);
   const [first = NaN] = numbers;
   if (!Number.isFinite(first) || numbers.some((each) => !Number.isFinite(each))) {
     return NaN;
@@ -445,18 +531,117 @@ function setWhatever(method: string, given: readonly Constant[]): number | undef
   return method === 'setTime' && Math.abs(first) > MAX_TIME ? NaN : undefined;
 }
 
+/** What the code writes of a value of its own, whose methods are its own, or none at all. */
+const OWN_VALUES: readonly ((node: Expression) => boolean)[] = [
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isClassExpression,
+  isFunctionExpression,
+  isObjectLiteralExpression,
+];
+
 /**
- * The time of `new Date(…)` of what the code writes, as the engine both sides run reads it — `NaN`
- * of text of no time, of a number past the dates it holds; none of another.
+ * Whether the code writes `node` — there, or as what a constant it names holds (`names.resolve`)
+ * — as what is no date: an object, an array, a function or a class of its own, whose method of a
+ * date's name is its own, `({ setTime: () => 0 }).setTime(Infinity)`; what a class but the global
+ * `Date` makes; or a number or text, which hold none. What it does not show is read as a date: a
+ * method of a name of the language's, called on what the code does not show, is the language's.
  */
-function dateTime(made: NewExpression, names: Names): number | undefined {
+function writtenOtherwise(node: Expression, names: Names): boolean {
+  let value = unwrapped(node);
+  const following = new Set(names.following);
+  for (;;) {
+    const held = isIdentifier(value) ? names.resolve?.(value) : undefined;
+    if (held === undefined || following.has(held)) break;
+    following.add(held);
+    value = unwrapped(held);
+  }
+  if (isNewExpression(value)) {
+    return globalPathOf(unwrapped(value.expression))?.join('.') !== 'Date';
+  }
+  return (
+    OWN_VALUES.some((own) => own(value)) ||
+    constantOperand(value, { ...names, following }) !== undefined
+  );
+}
+
+/** What `new Date(…)` is given, where it makes the global's of what the code writes alone. */
+function dateGiven(made: NewExpression, names: Names): readonly Constant[] | undefined {
   const given = (made.arguments ?? []).map((argument) =>
     isSpreadElement(argument) ? undefined : constantOperand(argument, names),
   );
-  if (globalOf(unwrapped(made.expression)) !== 'Date' || given.includes(undefined)) {
+  return globalOf(unwrapped(made.expression)) !== 'Date' || given.includes(undefined)
+    ? undefined
+    : (given as readonly Constant[]);
+}
+
+/**
+ * The time of `new Date(…)` of what the code writes, as the engine both sides run reads it — `NaN`
+ * of text of no time, of a number past the dates it holds; none of another. Of no argument, it is
+ * the time the compile reads of the clock, and of parts or text of no offset, the time they make in
+ * the compile's time zone: a date the code makes, and whether it holds a time, all the same, but a
+ * time another run need not hold (`fixedTime`).
+ */
+function dateTime(made: NewExpression, names: Names): number | undefined {
+  const given = dateGiven(made, names);
+  return given === undefined ? undefined : (Reflect.construct(Date, given) as Date).getTime();
+}
+
+/**
+ * The time of `new Date(…)` of what the code writes where it is the same wherever and whenever the
+ * code runs: of a number, and of text every time zone reads alike (`fixedText`) — `NaN` of parts
+ * that make none in any time zone (`timeless`); none of the clock's, `new Date()`, nor of parts,
+ * `new Date(2020, 0, 1)`, or of other text, which it reads in the time zone where it runs.
+ */
+function fixedTime(made: NewExpression, names: Names): number | undefined {
+  const given = dateGiven(made, names);
+  const [first] = given ?? [];
+  if (given === undefined || first === undefined) {
     return undefined;
   }
-  return (Reflect.construct(Date, given) as Date).getTime();
+  if (given.length > 1) {
+    return timeless(given.map(Number)) ? NaN : undefined;
+  }
+  const time = (Reflect.construct(Date, given) as Date).getTime();
+  return typeof first === 'number' || fixedText(first, time) ? time : undefined;
+}
+
+/**
+ * Whether the parts of a date, `new Date(year, month, …)`, which it reads in the time zone where it
+ * runs, make it of no time in any: of what is no finite number, or past the dates the language holds
+ * a day either way of them read in UTC (`Date.UTC`), farther than any time zone is from it.
+ */
+function timeless(parts: readonly number[]): boolean {
+  const [year, month, day = 1, ...rest] = parts;
+  const whole = Math.trunc(day);
+  return [whole - 1, whole + 1].every((near) =>
+    Number.isNaN(Reflect.apply(Date.UTC, Date, [year, month, near, ...rest]) as number),
+  );
+}
+
+/** Text in ISO's form of a date alone, `2020-01-01`, which every time zone reads as UTC. */
+const ISO_DATE = /^(?:\d{4}|[+-]\d{6})(?:-\d{2}(?:-\d{2})?)?$/u;
+
+/** The day of text in ISO's form of a day and a time, `2020-01-01` of `2020-01-01T00:00Z`. */
+const ISO_DAY = /^(?:\d{4}|[+-]\d{6})-\d{2}-\d{2}$/u;
+
+/** The time of text in ISO's form of a day and a time of an offset, `00:00Z`, `09:00+09:00`. */
+const ISO_ZONED_TIME = /^\d{2}:\d{2}(?::\d{2}(?:\.\d{3})?)?(?:Z|[+-]\d{2}:\d{2})$/u;
+
+/**
+ * Whether every time zone reads `text` alike as a date: in ISO's form of a date alone, or of a day
+ * and a time of an offset — but of the year `-000000`, of no form of ISO's, which the engine reads
+ * otherwise, in the time zone where it runs.
+ */
+function zonelessText(text: string): boolean {
+  if (text.startsWith('-000000')) {
+    return false;
+  }
+  const at = text.indexOf('T');
+  return (
+    ISO_DATE.test(text) ||
+    (at !== -1 && ISO_DAY.test(text.slice(0, at)) && ISO_ZONED_TIME.test(text.slice(at + 1)))
+  );
 }
 
 /**
@@ -467,12 +652,10 @@ export function writtenTime(node: Expression, resolve?: Resolve): number | undef
   return timeOf(node, startNames(resolve));
 }
 
-/** The time of a date the code writes (`writtenTime`), but of a name followed on the way already. */
+/** The time of a date the code writes (`writtenTime`), but of a constant followed on the way already. */
 function timeOf(node: Expression, names: Names): number | undefined {
   const value = unwrapped(node);
-  if (isNewExpression(value)) {
-    return dateTime(value, names);
-  }
+  if (isNewExpression(value)) return dateTime(value, names);
   return isIdentifier(value) ? followed(value, names, names.times, timeOf) : undefined;
 }
 

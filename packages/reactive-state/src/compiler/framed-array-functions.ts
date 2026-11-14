@@ -1,52 +1,54 @@
 import {
   type Expression,
   type CallExpression,
+  isArrayBindingPattern,
   isArrowFunction,
-  isAwaitExpression,
   isBinaryExpression,
+  isBindingElement,
   isBlock,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isConditionalExpression,
   isComputedPropertyName,
-  isDeleteExpression,
   isElementAccessExpression,
+  isExpression,
   isIdentifier,
   isFunctionExpression,
   isFunctionDeclaration,
   isGetAccessorDeclaration,
+  isJsxExpression,
   isMethodDeclaration,
-  isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
   isReturnStatement,
-  isSpreadElement,
+  isSetAccessorDeclaration,
   isSpreadAssignment,
   isStringLiteral,
-  isTaggedTemplateExpression,
-  isTemplateExpression,
-  isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
-  isYieldExpression,
   type FunctionDeclaration,
   type Identifier,
   type MethodDeclaration,
+  NodeFlags,
   type Node,
+  type ObjectBindingPattern,
   type ObjectLiteralExpression,
+  type PropertyAssignment,
   type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
+import { useOf } from './code-globals.ts';
+import { destructuredFirst, patternAfter } from './destructuring-order.ts';
 import { deferredArrayChange } from './framed-array-mutations.ts';
 import {
   frameBindingOf,
@@ -55,8 +57,9 @@ import {
   type FrameBinding,
 } from './framed-bindings.ts';
 import { namesThis } from './framed-this-functions.ts';
+import { APPLICATION_WORK } from './framed-tuple-work.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Source identity proofs for custom array text methods. */
 
@@ -86,17 +89,42 @@ export function sourceArrayMethod(receiver: Expression, path: readonly string[])
   return method !== undefined && sourceFunctionValues(method);
 }
 
-/** Whether every possible written value of `start` is a source-written function. */
+/** A value being proved: the values it may be written as, and how many of them are proved. */
+interface Proving {
+  readonly value: FunctionValue;
+  readonly next: readonly FunctionValue[];
+  proved: number;
+}
+
+/**
+ * Whether every possible written value of `start` is a source-written function. Each value is
+ * proved once, however many ways reach it, so aliases that converge cost no more than a chain; a
+ * value reached while it is being proved is a cycle, and gives no proof.
+ */
 function sourceFunctionValues(start: FunctionValue): boolean {
-  const pending: { value: FunctionValue; seen: ReadonlySet<Node> }[] = [
-    { value: start, seen: new Set() },
-  ];
-  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (at.seen.has(at.value)) return false;
-    const values = sourceFunctions(at.value);
-    if (values === undefined) return false;
-    const seen = new Set([...at.seen, at.value]);
-    for (const value of values) pending.push({ value, seen });
+  const proving = new Set<FunctionValue>();
+  const proved = new Set<FunctionValue>();
+  const stack: Proving[] = [];
+  const enter = (value: FunctionValue): boolean => {
+    if (proved.has(value)) return true;
+    if (proving.has(value)) return false;
+    const next = sourceFunctions(value);
+    if (next === undefined) return false;
+    proving.add(value);
+    stack.push({ value, next, proved: 0 });
+    return true;
+  };
+  if (!enter(start)) return false;
+  for (let each = stack.at(-1); each !== undefined; each = stack.at(-1)) {
+    const value = each.next[each.proved];
+    if (value === undefined) {
+      stack.pop();
+      proving.delete(each.value);
+      proved.add(each.value);
+    } else {
+      each.proved += 1;
+      if (!enter(value)) return false;
+    }
   }
   return true;
 }
@@ -164,6 +192,18 @@ function methodValue(
   return keys.length > 0 ? value : undefined;
 }
 
+/**
+ * Whether `property`, a name or text and not a computed one, is `__proto__: value`, which sets the
+ * object's prototype and defines no member of it: the scan goes past it, to an own member of that
+ * name an entry before it defines.
+ */
+function setsPrototype(property: PropertyAssignment): boolean {
+  return (
+    property.name.kind !== SyntaxKind.ComputedPropertyName &&
+    writtenArrayKey(property.name) === '__proto__'
+  );
+}
+
 /** A final own literal member; later opaque fields cannot establish the selected function's identity. */
 function literalFunctionMember(
   object: ObjectLiteralExpression,
@@ -175,13 +215,18 @@ function literalFunctionMember(
     if (name === undefined) return undefined;
     if (name !== key) continue;
     if (isMethodDeclaration(property)) return property;
-    return isPropertyAssignment(property) ? property.initializer : undefined;
+    if (!isPropertyAssignment(property)) return undefined;
+    if (setsPrototype(property)) continue;
+    return property.initializer;
   }
   return undefined;
 }
 
-/** Only const declarations retain a function alias without assuming subsequent assignments away. */
-function constantInitializer(binding: FrameBinding): Expression | undefined {
+/**
+ * Only const declarations retain a function alias, or an array, without assuming subsequent
+ * assignments away.
+ */
+export function constantInitializer(binding: FrameBinding): Expression | undefined {
   if (!isVariableDeclaration(binding) || !isVariableDeclarationList(binding.parent))
     return undefined;
   return isVariableStatement(binding.parent.parent) &&
@@ -190,16 +235,23 @@ function constantInitializer(binding: FrameBinding): Expression | undefined {
     : undefined;
 }
 
-/** A mutable holder is not trusted after an earlier read or application effect could change it. */
+/**
+ * A mutable holder is not trusted after an earlier read or application effect could change it, nor,
+ * where a loop reads it again, after the rest of the loop could (`deferredArrayChange`).
+ */
 function firstReference(
   reference: Identifier,
   binding: FrameBinding | FunctionDeclaration,
 ): boolean {
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (node.pos >= reference.pos || isTypeNode(node)) continue;
+    if (isTypeOnly(node) || runsAfter(node, reference)) continue;
     if (deferredBefore(node, reference, pending)) continue;
-    if (node.end <= reference.pos && isCallExpression(node) && quietWrittenCall(node)) continue;
+    const rest = quietCallRest(node, reference);
+    if (rest !== undefined) {
+      pending.push(...rest);
+      continue;
+    }
     if (priorEffect(node, reference)) return false;
     if (priorBindingRead(node, reference, binding)) return false;
     node.forEachChild((child) => {
@@ -207,19 +259,109 @@ function firstReference(
     });
   }
   return !deferredArrayChange(reference, binding, {
-    member: (value) => methodValue(value, false) !== undefined,
+    member: quietMember,
     quiet: quietWrittenCall,
   });
 }
 
-/** Other function bodies are deferred, but their computed method names are evaluated now. */
+/**
+ * Whether `node` has run where `reference` is read: it is written before it, or lies in what a
+ * pattern around the reference destructures, which runs first, before the pattern's defaults and
+ * computed keys, though it is written after them.
+ */
+function completed(node: Node, reference: Identifier): boolean {
+  return (
+    node.end <= reference.pos ||
+    destructuredFirst(node, reference) ||
+    ownerKeyFirst(node, reference)
+  );
+}
+
+/** Whether `node` is written after `reference` and runs after it too. */
+function runsAfter(node: Node, reference: Identifier): boolean {
+  return (
+    node.pos >= reference.pos &&
+    !destructuredFirst(node, reference) &&
+    !ownerKeyFirst(node, reference)
+  );
+}
+
+/**
+ * What a completed quiet call leaves to read: its invoked body is quiet, but a callee that selects
+ * the method from an object literal written in place evaluates that literal's other members first.
+ * `undefined` where the call is not a quiet one.
+ */
+function quietCallRest(node: Node, reference: Identifier): readonly Node[] | undefined {
+  if (!completed(node, reference) || !isCallExpression(node) || !quietWrittenCall(node))
+    return undefined;
+  let root = unwrapped(node.expression);
+  while (isPropertyAccessExpression(root) || isElementAccessExpression(root))
+    root = unwrapped(root.expression);
+  return isObjectLiteralExpression(root) ? [root] : [];
+}
+
+/**
+ * A member read of the holder that hands nothing of it away: a function, or a value that is no
+ * object the holder's literal holds. Such an object read as a value, passed on or kept under a
+ * name, is the holder's own, and what receives it can replace the method it holds; a pattern that
+ * takes it apart only reads its members (`bindsNoHolder`).
+ */
+function quietMember(value: Expression): boolean {
+  const selected = methodValue(value, false);
+  if (selected === undefined) return false;
+  if (isFunctionDeclaration(selected) || isMethodDeclaration(selected)) return true;
+  const member = unwrapped(selected);
+  return !isObjectLiteralExpression(member) || takenApart(value, member);
+}
+
+/** Whether `value` is what an object pattern of a declaration takes apart, keeping no `holder`. */
+function takenApart(value: Expression, holder: ObjectLiteralExpression): boolean {
+  const { at, parent } = useOf(value);
+  return (
+    isExpression(at) &&
+    isVariableDeclaration(parent) &&
+    parent.initializer === at &&
+    isObjectBindingPattern(parent.name) &&
+    bindsNoHolder(parent.name, holder)
+  );
+}
+
+/**
+ * Whether each element of `pattern` binds a member of `holder` that is no object literal, or one
+ * that a pattern takes apart in turn: a name for the object itself, a rest, a key that is not
+ * written or a member that is no literal one keeps it, or may.
+ */
+function bindsNoHolder(pattern: ObjectBindingPattern, holder: ObjectLiteralExpression): boolean {
+  return pattern.elements.every((element) => {
+    const key = element.dotDotDotToken === undefined ? frameMemberName(element) : undefined;
+    const selected = key === undefined ? undefined : literalFunctionMember(holder, key);
+    if (selected === undefined) return false;
+    if (isFunctionDeclaration(selected) || isMethodDeclaration(selected)) return true;
+    const member = unwrapped(selected);
+    if (!isObjectLiteralExpression(member)) return true;
+    return (
+      element.name !== undefined &&
+      isObjectBindingPattern(element.name) &&
+      bindsNoHolder(element.name, member)
+    );
+  });
+}
+
+/**
+ * Other function bodies, a setter's too, are deferred, but their computed names are evaluated now:
+ * the name itself is walked, for a key that is no written constant converts an object where the
+ * class is defined.
+ */
 function deferredBefore(node: Node, reference: Identifier, pending: Node[]): boolean {
-  if (!isAnswering(node) || node.end >= reference.pos) return false;
+  if (!(isAnswering(node) || isSetAccessorDeclaration(node)) || !completed(node, reference))
+    return false;
   if (
-    (isMethodDeclaration(node) || isGetAccessorDeclaration(node)) &&
+    (isMethodDeclaration(node) ||
+      isGetAccessorDeclaration(node) ||
+      isSetAccessorDeclaration(node)) &&
     isComputedPropertyName(node.name)
   )
-    pending.push(node.name.expression);
+    pending.push(node.name);
   return true;
 }
 
@@ -238,41 +380,51 @@ function priorBindingRead(
   );
 }
 
-/** Completed earlier work can call a later-written hoisted mutator before a method is captured. */
+/**
+ * Completed earlier work can call a later-written hoisted mutator before a method is captured. So
+ * does a pattern that takes a value apart, which runs the getters and the iterator it reads before
+ * its defaults, and so before a reference in them — but not one whose own source holds the
+ * reference, which it takes apart after, a pattern inside it too.
+ */
 function priorEffect(node: Node, reference: Identifier): boolean {
-  if (node.end > reference.pos) return false;
+  if (isObjectBindingPattern(node) || isArrayBindingPattern(node))
+    return !patternAfter(outermostPattern(node), reference);
+  if (!completed(node, reference)) return false;
   if (isComputedPropertyName(node)) return constantValue(node.expression) === undefined;
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
     const { parent } = node;
-    return !(
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === node &&
-      parent.end > reference.pos
+    return (
+      !isBinaryExpression(parent) ||
+      parent.operatorToken.kind !== SyntaxKind.EqualsToken ||
+      parent.left !== node ||
+      completed(parent, reference)
     );
   }
-  return (
-    isCallExpression(node) ||
-    isNewExpression(node) ||
-    isBinaryExpression(node) ||
-    implicitEffect(node)
-  );
+  return implicitEffect(node);
 }
 
-/** Implicit calls, conversions, mutation and deferred completion also invalidate a mutable proof. */
+/** The outermost pattern `pattern` is part of: an element of a pattern holds a pattern of its own. */
+function outermostPattern(pattern: Node): Node {
+  let at = pattern;
+  while (isBindingElement(at.parent)) at = at.parent.parent;
+  return at;
+}
+
+/**
+ * Implicit calls, conversions, mutation and deferred completion also invalidate a mutable proof:
+ * the evaluation that can run the application's code (`APPLICATION_WORK`, which holds a call, a
+ * construction, a spread, a loop's iteration and the spread of a JSX attribute), a class, the
+ * spread of a JSX child, which iterates, and a `using` or an `await using` declaration, which runs
+ * its resource's disposal where its scope is left.
+ */
 function implicitEffect(node: Node): boolean {
   return (
-    isTaggedTemplateExpression(node) ||
-    isTemplateExpression(node) ||
-    isSpreadAssignment(node) ||
-    isSpreadElement(node) ||
-    isAwaitExpression(node) ||
-    isYieldExpression(node) ||
-    isDeleteExpression(node) ||
-    isPrefixUnaryExpression(node) ||
-    isPostfixUnaryExpression(node) ||
+    APPLICATION_WORK.has(node.kind) ||
     isClassDeclaration(node) ||
-    isClassExpression(node)
+    isClassExpression(node) ||
+    (isJsxExpression(node) && node.dotDotDotToken !== undefined) ||
+    // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
+    (isVariableDeclarationList(node) && (node.flags & NodeFlags.Using) !== 0)
   );
 }
 

@@ -6,7 +6,6 @@ import {
   isIdentifier,
   isExpression,
   isSpreadElement,
-  isTypeNode,
   isVariableDeclaration,
   isVariableStatement,
   type Node,
@@ -14,13 +13,14 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Native fill contributes no inserted value where written bounds prove an empty range. */
 
@@ -43,8 +43,20 @@ export function emptyArrayFill(given: readonly Expression[], context: FillContex
   const length = unexposedLength(context);
   if (length === undefined || start === undefined) return false;
   if (equalOrReversed) return true;
+  if (exportedBefore(context)) return false;
   const stop = fillBound(given[2], length);
   return stop !== undefined && relativeBound(start, length) >= relativeBound(stop, length);
+}
+
+/**
+ * Whether an importing module can change the length of the array before the fill runs: the module
+ * exports it where it is declared, and the fill is in a body that runs later.
+ */
+function exportedBefore(context: FillContext): boolean {
+  return (
+    exportedDeclaration(context.root) &&
+    executionOwner(context.call) !== executionOwner(context.root)
+  );
 }
 
 /** Monotone bounds on one side of zero clamp together without knowing the receiver length. */
@@ -87,7 +99,7 @@ function unexposedLength(context: FillContext): number | undefined {
     return undefined;
   const pending: Node[] = [root.getSourceFile()];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (isTypeNode(at)) continue;
+    if (isTypeOnly(at)) continue;
     if (isIdentifier(at) && lengthExposed(at, context)) return undefined;
     at.forEachChild((child) => {
       pending.push(child);
@@ -96,7 +108,12 @@ function unexposedLength(context: FillContext): number | undefined {
   return array.elements.length;
 }
 
-/** Earlier uses, argument effects and possible other-owner reads can change the captured length. */
+/**
+ * Earlier uses, argument effects and possible other-owner reads can change the captured length: a
+ * use in what a destructuring pattern destructures runs before a fill in the pattern's defaults,
+ * though it is written after it, and a use in a computed key of a class runs before a fill in one
+ * of the class's static initializers.
+ */
 function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (!readsBinding(name) || context.identity(name) !== context.root) return false;
   const selected = frameBindingOf(name);
@@ -105,7 +122,10 @@ function lengthExposed(name: Identifier, context: FillContext): boolean {
   if (executionOwner(name) !== owner) return true;
   if (
     (name.pos > context.call.end || destructuredFirst(context.call, name)) &&
-    !repeatedFrameRead(name, context.call, context.root, owner)
+    !destructuredFirst(name, context.call) &&
+    !ownerKeyFirst(name, context.call) &&
+    !repeatedFrameRead(name, context.call, context.root, owner) &&
+    !repeatsAround(owner, context.root)
   )
     return false;
   return !constantAliasUse(name, context);

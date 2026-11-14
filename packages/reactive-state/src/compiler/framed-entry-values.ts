@@ -27,6 +27,7 @@ import {
   isVoidExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
+  isSourceFile,
   isSpreadElement,
   type Node,
   SyntaxKind,
@@ -325,12 +326,24 @@ function patternWrites(node: Node, aliases: ReadonlySet<FrameBinding>): SlotWrit
 
 /** The targets a pattern goes on to: those the pattern readers route, and its others unrouted. */
 function patternTargets(target: Expression, at: PatternTarget): readonly PatternTarget[] {
-  const routed = at.loose === true ? [] : assignmentPatternTargets(target, at.sources);
+  const routed =
+    at.loose === true
+      ? []
+      : assignmentPatternTargets(target, at.sources).filter(
+          (each) => !underRest(each.target, target),
+        );
   const covered = new Set<Node>(routed.map((each) => each.target));
   const unrouted = patternChildren(target)
     .filter((child) => !covered.has(child))
     .flatMap((child) => unroutedTargets(child, at));
   return [...routed, ...unrouted];
+}
+
+/** Whether a routed target sits in a rest of the pattern, which the unrouted targets read loosely. */
+function underRest(inner: Node, pattern: Node): boolean {
+  for (let at = inner; at !== pattern && !isSourceFile(at); at = at.parent)
+    if (isSpreadElement(at)) return true;
+  return false;
 }
 
 /** The targets a pattern or a default names directly, each as the pattern readers route it. */

@@ -52,8 +52,18 @@ function fault(what: string, why: string): never {
   throw new TypeError(`${what}: ${why}`);
 }
 
+/**
+ * Whether `value` is an object as a query is written of — `{ … }`, or one of no prototype — whose
+ * own entries say all it does. A `Date`, a `Map`, an array or an object of a class is none: what
+ * it says may be its prototype's, its getters' among them, and read by its entries it would ask
+ * of nothing, every record.
+ */
 function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /** What JavaScript calls the type of the values a field holds. */

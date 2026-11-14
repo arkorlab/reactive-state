@@ -224,6 +224,26 @@ function counted(renderer: Renderer, instances: number): void {
   }
 }
 
+/**
+ * How deeply each rendering the memo keeps rendered components beneath itself, a refusal those it
+ * rendered before it refused: a render that takes one from the memo holds it to `MAX_DEPTH` where
+ * it stands, as evaluating it there would. Each is noted here as the memo is given it.
+ */
+const HEIGHTS = new WeakMap<MemoEntry, number>();
+
+/**
+ * Notes that the tree `within` renders a component `depth` deep, toward the deepest of the
+ * rendering it is part of, where that is noted (`deepest`): a fault past `MAX_DEPTH`.
+ */
+function reached(within: Pick<Within, 'deepest'>, depth: number): void {
+  if (depth > MAX_DEPTH) {
+    throw new Error(`Components render components more than ${String(MAX_DEPTH)} deep.`);
+  }
+  if (within.deepest !== undefined) {
+    within.deepest.depth = Math.max(within.deepest.depth, depth);
+  }
+}
+
 /** Where a component stands in what its parent rendered: its region, and its ordinal there. */
 export interface Place {
   readonly region: string;
@@ -238,12 +258,10 @@ async function instanceOf(
   renderer: Renderer,
   node: InstanceNode,
   place: Place & { readonly depth: number },
-  parent: Pick<Within, 'asView' | 'dependencies'>,
+  parent: Pick<Within, 'asView' | 'deepest' | 'dependencies'>,
 ): Promise<SkeletonInstance> {
   const { depth, ordinal, region } = place;
-  if (depth > MAX_DEPTH) {
-    throw new Error(`Components render components more than ${String(MAX_DEPTH)} deep.`);
-  }
+  reached(parent, depth);
   const { component, key, props } = node;
   const program = programOf(renderer, component);
   const at = {
@@ -257,6 +275,8 @@ async function instanceOf(
   const memoized = memoKey(renderer, component, node);
   const kept = keptOf(renderer, memoized);
   if (kept !== undefined) {
+    // What it rendered beneath itself renders as deep from here as evaluating it here would.
+    reached(parent, depth + (HEIGHTS.get(kept) ?? 0));
     counted(renderer, kept.instances);
     renderer.counts.memoHits += 1;
     parent.dependencies.merge(kept.dependencies);
@@ -269,11 +289,14 @@ async function instanceOf(
   const mark = call.boundMark;
   const omitted = OMITTED_LISTS.get(renderer) ?? 0;
   const dependencies = new Dependencies();
+  // How deeply it, and each component it renders, renders components is kept with it too.
+  const deepest = { depth };
   let output: Output;
   try {
     const answered = await evaluated(renderer, program, node, dependencies);
     output = await outputOf(renderer, program, answered, {
       asView: parent.asView,
+      deepest,
       dependencies,
       depth,
     });
@@ -288,13 +311,16 @@ async function instanceOf(
   }
   // A list omitted only at first must be checked as a refusal beneath a requested parent later.
   if ((OMITTED_LISTS.get(renderer) ?? 0) === omitted) {
-    renderer.memo.set(memoized, {
+    const entry: MemoEntry = {
       dependencies,
       instances: renderer.instances - before + 1,
       output,
       requestBound: call.boundSince(mark),
-    });
+    };
+    HEIGHTS.set(entry, deepest.depth - depth);
+    renderer.memo.set(memoized, entry);
   }
+  reached(parent, deepest.depth);
   parent.dependencies.merge(dependencies);
   return { ...at, output };
 }
@@ -313,6 +339,11 @@ export interface Within {
   readonly dependencies: Dependencies;
   readonly depth: number;
   readonly asView?: SiteRun | undefined;
+  /**
+   * The deepest the rendering it is part of renders a component so far, where the memo is to keep
+   * that rendering (`HEIGHTS`).
+   */
+  readonly deepest?: { depth: number } | undefined;
 }
 
 /**

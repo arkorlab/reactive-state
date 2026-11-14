@@ -7,6 +7,7 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isPropertyAssignment,
+  NodeFlags,
   SyntaxKind,
   type VariableStatement,
 } from 'typescript/ast';
@@ -25,8 +26,19 @@ const INERT: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TrueKeyword,
 ]);
 
-/** Whether leaving a statement out skips only values whose construction runs no application code. */
+/**
+ * Whether leaving a statement out skips only values whose construction runs no application code.
+ * A `using` or an `await using` is more than its value: it reads the resource's disposal method and
+ * registers a cleanup its scope runs, which only its whole behavior could show inert, so it stays.
+ * So does a name: reading one runs a global's getter, and throws where a `let`, a `const` or a class
+ * is read before its declaration, or where nothing declares it. The compile does not tell what a
+ * name is bound to, so a name is never left out, whether it is written alone or within a container.
+ */
 export function canOmit(statement: VariableStatement): boolean {
+  // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
+  if ((statement.declarationList.flags & NodeFlags.Using) !== 0) {
+    return false;
+  }
   return statement.declarationList.declarations.every((declaration) => {
     return (
       isIdentifier(declaration.name) &&
@@ -36,7 +48,7 @@ export function canOmit(statement: VariableStatement): boolean {
   });
 }
 
-/** A literal, alias or data container whose evaluation does not call or coerce another value. */
+/** A literal, function or data container whose evaluation does not call, coerce or read a name. */
 function inertValue(expression: Expression): boolean {
   const pending = [expression];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
@@ -51,12 +63,7 @@ function inertValue(expression: Expression): boolean {
 
 /** The values an inert expression evaluates; none where another evaluation must be preserved. */
 function inertChildren(value: Expression): readonly Expression[] | undefined {
-  if (
-    INERT.has(value.kind) ||
-    isIdentifier(value) ||
-    isArrowFunction(value) ||
-    isFunctionExpression(value)
-  ) {
+  if (INERT.has(value.kind) || isArrowFunction(value) || isFunctionExpression(value)) {
     return [];
   }
   if (isArrayLiteralExpression(value)) {

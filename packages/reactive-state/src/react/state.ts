@@ -267,7 +267,8 @@ function persistentSetter<T>(field: string): Persistent<T> {
       send: live.send,
       session: live.session,
       updaterId: set,
-      value: next,
+      // `-0` as the authority writes it, `0`: the page shows what the frame will confirm.
+      value: typeof next === 'number' ? next + 0 : next,
     });
   };
   const compiled = (

@@ -18,8 +18,9 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * grows with the constants, not with the ways to reach them (a chain whose every constant reads the
  * one before twice is 2^n ways). What a name cut short (a constant that reads itself) holds is no
  * constant, and is not kept for another way to it; and a reading takes no more than a bounded number
- * of constants, past which it takes the rest for none. A date is read the same way as a value: a
- * constant that holds one, read through a method of it, is read once too.
+ * of constants, past which it takes the rest for none. A date a name holds is read through no method
+ * of it (a setter of the code may have changed it since): where such a chain is read, it is none, and
+ * read as quickly.
  */
 const CHAIN = 16;
 
@@ -105,14 +106,14 @@ const CASES = [
     id: 'time-of-the-latest-of-the-date-before-twice',
     source: dates('1', (before) => `new Date(Math.max(${before}.getTime(), ${before}.getTime()))`),
     last: 'last',
-    value: 1,
+    value: undefined,
     reads: 40,
   },
   {
     id: 'time-of-the-date-before-and-its-value-of',
     source: dates('1', (before) => `new Date(${before}.getTime() + ${before}.valueOf())`),
     last: 'last',
-    value: 2 ** CHAIN,
+    value: undefined,
     reads: 40,
   },
   {
@@ -122,14 +123,14 @@ const CASES = [
       (before) => `new Date(Date.UTC(${before}.getUTCFullYear(), ${before}.getUTCMonth()))`,
     ),
     last: 'last',
-    value: 0,
+    value: undefined,
     reads: 40,
   },
   {
     id: 'date-by-a-setter-of-the-date-before',
     source: dates('0', (before) => `new Date(${before}.setTime(${before}.getTime()))`),
     last: 'last',
-    value: 0,
+    value: undefined,
     reads: 40,
   },
   {
@@ -139,7 +140,7 @@ const CASES = [
       (before) => `new Date(${before}.setTime(Infinity) + ${before}.setHours(Infinity))`,
     ),
     last: 'last',
-    value: NaN,
+    value: undefined,
     reads: 40,
   },
   {
@@ -157,7 +158,7 @@ const CASES = [
     id: 'time-of-a-date-the-dates-before-hold',
     source: chain('new Date(1)', (before) => `new Date(${before}.getTime())`, CHAIN),
     last: `c${CHAIN}`,
-    value: 1,
+    value: undefined,
     reads: 40,
     time: true,
   },
@@ -182,7 +183,7 @@ const CASES = [
     source:
       'const p = 0; const dq = new Date(p); { const p = dq.getTime(); const dd = new Date(p); const last = Math.max(dd.setTime(Infinity), dq.getTime()); }',
     last: 'last',
-    value: NaN,
+    value: undefined,
     reads: 40,
     scoped: true,
   },

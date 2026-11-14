@@ -8,6 +8,8 @@ import {
   isJsxSelfClosingElement,
   isJsxSpreadAttribute,
   isJsxText,
+  isObjectLiteralExpression,
+  isPropertyAssignment,
   isStringLiteral,
   type JsxAttributeName,
   type JsxAttributes,
@@ -104,6 +106,38 @@ function call(indent: string, head: readonly [Piece, Piece], children: readonly 
 
 const EMPTY_EXPRESSION = 'An attribute is given a value: `{}` holds none.';
 
+/**
+ * Why an attribute `__proto__` given a value is refused: React's transforms write it into an object
+ * literal, where it sets the props' prototype, and React's `jsx` hands the component what they
+ * inherit — the authority reads their own fields alone. Given text, or nothing, it sets none, and is
+ * dropped alike on both sides.
+ */
+const INHERITED =
+  "An attribute `__proto__` given a value — in braces, or an element — sets what the props inherit rather than a prop: React hands the component what that value holds, and what the authority renders reads the props' own fields alone. Name the attribute otherwise.";
+
+/**
+ * Why a spread of an object written with `__proto__: …` is refused: Next.js's SWC writes the object's
+ * fields into the props' literal, where `__proto__` sets their prototype, and the authority spreads
+ * the object, which copies none of it. A computed or shorthand `__proto__` is an own field, which
+ * both copy, and SWC writes a spread in parentheses as a spread.
+ */
+const INHERITED_SPREAD =
+  "A spread of an object written with `__proto__: …` sets what the props inherit in the browser, where Next.js's SWC writes the object's fields into the props, and nothing in what the authority renders, whose spread copies none of it. Write the key computed, `['__proto__']`, or give the value another name.";
+
+/** Whether `expression` is an object written with `__proto__: …`, which sets its prototype. */
+function setsPrototype(expression: Expression): boolean {
+  return (
+    isObjectLiteralExpression(expression) &&
+    expression.properties.some((property) => {
+      return (
+        isPropertyAssignment(property) &&
+        (isIdentifier(property.name) || isStringLiteral(property.name)) &&
+        property.name.text === '__proto__'
+      );
+    })
+  );
+}
+
 /** The props of an element: `null` where it has no attribute, as React's transform writes it. */
 function propsOf(attributes: JsxAttributes, rendering: Rendering): Piece {
   const { fail, sourceFile } = rendering;
@@ -112,6 +146,7 @@ function propsOf(attributes: JsxAttributes, rendering: Rendering): Piece {
   }
   const parts = attributes.properties.map((attribute) => {
     if (isJsxSpreadAttribute(attribute)) {
+      if (setsPrototype(attribute.expression)) fail(INHERITED_SPREAD, attribute);
       return `...${rendering.expression(attribute.expression)}`;
     }
     const name = attributeName(attribute.name);
@@ -122,6 +157,9 @@ function propsOf(attributes: JsxAttributes, rendering: Rendering): Piece {
       );
     }
     const { initializer } = attribute;
+    if (name === '__proto__' && initializer !== undefined && !isStringLiteral(initializer)) {
+      fail(INHERITED, attribute);
+    }
     let value: string;
     if (initializer === undefined) {
       value = 'true';

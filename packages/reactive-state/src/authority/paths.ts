@@ -80,8 +80,9 @@ function siblingOf(
 
 /**
  * A JSON document an application module imports: as Node loads one, where the import says it is
- * JSON (`with { type: 'json' }`); and, where it does not — as TypeScript and the bundlers let an
- * application write it, and Node refuses — as a module of the hooks' own, whose default it is.
+ * JSON (`with { type: 'json' }`), or refuses one, where it names any other attribute; and, where it
+ * names none — as TypeScript and the bundlers let an application write it, and Node refuses — as a
+ * module of the hooks' own, whose default it is.
  */
 function jsonResolution(
   file: string,
@@ -90,6 +91,12 @@ function jsonResolution(
   const url = pathToFileURL(file);
   if (attributes?.['type'] === 'json') {
     return { format: 'json', shortCircuit: true, url: url.href };
+  }
+  // Another `type`, or a key but `type`, is Node's to refuse, as it refuses one of any JSON
+  // document it loads — and as a Durable Object's bundler does: the hooks' module, which Node
+  // checks no attribute of, would take it for none.
+  if (Object.keys(attributes ?? {}).length > 0) {
+    return { shortCircuit: true, url: url.href };
   }
   url.searchParams.set(AS_MODULE, '');
   return { shortCircuit: true, url: url.href };
@@ -197,19 +204,23 @@ function jsonImported(resolved: ResolveFnOutput, context: ResolveHookContext): R
   return file.endsWith('.json') ? jsonResolution(file, context.importAttributes) : resolved;
 }
 
-/** How the hooks resolve `specifier` to `file`, a file they found for it. */
+/**
+ * How the hooks resolve `specifier` to `file`, a file they found for it, for the import or the
+ * `require` `context` says: a JSON document is made a module for an import alone, as one Node
+ * resolved is (`jsonImported`). A `require` reads JSON itself.
+ */
 function resolutionOf(
   specifier: string,
   file: string,
-  attributes: Readonly<Partial<Record<string, string>>> | undefined,
+  context: ResolveHookContext,
 ): { readonly format?: string; readonly shortCircuit: true; readonly url: string } {
   if (JSX.test(file)) {
     throw new Error(
       `${specifier} is ${file}, which Node cannot run: what the authority imports holds no JSX, and the browser's components are imported by the Client Component alone.`,
     );
   }
-  if (file.endsWith('.json')) {
-    return jsonResolution(file, attributes);
+  if (file.endsWith('.json') && context.conditions.includes('import')) {
+    return jsonResolution(file, context.importAttributes);
   }
   // `.mts` and `.cts` say what they are; a `.ts` file is what its package's `type` and its own
   // syntax make it, which Node tells as it loads it.
@@ -280,7 +291,7 @@ export function registerPaths(tsconfig: string): void {
       const resolution =
         file === undefined
           ? resolvedByNode(specifier, context, nextResolve)
-          : resolutionOf(specifier, file, context.importAttributes);
+          : resolutionOf(specifier, file, context);
       // A package's name, or a `#` import, that leads into the importer's own package — the
       // application naming itself — leads into the application still.
       if (

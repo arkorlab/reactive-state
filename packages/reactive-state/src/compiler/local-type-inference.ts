@@ -11,6 +11,7 @@ import {
   type TypeParameterDeclaration,
 } from 'typescript/ast';
 
+import { booleanReadings } from './local-type-distribution.ts';
 import type { TypeReading } from './local-type-environment.ts';
 import {
   callableObjectShape,
@@ -51,7 +52,10 @@ import {
   sequencePatternMatch,
   sequenceReading,
 } from './local-type-sequence-patterns.ts';
-import { signatureMemberPatternMatch } from './local-type-signature-patterns.ts';
+import {
+  partSignatureMatch,
+  signatureMemberPatternMatch,
+} from './local-type-signature-patterns.ts';
 import { memberName, optionalMember, weakMismatch } from './local-type-weak-objects.ts';
 
 /** Conditional inference from explicitly written local object, reference and sequence patterns. */
@@ -140,9 +144,8 @@ function matchPair(pair: Pair, state: Matching): MatchResult {
     return { matches: true };
   }
   if (isUnionTypeNode(pattern.type)) {
-    if (checked.type.kind === SyntaxKind.BooleanKeyword) {
-      return { matches: booleanUnionMatch(pattern, pattern.type.types, state) };
-    }
+    if (checked.type.kind === SyntaxKind.BooleanKeyword)
+      return booleanUnionPairs(checked, pattern, pattern.type.types, state);
     return {
       branches: matchingUnionTypes(pattern.type.types, state).map((type) => {
         const expected = { ...pattern, type };
@@ -201,6 +204,24 @@ function bothWays(pair: Pair, state: Matching): boolean {
     (each) =>
       inferPattern(each.checked, each.pattern, state.resolve, state.compare).matches === true,
   );
+}
+
+/**
+ * Each of boolean's two literals meets an arm of an inference pattern on its own, as TypeScript reads
+ * `boolean` as `true | false`, so that `string | infer U` binds `U` to both; without inference, the
+ * two match the union collectively.
+ */
+function booleanUnionPairs(
+  checked: TypeReading,
+  pattern: TypeReading,
+  alternatives: readonly TypeNode[],
+  state: Matching,
+): MatchResult {
+  const literals = booleanReadings(checked);
+  if (literals === undefined || inferenceParameters(pattern.type).length === 0)
+    return { matches: booleanUnionMatch(pattern, alternatives, state) };
+  for (const literal of literals) state.pending.push({ checked: literal, pattern });
+  return { matches: true };
 }
 
 /** Boolean's two literal values can collectively match a union, although neither alone covers it. */
@@ -338,13 +359,25 @@ function objectMember(
   return true;
 }
 
-/** Written suppliers win before any implicit Function metadata or inherited Object fallback. */
+/**
+ * Written suppliers win before any implicit Function metadata or inherited Object fallback; a call
+ * or construct requirement is met by the one signature of its kind the sources write.
+ */
 function missingObjectMember(
   sources: readonly TypeReading[],
   pattern: TypeReading,
   member: TypeElement,
   state: Matching,
 ): boolean | undefined {
+  const signature = partSignatureMatch(
+    { sources, unknown: false },
+    { reading: pattern, member },
+    state,
+  );
+  if (signature !== undefined) {
+    state.pending.push(...signature.pairs);
+    return signature.matches;
+  }
   const name = memberName(member);
   if (name === undefined) return undefined;
   const actual = implicitFunctionField(sources, name);
@@ -424,7 +457,10 @@ function intersectionMember(
   state: Matching,
 ): boolean | undefined {
   const name = memberName(member);
-  if (name === undefined) return undefined;
+  if (name === undefined)
+    return source.unknown
+      ? undefined
+      : missingObjectMember([...source.sources, ...source.callables], pattern, member, state);
   const supplied = source.sources.filter((each) => sourceMember(each.type, name) !== null);
   if (supplied.length === 0)
     return source.unknown
@@ -489,7 +525,8 @@ function interfaceMemberMatch(
     return indexed.matches;
   }
   const name = memberName(member);
-  if (name === undefined) return undefined;
+  if (name === undefined)
+    return unknown ? undefined : missingObjectMember(sources, pattern, member, state);
   const shapes = sources.flatMap((source) => {
     const { type } = source;
     return isTypeLiteralNode(type) ? [{ ...source, aliases: new Set<string>(), type }] : [];

@@ -205,10 +205,14 @@ function parameterValues(
   if (selected === undefined || parameter === undefined) return restRead(name, parameters, slots);
   const path = readPath(name);
   const keys = [...selected.keys, ...path.keys];
-  if (parameter.dotDotDotToken !== undefined)
-    return { defaults: [], values: restValues(slots.slice(index), keys) };
-  const given = slots[index] ?? [];
   const declared = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
+  if (parameter.dotDotDotToken !== undefined) {
+    return {
+      defaults: declared === undefined ? [] : restDefaults(declared),
+      values: restValues(slots.slice(index), keys, path.any),
+    };
+  }
+  const given = slots[index] ?? [];
   const takesDefault = framedDefaultTaken(given);
   const effective =
     takesDefault && parameter.initializer !== undefined
@@ -305,6 +309,20 @@ function elementDefaults(
 }
 
 /**
+ * The defaults of the binding elements from a name in a rest parameter's pattern up to the
+ * parameter: whether the rest holds an argument where the name stands is not told, so each default
+ * may be taken, and any member of it may be what the name holds.
+ */
+function restDefaults(name: Identifier): DefaultValue[] {
+  const defaults: DefaultValue[] = [];
+  for (let at: Node = name.parent; isBindingElement(at); at = at.parent.parent) {
+    if (at.initializer !== undefined)
+      defaults.push({ any: true, keys: [], value: at.initializer, selected: false });
+  }
+  return defaults;
+}
+
+/**
  * The written member path a read of a name selects, `options.message` or `list[0]`, through
  * parentheses and assertions; a method it calls reads the receiver whole, and a key the compile
  * cannot read leaves any member possible after the path.
@@ -330,13 +348,16 @@ function readPath(name: Identifier): ReadPath {
   }
 }
 
-/** The rest positions a read selects: one by a written index, otherwise every position whole. */
-function restValues(rest: Slots, keys: readonly string[]): readonly ForwardedValue[] {
+/**
+ * The rest positions a read selects: one by a written index, otherwise every position whole — and
+ * any member after the path where a key on it is one the compile cannot read (`any`).
+ */
+function restValues(rest: Slots, keys: readonly string[], any: boolean): readonly ForwardedValue[] {
   const [first, ...remaining] = keys;
   const position = first === undefined ? undefined : restPosition(first);
-  if (position === undefined) return rest.flat();
+  if (position === undefined) return rest.flat().map((each) => selectedValue(each, [], any));
   const given = rest[position] ?? [];
-  return given.map((each) => selectedValue(each, remaining, false));
+  return given.map((each) => selectedValue(each, remaining, any));
 }
 
 /** A canonical array index, as a written key spells it. */

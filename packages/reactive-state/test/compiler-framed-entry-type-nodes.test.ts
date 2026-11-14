@@ -95,11 +95,11 @@ const CASES = [
     values: ['entry:1'],
   },
   {
-    id: 'value-use-of-the-tuple-in-a-function-elsewhere-pin',
+    id: 'value-use-of-the-tuple-in-a-function-elsewhere-is-exposed',
     source:
       "function frames(error: Error, flag: boolean, other: unknown) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([entry, ['k', Math.abs(1)]]); function later() { entry[1] = error; } return out; }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1'],
   },
 ] as const;
 

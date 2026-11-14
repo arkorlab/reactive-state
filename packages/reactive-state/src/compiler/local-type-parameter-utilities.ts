@@ -5,7 +5,6 @@ import {
   isConstructSignatureDeclaration,
   isFunctionTypeNode,
   isIdentifier,
-  isIntersectionTypeNode,
   isTypeLiteralNode,
   type CallSignatureDeclaration,
   type ConstructorTypeNode,
@@ -17,7 +16,7 @@ import {
 
 import { capturedSequence, type CapturedPosition } from './local-type-captured-sequences.ts';
 import { constraintReading, type TypeReading } from './local-type-environment.ts';
-import { interfaceShapeReadings } from './local-type-interface-members.ts';
+import { lastSignatureOf } from './local-type-interface-members.ts';
 
 /** Native argument tuple utilities select the last matching written signature. */
 
@@ -31,39 +30,21 @@ type Signature =
   | ConstructSignatureDeclaration;
 const UNKNOWN = factory.createKeywordTypeNode(SyntaxKind.UnknownKeyword);
 
-/** Call and construct parameter tuples retain each position's original lexical environment. */
+/**
+ * Call and construct parameter tuples retain each position's original lexical environment, of the last
+ * matching signature as TypeScript lists them (`lastSignatureOf`).
+ */
 export function parameterUtilityReading(
   at: TypeReading,
   utility: Utility,
   operands: Operands,
 ): TypeReading | undefined {
-  let result: TypeReading | undefined;
-  let expandInterfaces = true;
-  const pending = [at];
-  for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
-    const { type } = reading;
-    const interfaces = expandInterfaces ? interfaceShapeReadings(reading, operands) : undefined;
-    if (interfaces?.unknown === true) {
-      expandInterfaces = false;
-      result = undefined;
-      pending.length = 0;
-      pending.push(at);
-      continue;
-    }
-    if (interfaces !== undefined) {
-      pending.push(...interfaces.sources.toReversed());
-      continue;
-    }
-    if (isIntersectionTypeNode(type)) {
-      const signatures = type.types.flatMap((member) => operands({ ...reading, type: member }));
-      pending.push(...signatures.toReversed());
-      continue;
-    }
-    const signature = writtenSignature(type, utility);
-    if (signature !== undefined)
-      result = parameterSequence(signatureContext(reading, signature), signature.parameters);
-  }
-  return result;
+  return lastSignatureOf(at, operands, (reading) => {
+    const signature = writtenSignature(reading.type, utility);
+    return signature === undefined
+      ? undefined
+      : { result: parameterSequence(signatureContext(reading, signature), signature.parameters) };
+  });
 }
 
 /** Only matching call or construct signatures supply positions and their own generic binders. */

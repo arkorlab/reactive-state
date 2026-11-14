@@ -5,52 +5,53 @@ import { framedEntriesCall, framedEntryValues } from '../src/compiler/framed-ent
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * A call or a new object that the argument list never reaches runs nothing: a short circuit or a
- * branch a written condition rules out holds no code that writes the tuple, and the tuple is read as it
- * was written, as one the list may run code against is not.
+ * A call or a new object in the argument list is counted as work that may run, whether or not the
+ * list reaches it: a call a short circuit or a branch a written condition rules out is no less a call
+ * of a function of the module's that writes the tuple, and the tuple the list reads is not taken as it
+ * was written. (Following the conditions that rule a call out is precision the reader does not keep.)
  */
 const CASES = [
   {
-    id: 'call-behind-a-false-short-circuit',
+    id: 'call-behind-a-false-short-circuit-is-counted',
     source:
       "function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], entry, ['unused', false && change()]]); return out; function change() { entry[0] = 'other'; } }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1', 'error:'],
   },
   {
-    id: 'call-behind-a-true-fallback',
+    id: 'call-behind-a-true-fallback-is-counted',
     source:
       "function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], entry, ['unused', true || change()]]); return out; function change() { entry[0] = 'other'; } }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1', 'error:'],
   },
   {
-    id: 'call-in-the-branch-a-literal-condition-rules-out',
+    id: 'call-in-the-branch-a-literal-condition-rules-out-is-counted',
     source:
       "function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], entry, ['unused', 0 ? change() : 1]]); return out; function change() { entry[0] = 'other'; } }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1', 'error:'],
   },
   {
-    id: 'call-in-the-other-branch-a-literal-condition-rules-out',
+    id: 'call-in-the-other-branch-a-literal-condition-rules-out-is-counted',
     source:
       "function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], entry, ['unused', 1 ? 1 : change()]]); return out; function change() { entry[0] = 'other'; } }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1', 'error:'],
   },
   {
-    id: 'new-behind-a-false-short-circuit',
+    id: 'new-behind-a-false-short-circuit-is-counted',
     source:
       "function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], entry, ['unused', false && new Change()]]); return out; function change() { entry[0] = 'other'; } class Change { constructor() { entry[0] = 'other'; } } }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1', 'error:'],
   },
   {
-    id: 'call-behind-a-negated-literal',
+    id: 'call-behind-a-negated-literal-is-counted',
     source:
       "function frames(error: Error, flag: boolean) { const entry: [string, unknown] = ['message', 'safe']; const out = Object.fromEntries([['message', error], entry, ['unused', !true && change()]]); return out; function change() { entry[0] = 'other'; } }",
     key: 'message',
-    values: ["'safe':"],
+    values: ['entry:1', 'error:'],
   },
   {
     id: 'call-behind-a-short-circuit-that-may-run',

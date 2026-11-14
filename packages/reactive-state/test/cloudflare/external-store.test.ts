@@ -27,7 +27,8 @@ async function prepare(): Promise<void> {
 /** One authority, its clock advanced before manually running its shared alarm. */
 async function opened() {
   await prepare();
-  let now = Date.now();
+  // Ahead of workerd's own clock, by which it runs alarms: none the test arms comes due by itself.
+  let now = Date.now() + 3_600_000;
   const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
   const stub = env.EXTERNAL_AUTHORITY.getByName(crypto.randomUUID()) as unknown as AuthorityStub &
     Pick<AuthorityObject, 'poke'>;
@@ -104,7 +105,11 @@ describe('external stores in a Durable Object', () => {
     await expect(runDurableObjectAlarm(stub)).resolves.toBe(true);
 
     expect(errors).toHaveBeenCalledWith(expect.stringContaining('could not be ingested'));
-    await expect(alarm()).resolves.toBeGreaterThan(now());
+
+    // The next poll is armed once the handler's writes are confirmed, a turn after it returns.
+    await vi.waitFor(async () => {
+      await expect(alarm()).resolves.toBeGreaterThan(now());
+    });
 
     await runInDurableObject(stub, (_object, state) => {
       const row = state.storage.sql

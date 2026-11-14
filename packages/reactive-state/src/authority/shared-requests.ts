@@ -26,6 +26,11 @@ export const MAX_PROPS_LENGTH = 32_768;
 const MAX_TOKEN = 4096;
 /** The longest a deployment's id may be, as a gate's question names it. */
 const MAX_DEPLOYMENT = 256;
+/**
+ * What a gate's URL is read against, as the gate reads its route's params of it: a base of no
+ * site's, of a scheme under which `\` is `/` and `//` begins a host, as a browser reads a URL.
+ */
+const URL_BASE = 'https://gate.invalid';
 
 function invalid(code: string, message: string): Error {
   return refusal(HTTP_BAD_REQUEST, code, message);
@@ -127,7 +132,11 @@ function headersOf(value: unknown): Readonly<Record<string, string>> {
   return Object.fromEntries(headers);
 }
 
-/** A gate's question: the route, what the visitor asked for, and how. */
+/**
+ * A gate's question: the route, what the visitor asked for, and how. A URL that reads as no URL
+ * against `URL_BASE` — `//`, `//:80`, `/\`, which the parser takes for a host, empty or invalid — is
+ * refused as a question of no URL is, not thrown by the parser as the gate reads its route's params.
+ */
 export function gateRequestOf(value: unknown): GateRequest {
   if (!isObject(value)) {
     throw invalid('INVALID_GATE', 'A gate is asked of a route, a URL, a method and headers.');
@@ -139,7 +148,8 @@ export function gateRequestOf(value: unknown): GateRequest {
     (method !== 'GET' && method !== 'HEAD') ||
     route.length > MAX_ROUTE ||
     url.length > MAX_URL ||
-    !url.startsWith('/')
+    !url.startsWith('/') ||
+    !URL.canParse(url, URL_BASE)
   ) {
     throw invalid('INVALID_GATE', 'A gate is asked of a route, a URL, a method and headers.');
   }

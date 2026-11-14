@@ -22,7 +22,6 @@ import {
   isPropertyAssignment,
   isPropertyDeclaration,
   isVariableDeclarationList,
-  isTypeNode,
   isNumericLiteral,
   isStringLiteral,
   isNoSubstitutionTemplateLiteral,
@@ -48,6 +47,7 @@ import {
 
 import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import {
   type AssignedFrameSource,
@@ -60,7 +60,7 @@ import { framedPossibleBranch } from './framed-branches.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { isNamedFunction, madeWithin, runsItself } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
-import { readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Source-visible assignments that can supply a local receiver at its lexical read. */
 
@@ -119,7 +119,8 @@ function assignedAt(
 
 /**
  * Referenced closures remain possible; an entirely unreferenced nested declaration does not run. A
- * write in what a pattern destructures runs before the pattern's defaults and computed keys.
+ * write in what a pattern destructures runs before the pattern's defaults and computed keys, and a
+ * write in a computed key of a class runs before a read in one of its static initializers.
  */
 function possibleWriteBefore(
   node: Node,
@@ -133,6 +134,7 @@ function possibleWriteBefore(
   return (
     node.pos < name.pos ||
     destructuredFirst(node, name) ||
+    ownerKeyFirst(node, name) ||
     repeatedFrameRead(node, name, declared, owner) ||
     (cutoff === undefined && bindingOwner(declared) !== owner)
   );
@@ -593,7 +595,7 @@ function primitiveData(value: Expression): boolean {
 function otherUse(name: Identifier, binding: VariableDeclaration): boolean {
   const pending: Node[] = [name.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeOnly(node)) continue;
     if (
       node !== name &&
       node !== binding.name &&

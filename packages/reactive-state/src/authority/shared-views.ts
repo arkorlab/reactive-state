@@ -48,8 +48,17 @@ import type { SharedStore } from './shared-store.ts';
 import { SiteShapes } from './site-shapes.ts';
 import { generationOf, verifyView } from './view-tokens.ts';
 
-/** The origin a question's URL — a path and a query — is read against, of no site's own. */
+/** The origin a question's URL — a path and a query — is read under, of no site's own. */
 const GATE_ORIGIN = 'https://gate.invalid';
+
+/**
+ * The pathname of `url` — a path and its query, as a request names them — read as a server reads
+ * its request's target (RFC 9112 §3.3): put after the origin, never resolved against it, so that a
+ * path that begins `//` or `/\` is that path still, not a host of its own and a path after it.
+ */
+function pathnameOf(url: string): string {
+  return new URL(`${GATE_ORIGIN}${url}`).pathname;
+}
 
 /**
  * The shared views of the application's routes: each route's document as every visitor is
@@ -130,10 +139,13 @@ export class SharedViews {
     });
   }
 
-  /** The params of `route` a request's URL names, as a site of `site` serves it; none otherwise. */
+  /**
+   * The params of `route` a request's URL names, as a site of `site` serves it; none otherwise —
+   * none of a path that repeats a slash (`//x/boards/p1`), whose empty segment is no route's: Next.js
+   * redirects such a path (308) rather than serve it, and the gate lets the site answer it so.
+   */
   #paramsOf(route: RouteRegistration, url: string, site: SiteShape): RouteParams | undefined {
-    const pathname = new URL(url, GATE_ORIGIN).pathname;
-    const path = routePathOf(site, pathname);
+    const path = routePathOf(site, pathnameOf(url));
     return path === undefined ? undefined : paramsOfPath(route.route, path);
   }
 
@@ -418,8 +430,17 @@ export class SharedViews {
       this.#persist(entry);
       throw error;
     }
-    this.#jobs.apply(entry, outcome);
-    this.#persist(entry);
+    try {
+      this.#jobs.apply(entry, outcome);
+      this.#persist(entry);
+    } catch (error) {
+      // A fault of the store's, as what was decided is kept — the view's row, or the epoch of its
+      // revocation: the requests the gate holds for the view answer 503 at once (`fault`), as for a
+      // fault of the application's code, and a later request, or a commit, tries again — never one
+      // of them left to wait out its deadline.
+      this.#jobs.fault(entry.key);
+      throw error;
+    }
     this.#jobs.wake(entry.key);
   }
 
@@ -586,8 +607,8 @@ export class SharedViews {
     }
     // Artifacts answer the spelling the site rendered (`usePathname()`), while the view's
     // authorization decides every spelling of its route and params before another passes.
-    const spelled = new URL(sitePathOf(site, pagePathOf(route.route, params)), GATE_ORIGIN);
-    const artifactPath = new URL(request.url, GATE_ORIGIN).pathname === spelled.pathname;
+    const spelled = pathnameOf(sitePathOf(site, pagePathOf(route.route, params)));
+    const artifactPath = pathnameOf(request.url) === spelled;
     const key = this.keyOf(route.route, params);
     const generation = request.headers[GENERATION_HEADER];
     if (generation !== undefined && this.#jobs.asks.passes(generation, key, this.#core.clock())) {

@@ -564,13 +564,13 @@ const ELEMENTS = [
     id: 'define-repeated-constant-list',
     source: `function frames(error: Error) { ${VALUES} const empty: never[] = []; Object.defineProperty(values, ...empty, ...empty, 'label', { value: error }); return values; }`,
     index: undefined,
-    elements: [],
+    elements: ['empty:1.value', "'label':value", 'error:'],
   },
   {
     id: 'define-repeated-constant-list-index',
     source: `function frames(error: Error) { ${VALUES} const empty: never[] = []; Object.defineProperty(values, ...empty, ...empty, 0, { value: error }); return values; }`,
     index: undefined,
-    elements: ['error:'],
+    elements: ['empty:1.value', '0:value', 'error:'],
   },
   {
     id: 'define-descriptor-spread-prototype-pin',
@@ -2163,7 +2163,7 @@ const CONVERSIONS = [
   {
     id: 'define-repeated-constant-list-safe',
     source: `function frames(error: Error) { const a = ['safe']; const empty: never[] = []; Object.defineProperty(a, ...empty, ...empty, 'label', { value: error }); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-descriptor-spread-prototype-safe',

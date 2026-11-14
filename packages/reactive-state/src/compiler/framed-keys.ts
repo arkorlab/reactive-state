@@ -7,19 +7,20 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
-  isCallExpression,
   isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
   isExpression,
+  isForInStatement,
   isForOfStatement,
+  type Identifier,
   isIdentifier,
   isLiteralTypeNode,
-  isNewExpression,
   isObjectBindingPattern,
   isParameterDeclaration,
   isParenthesizedTypeNode,
-  isPropertyAccessExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isSpreadElement,
   isUnionTypeNode,
   isVariableDeclaration,
@@ -28,23 +29,32 @@ import {
   type Node,
   SyntaxKind,
   type TypeNode,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
+import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import {
   type FrameBinding,
   frameBindingContainer,
   frameBindingOf,
+  frameDeclarationOf,
   frameMemberName,
   type FrameSelection,
 } from './framed-bindings.ts';
-import { namesInType } from './framed-references.ts';
 import { framedCondition } from './framed-sources.ts';
+import {
+  APPLICATION_WORK,
+  callWorkExposure,
+  extendsWork,
+  namedElsewhere,
+  tupleBindingExposure,
+} from './framed-tuple-work.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { readsBinding } from './scope.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /** Finite written property keys, and a binding's receiver before its final computed key. */
 
@@ -53,6 +63,17 @@ const TARGET_WRITES: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BarBarEqualsToken,
   SyntaxKind.EqualsToken,
   SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** Work before the call that exposes a tuple wherever it stands: a call, a construction, a read. */
+const PRIOR_WORK: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.CallExpression,
+  SyntaxKind.Decorator,
+  SyntaxKind.ElementAccessExpression,
+  SyntaxKind.NewExpression,
+  SyntaxKind.PropertyAccessExpression,
+  SyntaxKind.TaggedTemplateExpression,
+  SyntaxKind.TemplateExpression,
 ]);
 
 /** The possible written keys of a member; none known means a computed key remains arbitrary. */
@@ -100,7 +121,7 @@ export function framedArgumentPrefix(
     }
     const selected = argumentArray(each.node.expression, each.seen, call);
     if (selected === undefined) return { values, unknown: true };
-    if (selected.exposed) return exposedArgumentPrefix(values, selected, call);
+    if (selected.exposed) return exposedArgumentPrefix(values, selected, call, each.node);
     for (const node of selected.array.elements.toReversed())
       pending.push({ node, seen: selected.seen });
   }
@@ -121,17 +142,23 @@ function exposedArgumentPrefix(
   values: Expression[],
   selected: ArgumentArray,
   call: CallExpression | NewExpression,
+  spread: Node,
 ): ArgumentPrefix {
-  const alternatives = values.length === 0 ? tupleTargetWrites(selected.seen, call) : [];
+  const alternatives = values.length === 0 ? tupleTargetWrites(selected.seen, call, spread) : [];
   const first = selected.array.elements[0];
   if (first !== undefined && values.length === 0 && !isSpreadElement(first)) values.push(first);
   return { values, unknown: true, alternatives };
 }
 
-/** A tuple's written first-entry replacements remain possible receivers after its proof is lost. */
+/**
+ * A tuple's written first-entry replacements remain possible receivers after its proof is lost:
+ * those written before the `spread` that reads it, in the call's own work too, and those a later
+ * pass or another owner may run first.
+ */
 function tupleTargetWrites(
   aliases: ReadonlySet<FrameBinding>,
   call: CallExpression | NewExpression,
+  spread: Node,
 ): readonly Expression[] {
   const values: Expression[] = [];
   const owner = executionOwner(call);
@@ -140,7 +167,7 @@ function tupleTargetWrites(
     if (
       isBinaryExpression(node) &&
       TARGET_WRITES.has(node.operatorToken.kind) &&
-      tupleWriteBefore(node, call, aliases, owner) &&
+      (node.end <= spread.pos || tupleWriteBefore(node, call, aliases, owner)) &&
       framedPossibleBranch(node) &&
       firstTupleEntry(node.left, aliases)
     )
@@ -152,15 +179,27 @@ function tupleTargetWrites(
   return values;
 }
 
-/** Later writes in a repeated body can supply the tuple at its next native call. */
+/**
+ * Later writes in a repeated body — a loop's, or a function's that can be called again with a tuple
+ * declared outside it — can supply the tuple at its next native call, and so can those in
+ * what a pattern around the call destructures and in a computed key of a class around it, which run
+ * before it though they are written after.
+ */
 function tupleWriteBefore(
   node: Node,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
   owner: Node,
 ): boolean {
-  if (executionOwner(node) !== owner || node.pos < call.pos) return true;
-  for (const binding of aliases) if (repeatedFrameRead(node, call, binding, owner)) return true;
+  if (
+    executionOwner(node) !== owner ||
+    node.pos < call.pos ||
+    destructuredFirst(node, call) ||
+    ownerKeyFirst(node, call)
+  )
+    return true;
+  for (const binding of aliases)
+    if (repeatedFrameRead(node, call, binding, owner) || repeatsAround(owner, binding)) return true;
   return false;
 }
 
@@ -192,47 +231,65 @@ function argumentArray(
     seen.add(binding);
     const values = constantKeys(binding);
     if (values?.length !== 1 || binding.initializer === undefined) return undefined;
-    exposed ||= arrayExposed(binding, call, seen);
+    exposed ||= arrayExposed(binding, call, seen, expression);
     value = unwrapped(binding.initializer);
   }
   return isArrayLiteralExpression(value) ? { array: value, seen, exposed } : undefined;
 }
 
-/** Prior reads or application work can change a captured array before the native call reads it. */
+/**
+ * Prior reads or application work can change a captured array before the native call reads it — the
+ * work of a pattern's source and of a computed key of a class around the call, which run before it
+ * though they are written after — and so can the call's own work before it reads `read`
+ * (`callWorkExposure`).
+ */
 function arrayExposed(
   binding: FrameBinding,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
+  read: Expression,
 ): boolean {
+  let reachable: boolean | undefined;
+  const reached = (): boolean => {
+    reachable ??= namedElsewhere(binding, call);
+    return reachable;
+  };
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const repeated =
       node.pos >= call.end &&
       executionOwner(node) === executionOwner(call) &&
       (destructuredFirst(node, call) ||
+        ownerKeyFirst(node, call) ||
         repeatedFrameRead(node, call, binding, executionOwner(call))) &&
       framedPossibleBranch(node);
     if (!repeated && node.pos >= call.pos) continue;
     if (
       node.pos >= binding.end &&
       (repeated || node.end <= call.pos) &&
-      arrayExposure(node, binding, aliases)
+      arrayExposure(node, binding, aliases, reached)
     )
       return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return deferredTupleExposure(binding, call, aliases);
+  return (
+    callWorkExposure(binding, call, aliases, read) || deferredTupleExposure(binding, call, aliases)
+  );
 }
 
-/** A deferred read also sees later uses that can replace a captured tuple's entries. */
+/**
+ * A deferred read also sees later uses that can replace a captured tuple's entries, and what an
+ * importing module does to a tuple this one exports before it calls a function that reads it.
+ */
 function deferredTupleExposure(
   binding: FrameBinding,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
 ): boolean {
   if (executionOwner(call) === executionOwner(binding)) return false;
+  if (exportedDeclaration(binding)) return true;
   const pending: Node[] = [binding.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (node === call) continue;
@@ -244,38 +301,23 @@ function deferredTupleExposure(
   return false;
 }
 
-/** A prior effect or a use outside known constant aliases loses the mutable tuple proof. */
+/**
+ * A prior effect or a use outside known constant aliases loses the mutable tuple proof: a call —
+ * written, a template's tag or conversion, a decorator — a construction or a member read wherever it
+ * stands, and other work that runs the application's code where that code `reached` the tuple.
+ */
 function arrayExposure(
   node: Node,
   binding: FrameBinding,
   aliases: ReadonlySet<FrameBinding>,
+  reached: () => boolean,
 ): boolean {
   if (
-    isCallExpression(node) ||
-    isNewExpression(node) ||
-    isPropertyAccessExpression(node) ||
-    isElementAccessExpression(node)
+    PRIOR_WORK.has(node.kind) ||
+    ((APPLICATION_WORK.has(node.kind) || extendsWork(node)) && reached())
   )
     return true;
   return tupleBindingExposure(node, binding, aliases);
-}
-
-/** Only a whole constant alias can retain a tuple without exposing its mutable entries. */
-function tupleBindingExposure(
-  node: Node,
-  binding: FrameBinding,
-  aliases: ReadonlySet<FrameBinding>,
-): boolean {
-  if (
-    !isIdentifier(node) ||
-    node === binding.name ||
-    !readsBinding(node) ||
-    namesInType(node) ||
-    frameBindingOf(node)?.binding !== binding
-  )
-    return false;
-  const owner = node.parent;
-  return !isVariableDeclaration(owner) || owner.initializer !== node || !aliases.has(owner);
 }
 
 /** A computed object's key expression, without giving its target binding's name to the key. */
@@ -293,12 +335,17 @@ interface KeyWork {
   readonly fallback: readonly string[] | undefined;
 }
 
-/** Written conditional alternatives, constants and literal key annotations keep their finite names. */
+/**
+ * Written conditional alternatives, constants and literal key annotations keep their finite names.
+ * A value is followed once under each declared bound, whichever way it is reached, so that aliases
+ * that converge cost no more than a chain.
+ */
 export function framedKeyNames(key: Expression): readonly string[] | undefined {
   const names = new Set<string>();
+  const followed = new Map<Node, Set<string>>();
   const pending: KeyWork[] = [{ node: key, seen: new Set(), fallback: undefined }];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const step = keyStep(each);
+    const step = keyStep(each, followed);
     if (step === undefined) return undefined;
     for (const name of step.names) names.add(name);
     pending.push(...step.next);
@@ -306,12 +353,28 @@ export function framedKeyNames(key: Expression): readonly string[] | undefined {
   return [...names];
 }
 
+/** Whether `value` was followed already under the declared names `fallback`; it is marked followed. */
+function wasFollowed(
+  value: Node,
+  fallback: readonly string[] | undefined,
+  followed: Map<Node, Set<string>>,
+): boolean {
+  const bound = JSON.stringify(fallback ?? null);
+  const known = followed.get(value) ?? new Set<string>();
+  followed.set(value, known);
+  if (known.has(bound)) return true;
+  known.add(bound);
+  return false;
+}
+
 /** A source-proven value takes precedence over a literal annotation; opaque values keep its bound. */
 function keyStep(
   each: KeyWork,
+  followed: Map<Node, Set<string>>,
 ): { readonly names: readonly string[]; readonly next: readonly KeyWork[] } | undefined {
   const value = unwrapped(each.node);
   if (each.seen.has(value)) return undefined;
+  if (wasFollowed(value, each.fallback, followed)) return { names: [], next: [] };
   const seen = new Set(each.seen).add(value);
   if (isConditionalExpression(value)) {
     const condition = framedCondition(value.condition);
@@ -344,21 +407,111 @@ function keyAlternatives(value: Expression):
   | undefined {
   const literal = constantValue(value);
   if (literal !== undefined) return { names: [String(literal)] };
-  const binding = isIdentifier(value) ? frameBindingOf(value) : undefined;
+  if (!isIdentifier(value)) return undefined;
+  const binding = frameBindingOf(value);
   if (binding === undefined || binding.keys.length > 0) return undefined;
-  const names = literalTypeKeys(binding.binding.type);
+  const names = declaredKeys(binding.binding);
   const values = constantKeys(binding.binding);
   if (values !== undefined) return { values, fallback: names };
   if (names === undefined) return undefined;
-  const sources = binding.binding.initializer === undefined ? [] : [binding.binding.initializer];
-  if (isIdentifier(value)) sources.push(...framedAssignedValues(value));
+  const again = redeclarations(value, binding.binding);
+  const sources = [...initializersOf([binding.binding, ...again]), ...framedAssignedValues(value)];
+  const declared =
+    isParameterDeclaration(binding.binding) ||
+    again.length > 0 ||
+    changedBeyondSources(value, binding.binding);
   return sources.length === 0
     ? { names }
-    : {
-        values: sources,
-        fallback: names,
-        callerNames: isParameterDeclaration(binding.binding) ? names : [],
-      };
+    : { values: sources, fallback: names, callerNames: declared ? names : [] };
+}
+
+/** The values that declarations of one variable write where they name it whole. */
+function initializersOf(declarations: readonly FrameBinding[]): readonly Expression[] {
+  const values: Expression[] = [];
+  for (const declaration of declarations) {
+    if (isIdentifier(declaration.name) && declaration.initializer !== undefined)
+      values.push(declaration.initializer);
+  }
+  return values;
+}
+
+/**
+ * The declarations of `binding`'s variable beyond the one a name resolves to, the first: a `var`
+ * declared again in its scope — in a block, a `for` head, a `switch` case or a `catch` block, or
+ * beside a parameter of its name — writes it where it stands. Its initializer is a source where it
+ * names the variable whole; a pattern or a loop head writes what no initializer says, and
+ * `keyAlternatives` keeps the names the declared type allows wherever there is one.
+ */
+function redeclarations(name: Identifier, binding: FrameBinding): readonly VariableDeclaration[] {
+  const found: VariableDeclaration[] = [];
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (
+      node !== binding &&
+      isVariableDeclaration(node) &&
+      bindingIdentifiers(node.name).some(
+        (bound) => bound.text === name.text && frameDeclarationOf(bound) === binding,
+      )
+    )
+      found.push(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return found;
+}
+
+/**
+ * Whether the code changes `binding` where no expression writes the value it takes: a compound
+ * assignment, an update or a `for…in` binding. What it is assigned (`framedAssignedValues`) is
+ * then not all it may be: the names its declared type allows are possible too, beside what is
+ * assigned.
+ */
+function changedBeyondSources(name: Identifier, binding: FrameBinding): boolean {
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    const target = changedTarget(node);
+    const selected =
+      target !== undefined && isIdentifier(target) ? frameBindingOf(target) : undefined;
+    if (selected?.binding === binding && selected.keys.length === 0) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/** What a compound assignment, an update or a `for…in` binding changes, where it is written. */
+function changedTarget(node: Node): Expression | undefined {
+  if (isBinaryExpression(node)) {
+    const { kind } = node.operatorToken;
+    const compound =
+      kind >= SyntaxKind.FirstAssignment &&
+      kind <= SyntaxKind.LastAssignment &&
+      !TARGET_WRITES.has(kind);
+    return compound ? unwrapped(node.left) : undefined;
+  }
+  if (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node))
+    return node.operator === SyntaxKind.PlusPlusToken ||
+      node.operator === SyntaxKind.MinusMinusToken
+      ? unwrapped(node.operand)
+      : undefined;
+  return isForInStatement(node) && isExpression(node.initializer)
+    ? unwrapped(node.initializer)
+    : undefined;
+}
+
+/**
+ * The names a binding's declared type allows: those of its literal union, and `undefined` as well
+ * for an optional parameter with no default, which holds it where the argument is left out.
+ */
+function declaredKeys(binding: FrameBinding): readonly string[] | undefined {
+  const names = literalTypeKeys(binding.type);
+  const optional =
+    isParameterDeclaration(binding) &&
+    binding.questionToken !== undefined &&
+    binding.initializer === undefined;
+  return names !== undefined && optional ? [...names, 'undefined'] : names;
 }
 
 /** A written literal key or union, without inferring arbitrary string values from their uses. */

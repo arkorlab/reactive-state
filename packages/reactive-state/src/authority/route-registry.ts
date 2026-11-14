@@ -17,10 +17,10 @@ import type { Registry } from './programs.ts';
  * What the engine checks of the routes a compile registered — each a page that renders a root of its
  * route's params, or a page of none or a route handler under route middleware — and of the guards
  * of the route middleware around them, before anything is served: each route names its path's
- * params, in order, none left out, each of one segment — no catch-all; a route names a root the
- * authority runs, props of its params alone, and middleware it was given the guard of where that
- * middleware has one; a route of no root is under middleware, and says whether a guard of it is
- * among the authority's as it is. What fails is the application's fault.
+ * params, in order, none left out, each of one segment — no catch-all — and of a name of its own; a
+ * route names a root the authority runs, props of its params alone, and middleware it was given the
+ * guard of where that middleware has one; a route of no root is under middleware, and says whether a
+ * guard of it is among the authority's as it is. What fails is the application's fault.
  */
 
 export interface RouteRegistry {
@@ -116,10 +116,11 @@ function malformedChain(
 /**
  * Why the params `route` names are not its path's — each of its dynamic segments', in the order the
  * path names them, none left out and none more, each of one segment: no catch-all (`[...slug]`,
- * `[[...slug]]`), which the compile registers no route of, reactive or plain — or nothing where they
- * are: what a request of the route is read by (`paramsOfPath`), and what the page's own request
- * withholds of the visitor's query under Next.js's prefixes (`nxtPprojectId`), which a param left
- * out of the list would let through to the page.
+ * `[[...slug]]`), which the compile registers no route of, reactive or plain; and each of a name no
+ * other segment has, as a request's params hold one value of a name, and Next.js serves no path that
+ * names one twice — or nothing where they are: what a request of the route is read by
+ * (`paramsOfPath`), and what the page's own request withholds of the visitor's query under Next.js's
+ * prefixes (`nxtPprojectId`), which a param left out of the list would let through to the page.
  */
 function malformedParams(route: RegisteredRoute): string | undefined {
   const kinds = route.route.split('/').map((segment) => dynamicSegmentOf(segment)?.kind);
@@ -127,6 +128,10 @@ function malformedParams(route: RegisteredRoute): string | undefined {
     return 'has a catch-all, which the compile registers no route of';
   }
   const params = paramsOfRoute(route.route);
+  const twice = params.find((param, index) => params.indexOf(param) !== index);
+  if (twice !== undefined) {
+    return `names the param ${JSON.stringify(twice)} in two of its segments: Next.js serves no path of it, and a request's params hold one value of each name`;
+  }
   // Read as the module it was imported of has it, whatever its type says.
   const named: unknown = route.params;
   return Array.isArray(named) &&

@@ -6,21 +6,20 @@ import {
   type FunctionDeclaration,
   isArrayBindingPattern,
   isBindingElement,
-  isBlock,
   isCallExpression,
-  isCaseBlock,
   isCatchClause,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
   isElementAccessExpression,
+  isEnumDeclaration,
   isIdentifier,
   isFunctionDeclaration,
   isFunctionExpression,
   isForInStatement,
   isForOfStatement,
   isForStatement,
-  isModuleBlock,
+  isModuleDeclaration,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectBindingPattern,
@@ -40,6 +39,13 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import {
+  erased,
+  exportedElsewhere,
+  hasEnumMember,
+  statementsOf,
+  valueName,
+} from './namespace-merges.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, hoistedIn, isBlockScoped } from './scope.ts';
 
@@ -59,6 +65,12 @@ export interface FrameTypeSelection {
 }
 
 const RESOLVING_KEYS = new WeakSet<Node>();
+
+/** The vars each function body, static block or source file holds, by the node that holds them. */
+const HOISTED = new WeakMap<Node, readonly VariableDeclaration[]>();
+
+/** What each block's statements declare (`declaredBy`), by the node that holds them. */
+const DECLARED = new WeakMap<Node, ReadonlyMap<string, FrameDeclaration | null>>();
 
 /** The stable member name recorded after a framed read is classified, including coercion calls. */
 export function framedInputName(node: Node): string {
@@ -92,7 +104,10 @@ export function frameBindingOf(name: Identifier): FrameSelection | undefined {
     : undefined;
 }
 
-/** The nearest written value declaration, with unsupported own expression names kept opaque. */
+/**
+ * The nearest written value declaration, with unsupported own expression names, and the enums,
+ * namespaces and import aliases of a scope, kept opaque.
+ */
 export function frameDeclarationOf(name: Identifier): FrameDeclaration | undefined {
   let within: Node = name;
   for (let at: Node = name.parent; ; within = at, at = at.parent) {
@@ -166,43 +181,63 @@ function resolvedKey(node: Expression): string | undefined {
 function localBinding(node: Node, within: Node, name: string): FrameDeclaration | null | undefined {
   const loop = loopBinding(node, name);
   if (loop !== undefined) return loop;
+  if (isEnumDeclaration(node) && hasEnumMember(node, name)) return null;
   if (
     isCatchClause(node) &&
     node.variableDeclaration !== undefined &&
     bindingIdentifiers(node.variableDeclaration.name).some((bound) => bound.text === name)
   )
     return node.variableDeclaration;
-  const statements = statementsOf(node);
-  if (statements !== undefined) {
-    const binding = statementBinding(statements, name);
-    if (binding !== undefined) return binding;
-  }
+  const binding = statementBinding(node, name);
+  if (binding !== undefined) return binding;
   const parameters = isSignatureDeclaration(node) ? node.parameters : undefined;
   const declared =
     parameters?.find((parameter) =>
       bindingIdentifiers(parameter.name).some((bound) => bound.text === name),
     ) ?? hoistedBinding(node, within, name);
   if (declared !== undefined) return declared;
+  if (isModuleDeclaration(node) && exportedElsewhere(node, within, name) !== undefined) {
+    return null;
+  }
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name?.text === name
     ? null
     : undefined;
 }
 
-/** Ordinary and namespace blocks keep their statements; a switch's clauses share one scope. */
-function statementsOf(node: Node): readonly Statement[] | undefined {
-  if (isCaseBlock(node)) return node.clauses.flatMap((clause) => clause.statements);
-  return isBlock(node) || isModuleBlock(node) || isSourceFile(node) ? node.statements : undefined;
-}
-
-/** A function, static block or source file owns its nested vars; nested functions and classes do not. */
-function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | undefined {
-  let roots: readonly Node[];
-  if (isSourceFile(node)) roots = node.statements;
-  else if ('body' in node && node.body === within) roots = [within];
+/**
+ * A function, static block or source file owns its nested vars; nested functions and classes do
+ * not, and a namespace's are its own; nor does a `declare var` of a namespace's body bind a value.
+ * Each scope's are gathered once (`HOISTED`), for every name looked up in it.
+ */
+export function hoistedBinding(node: Node, within: Node, name: string): FrameBinding | undefined {
+  let root: Node;
+  if (isSourceFile(node)) root = node;
+  else if ('body' in node && node.body === within) root = within;
   else return undefined;
-  return hoistedIn(roots).find((declaration) =>
+  let declarations = HOISTED.get(root);
+  if (declarations === undefined) {
+    declarations = hoistedIn(isSourceFile(root) ? root.statements : [root]).filter(
+      (declaration) => !ownedByNamespace(declaration, root) && !erasedVar(declaration),
+    );
+    HOISTED.set(root, declarations);
+  }
+  return declarations.find((declaration) =>
     bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
   );
+}
+
+/** Whether the var is of a `declare` statement of a body that exports none of it. */
+function erasedVar(declaration: VariableDeclaration): boolean {
+  const statement = declaration.parent.parent;
+  return isVariableStatement(statement) && erased(statement);
+}
+
+/** Whether a namespace within `root` holds the var: a namespace's own vars are those of its body. */
+function ownedByNamespace(declaration: VariableDeclaration, root: Node): boolean {
+  for (let at = declaration.parent; at !== root; at = at.parent) {
+    if (isModuleDeclaration(at)) return true;
+  }
+  return false;
 }
 
 /** A block-scoped loop header binding shadows outer names throughout its body. */
@@ -216,24 +251,54 @@ function loopBinding(node: Node, name: string): FrameBinding | undefined {
     : undefined;
 }
 
-/** The variable a block declares, with named functions and classes stopping outer lookup. */
-function statementBinding(
-  statements: readonly Statement[],
-  name: string,
-): FrameDeclaration | undefined {
-  for (const statement of statements) {
-    if (
-      (isFunctionDeclaration(statement) || isClassDeclaration(statement)) &&
-      statement.name?.text === name
-    )
-      return statement;
-    if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) continue;
-    const found = statement.declarationList.declarations.find((declaration) =>
-      bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
-    );
-    if (found !== undefined) return found;
+/**
+ * The variable a block declares, with named functions and classes stopping outer lookup: the first
+ * of its statements to declare the name, or `null` where an enum, a namespace or an import alias
+ * does, which stops it with no declaration to answer. Each block's are gathered once (`DECLARED`),
+ * for every name looked up in it.
+ */
+function statementBinding(node: Node, name: string): FrameDeclaration | null | undefined {
+  let declared = DECLARED.get(node);
+  if (declared === undefined) {
+    declared = declaredBy(statementsOf(node) ?? []);
+    DECLARED.set(node, declared);
   }
-  return undefined;
+  return declared.get(name);
+}
+
+/**
+ * The functions, classes and block-scoped variables statements declare, the first of each name; and
+ * `null` for each name an enum, a namespace or an import alias gives a value (`valueName`), whose
+ * declaration no caller follows, but which an outer binding of the name does not reach.
+ */
+function declaredBy(
+  statements: readonly Statement[],
+): ReadonlyMap<string, FrameDeclaration | null> {
+  const declared = new Map<string, FrameDeclaration | null>();
+  for (const statement of statements) {
+    for (const [name, declaration] of declarationsOf(statement)) {
+      if (!declared.has(name)) declared.set(name, declaration);
+    }
+  }
+  return declared;
+}
+
+/** What one statement of a block declares, by name; a `declare` its body does not export, none. */
+function declarationsOf(
+  statement: Statement,
+): readonly (readonly [string, FrameDeclaration | null])[] {
+  if (erased(statement)) return [];
+  if (isFunctionDeclaration(statement) || isClassDeclaration(statement)) {
+    return statement.name === undefined ? [] : [[statement.name.text, statement]];
+  }
+  const opaque = valueName(statement);
+  if (opaque !== undefined) return [[opaque, null]];
+  if (!isVariableStatement(statement) || !isBlockScoped(statement.declarationList)) return [];
+  return statement.declarationList.declarations.flatMap((declaration) => {
+    return bindingIdentifiers(declaration.name).map(
+      (bound): readonly [string, FrameDeclaration] => [bound.text, declaration],
+    );
+  });
 }
 
 /** A declaration's binding path for one of the identifiers it binds. */

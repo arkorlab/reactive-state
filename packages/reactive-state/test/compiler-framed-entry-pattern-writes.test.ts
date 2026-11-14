@@ -549,10 +549,10 @@ const CASES = [
     values: ["'safe':", 'error:'],
   },
   {
-    id: 'named-prototype-key-direct-pin',
+    id: 'named-prototype-key-direct-is-read-beside-the-setter',
     source: `function frames(error: Error) { ${ENTRY} return Object.fromEntries([entry], ({ __proto__: entry[1] } = { __proto__: error })); }`,
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: ["'safe':", '{ __proto__: error }:__proto__', 'error:'],
   },
   {
     id: 'computed-key-self-referential-spread-pin',
@@ -751,16 +751,16 @@ const CASES = [
     values: ["'safe':", 'error:'],
   },
   {
-    id: 'named-key-prototype-constant-is-opaque',
+    id: 'named-key-prototype-constant-is-read-through',
     source: `function frames(error: Error)  { const entry: [string, unknown] = ['message', 'safe']; const base = { field: error }; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: base })); }`,
     key: 'message',
-    values: ["'safe':", '{ __proto__: base }:field'],
+    values: ["'safe':", 'base:field'],
   },
   {
-    id: 'named-key-prototype-call-is-opaque',
+    id: 'named-key-prototype-call-is-read-through',
     source: `function frames(error: Error, make: () => object) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { __proto__: make() })); }`,
     key: 'message',
-    values: ["'safe':", '{ __proto__: make() }:field'],
+    values: ["'safe':", 'make():field'],
   },
   {
     id: 'named-key-own-prototype-name-is-no-prototype',
@@ -886,7 +886,7 @@ const CASES = [
     id: 'named-prototype-key-setter-after-own-field-of-another-name',
     source: `function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ __proto__: entry[1] } = { field: error, __proto__: error })); }`,
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: ["'safe':", '{ field: error, __proto__: error }:__proto__', 'error:'],
   },
   {
     id: 'named-prototype-key-own-field-after-setter',
