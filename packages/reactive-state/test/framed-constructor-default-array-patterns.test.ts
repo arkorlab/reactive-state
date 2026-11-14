@@ -17,8 +17,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * An array pattern takes apart what it is given by iterating it: of an array literal the
  * language's own iteration, which reads its elements alone, but of an object literal its own
  * `Symbol.iterator`, whose code is the application's — and of an object of none, a throw. Only an
- * array literal is a quiet source of an array pattern. The rows marked a pin answer the same before
- * the change as after it.
+ * array literal is a quiet source of an array pattern.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose default is read along a path, beside a parameter of an array rest. */
@@ -62,15 +65,15 @@ const CASES = [
   },
   {
     made: 'new Failure({ message: error }, [0, 1])',
-    quiet: true,
+    quiet: false,
     source: REST,
-    what: 'an array copied by a rest (pin)',
+    what: 'an array copied by a rest (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, { inner: [0] })',
-    quiet: true,
+    quiet: false,
     source: NESTED,
-    what: 'an array taken apart inside (pin)',
+    what: 'an array taken apart inside (was quiet)',
   },
 ] as const;
 
@@ -110,8 +113,7 @@ describe('a constructor default beside an array pattern of a parameter', () => {
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {

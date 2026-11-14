@@ -17,8 +17,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * A default read of a field of what a construction supplies reads the field the literal holds at
  * last: a key the code computes after the field, `['message']`, may replace it, with a value the
  * default cannot tell — the read is then no more quiet than a read of any value. A computed key
- * before the field is replaced by it. The rows marked a pin answer the same before the change as
- * after it.
+ * before the field is replaced by it.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 const FAILURE =
@@ -36,11 +39,11 @@ const CASES = [
     what: 'a field an unread key may replace',
   },
   {
-    quiet: true,
+    quiet: false,
     supplied: '{ [key]: other, message: { inner: error } }',
-    what: 'a field after an unread key (pin)',
+    what: 'a field after an unread key (was quiet)',
   },
-  { quiet: true, supplied: '{ message: { inner: error } }', what: 'a field alone (pin)' },
+  { quiet: false, supplied: '{ message: { inner: error } }', what: 'a field alone (was quiet)' },
   {
     quiet: false,
     supplied: "{ ['message']: { inner: error } }",
@@ -85,8 +88,7 @@ describe('a constructor default read of a field a computed key may replace', () 
     if (constructor === undefined || made === undefined || call === undefined) {
       throw new Error(`No construction of Failure of ${supplied}.`);
     }
-    const slots = (made.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ quiet, supplied }) => {

@@ -98,7 +98,7 @@ export function framedSlotValues(
     {
       keys: [],
       value: argument,
-      selected: framedConstructorDefaultEvaluation(parameters, slots, evaluated),
+      selected: framedConstructorDefaultEvaluation(parameters, evaluated),
     },
   ];
   for (let scan = pending.pop(); scan !== undefined; scan = pending.pop()) {

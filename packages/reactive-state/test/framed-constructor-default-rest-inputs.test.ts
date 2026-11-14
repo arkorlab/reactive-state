@@ -18,8 +18,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * its position is its first element, not its value, and `rest[1]` is the argument after it. What
  * the evaluation reads of a rest parameter is therefore no member of the argument at its position —
  * a read of `rest[1].x` is not the second element of an array literal given there — and a pattern
- * of a rest parameter takes apart that array, not the argument. The rows marked a pin answer the
- * same before the change as after it.
+ * of a rest parameter takes apart that array, not the argument.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose `super` argument is read through the rest parameter `args`. */
@@ -77,9 +80,9 @@ const CASES = [
   },
   {
     made: 'new Failure([0, { x: 1 }], { x: 2 })',
-    quiet: true,
+    quiet: false,
     source: POSITIONAL,
-    what: 'positional parameters (pin)',
+    what: 'positional parameters (was quiet)',
   },
 ] as const;
 
@@ -113,8 +116,7 @@ describe('a constructor evaluation beside a rest parameter', () => {
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {

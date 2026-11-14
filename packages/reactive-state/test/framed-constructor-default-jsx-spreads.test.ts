@@ -16,8 +16,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
 /**
  * A spread in JSX, `<div {...props} />`, copies the own fields of what it spreads, a getter's
  * return among them, as a spread in an object literal does, and `{...items}` as a child iterates
- * it: the application's own code, so a default that holds one is not quiet. The rows marked a pin
- * answer the same before the change as after it.
+ * it: the application's own code, so a default that holds one is not quiet.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose default `view` is the element `element`, beside a default that reads. */
@@ -59,9 +62,9 @@ const CASES = [
   },
   {
     made: MADE,
-    quiet: true,
+    quiet: false,
     source: viewOf('<div a="1" />'),
-    what: 'an element of a written attribute (pin)',
+    what: 'an element of a written attribute (was quiet)',
   },
   {
     made: MADE,
@@ -107,8 +110,7 @@ describe('a constructor default beside a spread in JSX', () => {
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {

@@ -389,6 +389,6 @@ describe('what a class’s extends expression and an instantiation expression do
     );
 
     expect(parameters).toHaveLength(1);
-    expect(framedConstructorDefaultEvaluation(parameters, [[]], [])).toBe(quiet);
+    expect(framedConstructorDefaultEvaluation(parameters, [])).toBe(quiet);
   });
 });
