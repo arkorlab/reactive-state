@@ -17,14 +17,17 @@ import { EventStreams } from '../src/cloudflare/stream.ts';
  * the application whether its session still stands. A render of the root waits in the engine's
  * queue, which every request of the authority joins, so one a commit asked for can run after the
  * session has expired, and the engine then refuses it the session as it refuses an ended one. The
- * stream must tell the two apart by the time: a refusal after the session's expiry is the expiry's.
+ * stream must tell the two apart by the time: a refusal after the session's own expiry is the
+ * expiry's. That time is the session's `expires`, which the engine compares with its clock, and not
+ * the `expiresIn` the stream is opened with: the engine samples that earlier than the stream opens,
+ * so it adds the time that passed between to the clock, and ends later than the session does.
  * Here the engine's refusal is made to come after the expiry by moving the clock as the render
- * runs, in place of the load that makes it come late in a run of the Durable Object's suites
- * (`cloudflare/asserted.test.ts`).
+ * runs, and the clock moves between the sampling and the stream's opening, in place of the load
+ * that makes both happen in a run of the Durable Object's suites (`cloudflare/asserted.test.ts`).
  */
 
-/** How long the session lasts, from the instant the stream opens at the clock's zero. */
-const LASTS_MS = 500;
+/** When the session the application's server asserts expires, the clock being at zero as it opens. */
+const EXPIRES_AT = 500;
 const READ = 'todos:t1';
 const SIGNED_OUT = 'Sign in first.';
 
@@ -36,18 +39,22 @@ const SHOWN: Watched = {
   revision: 0,
 };
 
-/** The session the application's server asserts, expiring when the stream's expiry does. */
-const ASSERTED: AssertedSession = { expires: LASTS_MS, id: 'k1', user: 'alice' };
+/** The session the application's server asserts, which the engine samples 500 ms from its end. */
+const ASSERTED: AssertedSession = { expires: EXPIRES_AT, id: 'k1', user: 'alice' };
+/** One that lasts long after the page's first renewal, which the engine's `expiresIn` ends at. */
+const LONG: AssertedSession = { expires: 10_000, id: 'k2', user: 'alice' };
 /** A session the demo's sign-in opened, which is a bare id. */
 const DEMO = 'demo-session';
-
-type Clock = 'at' | 'before' | 'past';
 
 interface Row {
   readonly id: string;
   readonly session: SessionId;
-  /** Where the clock stands as the render the engine refuses runs, against the session's expiry. */
-  readonly clock: Clock;
+  /** What the engine samples as `expiresIn` at the clock's zero: how long the stream has. */
+  readonly lasts: number;
+  /** How far the clock moves between that sampling and the stream's opening. */
+  readonly drift: number;
+  /** Where the clock stands as the render the engine refuses runs. */
+  readonly at: number;
   readonly failure: Error;
   /** The events the stream says after it opens, by name, and what each carries. */
   readonly said: readonly { readonly data: unknown; readonly event: string }[];
@@ -58,51 +65,94 @@ const revoked = { code: 'UNAUTHENTICATED', error: SIGNED_OUT };
 
 const ROWS: readonly Row[] = [
   {
-    clock: 'past',
+    at: 1500,
+    drift: 0,
     failure: unauthenticated(),
     id: 'an asserted session refused after its expiry is renewed',
+    lasts: EXPIRES_AT,
     said: [{ data: {}, event: 'renew' }],
     session: ASSERTED,
   },
   {
-    clock: 'at',
+    at: EXPIRES_AT,
+    drift: 0,
     failure: unauthenticated(),
     id: 'an asserted session refused at the instant it expires is renewed',
+    lasts: EXPIRES_AT,
     said: [{ data: {}, event: 'renew' }],
     session: ASSERTED,
   },
   {
-    clock: 'past',
+    at: 1500,
+    drift: 0,
     failure: refusal(403, 'FORBIDDEN', 'Not allowed.'),
     id: 'an asserted session refused with a forbidding status after its expiry is renewed',
+    lasts: EXPIRES_AT,
     said: [{ data: {}, event: 'renew' }],
     session: ASSERTED,
   },
   {
-    clock: 'before',
+    // The stream opens 5 ms after the engine sampled `expiresIn`, so its own deadline is 505.
+    at: EXPIRES_AT + 1,
+    drift: 5,
     failure: unauthenticated(),
-    id: 'an asserted session refused before its expiry has ended, and is revoked',
+    id: 'an asserted session refused just after it expires, before its stream’s own deadline, is renewed',
+    lasts: EXPIRES_AT,
+    said: [{ data: {}, event: 'renew' }],
+    session: ASSERTED,
+  },
+  {
+    at: EXPIRES_AT - 1,
+    drift: 5,
+    failure: unauthenticated(),
+    id: 'an asserted session refused just before it expires has ended, and is revoked',
+    lasts: EXPIRES_AT,
     said: [{ data: revoked, event: 'revoked' }],
     session: ASSERTED,
   },
   {
-    clock: 'past',
+    at: 0,
+    drift: 0,
+    failure: unauthenticated(),
+    id: 'an asserted session refused long before its expiry has ended, and is revoked',
+    lasts: EXPIRES_AT,
+    said: [{ data: revoked, event: 'revoked' }],
+    session: ASSERTED,
+  },
+  {
+    // Its stream is to be renewed at 500, to ask the application again; the session ends at 10 000.
+    at: 600,
+    drift: 0,
+    failure: unauthenticated(),
+    id: 'an asserted session refused past its stream’s deadline but before its own expiry has ended, and is revoked',
+    lasts: EXPIRES_AT,
+    said: [{ data: revoked, event: 'revoked' }],
+    session: LONG,
+  },
+  {
+    at: 1500,
+    drift: 0,
     failure: unauthenticated(),
     id: 'a demo session refused after its expiry is revoked, as it was',
+    lasts: EXPIRES_AT,
     said: [{ data: revoked, event: 'revoked' }],
     session: DEMO,
   },
   {
-    clock: 'before',
+    at: 0,
+    drift: 0,
     failure: unauthenticated(),
     id: 'a demo session refused before its expiry is revoked',
+    lasts: EXPIRES_AT,
     said: [{ data: revoked, event: 'revoked' }],
     session: DEMO,
   },
   {
-    clock: 'past',
+    at: 1500,
+    drift: 0,
     failure: new Error('did not settle within 5000 ms'),
     id: 'a fault after the expiry ends the stream without saying anything',
+    lasts: EXPIRES_AT,
     said: [],
     session: ASSERTED,
   },
@@ -121,10 +171,7 @@ function unfollowed(): void {
 /** What the engine does as a render of the root runs, once the test has it refuse. */
 function refusing(row: Row): () => Promise<Watched> {
   return () => {
-    const expiresAt = LASTS_MS;
-    if (row.clock !== 'before') {
-      vi.setSystemTime(row.clock === 'at' ? expiresAt : expiresAt + 1000);
-    }
+    vi.setSystemTime(row.at);
     return Promise.reject(row.failure);
   };
 }
@@ -141,7 +188,11 @@ function authority(row: Row): {
   const listeners = new Set<(event: CommitEvent) => void>();
   let render = shown;
   const engine = {
-    expiresIn: () => Promise.resolve(LASTS_MS),
+    // Sampled at the clock's zero, as the engine's own is, and answered the later for the drift.
+    expiresIn: () => {
+      vi.setSystemTime(row.drift);
+      return Promise.resolve(row.lasts);
+    },
     // What a stream holds while it is open: the external stores' logs followed, of which it has none.
     following: () => unfollowed,
     onCommit: (listener: (event: CommitEvent) => void) => {
@@ -227,9 +278,11 @@ async function saidByNode(row: Row): Promise<Row['said']> {
   const res = new Response();
   // eslint-disable-next-line unicorn/prefer-event-target -- a Node request is an EventEmitter too
   const req = Object.assign(new EventEmitter(), { destroyed: false });
+  // The HTTP route samples `expiresIn` at the clock's zero, and opens the stream the drift later.
+  vi.setSystemTime(row.drift);
   openEventStream(req as unknown as IncomingMessage, res as unknown as ServerResponse, {
     engine,
-    expiresIn: LASTS_MS,
+    expiresIn: row.lasts,
     initial: SHOWN,
     sessionId: row.session,
     streams: new Set(),
@@ -249,7 +302,8 @@ describe.each([
 ])('%s', (_name, said) => {
   beforeEach(() => {
     // Only the clock is moved: a render the engine refuses runs after the session's expiry, or at
-    // it, by the clock the stream reads, with no timer of the stream's firing before.
+    // it, by the clock the stream reads, with no timer of the stream's firing before. A real timer
+    // of the stream, set for 500 ms, is cleared as the stream ends.
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(0);
   });

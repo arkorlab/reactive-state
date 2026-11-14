@@ -32,7 +32,8 @@ import { REVOKING_STATUSES } from '../status.ts';
  *
  * A render waits in the engine's queue, so one begun before the expiry can run after it, where the
  * engine refuses the session as it refuses one that ended. An asserted session's render refused
- * once its expiry has come is the expiry's and not an end: the stream is renewed then as well.
+ * once the session's own expiry has come is the expiry's and not an end: the stream is renewed then
+ * as well.
  */
 
 /** How long a stream says nothing before it says it is alive, under what proxies close idle at. */
@@ -255,13 +256,16 @@ class Follower {
 
   /**
    * What a refusal of the session is said as: `revoked`, except for an asserted session once its
-   * expiry has come, which `renew`s. The render waited in the engine's queue, and the engine
+   * own expiry has come, which `renew`s. The render waited in the engine's queue, and the engine
    * refuses a session from the instant it expires as it refuses one that ended; the clock tells
-   * them apart, and the page asks the application whether the session stands in either case.
+   * them apart, and the page asks the application whether the session stands in either case. The
+   * session's `expires` decides, not `#expiresAt`: that is the `expiresIn` the engine sampled,
+   * added to the clock when the stream opened, so it comes later than the session's expiry by what
+   * passed between, and it comes earlier where the page asks again before the session ends.
    */
   #refused(error: AuthorityError): string {
-    return assertedSessionOf(this.#following.sessionId) !== undefined &&
-      Date.now() >= this.#expiresAt
+    const asserted = assertedSessionOf(this.#following.sessionId);
+    return asserted !== undefined && Date.now() >= asserted.expires
       ? event('renew', {})
       : event('revoked', { code: error.code, error: error.message });
   }
