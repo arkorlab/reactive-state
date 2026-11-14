@@ -21,10 +21,10 @@ import { globalPathOf } from './code-globals.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { callableQueryReading } from './local-type-callable-queries.ts';
 import { localClassPrototypeReading } from './local-type-class-prototypes.ts';
-import type { TypeReading } from './local-type-environment.ts';
+import { type TypeReading, typeReadingKey } from './local-type-environment.ts';
 import { prototypeQueryBuiltin } from './local-type-prototype-queries.ts';
 import { queryArgumentReadings } from './local-type-query-arguments.ts';
-import { memberReadings } from './local-type-selections.ts';
+import { memberReadings, QUERY_KEY_PREFIX } from './local-type-selections.ts';
 
 /** Local value queries retain explicit types and directly written native Error constructions. */
 
@@ -40,9 +40,6 @@ const ERRORS = new Set([
   'URIError',
 ]);
 const PROTOTYPES = new WeakMap<Node, TypeQueryNode>();
-const QUERIES = new WeakMap<Node, number>();
-const ENVIRONMENTS = new WeakMap<TypeReading['bindings'], number>();
-const SEQUENCE = { identity: 0 };
 
 /** Annotation syntax wins; only a direct native initializer supplies an otherwise unwritten instance. */
 export function valueQueryReading(
@@ -112,21 +109,12 @@ function queryBinding(
   return undefined;
 }
 
-/** Original query syntax and its actual argument map stop annotation and alias re-entry. */
+/**
+ * Original query syntax and its actual arguments, by what they hold rather than by the map that
+ * holds them, which a selection through an interface makes anew, stop annotation and alias re-entry.
+ */
 function queryKey(at: TypeReading): string {
-  let query = QUERIES.get(at.type);
-  if (query === undefined) {
-    SEQUENCE.identity += 1;
-    query = SEQUENCE.identity;
-    QUERIES.set(at.type, query);
-  }
-  let environment = ENVIRONMENTS.get(at.bindings);
-  if (environment === undefined) {
-    SEQUENCE.identity += 1;
-    environment = SEQUENCE.identity;
-    ENVIRONMENTS.set(at.bindings, environment);
-  }
-  return `value-query:${query}:${environment}`;
+  return `${QUERY_KEY_PREFIX}${typeReadingKey(at)}`;
 }
 
 /** Whole value aliases preserve the original initializer; assertions and arbitrary calls stay opaque. */
