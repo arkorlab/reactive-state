@@ -10,6 +10,11 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * part first: the operands of a call, the key and the right of an assignment, the iterable of a loop.
  * Where the read lies in a part it evaluates after (the body of a loop, a default of a later element of a
  * pattern, the left of a pattern), the write has been made, and is an element the read joins.
+ *
+ * A read inside the target of a pattern or of a `for…of` head is counted after the write of the whole
+ * pattern, though it runs before the element it belongs to is written: the cases that say so are
+ * refused on purpose, and accept none. Telling which elements of a pattern are written before a given
+ * target needs the order of every default and computed key of the pattern.
  */
 const CASES = [
   {
@@ -95,6 +100,26 @@ const CASES = [
   {
     id: 'read-in-a-later-statement-pin',
     source: `function frames(error: Error) { const a: unknown[] = []; a.push(error); String(a); return a; }`,
+    converts: true,
+  },
+  {
+    id: 'pattern-default-of-the-first-element-reads-before-either-write-refused-by-the-standing-decision-pin',
+    source: `function frames(error: Error) { const a: unknown[] = []; [a[0] = String(a) as unknown, a[1]] = [undefined, error]; return a; }`,
+    converts: true,
+  },
+  {
+    id: 'pattern-computed-target-reads-before-the-write-refused-by-the-standing-decision-pin',
+    source: `function frames(error: Error) { const a: unknown[] = []; [a[String(a).length]] = [error]; return a; }`,
+    converts: true,
+  },
+  {
+    id: 'for-of-computed-key-reads-before-the-write-refused-by-the-standing-decision-pin',
+    source: `function frames(error: Error) { const a: unknown[] = []; for (a[String(a).length] of [error]) { } return a; }`,
+    converts: true,
+  },
+  {
+    id: 'for-of-computed-key-with-a-string-read-refused-by-the-standing-decision-pin',
+    source: `function frames(error: Error) { const a: unknown[] = []; for (a[String(a) as unknown as number] of [error]) { } return a; }`,
     converts: true,
   },
 ] as const;
