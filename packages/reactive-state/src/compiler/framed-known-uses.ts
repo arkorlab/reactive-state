@@ -394,8 +394,9 @@ function handsElements(call: Node, name: string): boolean {
 }
 
 /**
- * Whether the element a method answers is written or called through a member (`array.at(0).x = value`):
- * a member of a member of the array, which no reader of writes collects, as for an index.
+ * Whether the element a method answers is written, called or tagged through a member (`array.at(0).x =
+ * value`, `array.at(0).run()`, ``array.at(0).run`text` ``): a member of a member of the array, which no reader of
+ * writes collects, as for an index. A tag runs with the element as its receiver, as a method does.
  */
 function elementWritten(call: Node): boolean {
   const start = outermost(call);
@@ -403,7 +404,8 @@ function elementWritten(call: Node): boolean {
   for (let { parent } = at; isMemberOf(parent, at); { parent } = at) at = outermost(parent);
   const { parent } = at;
   const called = (isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at;
-  return at !== start && (written(at) || called);
+  const tagged = isTaggedTemplateExpression(parent) && parent.tag === at;
+  return at !== start && (written(at) || called || tagged);
 }
 
 /** Whether a node is a member read of the expression: `at.name` or `at[key]`. */

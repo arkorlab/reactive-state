@@ -4816,6 +4816,66 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'element-of-at-tagged-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (a.at(0) as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-find-tagged-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (a.find(() => true) as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-find-last-tagged-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (a.findLast(() => true) as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-pop-tagged-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (a.pop() as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-shift-tagged-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (a.shift() as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-tagged-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (Array.prototype.at.call(a, 0) as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-find-tagged-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (Array.prototype.find.call(a, () => true) as any).mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-at-asserted-and-tagged-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; a.at(0)!.mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-at-tagged-through-a-member-of-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ inner: { mutate(s: any) { (this as any).toString = () => String(error); } } }]; (a.at(0) as any).inner.mutate\`\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-at-tagged-with-a-substitution-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any, v: any) { (this as any).toString = () => String(error); } }]; (a.at(0) as any).mutate\`\${1}\`; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-at-member-read-into-a-constant-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; const m = (a.at(0) as any).mutate; void m; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-of-at-member-constructed-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ Ctor: class { constructor() { (this as any).x = 1; } } }]; new (a.at(0) as any).Ctor(); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'borrowed-at-read-through-a-member-pin',
     source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; const m = (Array.prototype.at.call(a, 0) as any).v; void m; return String(a); }`,
     converts: false,
