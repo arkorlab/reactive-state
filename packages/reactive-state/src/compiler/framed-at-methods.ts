@@ -10,6 +10,7 @@ import {
   isConditionalExpression,
   isElementAccessExpression,
   isExpressionStatement,
+  isHeritageClause,
   isIdentifier,
   isMethodDeclaration,
   isObjectLiteralExpression,
@@ -68,7 +69,10 @@ export function framedReceiverDispatch(
   return writtenFunctions(value)?.some((fn) => receiverUsed(fn, receiver)) === true;
 }
 
-/** An arrow has no `this` of its own; a nested function, accessor or class binds a new one. */
+/**
+ * An arrow has no `this` of its own; a nested function, accessor or class binds a new one, but not
+ * for the expression a class extends.
+ */
 function receiverUsed(fn: Answering, receiver: (node: Identifier) => boolean): boolean {
   const pending: ReceiverReading[] = [{ node: fn, nested: false, own: !isArrowFunction(fn) }];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
@@ -85,7 +89,11 @@ function receiverUsed(fn: Answering, receiver: (node: Identifier) => boolean): b
         isClassExpression(node));
     const binds = inner && !isArrowFunction(node);
     node.forEachChild((child) => {
-      pending.push({ node: child, nested: nested || inner, own: own && !binds });
+      pending.push({
+        node: child,
+        nested: nested || inner,
+        own: own && (!binds || isHeritageClause(child)),
+      });
     });
   }
   return false;

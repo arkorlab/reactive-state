@@ -117,11 +117,10 @@ function thisUses(getter: { readonly body?: Node | undefined }): ThisUses | unde
       named.push(...used.named);
       deleted.push(...used.deleted);
     }
-    const rebinds =
-      (isFunctionLikeDeclaration(node) && !isArrowFunction(node)) ||
-      isClassDeclaration(node) ||
-      isClassExpression(node);
-    if (!rebinds)
+    if (isClassDeclaration(node) || isClassExpression(node)) {
+      // The class binds a `this` of its own for its members, not for the expression it extends.
+      pending.push(...(node.heritageClauses ?? []));
+    } else if (!isFunctionLikeDeclaration(node) || isArrowFunction(node))
       node.forEachChild((child) => {
         pending.push(child);
       });
