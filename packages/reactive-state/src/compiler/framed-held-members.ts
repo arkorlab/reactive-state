@@ -160,6 +160,14 @@ export function framedHeldValues(
   }
   const holder = framedHeldVariable(selected.binding);
   const changes = [...assigned, ...memberChanges(name, holder, path, point)];
+  const made = capturedFrom(selected.binding, holder);
+  const captured = made === undefined ? undefined : framedHeldValues(made, path, made);
+  if (captured !== undefined) {
+    return {
+      initial: captured.initial,
+      held: [...captured.held, ...changes.map((each) => each.held)],
+    };
+  }
   const direct = holder === selected.binding;
   const cut =
     direct || constantVariable(holder)
@@ -187,6 +195,12 @@ export function framedHeldFields(
   const holder = framedHeldVariable(selected.binding);
   const names = assignedFieldNames(name);
   const unknown: Held[] = [];
+  const made = capturedFrom(selected.binding, holder);
+  const captured = made === undefined ? undefined : framedHeldFields(made, made);
+  if (captured !== undefined) {
+    for (const each of captured.names) names.add(each);
+    unknown.push(...captured.unknown);
+  }
   for (const write of framedMemberWrites(name.getSourceFile())) {
     if (write.holder !== holder || write.path.length !== 1 || !reaches(write.node, name, point))
       continue;
@@ -195,6 +209,21 @@ export function framedHeldFields(
     else for (const each of first) names.add(each);
   }
   return { names, unknown };
+}
+
+/**
+ * Where a constant alias takes its object from a variable that is assigned again, the alias holds
+ * what that variable held where the alias was made, which is read there: its initializer, what was
+ * assigned to it before, and what code wrote into it. The identifier the alias names is returned.
+ */
+function capturedFrom(
+  alias: VariableDeclaration,
+  holder: VariableDeclaration,
+): Identifier | undefined {
+  if (alias === holder || alias.initializer === undefined || constantVariable(holder))
+    return undefined;
+  const made = unwrapped(alias.initializer);
+  return isIdentifier(made) ? made : undefined;
 }
 
 /**
