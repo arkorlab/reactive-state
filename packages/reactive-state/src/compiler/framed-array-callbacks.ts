@@ -56,6 +56,15 @@ export const READERS: ReadonlySet<string> = new Set([
   'Object.keys',
 ]);
 
+/**
+ * The readers that answer the fields of their argument themselves: the descriptor of a field holds
+ * it as its `value`, so what is answered is written through where it is kept or used.
+ */
+export const GIVING_READERS: ReadonlySet<string> = new Set([
+  'Object.getOwnPropertyDescriptor',
+  'Object.getOwnPropertyDescriptors',
+]);
+
 /** The natives that convert an array to text or copy its elements, running its own methods. */
 export const CONVERTERS: ReadonlySet<string> = new Set([
   'Array.from',
@@ -111,6 +120,40 @@ export function borrowedMethod(call: CallExpression): Borrowed | undefined {
     ? { name, apply: how === 'apply', receiver }
     : undefined;
 }
+
+/**
+ * The methods that read the element they are called on and answer a number, a boolean or a text, and
+ * call no function of the program: the methods of a text and of a number, and the reads of an array
+ * that answer no element. Called on a member of an array they leave the member as it was.
+ */
+export const READ_ONLY_METHODS: ReadonlySet<string> = new Set([
+  'charAt',
+  'charCodeAt',
+  'codePointAt',
+  'endsWith',
+  'includes',
+  'indexOf',
+  'join',
+  'lastIndexOf',
+  'localeCompare',
+  'normalize',
+  'padEnd',
+  'padStart',
+  'repeat',
+  'startsWith',
+  'substring',
+  'toExponential',
+  'toFixed',
+  'toLocaleLowerCase',
+  'toLocaleUpperCase',
+  'toLowerCase',
+  'toPrecision',
+  'toString',
+  'toUpperCase',
+  'trim',
+  'trimEnd',
+  'trimStart',
+]);
 
 /** The methods that answer an element of the array. */
 export const ELEMENT_RETURNING: ReadonlySet<string> = new Set([

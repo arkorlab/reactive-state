@@ -4816,6 +4816,201 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'element-member-pushed-through-a-name-of-the-element-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-literal-member-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [[]]; a[0].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-an-element-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [[[]]]; a[0][0].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-kept-by-a-constant-and-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; const e = a[0]; e.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-handed-to-a-function-that-pushes-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; function f(x: any) { x.push(error); } f(a[0]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-given-to-a-borrowed-push-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; Array.prototype.push.call(a[0], error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-given-to-a-native-mutator-as-its-target-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; Object.assign(a[0], { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-with-a-string-key-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a['0'].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-pushed-through-an-optional-call-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0]?.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-asserted-and-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0]!.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-pushed-through-call-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0].push.call(a[0], error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-trimmed-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a[0].trim(); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-upper-cased-into-a-constant-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const u = a[0].toUpperCase(); void u; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-converted-by-to-string-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a[0].toString(); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-joined-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'length-fixed-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; (a as any).length.toFixed(2); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-in-a-template-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = \`\${a[0]}\`; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-concatenated-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = a[0] + 'x'; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-compared-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; const t = a[0] < 2; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-converted-by-number-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['1']; const t = Number(a[0]); void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-typeof-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = typeof a[0]; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-condition-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; if (a[0]) { void 1; } return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-strict-equal-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = a[0] === 'safe'; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-tested-by-is-array-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [[1]]; const t = Array.isArray(a[0]); void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'length-kept-in-a-constant-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const n = a.length; void n; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-negated-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; const t = -a[0]; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-kept-in-a-constant-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const e = a[0]; void e; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-given-to-a-native-function-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Math.abs(a[0]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-box-field-leaks-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptor(box, 'd') as any).value; leaked.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptors-of-a-box-leak-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptors(box) as any).d.value; leaked.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptors-of-a-map-leak-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const m: any = { 0: d }; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptors(m) as any)[0].value; leaked.get = () => error; Object.defineProperties(a, m); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-list-entry-leaks-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const l: any[] = [d]; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptor(l, 0) as any).value; leaked.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-held-descriptor-field-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const a: any[] = ['safe']; const f = (Object.getOwnPropertyDescriptor(d, 'get') as any).value; void f; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-box-field-dropped-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.getOwnPropertyDescriptor(box, 'd'); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptors-of-a-map-dropped-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const m: any = { 0: d }; const a: any[] = ['safe']; Object.getOwnPropertyDescriptors(m); Object.defineProperties(a, m); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptors-of-a-box-tested-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; if (Object.getOwnPropertyDescriptors(box)) { void 1; } Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'keys-of-a-box-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.keys(box); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'own-property-names-of-a-box-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.getOwnPropertyNames(box); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'frozen-test-of-a-box-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.isFrozen(box); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'borrowed-at-read-through-a-member-pin',
     source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; const m = (Array.prototype.at.call(a, 0) as any).v; void m; return String(a); }`,
     converts: false,
