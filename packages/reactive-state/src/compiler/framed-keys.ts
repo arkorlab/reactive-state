@@ -29,6 +29,7 @@ import {
   type Node,
   SyntaxKind,
   type TypeNode,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -39,6 +40,7 @@ import {
   type FrameBinding,
   frameBindingContainer,
   frameBindingOf,
+  frameDeclarationOf,
   frameMemberName,
   type FrameSelection,
 } from './framed-bindings.ts';
@@ -52,6 +54,7 @@ import {
 } from './framed-tuple-work.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /** Finite written property keys, and a binding's receiver before its final computed key. */
 
@@ -404,20 +407,58 @@ function keyAlternatives(value: Expression):
   | undefined {
   const literal = constantValue(value);
   if (literal !== undefined) return { names: [String(literal)] };
-  const binding = isIdentifier(value) ? frameBindingOf(value) : undefined;
+  if (!isIdentifier(value)) return undefined;
+  const binding = frameBindingOf(value);
   if (binding === undefined || binding.keys.length > 0) return undefined;
   const names = declaredKeys(binding.binding);
   const values = constantKeys(binding.binding);
   if (values !== undefined) return { values, fallback: names };
   if (names === undefined) return undefined;
-  const sources = binding.binding.initializer === undefined ? [] : [binding.binding.initializer];
-  if (isIdentifier(value)) sources.push(...framedAssignedValues(value));
+  const again = redeclarations(value, binding.binding);
+  const sources = [...initializersOf([binding.binding, ...again]), ...framedAssignedValues(value)];
   const declared =
     isParameterDeclaration(binding.binding) ||
-    (isIdentifier(value) && changedBeyondSources(value, binding.binding));
+    again.length > 0 ||
+    changedBeyondSources(value, binding.binding);
   return sources.length === 0
     ? { names }
     : { values: sources, fallback: names, callerNames: declared ? names : [] };
+}
+
+/** The values that declarations of one variable write where they name it whole. */
+function initializersOf(declarations: readonly FrameBinding[]): readonly Expression[] {
+  const values: Expression[] = [];
+  for (const declaration of declarations) {
+    if (isIdentifier(declaration.name) && declaration.initializer !== undefined)
+      values.push(declaration.initializer);
+  }
+  return values;
+}
+
+/**
+ * The declarations of `binding`'s variable beyond the one a name resolves to, the first: a `var`
+ * declared again in its scope — in a block, a `for` head, a `switch` case or a `catch` block, or
+ * beside a parameter of its name — writes it where it stands. Its initializer is a source where it
+ * names the variable whole; a pattern or a loop head writes what no initializer says, and
+ * `keyAlternatives` keeps the names the declared type allows wherever there is one.
+ */
+function redeclarations(name: Identifier, binding: FrameBinding): readonly VariableDeclaration[] {
+  const found: VariableDeclaration[] = [];
+  const pending: Node[] = [name.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (
+      node !== binding &&
+      isVariableDeclaration(node) &&
+      bindingIdentifiers(node.name).some(
+        (bound) => bound.text === name.text && frameDeclarationOf(bound) === binding,
+      )
+    )
+      found.push(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return found;
 }
 
 /**
