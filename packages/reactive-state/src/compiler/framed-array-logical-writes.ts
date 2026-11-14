@@ -22,6 +22,7 @@ import { unwrapped } from './bounded.ts';
 import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
+import { constantInitializer } from './framed-array-functions.ts';
 import { executionOwner, exportedDeclaration, repeatsAround } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
@@ -60,17 +61,23 @@ export function framedLogicalElementSkipped(
   return truth === skipWhenTruthy;
 }
 
-/** A fixed index in a directly written literal keeps a missing entry distinct from an opaque value. */
+/**
+ * A fixed index in a literal that a `const` variable is written with keeps a missing entry distinct
+ * from an opaque value. No other binding is trusted with its initializer: a parameter's is the
+ * default a call that passes nothing gives, a `var` can be declared again with another one, a `let`
+ * can be written again, and a name in a pattern takes a part of its source.
+ */
 function initialSlot(
   node: BinaryExpression,
   root: FrameBinding,
 ): { readonly value: Expression | undefined } | undefined {
   const target = unwrapped(node.left);
-  if (!isElementAccessExpression(target) || root.initializer === undefined) return undefined;
+  const initializer = isIdentifier(root.name) ? constantInitializer(root) : undefined;
+  if (initializer === undefined || !isElementAccessExpression(target)) return undefined;
   const key = constantValue(unwrapped(target.argumentExpression));
   const index = typeof key === 'string' && /^(?:0|[1-9]\d*)$/u.test(key) ? Number(key) : key;
   if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) return undefined;
-  const array = unwrapped(root.initializer);
+  const array = unwrapped(initializer);
   if (!isArrayLiteralExpression(array) || array.elements.some((each) => isSpreadElement(each)))
     return undefined;
   const value = array.elements[index];
