@@ -50,29 +50,29 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'proof-after-branch-pin',
+    id: 'proof-after-branch-refused',
     source: `function frames(error: Error, flag: boolean) { const values = [error]; if (flag) ${NATIVE} ${SAFE} return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unreferenced-function-pin',
+    id: 'unreferenced-function-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return String(values); function unused() { ${NATIVE} } }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'dead-branch-pin',
+    id: 'dead-branch-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} if (false) ${NATIVE} return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'other-array-branch-pin',
+    id: 'other-array-branch-refused',
     source: `function frames(error: Error, flag: boolean) { const values = [error]; const other = [1]; ${SAFE} if (flag) other.join = Array.prototype.join; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'later-in-read-statement-pin',
+    id: 'later-in-read-statement-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return [String(values), ${NATIVE.slice(0, -1)}][0]; }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

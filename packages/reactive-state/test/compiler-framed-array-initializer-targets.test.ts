@@ -122,9 +122,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'definition-in-the-initializer-of-another-array-pin',
+    id: 'definition-in-the-initializer-of-another-array-refused',
     source: `function frames(error: Error, flag: boolean, opaque: () => object) { const other = Object.defineProperty([], 'join', { get() { return Array.prototype.join; }, set(_: unknown) {} }); const values: unknown[] = []; values.join = () => 'safe'; values[0] = error; void other; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'custom-method-given-in-the-initializer-through-a-bound-call',

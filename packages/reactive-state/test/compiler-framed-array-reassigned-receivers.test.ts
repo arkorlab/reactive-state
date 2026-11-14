@@ -39,24 +39,24 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'never-reassigned-pin',
+    id: 'never-reassigned-refused',
     source: `function frames(error: Error) { let a = [error]; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'constant-pin',
+    id: 'constant-refused',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'other-name-reassigned-pin',
+    id: 'other-name-reassigned-refused',
     source: `function frames(error: Error) { let a = [error]; let other = [1]; ${SAFE} other = [2]; return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'member-written-pin',
+    id: 'member-written-refused',
     source: `function frames(error: Error) { let a = [error]; ${SAFE} a.length = 1; return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-write-then-reassigned',
@@ -139,19 +139,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'var-redeclared-without-initializer-pin',
+    id: 'var-redeclared-without-initializer-refused',
     source: `function frames(error: Error) { var a = [error]; ${SAFE} var a; return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'block-scoped-loop-head-pin',
+    id: 'block-scoped-loop-head-refused',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} for (const a of [[error]]); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'block-scoped-shadow-pin',
+    id: 'block-scoped-shadow-refused',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} { const a = [error]; } return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'alias-writable-definition-keeps-later-proof',
@@ -219,14 +219,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'unrelated-stable-name-write-pin',
+    id: 'unrelated-stable-name-write-refused',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} const other = [1]; other.join = Array.prototype.join; return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'whole-write-only-pin',
+    id: 'whole-write-only-refused',
     source: `function frames(error: Error) { const a = [error]; ${SAFE} let b = a; b = []; return String(a); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

@@ -1,18 +1,8 @@
-import {
-  type CallExpression,
-  type Expression,
-  isCallExpression,
-  isIdentifier,
-  type Node,
-} from 'typescript/ast';
+import { type Expression, isCallExpression, isIdentifier, type Node } from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
 import { unwrapped } from '../src/compiler/bounded.ts';
-import {
-  arrayMethodOverride,
-  framedArrayString,
-  framedArrayText,
-} from '../src/compiler/framed-arrays.ts';
+import { framedArrayString, framedArrayText } from '../src/compiler/framed-arrays.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
@@ -755,9 +745,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'read-in-static-field-before-static-write-pin',
+    id: 'read-in-static-field-before-static-write-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static b = ((values.join = Array.prototype.join), 1); } return values.length; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'read-in-static-field-after-static-write',
@@ -765,9 +755,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'read-in-static-field-before-static-block-pin',
+    id: 'read-in-static-field-before-static-block-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; class K { static a = String(values); static { values.join = Array.prototype.join; } } return values.length; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'read-in-static-field-after-static-block',
@@ -805,14 +795,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'read-in-pattern-key-before-initializer-write-pin',
+    id: 'read-in-pattern-key-before-initializer-write-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const { [String(values)]: unused } = {}; (values.join = Array.prototype.join); return values.length; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'read-in-argument-before-later-argument-write-pin',
+    id: 'read-in-argument-before-later-argument-write-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; String(values); Object.assign({}, { first: String(values), second: ((values.join = Array.prototype.join)) }); return values.length; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-method-decorator-write-runs',
@@ -835,9 +825,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-method-body-decorator-free-pin',
+    id: 'class-method-body-decorator-free-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const unused = class { method() { return 1; } }; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-declaration-static-block-replaces-accessor',
@@ -1162,14 +1152,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'to-string-set-to-a-custom-function-after-custom-join-pin',
+    id: 'to-string-set-to-a-custom-function-after-custom-join-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.toString = () => 'safe'; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'to-string-untouched-delegates-to-custom-join-pin',
+    id: 'to-string-untouched-delegates-to-custom-join-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'to-string-set-to-native-to-string-after-custom-join-stays-possible-pin',
@@ -1177,19 +1167,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'to-string-deleted-after-an-assignment-delegates-to-custom-join-pin',
+    id: 'to-string-deleted-after-an-assignment-delegates-to-custom-join-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'to-string-deleted-after-a-custom-function-delegates-to-custom-join-pin',
+    id: 'to-string-deleted-after-a-custom-function-delegates-to-custom-join-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = () => 'x'; delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'to-string-deleted-though-never-written-pin',
+    id: 'to-string-deleted-though-never-written-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'to-string-deleted-after-a-configurable-definition-delegates-refused',
@@ -1217,9 +1207,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'to-string-deleted-twice-delegates-pin',
+    id: 'to-string-deleted-twice-delegates-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; values.toString = Array.prototype.join; delete values.toString; delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'define-descriptor-getter-before-attributes-makes-an-accessor',
@@ -1287,19 +1277,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'known-method-proof-after-a-method-of-the-array-pin',
+    id: 'known-method-proof-after-a-method-of-the-array-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.push('safe'); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-method-proof-after-a-spread-of-the-array-pin',
+    id: 'known-method-proof-after-a-spread-of-the-array-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const copy = [...values]; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-method-proof-after-a-second-custom-method-pin',
+    id: 'known-method-proof-after-a-second-custom-method-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.join = () => 'again'; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'known-method-proof-after-a-native-mutator-refused',
@@ -1307,9 +1297,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'known-method-proof-with-a-handing-after-the-read-pin',
+    id: 'known-method-proof-with-a-handing-after-the-read-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; const text = String(values); ((list: any) => { list.join = Array.prototype.join; })(values); return text; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'refused-callback-handed-the-array',
@@ -1342,19 +1332,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'known-callback-without-the-array-pin',
+    id: 'known-callback-without-the-array-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.forEach((item: unknown) => { void item; }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-callback-native-pin',
+    id: 'known-callback-native-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.filter(Boolean); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-callback-with-two-parameters-pin',
+    id: 'known-callback-with-two-parameters-refused',
     source: `function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values.map((item: unknown, index: number) => [item, index]); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'container-member-alias-refused',
@@ -1467,24 +1457,24 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'known-element-destructuring-pin',
+    id: 'known-element-destructuring-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const [first] = values; void first; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-field-destructuring-pin',
+    id: 'known-field-destructuring-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; const { length } = values; void length; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-spread-into-a-call-pin',
+    id: 'known-spread-into-a-call-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; ((...a: any[]) => a)(...values); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'known-conditional-receiver-read-pin',
+    id: 'known-conditional-receiver-read-refused',
     source: `function frames(error: Error, flag: boolean) { const values: any[] = [error]; values.join = () => 'safe'; void (flag ? values : []).length; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'method-of-the-array-naming-this-refused',
@@ -1582,9 +1572,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'whole-write-of-an-alias-keeps-the-proof-pin',
+    id: 'whole-write-of-an-alias-keeps-the-proof-refused',
     source: `function frames(error: Error, flag: boolean) { const a: any[] = [error]; a.join = () => 'safe'; let b = a; b = []; return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'wrapped-value-naming-this-refused',
@@ -1739,42 +1729,4 @@ function convertsError(root: Node): boolean {
     });
   }
   return false;
-}
-
-const LOGICAL = [
-  { id: 'or-assignment', operator: '||=' },
-  { id: 'and-assignment', operator: '&&=' },
-  { id: 'nullish-assignment', operator: '??=' },
-] as const;
-
-describe('what a logical assignment to a method leaves of its attributes', () => {
-  it.each(LOGICAL)('$id claims no attribute: it may assign nothing', ({ operator }) => {
-    using api = openTypeScript();
-    using parsed = parseModule(
-      api,
-      'logical-assignment.ts',
-      `function frames(error: Error) { const values = [error]; values.join ${operator} (() => 'x'); return String(values); }`,
-    );
-    const read = stringCall(parsed.sourceFile);
-
-    expect(arrayMethodOverride(read.arguments[0]!, 'join', read)).toStrictEqual({
-      own: false,
-    });
-  });
-});
-
-function stringCall(root: Node): CallExpression {
-  const pending = [root];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (
-      isCallExpression(node) &&
-      isIdentifier(node.expression) &&
-      node.expression.text === 'String'
-    )
-      return node;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  throw new Error('no String call');
 }

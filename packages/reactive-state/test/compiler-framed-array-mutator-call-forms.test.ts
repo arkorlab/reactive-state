@@ -180,24 +180,24 @@ const METHODS = [
     converts: true,
   },
   {
-    id: 'inner-assign-of-another-array-pin',
+    id: 'inner-assign-of-another-array-refused',
     source: `function frames(error: Error) { const values: unknown[] = [error]; const other: unknown[] = []; values.join = () => 'fixed'; Object.assign(Object.assign.call(null, other, {}), { join: Array.prototype.join }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'inner-fill-of-another-array-pin',
+    id: 'inner-fill-of-another-array-refused',
     source: `function frames(error: Error) { const values: unknown[] = [error]; const other: unknown[] = []; values.join = () => 'fixed'; Object.assign(other.fill(error), { join: Array.prototype.join }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'inner-bound-of-another-array-pin',
+    id: 'inner-bound-of-another-array-refused',
     source: `function frames(error: Error) { const values: unknown[] = [error]; const other: unknown[] = []; const assign = Object.assign.bind(null); values.join = () => 'fixed'; Object.assign(assign(other, {}), { join: Array.prototype.join }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'inner-new-object-of-another-array-pin',
+    id: 'inner-new-object-of-another-array-refused',
     source: `function frames(error: Error) { const values: unknown[] = [error]; const other: unknown[] = []; values.join = () => 'fixed'; Object.assign(new Object(other), { join: Array.prototype.join }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

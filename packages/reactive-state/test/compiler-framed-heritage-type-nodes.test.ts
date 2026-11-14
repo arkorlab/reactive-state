@@ -287,12 +287,9 @@ function sortsByDefault(source: string): boolean {
 }
 
 function wordsWritten(source: string): boolean {
-  return inModule(source, (file) => {
-    return writtenArrayWords(lastNamed(file, 'words'), {
-      created: () => false,
-      custom: () => false,
-    });
-  });
+  return inModule(source, (file) =>
+    writtenArrayWords(lastNamed(file, 'words'), { created: () => false }),
+  );
 }
 
 function settersFollowed(source: string): boolean {

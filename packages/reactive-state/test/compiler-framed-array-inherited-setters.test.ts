@@ -57,9 +57,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'direct-write-with-no-prototype-change-pin',
+    id: 'direct-write-with-no-prototype-change-refused',
     source: `function frames(error: Error) { const a: unknown[] = [error]; a.join = () => 'safe'; return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'assign-with-no-prototype-change-refused',

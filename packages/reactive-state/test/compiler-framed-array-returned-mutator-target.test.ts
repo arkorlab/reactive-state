@@ -33,9 +33,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'assign-through-the-result-of-another-array-pin',
+    id: 'assign-through-the-result-of-another-array-refused',
     source: `function frames(error: Error) { const values = [error]; const other: unknown[] = []; ${SAFE} Object.assign(Object.assign(other, {}), { join: Array.prototype.join }); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'assign-directly-restores-the-method-pin',

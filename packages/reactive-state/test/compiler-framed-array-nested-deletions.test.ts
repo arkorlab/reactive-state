@@ -18,57 +18,57 @@ const CASES = [
   {
     id: 'void-delete-of-an-unwritten-to-string',
     source: `${HEAD} values.join = () => 'safe'; void delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'comma-delete-of-an-unwritten-to-string',
     source: `${HEAD} values.join = () => 'safe'; (delete values.toString, 0); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'negated-delete-of-an-unwritten-to-string',
     source: `${HEAD} values.join = () => 'safe'; !delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-in-a-list-of-an-unwritten-to-string',
     source: `${HEAD} values.join = () => 'safe'; [delete values.toString]; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-through-an-element-access',
     source: `${HEAD} values.join = () => 'safe'; void delete values['toString']; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-of-an-unwritten-to-string-in-a-short-circuit',
     source: `${HEAD} values.join = () => 'safe'; flag && delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-of-an-unwritten-to-string-in-a-condition',
     source: `${HEAD} values.join = () => 'safe'; flag ? delete values.toString : 0; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-of-an-unwritten-to-string-in-an-if',
     source: `${HEAD} values.join = () => 'safe'; if (flag) void delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-of-an-unwritten-to-string-in-a-loop',
     source: `${HEAD} values.join = () => 'safe'; for (let at = 0; at < 2; at += 1) void delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'void-delete-gives-back-the-native-to-string',
     source: `${HEAD} values.toString = () => 'text'; values.join = () => 'safe'; void delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'comma-delete-gives-back-the-native-to-string',
     source: `${HEAD} values.toString = () => 'text'; values.join = () => 'safe'; (delete values.toString, 0); return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'short-circuit-delete-after-a-custom-to-string-pin',
@@ -81,9 +81,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'delete-of-another-array-pin',
+    id: 'delete-of-another-array-refused',
     source: `${HEAD} values.join = () => 'safe'; void delete other.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-of-the-join-gives-back-the-native-join',
@@ -96,9 +96,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'direct-delete-of-an-unwritten-to-string-pin',
+    id: 'direct-delete-of-an-unwritten-to-string-refused',
     source: `${HEAD} values.join = () => 'safe'; delete values.toString; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'delete-after-a-native-method-is-given-to-the-array-prototype-pin',

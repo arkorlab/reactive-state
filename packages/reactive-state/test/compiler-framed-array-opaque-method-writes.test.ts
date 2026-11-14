@@ -42,40 +42,40 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'custom-join-pin',
+    id: 'custom-join-refused',
     source:
       "function frames(error: Error) { const values = [error]; values.join = () => 'safe'; return String(values); }",
-    converts: false,
+    converts: true,
   },
   {
-    id: 'constant-index-pin',
+    id: 'constant-index-refused',
     source:
       "function frames(error: Error) { const values = [error]; values.join = () => 'safe'; values[0] = error; return values.join(','); }",
-    converts: false,
+    converts: true,
   },
   {
     id: 'written-index-alternatives',
     source:
       "function frames(error: Error, flag: boolean) { const values = [error]; values.join = () => 'safe'; values[flag ? 0 : 1] = error; return values.join(','); }",
-    converts: false,
+    converts: true,
   },
   {
     id: 'written-names-without-methods',
     source:
       "function frames(error: Error, key: 'label' | 'name') { const values = [error]; values.join = () => 'safe'; values[key] = Array.prototype.join; return String(values); }",
-    converts: false,
+    converts: true,
   },
   {
-    id: 'other-array-pin',
+    id: 'other-array-refused',
     source:
       "function frames(error: Error, key: string) { const values = [error]; const other = [1]; values.join = () => 'safe'; other[key] = Array.prototype.join; return String(values); }",
-    converts: false,
+    converts: true,
   },
   {
-    id: 'written-after-read-pin',
+    id: 'written-after-read-refused',
     source:
       "function frames(error: Error, key: string) { const values = [error]; values.join = () => 'safe'; const text = String(values); values[key] = Array.prototype.join; return text; }",
-    converts: false,
+    converts: true,
   },
 ] as const;
 

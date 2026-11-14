@@ -43,14 +43,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'other-array-pattern-pin',
+    id: 'other-array-pattern-refused',
     source: `function frames(error: Error) { const values = [error]; const other = [1]; ${SAFE} [other.join] = [Array.prototype.join]; return String(values); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'other-member-pattern-pin',
+    id: 'other-member-pattern-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} [(values as any).label] = [1]; return String(values); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

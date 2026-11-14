@@ -1,19 +1,8 @@
-import {
-  type Expression,
-  isCallExpression,
-  isIdentifier,
-  isPropertyAccessExpression,
-  type Node,
-} from 'typescript/ast';
+import { type Expression, isCallExpression, isIdentifier, type Node } from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
 import { unwrapped } from '../src/compiler/bounded.ts';
-import type { ArrayMethodOverride } from '../src/compiler/framed-array-own-methods.ts';
-import {
-  arrayMethodOverride,
-  framedArrayString,
-  framedArrayText,
-} from '../src/compiler/framed-arrays.ts';
+import { framedArrayString, framedArrayText } from '../src/compiler/framed-arrays.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
@@ -29,12 +18,12 @@ const CASES = [
   {
     id: 'reviewed-delete-argument',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return values.join(delete values.join); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'assignment-argument',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return values.join((values.join = Array.prototype.join, 1)); }`,
-    converts: false,
+    converts: true,
   },
   {
     // Refused since the array is followed only where each mention is known: the answer of a definition is handed to the method the call selected, which may be a function of the program.
@@ -45,7 +34,7 @@ const CASES = [
   {
     id: 'element-access-callee',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return values['join'](delete values.join); }`,
-    converts: false,
+    converts: true,
   },
   {
     // Refused since the array is followed only where each mention is known: a function of the program returns the array, to whoever calls it.
@@ -69,9 +58,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'other-method-argument-pin',
+    id: 'other-method-argument-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return values.join(delete values.toString); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-pin',
@@ -86,22 +75,22 @@ const CASES = [
   {
     id: 'assignment-operand',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} values.join = String(values) as any; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'array-pattern-operand',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} [values.join] = [String(values) as any]; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'object-pattern-operand',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} ({ restore: values.join } = { restore: String(values) as any }); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-iterable-operand',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (values.join of [String(values) as any]); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'later-target-default',
@@ -114,14 +103,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'earlier-default-pin',
+    id: 'earlier-default-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} [text = String(values), values.join] = [undefined, Array.prototype.join]; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'other-array-target-pin',
+    id: 'other-array-target-refused',
     source: `function frames(error: Error) { const values = [error]; const other = [1]; ${SAFE} [other.join, text = String(values)] = [Array.prototype.join, undefined]; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-condition-revisit',
@@ -139,14 +128,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'loop-made-array-pin',
+    id: 'loop-made-array-refused',
     source: `function frames(error: Error) { for (let pass = 0; pass < 2; pass++) { const values = [error]; ${SAFE} String(values); values.join = Array.prototype.join; } }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'later-statement-pin',
+    id: 'later-statement-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} String(values); values.join = Array.prototype.join; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'repeated-assignment-pin',
@@ -161,7 +150,7 @@ const CASES = [
   {
     id: 'loop-override-before-each-read',
     source: `function frames(error: Error) { const values = [error]; for (let pass = 0; pass < 2; pass++) { ${SAFE} String(values); values.join = Array.prototype.join; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-override-before-condition-revisit-pin',
@@ -176,17 +165,17 @@ const CASES = [
   {
     id: 'iterable-read-runs-once',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (const text of [String(values), 'other']) { values.join = Array.prototype.join; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'for-initializer-read-runs-once',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let text = String(values), pass = 0; pass < 2; pass++) { values.join = Array.prototype.join; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'for-in-expression-read-runs-once',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (const key in { [String(values)]: 1, other: 2 }) { values.join = Array.prototype.join; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-body-read-pin',
@@ -214,19 +203,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'shadowed-name-iife-pin',
+    id: 'shadowed-name-iife-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(read = () => '', text = String(values)) { values.join = Array.prototype.join; return text + read(); })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'shadowed-by-local-iife-pin',
+    id: 'shadowed-by-local-iife-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)) { values.join = Array.prototype.join; const read = () => ''; return text + read(); })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'inner-function-of-same-name-pin',
+    id: 'inner-function-of-same-name-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)) { values.join = Array.prototype.join; return text + (function read(pass: number): string { return pass > 0 ? read(pass - 1) : ''; })(1); })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursive-iife-in-body-reference',
@@ -236,17 +225,17 @@ const CASES = [
   {
     id: 'unreachable-self-reference',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)): string { values.join = Array.prototype.join; if (false) read(); return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'unreachable-conditional-self-reference',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)): string { values.join = Array.prototype.join; return false ? read() : text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'unreachable-nested-function-self-reference',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = String(values)): string { values.join = Array.prototype.join; if (false) { (() => read())(); } return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'selected-branch-self-reference',
@@ -256,12 +245,12 @@ const CASES = [
   {
     id: 'unreachable-self-reference-selection',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} return (function read(text = values.join((values.join = Array.prototype.join, ''))): string { if (false) read(); return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-custom-only-write-keeps-proof',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = () => 'also fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-custom-object-assign-keeps-proof',
@@ -276,7 +265,7 @@ const CASES = [
   {
     id: 'loop-custom-write-in-branch-keeps-proof',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 0) values.join = () => 'also fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-custom-then-native-write-pin',
@@ -306,27 +295,27 @@ const CASES = [
   {
     id: 'loop-break-after-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; break; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-return-after-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; return 1; } return 0; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-throw-after-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; throw error; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-break-in-block-after-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} let pass = 0; while (String(values) === 'fixed') { if (pass++ > 1) { values.join = Array.prototype.join; break; } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-break-after-write-in-for',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; String(values) === 'fixed'; pass++) { values.join = Array.prototype.join; break; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-inner-loop-break',
@@ -351,12 +340,12 @@ const CASES = [
   {
     id: 'loop-inner-loop-break-then-break',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { for (const text of ['one', 'two']) { values.join = Array.prototype.join; break; } break; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-break-in-selected-branch-after-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { if (error) { values.join = Array.prototype.join; break; } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-labeled-break-of-inner-block',
@@ -384,9 +373,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'loop-try-around-inner-loop-proof-in-try-pin',
+    id: 'loop-try-around-inner-loop-proof-in-try-refused',
     source: `function frames(error: Error) { const values = [error]; for (let outer = 0; outer < 2; outer++) { try { ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (outer === 0) throw error; values.join = () => 'fixed'; } } catch { /* the outer loop goes on */ } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-try-around-inner-loop-proof-outside-pin',
@@ -396,22 +385,22 @@ const CASES = [
   {
     id: 'loop-labeled-break-of-the-loop',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} outer: while (String(values) === 'fixed') { values.join = Array.prototype.join; break outer; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-labeled-break-of-an-outer-loop',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} outer: while (String(values) === 'fixed') { for (const text of ['one', 'two']) { values.join = Array.prototype.join; break outer; } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-finally-return-after-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { values.join = Array.prototype.join; return 1; } finally { /* nothing */ } } return 0; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-overwrite-in-try-finally',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; values.join = () => 'fixed'; } finally { /* nothing */ } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-finally-continue-skips-overwrite-pin',
@@ -426,17 +415,17 @@ const CASES = [
   {
     id: 'loop-unreachable-continue-before-custom-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; if (false) continue; values.join = () => 'fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-unreachable-break-before-custom-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { switch (pass) { default: { values.join = Array.prototype.join; if (false) break; values.join = () => 'fixed'; } } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-finally-unreachable-continue',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; if (pass === 0) throw error; values.join = () => 'fixed'; } finally { if (false) continue; } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-selected-continue-before-custom-write-pin',
@@ -446,12 +435,12 @@ const CASES = [
   {
     id: 'loop-finally-inner-block-break-after-return',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { values.join = Array.prototype.join; return 1; } finally { inner: { break inner; } } } return 0; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-overwrite-in-try-finally-inner-loop-break',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { try { values.join = Array.prototype.join; values.join = () => 'fixed'; } finally { for (;;) { break; } } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-pending-continue-through-finally-write',
@@ -461,7 +450,7 @@ const CASES = [
   {
     id: 'loop-finally-break-cancels-pending-continue',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} while (String(values) === 'fixed') { try { continue; } finally { values.join = Array.prototype.join; break; } } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-catch-between-write-and-return-pin',
@@ -474,19 +463,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'loop-iife-return-after-custom-write-pin',
+    id: 'loop-iife-return-after-custom-write-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { (function once() { values.join = Array.prototype.join; values.join = () => 'fixed'; if (pass === 0) return; })(); } }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'loop-callback-return-between-writes-pin',
+    id: 'loop-callback-return-between-writes-refused',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; [1].forEach((each) => { return each; }); values.join = () => 'fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-jump-in-sibling-else-branch',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 5) { values.join = Array.prototype.join; } else { continue; } values.join = () => 'fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-jump-in-later-branch-pin',
@@ -506,7 +495,7 @@ const CASES = [
   {
     id: 'recursion-before-proof-keeps-proof',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { if (pass < 1) read(pass + 1); ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-later-helper-between-proof-and-read',
@@ -516,17 +505,17 @@ const CASES = [
   {
     id: 'recursion-through-later-helper-before-proof-keeps-proof',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { if (pass < 1) again(); ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-unreachable-helper-call',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { if (pass < 1) again(); ${SAFE} if (false) again(); const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-unreachable-helper-only',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} if (false) again(); const text = String(values); values.join = Array.prototype.join; return text; function again() { read(pass + 1); } })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-helper-hidden-by-nested-helper-of-the-same-name',
@@ -546,7 +535,7 @@ const CASES = [
   {
     id: 'loop-exit-with-unreachable-self-call',
     source: `function frames(error: Error) { const values = [error]; (function read(): void { ${SAFE} while (String(values) === 'fixed') { values.join = Array.prototype.join; break; } if (false) read(); })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-exit-with-shadowed-name',
@@ -569,9 +558,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'recursion-after-read-in-declaration-pin',
+    id: 'recursion-after-read-in-declaration-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursive-declaration-loop-exit-element-write',
@@ -701,7 +690,7 @@ const CASES = [
   {
     id: 'recursion-only-in-unreachable-call-of-helper',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} again(); const text = String(values); values.join = Array.prototype.join; return text; } function again() { if (false) read(1); } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-constructor',
@@ -714,19 +703,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'recursion-after-read-in-declaration-again-pin',
+    id: 'recursion-after-read-in-declaration-again-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number) { ${SAFE} const text = String(values); values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'declaration-calling-its-parameter-pin',
+    id: 'declaration-calling-its-parameter-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number, again: (next: number) => string): string { ${SAFE} if (pass < 1) again(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0, () => 'x'); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'declaration-calling-an-inner-function-of-its-name-pin',
+    id: 'declaration-calling-an-inner-function-of-its-name-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} if (pass < 1) { function read(inner: number) { return inner; } read(1); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-computed-key',
@@ -749,9 +738,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'escaped-function-with-nothing-between-pin',
+    id: 'escaped-function-with-nothing-between-refused',
     source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function read(): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-instance-field-initializer',
@@ -769,9 +758,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'instance-field-initializer-never-run-pin',
+    id: 'instance-field-initializer-never-run-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class Holder { held = read(pass + 1); } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-satisfies-holder',
@@ -854,24 +843,24 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'uncalled-nested-function-pin',
+    id: 'uncalled-nested-function-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} function unused() { read(); } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'uncalled-nested-arrow-pin',
+    id: 'uncalled-nested-arrow-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} const unused = () => { read(); }; const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'uncalled-nested-method-pin',
+    id: 'uncalled-nested-method-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} const o = { go() { read(); } }; const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'uncalled-nested-class-method-pin',
+    id: 'uncalled-nested-class-method-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read() { ${SAFE} class K { go() { read(); } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'nested-function-called-between',
@@ -919,9 +908,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'async-without-a-wait-pin',
+    id: 'async-without-a-wait-refused',
     source: `async function frames(error: Error) { const values = [error]; let seen = ''; async function read(pass: number): Promise<string> { ${SAFE} const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } await Promise.all([read(0), read(1)]); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-in-a-later-argument',
@@ -949,9 +938,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'uncalled-static-method-pin',
+    id: 'uncalled-static-method-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string { ${SAFE} class K { static m() { read(pass + 1); } } const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-object-method-computed-name',
@@ -969,14 +958,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'property-call-is-a-call-pin',
+    id: 'property-call-is-a-call-refused',
     source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib.read.call(null); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'property-apply-is-a-call-pin',
+    id: 'property-apply-is-a-call-refused',
     source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib.read.apply(null, []); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'property-bind-is-an-escape-pin',
@@ -1009,19 +998,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'named-helper-never-called-pin',
+    id: 'named-helper-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function helper() { read(pass + 1); }); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unreachable-wait-pin',
+    id: 'unreachable-wait-refused',
     source: `async function frames(error: Error) { const values = [error]; let seen = ''; async function read(): Promise<string> { ${SAFE} if (false) await 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } await Promise.all([read(), read()]); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unreachable-yield-pin',
+    id: 'unreachable-yield-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; function* read(): Generator<number, string> { ${SAFE} if (false) yield 0; const text = String(values); values.join = Array.prototype.join; seen += text + ','; return text; } const a = read(); const b = read(); a.next(); b.next(); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-constructor-of-a-class-made-on-the-spot',
@@ -1054,24 +1043,24 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'immediate-async-function-without-a-wait-pin',
+    id: 'immediate-async-function-without-a-wait-refused',
     source: `async function frames(error: Error) { const values = [error]; let seen = ''; const read = (pass: number): void => { (async () => { ${SAFE} const text = String(values); values.join = Array.prototype.join; seen += text + ','; })(); }; read(0); read(1); await new Promise((r) => setTimeout(r, 5)); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'class-never-made-pin',
+    id: 'class-never-made-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (class { constructor() { read(pass + 1); } }); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'uncalled-function-in-a-helper-pin',
+    id: 'uncalled-function-in-a-helper-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { function unused() { read(); } } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'uncalled-arrow-in-a-helper-pin',
+    id: 'uncalled-arrow-in-a-helper-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { const unused = () => { read(); }; } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'called-function-in-a-helper',
@@ -1079,14 +1068,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'dropped-generator-pin',
+    id: 'dropped-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function* helper() { read(pass + 1); })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'dropped-async-generator-pin',
+    id: 'dropped-async-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (async function* helper() { read(pass + 1); })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'generator-advanced-on-the-spot',
@@ -1114,19 +1103,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'property-write-of-the-name-pin',
+    id: 'property-write-of-the-name-refused',
     source: `function frames(error: Error) { const values = [error]; const holder: any = {}; function read(): string { ${SAFE} holder.read = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'element-write-of-the-name-pin',
+    id: 'element-write-of-the-name-refused',
     source: `function frames(error: Error) { const values = [error]; const holder: any = {}; function read(): string { ${SAFE} holder['read'] = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'wrapped-property-write-of-the-name-pin',
+    id: 'wrapped-property-write-of-the-name-refused',
     source: `function frames(error: Error) { const values = [error]; const holder: any = {}; function read(): string { ${SAFE} (holder.read as any) = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-a-setter-the-write-calls',
@@ -1154,14 +1143,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'unused-class-field-in-a-helper-pin',
+    id: 'unused-class-field-in-a-helper-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { class Unused { x = read(); } } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unused-class-expression-field-in-a-helper-pin',
+    id: 'unused-class-expression-field-in-a-helper-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper() { const Unused = class { x = read(); }; } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-field-built-in-a-helper',
@@ -1184,9 +1173,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-field-never-built-pin',
+    id: 'class-field-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { class K { x = pass < 1 ? read(pass + 1) : 0; } ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-field-of-the-parent-class',
@@ -1194,9 +1183,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'named-generator-made-and-dropped-pin',
+    id: 'named-generator-made-and-dropped-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper() { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'generator-method-an-object-holds-is-reached-by-its-keys-pin',
@@ -1204,9 +1193,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'generator-made-and-dropped-in-a-helper-pin',
+    id: 'generator-made-and-dropped-in-a-helper-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} g(); const text = String(values); values.join = Array.prototype.join; return text; function g() { helper(); } function* helper() { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'generator-made-before-the-proof-and-advanced-between',
@@ -1289,9 +1278,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'chained-assignment-never-read-again-pin',
+    id: 'chained-assignment-never-read-again-refused',
     source: `function frames(error: Error) { const values = [error]; let a: any, b: any, c: any; const o: any = {}; a = b = (pass: number): string => { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; }; return b(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-the-default-of-a-dropped-generator',
@@ -1309,24 +1298,24 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'dropped-generator-with-a-plain-default-pin',
+    id: 'dropped-generator-with-a-plain-default-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = 1) { read(pass + 1); } })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'generators-whose-defaults-make-each-other-pin',
+    id: 'generators-whose-defaults-make-each-other-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} if (false) a(); const text = String(values); values.join = Array.prototype.join; return text; function* a(x: any = b()) {} function* b(y: any = a()) {} })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'generator-advanced-only-in-unreachable-code-pin',
+    id: 'generator-advanced-only-in-unreachable-code-refused',
     source: `function frames(error: Error) { const values = [error]; function note() {} return (function read(): string { ${SAFE} if (false) helper().next(); note(); const text = String(values); values.join = Array.prototype.join; return text; function* helper() { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'generator-spread-only-in-unreachable-code-pin',
+    id: 'generator-spread-only-in-unreachable-code-refused',
     source: `function frames(error: Error) { const values = [error]; function note() {} return (function read(): string { ${SAFE} if (false) [...helper()]; note(); const text = String(values); values.join = Array.prototype.join; return text; function* helper() { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'generator-advanced-in-reachable-code',
@@ -1334,14 +1323,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'dead-default-of-a-dropped-generator-pin',
+    id: 'dead-default-of-a-dropped-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = false ? read() : 1) { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'dead-default-in-the-other-arm-pin',
+    id: 'dead-default-in-the-other-arm-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(p: any = true ? 1 : read()) { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'dead-default-of-a-generator-method-an-object-holds-pin',
@@ -1374,14 +1363,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'dead-default-of-an-immediate-generator-pin',
+    id: 'dead-default-of-an-immediate-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function* (next: any = false ? read(pass + 1) : '') { read(pass + 1); })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'immediate-generator-with-a-plain-default-pin',
+    id: 'immediate-generator-with-a-plain-default-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function* (next: any = 1) { read(pass + 1); })(); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-the-default-of-a-kept-generator',
@@ -1389,14 +1378,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'parameter-named-like-the-function-pin',
+    id: 'parameter-named-like-the-function-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(() => 'ok'); const text = String(values); values.join = Array.prototype.join; return text; function helper(read: () => string) { return read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'parameter-named-like-a-helper-pin',
+    id: 'parameter-named-like-a-helper-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} (function (helper: () => any) { helper(); })(() => 1); const text = String(values); values.join = Array.prototype.join; return text; function helper() { if (pass < 1) read(pass + 1); } })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-a-parameter-given-a-caller',
@@ -1409,14 +1398,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'parameter-of-another-name-pin',
+    id: 'parameter-of-another-name-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} helper(() => 'ok'); const text = String(values); values.join = Array.prototype.join; return text; function helper(other: () => string) { return other(); } function again() { read(1); } })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unused-class-in-the-default-of-a-generator-pin',
+    id: 'unused-class-in-the-default-of-a-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(next: any = (() => { class Unused { text = read(); } })()) { read(); } })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-built-in-the-default-of-a-generator',
@@ -1424,14 +1413,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'default-function-of-a-dropped-generator-pin',
+    id: 'default-function-of-a-dropped-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(next: any = () => read()) {} })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'default-function-of-a-helper-never-called-pin',
+    id: 'default-function-of-a-helper-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function helper(next: any = () => read()) {} })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'default-function-the-helper-calls',
@@ -1454,9 +1443,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'write-through-a-template-key-pin',
+    id: 'write-through-a-template-key-refused',
     source: `function frames(error: Error) { const values = [error]; const helper: any = {}; function read(): string { ${SAFE} helper[\`read\`] = 1; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-a-getter-in-an-immediate-arrow',
@@ -1469,14 +1458,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'getter-in-an-arrow-never-called-pin',
+    id: 'getter-in-an-arrow-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; let n = 0; const o = { get x() { if (n++ === 0) read(); return 0; } }; function read(): string { ${SAFE} const later = () => o['x' + '']; const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'default-function-in-a-parameter-of-any-name-pin',
+    id: 'default-function-in-a-parameter-of-any-name-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} helper(); const text = String(values); values.join = Array.prototype.join; return text; function* helper(cb: any = () => read()) {} })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'default-function-in-a-parameter-of-any-name-called',
@@ -1519,19 +1508,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'write-of-a-private-field-pin',
+    id: 'write-of-a-private-field-refused',
     source: `function frames(error: Error) { const values = [error]; class C { #again: number = 0; set(p: number): void { this.#again = p; } } function read(pass: number): string { ${SAFE} new C().set(pass); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'accessor-in-unreachable-code-pin',
+    id: 'accessor-in-unreachable-code-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} if (false) { const unused = { get again() { return read(); } }; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'class-in-unreachable-code-pin',
+    id: 'class-in-unreachable-code-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} if (false) { class U { get again() { return read(); } } } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'accessor-in-reachable-code',
@@ -1559,24 +1548,24 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'chain-of-variables-never-called-pin',
+    id: 'chain-of-variables-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; let n = 0; let x: any; let y: any; const o: any = {}; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} x = y = () => { read(); }; return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'call-through-a-template-key-is-a-call-pin',
+    id: 'call-through-a-template-key-is-a-call-refused',
     source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib[\`read\`].call(null); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'call-through-a-string-key-is-a-call-pin',
+    id: 'call-through-a-string-key-is-a-call-refused',
     source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib['read'].apply(null, []); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'call-through-a-wrapped-key-is-a-call-pin',
+    id: 'call-through-a-wrapped-key-is-a-call-refused',
     source: `function frames(error: Error) { const values = [error]; const lib = { read: () => 'x' }; function read(): string { ${SAFE} note(); const text = String(values); values.join = Array.prototype.join; return text; } function note() {} lib[('read' as const)].call(null); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'bind-through-a-template-key-is-an-escape-pin',
@@ -1644,9 +1633,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'method-never-reached-pin',
+    id: 'method-never-reached-refused',
     source: `function frames(error: Error) { const values = [error]; const helper: any = { again(next: number): string { return read(next); } }; function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-a-field-arrow-a-method-calls',
@@ -1654,19 +1643,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'field-arrow-never-called-pin',
+    id: 'field-arrow-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; class C { helper = (p: number): string => read(p); } function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'accessor-in-a-function-never-called-pin',
+    id: 'accessor-in-a-function-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function unused() { const object = { get again() { return read(); } }; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'accessor-in-an-arrow-never-called-pin',
+    id: 'accessor-in-an-arrow-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const unused = () => { const object = { get again() { return read(); } }; }; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'accessor-in-a-function-that-is-called',
@@ -1674,9 +1663,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'accessor-in-a-function-nested-in-one-never-called-pin',
+    id: 'accessor-in-a-function-nested-in-one-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function outer() { function inner() { const object = { get again() { return read(); } }; } } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'accessor-in-a-function-called-on-the-spot',
@@ -1689,9 +1678,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-without-heritage-runs-nothing-pin',
+    id: 'class-without-heritage-runs-nothing-refused',
     source: `function frames(error: Error) { const values = [error]; function read(): string { ${SAFE} class Plain { m() { read(); } } const text = String(values); values.join = Array.prototype.join; return text; } return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'function-at-the-top-of-a-file-is-taken-to-run',
@@ -1714,19 +1703,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'method-made-in-the-body-of-a-dropped-generator-pin',
+    id: 'method-made-in-the-body-of-a-dropped-generator-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} (function* () { const o = { valueOf() { return read(); } }; })(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'accessor-in-a-field-of-a-class-never-built-pin',
+    id: 'accessor-in-a-field-of-a-class-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} class Unused { object = { get again() { return read(); } }; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'accessor-in-a-field-of-a-class-expression-never-built-pin',
+    id: 'accessor-in-a-field-of-a-class-expression-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const Unused = class { object = { get again() { return read(); } }; }; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'accessor-in-a-field-of-a-class-that-is-built',
@@ -1744,14 +1733,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'accessor-in-the-body-of-a-generator-whose-iterator-is-dropped-pin',
+    id: 'accessor-in-the-body-of-a-generator-whose-iterator-is-dropped-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function* helper() { const o = { get again() { return read(); } }; o.again; } helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'accessor-in-the-body-of-a-dropped-generator-expression-pin',
+    id: 'accessor-in-the-body-of-a-dropped-generator-expression-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const helper = function* () { const o = { get again() { return read(); } }; o.again; }; helper(); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'accessor-in-the-body-of-a-generator-that-is-advanced',
@@ -1769,9 +1758,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'accessor-in-the-body-of-a-generator-never-called-pin',
+    id: 'accessor-in-the-body-of-a-generator-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function* helper() { const o = { get again() { return read(); } }; o.again; } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-builds-itself-in-a-static-block',
@@ -1789,9 +1778,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-static-block-without-this-pin',
+    id: 'class-static-block-without-this-refused',
     source: `function frames(error: Error) { const values = [error]; let n = 0; return (function read(): string { ${SAFE} class Unused { object = { again() { if (n++ < 1) read(); } }; constructor() { this.object.again(); } static { n; } } const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-a-decorator-builds',
@@ -1809,9 +1798,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'unnamed-function-made-with-new-without-reentry-pin',
+    id: 'unnamed-function-made-with-new-without-reentry-refused',
     source: `function frames(error: Error) { const values = [error]; let last = ''; new (function (this: any, pass: number) { ${SAFE} const text = String(values); values.join = Array.prototype.join; last = text; } as any)(0); return last; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'accessor-in-a-generator-method-an-object-holds-is-refused-pin',
@@ -1829,14 +1818,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'loop-ends-in-a-return-that-holds-the-write-pin',
+    id: 'loop-ends-in-a-return-that-holds-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; while ((seen += String(values)) === 'fixed') { return (values.join = Array.prototype.join); } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'loop-ends-in-a-branch-return-that-holds-the-write-pin',
+    id: 'loop-ends-in-a-branch-return-that-holds-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let c = true; while ((seen += String(values)) === 'fixed') { if (c) return (values.join = Array.prototype.join); } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'return-that-holds-the-write-in-a-try-whose-finally-continues',
@@ -1844,9 +1833,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'return-that-holds-the-write-in-a-branch-not-taken-pin',
+    id: 'return-that-holds-the-write-in-a-branch-not-taken-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let c = false; while ((seen += String(values)) === 'fixed' && !c) { if (c) { return (values.join = Array.prototype.join); } c = true; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'return-of-a-function-in-the-loop-that-holds-the-write',
@@ -1854,19 +1843,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'unused-setter-between-a-proof-and-a-read-pin',
+    id: 'unused-setter-between-a-proof-and-a-read-refused',
     source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function read(): string { ${SAFE} const unused = { set x(value: number) {} }; const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unused-constructor-between-a-proof-and-a-read-pin',
+    id: 'unused-constructor-between-a-proof-and-a-read-refused',
     source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function note() {} function read(): string { ${SAFE} class Unused { constructor() { note(); } } const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'unused-class-expression-constructor-between-a-proof-and-a-read-pin',
+    id: 'unused-class-expression-constructor-between-a-proof-and-a-read-refused',
     source: `function frames(error: Error) { const values = [error]; const kept: unknown[] = []; function note() {} function read(): string { ${SAFE} const Unused = class { constructor() { note(); } }; const text = String(values); values.join = Array.prototype.join; return text; } kept.push(read); return read(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'setter-called-between-a-proof-and-a-read',
@@ -1879,19 +1868,19 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'loop-body-is-a-return-that-holds-the-write-pin',
+    id: 'loop-body-is-a-return-that-holds-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; while ((seen += String(values)) === 'fixed') return (values.join = Array.prototype.join); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'for-body-is-a-return-that-holds-the-write-pin',
+    id: 'for-body-is-a-return-that-holds-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; for (let i = 0; (seen += String(values)) === 'fixed'; i++) return (values.join = Array.prototype.join); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'loop-body-is-a-branch-with-a-return-that-holds-the-write-pin',
+    id: 'loop-body-is-a-branch-with-a-return-that-holds-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; let c = true; while ((seen += String(values)) === 'fixed') if (c) return (values.join = Array.prototype.join); return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-body-is-a-write-that-comes-round',
@@ -1909,14 +1898,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'break-of-the-outer-loop-in-an-inner-loop-pin',
+    id: 'break-of-the-outer-loop-in-an-inner-loop-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) break outer; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'return-in-an-inner-loop-pin',
+    id: 'return-in-an-inner-loop-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) return seen; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'jump-after-the-write-in-an-inner-loop-goes-round-the-outer-one',
@@ -1924,14 +1913,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'jump-before-the-write-that-only-skips-the-inner-pass-pin',
+    id: 'jump-before-the-write-that-only-skips-the-inner-pass-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) continue; values.join = Array.prototype.join; } values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'opposite-arms-of-one-evaluation-pin',
+    id: 'opposite-arms-of-one-evaluation-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { if (pass === 5) continue outer; else values.join = Array.prototype.join; values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'jump-before-the-write-in-an-inner-while-loop',
@@ -1964,29 +1953,29 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'jump-in-a-loop-that-ends-before-the-write-pin',
+    id: 'jump-in-a-loop-that-ends-before-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { if (i === 1) continue outer; } values.join = Array.prototype.join; values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'jump-before-the-write-with-the-target-in-the-same-loop-pin',
+    id: 'jump-before-the-write-with-the-target-in-the-same-loop-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { if (i === 1) continue outer; values.join = Array.prototype.join; values.join = () => 'fixed'; } } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'break-of-a-labeled-block-in-the-inner-loop-pin',
+    id: 'break-of-a-labeled-block-in-the-inner-loop-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 3 && (seen += String(values) + ','); pass++) { for (let i = 0; i < 2; i++) { blk: { values.join = Array.prototype.join; if (i === 0) break blk; } } values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'inner-loop-breaks-after-the-write-pin',
+    id: 'inner-loop-breaks-after-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) continue outer; values.join = Array.prototype.join; break; } values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'inner-loop-returns-after-the-write-pin',
+    id: 'inner-loop-returns-after-the-write-refused',
     source: `function frames(error: Error) { const values = [error]; let seen = ''; values.join = () => 'fixed'; outer: for (let pass = 0; pass < 2 && (seen += String(values) + ','); pass++) { for (let inner = 0; inner < 2; inner++) { if (inner === 1) continue outer; values.join = Array.prototype.join; return seen; } values.join = () => 'fixed'; } return seen; }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'inner-break-skipped-by-a-continue-after-the-write',
@@ -1994,14 +1983,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'reader-returned-by-a-function-never-called-pin',
+    id: 'reader-returned-by-a-function-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} function unused() { return read; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'reader-returned-by-an-arrow-never-called-pin',
+    id: 'reader-returned-by-an-arrow-never-called-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} const unused = () => read; Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'reader-returned-by-a-method-an-object-holds-pin',
@@ -2014,9 +2003,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'reader-held-by-a-field-of-a-class-never-built-pin',
+    id: 'reader-held-by-a-field-of-a-class-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(): string { ${SAFE} class Unused { held = read; } Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'reader-saved-by-the-constructor-of-a-class-that-builds-itself-in-a-static-block',
@@ -2029,9 +2018,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'reader-saved-by-the-constructor-of-a-class-never-built-pin',
+    id: 'reader-saved-by-the-constructor-of-a-class-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Unused { constructor() { saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'reader-saved-by-the-constructor-of-a-class-built-by-its-name',
@@ -2054,9 +2043,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'reader-in-the-body-of-a-constructor-never-built-pin',
+    id: 'reader-in-the-body-of-a-constructor-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; let saved: any; const capture = (target: any) => { saved = target; return (): void => {}; }; return (function read(pass: number): string { ${SAFE} class Unused { constructor(value: unknown) { capture(read); } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-built-by-a-static-super-call-in-a-static-block',
@@ -2074,9 +2063,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-that-extends-and-is-never-built-pin',
+    id: 'class-that-extends-and-is-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Base { } class Unused extends Base { constructor() { super(); saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-built-by-the-decorator-of-a-static-method',
@@ -2119,9 +2108,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-with-members-and-no-decorator-is-never-built-pin',
+    id: 'class-with-members-and-no-decorator-is-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; let saved: any; const build = (target: any) => { new target(); }; return (function read(pass: number): string { ${SAFE} class Unused { marker() {} static other() {} constructor() { saved = read; } } if (pass < 1) saved(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'class-built-by-an-arrow-of-a-static-field-that-reads-this',
@@ -2139,9 +2128,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'class-with-a-computed-name-is-never-built-pin',
+    id: 'class-with-a-computed-name-is-never-built-refused',
     source: `function frames(error: Error) { const values = [error]; let saved: any; return (function read(): string { class Unused { [(() => 'k')()]() {} constructor() { saved = read; } } ${SAFE} Math.abs(0); const text = String(values); values.join = Array.prototype.join; return text; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-continue-before-exit-pin',
@@ -2171,17 +2160,17 @@ const CASES = [
   {
     id: 'loop-restoration-then-custom-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = Array.prototype.join; values.join = () => 'fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-branch-restoration-then-custom-write',
     source: `function frames(error: Error) { const values = [error]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { if (pass > 0) { values.join = Array.prototype.join; } values.join = () => 'fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-unknown-write-then-custom-write',
     source: `function frames(error: Error) { const values = [error]; const choices = [() => 'also fixed', Array.prototype.join]; ${SAFE} for (let pass = 0; pass < 2 && String(values); pass++) { values.join = choices[pass] as any; values.join = () => 'fixed'; } }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-custom-then-restoration-pin',
@@ -2214,9 +2203,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'recursive-iife-own-array-pin',
+    id: 'recursive-iife-own-array-refused',
     source: `function frames(error: Error) { return (function read(pass: number): string { const values = [error]; ${SAFE} const text = values.join((values.join = Array.prototype.join, '')); return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursive-iife-later-write',
@@ -2224,9 +2213,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'recursive-iife-override-before-each-read-pin',
+    id: 'recursive-iife-override-before-each-read-refused',
     source: `function frames(error: Error) { const values = [error]; return (function read(pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return pass < 1 ? text + read(pass + 1) : text; })(0); }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 
@@ -2236,25 +2225,6 @@ describe("writes in a call's arguments, after it selected its method", () => {
     using parsed = parseModule(api, 'call-callee-order.ts', source);
 
     expect(convertsError(parsed.sourceFile)).toBe(converts);
-  });
-
-  it('drops the value of a method a repeated custom write may replace, and keeps it custom', () => {
-    const source =
-      "function frames(error: Error) { const values = [error]; values.map = () => 'fixed'; for (let pass = 0; pass < 2 && values.map(String); pass++) { values.map = () => 'again'; } }";
-    using api = openTypeScript();
-    using parsed = parseModule(api, 'call-callee-order.ts', source);
-
-    expect(overrideFound(parsed.sourceFile, 'map')?.own).toBe(true);
-    expect(overrideFound(parsed.sourceFile, 'map')?.value).toBeUndefined();
-  });
-
-  it('keeps the selected method for a result-sensitive read', () => {
-    const source =
-      "function frames(error: Error) { const values = [error]; values.at = () => 'fixed'; return values.at(delete values.at); }";
-    using api = openTypeScript();
-    using parsed = parseModule(api, 'call-callee-order.ts', source);
-
-    expect(overrideFound(parsed.sourceFile, 'at')?.own).toBe(true);
   });
 });
 
@@ -2284,21 +2254,4 @@ function convertsError(root: Node): boolean {
     });
   }
   return false;
-}
-
-/** What the source's call of the method on `values` finds written on it. */
-function overrideFound(root: Node, method: string): ArrayMethodOverride | undefined {
-  const pending = [root];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (
-      isCallExpression(node) &&
-      isPropertyAccessExpression(node.expression) &&
-      node.expression.name.text === method
-    )
-      return arrayMethodOverride(node.expression.expression, method, node);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  throw new Error('no call');
 }

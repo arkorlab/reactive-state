@@ -4,7 +4,6 @@ import {
   type VariableDeclaration,
   type ObjectLiteralExpression,
   isArrayLiteralExpression,
-  isBinaryExpression,
   isElementAccessExpression,
   isIdentifier,
   isObjectLiteralExpression,
@@ -21,18 +20,17 @@ import {
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { sourceArrayFunction, writtenArrayKey } from './framed-array-functions.ts';
+import { writtenArrayKey } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
-/** Positive closed literal origins keep locally written error words and custom array text methods. */
+/** Positive closed literal origins keep locally written error words. */
 
 interface KnownWords {
   readonly created: (value: Expression) => boolean;
-  readonly custom: (value: Expression) => boolean;
 }
 
 interface WordOrigins {
@@ -55,18 +53,9 @@ export function writtenArrayWords(value: Expression, known: KnownWords): boolean
   return origins.array && unexposedBindings(value, origins.bindings, origins.uses);
 }
 
-/** Every literal leaf is primitive, a local error construction, or a proven custom array method. */
+/** Every literal leaf is primitive or a local error construction. */
 function knownWord(value: Expression, known: KnownWords, origins: WordOrigins): boolean {
   const each = unwrapped(value);
-  if (known.custom(each)) {
-    if (!isIdentifier(each)) return false;
-    const binding = constantBinding(each);
-    if (binding === undefined) return false;
-    origins.uses.add(each);
-    origins.bindings.add(binding);
-    origins.array = true;
-    return true;
-  }
   if (isPropertyAccessExpression(each) || isElementAccessExpression(each))
     return literalMemberWords(each, origins);
   if (isArrayLiteralExpression(each)) {
@@ -144,7 +133,7 @@ function bindingReads(source: Node): readonly Identifier[] {
   return names;
 }
 
-/** Only whole constants and selected custom text writes preserve an earlier source identity. */
+/** Only whole constants preserve an earlier source identity. */
 function knownBindingUse(
   name: Identifier,
   binding: VariableDeclaration,
@@ -170,26 +159,7 @@ function knownBindingUse(
     )
       return { allowed: true, alias: parent };
   }
-  return { allowed: customMethodWrite(name) };
-}
-
-/** Direct custom text methods preserve the existing source-function proof; opaque uses do not. */
-function customMethodWrite(name: Identifier): boolean {
-  const { at, parent } = useOf(name);
-  if (
-    (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
-    parent.expression !== at
-  )
-    return false;
-  const key = frameMemberName(parent);
-  if (key !== 'toString' && key !== 'join') return false;
-  const assignment = parent.parent;
-  return (
-    isBinaryExpression(assignment) &&
-    assignment.left === parent &&
-    assignment.operatorToken.kind === SyntaxKind.EqualsToken &&
-    sourceArrayFunction(assignment.right)
-  );
+  return { allowed: false };
 }
 
 /** A literal field path preserves word origins only while every whole holder stays unexposed. */
