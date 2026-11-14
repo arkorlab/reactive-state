@@ -160,6 +160,12 @@ const COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ExclamationEqualsToken,
 ]);
 
+/** The prefix operators that write what they are given; `!`, `-`, `+` and `~` only read it. */
+const STEPS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.MinusMinusToken,
+  SyntaxKind.PlusPlusToken,
+]);
+
 /** Whether a node, where it is read, may reach a prototype in a way the list of uses does not name. */
 function escapes(node: Node): boolean {
   if (isBinaryExpression(node) || isTemplateExpression(node))
@@ -433,7 +439,7 @@ function changed(member: Node): boolean {
   return (
     isWrittenMember(member) ||
     isDeleteExpression(parent) ||
-    isPrefixUnaryExpression(parent) ||
+    (isPrefixUnaryExpression(parent) && STEPS.has(parent.operator)) ||
     isPostfixUnaryExpression(parent)
   );
 }

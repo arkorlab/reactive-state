@@ -261,6 +261,51 @@ const CASES = [
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { const [first] = [Object.assign]; void first; }`,
     changes: false,
   },
+  {
+    id: 'object-assign-negated-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !Object.assign; }`,
+    changes: false,
+  },
+  {
+    id: 'object-assign-negated-in-a-condition-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { if (!Object.assign) { void a; } }`,
+    changes: false,
+  },
+  {
+    id: 'reflect-set-negated-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !Reflect.set; }`,
+    changes: false,
+  },
+  {
+    id: 'object-assign-negated-through-a-cast-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !(Object as any).assign; }`,
+    changes: false,
+  },
+  {
+    id: 'object-assign-minus-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void -Object.assign; }`,
+    changes: false,
+  },
+  {
+    id: 'object-assign-plus-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void +Object.assign; }`,
+    changes: false,
+  },
+  {
+    id: 'object-assign-complemented-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void ~Object.assign; }`,
+    changes: false,
+  },
+  {
+    id: 'array-prototype-join-negated-pin',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !Array.prototype.join; }`,
+    changes: false,
+  },
+  {
+    id: 'object-assign-stepped-before-in-parentheses-refused',
+    source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { ++((Object as any).assign); }`,
+    changes: true,
+  },
 ] as const;
 
 describe('a file that writes, deletes or steps a member of a holder', () => {
