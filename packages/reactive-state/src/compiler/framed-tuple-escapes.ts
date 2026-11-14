@@ -9,7 +9,6 @@ import {
   isElementAccessExpression,
   isExpression,
   isIdentifier,
-  isNewExpression,
   isNonNullExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
@@ -24,6 +23,7 @@ import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { isTrackedCall } from './framed-called-elements.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
+import { entriesRunCode, runsCode } from './framed-implicit-code.ts';
 import { readsBinding } from './scope.ts';
 
 /** Whether the identifier names one of the bindings, whole. */
@@ -129,17 +129,14 @@ function tupleRunsElsewhere(call: CallExpression, aliases: ReadonlySet<FrameBind
   const file = call.getSourceFile();
   const owner = executionOwner(call);
   let runs = false;
-  const inside: Node[] = [call];
+  const inside: Node[] = [...call.arguments];
   for (let node = inside.pop(); node !== undefined && !runs; node = inside.pop()) {
-    runs =
-      node !== call &&
-      (isCallExpression(node) || isNewExpression(node)) &&
-      executionOwner(node) === owner;
+    runs = runsCode(node) && executionOwner(node) === owner;
     node.forEachChild((child) => {
       inside.push(child);
     });
   }
-  if (!runs) return false;
+  if (!runs && !entriesRunCode(call)) return false;
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (namesTuple(node, aliases)) {
