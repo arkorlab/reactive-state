@@ -14,6 +14,7 @@ import {
   isNumericLiteral,
   isPrivateIdentifier,
   isPropertyAccessExpression,
+  isQualifiedName,
   isShorthandPropertyAssignment,
   isStringLiteral,
   isTaggedTemplateExpression,
@@ -38,6 +39,16 @@ import { readsBinding } from './scope.ts';
 /** Whether a node is a type and no value: the expression a class extends is a value. */
 export function isTypeOnly(node: Node): boolean {
   return isTypeNode(node) && !isExpressionWithTypeArguments(node);
+}
+
+/**
+ * Whether an identifier is read by a type only: `typeof entry`, in a cast, a type argument, the type
+ * of a parameter or of a result, an alias. A type names a variable without using it.
+ */
+export function namesInType(name: Node): boolean {
+  let at = name.parent;
+  while (isQualifiedName(at)) at = at.parent;
+  return isTypeOnly(at);
 }
 
 /** The name an identifier or a private name reads: a variable's, or a property's by its name. */

@@ -30,13 +30,14 @@ import { convertedToName, runsOwnCode } from './framed-entry-keys.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { entriesRunCode, runsCode } from './framed-implicit-code.ts';
+import { namesInType } from './framed-references.ts';
 import { readsBinding } from './scope.ts';
 
-/** Whether the identifier names one of the bindings, whole. */
+/** Whether the identifier names one of the bindings, whole, as a value. */
 function namesTuple(node: Node, aliases: ReadonlySet<FrameBinding>): boolean {
   if (!isIdentifier(node) || !readsBinding(node)) return false;
   const selected = frameBindingOf(node);
-  return selected?.keys.length === 0 && aliases.has(selected.binding);
+  return selected?.keys.length === 0 && aliases.has(selected.binding) && !namesInType(node);
 }
 
 /** Whether an expression gives the value of an operand as its own: a cast, a branch, a logical operand. */
