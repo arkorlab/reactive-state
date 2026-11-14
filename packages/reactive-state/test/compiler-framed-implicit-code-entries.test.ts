@@ -14,32 +14,32 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 const CASES = [
   {
     id: 'lists-written-out',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { const row: [string, number] = ['a', 1]; return Object.fromEntries([row, ['b', 2]]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { const held: [string, number] = ['a', 1]; return Object.fromEntries([held, ['b', 2]]); }`,
     runs: false,
   },
   {
     id: 'list-held-by-a-constant-with-a-text-key',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { const row = ['a', 1]; return Object.fromEntries([row]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { const held = ['a', 1]; return Object.fromEntries([held]); }`,
     runs: false,
   },
   {
     id: 'list-held-by-a-name-written-as-a-whole',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let row: any = ['a', 1]; row = { get 0() { return 'b'; }, 1: 2 }; return Object.fromEntries([row]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let held: any = ['a', 1]; held = { get 0() { return 'b'; }, 1: 2 }; return Object.fromEntries([held]); }`,
     runs: true,
   },
   {
     id: 'list-held-by-a-name-assigned-in-a-branch',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let row: any = ['a', 1]; if (flag) row = {}; return Object.fromEntries([row]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let held: any = ['a', 1]; if (flag) held = {}; return Object.fromEntries([held]); }`,
     runs: true,
   },
   {
     id: 'list-held-by-a-name-assigned-in-a-loop',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let row: any = ['a', 1]; for (const each of [1]) { row = each; } return Object.fromEntries([row]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let held: any = ['a', 1]; for (const each of [1]) { held = each; } return Object.fromEntries([held]); }`,
     runs: true,
   },
   {
     id: 'list-held-by-a-name-of-an-unwritten-let-pin',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let row: [string, number] = ['a', 1]; return Object.fromEntries([row]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { let held: [string, number] = ['a', 1]; return Object.fromEntries([held]); }`,
     runs: false,
   },
   {
@@ -49,7 +49,7 @@ const CASES = [
   },
   {
     id: 'object-with-a-hook-as-the-key-of-a-held-list',
-    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { const row = [{ toString() { return 'a'; } }, 1]; return Object.fromEntries([row]); }`,
+    source: `function frames(error: Error, flag: boolean, name: string, count: number, key: unknown, row: any, rows: any) { const held = [{ toString() { return 'a'; } }, 1]; return Object.fromEntries([held]); }`,
     runs: true,
   },
   {
