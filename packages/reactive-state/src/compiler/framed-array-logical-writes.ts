@@ -1,5 +1,6 @@
 import {
   type BinaryExpression,
+  type ElementAccessExpression,
   type Expression,
   isArrayLiteralExpression,
   isArrowFunction,
@@ -45,7 +46,7 @@ export function framedLogicalElementSkipped(
   sameArray: (value: Expression) => boolean,
 ): boolean {
   if (!LOGICAL_ASSIGNMENTS.has(node.operatorToken.kind)) return false;
-  const slot = initialSlot(node, root);
+  const slot = initialSlot(node, root, sameArray);
   if (slot === undefined || exportedBefore(node, root) || !unchangedBefore(node, root, sameArray))
     return false;
   const value = slot.value === undefined ? undefined : logicalInitialValue(slot.value);
@@ -65,15 +66,23 @@ export function framedLogicalElementSkipped(
  * A fixed index in a literal that a `const` variable is written with keeps a missing entry distinct
  * from an opaque value. No other binding is trusted with its initializer: a parameter's is the
  * default a call that passes nothing gives, a `var` can be declared again with another one, a `let`
- * can be written again, and a name in a pattern takes a part of its source.
+ * can be written again, and a name in a pattern takes a part of its source. Nor is the literal
+ * trusted for an element of another array, or of an element, a member or a call's result: the
+ * receiver of the target is the array `root`, by its name or an alias's, or the slot is unknown.
  */
 function initialSlot(
   node: BinaryExpression,
   root: FrameBinding,
+  sameArray: (value: Expression) => boolean,
 ): { readonly value: Expression | undefined } | undefined {
   const target = unwrapped(node.left);
   const initializer = isIdentifier(root.name) ? constantInitializer(root) : undefined;
-  if (initializer === undefined || !isElementAccessExpression(target)) return undefined;
+  if (
+    initializer === undefined ||
+    !isElementAccessExpression(target) ||
+    !sameArray(receiverOf(target))
+  )
+    return undefined;
   const key = constantValue(unwrapped(target.argumentExpression));
   const index = typeof key === 'string' && /^(?:0|[1-9]\d*)$/u.test(key) ? Number(key) : key;
   if (typeof index !== 'number' || !Number.isSafeInteger(index) || index < 0) return undefined;
@@ -147,11 +156,15 @@ function inTarget(node: Node, read: BinaryExpression): boolean {
   const { left } = read;
   if (node.pos < left.pos || node.end > left.end) return false;
   const target = unwrapped(left);
-  if (!isElementAccessExpression(target)) return false;
-  let receiver: Expression = unwrapped(target.expression);
+  return isElementAccessExpression(target) && node !== receiverOf(target);
+}
+
+/** What the receiver of an element comes to: its last operand where it is a comma expression. */
+function receiverOf(target: ElementAccessExpression): Expression {
+  let receiver = unwrapped(target.expression);
   for (let next = commaResult(receiver); next !== undefined; next = commaResult(receiver))
     receiver = next;
-  return node !== receiver;
+  return receiver;
 }
 
 /** What a comma expression comes to: its last operand. */
