@@ -3686,6 +3686,36 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'form-read-as-a-descriptor-and-as-a-map-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const mk = (): any => ({ get: () => error }); const shared: any = { 0: mk() }; const a: any[] = ['safe']; Object.defineProperties(a, { ...shared, 1: shared }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'form-read-as-a-map-and-as-a-descriptor-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const mk = (): any => ({ get: () => error }); const shared: any = { 0: mk() }; const a: any[] = ['safe']; Object.defineProperties(a, { 1: shared, ...shared }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'list-read-as-a-spread-and-as-an-entry-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const mk = (): any => ({ get: () => error }); const shared: any = [mk()]; const a: any[] = ['safe']; Object.defineProperties(a, [...shared, shared] as any); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-form-read-as-a-descriptor-and-as-a-map-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const mk = (): any => ({ get: () => error }); const inner: any = { 0: mk() }; const outer: any = { ...inner, 1: inner }; const a: any[] = ['safe']; Object.defineProperties(a, outer); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'nested-form-read-as-a-map-and-as-a-descriptor-is-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const mk = (): any => ({ get: () => error }); const inner: any = { 0: mk() }; const outer: any = { 1: inner, ...inner }; const a: any[] = ['safe']; Object.defineProperties(a, outer); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'form-read-in-two-roles-with-known-values-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const mk = (): any => ({ get: () => error }); const shared: any = { 0: 'safe' }; const a: any[] = ['safe']; Object.defineProperties(a, { ...shared, 1: shared }); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'define-logical-after-condition-test-pin',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { get: () => 'safe' }; if (descriptor) {} descriptor.get ??= () => error; Object.defineProperty(a, 0, descriptor); return String(a); }`,
     converts: false,
