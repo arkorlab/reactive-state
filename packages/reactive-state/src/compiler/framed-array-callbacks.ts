@@ -145,6 +145,32 @@ export function callsBack(name: string): boolean {
   return ARRAY_PARAMETER.has(name) || name === 'sort' || name === 'toSorted';
 }
 
+/** The methods whose answer holds the elements of the array, or is one: an array that holds itself holds itself in it. */
+const COPYING: ReadonlySet<string> = new Set([
+  'at',
+  'concat',
+  'entries',
+  'filter',
+  'find',
+  'findLast',
+  'flat',
+  'flatMap',
+  'pop',
+  'shift',
+  'slice',
+  'splice',
+  'toReversed',
+  'toSorted',
+  'toSpliced',
+  'values',
+  'with',
+]);
+
+/** Whether a method answers elements of the array, in a new array, an iterator or alone. */
+export function copiesElements(name: string): boolean {
+  return COPYING.has(name);
+}
+
 /**
  * The natives that take no more than two arguments, and so ignore the third argument of a callback,
  * which is the array, and the fourth of a reducer. Another native may use it: a callback gets the

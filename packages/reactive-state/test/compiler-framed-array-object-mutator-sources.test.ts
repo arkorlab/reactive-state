@@ -4006,6 +4006,166 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'carrier-sliced-and-written-through-the-copy-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const copy = array.slice(); copy[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-at-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = array.at(0); x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-concatenated-and-written-through-the-copy-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.concat(); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-pop-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = array.pop(); x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-flattened-and-written-through-the-copy-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.flat(0); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-values-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = array.values().next().value; x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-entries-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = array.entries().next().value[1]; x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-shift-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = array.shift(); x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-spliced-and-written-through-the-removed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.splice(0, 1); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-reversed-into-a-copy-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.toReversed(); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-sorted-into-a-copy-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.toSorted(); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-spliced-into-a-copy-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.toSpliced(1, 0); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-find-last-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = array.findLast(() => true); x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-sliced-by-a-borrowed-method-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = Array.prototype.slice.call(array); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-taken-by-a-borrowed-at-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const x = Array.prototype.at.call(array, 0); x[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-flat-mapped-and-written-through-the-copy-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = array.flatMap((x: any) => [x]); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'sliced-array-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = ['safe']; const copy = array.slice(); return String(copy); }`,
+    converts: false,
+  },
+  {
+    id: 'sliced-array-written-through-the-copy-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = ['safe']; const copy = array.slice(); copy[0] = 'x'; return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'carrier-joined-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); return array.join(','); }`,
+    converts: false,
+  },
+  {
+    id: 'carrier-given-to-its-own-index-of-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); array.indexOf(array); return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-get-own-property-descriptor-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Object.getOwnPropertyDescriptor(array, 0) as any; d.value[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-get-own-property-descriptors-and-written-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Object.getOwnPropertyDescriptors(array) as any; d[0].value[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-values-and-written-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const v = Object.values(array); v[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-a-set-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const s = new Set(array); [...s][0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-element-given-by-reflect-get-own-property-descriptor-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Reflect.getOwnPropertyDescriptor(array, 0) as any; d.value[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-grouped-and-written-through-the-group-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const g = (Object as any).groupBy(array, () => 'k'); g.k[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-structured-clone-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const c = structuredClone(array); c[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-keys-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); Object.keys(array); return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-of-an-element-of-a-plain-array-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = ['safe']; Object.getOwnPropertyDescriptor(array, 0); return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'carrier-element-given-by-a-descriptor-kept-by-a-constant-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const d = Object.getOwnPropertyDescriptor(array, 0) as any; const m = d.value; m[0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
+    id: 'carrier-own-property-names-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); Object.getOwnPropertyNames(array); return String(array); }`,
+    converts: false,
+  },
+  {
+    id: 'carrier-descriptors-given-to-define-properties-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const array: any[] = []; Object.assign(array, { 0: array.reverse() }); const copy: any[] = []; Object.defineProperties(copy, Object.getOwnPropertyDescriptors(array)); copy[0][0] = error; return String(array); }`,
+    converts: true,
+  },
+  {
     id: 'sequence-ending-at-an-unknown-reassigned-converts',
     source: `function frames(error: Error, original: unknown[], flag: boolean) { let values = (0, original); values = 'other'; return String([values]); }`,
     converts: true,
