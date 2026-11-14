@@ -395,6 +395,46 @@ const CASES = [
     source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: 0 }; const source = { x: error } as { x: unknown }; touch(source); Object.assign(box, source); return box.x; }`,
     selects: true,
   },
+  {
+    id: 'unrelated-parameter-of-the-same-name',
+    source: `function other(source: { x: unknown }, touch: (value: unknown) => void) { touch(source); } function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unrelated-write-through-a-parameter-of-the-same-name',
+    source: `function other(source: { x: unknown }, error: Error) { source.x = error; } function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unrelated-callback-parameter-of-the-same-name',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; const each = (source: { x: unknown }) => { touch(source); }; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unrelated-variable-of-another-scope',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; Object.assign(box, source); { const source = { x: 1 }; touch(source); source.x = 2; } return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'unrelated-parameter-named-like-an-alias',
+    source: `function other(alias: { x: unknown }, touch: (value: unknown) => void) { touch(alias); } function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; const alias = source; Object.assign(box, alias); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'write-in-a-block-of-the-same-name',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; { source.x = error; } Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'write-in-a-function-without-the-name',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; const run = (value: unknown) => { source.x = error; }; run(1); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'write-through-an-alias-of-another-scope',
+    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; const alias = source; (() => { alias.x = error; })(); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
 ] as const;
 
 describe('what the sources of one Object.assign leave in a member', () => {

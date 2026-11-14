@@ -7,7 +7,9 @@ import { describe, expect, it } from 'vitest';
  * Whether code may have changed a constant before `Object.assign` copies it is read from an index of
  * the module's mentions and aliases, made once for the module: a module of many small constants,
  * each copied, costs in proportion to its size, not to the square of it, as a walk of the whole
- * module for each constant would (two thousand copies took a quarter of a minute). Each row runs in
+ * module for each constant would (two thousand copies took a quarter of a minute), and a name that
+ * many functions declare is told apart by the declaration each mention stands for, once for each
+ * mention, not once for each declaration of the name. Each row runs in
  * a process of its own, killed after a few seconds, so a reader that does not return in time fails
  * its row and no more. The process starts in the package's own directory, where `typescript/ast` is
  * the package's TypeScript, whichever directory the tests are run from.
@@ -23,16 +25,20 @@ const SCRIPT = [
   `const { framedMemberWrites } = await import(${JSON.stringify(WRITES)});`,
   `const { openTypeScript, parseModule } = await import(${JSON.stringify(TYPESCRIPT)});`,
   'const [count, shape] = process.argv.slice(1);',
-  'const lines = [',
-  "  'export function frames(error: Error, touch: (value: unknown) => void) {',",
-  "  'const box: Record<string, unknown> = { x: error };',",
-  '];',
+  'const lines = [];',
+  "if (shape === 'plain' || shape === 'handed') lines.push('export function frames(error: Error, touch: (value: unknown) => void) {', 'const box: Record<string, unknown> = { x: error };');",
   'for (let at = 0; at < Number(count); at += 1) {',
+  "  if (shape.startsWith('same-name')) {",
+  "    lines.push('export function f' + at + '(error: Error) { const box: Record<string, unknown> = { x: error }; const source = { x: ' + at + ' };');",
+  "    if (shape === 'same-name-alias') lines.push('const alias = source;');",
+  "    lines.push('Object.assign(box, ' + (shape === 'same-name-alias' ? 'alias' : 'source') + '); return String(box.x); }');",
+  '    continue;',
+  '  }',
   "  lines.push('const source' + at + ' = { x: ' + at + ' };');",
   "  if (shape === 'handed') lines.push('touch(source' + at + ');');",
   "  lines.push('Object.assign(box, source' + at + ');');",
   '}',
-  "lines.push('return String(box.x);', '}');",
+  "if (shape === 'plain' || shape === 'handed') lines.push('return String(box.x);', '}');",
   'const api = openTypeScript();',
   "const parsed = parseModule(api, 'source-copies.ts', lines.join(' '));",
   'const writes = framedMemberWrites(parsed.sourceFile);',
@@ -43,6 +49,8 @@ const SCRIPT = [
 const CASES = [
   { id: 'constants-copied-and-never-changed', shape: 'plain', reopened: 0 },
   { id: 'constants-copied-and-handed-to-a-call', shape: 'handed', reopened: COPIES },
+  { id: 'one-name-in-as-many-functions', shape: 'same-name', reopened: 0 },
+  { id: 'one-name-and-one-alias-in-as-many-functions', shape: 'same-name-alias', reopened: 0 },
 ] as const;
 
 describe('a module of many constants each copied by Object.assign', () => {

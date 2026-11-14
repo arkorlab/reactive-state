@@ -33,6 +33,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Whether a constant object may have changed where code copies it: any mention but a read says so. */
@@ -67,6 +68,15 @@ export function sourceChanged(holder: VariableDeclaration): boolean {
 interface Index {
   readonly mentions: ReadonlyMap<string, readonly Identifier[]>;
   readonly aliases: ReadonlyMap<string, readonly VariableDeclaration[]>;
+  /** The mentions and the aliases of a name, once its declarations are told apart. */
+  readonly mentioned: Map<string, Grouped<Identifier>>;
+  readonly aliased: Map<string, Grouped<VariableDeclaration>>;
+}
+
+/** Items of a name by the declaration the name stands for; `open` are those no declaration is found for. */
+interface Grouped<Item> {
+  readonly declared: Map<Node, Item[]>;
+  readonly open: Item[];
 }
 
 /** The index of each module. */
@@ -84,55 +94,92 @@ function indexOf(file: SourceFile): Index {
     if (isIdentifier(node) && readsBinding(node)) append(mentions, node.text, node);
     if (isVariableDeclaration(node)) {
       const named = aliasedName(node);
-      if (named !== undefined) append(aliases, named, node);
+      if (named !== undefined) append(aliases, named.text, node);
     }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  const index = { mentions, aliases };
+  const index = { mentions, aliases, mentioned: new Map(), aliased: new Map() };
   INDEXES.set(file, index);
   return index;
 }
 
 /** Adds a value to the list a key holds. */
-function append<Value>(lists: Map<string, Value[]>, key: string, value: Value): void {
+function append<Key, Value>(lists: Map<Key, Value[]>, key: Key, value: Value): void {
   const list = lists.get(key);
   if (list === undefined) lists.set(key, [value]);
   else list.push(value);
 }
 
-/** The text of the variable a declaration gives a new name to, none for another declaration. */
-function aliasedName(declaration: VariableDeclaration): string | undefined {
+/** The variable a declaration gives a new name to, none for another declaration. */
+function aliasedName(declaration: VariableDeclaration): Identifier | undefined {
   const { name, initializer } = declaration;
   if (initializer === undefined || !isIdentifier(name)) return undefined;
   const value = unwrapped(initializer);
-  return isIdentifier(value) ? value.text : undefined;
+  return isIdentifier(value) ? value : undefined;
 }
 
-/** Whether a mention of the constant, or of a constant that names it, may change it. */
-function mentionsChange(holder: VariableDeclaration): boolean {
-  const { name } = holder;
-  if (!isIdentifier(name)) return true;
-  const index = indexOf(holder.getSourceFile());
-  const names = new Set([name.text]);
-  const pending = [name.text];
-  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const aliases = index.aliases.get(each);
-    if (aliases === undefined) continue;
-    for (const alias of aliases) {
-      const aliasName = (alias.name as Identifier).text;
-      if (names.has(aliasName)) continue;
-      names.add(aliasName);
-      pending.push(aliasName);
+/**
+ * The items that name a text, grouped by the declaration each of them stands for, which is looked
+ * up once for each item however many declarations share the text.
+ */
+function groupedBy<Item>(
+  cache: Map<string, Grouped<Item>>,
+  items: ReadonlyMap<string, readonly Item[]>,
+  text: string,
+  nameOf: (item: Item) => Identifier | undefined,
+): Grouped<Item> {
+  const known = cache.get(text);
+  if (known !== undefined) return known;
+  const group: Grouped<Item> = { declared: new Map(), open: [] };
+  const named = items.get(text);
+  if (named !== undefined) {
+    for (const item of named) {
+      const name = nameOf(item);
+      const declaration = name === undefined ? undefined : frameDeclarationOf(name);
+      if (declaration === undefined) group.open.push(item);
+      else append(group.declared, declaration, item);
     }
   }
-  return [...names].some((each) => mentionTouches(index, each));
+  cache.set(text, group);
+  return group;
 }
 
-/** Whether a mention of a name may change what it names. */
-function mentionTouches(index: Index, name: string): boolean {
-  return (index.mentions.get(name) ?? []).some((mention) => touches(mention));
+/**
+ * Whether a mention of the constant, or of a constant that names it, may change it. A mention that
+ * names another declaration of the same text, a parameter or a variable of another scope, is none.
+ */
+function mentionsChange(holder: VariableDeclaration): boolean {
+  if (!isIdentifier(holder.name)) return true;
+  const index = indexOf(holder.getSourceFile());
+  const known = new Set<Node>([holder]);
+  const pending = [holder];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (mentionsOf(index, each).some((mention) => touches(mention))) return true;
+    for (const alias of aliasesOf(index, each)) {
+      if (known.has(alias)) continue;
+      known.add(alias);
+      pending.push(alias);
+    }
+  }
+  return false;
+}
+
+/** The mentions of a variable's name that stand for it, and those no declaration is found for. */
+function mentionsOf(index: Index, declaration: VariableDeclaration): readonly Identifier[] {
+  const { name } = declaration;
+  if (!isIdentifier(name)) return [];
+  const group = groupedBy(index.mentioned, index.mentions, name.text, (each) => each);
+  return [...(group.declared.get(declaration) ?? []), ...group.open];
+}
+
+/** The variables declared as another variable that names this declaration. */
+function aliasesOf(index: Index, declaration: VariableDeclaration): readonly VariableDeclaration[] {
+  const { name } = declaration;
+  if (!isIdentifier(name)) return [];
+  const group = groupedBy(index.aliased, index.aliases, name.text, aliasedName);
+  return [...(group.declared.get(declaration) ?? []), ...group.open];
 }
 
 /** Whether a mention may change the object, or hand it to code that may: no read is such a use. */
