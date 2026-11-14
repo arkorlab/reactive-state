@@ -5,12 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isErased, readsCodeGlobal } from '../src/compiler/code-globals.ts';
 
 /**
- * A function of the language's that reads a member by the key it is given, `Reflect.get`, reads it
- * as well where the code binds it: `Reflect.get.bind(null, fn, 'constructor')()` is `Reflect.get(fn,
- * 'constructor')` — `bind` keeps what it is given after the `this` it takes, and a call of what it
- * made is given what follows. The key reads at the call that gives it, once: where `bind` is given
- * it, `bind` is the read; where the call is, the call is. What the code does not show — a bound
- * function it holds by a name, a key past a spread, a key it computes — is not read.
+ * A function of the language's that reads a member by the key it is given, `Reflect.get`, is read
+ * as well where the code binds it: `Reflect.get.bind(null, fn, 'constructor')()`. A call that writes
+ * the text `'constructor'` among its arguments and holds the reader reads it, wherever the text
+ * stands: as the `this` `bind` takes, or after a key `bind` was given. What the code does not show —
+ * a bound function it holds by a name, a key it computes — is not read.
  */
 
 const CASES = [
@@ -100,12 +99,12 @@ const CASES = [
     what: 'another key, given to the call',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(run, 'constructor')"],
     source: "return Reflect.get.bind(run, 'constructor')();",
     what: "`'constructor'` as what is read, the `this` taken first",
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run, 'name')('constructor')"],
     source: "return Reflect.get.bind(null, run, 'name')('constructor');",
     what: 'a key the call is given after the one `bind` was',
   },

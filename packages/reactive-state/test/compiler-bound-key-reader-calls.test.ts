@@ -5,12 +5,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isErased, readsCodeGlobal } from '../src/compiler/code-globals.ts';
 
 /**
- * A function `bind` made of a key reader of the language's keeps what it was given, and what a call
- * of it is given is what follows — also where the call is borrowed, `call` or `apply`: `Reflect.get
- * .bind(null, fn).call(null, 'constructor')` is `Reflect.get(fn, 'constructor')`. The key reads at
- * the call that gives it, once: where `bind` is given it, `bind` is the read; where the borrowed call
- * is, that call is. What the code does not show — an array `apply` is given by a name, a key past a
- * spread — is not read.
+ * A function `bind` made of a key reader of the language's is read where a call of it, borrowed
+ * through `call` or `apply`, is given the text: `Reflect.get.bind(null, fn).call(null,
+ * 'constructor')`. A call that writes the text `'constructor'` among its arguments and holds the
+ * bound reader reads it, wherever the text stands, a key after the one `bind` was given included.
+ * What the code does not show — an array `apply` is given by a name, a key it computes — is not read.
  */
 
 const CASES = [
@@ -86,12 +85,12 @@ const CASES = [
     what: 'another key, applied',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run).call('constructor')"],
     source: "return Reflect.get.bind(null, run).call('constructor');",
     what: "`'constructor'` as the `this` a borrowed call takes",
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run, 'name').call(null, 'constructor')"],
     source: "return Reflect.get.bind(null, run, 'name').call(null, 'constructor');",
     what: 'a key the borrowed call is given after the one `bind` was',
   },
