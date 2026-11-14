@@ -21,6 +21,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 import { arrayIdentity } from './framed-array-identity.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedKeyNames } from './framed-keys.ts';
@@ -114,6 +115,13 @@ function isPrimitiveName(name: Identifier): boolean {
 }
 
 /**
+ * The names the language gives a primitive: `undefined`, `NaN`, `Infinity`. A name spelled so that the code
+ * declares in the scope it is read in is any value its declaration gives it, which `globalPathOf` does not
+ * resolve to a global.
+ */
+const PRIMITIVE_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN', 'undefined']);
+
+/**
  * Whether the key of an entry, which `Object.fromEntries` converts to the name it installs, may be an
  * object: it is not a text, a number or a primitive written out, a constant that is one, a name of
  * a type that is one, or a name whose written values are all texts. An object is converted by its
@@ -133,7 +141,9 @@ function keyMayBeObject(key: Expression | undefined): boolean {
     value.kind === SyntaxKind.NullKeyword
   )
     return false;
-  if (isIdentifier(value) && (value.text === 'undefined' || isPrimitiveName(value))) return false;
+  const global = globalPathOf(value)?.join('.');
+  if (global !== undefined && PRIMITIVE_GLOBALS.has(global)) return false;
+  if (isIdentifier(value) && isPrimitiveName(value)) return false;
   return constantValue(value) === undefined && framedKeyNames(value) === undefined;
 }
 
