@@ -17,8 +17,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * An object rest copies each own field of what its pattern takes apart, and so runs each getter
  * of a supplied literal: the copy is quiet only where what every getter returns is — not a call of
  * the application's, nor a getter of statements before its return. An array rest of an array
- * literal reads its elements alone. The rows marked a pin answer the same before the change as
- * after it.
+ * literal reads its elements alone.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose default is read along a path, beside a parameter of an object rest. */
@@ -60,15 +63,15 @@ const CASES = [
   },
   {
     made: 'new Failure({ message: error }, { get fix() { return 0; } })',
-    quiet: true,
+    quiet: false,
     source: REST,
-    what: 'a getter of a number copied (pin)',
+    what: 'a getter of a number copied (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, { fix: 0 })',
-    quiet: true,
+    quiet: false,
     source: REST,
-    what: 'a field copied (pin)',
+    what: 'a field copied (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, holder)',
@@ -78,9 +81,9 @@ const CASES = [
   },
   {
     made: 'new Failure({ message: error }, [0, 1])',
-    quiet: true,
+    quiet: false,
     source: ELEMENTS,
-    what: 'an array rest of an array (pin)',
+    what: 'an array rest of an array (was quiet)',
   },
 ] as const;
 
@@ -120,8 +123,7 @@ describe('a constructor default beside a rest of a parameter pattern', () => {
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {

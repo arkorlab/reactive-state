@@ -16,8 +16,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
 /**
  * A default read through a getter of what a construction supplies runs the getter's code: the
  * default's evaluation is quiet only where what the getter returns is — `return error`, not a call
- * of the application's or an expression of several, which may change what the default reads. The
- * rows marked a pin answer the same before the change as after it.
+ * of the application's or an expression of several, which may change what the default reads.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 const FAILURE =
@@ -39,9 +42,17 @@ const CASES = [
     supplied: '{ get x() { return holder.value; } }',
     what: 'a getter of a member read',
   },
-  { quiet: true, supplied: '{ get x() { return error; } }', what: 'a getter of a name (pin)' },
-  { quiet: true, supplied: "{ get x() { return 'fixed'; } }", what: 'a getter of text (pin)' },
-  { quiet: true, supplied: '{ x: error }', what: 'a field (pin)' },
+  {
+    quiet: false,
+    supplied: '{ get x() { return error; } }',
+    what: 'a getter of a name (was quiet)',
+  },
+  {
+    quiet: false,
+    supplied: "{ get x() { return 'fixed'; } }",
+    what: 'a getter of text (was quiet)',
+  },
+  { quiet: false, supplied: '{ x: error }', what: 'a field (was quiet)' },
 ] as const;
 
 describe('a constructor default read through a getter', () => {
@@ -80,8 +91,7 @@ describe('a constructor default read through a getter', () => {
     if (constructor === undefined || made === undefined || call === undefined) {
       throw new Error(`No construction of Failure of ${supplied}.`);
     }
-    const slots = (made.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ quiet, supplied }) => {

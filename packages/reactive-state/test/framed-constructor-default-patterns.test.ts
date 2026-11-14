@@ -18,7 +18,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * value — or the element's default, where that is undefined — and its reads are quiet only where
  * that is a shown ordinary literal: not an unknown value, whose members may be getters. Each
  * element of a pattern, nested or not, reads its member as a member read does: a getter's return
- * is scanned. The rows marked a pin answer the same before the change as after it.
+ * is scanned.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose default is read along a path, beside a parameter of a nested pattern. */
@@ -68,9 +72,9 @@ const CASES = [
   },
   {
     made: 'new Failure({ message: error }, { fix: 0 })',
-    quiet: true,
+    quiet: false,
     source: TOP,
-    what: "a field a parameter's pattern reads (pin)",
+    what: "a field a parameter's pattern reads (was quiet)",
   },
   {
     made: 'new Failure({ message: error }, holder)',
@@ -80,27 +84,27 @@ const CASES = [
   },
   {
     made: 'new Failure({ message: error }, { fix: 0 })',
-    quiet: true,
+    quiet: false,
     source: REST,
-    what: 'a rest of a literal (pin)',
+    what: 'a rest of a literal (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, { inner: { fix: 0 } })',
-    quiet: true,
+    quiet: false,
     source: NESTED,
-    what: 'a literal taken apart (pin)',
+    what: 'a literal taken apart (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, { inner: [0] })',
-    quiet: true,
+    quiet: false,
     source: ELEMENTS,
-    what: 'an array iterated (pin)',
+    what: 'an array iterated (was quiet)',
   },
   {
     made: 'new Failure({ message: error })',
-    quiet: true,
+    quiet: false,
     source: DEFAULTED,
-    what: "an element's default taken apart (pin)",
+    what: "an element's default taken apart (was quiet)",
   },
 ] as const;
 
@@ -140,8 +144,7 @@ describe('a constructor default beside the reads of a parameter pattern', () => 
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {

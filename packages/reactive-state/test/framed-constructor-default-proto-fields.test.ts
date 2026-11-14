@@ -19,8 +19,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * what a getter of the prototype returns, the application's code. Such a read is no shown ordinary
  * field, as the default's own checks have it. A key the literal does write, beside a prototype it
  * sets, is read as before, and so is an own `__proto__` a getter or a shorthand makes, whichever
- * comes first: it stands before the prototype's inherited one. The rows marked a pin answer the
- * same before the change as after it.
+ * comes first: it stands before the prototype's inherited one.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose default reads a member of its first argument. */
@@ -72,15 +75,15 @@ const CASES = [
   },
   {
     made: 'new Failure({ __proto__: null, message: "fixed" })',
-    quiet: true,
+    quiet: false,
     source: MEMBER,
-    what: 'a null prototype beside a field read (pin)',
+    what: 'a null prototype beside a field read (was quiet)',
   },
   {
     made: 'new Failure({ __proto__: { x: 1 }, message: "fixed" })',
-    quiet: true,
+    quiet: false,
     source: MEMBER,
-    what: 'a prototype beside a field read (pin)',
+    what: 'a prototype beside a field read (was quiet)',
   },
   {
     made: 'new Failure({ __proto__: null })',
@@ -90,9 +93,9 @@ const CASES = [
   },
   {
     made: 'new Failure({ get __proto__() { return 0; } })',
-    quiet: true,
+    quiet: false,
     source: PROTO,
-    what: 'an own getter of a number (pin)',
+    what: 'an own getter of a number (was quiet)',
   },
   {
     made: 'new Failure({ get __proto__() { return mutate(); } })',
@@ -102,9 +105,9 @@ const CASES = [
   },
   {
     made: 'new Failure({ __proto__ })',
-    quiet: true,
+    quiet: false,
     source: PROTO,
-    what: 'an own shorthand field (pin)',
+    what: 'an own shorthand field (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, { __proto__: holder })',
@@ -114,39 +117,39 @@ const CASES = [
   },
   {
     made: 'new Failure({ __proto__: null, get __proto__() { return 0; } })',
-    quiet: true,
+    quiet: false,
     source: PROTO,
-    what: 'an own getter after a prototype',
+    what: 'an own getter after a prototype (was quiet)',
   },
   {
     made: 'new Failure({ get __proto__() { return 0; }, __proto__: null })',
-    quiet: true,
+    quiet: false,
     source: PROTO,
-    what: 'an own getter before a prototype',
+    what: 'an own getter before a prototype (was quiet)',
   },
   {
     made: 'new Failure({ __proto__: null, __proto__ })',
-    quiet: true,
+    quiet: false,
     source: PROTO,
-    what: 'an own shorthand after a prototype',
+    what: 'an own shorthand after a prototype (was quiet)',
   },
   {
     made: 'new Failure({ __proto__, __proto__: null })',
-    quiet: true,
+    quiet: false,
     source: PROTO,
-    what: 'an own shorthand before a prototype',
+    what: 'an own shorthand before a prototype (was quiet)',
   },
   {
     made: 'new Failure({ __proto__: null, get __proto__() { return 0; } })',
-    quiet: true,
+    quiet: false,
     source: ELEMENT,
-    what: 'an own getter beside a prototype, read by an element key',
+    what: 'an own getter beside a prototype, read by an element key (was quiet)',
   },
   {
     made: 'new Failure({ message: error }, { __proto__: null, get __proto__() { return 0; } })',
-    quiet: true,
+    quiet: false,
     source: PATTERN,
-    what: 'an own getter beside a prototype, taken by a parameter pattern',
+    what: 'an own getter beside a prototype, taken by a parameter pattern (was quiet)',
   },
   {
     made: 'new Failure({ __proto__: null, get __proto__() { return mutate(); } })',
@@ -205,8 +208,7 @@ describe('a constructor default beside a read of a literal member named __proto_
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {

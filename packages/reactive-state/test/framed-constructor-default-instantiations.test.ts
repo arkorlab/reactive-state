@@ -17,7 +17,11 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * An instantiation expression, `a.x<string>`, `make()<string>`, is a type node of TypeScript's
  * syntax tree whose expression runs: a call, a construction, a read of a getter. A default is
  * quiet only where that expression is, so the scan does not leave it out with the types written
- * beside it. The rows marked a pin answer the same before the change as after it.
+ * beside it.
+ * The scan no longer follows what a construction supplies: a default, or a `super` argument,
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
+ * pin answer the same before that change as after it; those marked "was quiet" answered true
+ * before it.
  */
 
 /** A constructor whose default is the expression `init`. */
@@ -61,15 +65,15 @@ const CASES = [
   },
   {
     made: 'new Failure({ x: 0 })',
-    quiet: true,
+    quiet: false,
     source: defaultOf('a.x<string>'),
-    what: 'a field read instantiated (pin)',
+    what: 'a field read instantiated (was quiet)',
   },
   {
     made: 'new Failure({ message: "fixed" })',
-    quiet: true,
+    quiet: false,
     source: defaultOf('a.message as string'),
-    what: 'a field read with a type written beside it (pin)',
+    what: 'a field read with a type written beside it (was quiet)',
   },
   {
     made: 'new Failure({ get x() { return mutate(); } })',
@@ -122,8 +126,7 @@ describe('a constructor default beside an instantiation expression', () => {
     if (constructor === undefined || construction === undefined || call === undefined) {
       throw new Error(`No construction of Failure as ${made}.`);
     }
-    const slots = (construction.arguments ?? []).map((value) => [{ keys: [], value }]);
-    return framedConstructorDefaultEvaluation(constructor.parameters, slots, call.arguments);
+    return framedConstructorDefaultEvaluation(constructor.parameters, call.arguments);
   }
 
   it.each(CASES)('$what', ({ made, quiet, source }) => {
