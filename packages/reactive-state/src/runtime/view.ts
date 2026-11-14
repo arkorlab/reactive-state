@@ -10,6 +10,7 @@ import type {
 import { BUILD_MISMATCH, REVOKING_STATUSES } from '../status.ts';
 import { canonicalJson } from './json.ts';
 import { type Keeping, SetStates } from './set-states.ts';
+import { isDefinitive } from './store-answers.ts';
 import {
   carries,
   type Held,
@@ -121,9 +122,6 @@ type Failure = Extract<Result<never>, { readonly ok: false }>;
 const REQUEST_TIMEOUT_MS = 20_000;
 const FIRST_RETRY_MS = 1000;
 const LONGEST_RETRY_MS = 30_000;
-const CLIENT_ERRORS = { first: 400, last: 499 } as const;
-const HTTP_REQUEST_TIMEOUT = 408;
-const HTTP_TOO_MANY_REQUESTS = 429;
 const REFUSED = 'The page could not be shown.';
 
 function own<T>(target: Record<string, T>, name: string, value: T): void {
@@ -187,16 +185,6 @@ function partsChanged(rendered: View, wanted: View): View {
   return changed;
 }
 
-/** Whether a refusal is one a resend would only repeat: a 4xx, but a timeout's or a throttle's. */
-function isDefinitive(status: number): boolean {
-  return (
-    status >= CLIENT_ERRORS.first &&
-    status <= CLIENT_ERRORS.last &&
-    status !== HTTP_REQUEST_TIMEOUT &&
-    status !== HTTP_TOO_MANY_REQUESTS
-  );
-}
-
 /** Whether a Server Function's answer is a `Result` of an answer, as a newer build's may not be. */
 function isResult<T>(value: unknown): value is Result<ViewAnswer<T>> {
   if (typeof value !== 'object' || value === null) {
@@ -207,13 +195,16 @@ function isResult<T>(value: unknown): value is Result<ViewAnswer<T>> {
     return true;
   }
   const frame = (value as { readonly value?: { readonly frame?: Partial<Frame> } }).value?.frame;
+  // A frame of `null`, or of a view of `null`, which JSON and React's payload carry, is none either,
+  // though `typeof` says `null` is an object.
+  const view: unknown = frame?.view;
   return (
     ok === true &&
-    typeof frame === 'object' &&
-    typeof frame.rootKey === 'string' &&
+    typeof frame?.rootKey === 'string' &&
     typeof frame.revision === 'number' &&
     typeof frame.subscription === 'string' &&
-    typeof frame.view === 'object'
+    typeof view === 'object' &&
+    view !== null
   );
 }
 
@@ -385,7 +376,8 @@ export class ViewController<T> {
     const kept = this.#set.kept;
     const valuesOf = (instance: string) => this.#valuesOf(instance);
     const held = this.#heldIn(subscription);
-    const { named, rest } = namedParts(this.#view, changed, { held, kept, valuesOf });
+    const answered = this.#answered === this.#generation;
+    const { named, rest } = namedParts(this.#view, changed, { answered, held, kept, valuesOf });
     const withValues = sentInputs(named, kept, valuesOf);
     // Past what a request carries with them, it goes without, and each part it names shows the sites
     // it names alone: one a followed state opens there is asked for once the page shows it.
@@ -563,11 +555,15 @@ export class ViewController<T> {
 
   /**
    * The root is no longer shown, or is shown anew: every wait is let go of, every answer on its way
-   * dropped, and what its parts showed forgotten — a part shown again commits it again.
+   * dropped — what it was sent for asked for again once the root is shown, as for a request lost —
+   * and what its parts showed forgotten — a part shown again commits it again.
    */
   stop(): void {
     this.#started = false;
-    clearTimeout(this.#inFlight?.timer);
+    if (this.#inFlight !== undefined) {
+      clearTimeout(this.#inFlight.timer);
+      this.#restore(this.#inFlight);
+    }
     clearTimeout(this.#retry);
     this.#inFlight = undefined;
     this.#retry = undefined;
@@ -581,7 +577,9 @@ export class ViewController<T> {
 
   /**
    * The root committed `frame`: its first, one the route rendered, or an answer. The sites that
-   * waited render again, with what the frame's tree brought them.
+   * waited render again, with what the frame's tree brought them. A frame the route rendered
+   * answers none of the page's views — it was rendered for the sites the states' first values show
+   * — and the root is rendered again for what the page shows otherwise, as for the first.
    */
   show(frame: Frame): void {
     if (frame === this.#committed || frame.rootKey !== this.#rootKey) {
@@ -589,6 +587,9 @@ export class ViewController<T> {
     }
     this.#committed = frame;
     if (this.#shown === undefined || frame.revision >= this.#shown.revision) {
+      if (frame !== this.#shown) {
+        this.#answered = 0;
+      }
       this.#shown = frame;
     }
     if (this.#refreshing) {

@@ -129,28 +129,38 @@ interface InterfaceShapes {
   readonly unknown: boolean;
 }
 
+/** An interface's shapes in the order TypeScript lists their signatures: own, then each base's. */
+interface InterfaceSignatureShapes extends InterfaceShapes {
+  /** How many of `sources` precede the last part whose signatures cannot be read, if any. */
+  readonly unknownAfter?: number | undefined;
+}
+
 const INTERFACE_SHAPES = new WeakMap<InterfaceDeclaration, TypeLiteralNode>();
 
 /** Written interface bodies precede inherited signatures, retaining each original argument environment. */
 export function interfaceShapeReadings(
   at: TypeReading,
   operands: Operands,
-): InterfaceShapes | undefined {
+): InterfaceSignatureShapes | undefined {
   if (interfaceDeclaration(at.type) === undefined) return undefined;
   const sources: TypeReading[] = [];
-  const pending = [at];
-  let unknown = false;
+  // `null` holds the place of a base read as nothing, where its signatures would be listed.
+  const pending: (TypeReading | null)[] = [at];
+  let unknownAfter: number | undefined;
   for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
+    if (reading === null) {
+      unknownAfter = sources.length;
+      continue;
+    }
     const part = interfaceShapesStep(reading);
     sources.push(...part.sources);
-    unknown ||= part.unknown;
+    if (part.unknown) unknownAfter = sources.length;
     for (const base of part.bases.toReversed()) {
       const resolved = operands(base);
-      if (resolved.length === 0) unknown = true;
-      pending.push(...resolved.toReversed());
+      pending.push(...(resolved.length === 0 ? [null] : resolved.toReversed()));
     }
   }
-  return { sources, unknown };
+  return { sources, unknown: unknownAfter !== undefined, unknownAfter };
 }
 
 /** One inherited declaration is expanded once in its own bound environment, before following bases. */
@@ -197,4 +207,72 @@ function interfaceShape(declaration: InterfaceDeclaration): TypeLiteralNode {
   const type = factory.createTypeLiteralNode(declaration.members);
   INTERFACE_SHAPES.set(declaration, type);
   return type;
+}
+
+/** What one written shape's last matching signature gives; none where the shape has no such signature. */
+export type ShapeSignature<Result> = { readonly result: Result | undefined } | undefined;
+
+interface SignatureStep {
+  readonly reading: TypeReading;
+  /** Whether an interface's shape gave the reading, rather than a written type outside interfaces. */
+  readonly inherited: boolean;
+}
+
+/** A step of the walk, or `null` where signatures the reader cannot read are listed. */
+type Listed = SignatureStep | null;
+
+/**
+ * The last signature `read` finds, in the order TypeScript lists signatures: an interface's own and
+ * then each base's, an intersection's members in turn. One read after the last part the reader cannot
+ * read is TypeScript's last; where none follows that part, the written shapes outside interfaces keep
+ * the reading they give, and interfaces give none.
+ */
+export function lastSignatureOf<Result>(
+  at: TypeReading,
+  operands: Operands,
+  read: (reading: TypeReading) => ShapeSignature<Result>,
+): Result | undefined {
+  let last: ShapeSignature<Result>;
+  let written: ShapeSignature<Result>;
+  let unread = false;
+  const pending: Listed[] = [{ inherited: false, reading: at }];
+  for (let step = pending.pop(); step !== undefined; step = pending.pop()) {
+    if (step === null) {
+      last = undefined;
+      unread = true;
+      continue;
+    }
+    const listed = listedSteps(step, operands);
+    if (listed !== undefined) {
+      pending.push(...listed.toReversed());
+      continue;
+    }
+    const found = read(step.reading);
+    if (found === undefined) continue;
+    last = found;
+    if (!step.inherited) written = found;
+  }
+  return (unread && last === undefined ? written : last)?.result;
+}
+
+/**
+ * What an interface or an intersection lists, in signature order — `null` where an interface lists
+ * signatures the reader cannot read — and none of a shape that is neither.
+ */
+function listedSteps(step: SignatureStep, operands: Operands): readonly Listed[] | undefined {
+  const { inherited, reading } = step;
+  const interfaces = interfaceShapeReadings(reading, operands);
+  if (interfaces !== undefined) {
+    const steps = interfaces.sources.map((source) => inheritedStep(source));
+    if (interfaces.unknownAfter !== undefined) steps.splice(interfaces.unknownAfter, 0, null);
+    return steps;
+  }
+  if (!isIntersectionTypeNode(reading.type)) return undefined;
+  const members = reading.type.types.flatMap((member) => operands({ ...reading, type: member }));
+  return members.map((member): SignatureStep => ({ inherited, reading: member }));
+}
+
+/** A shape an interface's walk gave. */
+function inheritedStep(reading: TypeReading): Listed {
+  return { inherited: true, reading };
 }

@@ -81,13 +81,17 @@ export class SiteShapes {
     }
   }
 
-  /** In the queue: the build's, as a page's render or a gate's question says — kept from now on. */
+  /**
+   * In the queue: the build's, as a page's render or a gate's question says — kept from now on, once
+   * the store holds it: one whose write failed is held as it was, and written again as the next
+   * render or question says it.
+   */
   learn(site: SiteShape | undefined): void {
     if (site === undefined || sameSite(this.#site, site)) {
       return;
     }
-    this.#site = site;
     this.#store.putSite(this.#build, site);
+    this.#site = site;
   }
 
   /**

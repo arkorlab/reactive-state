@@ -26,7 +26,11 @@ import { acceptsQueryArguments, queryArgumentReadings } from './local-type-query
 
 const CALLABLES = new WeakMap<Node, FunctionTypeNode>();
 
-/** The last written overload or explicit local callable type, with lexical shadows left in place. */
+/**
+ * The last written overload or explicit local callable type, with lexical shadows left in place —
+ * none of a name a pattern takes apart, `{ f }` of `{ f }: { f: () => string }`, whose type is what
+ * the pattern selects, not the whole it is taken apart of, nor what that whole is declared of.
+ */
 export function callableQueryReading(at: TypeReading): TypeReading | undefined {
   if (!isTypeQueryNode(at.type) || !isIdentifier(at.type.exprName)) return undefined;
   let name = at.type.exprName;
@@ -34,7 +38,7 @@ export function callableQueryReading(at: TypeReading): TypeReading | undefined {
   while (!seen.has(name)) {
     seen.add(name);
     const declared = frameDeclarationOf(name);
-    if (declared === undefined) return undefined;
+    if (declared === undefined || takenApart(declared)) return undefined;
     const direct = declarationReading(at, declared);
     if (direct !== undefined) return direct;
     const value = isVariableDeclaration(declared) ? declared.initializer : undefined;
@@ -93,4 +97,12 @@ function declarationReading(at: TypeReading, declared: FrameDeclaration): TypeRe
   return value !== undefined && (isFunctionExpression(value) || isArrowFunction(value))
     ? signatureReading(at, value)
     : undefined;
+}
+
+/** Whether a variable or a parameter binds a pattern, which takes apart what it is given. */
+function takenApart(declared: FrameDeclaration): boolean {
+  return (
+    (isVariableDeclaration(declared) || isParameterDeclaration(declared)) &&
+    !isIdentifier(declared.name)
+  );
 }

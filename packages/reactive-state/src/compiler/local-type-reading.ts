@@ -34,6 +34,7 @@ import { type CallResultSelection, singleCallResultReading } from './local-type-
 import { capturedTypeReading } from './local-type-captured-sequences.ts';
 import { heritageReference } from './local-type-class-bases.ts';
 import { conditionalUtilityReadings, literalValue } from './local-type-conditional-utilities.ts';
+import { constrainedOperands } from './local-type-constrained-operands.ts';
 import { conditionalChecks } from './local-type-distribution.ts';
 import {
   constraintReading,
@@ -78,10 +79,8 @@ export function namesLocalMemberType(
   keys: readonly string[],
   names: ReadonlySet<string>,
 ): boolean {
-  const readings =
-    type === undefined
-      ? []
-      : memberReadings(initialReading(type), keys, (at) => operandReadings(at, names));
+  const operands = constrainedOperands((at) => operandReadings(at, names));
+  const readings = type === undefined ? [] : memberReadings(initialReading(type), keys, operands);
   return namesReadings(readings, names);
 }
 
@@ -124,7 +123,7 @@ export function namesLocalMemberArrayType(
     type !== undefined &&
     selectedArrayReadings(initialReading(type), keys, selection, {
       matches: (reading) => namesReadings([reading], names),
-      operands: (reading) => operandReadings(reading, names),
+      operands: constrainedOperands((reading) => operandReadings(reading, names)),
     })
   );
 }
@@ -142,10 +141,15 @@ export function namesLocalTypeArgument(
   });
 }
 
-const iterationOperands = (reading: Reading): Reading[] =>
-  operandReadings(reading, STANDARD_ERRORS);
+const iterationOperands = constrainedOperands((reading) =>
+  operandReadings(reading, STANDARD_ERRORS),
+);
 
-/** Literal positions of finite required iteration tuples, retaining each original type environment. */
+/**
+ * Literal places of the iteration tuples a type may be, retaining each original type environment. A
+ * type parameter no actual argument fills stands for its written constraint, as it does where
+ * members and elements are selected.
+ */
 export function localArrayIterationKeys(
   type: TypeNode,
   keys: readonly string[],

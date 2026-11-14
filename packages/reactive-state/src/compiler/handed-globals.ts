@@ -3,21 +3,25 @@ import {
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
+  isExpressionStatement,
   isExpressionWithTypeArguments,
-  isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isObjectBindingPattern,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isSpreadAssignment,
   isStringLiteral,
+  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, useOf } from './code-globals.ts';
+import { globalPathOf, patternKey, useOf } from './code-globals.ts';
 
 /**
  * What of a shared module's code reaches a member of a global's that answers otherwise as it runs,
@@ -103,6 +107,19 @@ function handsOn(node: Node, root: string, members: readonly string[]): boolean 
   }
   if (isBinaryExpression(parent)) {
     const kind = parent.operatorToken.kind;
+    // A pattern an assignment writes takes it apart as a declaration's does — but for the value of
+    // the assignment, which is the global itself, and is handed on where it is used.
+    if (
+      kind === SyntaxKind.EqualsToken &&
+      parent.right === at &&
+      isObjectLiteralExpression(parent.left) &&
+      isExpressionStatement(useOf(parent).parent)
+    ) {
+      return takesMember(
+        parent.left.properties.map((property) => assignedKey(property)),
+        members,
+      );
+    }
     const asked = kind === SyntaxKind.InKeyword || kind === SyntaxKind.InstanceOfKeyword;
     return !(COMPARING.has(kind) || (asked && parent.right === at));
   }
@@ -111,27 +128,42 @@ function handsOn(node: Node, root: string, members: readonly string[]): boolean 
   }
   // What a pattern stands beside is what it takes apart: `const { random } = Math`.
   if (isVariableDeclaration(parent) && isObjectBindingPattern(parent.name)) {
-    return parent.name.elements.some((element) => {
-      const key = takenKey(element);
-      return key === undefined || members.includes(key);
-    });
+    return takesMember(
+      parent.name.elements.map((element) => takenKey(element)),
+      members,
+    );
   }
   return true;
 }
 
-/** The name a pattern takes `element` apart by, where the code writes it; none of a rest, or a key it computes. */
-function takenKey(element: BindingElement): string | undefined {
-  if (element.dotDotDotToken !== undefined) {
-    return undefined;
-  }
-  const key = element.propertyName ?? element.name;
-  if (key === undefined) {
-    return undefined;
-  }
-  return isIdentifier(key) ? key.text : keyOf(key);
+/** Whether a pattern's `keys` — the name each takes apart by — hold a member of `members`, or one it cannot name. */
+function takesMember(keys: readonly (string | undefined)[], members: readonly string[]): boolean {
+  return keys.some((key) => key === undefined || members.includes(key));
 }
 
-/** The text `node` writes, a string; none of another node. */
+/**
+ * The name an assignment's pattern takes `property` apart by, where the code writes it — `abs` of
+ * `{ abs }`, of `{ abs: target }`, of `{ ['abs']: target }`; none of a rest, or a key it computes.
+ */
+function assignedKey(property: ObjectLiteralElementLike): string | undefined {
+  return isSpreadAssignment(property) ? undefined : patternKey(property);
+}
+
+/**
+ * The name a pattern takes `element` apart by, where the code writes it — `abs` of `{ abs }`, of
+ * `{ ['abs']: abs }` (`patternKey`); none of a rest, or a key it computes.
+ */
+function takenKey(element: BindingElement): string | undefined {
+  return element.dotDotDotToken === undefined ? patternKey(element) : undefined;
+}
+
+/** The text `node` writes, a string, past a cast in angle brackets; none of another node. */
 function keyOf(node: Node): string | undefined {
-  return isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node) ? node.text : undefined;
+  let written = node;
+  while (isTypeAssertion(written)) {
+    written = unwrapped(written.expression);
+  }
+  return isStringLiteral(written) || isNoSubstitutionTemplateLiteral(written)
+    ? written.text
+    : undefined;
 }

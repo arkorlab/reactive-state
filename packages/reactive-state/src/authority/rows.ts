@@ -15,13 +15,16 @@ export function text(row: Row, column: string): string {
   return value;
 }
 
+/**
+ * The integer `column` holds, which a number holds exactly. A driver that reads integers as `bigint`
+ * hands each back as one: one no number holds exactly is refused, as such a number is, rather than
+ * rounded to another.
+ */
 export function integer(row: Row, column: string): number {
   const value = row[column];
-  if (typeof value === 'number' && Number.isSafeInteger(value)) {
-    return value;
-  }
-  if (typeof value === 'bigint') {
-    return Number(value);
+  const read = typeof value === 'bigint' ? Number(value) : value;
+  if (typeof read === 'number' && Number.isSafeInteger(read)) {
+    return read;
   }
   throw new TypeError(`column ${column} is not an integer`);
 }

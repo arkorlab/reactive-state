@@ -1,13 +1,8 @@
 import type { FieldOperation, FieldReceipt, Frame, Json, Result, Value } from '../program.ts';
-import {
-  BUILD_MISMATCH,
-  HTTP_FORBIDDEN,
-  HTTP_NOT_FOUND,
-  HTTP_UNAUTHORIZED,
-  TARGET_CHANGED,
-} from '../status.ts';
+import { BUILD_MISMATCH, HTTP_UNAUTHORIZED } from '../status.ts';
 import { toJsonRecord } from './json.ts';
 import { type PendingOperation, type Predictor, reflects } from './operations.ts';
+import { isDefinitive, isReceipt, refusesBinding } from './store-answers.ts';
 
 /**
  * The page's store, one for the page however many roots it renders: every operation the page has
@@ -70,7 +65,10 @@ export interface StoreOptions {
   readonly retryDelay?: number;
   /** Names a new operation; unique per operation. */
   readonly id?: () => string;
-  /** An operation committed at `revision`, which the page should show. */
+  /**
+   * An operation committed at `revision` — at the latest, where a frame told of it first — which the
+   * page should show.
+   */
   readonly onCommitted?: (revision: number) => void;
   /**
    * An operation was let go of whose effect the page cannot show from what it holds — the authority
@@ -128,25 +126,6 @@ const RETRY_DELAY_MS = 200;
 /** The random bytes of an operation's id: 128 bits. */
 const OPERATION_ID_BYTES = 16;
 const HEX = 16;
-const CLIENT_ERRORS = { first: 400, last: 499 } as const;
-const HTTP_REQUEST_TIMEOUT = 408;
-const HTTP_TOO_MANY_REQUESTS = 429;
-/** Statuses of the 4xx class that say nothing of the operation: it may be sent again. */
-const TRANSIENT: ReadonlySet<number> = new Set([HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS]);
-/**
- * Whether a refusal is of the binding rather than of one operation: the session may no longer write
- * through it (403), the target is gone (404) or is no longer what the binding names (409
- * `TARGET_CHANGED`). Every operation of the binding would be refused alike; any other conflict — a
- * `unique` group another record holds — is the one operation's.
- */
-function refusesBinding(failure: { readonly status: number; readonly code: string }): boolean {
-  return (
-    failure.status === HTTP_FORBIDDEN ||
-    failure.status === HTTP_NOT_FOUND ||
-    failure.code === TARGET_CHANGED
-  );
-}
-
 const CHECKING = 'Checking whether the change was saved.';
 const NOT_SAVED = 'The change could not be saved.';
 /** What the page says of a write it let go of without learning whether the authority made it. */
@@ -171,19 +150,6 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
-}
-
-/** Whether a failed answer is the authority's refusal, which a resend would only repeat. */
-function isDefinitive(status: number): boolean {
-  return status >= CLIENT_ERRORS.first && status <= CLIENT_ERRORS.last && !TRANSIENT.has(status);
-}
-
-function isReceipt(value: unknown): value is FieldReceipt {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    Number.isSafeInteger((value as Partial<Record<string, unknown>>)['committedRevision'])
-  );
 }
 
 /** The operation as it is sent: a `set` carries its value — `false`, `0` or `''` too. */
@@ -236,6 +202,11 @@ export class PageStore {
   #revoked = false;
   #mismatched = false;
   #sending = false;
+  /**
+   * The drains started, the one that sends the last: a frame that names the operation a drain waits
+   * on, unanswered, lets another start (`#settle`), and the one that waited stops once it is answered.
+   */
+  #drains = 0;
   #disposed = false;
   #status: StoreStatus;
 
@@ -315,15 +286,29 @@ export class PageStore {
    * A frame that names an operation whose outcome was unknown — its answer lost after the authority
    * committed it — answers what the page was checking: once no operation's outcome is unknown any
    * more, the page says so no longer, though no answer to a send of it ever comes.
+   *
+   * A commit a frame names before any answer said it — one that comes after, ignored once the
+   * operation is let go of, or none — is told as a receipt's is (`onCommitted`): every root renders
+   * that revision, which each must reflect before the operation is let go of.
    */
   #settle(): void {
     const shown = [...this.#roots.values()];
+    let learned = -Infinity;
     this.#remove((operation) => {
       const own = shown.filter(({ session }) => session === operation.target.session);
       for (const { frame } of own) {
         // Named by a frame, it committed at that frame's revision at the latest.
         const named = reflects(frame, { committedRevision: null, id: operation.id });
         if (named && (operation.committedRevision ?? Infinity) > frame.revision) {
+          if (operation.committedRevision === null) {
+            learned = Math.max(learned, frame.revision);
+            // Its commit known before its answer came, the writes after it go — they commit after
+            // it, and a copy of it still on its way the authority answers with its receipt, writing
+            // nothing again; `attach` starts their drain.
+            if (operation.sending) {
+              this.#sending = false;
+            }
+          }
           operation.committedRevision = frame.revision;
           this.#changed(operation);
         }
@@ -334,6 +319,9 @@ export class PageStore {
     });
     if (this.#error === CHECKING && !this.#checking()) {
       this.#error = null;
+    }
+    if (learned > -Infinity) {
+      this.#onCommitted(learned);
     }
   }
 
@@ -357,16 +345,20 @@ export class PageStore {
       return;
     }
     this.#sending = true;
+    this.#drains += 1;
+    const drain = this.#drains;
     try {
       let operation = this.#next();
       while (operation !== undefined) {
-        if (!(await this.#send(operation))) {
+        if (!(await this.#send(operation)) || drain !== this.#drains) {
           break;
         }
         operation = this.#next();
       }
     } finally {
-      this.#sending = false;
+      if (drain === this.#drains) {
+        this.#sending = false;
+      }
     }
   }
 
@@ -434,9 +426,13 @@ export class PageStore {
       return false;
     }
     const binding = refusesBinding(failure);
-    this.#remove((pending) =>
-      binding ? pending.target.binding === operation.target.binding : pending === operation,
-    );
+    // Of the binding's operations, those not made yet would be refused alike; one that committed is
+    // shown on top of each frame that does not reflect it until every frame does (`#settle`).
+    this.#remove((pending) => {
+      return binding
+        ? pending.target.binding === operation.target.binding && pending.committedRevision === null
+        : pending === operation;
+    });
     // A refused resend says nothing of a send before it that went unanswered, which may have
     // committed — a write that took its own binding's target away is refused when sent again — so
     // the page says the change may have been made, and renders again to show whether it was.

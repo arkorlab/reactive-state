@@ -12,6 +12,7 @@ import {
 
 import { literalName, unwrapped } from './bounded.ts';
 import { localClassBinding, localClassValueBinding } from './local-type-aliases.ts';
+import { qualifiedClassBinding } from './local-type-class-namespaces.ts';
 
 /** Written class bases followed through constant constructor aliases in their lexical value scope. */
 
@@ -20,12 +21,17 @@ interface ClassReference {
   readonly builtin: string | undefined;
 }
 
-/** The source class or built-in constructor a heritage expression denotes, past plain constants. */
+/**
+ * The source class or built-in constructor a heritage expression denotes, past plain constants and
+ * through the namespaces a class is written in.
+ */
 export function heritageReference(expression: Expression): ClassReference {
   let value = unwrapped(expression);
   const seen = new Set<VariableDeclaration>();
   for (;;) {
     if (isClassExpression(value)) return { binding: value, builtin: undefined };
+    const qualified = qualifiedClassBinding(value);
+    if (qualified !== undefined) return { binding: qualified, builtin: undefined };
     if (!isIdentifier(value)) return { binding: null, builtin: heritageBuiltin(value) };
     const binding = localClassValueBinding(value);
     if (binding === undefined) return { binding, builtin: value.text };

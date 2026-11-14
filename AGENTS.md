@@ -50,8 +50,10 @@ to the code.
 ## The compiler's syntax trees
 
 The compiler reads TypeScript 7.1's syntax trees (`typescript/ast`, through `typescript.ts`), and no
-types but those the code writes. In that API a node's `parameters` may be missing
-(`node.parameters ?? []`), a `BindingElement`'s `name` may be `undefined`, and a
+types but those the code writes. In that API every node has a getter for every child, so
+`'parameters' in node` or `'name' in node` is true of any node and tells no kind apart: test the
+kind (`isSignatureDeclaration`, `isBlock`). A signature's `parameters` is a list, an empty one too,
+so it needs no `?? []`. A `BindingElement`'s `name` may be `undefined`, and a
 `ShorthandPropertyAssignment`'s `name` needs `isIdentifier` before `.text`.
 
 ## Where a change lands
