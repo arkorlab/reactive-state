@@ -1,7 +1,7 @@
 import { isIdentifier, isTypeParameterDeclaration, isTypeReferenceNode } from 'typescript/ast';
 
 import { localTypeBinding } from './local-type-aliases.ts';
-import { constraintReading, type TypeReading } from './local-type-environment.ts';
+import { constraintKeys, constraintReading, type TypeReading } from './local-type-environment.ts';
 
 /**
  * A type parameter no actual argument fills, `T` of `function f<T extends { e: Error }>(value: T)`,
@@ -41,4 +41,22 @@ function unfilledConstraint(reading: TypeReading): TypeReading | undefined {
   )
     return undefined;
   return constraintReading(binding, reading);
+}
+
+/**
+ * Readings selected from an operand keep the parameters whose constraints that operand was read
+ * through, and nothing else of its path: member selection starts a path anew, the aliases already
+ * expanded included, but a constraint that names its own parameter through a member would then be
+ * read again for ever. What is kept is the operand's own, never that of another operand beside it.
+ */
+export function onConstraintPath(
+  selected: readonly TypeReading[],
+  operand: TypeReading,
+): TypeReading[] {
+  const keys = constraintKeys(operand);
+  return selected.map((reading) => {
+    const aliases = new Set(reading.aliases);
+    for (const key of keys) aliases.add(key);
+    return { ...reading, aliases };
+  });
 }

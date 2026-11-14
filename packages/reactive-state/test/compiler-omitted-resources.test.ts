@@ -9,7 +9,8 @@ import { canOmit } from '../src/compiler/omitted-work.ts';
  * disposal method as it is made and registers a cleanup that runs when its scope exits, `await`ed
  * where it is `await using`, so that leaving it out skips getters, a cleanup and its disposal. Each
  * row is the first statement of a function's body and whether `canOmit` takes it as work to leave
- * out; the `const` rows, an alias and a literal among them, pin what the change keeps.
+ * out; the `const` rows pin what the change keeps: a literal is left out, and an alias is not, as
+ * no name is (`compiler-omitted-identifier-reads.test.ts`).
  */
 const CASES = [
   { statement: 'using resource = source;', omitted: false, what: 'a using of an alias' },
@@ -24,9 +25,9 @@ const CASES = [
     omitted: false,
     what: 'several using declarations',
   },
-  { statement: 'const resource = source;', omitted: true, what: 'a const of an alias' },
+  { statement: 'const resource = source;', omitted: false, what: 'a const of an alias' },
   { statement: 'const resource = 1;', omitted: true, what: 'a const of a literal' },
-  { statement: 'let resource = source;', omitted: true, what: 'a let of an alias' },
+  { statement: 'let resource = source;', omitted: false, what: 'a let of an alias' },
   { statement: 'const resource = make();', omitted: false, what: 'a const of a call' },
 ] as const;
 

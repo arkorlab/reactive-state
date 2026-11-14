@@ -4,7 +4,6 @@ import {
   isExpressionWithTypeArguments,
   isFunctionTypeNode,
   isIdentifier,
-  isIntersectionTypeNode,
   isNamedTupleMember,
   isOptionalTypeNode,
   isRestTypeNode,
@@ -22,7 +21,11 @@ import { qualifiedBuiltinName } from './local-type-builtins.ts';
 import { callableQueryReading } from './local-type-callable-queries.ts';
 import type { TypeReading } from './local-type-environment.ts';
 import { instanceUtilityReading } from './local-type-instance-utilities.ts';
-import { interfaceMemberReadings, interfaceShapeReadings } from './local-type-interface-members.ts';
+import {
+  interfaceMemberReadings,
+  lastSignatureOf,
+  type ShapeSignature,
+} from './local-type-interface-members.ts';
 import {
   indexedKeyofReadings,
   keyedMemberTypes,
@@ -88,37 +91,40 @@ export function returnTypeReadings(
   });
 }
 
-/** The last written call signature supplies an overloaded callable's inferred result. */
+/**
+ * The last call signature supplies an overloaded callable's inferred result, as TypeScript lists
+ * signatures (`lastSignatureOf`): one the reader cannot read, an unreadable base's or one that writes
+ * no result, is the last when nothing it can read follows it.
+ */
 function callResultReading(at: TypeReading, operands: Operands): TypeReading | undefined {
-  let result: TypeReading | undefined;
-  const pending = [at];
-  for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
+  return lastSignatureOf(at, operands, (reading) => {
     const { type } = reading;
-    const interfaces = interfaceShapeReadings(reading, operands);
-    if (interfaces !== undefined) {
-      pending.push(...interfaces.sources.toReversed());
-    } else if (isIntersectionTypeNode(type)) {
-      const signatures = type.types.flatMap((member) => operands({ ...reading, type: member }));
-      pending.push(...signatures.toReversed());
-    } else if (isFunctionTypeNode(type) && type.type !== undefined) {
-      result = writtenReturnReading(reading, type);
-    } else if (isTypeLiteralNode(type)) {
+    if (isFunctionTypeNode(type)) return { result: writtenReturnReading(reading, type) };
+    let found: ShapeSignature<TypeReading>;
+    if (isTypeLiteralNode(type)) {
       for (const member of type.members) {
-        if (isCallSignatureDeclaration(member) && member.type !== undefined) {
-          result = writtenReturnReading(reading, member);
-        }
+        if (isCallSignatureDeclaration(member))
+          found = { result: writtenReturnReading(reading, member) };
       }
     }
-  }
-  return result;
+    return found;
+  });
 }
 
-/** Declared fields selected one literal step at a time, without flattening generic bindings. */
+/** What a value query's key starts with among the keys of a reading's alias path. */
+export const QUERY_KEY_PREFIX = 'value-query:';
+
+/**
+ * Declared fields selected one literal step at a time, without flattening generic bindings. A member
+ * starts no alias path of its own, but the value queries being read where the selection starts stay
+ * on it: a member that is one of them again is the query read within its own reading, and ends there.
+ */
 export function memberReadings(
   at: TypeReading,
   keys: readonly string[],
   operands: Operands,
 ): readonly TypeReading[] {
+  const queries = [...at.aliases].filter((key) => key.startsWith(QUERY_KEY_PREFIX));
   let selected = [at];
   for (const key of keys) {
     selected = selected.flatMap((reading) => {
@@ -132,19 +138,19 @@ export function memberReadings(
         if (mapped !== undefined) return memberReadings(mapped, [key], operands);
         const members = interfaceMemberReadings(source, key, operands);
         if (members !== undefined)
-          return members.map((member) => ({ ...member, aliases: new Set<string>() }));
+          return members.map((member) => ({ ...member, aliases: new Set(queries) }));
         if (isExpressionWithTypeArguments(source.type)) return [];
         if (/^(?:0|[1-9]\d*)$/u.test(key)) {
           const tuple = tupleReadings(source, Number(key), operands);
           if (tuple !== undefined)
-            return tuple.map((member) => ({ ...member, aliases: new Set<string>() }));
+            return tuple.map((member) => ({ ...member, aliases: new Set(queries) }));
         }
         const element = nativeArrayElement(source.type);
         const types =
           element !== undefined && /^(?:0|[1-9]\d*)$/u.test(key)
             ? [element]
             : selectedMemberTypes(source.type, [key]);
-        return types?.map((type) => ({ ...source, aliases: new Set<string>(), type })) ?? [];
+        return types?.map((type) => ({ ...source, aliases: new Set(queries), type })) ?? [];
       });
     });
   }
@@ -272,7 +278,9 @@ function expandedRest(readings: readonly TypeReading[]): boolean {
 
 /**
  * Every place of a written tuple may be produced by source iteration, as may the elements of any
- * other iterable, which one place stands for. Undefined where no source is a tuple.
+ * other iterable, which one place stands for. A tuple a count could not finish is read at the places
+ * a spread leaves a tuple and at each member written after, never at fewer. Undefined where no
+ * source is a tuple.
  */
 export function arrayIterationKeys(
   readings: readonly TypeReading[],
