@@ -423,10 +423,15 @@ function namesOf(property: ObjectLiteralElementLike): readonly string[] | undefi
   return name === undefined ? undefined : [name];
 }
 
-/** The names a spread of a written object puts among the fields, none known for any other. */
+/**
+ * The names a spread of a written object puts among the fields, none known for any other, and none
+ * where an accessor of it may delete a name before the copy reaches it: the names it leaves out are
+ * not among those the object holds, and a field after it of the name sets it later.
+ */
 function spreadOrder(copied: Expression): readonly string[] | undefined {
   const value = unwrapped(copied);
-  return isObjectLiteralExpression(value) ? copyOrder(value) : undefined;
+  if (!isObjectLiteralExpression(value) || deletedNames(value).length > 0) return undefined;
+  return copyOrder(value);
 }
 
 /**

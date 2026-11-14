@@ -2273,6 +2273,66 @@ const CASES = [
       'proto:0',
     ],
   },
+  {
+    id: 'copy-order-spread-whose-getter-deletes-a-name-leaves-it-out',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ get 0() { delete this.value; return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-with-two-getters-one-deletes',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ get 0() { delete this.value; return 0; }, get 1() { return 1; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-nested-spread-whose-getter-deletes',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ ...{ get 0() { delete this.value; return 0; }, value: 'old' } }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-whose-setter-deletes-through-a-getter',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ set 0(v: unknown) { delete this.value; }, get 1() { this[0] = 1; return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-whose-getter-deletes-a-computed-name',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ get 0() { delete this[k]; return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-whose-getter-deletes-another-name-stays-possible',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ get 0() { delete this.other; return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-whose-getter-gives-this-on',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ get 0() { other(this); return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-without-a-deleting-getter-pin',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ get 0() { return 0; }, value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':"],
+  },
+  {
+    id: 'copy-order-getter-before-a-spread-whose-getter-deletes-pin',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ get trigger() { this.value = error; return 0; }, ...{ get 0() { delete this.value; return 0; }, value: 'old' }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':", 'error:'],
+  },
+  {
+    id: 'copy-order-spread-of-a-plain-object-pin',
+    source: `function frames(error: Error, name: string, k: string, flag: boolean, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ value: entry[1] } = { ...{ ...{ value: 'old' }, get trigger() { this.value = error; return 0; }, value: 'safe' } })); }`,
+    key: 'message',
+    values: ["'safe':", "'safe':"],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {
