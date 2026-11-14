@@ -44,19 +44,12 @@ export function signView(secret: string, claims: ViewClaims): string {
 
 /**
  * The claims of a view token this authority signed, for the build it runs; a refusal otherwise —
- * 403, or 409 for another build's page, which a reload brings up to this one.
+ * 403, or 409 for another build's page, which a reload brings up to this one, whatever version of
+ * the claims its token holds.
  */
 export function verifyView(secret: string, token: unknown, build: string): ViewClaims {
   const claims = claimsOf(secret, token);
-  const { epoch, generation, params, route } = claims;
-  if (
-    typeof route !== 'string' ||
-    claims['t'] !== VIEW ||
-    claims['v'] !== TOKEN_VERSION ||
-    !isRouteParams(params) ||
-    !isCount(generation) ||
-    !isCount(epoch)
-  ) {
+  if (claims['t'] !== VIEW) {
     throw denied();
   }
   if (claims['build'] !== build) {
@@ -64,6 +57,16 @@ export function verifyView(secret: string, token: unknown, build: string): ViewC
       code: BUILD_MISMATCH,
       status: HTTP_CONFLICT,
     });
+  }
+  const { epoch, generation, params, route } = claims;
+  if (
+    typeof route !== 'string' ||
+    claims['v'] !== TOKEN_VERSION ||
+    !isRouteParams(params) ||
+    !isCount(generation) ||
+    !isCount(epoch)
+  ) {
+    throw denied();
   }
   return { build, epoch, generation, params, route };
 }

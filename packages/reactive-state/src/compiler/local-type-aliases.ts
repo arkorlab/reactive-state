@@ -24,6 +24,7 @@ import {
   isImportEqualsDeclaration,
   isInferTypeNode,
   isInterfaceDeclaration,
+  isMappedTypeNode,
   isModuleBlock,
   isModuleDeclaration,
   isNamespaceImport,
@@ -33,6 +34,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
+  type ModuleDeclaration,
   type Node,
   NodeFlags,
   type Statement,
@@ -43,7 +45,7 @@ import {
   isSignatureDeclaration,
 } from 'typescript/ast';
 
-import { namespaceStatements } from './local-type-namespaces.ts';
+import { dottedStatements, holdsValues, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, hoistedIn } from './scope.ts';
 
 /** Local type declarations a reference names, with each nearer binding taking precedence. */
@@ -163,6 +165,49 @@ export function localClassValueBinding(
   }
 }
 
+/**
+ * The namespaces `name` is as a value: the declarations that merge under its nearest value binding,
+ * where that binding is a namespace (a class, function or enum may merge with it). `null` for any
+ * other nearer or only value binding — a constant, a parameter, an import, a class alone — and
+ * `undefined` for no local value binding at all.
+ */
+export function localNamespaceValue(
+  name: Identifier,
+): readonly ModuleDeclaration[] | null | undefined {
+  let within: Node = name;
+  let inParameterDecorator = false;
+  for (let at: Node = name.parent; ; within = at, at = at.parent) {
+    if (ownClassBinding(at, within, name.text, inParameterDecorator) !== undefined) {
+      return null;
+    }
+    const declared = statementsOf(at)?.filter((statement) => bindsValue(statement, name.text));
+    if (declared !== undefined && declared.length > 0) {
+      return mergedNamespaces(declared);
+    }
+    if (isSourceFile(at)) {
+      return undefined;
+    }
+    inParameterDecorator = isParameterDeclaration(at) && isDecorator(within);
+  }
+}
+
+/** The namespaces among the statements one scope binds a value name with, if all of them may merge. */
+function mergedNamespaces(declared: readonly Statement[]): readonly ModuleDeclaration[] | null {
+  const namespaces = declared.filter(isModuleDeclaration);
+  const merges = declared.every((statement) => mergesWithNamespace(statement));
+  return merges && namespaces.length > 0 ? namespaces : null;
+}
+
+/** Whether a declaration of a value name may share it with a namespace: a constant or import may not. */
+function mergesWithNamespace(statement: Statement): boolean {
+  return (
+    isModuleDeclaration(statement) ||
+    isClassDeclaration(statement) ||
+    isFunctionDeclaration(statement) ||
+    isEnumDeclaration(statement)
+  );
+}
+
 /** The class or plain constant identifier one statement binds, never a destructuring projection. */
 function valueBindingIn(
   statement: Statement,
@@ -202,8 +247,16 @@ function ownClassBinding(
   return bindsScopedValue(node, within, name) ? null : undefined;
 }
 
-/** Whether a catch, loop or function body declares a value binding of `name`. */
+/**
+ * Whether a catch, loop or function body declares a value binding of `name` — or the module, by a
+ * `var` of one of its blocks, which is the module's as a function's are the function's. A
+ * namespace's `var`s are its own.
+ */
 function bindsScopedValue(node: Node, within: Node, name: string): boolean {
+  if (isSourceFile(node)) {
+    const code = node.statements.filter((statement) => !isModuleDeclaration(statement));
+    return hoistedIn(code).some((declaration) => bindingNames(declaration.name, name));
+  }
   if (isCatchClause(node)) {
     return (
       node.variableDeclaration !== undefined && bindingNames(node.variableDeclaration.name, name)
@@ -219,14 +272,24 @@ function bindsScopedValue(node: Node, within: Node, name: string): boolean {
       return true;
     }
   }
-  return (
-    'body' in node &&
-    node.body === within &&
-    hoistedIn([within]).some((declaration) => bindingNames(declaration.name, name))
-  );
+  if (!('body' in node) || node.body !== within) {
+    return false;
+  }
+  // A namespace's `var`s are its own: those of a namespace in the body are not the body's, nor are
+  // those of the one a dotted name holds, `namespace A.B {}`, whose body `A` has none of its own.
+  let code: readonly Node[] = [within];
+  if (isModuleBlock(within)) {
+    code = within.statements.filter((statement) => !isModuleDeclaration(statement));
+  } else if (isModuleDeclaration(within)) {
+    code = [];
+  }
+  return hoistedIn(code).some((declaration) => bindingNames(declaration.name, name));
 }
 
-/** Whether `statement` declares or imports a value of `name`, even if its shape is unknown. */
+/**
+ * Whether `statement` declares or imports a value of `name`, even if its shape is unknown — but a
+ * namespace of types alone, which emits none.
+ */
 function bindsValue(statement: Statement, name: string): boolean {
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.some((declaration) =>
@@ -240,7 +303,7 @@ function bindsValue(statement: Statement, name: string): boolean {
     return statement.name.text === name;
   }
   if (isModuleDeclaration(statement)) {
-    return isIdentifier(statement.name) && statement.name.text === name;
+    return isIdentifier(statement.name) && statement.name.text === name && holdsValues(statement);
   }
   return (
     (isClassDeclaration(statement) ||
@@ -263,12 +326,13 @@ function statementsOf(node: Node): readonly Statement[] | undefined {
   if (isModuleBlock(node)) {
     return namespaceStatements(node);
   }
-  return isBlock(node) || isSourceFile(node) ? node.statements : undefined;
+  return isBlock(node) || isSourceFile(node) ? node.statements : dottedStatements(node);
 }
 
 /**
  * The class name or type parameter `node` binds. A class expression's name includes its decorator;
- * member type parameters exclude computed names, member decorators and parameter decorators.
+ * member type parameters exclude computed names, member decorators and parameter decorators; a
+ * mapped type's parameter is the type's own throughout.
  */
 function ownTypeBinding(
   node: Node,
@@ -284,6 +348,10 @@ function ownTypeBinding(
   }
   if (inParameterDecorator || isComputedPropertyName(within) || isDecorator(within)) {
     return undefined;
+  }
+  // A mapped type keeps its one parameter in `typeParameter`, not in a list: `{ [Item in K]: Item }`.
+  if (isMappedTypeNode(node)) {
+    return node.typeParameter.name.text === name ? node.typeParameter : undefined;
   }
   const parameters =
     'typeParameters' in node

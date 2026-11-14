@@ -18,6 +18,8 @@ type RestSelection = (reading: TypeReading, index: number | undefined) => readon
 type Operands = (reading: TypeReading) => readonly TypeReading[];
 
 interface Member {
+  /** One written member of one expansion: what a path has left to read is a list of these. */
+  readonly identity: number;
   readonly reading: TypeReading;
   readonly element: TypeNode;
   readonly parents: readonly TypeReading[];
@@ -25,6 +27,8 @@ interface Member {
 interface Selection {
   readonly pending: Member[];
   position: number;
+  /** Past a rest of unknown length, `position` is only the least offset a member can stand at. */
+  least: boolean;
 }
 interface TupleReadings {
   readonly index: number | undefined;
@@ -32,9 +36,15 @@ interface TupleReadings {
   readonly operands: Operands;
   readonly result: TypeReading[];
   readonly paths: Selection[];
+  /** The states of paths read so far, and how many members have been made. */
+  readonly reached: Set<string>;
+  readonly made: { members: number };
 }
 
-/** Fixed prefixes and trailing rests keep literal offsets; numeric selections retain every rest. */
+/**
+ * Fixed prefixes and the first rest of unknown length keep literal offsets; a member past such a rest
+ * may stand at any offset from its least one; numeric selections retain every rest.
+ */
 export function writtenTupleReadings(
   at: TypeReading,
   index: number | undefined,
@@ -49,11 +59,18 @@ export function writtenTupleReadings(
     selectRest,
     operands,
     result: [],
-    paths: [{ pending: tupleMembers({ ...at, type: tuple }, []), position: 0 }],
+    paths: [],
+    reached: new Set(),
+    made: { members: 0 },
   };
+  state.paths.push({
+    least: false,
+    pending: tupleMembers({ ...at, type: tuple }, [], state.made),
+    position: 0,
+  });
   for (let path = state.paths.pop(); path !== undefined; path = state.paths.pop()) {
     for (let member = path.pending.pop(); member !== undefined; member = path.pending.pop()) {
-      if (selectTupleMember(member, path, state)) break;
+      if (repeatedState(member, path, state) || selectTupleMember(member, path, state)) break;
     }
   }
   return state.result;
@@ -86,6 +103,19 @@ export function writtenTuplePlaces(
   return places;
 }
 
+/**
+ * What a path has left to read, and where, decides everything it will select. Alternatives of one
+ * rest meet again once their own members are read; the path that comes second selects what the
+ * first has, so it ends, and the work is the states there are, not the paths that lead to them.
+ */
+function repeatedState(member: Member, path: Selection, state: TupleReadings): boolean {
+  const left = [...path.pending, member].map(({ identity }) => identity);
+  const key = `${path.position}:${path.least ? 1 : 0}:${left.join(',')}`;
+  if (state.reached.has(key)) return true;
+  state.reached.add(key);
+  return false;
+}
+
 /** One member either supplies a result, adds finite alternatives or retains the opaque rest rule. */
 function selectTupleMember(member: Member, path: Selection, state: TupleReadings): boolean {
   const { reading, element, parents } = member;
@@ -96,31 +126,43 @@ function selectTupleMember(member: Member, path: Selection, state: TupleReadings
   if (expanded === undefined) return selectOpaqueRest(restReading, path, state);
   for (const each of expanded) {
     state.paths.push({
-      pending: [...path.pending, ...tupleMembers(each, parents)],
+      least: path.least,
+      pending: [...path.pending, ...tupleMembers(each, parents, state.made)],
       position: path.position,
     });
   }
   return true;
 }
 
-/** A fixed position retains its original member and environment before advancing the offset. */
+/**
+ * A fixed position retains its original member and environment before advancing the offset. Past a
+ * rest of unknown length, each member up to the index may be the one a shorter rest brings there.
+ */
 function selectFixedMember(member: Member, path: Selection, state: TupleReadings): boolean {
-  if (state.index === undefined || state.index === path.position)
+  const { index } = state;
+  if (index !== undefined && index < path.position) return true;
+  if (index === undefined || index === path.position || path.least)
     state.result.push({ ...member.reading, type: tupleElementType(member.element) });
-  if (state.index === path.position) return true;
-  path.position += 1;
+  if (index === path.position && !path.least) return true;
+  if (index !== undefined) path.position += 1;
   return false;
 }
 
-/** Unknown rest lengths keep the original numeric or trailing-rest selection boundary. */
+/**
+ * A rest of unknown length holds the index at the offset the fixed positions before it leave, or at
+ * any offset once an earlier rest left them unknown; the members after it may hold the index too.
+ */
 function selectOpaqueRest(reading: TypeReading, path: Selection, state: TupleReadings): boolean {
-  if (state.index === undefined) {
+  const { index } = state;
+  if (index === undefined) {
     state.result.push(...state.selectRest(reading, undefined));
     return false;
   }
-  if (path.pending.length === 0 && state.index >= path.position)
-    state.result.push(...state.selectRest(reading, state.index - path.position));
-  return true;
+  if (index < path.position) return true;
+  const offset = path.least ? undefined : index - path.position;
+  state.result.push(...state.selectRest(reading, offset));
+  path.least = true;
+  return path.pending.length === 0;
 }
 
 /** Only entirely written tuple alternatives determine the offset of a following member. */
@@ -145,11 +187,18 @@ function finiteRestReadings(
 }
 
 /** Expanded positions retain the selected alias's actual arguments and their original scopes. */
-function tupleMembers(reading: TypeReading, parents: readonly TypeReading[]): Member[] {
+function tupleMembers(
+  reading: TypeReading,
+  parents: readonly TypeReading[],
+  made: { members: number },
+): Member[] {
   const { type } = reading;
   if (!isTupleTypeNode(type)) return [];
   const lineage = [...parents, reading];
-  return type.elements.toReversed().map((element) => ({ element, reading, parents: lineage }));
+  return type.elements.toReversed().map((element) => {
+    made.members += 1;
+    return { element, identity: made.members, parents: lineage, reading };
+  });
 }
 
 /** An unchanged recursive operand cannot shift the same pending suffix forever. */

@@ -28,6 +28,7 @@ import {
   isComputedPropertyName,
   isConstructorDeclaration,
   isContinueStatement,
+  isDecorator,
   isEnumDeclaration,
   isEnumMember,
   isExpressionWithTypeArguments,
@@ -171,7 +172,7 @@ export function walk(root: Node, names: Names, visitor: Visitor, fail: Fail): vo
     }
     visitor.global?.(identifier);
   };
-  const visit = (node: Node, scope: ReadonlySet<string>): void => {
+  const visit = (node: Node, scope: ReadonlySet<string>, outside?: ReadonlySet<string>): void => {
     // A type is erased from what runs, and a signature of no body with it (`isTypeOnly`), so the
     // names in either are no reads, nor declarations; but each output names the types it uses, and
     // so is told of them.
@@ -183,7 +184,7 @@ export function walk(root: Node, names: Names, visitor: Visitor, fail: Fail): vo
     if (isIdentifier(node)) {
       identify(node, scope);
     }
-    eachInScope(node, scope, visit);
+    eachInScope(node, scope, visit, outside);
   };
   visit(
     root,
@@ -350,7 +351,7 @@ function isFunctionNode(node: Node): node is FunctionNode {
  */
 export function freeReads(root: Node): readonly Identifier[] {
   const found: Identifier[] = [];
-  const visit = (node: Node, scope: ReadonlySet<string>): void => {
+  const visit = (node: Node, scope: ReadonlySet<string>, outside?: ReadonlySet<string>): void => {
     if (isTypeOnly(node)) {
       return;
     }
@@ -360,7 +361,7 @@ export function freeReads(root: Node): readonly Identifier[] {
       }
       return;
     }
-    eachInScope(node, scope, visit);
+    eachInScope(node, scope, visit, outside);
   };
   visit(root, new Set());
   return found;
@@ -370,16 +371,19 @@ export function freeReads(root: Node): readonly Identifier[] {
  * Visits each child of `node` in the scope it is in: `scope`, or, within a function, a block, a
  * loop or a `catch`, what it declares as well — a function's `var`s within its body alone, its
  * parameters' defaults being read before the body runs, where a `var` of the body does not reach;
- * and a method's computed name in `scope`, where the method is defined.
+ * a method's computed name in `scope`, where the method is defined; and a decorator in `scope` as
+ * well, where the class is defined, outside the parameters of the method it decorates — a
+ * parameter's too, which `outside` is the scope of, where `node` is the parameter.
  */
 function eachInScope(
   node: Node,
   scope: ReadonlySet<string>,
-  visit: (child: Node, scope: ReadonlySet<string>) => void,
+  visit: (child: Node, scope: ReadonlySet<string>, outside?: ReadonlySet<string>) => void,
+  outside?: ReadonlySet<string>,
 ): void {
   if (!opensScope(node)) {
     node.forEachChild((child) => {
-      visit(child, scope);
+      visit(child, outside !== undefined && isDecorator(child) ? outside : scope);
     });
     return;
   }
@@ -390,8 +394,10 @@ function eachInScope(
   node.forEachChild((child) => {
     if (child === bodyNode) {
       visit(child, body);
+    } else if (child === keyNode || isDecorator(child)) {
+      visit(child, scope);
     } else {
-      visit(child, child === keyNode ? scope : inner);
+      visit(child, inner, isParameterDeclaration(child) ? scope : undefined);
     }
   });
 }

@@ -165,16 +165,23 @@ function unheld(
  * state's site of its own value, which the page no longer takes. Those go as far as a request
  * carries (`carries`), the changed first; `rest` says whether some were left for a request after,
  * once the answer to this one holds these — where it named one, so that a part no request carries
- * alone is asked for no more.
+ * alone is asked for no more. The changed count where no frame answered the view the page shows
+ * (`answered`), whose answer shows them and leaves the next request the room they took; once one
+ * did, the frame shows what the authority renders of them, which another request would not change.
  */
 export function namedParts(
   shown: View,
   changed: View,
-  state: { readonly held: Held; readonly kept: StatesOf; readonly valuesOf: ValuesOf },
+  state: {
+    readonly answered: boolean;
+    readonly held: Held;
+    readonly kept: StatesOf;
+    readonly valuesOf: ValuesOf;
+  },
 ): { readonly named: View; readonly rest: boolean } {
   const { kept, valuesOf } = state;
   const named: Record<string, Readonly<Record<string, SiteInputs>>> = { ...changed };
-  let added = false;
+  let added = !state.answered && Object.keys(changed).length > 0;
   let left = false;
   for (const [instance, sites] of Object.entries(shown)) {
     if (Object.hasOwn(named, instance) || !unheld(instance, sites, state)) {

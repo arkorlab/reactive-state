@@ -2,6 +2,8 @@ import {
   type BindingName,
   type Expression,
   type Identifier,
+  type ImportDeclaration,
+  type ImportEqualsDeclaration,
   isArrayLiteralExpression,
   isArrowFunction,
   isBigIntLiteral,
@@ -28,6 +30,7 @@ import {
   isModuleDeclaration,
   isNamespaceImport,
   isNewExpression,
+  isNumericLiteral,
   isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAssignment,
@@ -39,6 +42,7 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
+  isTypeOfExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -54,15 +58,42 @@ import {
 import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { constructorReferences, fileConstructorReference } from './file-constructor-references.ts';
+import { hoistedBinding } from './framed-bindings.ts';
+import {
+  aliasMeaning,
+  erased,
+  exportedElsewhere,
+  hasEnumMember,
+  instantiated,
+} from './namespace-merges.ts';
 import { constantValue } from './numbers.ts';
-import { bindingIdentifiers, hoistedIn, readsBinding } from './scope.ts';
+import { bindingIdentifiers, isTypeOnly } from './scope.ts';
 
 /** File constructions whose options cannot supply a timestamp independent of the clock. */
 
 type Timestamp = 'absent' | 'defined' | 'unknown';
-type Binding = VariableDeclaration | null | undefined;
+/**
+ * What a name binds: a variable, an opaque value (`null`), none, or `unknown` — an alias of what the
+ * file does not declare, which may bind a value or none: a write to it may reach what is around it.
+ */
+type Binding = VariableDeclaration | null | undefined | UnknownBinding;
 
-/** Whether a global File reference can escape construction with a timestamp shown defined. */
+/** The binding of a name that may be a value or none (`Binding`). */
+interface UnknownBinding {
+  readonly unknown: true;
+}
+
+const UNKNOWN: UnknownBinding = { unknown: true };
+
+/** Whether a binding is `UNKNOWN`. */
+function isUnknown(binding: Binding): binding is UnknownBinding {
+  return binding === UNKNOWN;
+}
+
+/**
+ * Whether a global File reference can escape construction with a timestamp shown defined. A
+ * reference only tested, `typeof File` or `value instanceof File`, constructs nothing.
+ */
 export function fileReferenceReadsClock(reference: Identifier): boolean {
   if (!fileConstructorReference(reference)) return false;
   const pending = [reference];
@@ -74,26 +105,58 @@ export function fileReferenceReadsClock(reference: Identifier): boolean {
       if (!hasFileTimestamp(parent)) return true;
       continue;
     }
-    if (
-      !isVariableDeclaration(parent) ||
-      parent.initializer !== expression ||
-      !isConstant(parent)
-    ) {
-      return true;
-    }
-    const statement = parent.parent.parent;
-    if (
-      isVariableStatement(statement) &&
-      statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
-    ) {
-      return true;
-    }
-    if (!seen.has(parent)) {
-      seen.add(parent);
-      pending.push(...constructorReferences(parent, localBinding));
-    }
+    if (isTested(parent, expression)) continue;
+    const aliased = aliasReads(parent, expression, seen);
+    if (aliased === undefined) return true;
+    pending.push(...aliased);
   }
   return false;
+}
+
+/**
+ * Whether `parent` only tests what `at` is: the operand of `typeof`, or the right of `instanceof`,
+ * which reads the constructor's `Symbol.hasInstance` and prototype and calls it never. The left of
+ * `instanceof` is handed to the right side's `Symbol.hasInstance`, which may construct it.
+ */
+function isTested(parent: Node, at: Expression): boolean {
+  return (
+    isTypeOfExpression(parent) ||
+    (isBinaryExpression(parent) &&
+      parent.operatorToken.kind === SyntaxKind.InstanceOfKeyword &&
+      parent.right === at)
+  );
+}
+
+/**
+ * What a read of a File reference, `expression` within `parent`, leaves to follow: the reads of the
+ * constant it initializes, unless they were followed already. `undefined` where it stands in
+ * anything else, or in a constant that is exported, which hands the reference on.
+ */
+function aliasReads(
+  parent: Node,
+  expression: Expression,
+  seen: Set<VariableDeclaration>,
+): readonly Identifier[] | undefined {
+  if (!isVariableDeclaration(parent) || parent.initializer !== expression || !isConstant(parent)) {
+    return undefined;
+  }
+  const statement = parent.parent.parent;
+  if (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) === true
+  ) {
+    return undefined;
+  }
+  if (seen.has(parent)) return [];
+  seen.add(parent);
+  const { name } = parent;
+  // Only a read of the constant's own name can read the constant: one lookup of its binding for
+  // each of those, where one for every read of the module walks the module for each.
+  return constructorReferences(parent, (read) => {
+    if (!isIdentifier(name) || read.text !== name.text) return;
+    const bound = localBinding(read);
+    return isUnknown(bound) ? parent : bound;
+  });
 }
 
 /** Whether a global File, or a constant alias of it, may take its timestamp from the clock. */
@@ -188,23 +251,25 @@ function propertyTimestamp(property: ObjectLiteralElementLike): Timestamp {
   return value !== undefined && isDefined(value, new Set()) ? 'defined' : 'unknown';
 }
 
-/** A literal property name, including a constant computed string key. */
+/**
+ * A literal property name, including a constant computed key. A number is the text the language
+ * makes of it as a key — `1`, `0x10` and `[1 + 1]` are `'1'`, `'16'` and `'2'` — and none of them is
+ * `lastModified`.
+ */
 function keyOf(name: Node): string | undefined {
-  if (isIdentifier(name) || isStringLiteral(name)) {
+  if (isIdentifier(name) || isStringLiteral(name) || isNumericLiteral(name)) {
     return name.text;
   }
   const key = isComputedPropertyName(name)
     ? constantValue(name.expression, constantInitializer)
     : undefined;
-  return typeof key === 'string' ? key : undefined;
+  return key === undefined ? undefined : String(key);
 }
 
 /** A constant's initializer, only where that exact lexical binding is a plain const declaration. */
 function constantInitializer(name: Identifier): Expression | undefined {
-  const declaration = localBinding(name);
-  return declaration !== null && declaration !== undefined && isConstant(declaration)
-    ? declaration.initializer
-    : undefined;
+  const declaration = declarationOf(localBinding(name));
+  return declaration !== undefined && isConstant(declaration) ? declaration.initializer : undefined;
 }
 
 /** Whether a plain variable declaration binds an immutable value. */
@@ -222,9 +287,8 @@ function declaredValue(node: Expression, made: NewExpression): Expression {
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
-    const declaration = localBinding(value);
+    const declaration = declarationOf(localBinding(value));
     if (
-      declaration === null ||
       declaration === undefined ||
       !isConstant(declaration) ||
       declaration.initializer === undefined ||
@@ -237,7 +301,12 @@ function declaredValue(node: Expression, made: NewExpression): Expression {
   return value;
 }
 
-/** Whether the holder is used only by this File, constant aliases, or non-mutating object spreads. */
+/**
+ * Whether the holder is used only by this File, constant aliases, or non-mutating object spreads —
+ * of the reads of its own name alone, before the binding each reads is resolved, and of the runtime
+ * ones (`fileConstructorReference`): a type that names the holder, an export that is erased with the
+ * types, a re-export of another module's name and an export's label read nothing of it.
+ */
 function unchanged(
   declaration: VariableDeclaration,
   made: NewExpression,
@@ -256,14 +325,16 @@ function unchanged(
   const following = new Set([...seen, declaration]);
   let safe = true;
   const visit = (node: Node): void => {
-    if (!safe) {
+    if (!safe || isTypeOnly(node)) {
       return;
     }
     if (
       isIdentifier(node) &&
+      isIdentifier(declaration.name) &&
+      node.text === declaration.name.text &&
       node !== declaration.name &&
-      readsBinding(node) &&
-      localBinding(node) === declaration
+      fileConstructorReference(node) &&
+      reaches(node, declaration)
     ) {
       const { at, parent } = useOf(node);
       const expression = at as Expression;
@@ -285,38 +356,48 @@ function unchanged(
   return safe;
 }
 
-/** Whether a value has no branch that may be undefined; unknown calls and reads stay unknown. */
-function isDefined(node: Expression, seen: ReadonlySet<Expression>): boolean {
+/**
+ * Whether a value has no branch that may be undefined — nor, where `nullable` is false, `null`;
+ * unknown calls and reads stay unknown. The left of `??` supplies its value only where it is
+ * neither: `null ?? undefined` is `undefined`.
+ */
+function isDefined(node: Expression, seen: ReadonlySet<Expression>, nullable = true): boolean {
   const value = unwrapped(node);
   if (seen.has(value)) {
     return false;
   }
   const following = new Set([...seen, value]);
-  if (isIdentifier(value)) {
-    const held = constantInitializer(value);
-    return held !== undefined && isDefined(held, following);
-  }
+  // `NaN` and `Infinity` are numbers of their own, which no constant of the module declares.
   if (constantValue(value, constantInitializer) !== undefined) {
     return true;
   }
+  if (isIdentifier(value)) {
+    const held = constantInitializer(value);
+    return held !== undefined && isDefined(held, following, nullable);
+  }
   if (isConditionalExpression(value)) {
-    return isDefined(value.whenTrue, following) && isDefined(value.whenFalse, following);
+    return (
+      isDefined(value.whenTrue, following, nullable) &&
+      isDefined(value.whenFalse, following, nullable)
+    );
   }
   if (isBinaryExpression(value)) {
     if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
-      return isDefined(value.left, following) || isDefined(value.right, following);
+      return isDefined(value.left, following, false) || isDefined(value.right, following, nullable);
     }
-    return value.operatorToken.kind === SyntaxKind.BarBarToken && isDefined(value.right, following);
+    return (
+      value.operatorToken.kind === SyntaxKind.BarBarToken &&
+      isDefined(value.right, following, nullable)
+    );
   }
-  return isDefinedLiteral(value);
+  return isDefinedLiteral(value, nullable);
 }
 
-/** Literal values and constructions always supply a value when they complete. */
-function isDefinedLiteral(value: Expression): boolean {
+/** Literals and constructions always supply a value when they complete; `null` if `nullable`. */
+function isDefinedLiteral(value: Expression, nullable: boolean): boolean {
   return (
-    [SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword, SyntaxKind.TrueKeyword].includes(
-      value.kind,
-    ) ||
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    [SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword].includes(value.kind) ||
     isBigIntLiteral(value) ||
     isArrayLiteralExpression(value) ||
     isObjectLiteralExpression(value) ||
@@ -327,6 +408,17 @@ function isDefinedLiteral(value: Expression): boolean {
     isNewExpression(value) ||
     isTemplateExpression(value)
   );
+}
+
+/** The variable a binding is, if it is one. */
+function declarationOf(binding: Binding): VariableDeclaration | undefined {
+  return binding === null || binding === undefined || isUnknown(binding) ? undefined : binding;
+}
+
+/** Whether a read of the holder's name may be of the holder: it is, or its binding is not known. */
+function reaches(read: Identifier, declaration: VariableDeclaration): boolean {
+  const bound = localBinding(read);
+  return bound === declaration || isUnknown(bound);
 }
 
 /** The nearest value declaration, including blockers in catch, loop, switch and function scopes. */
@@ -342,13 +434,27 @@ function localBinding(name: Identifier): Binding {
     if (binding !== undefined) {
       return binding;
     }
+    const shared = sharedBinding(at, within, name.text);
+    if (shared !== undefined) {
+      return shared;
+    }
     if (isSourceFile(at)) {
-      return hoistedIn([at]).some((declaration) => binds(declaration.name, name.text))
-        ? null
-        : undefined;
+      return undefined;
     }
     parameterDecorator = isParameterDeclaration(at) && isDecorator(within);
   }
+}
+
+/** What the other bodies of a namespace export, or the vars a source file holds, bind as the name. */
+function sharedBinding(at: Node, within: Node, name: string): Binding {
+  if (isModuleDeclaration(at)) {
+    const elsewhere = exportedElsewhere(at, within, name);
+    if (elsewhere === undefined) {
+      return undefined;
+    }
+    return elsewhere === 'value' ? null : UNKNOWN;
+  }
+  return isSourceFile(at) && hoistedBinding(at, at, name) !== undefined ? null : undefined;
 }
 
 /** A binding among the statements sharing one scope. */
@@ -370,6 +476,9 @@ function ownBinding(node: Node, within: Node, name: string, parameterDecorator: 
   if ((isClassExpression(node) || isFunctionExpression(node)) && node.name?.text === name) {
     return null;
   }
+  if (isEnumDeclaration(node) && hasEnumMember(node, name)) {
+    return null;
+  }
   if (isCatchClause(node) && node.variableDeclaration !== undefined) {
     return binds(node.variableDeclaration.name, name) ? null : undefined;
   }
@@ -384,11 +493,8 @@ function ownBinding(node: Node, within: Node, name: string, parameterDecorator: 
   if (parameters?.some((parameter) => binds(parameter.name, name)) === true) {
     return null;
   }
-  return 'body' in node &&
-    node.body === within &&
-    hoistedIn([within]).some((declaration) => binds(declaration.name, name))
-    ? null
-    : undefined;
+  // A source file's own are found with the rest of its statements, as the holder's declaration.
+  return isSourceFile(node) || hoistedBinding(node, within, name) === undefined ? undefined : null;
 }
 
 /** A loop head's local variable, including an opaque iteration value. */
@@ -412,33 +518,64 @@ function statementsOf(node: Node): readonly Statement[] | undefined {
 
 /** The value binding a statement introduces, with imports and non-variable values opaque. */
 function statementBinding(statement: Statement, name: string): Binding {
+  if (erased(statement)) {
+    return undefined;
+  }
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.find((each) => binds(each.name, name));
   }
-  if (isImportDeclaration(statement)) {
-    const clause = statement.importClause;
-    if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
-      return undefined;
-    }
-    const named = clause.namedBindings;
-    const bound =
-      clause.name?.text === name ||
-      (named !== undefined &&
-        (isNamespaceImport(named)
-          ? named.name.text === name
-          : named.elements.some((each) => !each.isTypeOnly && each.name.text === name)));
-    return bound ? null : undefined;
-  }
   if (isImportEqualsDeclaration(statement)) {
-    return statement.name.text === name ? null : undefined;
+    return aliasBinding(statement, name);
   }
-  return (isClassDeclaration(statement) ||
-    isFunctionDeclaration(statement) ||
-    isEnumDeclaration(statement) ||
-    isModuleDeclaration(statement)) &&
+  return declaresOpaquely(statement, name) ? null : undefined;
+}
+
+/**
+ * The binding an `import … =` alias gives: a value, or none where it is of a type, which a bare
+ * reference passes by; unknown where it is of what the file does not declare.
+ */
+function aliasBinding(alias: ImportEqualsDeclaration, name: string): Binding {
+  if (alias.name.text !== name) {
+    return undefined;
+  }
+  const meaning = aliasMeaning(alias);
+  if (meaning === 'type') {
+    return undefined;
+  }
+  return meaning === 'value' ? null : UNKNOWN;
+}
+
+/** Whether a statement that is no variable binds the name to a value that the lookup leaves opaque. */
+function declaresOpaquely(statement: Statement, name: string): boolean {
+  if (isImportDeclaration(statement)) {
+    return importBinds(statement, name);
+  }
+  if (isModuleDeclaration(statement)) {
+    // A namespace of types alone is erased, and binds no value.
+    return isIdentifier(statement.name) && statement.name.text === name && instantiated(statement);
+  }
+  return (
+    (isClassDeclaration(statement) ||
+      isFunctionDeclaration(statement) ||
+      isEnumDeclaration(statement)) &&
     statement.name?.text === name
-    ? null
-    : undefined;
+  );
+}
+
+/** Whether an import binds the name, but for a type: `import type`, `{ type T }`. */
+function importBinds(statement: ImportDeclaration, name: string): boolean {
+  const clause = statement.importClause;
+  if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
+    return false;
+  }
+  const named = clause.namedBindings;
+  return (
+    clause.name?.text === name ||
+    (named !== undefined &&
+      (isNamespaceImport(named)
+        ? named.name.text === name
+        : named.elements.some((each) => !each.isTypeOnly && each.name.text === name)))
+  );
 }
 
 /** Whether a plain name or destructuring pattern binds the name read. */

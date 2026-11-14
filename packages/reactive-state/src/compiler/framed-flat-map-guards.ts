@@ -38,6 +38,7 @@ import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedOriginPrefix } from './framed-origin-prefix.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
+import { localTypeBinding } from './local-type-aliases.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
 
 /** Added flatMap array returns keep their original quiet evaluation and selected-source ownership. */
@@ -77,7 +78,10 @@ export function flatMapOwnedSource(
   return value !== undefined && framedOriginCoowned(value, call) ? value : undefined;
 }
 
-/** A nonliteral return adds only the native array category explicitly written on its original binding. */
+/**
+ * A nonliteral return adds only the native array category explicitly written on its original binding:
+ * `Array` or `ReadonlyArray` by a name no type declared or imported where it is written takes.
+ */
 export function flatMapWrittenArray(source: Expression): boolean {
   const selected = frameTypeOf(source);
   if (selected === undefined || selected.keys.length > 0) return false;
@@ -88,7 +92,8 @@ export function flatMapWrittenArray(source: Expression): boolean {
     isTupleTypeNode(type) ||
     (isTypeReferenceNode(type) &&
       isIdentifier(type.typeName) &&
-      framedNativeConstructor(type.typeName, ARRAYS))
+      ARRAYS.has(type.typeName.text) &&
+      localTypeBinding(type.typeName) === undefined)
   );
 }
 

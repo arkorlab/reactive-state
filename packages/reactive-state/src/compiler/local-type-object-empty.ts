@@ -7,10 +7,12 @@ import {
   isClassExpression,
   isInterfaceDeclaration,
   isEnumDeclaration,
+  isExpression,
   isFunctionTypeNode,
   isIdentifier,
   isLiteralTypeNode,
   isModuleBlock,
+  isModuleDeclaration,
   isMethodSignatureDeclaration,
   isNumericLiteral,
   isPrefixUnaryExpression,
@@ -31,6 +33,7 @@ import {
   type TypeElement,
   type TypeLiteralNode,
   type LiteralTypeNode,
+  type Node,
 } from 'typescript/ast';
 
 import { frameBindingOf } from './framed-bindings.ts';
@@ -57,7 +60,8 @@ interface EnumInitializer {
   readonly literal: LiteralTypeNode['literal'];
 }
 interface EnumValue {
-  readonly declaration: EnumDeclaration;
+  /** None of a plain literal, which no enum member's type shares, however equal their values. */
+  readonly declaration: EnumDeclaration | undefined;
   readonly value: string | number;
 }
 interface Domain {
@@ -116,6 +120,7 @@ const PRIMITIVES = new Set([
   SyntaxKind.UndefinedKeyword,
   SyntaxKind.VoidKeyword,
 ]);
+const UNDEFINED = factory.createKeywordTypeNode(SyntaxKind.UndefinedKeyword);
 
 /** A required contradictory finite discriminant reduces the intersection before member rejection. */
 export function emptyObjectIntersection(source: Source, resolve: Resolve): boolean | undefined {
@@ -167,7 +172,11 @@ function emptyField(fields: readonly Field[], resolve: Resolve): boolean | undef
   );
 }
 
-/** Original scopes survive each explicit property's finite primitive domain. */
+/**
+ * Original scopes survive each explicit property's finite primitive domain. A field discriminates
+ * only where some supplier's whole domain is units, as TypeScript's literal part must be: a literal
+ * arm beside a wide type, as in `'a' | string`, does not.
+ */
 function fieldDomain(fields: readonly Field[], resolve: Resolve): Domain {
   const readings: TypeReading[] = [];
   const enums: EnumValue[] = [];
@@ -180,7 +189,7 @@ function fieldDomain(fields: readonly Field[], resolve: Resolve): Domain {
     const domain =
       reading === undefined
         ? { ...EMPTY, unknown: true, discriminant: true }
-        : primitiveDomain(reading, resolve);
+        : primitiveDomain(reading, resolve, optionalMember(field.member));
     readings.push(...domain.readings);
     enums.push(...domain.enums);
     symbolSets.push(...domain.symbolSets);
@@ -191,17 +200,21 @@ function fieldDomain(fields: readonly Field[], resolve: Resolve): Domain {
   return { readings, enums, symbolSets, discriminant, never, unknown };
 }
 
-/** Union alternatives stay covariant inside a property before distinct suppliers intersect. */
-function primitiveDomain(at: TypeReading, resolve: Resolve): Domain {
+/**
+ * Union alternatives stay covariant inside a property before distinct suppliers intersect. An
+ * optional property's domain holds `undefined` beside its written type, as TypeScript reads it.
+ */
+function primitiveDomain(at: TypeReading, resolve: Resolve, optional: boolean): Domain {
   const pending: {
     readonly reading: TypeReading;
     readonly ancestors: ReadonlySet<TypeReading['type']>;
   }[] = [{ reading: at, ancestors: new Set() }];
+  if (optional) pending.push({ reading: { ...at, type: UNDEFINED }, ancestors: new Set() });
   const readings: TypeReading[] = [];
   const enums: EnumValue[] = [];
   const symbolSets: Domain['symbolSets'][number][] = [];
   let broadSymbol = false;
-  let discriminant = false;
+  let discriminant = true;
   let unknown = false;
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const reading = resolve(next.reading);
@@ -224,7 +237,7 @@ function primitiveDomain(at: TypeReading, resolve: Resolve): Domain {
     readings.push(...domain.readings);
     enums.push(...domain.enums);
     symbolSets.push(...domain.symbolSets);
-    discriminant ||= domain.discriminant;
+    discriminant &&= domain.discriminant;
     unknown ||= domain.unknown;
   }
   const combined = inferredCandidates(
@@ -270,9 +283,11 @@ function leafDomain(reading: TypeReading): Domain {
     isFunctionTypeNode(type) ||
     isConstructorTypeNode(type) ||
     objectReference(type);
+  const plain =
+    isLiteralTypeNode(type) && isExpression(type.literal) ? enumLiteral(type.literal) : undefined;
   return {
     readings: [reading],
-    enums: [],
+    enums: plain === undefined ? [] : [{ declaration: undefined, value: plain.identity }],
     symbolSets: [],
     never: false,
     discriminant: discriminant || !closed,
@@ -280,7 +295,10 @@ function leafDomain(reading: TypeReading): Domain {
   };
 }
 
-/** Equal-valued members from distinct enum declarations retain their nominal relation as opaque. */
+/**
+ * Equal-valued members from distinct enum declarations, and a member beside a plain literal of its
+ * value, retain their nominal relation as opaque: TypeScript keeps each enum member's type apart.
+ */
 function conflictingEnums(domain: Domain): boolean {
   return domain.enums.some((left) => {
     return domain.enums.some((right) => {
@@ -329,17 +347,34 @@ function enumDeclaration(name: Identifier): EnumDeclaration | undefined {
 
 /** Explicit literal values and native numeric auto-increments retain source member order. */
 function enumMemberValue(declaration: EnumDeclaration, name: string): EnumInitializer | undefined {
+  const ambient = ambientValues(declaration);
   let previous: number | undefined = -1;
   for (const member of declaration.members) {
-    const value: EnumInitializer | undefined =
-      member.initializer === undefined
-        ? automaticEnumValue(previous)
-        : enumLiteral(member.initializer);
+    let value: EnumInitializer | undefined;
+    if (member.initializer !== undefined) value = enumLiteral(member.initializer);
+    else if (!ambient) value = automaticEnumValue(previous);
     if ((isIdentifier(member.name) || isStringLiteral(member.name)) && member.name.text === name)
       return value;
     previous = typeof value?.identity === 'number' ? value.identity : undefined;
   }
   return undefined;
+}
+
+/**
+ * A non-const enum an ambient context declares numbers no omitted member: TypeScript reads such a
+ * member as computed, of a value it does not know, apart from every other member.
+ */
+function ambientValues(declaration: EnumDeclaration): boolean {
+  if (declaration.modifiers?.some((each) => each.kind === SyntaxKind.ConstKeyword) === true)
+    return false;
+  for (let node: Node = declaration; !isSourceFile(node); node = node.parent) {
+    if (
+      (isEnumDeclaration(node) || isModuleDeclaration(node)) &&
+      node.modifiers?.some((each) => each.kind === SyntaxKind.DeclareKeyword) === true
+    )
+      return true;
+  }
+  return declaration.getSourceFile().isDeclarationFile;
 }
 
 /** An omitted numeric initializer follows the preceding known numeric member. */

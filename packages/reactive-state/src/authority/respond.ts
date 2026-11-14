@@ -34,20 +34,27 @@ export function json(
   res.end(JSON.stringify(value));
 }
 
-/** The request's body, which every route takes as a JSON object: anything else is refused. */
+/**
+ * The request's body, which every route takes as a JSON object: anything else is refused. A body
+ * past `MAX_BODY_BYTES` is read to its end all the same, what comes past the limit let go of as it
+ * comes, and refused then: left early, the loop would leave the rest unread, and the next request a
+ * client sends on the connection unanswered until the server ends the connection as idle.
+ */
 export async function readJson(req: IncomingMessage): Promise<Readonly<Record<string, unknown>>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     const bytes = chunk as Buffer;
     size += bytes.length;
-    if (size > MAX_BODY_BYTES) {
-      throw new AuthorityError('The request is too large.', {
-        code: 'TOO_LARGE',
-        status: HTTP_PAYLOAD_TOO_LARGE,
-      });
+    if (size <= MAX_BODY_BYTES) {
+      chunks.push(bytes);
     }
-    chunks.push(bytes);
+  }
+  if (size > MAX_BODY_BYTES) {
+    throw new AuthorityError('The request is too large.', {
+      code: 'TOO_LARGE',
+      status: HTTP_PAYLOAD_TOO_LARGE,
+    });
   }
   const text = Buffer.concat(chunks).toString('utf8');
   let body: unknown;

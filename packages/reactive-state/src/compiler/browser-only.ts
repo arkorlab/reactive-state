@@ -21,14 +21,18 @@ import {
   isJsxExpression,
   isJsxOpeningElement,
   isJsxSelfClosingElement,
+  isModuleBlock,
+  isModuleDeclaration,
   isNamedExports,
   isNamespaceImport,
+  isNonNullExpression,
   isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAccessExpression,
   isSatisfiesExpression,
   isSourceFile,
   isStringLiteral,
+  isTypeAssertion,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -41,7 +45,8 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { freeReads, isTypeOnly, readsBinding } from './scope.ts';
+import { unshadowedReads } from './code-globals.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /**
  * What of a Client Component's code runs in the browser alone, never as the server renders the
@@ -84,22 +89,40 @@ interface Candidate {
   readonly body: Node;
 }
 
-/** What `node` stands in, past the parentheses and the casts around it. */
+/** What `node` stands in, past the parentheses, the casts, in angle brackets too, and the `!` around it. */
 function holderOf(node: Node): Node {
   let at = node.parent;
-  while (isParenthesizedExpression(at) || isAsExpression(at) || isSatisfiesExpression(at)) {
+  while (
+    isParenthesizedExpression(at) ||
+    isAsExpression(at) ||
+    isSatisfiesExpression(at) ||
+    isNonNullExpression(at) ||
+    isTypeAssertion(at)
+  ) {
     at = at.parent;
   }
   return at;
+}
+
+/** `node` past what `unwrapped` strips and the casts in angle brackets it leaves, `<any>useEffect`. */
+function uncast(node: Expression): Expression {
+  let each = unwrapped(node);
+  while (isTypeAssertion(each)) {
+    each = unwrapped(each.expression);
+  }
+  return each;
 }
 
 /** What a file reads React's own hooks by, as `reactNamesOf` reads it once. */
 interface ReactNames {
   /** Each name the file imports a value of `react`'s by, with `react`'s: `useEffect` of `onMount`. */
   readonly hooks: ReadonlyMap<string, string>;
-  /** The names `react` is imported by whole: `React` of `import * as React`, of `import React`. */
+  /** The names `react` is imported by whole: `React` of `import * as React`, of `import React`, of `{ default as React }`. */
   readonly whole: ReadonlySet<string>;
-  /** The reads of a name no function, block or `catch` around them declares (`freeReads`). */
+  /**
+   * The reads of a name no function, block, `catch` or namespace around them declares
+   * (`unshadowedReads`).
+   */
   readonly free: ReadonlySet<Identifier>;
 }
 
@@ -129,8 +152,15 @@ function readReact(statement: Statement, hooks: Map<string, string>, whole: Set<
     return;
   }
   for (const element of named.elements) {
-    if (!element.isTypeOnly) {
-      hooks.set(element.name.text, (element.propertyName ?? element.name).text);
+    if (element.isTypeOnly) {
+      continue;
+    }
+    const exported = (element.propertyName ?? element.name).text;
+    // The default of `react` is `react` read whole, as `import React from 'react'` names it.
+    if (exported === 'default') {
+      whole.add(element.name.text);
+    } else {
+      hooks.set(element.name.text, exported);
     }
   }
 }
@@ -144,7 +174,7 @@ function reactNamesOf(sourceFile: SourceFile): ReactNames {
     for (const statement of sourceFile.statements) {
       readReact(statement, hooks, whole);
     }
-    names = { free: new Set(freeReads(sourceFile)), hooks, whole };
+    names = { free: unshadowedReads(sourceFile), hooks, whole };
     REACT_NAMES.set(sourceFile, names);
   }
   return names;
@@ -157,12 +187,12 @@ function reactNamesOf(sourceFile: SourceFile): ReactNames {
  * — none of a function of the file's own, nor of another module's, of the name.
  */
 function namesHook(callee: Expression, names: ReadonlySet<string>): boolean {
-  const named = unwrapped(callee);
+  const named = uncast(callee);
   const react = reactNamesOf(named.getSourceFile());
   if (isIdentifier(named)) {
     return react.free.has(named) && names.has(react.hooks.get(named.text) ?? '');
   }
-  const whole = isPropertyAccessExpression(named) ? unwrapped(named.expression) : undefined;
+  const whole = isPropertyAccessExpression(named) ? uncast(named.expression) : undefined;
   return (
     whole !== undefined &&
     isPropertyAccessExpression(named) &&
@@ -207,7 +237,7 @@ function isHandedToBrowser(node: Node): boolean {
   return (
     isCallExpression(holder) &&
     first !== undefined &&
-    unwrapped(first) === node &&
+    uncast(first) === node &&
     namesHook(holder.expression, EFFECTS)
   );
 }
@@ -233,6 +263,54 @@ function declaresValue(node: Identifier): boolean {
       isImportSpecifier(parent) ||
       isNamespaceImport(parent)) &&
     parent.name === node
+  );
+}
+
+/** `node` within the parentheses, casts and `!` that wrap it, which `uncast` reads past. */
+function wrapperOf(node: Node): Node {
+  let at = node;
+  while (
+    isParenthesizedExpression(at) ||
+    isAsExpression(at) ||
+    isSatisfiesExpression(at) ||
+    isNonNullExpression(at) ||
+    isTypeAssertion(at)
+  ) {
+    at = at.parent;
+  }
+  return at;
+}
+
+/** Whether `node` is a call of `useCallback` that is handed `fn`, past casts, as its function. */
+function isCallbackOf(node: Node, fn: Node): boolean {
+  const [first] = isCallExpression(node) ? node.arguments : [];
+  return (
+    isCallExpression(node) &&
+    first !== undefined &&
+    uncast(first) === fn &&
+    namesHook(node.expression, CALLBACKS)
+  );
+}
+
+/**
+ * Whether `node` is the name of a function or class expression that the constant of that name
+ * holds, `const handler = function handler() {}`, past the parentheses, casts and `!` that
+ * `constantBody` reads past, and the call of `useCallback` it is handed to, `const handler =
+ * useCallback(function handler() {}, [])`: within it, it is that value, as the constant's name is
+ * — one name, one value. None of a function another call is handed, or one `useCallback` is given
+ * among its dependencies, whose answer is not the function.
+ */
+function namesItsHolder(node: Identifier): boolean {
+  const { parent } = node;
+  if (!(isFunctionExpression(parent) || isClassExpression(parent)) || parent.name !== node) {
+    return false;
+  }
+  let holder = wrapperOf(parent.parent);
+  if (isFunctionExpression(parent) && isCallbackOf(holder, parent)) {
+    holder = wrapperOf(holder.parent);
+  }
+  return (
+    isVariableDeclaration(holder) && isIdentifier(holder.name) && holder.name.text === node.text
   );
 }
 
@@ -265,14 +343,31 @@ function exportedBy(statement: Statement): readonly string[] {
     : [];
 }
 
+/**
+ * The names `statements` export of the file's own (`exportedBy`), and those a namespace's body
+ * exports, which the code reads as members of the namespace, `Helpers.read()`, by no name of theirs.
+ */
+function exportedIn(statements: readonly Statement[]): readonly string[] {
+  return statements.flatMap((statement) => {
+    if (!isModuleDeclaration(statement)) {
+      return exportedBy(statement);
+    }
+    const { body } = statement;
+    if (body !== undefined && isModuleDeclaration(body)) {
+      return exportedIn([body]);
+    }
+    return body !== undefined && isModuleBlock(body) ? exportedIn(body.statements) : [];
+  });
+}
+
 /** What runs when a `const` is called: its function, or what `useCallback` is handed of one. */
 function constantBody(initializer: Expression): Node | undefined {
-  const value = unwrapped(initializer);
+  const value = uncast(initializer);
   if (isArrowFunction(value) || isFunctionExpression(value)) {
     return value;
   }
   const [handed] = isCallExpression(value) ? value.arguments : [];
-  const given = handed === undefined ? undefined : unwrapped(handed);
+  const given = handed === undefined ? undefined : uncast(handed);
   return given !== undefined &&
     isCallExpression(value) &&
     namesHook(value.expression, CALLBACKS) &&
@@ -318,7 +413,9 @@ function namesOf(sourceFile: SourceFile): Names {
       names.candidates.push(candidate);
     }
     if (isIdentifier(node) && declaresValue(node)) {
-      names.declared.set(node.text, (names.declared.get(node.text) ?? 0) + 1);
+      if (!namesItsHolder(node)) {
+        names.declared.set(node.text, (names.declared.get(node.text) ?? 0) + 1);
+      }
     } else if (isIdentifier(node) && readsBinding(node)) {
       names.reads.set(node.text, [...(names.reads.get(node.text) ?? []), node]);
     }
@@ -347,15 +444,15 @@ function readInBrowser(read: Identifier, skipped: ReadonlySet<Node>): boolean {
 /**
  * The code of `sourceFile` that runs in the browser alone, as a predicate of each node: a function
  * handed to the browser where it is written (`isHandedToBrowser`), and a function of the file's
- * own, neither exported nor of a name declared twice, each of whose reads stands in such code or in
- * another function so skipped — all of them taken for skipped first, and each a read outside such
- * code is found of dropped, until none is.
+ * own, neither exported — by the module or by a namespace (`exportedIn`) — nor of a name declared
+ * twice, each of whose reads stands in such code or in another function so skipped — all of them
+ * taken for skipped first, and each a read outside such code is found of dropped, until none is.
  */
 export function browserOnlyIn(sourceFile: SourceFile): (node: Node) => boolean {
   let skips = SKIPPED.get(sourceFile);
   if (skips === undefined) {
     const { candidates, declared, reads } = namesOf(sourceFile);
-    const exported = new Set(sourceFile.statements.flatMap((statement) => exportedBy(statement)));
+    const exported = new Set(exportedIn(sourceFile.statements));
     let kept = candidates.filter(
       (candidate) => declared.get(candidate.name) === 1 && !exported.has(candidate.name),
     );
