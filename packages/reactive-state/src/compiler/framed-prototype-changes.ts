@@ -1,29 +1,31 @@
 import {
   type ElementAccessExpression,
+  type Identifier,
   isAssertionExpression,
   isBinaryExpression,
-  isBindingElement,
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
   isExpressionWithTypeArguments,
   isIdentifier,
+  isInterfaceDeclaration,
   isNewExpression,
   isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
-  isObjectBindingPattern,
   isParenthesizedExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
-  isQualifiedName,
   isSatisfiesExpression,
   isSourceFile,
   isStringLiteral,
+  isTypeAliasDeclaration,
   isTypeOfExpression,
+  type NoSubstitutionTemplateLiteral,
   type Node,
   type PropertyAccessExpression,
   type SourceFile,
+  type StringLiteral,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -40,9 +42,11 @@ const PROTOTYPE_CHANGES = new WeakMap<SourceFile, boolean>();
  * where every mention of what reaches a prototype is one of a short list of uses that reach none;
  * any other mention is taken for a change, and so is a name the code does not write.
  *
- * What reaches a prototype: the names `__proto__` and `setPrototypeOf` (as an identifier, a text or a
- * template); the globals `Object`, `Reflect`, `Array` and `Function`, and the global objects that
- * hold them (`globalThis`, `global`, `self`, `window`); a member `prototype` or `constructor`.
+ * What reaches a prototype: the names `__proto__`, `setPrototypeOf`, `getPrototypeOf`, `prototype`,
+ * `constructor`, `__defineGetter__`, `__defineSetter__`, `__lookupGetter__` and `__lookupSetter__`,
+ * written as a member, a key or a text, of whatever object (a helper, a parameter or an import is no
+ * different from a holder); and the globals `Object`, `Reflect`, `Array` and `Function`, and the global
+ * objects that hold them (`globalThis`, `global`, `self`, `window`).
  *
  * The uses that reach none:
  * - a name read by a type;
@@ -64,7 +68,7 @@ export function prototypeMayChange(file: SourceFile): boolean {
   let found = false;
   const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined && !found; node = pending.pop()) {
-    found = !isSourceFile(node) && !readByType(node) && escapes(node);
+    found = !isSourceFile(node) && escapes(node);
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -73,8 +77,21 @@ export function prototypeMayChange(file: SourceFile): boolean {
   return found;
 }
 
-/** The names that give an object another prototype: the accessor and the function. */
-const NAMES: ReadonlySet<string> = new Set(['__proto__', 'setPrototypeOf']);
+/**
+ * The names that reach a prototype, or give another to an object, as a member name, a key or a text, of
+ * whatever object they are written for: a helper, a parameter, an import and a holder alike.
+ */
+const REACHING: ReadonlySet<string> = new Set([
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+  '__proto__',
+  'constructor',
+  'getPrototypeOf',
+  'prototype',
+  'setPrototypeOf',
+]);
 
 /** The globals that reach a prototype, and the global objects that hold them. */
 const HOLDERS: ReadonlySet<string> = new Set([
@@ -135,19 +152,52 @@ const COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
 
 /** Whether a node, where it is read, may reach a prototype in a way the list of uses does not name. */
 function escapes(node: Node): boolean {
-  const written =
-    isIdentifier(node) || isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node);
-  if (written && NAMES.has(node.text)) return true;
-  if (isIdentifier(node)) return escapesAsHolder(node);
-  if (isMemberAccess(node)) return escapesAsMember(node);
-  return isBindingElement(node) && bindsPrototype(node);
+  if (!isIdentifier(node) && !isStringLiteral(node) && !isNoSubstitutionTemplateLiteral(node))
+    return false;
+  if (REACHING.has(node.text)) return !inType(node) && nameEscapes(node);
+  return isIdentifier(node) && !inType(node) && escapesAsHolder(node);
 }
 
-/** Whether a name is read by a type only: `Array<string>`, `typeof Object`: a type names no value. */
-function readByType(node: Node): boolean {
-  let at = node.parent;
-  while (isQualifiedName(at)) at = at.parent;
-  return isTypeOnly(at);
+/**
+ * Whether a name that reaches a prototype is used otherwise than the list says: as a member of a
+ * holder that is read as the list says (`Object.getPrototypeOf(x)` compared or read, `Array.prototype.join`,
+ * `x.constructor === Array`), or not at all as a member: a key of a literal or a pattern, a bare name, a
+ * text, whoever it is written for.
+ */
+function nameEscapes(name: Identifier | StringLiteral | NoSubstitutionTemplateLiteral): boolean {
+  const access = accessOf(name);
+  if (access === undefined) return true;
+  if (name.text === 'getPrototypeOf') return !isNativeHandingBack(access);
+  if (name.text === 'prototype') return prototypeUsedOtherwise(access);
+  if (name.text === 'constructor') return !onlyCompared(access);
+  return true;
+}
+
+/** The member access a name is the member of, by a name or a text key; none for any other place. */
+function accessOf(name: Node): PropertyAccessExpression | ElementAccessExpression | undefined {
+  const { parent } = name;
+  if (isPropertyAccessExpression(parent) && parent.name === name) return parent;
+  const site = outermost(name);
+  const holder = site.parent;
+  return isElementAccessExpression(holder) && holder.argumentExpression === site
+    ? holder
+    : undefined;
+}
+
+/** Whether a member is the `getPrototypeOf` of the global `Object` or `Reflect`, whose use the holder decides. */
+function isNativeHandingBack(access: PropertyAccessExpression | ElementAccessExpression): boolean {
+  const path = globalPathOf(access)?.join('.');
+  return path === 'Object.getPrototypeOf' || path === 'Reflect.getPrototypeOf';
+}
+
+/**
+ * Whether a name is written in a type: `Array<string>`, `typeof Object`, an interface, an alias, a
+ * member of a type literal. A type names no value and reaches no prototype.
+ */
+function inType(node: Node): boolean {
+  for (let at = node.parent; !isSourceFile(at); at = at.parent)
+    if (isTypeOnly(at) || isInterfaceDeclaration(at) || isTypeAliasDeclaration(at)) return true;
+  return false;
 }
 
 /** Whether a node is a member read by a name or a key. */
@@ -248,14 +298,6 @@ function memberUsed(
   return called || !isMemberAccess(parent) || OF_FUNCTIONS.has(writtenMember(parent) ?? '');
 }
 
-/** Whether a member access reaches a prototype where the list of uses does not name how. */
-function escapesAsMember(access: PropertyAccessExpression | ElementAccessExpression): boolean {
-  const member = writtenMember(access);
-  if (member === 'prototype') return prototypeUsedOtherwise(access);
-  if (member === 'constructor') return !onlyCompared(access);
-  return false;
-}
-
 /** Whether the `prototype` of a function is given away, written, or reached through a `constructor`. */
 function prototypeUsedOtherwise(
   access: PropertyAccessExpression | ElementAccessExpression,
@@ -290,13 +332,4 @@ function usedOtherwiseThanRead(node: Node): boolean {
   const { parent } = site;
   if (isBinaryExpression(parent) && COMPARISONS.has(parent.operatorToken.kind)) return false;
   return !isMemberAccess(parent) || parent.expression !== site || changed(parent);
-}
-
-/** Whether a pattern takes the `prototype` or the `constructor` of what it takes apart. */
-function bindsPrototype(element: Node): boolean {
-  if (!isBindingElement(element) || !isObjectBindingPattern(element.parent)) return false;
-  const key = element.propertyName ?? element.name;
-  const name =
-    key !== undefined && (isIdentifier(key) || isStringLiteral(key)) ? key.text : undefined;
-  return name === 'prototype' || name === 'constructor';
 }

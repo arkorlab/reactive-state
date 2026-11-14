@@ -397,8 +397,168 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'fields-named-prototype-and-constructor-pin',
+    id: 'fields-named-prototype-and-constructor-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string, p: object) { void { prototype: 1, constructor: 2 }; }`,
+    changes: true,
+  },
+  {
+    id: 'helper-get-prototype-of-defines-a-setter-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { Object.defineProperty(helper.getPrototypeOf([]), 'join', { get: () => Array.prototype.join, set() {} }); }`,
+    changes: true,
+  },
+  {
+    id: 'helper-get-prototype-of-by-a-text-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void helper['getPrototypeOf'](a); }`,
+    changes: true,
+  },
+  {
+    id: 'helper-get-prototype-of-by-a-template-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void helper[\`getPrototypeOf\`](a); }`,
+    changes: true,
+  },
+  {
+    id: 'helper-get-prototype-of-compared-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (helper.getPrototypeOf(a) === null); }`,
+    changes: true,
+  },
+  {
+    id: 'get-prototype-of-in-a-literal-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void { getPrototypeOf: (x: unknown) => x }; }`,
+    changes: true,
+  },
+  {
+    id: 'get-prototype-of-a-bare-parameter-called-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { function other(getPrototypeOf: (x: unknown) => object) { void getPrototypeOf([]); } void other; }`,
+    changes: true,
+  },
+  {
+    id: 'get-prototype-of-destructured-from-a-helper-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { const { getPrototypeOf } = helper; void getPrototypeOf; }`,
+    changes: true,
+  },
+  {
+    id: 'get-prototype-of-of-a-local-object-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { const Object = helper; void Object.getPrototypeOf(a); }`,
+    changes: true,
+  },
+  {
+    id: 'set-prototype-of-of-a-helper-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { helper.setPrototypeOf(a, {}); }`,
+    changes: true,
+  },
+  {
+    id: 'define-setter-on-an-array-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { (a as any).__defineSetter__('join', () => 1); }`,
+    changes: true,
+  },
+  {
+    id: 'define-getter-on-the-array-prototype-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { (Array.prototype as any).__defineGetter__('join', () => 1); }`,
+    changes: true,
+  },
+  {
+    id: 'lookup-getter-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (a as any).__lookupGetter__('join'); }`,
+    changes: true,
+  },
+  {
+    id: 'lookup-setter-on-the-object-prototype-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (Object.prototype as any).__lookupSetter__.call(a, 'join'); }`,
+    changes: true,
+  },
+  {
+    id: 'define-setter-by-a-text-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { (a as any)['__defineSetter__']('join', () => 1); }`,
+    changes: true,
+  },
+  {
+    id: 'define-setter-in-a-literal-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void { __defineSetter__: 1 }; }`,
+    changes: true,
+  },
+  {
+    id: 'constructor-text-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void ['constructor']; }`,
+    changes: true,
+  },
+  {
+    id: 'prototype-text-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void 'prototype'; }`,
+    changes: true,
+  },
+  {
+    id: 'prototype-of-a-helper-written-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { helper.prototype.join = () => 1; }`,
+    changes: true,
+  },
+  {
+    id: 'constructor-of-a-helper-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void helper.constructor; }`,
+    changes: true,
+  },
+  {
+    id: 'prototype-key-of-a-literal-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { void { prototype: 1 }; }`,
+    changes: true,
+  },
+  {
+    id: 'constructor-key-of-a-pattern-refused',
+    source: `function frames(helper: any, a: unknown[], key: string) { const { constructor } = helper; void constructor; }`,
+    changes: true,
+  },
+  {
+    id: 'get-prototype-of-in-a-type-pin',
+    source: `function frames(helper: any, a: unknown[], key: string) { type Finder = { getPrototypeOf: (x: unknown) => object; prototype: unknown; constructor: Function }; interface Holder { __proto__: unknown; setPrototypeOf(x: unknown): void } void (null as unknown as Finder | Holder); }`,
+    changes: false,
+  },
+  {
+    id: 'get-prototype-of-of-the-global-compared-pin',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (Object.getPrototypeOf(a) === Array.prototype); }`,
+    changes: false,
+  },
+  {
+    id: 'get-prototype-of-of-the-global-member-read-pin',
+    source: `function frames(helper: any, a: unknown[], key: string) { void Object.getPrototypeOf(a).join; }`,
+    changes: false,
+  },
+  {
+    id: 'reflect-get-prototype-of-compared-pin',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (Reflect.getPrototypeOf(a) !== null); }`,
+    changes: false,
+  },
+  {
+    id: 'get-prototype-of-of-the-global-object-pin',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (globalThis.Object.getPrototypeOf(a) === null); }`,
+    changes: false,
+  },
+  {
+    id: 'get-prototype-of-of-the-global-bracket-compared-pin',
+    source: `function frames(helper: any, a: unknown[], key: string) { void (Object['getPrototypeOf'](a) === null); }`,
+    changes: false,
+  },
+  {
+    id: 'get-prototype-of-imported-by-name-refused',
+    source: `import { getPrototypeOf } from './helper.ts'; function frames(a: unknown[]) { Object.defineProperty(getPrototypeOf(a), 'join', { get: () => 1, set() {} }); }`,
+    changes: true,
+  },
+  {
+    id: 'get-prototype-of-of-an-imported-namespace-refused',
+    source: `import * as helper from './helper.ts'; function frames(a: unknown[]) { Object.defineProperty(helper.getPrototypeOf(a), 'join', { get: () => 1, set() {} }); }`,
+    changes: true,
+  },
+  {
+    id: 'set-prototype-of-imported-by-name-refused',
+    source: `import { setPrototypeOf as reroot } from './helper.ts'; function frames(a: unknown[]) { reroot(a, {}); }`,
+    changes: true,
+  },
+  {
+    id: 'define-setter-of-an-imported-helper-refused',
+    source: `import helper from './helper.ts'; function frames(a: unknown[]) { helper.__defineSetter__('join', () => 1); }`,
+    changes: true,
+  },
+  {
+    id: 'imports-with-no-such-name-pin',
+    source: `import { keys } from './helper.ts'; function frames(a: unknown[]) { void keys(a); }`,
     changes: false,
   },
   {
