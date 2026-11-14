@@ -6,6 +6,16 @@ import {
   isAsExpression,
   isBinaryExpression,
   isCallExpression,
+  isWhileStatement,
+  isVoidExpression,
+  isTypeOfExpression,
+  isTemplateSpan,
+  isSwitchStatement,
+  isIfStatement,
+  isForStatement,
+  isExpressionStatement,
+  isDoStatement,
+  isConditionalExpression,
   isDeleteExpression,
   isElementAccessExpression,
   isForInStatement,
@@ -215,7 +225,7 @@ function touches(mention: Identifier): boolean {
     node = node.parent;
     while (transparent(node.parent)) node = node.parent;
   }
-  return writtenTarget(node) || called(node);
+  return writtenTarget(node) || called(node) || !consumedInPlace(node);
 }
 
 /** Uses of the object as a whole that change nothing: a spread, a constant alias, a copy's source. */
@@ -229,6 +239,61 @@ function readAsWhole(node: Node): boolean {
   if (!isCallExpression(parent)) return false;
   const copies = globalPathOf(unwrapped(parent.expression))?.join('.') === 'Object.assign';
   return copies && parent.arguments.some((each, index) => index > 0 && each === node);
+}
+
+/** The operators that read both operands and give a new value: a comparison, arithmetic, `in`. */
+const CONSUMING: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandToken,
+  SyntaxKind.AsteriskAsteriskToken,
+  SyntaxKind.AsteriskToken,
+  SyntaxKind.BarToken,
+  SyntaxKind.CaretToken,
+  SyntaxKind.EqualsEqualsEqualsToken,
+  SyntaxKind.EqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsToken,
+  SyntaxKind.GreaterThanEqualsToken,
+  SyntaxKind.GreaterThanGreaterThanGreaterThanToken,
+  SyntaxKind.GreaterThanGreaterThanToken,
+  SyntaxKind.GreaterThanToken,
+  SyntaxKind.InKeyword,
+  SyntaxKind.InstanceOfKeyword,
+  SyntaxKind.LessThanEqualsToken,
+  SyntaxKind.LessThanLessThanToken,
+  SyntaxKind.LessThanToken,
+  SyntaxKind.MinusToken,
+  SyntaxKind.PercentToken,
+  SyntaxKind.PlusToken,
+  SyntaxKind.SlashToken,
+]);
+
+/**
+ * Whether what a member read gives is used where it is read and held nowhere: an operand of a
+ * comparison, of arithmetic or of `typeof`, a test, a template's part, a statement of its own. A
+ * value that is bound to a variable, passed to a call, returned, spread, stored in an object or a
+ * list, or chosen between (`||`, `?:`) may be an object written later by the name that holds it.
+ */
+function consumedInPlace(node: Node): boolean {
+  const { parent } = node;
+  if (isExpressionStatement(parent) || isTypeOfExpression(parent) || isVoidExpression(parent))
+    return true;
+  if (isPrefixUnaryExpression(parent)) return true;
+  if (isBinaryExpression(parent)) return CONSUMING.has(parent.operatorToken.kind);
+  if (isTemplateSpan(parent)) return !isTaggedTemplateExpression(parent.parent.parent);
+  if (isConditionalExpression(parent)) return parent.condition === node;
+  return tested(node);
+}
+
+/** Whether a node is what a statement tests: an `if`, a loop, a `switch`. */
+function tested(node: Node): boolean {
+  const { parent } = node;
+  if (isIfStatement(parent) || isWhileStatement(parent) || isDoStatement(parent))
+    return parent.expression === node;
+  if (isForStatement(parent)) {
+    const { condition } = parent;
+    return condition !== undefined && condition === node;
+  }
+  return isSwitchStatement(parent) && parent.expression === node;
 }
 
 /** Whether a member chain is called, as a method, a constructor or a tag, with the object as `this`. */

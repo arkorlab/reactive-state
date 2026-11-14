@@ -366,11 +366,6 @@ const CASES = [
     selects: true,
   },
   {
-    id: 'read-source-member',
-    source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; const seen = source.x; Object.assign(box, source); return box.x; }`,
-    selects: false,
-  },
-  {
     id: 'read-source-copied-twice',
     source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 } as { x: unknown; update(): void }; Object.assign(box, source); const other = { y: 1 }; Object.assign(other, source); return box.x; }`,
     selects: false,
@@ -498,6 +493,126 @@ const CASES = [
   {
     id: 'constant-next-to-an-exported-function',
     source: `const source = { x: 0 }; export function other() { return 1; } function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-bound-to-a-variable',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const child = source.nested; child.y = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-read-bound-to-a-variable',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const seen = source.x; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-of-member-bound-to-a-variable',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const inner = source.nested.y; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-passed-to-a-call',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; touch(source.nested); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-returned-from-a-function',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const get = () => source.nested; get(); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-stored-in-an-object',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const wrap = { child: source.nested }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-stored-in-an-array',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const list = [source.nested]; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-spread-into-an-object',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const wrap = { ...source.nested }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-assigned-to-a-variable',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; let child: unknown; child = source.nested; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-with-a-fallback',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const child = source.nested || { y: 2 }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-with-a-nullish-fallback',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const child = source.nested ?? { y: 2 }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-chosen-by-a-condition',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const picked = touch.length > 0 ? source.nested : undefined; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-asserted-and-bound',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const child = <{ y: unknown }>source.nested; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-of-the-constant-through-an-alias-bound',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const alias = source; const child = alias.nested; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-read-by-key-bound',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const key = "nested"; const child = source[key]; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'member-compared',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; if (source.x === 0) { touch(1); } Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-in-a-template',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const text = \`\${source.x}\`; touch(text); Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-in-arithmetic',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const sum = (source.x as number) + 1; touch(sum); Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-negated',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const absent = !source.nested; touch(absent); Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-typeof',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const kind = typeof source.nested; touch(kind); Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-in-a-statement',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; source.x; source.nested.y; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-of-member-compared',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; if (source.nested.y === 1) { touch(1); } Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-in-a-condition',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; if (source.nested) { touch(2); } while (source.nested) { touch(3); } Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'member-tested-with-instanceof',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0, nested: { y: 1 } } as { x: unknown; nested: { y: unknown } }; const known = source.nested instanceof Object; touch(known); Object.assign(box, source); return box.x; }`,
     selects: false,
   },
 ] as const;
