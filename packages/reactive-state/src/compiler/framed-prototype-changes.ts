@@ -21,6 +21,7 @@ import {
   isSatisfiesExpression,
   isSourceFile,
   isStringLiteral,
+  isTaggedTemplateExpression,
   isTemplateExpression,
   isTypeAliasDeclaration,
   isTypeAssertion,
@@ -388,12 +389,17 @@ function holderUsed(site: Node, held: string): boolean {
   return memberUsed(parent, held, member);
 }
 
-/** Whether a member of a holder, read by its name, is one of the uses that reach no prototype. */
+/**
+ * Whether a member of a holder, read by its name, is one of the uses that reach no prototype. A member
+ * the code writes, deletes or steps (assigned, a pattern's place, a loop head) is none: the native it
+ * names is another from there on, and every call of it after that is a call of what the code made.
+ */
 function memberUsed(
   access: PropertyAccessExpression | ElementAccessExpression,
   held: string,
   member: string,
 ): boolean {
+  if (changed(access)) return false;
   const site = outermost(access);
   const { parent } = site;
   const called = isCallExpression(parent) && parent.expression === site;
@@ -423,7 +429,7 @@ function onlyCompared(access: Node): boolean {
 
 /** Whether a member write, a deletion or a step changes the member the access names. */
 function changed(member: Node): boolean {
-  const { parent } = member;
+  const { parent } = outermost(member);
   return (
     isWrittenMember(member) ||
     isDeleteExpression(parent) ||
@@ -435,12 +441,23 @@ function changed(member: Node): boolean {
 /**
  * Whether a prototype, or what hands one back, is given away, or has a member written, not read: a
  * member read is read by the name the code writes (`.join`, `['join']`), for a key the code computes
- * (`[key]`, `[0]`, `['jo' + 'in']`) may be a name that reaches another prototype or a method that sets one.
+ * (`[key]`, `[0]`, `['jo' + 'in']`) may be a name that reaches another prototype or a method that sets
+ * one; and a member is read, not called with the prototype as its `this` (`Array.prototype.valueOf()`
+ * answers the prototype itself, `Array.prototype.push(fn)` writes it): through `call`, `apply` and
+ * `bind` it is called on what the code gives, which is a use of its own.
  */
 function usedOtherwiseThanRead(node: Node): boolean {
   const site = outermost(node);
   const { parent } = site;
   if (isBinaryExpression(parent) && COMPARISONS.has(parent.operatorToken.kind)) return false;
   if (!isMemberAccess(parent) || parent.expression !== site) return true;
-  return writtenMember(parent) === undefined || changed(parent);
+  return writtenMember(parent) === undefined || changed(parent) || calledWithItAsThis(parent);
+}
+
+/** Whether a member access is called, as a method of what it reads from: the object is the `this`. */
+function calledWithItAsThis(access: Node): boolean {
+  const site = outermost(access);
+  const { parent } = site;
+  if (isTaggedTemplateExpression(parent)) return parent.tag === site;
+  return (isCallExpression(parent) || isNewExpression(parent)) && parent.expression === site;
 }
