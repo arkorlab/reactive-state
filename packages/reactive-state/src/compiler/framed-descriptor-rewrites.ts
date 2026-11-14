@@ -16,7 +16,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { getterWrites, inheritedDeletions } from './framed-getter-writes.ts';
+import { assignedNames, getterWrites, inheritedDeletions } from './framed-getter-writes.ts';
 import { functionReturns } from './framed-mutator-getters.ts';
 import { selectedValues } from './framed-selected-sources.ts';
 import { namesThis } from './framed-this-functions.ts';
@@ -290,7 +290,7 @@ function rewrites(
     const get = asGet ? functionReturns(each.value, new Set(), selectedValues) : [];
     return [...value, ...get];
   });
-  return reaches && runsWritingSetter(descriptor, writes)
+  return reaches && runsWritingSetter(descriptor, assignedNames(getter) ?? [undefined])
     ? [...found, { value: descriptor, keys: ['value'] }]
     : found;
 }
@@ -311,18 +311,14 @@ function setsProto(property: ObjectLiteralElementLike): boolean {
 /** Whether a write of a getter runs a setter that names `this`: it may write the descriptor as it likes. */
 function runsWritingSetter(
   descriptor: ObjectLiteralExpression,
-  writes: readonly { readonly name: string | undefined }[],
+  names: readonly (string | undefined)[],
 ): boolean {
   const setters = descriptor.properties.filter((one) => isSetAccessorDeclaration(one));
-  for (const { name } of writes) {
-    if (
-      name === undefined
-        ? setters.some((one) => namesThis(one))
-        : slotsOf(descriptor, name).has('setter')
-    )
-      return true;
-  }
-  return false;
+  return names.some((name) => {
+    return name === undefined
+      ? setters.some((one) => namesThis(one))
+      : slotsOf(descriptor, name).has('setter');
+  });
 }
 
 /** Whether the getter at `at` never runs: a field after it gives its name a value that is no accessor. */
