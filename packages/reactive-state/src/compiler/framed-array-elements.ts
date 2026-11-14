@@ -161,10 +161,10 @@ function arrayUsesKnown(
  * name that stands for it, that may run before the read and is no use the compile knows, or a native
  * mutator of it that is handed an argument written in a form no reader follows, or a name of the chain
  * the read goes by that is written as a whole elsewhere, which may hold another array than the one it
- * was given. Such an array holds what the compile cannot show, and the read is refused. Where the
- * elements of the array may be lists (`scalar` tells those that are not), every use that hands an
- * element out is refused as well: a write through the copy or the callback's parameter is a write to
- * the list the array holds.
+ * was given. Such an array holds what the compile cannot show, and the read is refused, as is the
+ * read of an array a parameter holds the default literal of. Where the elements of the array may be
+ * lists (`scalar` tells those that are not), every use that hands an element out is refused as well:
+ * a write through the copy or the callback's parameter is a write to the list the array holds.
  */
 export function arrayWritesUnfollowed(
   value: Expression,
@@ -172,7 +172,10 @@ export function arrayWritesUnfollowed(
   scalar?: (element: Expression, keys: readonly string[]) => boolean,
 ): boolean {
   const root = literalArrayBinding(value);
-  if (root === undefined || !isVariableDeclaration(root)) return false;
+  if (root === undefined) return false;
+  // A parameter holds the array it is called with, and the literal of its default only where none is
+  // given: what is written to it in the function is not every write to it.
+  if (!isVariableDeclaration(root)) return true;
   if (arrayIdentity(value) === undefined) return true;
   const owner = executionOwner(read);
   const lists =

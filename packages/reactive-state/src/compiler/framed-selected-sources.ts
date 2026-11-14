@@ -291,7 +291,34 @@ const CHANGING = new Set([
   'unshift',
 ]);
 
-/** Whether a place that names a list only reads it: spreads it, iterates it, takes an entry of it. */
+/** The prefix operators that write what they are given; `!`, `-`, `+` and `~` only read it. */
+const STEPS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.MinusMinusToken,
+  SyntaxKind.PlusPlusToken,
+]);
+
+/**
+ * The last member of the chain of members a name begins, as written: `list[0].x.y` for `list`, past
+ * the parentheses and casts between its links. A write to the chain's end, or a call of its end,
+ * reaches the entry the list holds at the first link, which is no other list than this one.
+ */
+function chainEnd(first: Node): Node {
+  let end = first;
+  for (
+    let next = outermost(end).parent;
+    (isPropertyAccessExpression(next) || isElementAccessExpression(next)) &&
+    next.expression === outermost(end);
+    next = outermost(end).parent
+  )
+    end = next;
+  return end;
+}
+
+/**
+ * Whether a place that names a list only reads it: spreads it, iterates it, takes an entry of it, or
+ * reads a member of that. A write, a deletion, a change or a call of a method that changes, at the
+ * end of the chain of members below it, is a change of the list's entries, however deep.
+ */
 function onlyReads(name: Identifier): boolean {
   const { parent } = name;
   if (isVariableDeclaration(parent)) return parent.name === name;
@@ -303,20 +330,21 @@ function onlyReads(name: Identifier): boolean {
       (isArrayLiteralExpression(parent.left) || isObjectLiteralExpression(parent.left))
     );
   if (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) return false;
-  if (isWrittenMember(parent)) return false;
-  const member = outermost(parent);
+  const end = chainEnd(parent);
+  if (isWrittenMember(end)) return false;
+  const member = outermost(end);
   const used = member.parent;
   if (isCallExpression(used) && used.expression === member)
     return (
-      isPropertyAccessExpression(parent) &&
-      !CHANGING.has(parent.name.text) &&
-      !callbackTakesList(parent.name.text, used)
+      isPropertyAccessExpression(end) &&
+      !CHANGING.has(end.name.text) &&
+      !callbackTakesList(end.name.text, used)
     );
   if (isBinaryExpression(used))
     return !(used.left === member && isAssignmentOperator(used.operatorToken.kind));
   return !(
     isDeleteExpression(used) ||
-    isPrefixUnaryExpression(used) ||
+    (isPrefixUnaryExpression(used) && STEPS.has(used.operator)) ||
     isPostfixUnaryExpression(used)
   );
 }
