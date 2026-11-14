@@ -1,5 +1,6 @@
 import { isIdentifier, isQualifiedName, type TypeQueryNode } from 'typescript/ast';
 
+import { GLOBAL_OBJECTS } from './code-globals.ts';
 import { localClassValueBinding } from './local-type-aliases.ts';
 
 /** Native error prototype type queries resolved through their lexical constructor value. */
@@ -16,7 +17,11 @@ const ERROR_PROTOTYPES = new Set([
   'URIError',
 ]);
 
-/** A native error prototype's instance type, with locally declared values kept opaque. */
+/**
+ * A native error prototype's instance type, with locally declared values kept opaque. The
+ * constructor is read of the global object by any of its names, `globalThis`, `self`, `window`,
+ * `global`, one of another as the code's own reading of a global strips them (`globalPathOf`).
+ */
 export function prototypeQueryBuiltin(type: TypeQueryNode): string | undefined {
   const member = type.exprName;
   if (!isQualifiedName(member) || member.right.text !== 'prototype') return undefined;
@@ -31,10 +36,10 @@ export function prototypeQueryBuiltin(type: TypeQueryNode): string | undefined {
   if (!ERROR_PROTOTYPES.has(name)) return undefined;
   let root = constructor.left;
   while (isQualifiedName(root)) {
-    if (root.right.text !== 'globalThis') return undefined;
+    if (!GLOBAL_OBJECTS.has(root.right.text)) return undefined;
     root = root.left;
   }
-  return root.text === 'globalThis' && localClassValueBinding(root) === undefined
+  return GLOBAL_OBJECTS.has(root.text) && localClassValueBinding(root) === undefined
     ? name
     : undefined;
 }
