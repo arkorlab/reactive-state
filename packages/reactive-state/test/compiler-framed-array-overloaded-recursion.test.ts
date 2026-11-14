@@ -28,14 +28,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'overloaded-function-that-does-not-call-itself-pin',
+    id: 'overloaded-function-that-does-not-call-itself-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'overloaded-function-whose-name-a-local-takes-pin',
+    id: 'overloaded-function-whose-name-a-local-takes-refused',
     source: `function frames(error: Error) { const values = [error]; function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const read = (again: number) => ''; if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'overloads-in-a-switch-case',
@@ -73,14 +73,14 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'switch-overloads-that-do-not-call-themselves-pin',
+    id: 'switch-overloads-that-do-not-call-themselves-refused',
     source: `function frames(error: Error) { const values = [error]; switch (0) { case 0: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'switch-overloads-whose-name-a-local-takes-pin',
+    id: 'switch-overloads-whose-name-a-local-takes-refused',
     source: `function frames(error: Error) { const values = [error]; switch (0) { case 0: function read(pass: number): string; function read(pass: number, extra?: number): string { ${SAFE} const read = (again: number) => ''; if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); } return ''; }`,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

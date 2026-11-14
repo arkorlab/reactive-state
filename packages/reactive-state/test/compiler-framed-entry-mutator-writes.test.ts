@@ -7,8 +7,8 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 /**
  * `Object.fromEntries` reads each entry only after its whole argument list is evaluated: a native
  * object mutator that evaluation runs on an entry's tuple may give it a key or a value the
- * initializer did not write, and the tuple is read where its slots are asked, as one a mutator
- * wrote before the call is.
+ * initializer did not write, and what a native object mutator installs is not read: the entries
+ * are left unfollowed (no values).
  */
 const CASES = [
   {
@@ -16,42 +16,42 @@ const CASES = [
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry, (Object.assign(entry, { 1: error }), ['other', 0])]); }",
     key: 'message',
-    values: ["'safe':", 'error:', "Object.assign(entry, { 1: error }), ['other', 0]:1"],
+    values: undefined,
   },
   {
     id: 'define-property-in-an-argument',
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.defineProperty(entry, 1, { value: error })); }",
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: undefined,
   },
   {
     id: 'define-properties-in-an-argument',
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.defineProperties(entry, { 1: { value: error } })); }",
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: undefined,
   },
   {
     id: 'assign-through-the-result-of-another',
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.assign(Object.assign(entry, {}), { 1: error })); }",
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: undefined,
   },
   {
     id: 'assign-a-getter-value',
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.assign(entry, { get 1() { return error; } })); }",
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: undefined,
   },
   {
     id: 'assign-the-key-slot',
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['other', 'safe']; return Object.fromEntries([entry], Object.assign(entry, { 0: 'message' })); }",
     key: 'message',
-    values: ["'safe':"],
+    values: undefined,
   },
   {
     id: 'push-in-an-argument',
@@ -219,14 +219,14 @@ const CASES = [
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const assign = Object.assign; return Object.fromEntries([entry], Object.assign(assign(entry, {}), { 1: error })); }",
     key: 'message',
-    values: ['entry:1', 'error:'],
+    values: undefined,
   },
   {
     id: 'assign-through-a-condition',
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Object.assign(true ? entry : [], { 1: error })); }",
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: undefined,
   },
   {
     id: 'member-read-pin',
@@ -261,7 +261,7 @@ const CASES = [
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], Function.prototype.call.bind(Object.assign)(null, entry, { 1: error })); }",
     key: 'message',
-    values: ["'safe':", 'error:'],
+    values: undefined,
   },
   {
     id: 'reflect-apply-bound-to-the-callee',
@@ -282,7 +282,7 @@ const CASES = [
     source:
       "function frames(error: Error) { const entry: [string, unknown] = ['message', 'safe']; const other: unknown[] = []; (entry as any).fill = () => other; return Object.fromEntries([entry], Object.assign(entry.fill(0), { 1: error })); }",
     key: 'message',
-    values: ['0:', 'entry:1', 'error:'],
+    values: undefined,
   },
 ] as const;
 

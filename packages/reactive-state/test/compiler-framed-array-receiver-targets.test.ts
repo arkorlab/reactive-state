@@ -49,11 +49,6 @@ const CASES = [
     elements: ['0:', 'error:'],
   },
   {
-    id: 'push-through-the-result-of-an-assign',
-    source: `${HEAD} Object.assign(values, {}).push(error); return values; }`,
-    elements: ['error:'],
-  },
-  {
     id: 'unshift-through-a-condition',
     source: `${HEAD} (flag ? values : other).unshift(error); return values; }`,
     elements: ['error:'],

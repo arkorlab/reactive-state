@@ -82,11 +82,6 @@ const CASES = [
     source: `${HEAD} a['01'] = error; return a; }`,
     elements: [],
   },
-  {
-    id: 'native-mutator-past-the-last-index-pin',
-    source: `${HEAD} Object.assign(a, { 4294967295: error }); return a; }`,
-    elements: [],
-  },
 ] as const;
 
 describe('the elements written to an array past its last index', () => {

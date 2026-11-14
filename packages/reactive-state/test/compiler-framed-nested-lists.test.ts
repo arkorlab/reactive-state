@@ -544,7 +544,10 @@ describe('an array that holds a list, handed out', () => {
       const inner =
         holder === 'two-levels' ? body.replaceAll('.push(error)', '[0].push(error)') : body;
 
-      expect(convertsError(`${setup}${inner} return String(a);`)).toBe(kind !== 'pin');
+      // An array a native object mutator wrote to is never followed, whatever else is done with it.
+      const refused = kind !== 'pin' || holder === 'assigned';
+
+      expect(convertsError(`${setup}${inner} return String(a);`)).toBe(refused);
     });
   });
 });

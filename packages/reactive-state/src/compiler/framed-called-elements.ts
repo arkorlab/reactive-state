@@ -29,7 +29,10 @@ export interface CalledElements {
   readonly elements: readonly WrittenArrayElement[];
 }
 
-/** The elements a native object mutator or an array insertion call writes into one literal array. */
+/**
+ * The elements an array insertion call writes into one literal array. It throws `UnfollowableError` where a
+ * native object mutator may write the array: what it installs is not read.
+ */
 export function calledArrayElements(
   node: CallExpression,
   value: Expression,

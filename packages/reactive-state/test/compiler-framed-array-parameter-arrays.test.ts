@@ -20,28 +20,28 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'parameter-array-override-without-a-recursive-call-pin',
+    id: 'parameter-array-override-without-a-recursive-call-refused',
     source: `function frames(error: Error) { function read(values: Error[], pass: number): string { ${SAFE} const text = String(values); values.join = Array.prototype.join; return text; } return read([error], 0); }`,
     typed: true,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'rest-array-override-restored-by-the-recursive-call-pin',
+    id: 'rest-array-override-restored-by-the-recursive-call-refused',
     source: `function frames(error: Error) { function read(pass: number, ...values: Error[]): string { ${SAFE} if (pass < 1) read(pass + 1, ...values); const text = String(values); values.join = Array.prototype.join; return text; } return read(0, error); }`,
     typed: true,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'rest-array-passed-on-by-name-is-a-copy-pin',
+    id: 'rest-array-passed-on-by-name-is-a-copy-refused',
     source: `function frames(error: Error) { function read(pass: number, ...values: Error[]): string { ${SAFE} if (pass < 1) read(pass + 1, values[0]); const text = String(values); values.join = Array.prototype.join; return text; } return read(0, error); }`,
     typed: true,
-    converts: false,
+    converts: true,
   },
   {
-    id: 'array-a-function-makes-override-restored-by-the-recursive-call-pin',
+    id: 'array-a-function-makes-override-restored-by-the-recursive-call-refused',
     source: `function frames(error: Error) { function read(pass: number): string { const values = [error]; ${SAFE} if (pass < 1) read(pass + 1); const text = String(values); values.join = Array.prototype.join; return text; } return read(0); }`,
     typed: true,
-    converts: false,
+    converts: true,
   },
 ] as const;
 

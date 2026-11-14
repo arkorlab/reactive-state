@@ -225,7 +225,7 @@ function sortsByDefault(source: string): boolean {
 
 function wordsWritten(source: string): boolean {
   return inModule(source, (file) =>
-    writtenArrayWords(lastNamed(file, 'words'), { created: () => false, custom: () => false }),
+    writtenArrayWords(lastNamed(file, 'words'), { created: () => false }),
   );
 }
 
