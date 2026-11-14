@@ -161,16 +161,16 @@ function commaResult(value: Expression): Expression | undefined {
     : undefined;
 }
 
-/** A whole constant alias does not read or replace any stored array entry. */
+/**
+ * A whole constant alias that the module does not export does not read or replace any stored array
+ * entry: an importing module can write through an exported one before a later body runs.
+ */
 function wholeAlias(node: Expression): boolean {
   const { parent } = useOf(node);
+  if (!isVariableDeclaration(parent) || !isIdentifier(parent.name)) return false;
+  const initializer = constantInitializer(parent);
   return (
-    isVariableDeclaration(parent) &&
-    isIdentifier(parent.name) &&
-    isVariableDeclarationList(parent.parent) &&
-    /^const\s/u.test(parent.parent.getText(parent.getSourceFile())) &&
-    parent.initializer !== undefined &&
-    unwrapped(parent.initializer) === node
+    initializer !== undefined && !exportedDeclaration(parent) && unwrapped(initializer) === node
   );
 }
 
