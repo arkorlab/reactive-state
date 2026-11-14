@@ -569,6 +569,14 @@ export default defineConfig([
     },
   },
 
+  // While the compiler's sources arrive: `answers.ts` type-imports a module a later pull request
+  // brings (`exported-values.ts`), and type-aware rules read the type it names as `any` until then.
+  // That pull request removes this, with `tools/typecheck-expecting.mts`.
+  {
+    files: ['packages/reactive-state/src/compiler/answers.ts'],
+    ...tseslint.configs.disableTypeChecked,
+  },
+
   // 7. Formatting is owned by oxfmt; disable every stylistic rule that conflicts with it.
   prettierConfig,
 ]);

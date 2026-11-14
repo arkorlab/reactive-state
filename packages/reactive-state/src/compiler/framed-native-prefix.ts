@@ -32,7 +32,6 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isTypeAssertion,
-  isTypeNode,
   isTemplateExpression,
   isVariableDeclaration,
   type MethodDeclaration,
@@ -44,6 +43,7 @@ import {
 } from 'typescript/ast';
 
 import { destructuredFirst, patternAfter } from './destructuring-order.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** A new native origin cannot cross opaque earlier work in its immediate execution owner. */
 
@@ -123,7 +123,7 @@ function outsidePrefix(node: Node, consumer: Expression, first: boolean): boolea
   return (
     node === consumer ||
     (!first && node.pos >= consumer.pos) ||
-    isTypeNode(node) ||
+    isTypeOnly(node) ||
     patternAfter(node, consumer)
   );
 }
