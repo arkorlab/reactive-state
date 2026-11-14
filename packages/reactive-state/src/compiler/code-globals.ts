@@ -414,8 +414,11 @@ function readsCodeKey(node: Node): boolean {
   );
 }
 
-/** Whether a node, or a part of it, is the text `'constructor'`. */
+/** Whether a node, or a part of it that runs, is the text `'constructor'`: a type names no key. */
 function namesConstructor(node: Node): boolean {
+  if (isErased(node)) {
+    return false;
+  }
   let found = textOf(node) === 'constructor';
   node.forEachChild((child) => {
     found ||= namesConstructor(child);

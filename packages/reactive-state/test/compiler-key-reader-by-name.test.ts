@@ -11,7 +11,8 @@ import { isErased, readsCodeGlobal } from '../src/compiler/code-globals.ts';
  * an argument — called, borrowed, bound, handed to `Reflect.apply`, put in a list — reads what made a
  * function, wherever the text stands among the arguments. A key the code does not write, a key that
  * is another text, and a reader the call does not hold are not read: a reader kept under a name of
- * the code's own is not followed.
+ * the code's own is not followed. A type names no key: the text in the type of a cast, of a
+ * `satisfies`, of an angle-bracket assertion, of a type argument or of a parameter is erased with it.
  */
 const CASES = [
   { id: 'direct-call-refused', source: "return Reflect.get(fn, 'constructor');", refused: true },
@@ -135,6 +136,83 @@ const CASES = [
   {
     id: 'a-reader-of-another-global-pin',
     source: "return Reflect.has(fn, 'constructor');",
+    refused: false,
+  },
+  {
+    id: 'text-written-and-cast-to-a-union-refused',
+    source: "return Reflect.get(fn, 'constructor' as 'name' | 'constructor');",
+    refused: true,
+  },
+  {
+    id: 'text-written-and-cast-to-string-refused',
+    source: "return Reflect.get(fn, 'constructor' as string);",
+    refused: true,
+  },
+  {
+    id: 'text-written-and-checked-by-satisfies-refused',
+    source: "return Reflect.get(fn, 'constructor' satisfies string);",
+    refused: true,
+  },
+  {
+    id: 'text-written-and-asserted-in-angle-brackets-refused',
+    source: "return Reflect.get(fn, <string>'constructor');",
+    refused: true,
+  },
+  {
+    id: 'text-written-beside-a-type-argument-refused',
+    source: "return Reflect.get<string>(fn, 'constructor');",
+    refused: true,
+  },
+  {
+    id: 'text-written-in-a-cast-list-refused',
+    source: "return Reflect.get.apply(null, [fn, 'constructor' as string]);",
+    refused: true,
+  },
+  {
+    id: 'key-cast-to-a-union-that-names-the-text-pin',
+    source: "return Reflect.get(fn, 'name' as 'name' | 'constructor');",
+    refused: false,
+  },
+  {
+    id: 'key-checked-against-a-union-that-names-the-text-pin',
+    source: "return Reflect.get(fn, 'name' satisfies 'name' | 'constructor');",
+    refused: false,
+  },
+  {
+    id: 'key-asserted-in-angle-brackets-to-a-union-that-names-the-text-pin',
+    source: "return Reflect.get(fn, <'name' | 'constructor'>'name');",
+    refused: false,
+  },
+  {
+    id: 'type-argument-that-names-the-text-pin',
+    source: "return Reflect.get<'constructor'>(fn, 'name');",
+    refused: false,
+  },
+  {
+    id: 'key-cast-to-const-pin',
+    source: "return Reflect.get(fn, 'name' as const);",
+    refused: false,
+  },
+  {
+    id: 'key-given-by-a-function-whose-type-names-the-text-pin',
+    source: "return Reflect.get(fn, ((): 'name' | 'constructor' => 'name')());",
+    refused: false,
+  },
+  {
+    id: 'reader-mapped-with-a-parameter-whose-type-names-the-text-pin',
+    source:
+      "return [Reflect.get].map((read: (target: unknown, key: 'name' | 'constructor') => unknown) => read(fn, 'name'));",
+    refused: false,
+  },
+  {
+    id: 'borrowed-call-cast-to-a-union-that-names-the-text-pin',
+    source: "return Reflect.get.call(null, fn, 'name' as 'name' | 'constructor');",
+    refused: false,
+  },
+  {
+    id: 'bound-reader-cast-in-its-type-pin',
+    source:
+      "return (Reflect.get.bind(null) as (target: unknown, key: 'constructor' | 'name') => unknown)(fn, 'name');",
     refused: false,
   },
 ] as const;
