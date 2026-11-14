@@ -363,7 +363,10 @@ function objectSource(
  * `Object.prototype` holds. A chain that ends in `null` before it reaches `Object.prototype` has no
  * accessor, so that nothing is read; a property of that name along the chain shadows it, and is the
  * value read; a primitive is ignored by the literal that sets it, and leaves `Object.prototype`.
- * Where a literal along the chain holds an unknown spread, key or prototype, the read stays open.
+ * Where a literal along the chain holds an unknown spread, key or prototype, or the chain reaches a
+ * value the reader cannot see into, the read stays open: a name, a call or a construction may hold a
+ * property of that name of its own, `const base = { ['__proto__']: error }`, which the read finds
+ * before the accessor, wherever it stands in the chain.
  */
 function heldPrototype(
   prototype: Expression,
@@ -375,7 +378,7 @@ function heldPrototype(
     const value = unwrapped(at);
     if (value.kind === SyntaxKind.NullKeyword) return [];
     if (!isObjectLiteralExpression(value))
-      return at === prototype || reachesAccessor(value) ? [held] : [held, opaque];
+      return holdsNoOwnPrototype(value) ? [held] : [held, opaque];
     const step = prototypeStep(value, held, opaque);
     if ('read' in step) return step.read;
     at = step.next;
@@ -405,13 +408,14 @@ function prototypeStep(
   return { next };
 }
 
-/** Whether a value that is no object literal leaves `Object.prototype` on the chain: arrays and constructions do. */
-function reachesAccessor(value: Expression): boolean {
-  return (
-    isArrayLiteralExpression(value) ||
-    value.kind === SyntaxKind.NewExpression ||
-    NO_PROTOTYPE.has(value.kind)
-  );
+/**
+ * Whether a value that is no object literal is read as it is written to hold no property named
+ * `__proto__`, and leaves `Object.prototype` on the chain: an array literal writes positions only,
+ * and a primitive is ignored by the literal that sets it. A name, a call or a construction may hold
+ * one, as the field `['__proto__']` of a class does, or a constructor that defines it.
+ */
+function holdsNoOwnPrototype(value: Expression): boolean {
+  return isArrayLiteralExpression(value) || NO_PROTOTYPE.has(value.kind);
 }
 
 /** The value an own entry of the selected key writes, or the entry's literal where it writes none. */
