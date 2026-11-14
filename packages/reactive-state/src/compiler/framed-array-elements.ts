@@ -8,7 +8,9 @@ import {
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
+  isForOfStatement,
   isIdentifier,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
   isVariableDeclaration,
@@ -171,6 +173,13 @@ function argumentsKnown(
   return argument === undefined || consultedKnown(argument, role, held);
 }
 
+const ELEMENT_WRITES = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 /**
  * Same-owner prefixes constrain writes, including those the read or copy evaluates in its own
  * receiver, key or arguments before it reads; other referenced execution owners remain possible.
@@ -193,7 +202,27 @@ function possibleBefore(node: Node, read: Node, owner: Node, root: FrameBinding)
  */
 function writesAfterOperands(node: Node, read: Node, root: FrameBinding, owner: Node): boolean {
   const holds = node !== read && node.pos <= read.pos && read.end <= node.end;
-  return holds && madeWithin(root, owner) && !repeatedFrameRead(node, read, root, owner);
+  return (
+    holds &&
+    madeWithin(root, owner) &&
+    evaluatesBeforeWriting(node, read) &&
+    !repeatedFrameRead(node, read, root, owner)
+  );
+}
+
+/** Whether a node, a call, an assignment or a loop head, makes its write only after the part the read lies in. */
+function evaluatesBeforeWriting(node: Node, read: Node): boolean {
+  if (isCallExpression(node)) return true;
+  if (isForOfStatement(node)) return within(read, node.expression);
+  if (!isBinaryExpression(node) || !ELEMENT_WRITES.has(node.operatorToken.kind)) return false;
+  const target = unwrapped(node.left);
+  const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
+  return !pattern || within(read, node.right);
+}
+
+/** Whether a node lies within another. */
+function within(node: Node, container: Node): boolean {
+  return node.pos >= container.pos && node.end <= container.end;
 }
 
 /** A write the read evaluates first, unless a written left operand short-circuits past it. */
@@ -216,13 +245,6 @@ function shortCircuits(node: BinaryExpression): boolean {
     (kind === SyntaxKind.BarBarToken && condition === true)
   );
 }
-
-const ELEMENT_WRITES = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 /**
  * Only indexed assignment positions, the insertion arguments of native mutators and the numeric
