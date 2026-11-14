@@ -34,7 +34,7 @@ import { type CallResultSelection, singleCallResultReading } from './local-type-
 import { capturedTypeReading } from './local-type-captured-sequences.ts';
 import { heritageReference } from './local-type-class-bases.ts';
 import { conditionalUtilityReadings, literalValue } from './local-type-conditional-utilities.ts';
-import { constrainedOperands, onPathOf } from './local-type-constrained-operands.ts';
+import { constrainedOperands, onConstraintPath } from './local-type-constrained-operands.ts';
 import { conditionalChecks } from './local-type-distribution.ts';
 import {
   constraintReading,
@@ -219,8 +219,8 @@ function constituentsOf(
 /**
  * Explicit members selected from each possible written object and index result. A type parameter no
  * actual argument fills reads as its written constraint wherever the access names it, as it does
- * where a member is selected directly, and what is selected stays on the path that reached the
- * object, so a constraint that names its own parameter ends as a cycle.
+ * where a member is selected directly, and what is selected from an object keeps the constraints
+ * that object was read through, so a constraint that names its own parameter ends as a cycle.
  */
 function indexedReadings(
   indexed: IndexedAccessTypeNode,
@@ -235,16 +235,17 @@ function indexedReadings(
   const indexReading = { ...at, type: indexed.indexType };
   const finite = intersectedIndexReadings(indexReading, resolve);
   const indices = finite ?? operands(indexReading);
-  const result: Reading[] = [];
-  for (const object of objects) {
-    if (isExpressionWithTypeArguments(object.type)) continue;
-    for (const index of indices) {
+  return objects.flatMap((object) => {
+    const selected: Reading[] = [];
+    const sources = isExpressionWithTypeArguments(object.type) ? [] : indices;
+    for (const index of sources) {
       if (isExpressionWithTypeArguments(index.type)) continue;
-      result.push(...indexedMemberReadings(object, index, operands, resolve));
+      selected.push(...indexedMemberReadings(object, index, operands, resolve));
     }
-  }
-  if (finite === undefined) result.push(...intrinsicIndexReadings(indexReading, objects, operands));
-  return onPathOf(result, objects);
+    if (finite === undefined)
+      selected.push(...intrinsicIndexReadings(indexReading, [object], operands));
+    return onConstraintPath(selected, object);
+  });
 }
 
 /** Transparent operands of a selected member, keeping each result's actual argument environment. */

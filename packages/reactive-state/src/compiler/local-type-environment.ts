@@ -145,13 +145,20 @@ function parameterValue(node: Node, reading: TypeReading): TypeReading | undefin
     : undefined;
 }
 
+const CONSTRAINT_KEY = 'constraint:';
+
+/** The entries of a path that stand for generic parameters whose constraints it has been read through. */
+export function constraintKeys(at: TypeReading): string[] {
+  return [...at.aliases].filter((key) => key.startsWith(CONSTRAINT_KEY));
+}
+
 /** A generic parameter's explicit constraint, with unresolved constraint cycles cut on this path. */
 export function constraintReading(
   parameter: TypeParameterDeclaration,
   at: TypeReading,
 ): TypeReading | undefined {
   const { constraint } = parameter;
-  const key = `constraint:${identityOf(parameter)}`;
+  const key = `${CONSTRAINT_KEY}${identityOf(parameter)}`;
   return constraint === undefined || at.aliases.has(key)
     ? undefined
     : { ...at, aliases: new Set([...at.aliases, key]), type: constraint };
