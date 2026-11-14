@@ -90,11 +90,24 @@ export function readUnder(
 
 /**
  * The names to read under once `earlier` reads are kept: the names hidden now while there is room;
- * past the room, those every read hid, which covers each of them; then, for good, none.
+ * past the room, those every read hid, which covers each of them; then, for good, none (an inherited
+ * read, where one was made).
  */
 function hiddenFor(earlier: readonly Hidden[], hidden: Hidden): Hidden {
   if (earlier.length < READS.kept) return hidden;
-  return earlier.length === READS.kept ? hiddenInEvery([...earlier, hidden]) : NOTHING_HIDDEN;
+  const reads = [...earlier, hidden];
+  return earlier.length === READS.kept ? hiddenInEvery(reads) : hiddenInNone(reads);
+}
+
+/**
+ * Nothing hidden, for good, and as an inherited read where any of the reads was one: a read that
+ * carries the own names of the descriptor that inherits the object is covered only by a read that
+ * does, so a fallback without them would leave every such read uncovered, and each would be made again.
+ */
+function hiddenInNone(reads: readonly Hidden[]): Hidden {
+  return reads.some((each) => each.own !== undefined)
+    ? { data: NOTHING_HIDDEN.data, getters: NOTHING_HIDDEN.getters, own: NO_NAMES }
+    : NOTHING_HIDDEN;
 }
 
 /** The names every one of the reads hid, for values and for getters apart. */
