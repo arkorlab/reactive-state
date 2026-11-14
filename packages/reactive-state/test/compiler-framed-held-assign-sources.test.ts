@@ -150,6 +150,91 @@ const CASES = [
     source: `function frames(error: Error, extra: { x: unknown }) { const box = { x: error }; Object.assign(box, { x: 0 }); Object.assign(box, extra); return box.x; }`,
     selects: false,
   },
+  {
+    id: 'source-alias-of-literal',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error }; Object.assign(box, overrides); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-alias-chain',
+    source: `function frames(error: Error) { const box = { x: 0 }; const first = { x: error }; const overrides = first; Object.assign(box, overrides); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-alias-asserted',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error } as { x: unknown }; Object.assign(box, overrides); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-of-literal',
+    source: `function frames(error: Error) { const box = { x: 0 }; Object.assign(box, { ...{ x: error } }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-of-alias',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error }; Object.assign(box, { ...overrides }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-between-entries',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error }; Object.assign(box, { y: 1, ...overrides, z: 2 }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-of-spread',
+    source: `function frames(error: Error) { const box = { x: 0 }; const inner = { x: error }; const outer = { ...inner }; Object.assign(box, outer); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-alias-after-explicit-source',
+    source: `function frames(error: Error) { const box = { x: 0 }; const second = { x: error }; Object.assign(box, { x: 0 }, second); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-after-explicit-entry',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error }; Object.assign(box, { x: 0, ...overrides }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-before-explicit-entry',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error }; Object.assign(box, { ...overrides, x: 0 }); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'source-spread-twice',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { x: error }; Object.assign(box, { ...overrides, x: 0, ...overrides }); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'source-spread-of-itself',
+    source: `function frames(error: Error) { const box = { x: 0 }; const loop: { x: unknown } = { x: error, ...loop }; Object.assign(box, loop); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'readable-source-replaces-error',
+    source: `function frames(error: Error) { const box = { x: 0 }; const first = { x: error }; const second = { x: 0 }; Object.assign(box, first, second); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'readable-spread-replaces-error',
+    source: `function frames(error: Error) { const box = { x: 0 }; Object.assign(box, { x: error }, { x: 0, ...{ y: 1 } }); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'readable-source-replaces-initial-error',
+    source: `function frames(error: Error) { const box = { x: error }; const overrides = { x: 0 }; Object.assign(box, overrides); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'source-alias-other-name',
+    source: `function frames(error: Error) { const box = { x: 0 }; const overrides = { y: error }; Object.assign(box, overrides); return box.x; }`,
+    selects: false,
+  },
+  {
+    id: 'source-variable-is-not-read',
+    source: `function frames(error: Error) { const box = { x: 0 }; let overrides = { x: error }; Object.assign(box, overrides); return box.x; }`,
+    selects: false,
+  },
 ] as const;
 
 describe('what the sources of one Object.assign leave in a member', () => {

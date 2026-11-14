@@ -248,13 +248,56 @@ function assignedEntries(node: Expression): readonly MemberWrite[] {
 }
 
 /**
- * The entries of an `Object.assign` source in the order it writes them; a part of it the walk cannot
- * read is `undefined`.
+ * The entries of an `Object.assign` source in the order it writes them: those of a literal, or of
+ * the literal a whole constant alias chain ends in, and of the literals it spreads, each read once
+ * (a second spread of one is a part the walk does not read). A part it cannot read is `undefined`.
  */
 function sourceEntries(source: Expression): readonly (WrittenEntry | undefined)[] {
-  const object = unwrapped(source);
-  if (!isObjectLiteralExpression(object)) return [undefined];
-  return object.properties.map((property) => writtenEntry(property));
+  const literal = constantLiteral(source);
+  if (literal === undefined) return [undefined];
+  const entries: (WrittenEntry | undefined)[] = [];
+  const seen = new Set([literal]);
+  const pending = [literal.properties.values()];
+  for (let at = pending.at(-1); at !== undefined; at = pending.at(-1)) {
+    const next = at.next();
+    if (next.done === true) {
+      pending.pop();
+      continue;
+    }
+    const property = next.value;
+    if (!isSpreadAssignment(property)) {
+      entries.push(writtenEntry(property));
+      continue;
+    }
+    const spread = constantLiteral(property.expression);
+    if (spread === undefined || seen.has(spread)) {
+      entries.push(undefined);
+    } else {
+      seen.add(spread);
+      pending.push(spread.properties.values());
+    }
+  }
+  return entries;
+}
+
+/** The object literal an expression is, or a whole constant alias chain of it ends in. */
+function constantLiteral(expression: Expression): ObjectLiteralExpression | undefined {
+  const value = unwrapped(expression);
+  if (isObjectLiteralExpression(value)) return value;
+  const declared = isIdentifier(value) ? frameDeclarationOf(value) : undefined;
+  if (declared === undefined || !isVariableDeclaration(declared)) return undefined;
+  const holder = framedHeldVariable(declared);
+  const initial = holder.initializer === undefined ? undefined : unwrapped(holder.initializer);
+  if (initial === undefined || !isObjectLiteralExpression(initial)) return undefined;
+  return isIdentifier(holder.name) && isConstant(holder) ? initial : undefined;
+}
+
+/** Whether a variable is declared whole with `const`, which nothing assigns anew. */
+function isConstant(declared: VariableDeclaration): boolean {
+  return (
+    isVariableDeclarationList(declared.parent) &&
+    /^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
+  );
 }
 
 /** `Object.defineProperty(holder, key, { value })`: the descriptor's written value under the key. */
@@ -352,8 +395,7 @@ export function framedHeldVariable(declared: VariableDeclaration): VariableDecla
       value === undefined ||
       !isIdentifier(value) ||
       !isIdentifier(holder.name) ||
-      !isVariableDeclarationList(holder.parent) ||
-      !/^const\s/u.test(holder.parent.getText(holder.getSourceFile()))
+      !isConstant(holder)
     )
       return holder;
     const next = frameDeclarationOf(value);
