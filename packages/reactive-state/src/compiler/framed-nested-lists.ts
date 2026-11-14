@@ -22,7 +22,9 @@ import {
   isTypeReferenceNode,
   isUnionTypeNode,
   isVariableDeclaration,
+  type Node,
   type TypeNode,
+  type VariableDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -32,6 +34,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { writtenAsWhole } from './framed-array-identity.ts';
 import { isNoArray } from './framed-array-starts.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { framedWrittenTargets } from './framed-written-targets.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /**
@@ -216,7 +219,9 @@ export function destructuredList(
 ): boolean {
   const declared = frameDeclarationOf(name);
   if (declared === undefined || !isVariableDeclaration(declared)) return false;
-  if (isIdentifier(declared.name) || declared.initializer === undefined) return false;
+  if (isIdentifier(declared.name)) return false;
+  if (rewritten(declared)) return true;
+  if (declared.initializer === undefined) return false;
   const source = literalSource(declared.initializer);
   if (source === undefined) return false;
   const selected = frameBindingOf(name);
@@ -233,6 +238,21 @@ function selection(source: Expression, keys: readonly string[]): Expression | un
     value = picked(value, key);
   }
   return value;
+}
+
+/** Whether a name of the declaration is written as a whole elsewhere: the declaration stands for every name of its pattern. */
+function rewritten(declared: VariableDeclaration): boolean {
+  const pending: Node[] = [declared.getSourceFile()];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    for (const target of framedWrittenTargets(node)) {
+      const name = unwrapped(target);
+      if (isIdentifier(name) && frameDeclarationOf(name) === declared) return true;
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
 }
 
 /** The literal a constant's initializer is, or ends at, through the names that only hold it. */

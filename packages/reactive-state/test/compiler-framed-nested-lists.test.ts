@@ -121,6 +121,32 @@ const PATTERNS = [
     "const [item, rest]: any = ['safe', [] as any[]]; void rest; return String(item);",
     false,
   ],
+  [
+    'rewritten-to-an-array',
+    "let [item]: any = ['safe']; item = [error]; return String(item);",
+    true,
+  ],
+  [
+    'rewritten-field-of-an-object',
+    "let { item }: any = { item: 'safe' }; item = [error]; return String(item);",
+    true,
+  ],
+  [
+    'rewritten-from-a-parameter',
+    'let [item]: any = other; item = [error]; return String(item);',
+    true,
+  ],
+  [
+    'rewritten-through-a-sibling-stays-refused',
+    "let [item, rest]: any = ['safe', 'x']; rest = [error]; void rest; return String(item);",
+    true,
+  ],
+  [
+    'rewritten-to-a-text-stays-refused',
+    "let [item]: any = ['safe']; item = 'text'; return String(item);",
+    true,
+  ],
+  ['never-rewritten-pin', "let [item]: any = ['safe']; return String(item);", false],
 ] as const;
 
 /** Arrays of texts, typed names and error words stay followed as before; one of unknown elements hands them out. */
