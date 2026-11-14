@@ -1,4 +1,6 @@
 import {
+  type AsExpression,
+  type Expression,
   type Identifier,
   isArrayLiteralExpression,
   isAsExpression,
@@ -26,17 +28,30 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
+  type NonNullExpression,
+  type ParenthesizedExpression,
+  type SatisfiesExpression,
   type SourceFile,
   SyntaxKind,
+  type TypeAssertion,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { exportedDeclaration } from './framed-array-mutations.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Whether a constant object may have changed where code copies it: any mention but a read says so. */
+
+/** Expressions that keep the identity of the one they wrap. */
+type TransparentExpression =
+  | AsExpression
+  | NonNullExpression
+  | ParenthesizedExpression
+  | SatisfiesExpression
+  | TypeAssertion;
 
 /** The answers for each constant, read once. */
 const CHANGED = new WeakMap<VariableDeclaration, boolean>();
@@ -116,8 +131,15 @@ function append<Key, Value>(lists: Map<Key, Value[]>, key: Key, value: Value): v
 function aliasedName(declaration: VariableDeclaration): Identifier | undefined {
   const { name, initializer } = declaration;
   if (initializer === undefined || !isIdentifier(name)) return undefined;
-  const value = unwrapped(initializer);
+  const value = peeled(initializer);
   return isIdentifier(value) ? value : undefined;
+}
+
+/** An expression within the parentheses, the casts of both syntaxes and the `!` that wrap it. */
+function peeled(expression: Expression): Expression {
+  let each = expression;
+  while (transparent(each)) each = each.expression;
+  return each;
 }
 
 /**
@@ -156,6 +178,7 @@ function mentionsChange(holder: VariableDeclaration): boolean {
   const known = new Set<Node>([holder]);
   const pending = [holder];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (exportedDeclaration(each)) return true;
     if (mentionsOf(index, each).some((mention) => touches(mention))) return true;
     for (const alias of aliasesOf(index, each)) {
       if (known.has(alias)) continue;
@@ -263,7 +286,7 @@ function memberReceiver(node: Node): boolean {
 }
 
 /** Syntax that keeps the identity of the expression it wraps. */
-function transparent(node: Node): boolean {
+function transparent(node: Node): node is TransparentExpression {
   return (
     isAsExpression(node) ||
     isTypeAssertion(node) ||

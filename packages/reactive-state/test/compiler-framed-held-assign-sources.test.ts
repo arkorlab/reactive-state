@@ -435,6 +435,71 @@ const CASES = [
     source: `function frames(error: Error, touch: (value: { x: unknown }) => void) { const box = { x: error }; const source = { x: 0 }; const alias = source; (() => { alias.x = error; })(); Object.assign(box, source); return box.x; }`,
     selects: true,
   },
+  {
+    id: 'angle-bracket-alias-written',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0 }; const alias = <{ x: unknown }>source; alias.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'angle-bracket-alias-of-an-alias',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0 }; const alias = <any>source; const again = <any>alias; again.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'angle-bracket-alias-handed-to-a-call',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0 }; const alias = <any>source; touch(alias); Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'satisfies-alias-written',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0 }; const alias = source satisfies { x: unknown }; alias.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'parenthesized-alias-written',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0 }; const alias = (source!); alias.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'asserted-alias-written',
+    source: `function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; const source = { x: 0 }; const alias = source as { x: unknown }; alias.x = error; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'exported-constant',
+    source: `export const source = { x: 0 }; function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'exported-by-name',
+    source: `const source = { x: 0 }; export { source }; function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'exported-under-another-name',
+    source: `const source = { x: 0 }; export { source as shared }; function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'exported-as-default',
+    source: `const source = { x: 0 }; export default source; function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'exported-alias-of-the-constant',
+    source: `const source = { x: 0 }; export const alias = source; function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'exported-constant-copied-through-an-alias',
+    source: `export const source = { x: 0 }; const alias = source; function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, alias); return box.x; }`,
+    selects: true,
+  },
+  {
+    id: 'constant-next-to-an-exported-function',
+    source: `const source = { x: 0 }; export function other() { return 1; } function frames(error: Error, touch: (value: unknown) => void) { const box = { x: error }; Object.assign(box, source); return box.x; }`,
+    selects: false,
+  },
 ] as const;
 
 describe('what the sources of one Object.assign leave in a member', () => {
