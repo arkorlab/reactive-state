@@ -49,12 +49,12 @@ export function valueQueryReading(
   const { type } = at;
   if (!isTypeQueryNode(type)) return undefined;
   const query = queriedMember(type.exprName);
-  const key = queryKey(at);
-  if (at.aliases.has(key)) return undefined;
-  const reading = { ...at, aliases: new Set([...at.aliases, key]) };
   const binding = queryBinding(query.root);
   if (binding === undefined) return undefined;
   const selection = { ...binding, keys: [...binding.keys, ...query.keys] };
+  const key = entryKey(at, selection);
+  if (key === undefined) return undefined;
+  const reading = { ...at, aliases: new Set([...at.aliases, key]) };
   if (selection.type !== undefined)
     return queryArgumentReadings(
       reading,
@@ -110,11 +110,43 @@ function queryBinding(
 }
 
 /**
- * Original query syntax and its actual arguments, by what they hold rather than by the map that
- * holds them, which a selection through an interface makes anew, stop annotation and alias re-entry.
+ * How many entries of a query already on a reading's path one path may make in all. A selection made
+ * of a reading the query gave starts from the queries that path holds, so a finite path of indexes
+ * may enter the same query again, `(typeof v)["self"]["self"]["e"]` of an interface that holds
+ * `self: typeof v`; a query that gives itself is entered each time it is read, and the bound ends
+ * it, as a repeat of an alias does. Past it the query reads as none, as a path of aliases past
+ * `ALIAS_PATH` does. The first entry of each query is no repeat, so a path of different queries is
+ * as long as the code writes it.
  */
-function queryKey(at: TypeReading): string {
-  return `${QUERY_KEY_PREFIX}${typeReadingKey(at)}`;
+const QUERY_REPEATS = 4;
+
+/**
+ * The key of the next entry of a query on a reading's path, none where it is a repeat past
+ * `QUERY_REPEATS`. A query is what it reads: the written type of the name it queries, the members
+ * it selects and the actual arguments it holds, by what they hold rather than by the map that
+ * holds them, which a selection through an interface makes anew. Queries of one name and members
+ * written in several places are one, as they read one type; a query given type arguments, which
+ * its reading applies, stays its own syntax.
+ */
+function entryKey(
+  at: TypeReading,
+  selection: { readonly type: TypeNode | undefined; readonly keys: readonly string[] },
+): string | undefined {
+  const { type } = at;
+  const read =
+    selection.type !== undefined && isTypeQueryNode(type) && type.typeArguments === undefined
+      ? { ...at, type: selection.type }
+      : at;
+  const query = `${QUERY_KEY_PREFIX}${typeReadingKey(read)}${JSON.stringify(selection.keys)}#`;
+  let entered = 0;
+  while (at.aliases.has(`${query}${entered}`)) entered += 1;
+  if (entered > 0) {
+    const repeats = [...at.aliases].filter(
+      (key) => key.startsWith(QUERY_KEY_PREFIX) && !key.endsWith('#0'),
+    );
+    if (repeats.length >= QUERY_REPEATS) return undefined;
+  }
+  return `${query}${entered}`;
 }
 
 /** Whole value aliases preserve the original initializer; assertions and arbitrary calls stay opaque. */
