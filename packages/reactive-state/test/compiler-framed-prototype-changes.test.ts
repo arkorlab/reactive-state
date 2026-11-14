@@ -134,9 +134,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'object-as-the-this-of-a-call-pin',
+    id: 'object-as-the-this-of-a-call-refused-pin',
     source: `${HEAD} Object.assign.call(Object, a, {}); return a; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-in-a-comma-as-the-base-of-a-class-pin',
@@ -244,9 +244,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'prototype-of-another-class-read-pin',
+    id: 'prototype-of-another-class-read-refused-pin',
     source: `${HEAD} class Table {} void Table.prototype; return a; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'plain-assignment-pin',
@@ -274,9 +274,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'member-of-object-by-constant-pin',
+    id: 'member-of-object-by-constant-refused-pin',
     source: `${HEAD} const key = 'keys'; Object[key](a); return a; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-called-pin',

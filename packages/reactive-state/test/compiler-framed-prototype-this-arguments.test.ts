@@ -4,11 +4,12 @@ import { prototypeMayChange } from '../src/compiler/framed-prototype-changes.ts'
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * `Object` given as the `this` of a call of `call`, `apply` or `bind` is not let go where the function
- * is one of the language's own (a member of `Object` or `Reflect`), which reads no member of it by a name
- * it chooses. A function the code writes may read any member of it, `this[key]`, and so may reach
- * `setPrototypeOf`: the holder it is given is let go, whether the function is a declaration, a method, an
- * arrow, a name, or the function a `call` is bound to.
+ * `Object` given as the `this` of a call of `call`, `apply` or `bind` is let go, whatever the function: a
+ * function the code writes may read any member of it, `this[key]`, and so may reach `setPrototypeOf`, and
+ * a function the code stores on `Object` or `Reflect` (`Object.reader = function …`) is a member the
+ * language does not name, which is no more one of the uses that reach no prototype than the function it
+ * holds. A function of the language's own, called with a holder as its `this`, is let go too: the list
+ * of uses has none that gives a holder to a call.
  */
 const CASES = [
   {
@@ -42,29 +43,29 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'native-called-with-object-as-this-pin',
+    id: 'native-called-with-object-as-this-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string) { Object.assign.call(Object, a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-applied-with-object-as-this-pin',
+    id: 'native-applied-with-object-as-this-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string) { Object.assign.apply(Object, [a, {}]); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-bound-to-object-pin',
+    id: 'native-bound-to-object-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string) { const assign = Object.assign.bind(Object); assign(a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-of-reflect-called-with-reflect-as-this-pin',
+    id: 'native-of-reflect-called-with-reflect-as-this-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string) { Reflect.has.call(Reflect, a, 0); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-keys-called-with-object-as-this-pin',
+    id: 'native-keys-called-with-object-as-this-refused-pin',
     source: `function frames(a: unknown[], name: string, key: string) { Object.keys.call(Object, a); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'native-alias-called-with-object-as-this-is-let-go',
@@ -84,6 +85,21 @@ const CASES = [
   {
     id: 'object-as-the-second-argument-of-a-native-call-pin',
     source: `function frames(a: unknown[], name: string, key: string) { Object.assign.call(null, Object, {}); }`,
+    changes: true,
+  },
+  {
+    id: 'user-reader-stored-on-object-called-with-object-as-this-refused',
+    source: `function frames(a: unknown[], name: string, key: string) { (Object as any).reader = function (this: any, k: string) { return this[k]; }; const change = (Object as any).reader.call(Object, key); change(a, {}); }`,
+    changes: true,
+  },
+  {
+    id: 'user-reader-stored-on-reflect-called-with-reflect-as-this-refused',
+    source: `function frames(a: unknown[], name: string, key: string) { (Reflect as any).reader = function (this: any, k: string) { return this[k]; }; const change = (Reflect as any).reader.apply(Reflect, [key]); change(a, {}); }`,
+    changes: true,
+  },
+  {
+    id: 'user-member-stored-on-object-and-called-without-this-refused',
+    source: `function frames(a: unknown[], name: string, key: string) { (Object as any).helper = () => 1; (Object as any).helper(); }`,
     changes: true,
   },
 ] as const;
