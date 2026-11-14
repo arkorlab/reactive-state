@@ -1,4 +1,5 @@
 import {
+  type BinaryExpression,
   type ElementAccessExpression,
   type Expression,
   type Identifier,
@@ -168,43 +169,97 @@ function escapes(node: Node): boolean {
   return isIdentifier(node) && !inType(node) && escapesAsHolder(node);
 }
 
-/** How many constants of constants a text is followed through. */
-const FOLDED_DEPTH = 8;
+/** The longest name that reaches a prototype: a text longer than it is none, whatever is joined to it. */
+const LONGEST_NAME = Math.max(...Array.from(REACHING, (name) => name.length));
+
+/** How many parts one folding reads (a text, a template, a constant, an operand) before it gives up. */
+const FOLD_STEPS = 256;
+
+/** What one folding has left to read. */
+interface FoldBudget {
+  steps: number;
+  /** The constants being folded: one that names itself, by whatever way, is no text. */
+  readonly following: Set<Node>;
+}
 
 /**
  * Whether an expression is a name that reaches a prototype, written as text alone: a `+` of texts, a
  * template whose substitutions are texts, a constant of such (`'__pro' + 'to__'`). Any such name is a
  * mention, whatever it is used for; a name that a call or a variable the code assigns makes is not read.
+ * The folding stops where the text is longer than any such name, and reads a bounded number of parts;
+ * an expression that takes more is taken for a name, as the code that is not read.
  */
 function foldsToName(expression: Expression): boolean {
-  const text = foldedText(expression, 0);
-  return text !== undefined && REACHING.has(text);
+  const budget: FoldBudget = { steps: FOLD_STEPS, following: new Set() };
+  const text = foldedText(expression, budget);
+  return budget.steps < 0 || (text !== undefined && REACHING.has(text));
 }
 
-/** The text an expression is written as of text alone, none where any part is known only when the code runs. */
-function foldedText(expression: Expression, depth: number): string | undefined {
-  let value = unwrapped(expression);
-  while (isTypeAssertion(value)) value = unwrapped(value.expression);
-  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text;
-  if (depth > FOLDED_DEPTH) return undefined;
-  if (isTemplateExpression(value)) {
-    let text = value.head.text;
-    for (const span of value.templateSpans) {
-      const part = foldedText(span.expression, depth + 1);
-      if (part === undefined) return undefined;
-      text += part + span.literal.text;
-    }
-    return text;
-  }
+/**
+ * The text an expression is written as of text alone, none where any part is known only when the
+ * code runs, or the text is longer than any name (which no part joined to it shortens).
+ */
+function foldedText(expression: Expression, budget: FoldBudget): string | undefined {
+  budget.steps -= 1;
+  if (budget.steps < 0) return undefined;
+  const value = stripped(expression);
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value))
+    return joinedText([value.text], budget);
+  if (isTemplateExpression(value))
+    return joinedText(
+      [
+        value.head.text,
+        ...value.templateSpans.flatMap((span) => [span.expression, span.literal.text]),
+      ],
+      budget,
+    );
   if (isIdentifier(value)) {
     const initializer = constantInitializer(value);
-    return initializer === undefined ? undefined : foldedText(initializer, depth + 1);
+    if (initializer === undefined || budget.following.has(initializer)) return undefined;
+    budget.following.add(initializer);
+    const text = foldedText(initializer, budget);
+    budget.following.delete(initializer);
+    return text;
   }
-  if (!isBinaryExpression(value) || value.operatorToken.kind !== SyntaxKind.PlusToken)
-    return undefined;
-  const left = foldedText(value.left, depth + 1);
-  const right = left === undefined ? undefined : foldedText(value.right, depth + 1);
-  return right === undefined ? undefined : `${left}${right}`;
+  return isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.PlusToken
+    ? joinedText(plusOperands(value, budget), budget)
+    : undefined;
+}
+
+/** The expression past the parentheses, the casts of any kind, `!` and `satisfies` around it. */
+function stripped(expression: Expression): Expression {
+  let value = unwrapped(expression);
+  while (isTypeAssertion(value)) value = unwrapped(value.expression);
+  return value;
+}
+
+/** The operands a chain of `+` joins, in order; the chain is read by a loop, not by recursion. */
+function plusOperands(chain: BinaryExpression, budget: FoldBudget): readonly Expression[] {
+  const operands: Expression[] = [];
+  let at: Expression = chain;
+  while (isBinaryExpression(at) && at.operatorToken.kind === SyntaxKind.PlusToken) {
+    budget.steps -= 1;
+    if (budget.steps < 0) break;
+    operands.push(at.right);
+    at = stripped(at.left);
+  }
+  operands.push(at);
+  return operands.toReversed();
+}
+
+/** The parts joined in order, none where one is not a text or the text outgrows every name. */
+function joinedText(
+  parts: readonly (Expression | string)[],
+  budget: FoldBudget,
+): string | undefined {
+  let text = '';
+  for (const part of parts) {
+    const piece = typeof part === 'string' ? part : foldedText(part, budget);
+    if (piece === undefined) return undefined;
+    text += piece;
+    if (text.length > LONGEST_NAME) return undefined;
+  }
+  return text;
 }
 
 /**
@@ -282,15 +337,16 @@ function outermost(node: Node): Node {
   return at;
 }
 
-/** Whether a node is the right of an `instanceof`, an operand of `typeof` or of a comparison. */
+/**
+ * Whether a node is the right of an `instanceof`, an operand of `typeof` or of a comparison. The left
+ * of an `instanceof` is not: it is handed to the `Symbol.hasInstance` hook of the right.
+ */
 function onlyTested(site: Node): boolean {
   const { parent } = site;
   if (isTypeOfExpression(parent)) return true;
-  return (
-    isBinaryExpression(parent) &&
-    (parent.operatorToken.kind === SyntaxKind.InstanceOfKeyword ||
-      COMPARISONS.has(parent.operatorToken.kind))
-  );
+  if (!isBinaryExpression(parent)) return false;
+  if (parent.operatorToken.kind === SyntaxKind.InstanceOfKeyword) return parent.right === site;
+  return COMPARISONS.has(parent.operatorToken.kind);
 }
 
 /**
@@ -308,6 +364,7 @@ function escapesAsHolder(name: Node): boolean {
   while (GLOBAL_OBJECTS.has(held)) {
     const site = outermost(holder);
     const { parent } = site;
+    if (isTypeOfExpression(parent)) return false;
     if (!isMemberAccess(parent) || parent.expression !== site) return true;
     const next = writtenMember(parent);
     if (next === undefined || !HOLDERS.has(next)) return true;
