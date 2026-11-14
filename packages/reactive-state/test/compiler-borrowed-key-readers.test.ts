@@ -64,7 +64,7 @@ const CASES = [
     what: "`'constructor'` as what is read, applied",
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(null, [...rest, 'constructor'])"],
     source: "return Reflect.get.apply(null, [...rest, 'constructor']);",
     what: 'an array of which a spread hides the key',
   },
@@ -84,12 +84,12 @@ const CASES = [
     what: "`'constructor'` as the receiver, after a spread of the arguments",
   },
   {
-    reads: [],
+    reads: ["Reflect.get.call(null, ...rest, 'constructor')"],
     source: "return Reflect.get.call(null, ...rest, 'constructor');",
     what: 'a key past a spread of an array it is given by a name',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.call(...args, run, 'constructor')"],
     source: "return Reflect.get.call(...args, run, 'constructor');",
     what: 'a `this` that a spread may be',
   },
@@ -99,7 +99,7 @@ const CASES = [
     what: 'an array of `apply` that a spread of the arguments before it moves',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(...args, [run, 'constructor'])"],
     source: "return Reflect.get.apply(...args, [run, 'constructor']);",
     what: 'a `this` of `apply` that a spread may be',
   },

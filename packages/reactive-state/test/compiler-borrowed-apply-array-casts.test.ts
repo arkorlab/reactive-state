@@ -59,12 +59,12 @@ const CASES = [
     what: 'an array it is given by a name, in an angle-bracket cast',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(null, <any>[...rest, 'constructor'])"],
     source: "return Reflect.get.apply(null, <any>[...rest, 'constructor']);",
     what: 'an array in an angle-bracket cast, of which a spread hides the key',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(...args, <any>[run, 'constructor'])"],
     source: "return Reflect.get.apply(...args, <any>[run, 'constructor']);",
     what: 'an array in an angle-bracket cast, after a spread that may be the `this`',
   },

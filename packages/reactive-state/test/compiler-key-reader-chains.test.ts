@@ -742,12 +742,12 @@ const CASES = [
     what: 'a key past the spread of an array, given directly',
   },
   {
-    reads: [],
+    reads: ["Reflect.get(...rest, 'constructor')"],
     source: "return Reflect.get(...rest, 'constructor');",
     what: 'a key past a spread of a list given by a name, given directly',
   },
   {
-    reads: [],
+    reads: ["Object.getOwnPropertyDescriptor(...args, 'constructor')"],
     source: "return Object.getOwnPropertyDescriptor(...args, 'constructor');",
     what: 'a key past a spread given to `Object.getOwnPropertyDescriptor`',
   },
@@ -767,12 +767,12 @@ const CASES = [
     what: 'a key given after the one a bound reader already has',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run).bind(null, ...rest)('constructor')"],
     source: "return Reflect.get.bind(null, run).bind(null, ...rest)('constructor');",
     what: 'a key past a spread of what `bind` is given the second time',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, ...rest).bind(null, run)('constructor')"],
     source: "return Reflect.get.bind(null, ...rest).bind(null, run)('constructor');",
     what: 'a key past a spread of what `bind` is given the first time',
   },
@@ -827,7 +827,7 @@ const CASES = [
     what: 'an array given to `Reflect.apply` by a name',
   },
   {
-    reads: [],
+    reads: ["Reflect.apply(Reflect.get, null, [...rest, 'constructor'])"],
     source: "return Reflect.apply(Reflect.get, null, [...rest, 'constructor']);",
     what: 'a key past a spread in the array `Reflect.apply` is given',
   },
