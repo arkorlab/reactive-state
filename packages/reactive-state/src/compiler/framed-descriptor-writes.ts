@@ -4,10 +4,17 @@ import {
   isCallExpression,
   isElementAccessExpression,
   isIdentifier,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
+  type ObjectLiteralElementLike,
+  type ObjectLiteralExpression,
+  type SpreadAssignment,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -15,6 +22,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
+import { writtenArrayKey } from './framed-array-functions.ts';
 import { executionOwner, repeatsAround } from './framed-array-mutations.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
@@ -133,11 +141,73 @@ function writtenValues(
     globalPathOf(unwrapped(node.expression))?.join('.') !== 'Object.assign'
   )
     return [];
-  const prefix = framedArgumentPrefix(node);
-  const [target] = prefix.values;
+  const [target, ...sources] = framedArgumentPrefix(node, node.arguments, Infinity).values;
   if (target === undefined || !sameDescriptor(unwrapped(target), aliases)) return [];
+  return sources.flatMap((source) => sourceValues(source));
+}
+
+/**
+ * The values an `Object.assign` source may write under `value`: those of a literal, or of the
+ * literal a whole constant alias chain ends in. Where a part of it cannot be read (a spread, a
+ * computed name), the entries that may be named `value` stay possible values: that part adds
+ * nothing and takes nothing away. A source that is no such literal writes nothing the walk knows.
+ */
+function sourceValues(source: Expression): readonly Expression[] {
+  const literal = constantLiteral(source);
+  if (literal === undefined) return [];
+  return framedDescriptorEntries(literal, ['value']) ?? possibleValues(literal);
+}
+
+/** The object literal an expression is, or a whole constant alias chain of it ends in. */
+function constantLiteral(expression: Expression): ObjectLiteralExpression | undefined {
+  let value = unwrapped(expression);
+  const seen = new Set<Node>();
+  while (isIdentifier(value)) {
+    const declared = frameDeclarationOf(value);
+    if (declared === undefined || seen.has(declared) || !wholeConstant(declared)) return undefined;
+    seen.add(declared);
+    value = unwrapped(declared.initializer);
+  }
+  return isObjectLiteralExpression(value) ? value : undefined;
+}
+
+/**
+ * Every data entry of a literal, and of the literals it spreads (each read once), whose name is
+ * `value` or may be: a computed name the compile cannot read may name it. A spread it cannot read
+ * is passed by.
+ */
+function possibleValues(literal: ObjectLiteralExpression): readonly Expression[] {
   const values: Expression[] = [];
-  for (const source of node.arguments.slice(1))
-    values.push(...(framedDescriptorEntries(source, ['value']) ?? []));
+  const seen = new Set([literal]);
+  const pending = [literal];
+  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
+    for (const property of at.properties) {
+      if (isSpreadAssignment(property)) pending.push(...unseenLiteral(property.expression, seen));
+      else values.push(...valueEntry(property));
+    }
+  }
   return values;
+}
+
+/** The literal a spread names, where it has not been read yet. */
+function unseenLiteral(
+  expression: Expression,
+  seen: Set<ObjectLiteralExpression>,
+): readonly ObjectLiteralExpression[] {
+  const literal = constantLiteral(expression);
+  if (literal === undefined || seen.has(literal)) return [];
+  seen.add(literal);
+  return [literal];
+}
+
+/** A data entry that is, or may be, named `value`: an accessor or a method holds no data. */
+function valueEntry(
+  property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
+): readonly Expression[] {
+  const name = writtenArrayKey(property.name);
+  if (name !== undefined && name !== 'value') return [];
+  if (isPropertyAssignment(property)) return [property.initializer];
+  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+    ? [property.name]
+    : [];
 }
