@@ -48,6 +48,7 @@ import { calledArrayElements } from './framed-called-elements.ts';
 import { possibleFields } from './framed-entry-fields.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
+import { namesInType } from './framed-references.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { checkedTuple } from './framed-tuple-escapes.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -555,6 +556,7 @@ function packedEntryReference(
     node === binding.name ||
     !isIdentifier(node) ||
     !readsBinding(node) ||
+    namesInType(node) ||
     frameBindingOf(node)?.binding !== binding
   )
     return false;

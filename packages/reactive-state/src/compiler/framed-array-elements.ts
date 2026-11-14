@@ -9,7 +9,9 @@ import {
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
+  isForOfStatement,
   isIdentifier,
+  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
   isVariableDeclaration,
@@ -22,7 +24,7 @@ import { unwrapped } from './bounded.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { emptyArrayFill } from './framed-array-fill-ranges.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { arrayIdentity } from './framed-array-identity.ts';
+import { arrayIdentity, isRootLiteral } from './framed-array-identity.ts';
 import { framedLogicalElementSkipped } from './framed-array-logical-writes.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
@@ -188,7 +190,7 @@ export function arrayWritesUnfollowed(
     const target = invoked?.args[0];
     if (invoked === undefined || target === undefined) return true;
     return (
-      invokedTargets(invoked).every((each) => literalArrayBinding(each) !== root) ||
+      invokedTargets(invoked).every((each) => !isRootArray(each, root)) ||
       argumentsKnown(invoked, (declaration) => {
         held.push(declaration);
       })
@@ -220,6 +222,13 @@ function argumentsKnown(
   return argument === undefined || consultedKnown(argument, role, held);
 }
 
+const ELEMENT_WRITES = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 /**
  * Same-owner prefixes constrain writes, including those the read or copy evaluates in its own
  * receiver, key or arguments before it reads; other referenced execution owners remain possible.
@@ -242,7 +251,27 @@ function possibleBefore(node: Node, read: Node, owner: Node, root: FrameBinding)
  */
 function writesAfterOperands(node: Node, read: Node, root: FrameBinding, owner: Node): boolean {
   const holds = node !== read && node.pos <= read.pos && read.end <= node.end;
-  return holds && madeWithin(root, owner) && !repeatedFrameRead(node, read, root, owner);
+  return (
+    holds &&
+    madeWithin(root, owner) &&
+    evaluatesBeforeWriting(node, read) &&
+    !repeatedFrameRead(node, read, root, owner)
+  );
+}
+
+/** Whether a node, a call, an assignment or a loop head, makes its write only after the part the read lies in. */
+function evaluatesBeforeWriting(node: Node, read: Node): boolean {
+  if (isCallExpression(node)) return true;
+  if (isForOfStatement(node)) return within(read, node.expression);
+  if (!isBinaryExpression(node) || !ELEMENT_WRITES.has(node.operatorToken.kind)) return false;
+  const target = unwrapped(node.left);
+  const pattern = isArrayLiteralExpression(target) || isObjectLiteralExpression(target);
+  return !pattern || within(read, node.right);
+}
+
+/** Whether a node lies within another. */
+function within(node: Node, container: Node): boolean {
+  return node.pos >= container.pos && node.end <= container.end;
 }
 
 /** A write the read evaluates first, unless a written left operand short-circuits past it. */
@@ -265,13 +294,6 @@ function shortCircuits(node: BinaryExpression): boolean {
     (kind === SyntaxKind.BarBarToken && condition === true)
   );
 }
-
-const ELEMENT_WRITES = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 /**
  * Only indexed assignment positions, the insertion arguments of native mutators and the numeric
@@ -297,9 +319,7 @@ export function elementSources(
   if (!isCallExpression(node)) return [];
   const mutated = objectMutatorElements(node, index);
   if (mutated !== undefined)
-    return mutated.targets.some((target) => literalArrayBinding(target) === root)
-      ? mutated.elements
-      : [];
+    return mutated.targets.some((target) => isRootArray(target, root)) ? mutated.elements : [];
   const borrowed = borrowedElements(node, root);
   if (borrowed !== undefined) return borrowed;
   const member = unwrapped(node.expression);
@@ -345,13 +365,18 @@ function insertedArguments(
 
 const MOVING = new Set(['copyWithin', 'reverse', 'shift', 'sort', 'splice', 'unshift']);
 
+/** Whether an expression is the array a binding holds: its name, or the literal it was initialized with. */
+export function isRootArray(expression: Expression, root: FrameBinding): boolean {
+  return literalArrayBinding(expression) === root || isRootLiteral(expression, root);
+}
+
 /**
  * Whether the array a method is called on may be this one: the name of it, or any of the arrays the
  * expression stands for, a condition, a comma, a logical operand, an assignment, a call that
  * returns what it was called on.
  */
 export function mayBeArrayOf(receiver: Expression, root: FrameBinding): boolean {
-  return returnedTargets(receiver).some((each) => literalArrayBinding(each) === root);
+  return returnedTargets(receiver).some((each) => isRootArray(each, root));
 }
 
 /** A possible position-moving mutator leaves every assigned numeric entry reachable. */

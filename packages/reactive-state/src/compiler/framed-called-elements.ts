@@ -9,6 +9,7 @@ import { unwrapped } from './bounded.ts';
 import {
   elementSources,
   literalArrayBinding,
+  isRootArray,
   mayBeArrayOf,
   positionsMove,
   type WrittenArrayElement,
@@ -16,7 +17,7 @@ import {
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { borrowedArrayMutation } from './framed-array-mutators.ts';
 import { frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { mutatorInvocation } from './framed-mutator-calls.ts';
+import { mutatorInvocation, returnedTargets } from './framed-mutator-calls.ts';
 
 /** What one call does to the elements of a written literal array, wherever the call stands. */
 export interface CalledElements {
@@ -47,7 +48,8 @@ export function calledArrayElements(
 function trackedCall(node: CallExpression, root: FrameBinding): boolean {
   if (mutatorInvocation(node) !== undefined) return true;
   const borrowed = borrowedArrayMutation(node);
-  if (borrowed !== undefined) return literalArrayBinding(borrowed.receiver) === root;
+  if (borrowed !== undefined)
+    return returnedTargets(borrowed.receiver).every((each) => isRootArray(each, root));
   const member = unwrapped(node.expression);
   return (
     (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
