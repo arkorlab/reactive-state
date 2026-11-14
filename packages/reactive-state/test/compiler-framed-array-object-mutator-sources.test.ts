@@ -4771,6 +4771,61 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'borrowed-at-written-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; (Array.prototype.at.call(a, 0) as any).toString = () => String(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-with-apply-written-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; (Array.prototype.at.apply(a, [0]) as any).toString = () => String(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-find-written-through-a-member-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; (Array.prototype.find.call(a, () => true) as any).toString = () => String(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-pop-written-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; (Array.prototype.pop.call(a) as any).toString = () => String(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-shift-written-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; (Array.prototype.shift.call(a) as any).toString = () => String(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-called-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ run() { return 1; } }]; (Array.prototype.at.call(a, 0) as any).run(); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-written-through-a-member-of-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: { w: 1 } }]; (Array.prototype.at.call(a, 0) as any).v.toString = () => String(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-written-by-a-compound-assignment-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ n: 1 }]; (Array.prototype.at.call(a, 0) as any).n += 1; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-deleted-through-a-member-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ n: 1 }]; delete (Array.prototype.at.call(a, 0) as any).n; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'borrowed-at-read-through-a-member-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ v: 'safe' }]; const m = (Array.prototype.at.call(a, 0) as any).v; void m; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'borrowed-join-discarded-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Array.prototype.join.call(a, ','); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'held-iterator-spread-of-a-logical-refused',
     source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const d: any = { *[Symbol.iterator]() { this.get = undefined; yield [1, 2]; }, get: () => 'safe' }; [...(d || [])]; d.get ??= () => error; Object.defineProperty(a, 0, d); return String(a); }`,
     converts: true,
