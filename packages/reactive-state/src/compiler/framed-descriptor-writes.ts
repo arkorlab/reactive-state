@@ -88,21 +88,29 @@ function descriptorAliases(node: Expression): ReadonlySet<VariableDeclaration> {
     aliases.add(declared);
     value = unwrapped(declared.initializer);
   }
-  const pending: Node[] = [node.getSourceFile()];
-  const declarations: (VariableDeclaration & { readonly initializer: Expression })[] = [];
+  return aliases.size === 0 ? aliases : namedAliases(aliases, node.getSourceFile());
+}
+
+/**
+ * The constants of a chain and every constant that names one of them, each found by the module's
+ * index of constants by the name they are given, and followed in its turn: the work grows with the
+ * aliases, however long a chain they make.
+ */
+function namedAliases(
+  holders: ReadonlySet<VariableDeclaration>,
+  file: SourceFile,
+): ReadonlySet<VariableDeclaration> {
+  const index = fileWrites(file);
+  const aliases = new Set(holders);
+  const pending = [...aliases];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    if (isTypeOnly(at)) continue;
-    if (wholeConstant(at)) declarations.push(at);
-    at.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  let count = -1;
-  while (count !== aliases.size) {
-    count = aliases.size;
-    for (const declared of declarations) {
-      const initializer = unwrapped(declared.initializer);
-      if (sameDescriptor(initializer, aliases)) aliases.add(declared);
+    const named = index.aliases.get(holderName(at));
+    if (named === undefined) continue;
+    for (const alias of named) {
+      if (aliases.has(alias) || !sameDescriptor(unwrapped(alias.initializer), new Set([at])))
+        continue;
+      aliases.add(alias);
+      pending.push(alias);
     }
   }
   return aliases;
@@ -280,18 +288,7 @@ function writtenThrough(
   const root = holders.at(-1);
   if (root === undefined || seen.has(root)) return [];
   const index = fileWrites(root.getSourceFile());
-  const aliases = new Set(holders);
-  const pending = [...holders];
-  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    const named = index.aliases.get(holderName(at));
-    if (named === undefined) continue;
-    for (const alias of named) {
-      if (aliases.has(alias) || !sameDescriptor(unwrapped(alias.initializer), new Set([at])))
-        continue;
-      aliases.add(alias);
-      pending.push(alias);
-    }
-  }
+  const aliases = namedAliases(new Set(holders), root.getSourceFile());
   for (const alias of aliases) seen.add(alias);
   const names = new Set([...aliases].map((each) => holderName(each)));
   return [...names]
@@ -314,10 +311,10 @@ function fileWrites(file: SourceFile): FileWrites {
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
     const written = writtenName(node);
-    if (written !== undefined) writes.set(written, [...(writes.get(written) ?? []), node]);
+    if (written !== undefined) appended(writes, written, node);
     const named = wholeConstant(node) ? unwrapped(node.initializer) : undefined;
     if (named !== undefined && isIdentifier(named) && wholeConstant(node))
-      aliases.set(named.text, [...(aliases.get(named.text) ?? []), node]);
+      appended(aliases, named.text, node);
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -325,6 +322,13 @@ function fileWrites(file: SourceFile): FileWrites {
   const indexed = { writes, aliases };
   FILE_WRITES.set(file, indexed);
   return indexed;
+}
+
+/** Adds an item to the list a key holds, one at a time: a module of many writes of one name stays linear. */
+function appended<Item>(lists: Map<string, Item[]>, key: string, item: Item): void {
+  const held = lists.get(key);
+  if (held === undefined) lists.set(key, [item]);
+  else held.push(item);
 }
 
 /** The text of the name an assignment of a member, or an `Object.assign`, writes into. */
