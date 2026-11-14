@@ -26,6 +26,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
+  type SourceFile,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -62,42 +63,76 @@ export function sourceChanged(holder: VariableDeclaration): boolean {
   return changed;
 }
 
-/** Whether a mention of the constant, or of a constant that names it, may change it. */
-function mentionsChange(holder: VariableDeclaration): boolean {
-  const { name } = holder;
-  if (!isIdentifier(name)) return true;
-  const mentions: Identifier[] = [];
-  const declarations: VariableDeclaration[] = [];
-  const pending: Node[] = [holder.getSourceFile()];
+/** What a module mentions by name, and the variables declared as another variable, read once. */
+interface Index {
+  readonly mentions: ReadonlyMap<string, readonly Identifier[]>;
+  readonly aliases: ReadonlyMap<string, readonly VariableDeclaration[]>;
+}
+
+/** The index of each module. */
+const INDEXES = new WeakMap<SourceFile, Index>();
+
+/** The mentions of a module by their text, and its aliases by the text of the variable they name. */
+function indexOf(file: SourceFile): Index {
+  const known = INDEXES.get(file);
+  if (known !== undefined) return known;
+  const mentions = new Map<string, Identifier[]>();
+  const aliases = new Map<string, VariableDeclaration[]>();
+  const pending: Node[] = [file];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (isIdentifier(node) && readsBinding(node)) mentions.push(node);
-    if (isVariableDeclaration(node)) declarations.push(node);
+    if (isIdentifier(node) && readsBinding(node)) append(mentions, node.text, node);
+    if (isVariableDeclaration(node)) {
+      const named = aliasedName(node);
+      if (named !== undefined) append(aliases, named, node);
+    }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  const names = namesOf(name.text, declarations);
-  return mentions.some((mention) => names.has(mention.text) && touches(mention));
+  const index = { mentions, aliases };
+  INDEXES.set(file, index);
+  return index;
 }
 
-/** The names of a constant, and of each variable declared as another of them, by their text. */
-function namesOf(first: string, declarations: readonly VariableDeclaration[]): ReadonlySet<string> {
-  const names = new Set([first]);
-  for (let grown = true; grown;) {
-    const named = declarations.filter((each) => namesAnother(each, names));
-    for (const each of named) names.add((each.name as Identifier).text);
-    grown = named.length > 0;
-  }
-  return names;
+/** Adds a value to the list a key holds. */
+function append<Value>(lists: Map<string, Value[]>, key: string, value: Value): void {
+  const list = lists.get(key);
+  if (list === undefined) lists.set(key, [value]);
+  else list.push(value);
 }
 
-/** Whether a declaration gives a new name to a variable of the set. */
-function namesAnother(declaration: VariableDeclaration, names: ReadonlySet<string>): boolean {
+/** The text of the variable a declaration gives a new name to, none for another declaration. */
+function aliasedName(declaration: VariableDeclaration): string | undefined {
   const { name, initializer } = declaration;
-  if (initializer === undefined || !isIdentifier(name) || names.has(name.text)) return false;
+  if (initializer === undefined || !isIdentifier(name)) return undefined;
   const value = unwrapped(initializer);
-  return isIdentifier(value) && names.has(value.text);
+  return isIdentifier(value) ? value.text : undefined;
+}
+
+/** Whether a mention of the constant, or of a constant that names it, may change it. */
+function mentionsChange(holder: VariableDeclaration): boolean {
+  const { name } = holder;
+  if (!isIdentifier(name)) return true;
+  const index = indexOf(holder.getSourceFile());
+  const names = new Set([name.text]);
+  const pending = [name.text];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const aliases = index.aliases.get(each);
+    if (aliases === undefined) continue;
+    for (const alias of aliases) {
+      const aliasName = (alias.name as Identifier).text;
+      if (names.has(aliasName)) continue;
+      names.add(aliasName);
+      pending.push(aliasName);
+    }
+  }
+  return [...names].some((each) => mentionTouches(index, each));
+}
+
+/** Whether a mention of a name may change what it names. */
+function mentionTouches(index: Index, name: string): boolean {
+  return (index.mentions.get(name) ?? []).some((mention) => touches(mention));
 }
 
 /** Whether a mention may change the object, or hand it to code that may: no read is such a use. */
