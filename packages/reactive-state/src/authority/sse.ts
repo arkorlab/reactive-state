@@ -143,10 +143,11 @@ class Follower {
       // waits in the engine's queue, so one queued before the expiry can run after it, where the
       // engine refuses the session as it refuses one that ended: an asserted session's refusal
       // once the session's own expiry has come is renewed (`renew`), as the expiry's own step
-      // would have. The session's `expires` is read, not the stream's `expiresIn` added to the
-      // clock now: that was sampled in the engine, earlier, so it ends later than the session does.
+      // would have. The session's `expires` is read, by the engine's own clock, the one it refused
+      // by, which is not always `Date.now`: not the stream's `expiresIn` added to the clock now,
+      // which was sampled in the engine, earlier, so it ends later than the session does.
       if (error instanceof AuthorityError && REVOKING_STATUSES.has(error.status)) {
-        if (this.#asserted !== undefined && Date.now() >= this.#asserted.expires) {
+        if (this.#asserted !== undefined && engine.now() >= this.#asserted.expires) {
           this.send('renew', {});
         } else {
           this.send('revoked', { code: error.code, error: error.message });

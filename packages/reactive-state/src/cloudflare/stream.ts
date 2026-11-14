@@ -259,13 +259,16 @@ class Follower {
    * own expiry has come, which `renew`s. The render waited in the engine's queue, and the engine
    * refuses a session from the instant it expires as it refuses one that ended; the clock tells
    * them apart, and the page asks the application whether the session stands in either case. The
-   * session's `expires` decides, not `#expiresAt`: that is the `expiresIn` the engine sampled,
-   * added to the clock when the stream opened, so it comes later than the session's expiry by what
-   * passed between, and it comes earlier where the page asks again before the session ends.
+   * session's `expires` decides, by the engine's own clock (`AuthorityEngine.now`), the one it
+   * refused by, which is not always `Date.now`: not `#expiresAt`, which is the `expiresIn` the
+   * engine sampled added to this isolate's clock when the stream opened, so it comes later than the
+   * session's expiry by what passed between, and earlier where the page asks again before the
+   * session ends.
    */
   #refused(error: AuthorityError): string {
-    const asserted = assertedSessionOf(this.#following.sessionId);
-    return asserted !== undefined && Date.now() >= asserted.expires
+    const { engine, sessionId } = this.#following;
+    const asserted = assertedSessionOf(sessionId);
+    return asserted !== undefined && engine.now() >= asserted.expires
       ? event('renew', {})
       : event('revoked', { code: error.code, error: error.message });
   }

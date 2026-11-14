@@ -201,6 +201,8 @@ function authority(row: Row): {
         listeners.delete(listener);
       };
     },
+    // The authority's clock is the one the test moves.
+    now: () => Date.now(),
     revision: () => 0,
     watch: async () => render(),
   } as unknown as Engine;

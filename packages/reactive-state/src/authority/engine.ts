@@ -314,6 +314,15 @@ export class AuthorityEngine {
     return this.#db.revision();
   }
 
+  /**
+   * The authority's clock, in epoch milliseconds: what it judges whether a session has expired by.
+   * The `clock` it was opened with, `Date.now` unless given, which a stream reads to tell a refusal
+   * for the expiry of an asserted session's `expires` from one for its end.
+   */
+  now(): number {
+    return this.#clock();
+  }
+
   async login(userId: unknown): Promise<{ readonly sessionId: string; readonly userId: string }> {
     return this.#run(() => this.#sessions.login(userId));
   }
