@@ -146,6 +146,72 @@ export function callsBack(name: string): boolean {
 }
 
 /**
+ * The natives that take no more than two arguments, and so ignore the third argument of a callback,
+ * which is the array, and the fourth of a reducer. Another native may use it: a callback gets the
+ * array as its third argument, or fourth for a reducer, and `Reflect.set` writes through it as the
+ * receiver of the write, and a native that takes any number of arguments (`Math.max`, `Math.min`,
+ * `Math.hypot`) converts each of them, which runs the methods of the array.
+ */
+const NON_RECEIVING: ReadonlySet<string> = new Set([
+  'Array.isArray',
+  'BigInt',
+  'Boolean',
+  'isFinite',
+  'isNaN',
+  'Math.abs',
+  'Math.acos',
+  'Math.acosh',
+  'Math.asin',
+  'Math.asinh',
+  'Math.atan',
+  'Math.atan2',
+  'Math.atanh',
+  'Math.cbrt',
+  'Math.ceil',
+  'Math.clz32',
+  'Math.cos',
+  'Math.cosh',
+  'Math.exp',
+  'Math.expm1',
+  'Math.f16round',
+  'Math.floor',
+  'Math.fround',
+  'Math.imul',
+  'Math.log',
+  'Math.log1p',
+  'Math.log2',
+  'Math.log10',
+  'Math.pow',
+  'Math.random',
+  'Math.round',
+  'Math.sign',
+  'Math.sin',
+  'Math.sinh',
+  'Math.sqrt',
+  'Math.tan',
+  'Math.tanh',
+  'Math.trunc',
+  'Number',
+  'Number.isFinite',
+  'Number.isInteger',
+  'Number.isNaN',
+  'Number.isSafeInteger',
+  'Number.parseFloat',
+  'Number.parseInt',
+  'Object.entries',
+  'Object.getOwnPropertyNames',
+  'Object.getOwnPropertySymbols',
+  'Object.isExtensible',
+  'Object.isFrozen',
+  'Object.isSealed',
+  'Object.keys',
+  'Object.values',
+  'parseFloat',
+  'parseInt',
+  'String',
+]);
+
+/**
  * Whether a method calls a function back with the array as an argument: a function of the program
  * that has a parameter for it (a rest parameter or `arguments` among them), or any callback that is
  * not written out, which may be one. The callback is the argument at `from`.
@@ -156,7 +222,7 @@ export function handsArray(call: CallExpression, name: string, from = 0): boolea
   if (position === undefined || first === undefined) return false;
   const callback = unwrapped(first);
   if (!isArrowFunction(callback) && !isFunctionExpression(callback))
-    return call.arguments.length > from + 1 || nativePath(first) === undefined;
+    return call.arguments.length > from + 1 || !NON_RECEIVING.has(nativePath(first) ?? '');
   return (
     callback.parameters.length > position ||
     callback.parameters.some((each) => each.dotDotDotToken !== undefined) ||
