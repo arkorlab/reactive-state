@@ -28,9 +28,16 @@ import { writtenTuplePlaces } from '../src/compiler/local-type-tuple-selections.
  * twenty levels were a million counts of one place. One count reads the rests of at most 4096
  * tuples. A count that needs more cannot say how many places there are, and a count that is short
  * drops the place a loop may assign an `Error` at: iterating `[...T12, ...[string, Error]]` over
- * twelve such levels counted two places, and left out `values.2`. It is the most places a tuple
- * has, ten thousand (TypeScript refuses a tuple spread past that), so that every place is read,
- * as every element is a candidate; what a count can finish within its reads keeps its own answer.
+ * twelve such levels counted two places, and left out `values.2`. A rest it has no reads for counts
+ * as ten thousand places, as many as a spread leaves a tuple (TypeScript refuses a spread that
+ * leaves it ten thousand elements or more), or as the places counted so far if more, so that every
+ * place is read, as every element is a candidate; what a count can finish within its reads keeps
+ * its own answer.
+ *
+ * Written members are not spreads. TypeScript takes a tuple written out of any length, and only a
+ * member written before a spread counts towards its limit, so that members are counted one by one,
+ * those after a rest the count could not read included, and a tuple of ten thousand strings and an
+ * `Error` has the `Error` at `values.10000`.
  */
 const MIXED = [
   {
@@ -211,16 +218,26 @@ function chainOf(
   return `type T0 = [${base}]; ${declarations.join(' ')}`;
 }
 
-/** The most places a tuple has, and the sources a loop over a count that has no reads left is given. */
+/** What a rest that no count has reads for stands for: the most places a spread leaves a tuple. */
 const TUPLE_PLACES = 10_000;
-const EVERY_PLACE = Array.from({ length: TUPLE_PLACES }, (_, place) => `values.${String(place)}`);
+
+/** The sources `iteratedFrameSources` gives a tuple of `count` places. */
+function placesOf(count: number): readonly string[] {
+  return Array.from({ length: count }, (_, place) => `values.${String(place)}`);
+}
+
+/** Members written one after the other: `count` strings. */
+function written(count: number): string {
+  return Array.from({ length: count }, () => 'string').join(', ');
+}
 
 /** Each level a rest of the one before it, twice. */
 const SEQUENCE = (at: number, before: number): string =>
   `type T${String(at)} = [...T${String(before)}, ...T${String(before)}];`;
 
 /**
- * Rests of shared aliases no count can read in full, the `Error` at a place a short count leaves out:
+ * Rests of shared aliases no count can read in full, the `Error` at a place a short count leaves out.
+ * The rest counts as a spread's worth of places, and what is written after it counts one place each:
  * after the rest, beside a tuple that is longer, after a rest that repeats a rest, beside arrays.
  */
 const EXHAUSTED = [
@@ -228,32 +245,95 @@ const EXHAUSTED = [
     id: 'rest-after-the-exhausted-rest',
     chain: (): string => chainOf(12, SHARING, 'string'),
     type: '[...T12, ...[string, Error]]',
+    places: TUPLE_PLACES,
   },
   {
     id: 'member-after-the-exhausted-rest',
     chain: (): string => chainOf(12, SHARING, 'string'),
     type: '[...T12, string, Error]',
+    places: TUPLE_PLACES + 2,
+  },
+  {
+    id: 'members-after-the-exhausted-rest',
+    chain: (): string => chainOf(12, SHARING, 'string'),
+    type: `[...T12, ${written(9)}, Error]`,
+    places: TUPLE_PLACES + 10,
+  },
+  {
+    id: 'members-before-the-exhausted-rest',
+    chain: (): string => chainOf(12, SHARING, 'string'),
+    type: '[string, string, ...T12]',
+    places: TUPLE_PLACES,
+  },
+  {
+    id: 'members-between-exhausted-rests',
+    chain: (): string => chainOf(12, SHARING, 'string'),
+    type: '[...T12, string, ...T12, Error]',
+    places: TUPLE_PLACES + 2,
   },
   {
     id: 'tuple-beside-the-exhausted-rest',
     chain: (): string => chainOf(12, SHARING, 'string'),
     type: '[...(T12 | [string, string, Error])]',
+    places: TUPLE_PLACES,
   },
   {
     id: 'exhausted-rest-of-arrays-and-tuples',
     chain: (): string => chainOf(12, MIXED_SHARING, 'string'),
     type: '[...T12, ...[string, Error]]',
+    places: TUPLE_PLACES,
   },
   {
     id: 'rests-that-reach-an-alias-twice',
     chain: (): string => chainOf(20, SEQUENCE, 'string'),
     type: '[...T20, ...[string, Error]]',
+    places: TUPLE_PLACES,
   },
   {
     id: 'exhausted-rest-in-an-alias',
     chain: (): string =>
       `${chainOf(12, SHARING, 'string')} type Values = [...T12, ...[string, Error]];`,
     type: 'Values',
+    places: TUPLE_PLACES,
+  },
+  {
+    id: 'exhausted-rest-spread-into-another',
+    chain: (): string =>
+      `${chainOf(12, SHARING, 'string')} type Inner = [...T12, string, Error]; type Values = [string, ...Inner, string];`,
+    type: 'Values',
+    places: TUPLE_PLACES + 1,
+  },
+] as const;
+
+/**
+ * Written members are counted one by one, whatever there are of them: TypeScript refuses only a
+ * spread past ten thousand elements, and takes a tuple of any length written out, so that the
+ * `Error` after ten thousand strings stands at `values.10000`.
+ */
+const WRITTEN = [
+  {
+    id: 'an-error-after-ten-thousand-members',
+    declarations: '',
+    type: `[${written(10_000)}, Error]`,
+    places: 10_001,
+  },
+  {
+    id: 'ten-thousand-and-one-members',
+    declarations: '',
+    type: `[${written(10_001)}]`,
+    places: 10_001,
+  },
+  {
+    id: 'ten-thousand-and-one-members-in-an-alias',
+    declarations: `type Values = [${written(10_001)}];`,
+    type: 'Values',
+    places: 10_001,
+  },
+  {
+    id: 'a-spread-under-the-limit-and-a-member',
+    declarations: `type Big = [${written(9000)}]; type Values = [...Big, Error];`,
+    type: 'Values',
+    places: 9001,
   },
 ] as const;
 
@@ -388,13 +468,26 @@ describe('the places a written tuple is counted at', () => {
 
   it.each(EXHAUSTED)(
     'reads every place where a count has no reads left: $id',
-    ({ chain, type }) => {
+    ({ chain, type, places }) => {
       const sources = iterated(chain(), type);
 
       expect(sources).toContain('values.2');
-      expect(sources).toStrictEqual(EVERY_PLACE);
+      expect(sources).toStrictEqual(placesOf(places));
     },
   );
+
+  it.each(WRITTEN)('counts written members one by one: $id', ({ declarations, type, places }) => {
+    const sources = iterated(declarations, type);
+
+    expect(sources).toHaveLength(places);
+    expect(sources).toStrictEqual(placesOf(places));
+  });
+
+  it('counts the members of a tuple written past ten thousand directly', () => {
+    const { places } = counted(`type Values = [${written(10_001)}];`, 'Values');
+
+    expect(places).toBe(10_001);
+  });
 
   it.each(FINISHED)(
     'keeps the places of a count that finishes: $id',

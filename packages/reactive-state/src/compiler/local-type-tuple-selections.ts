@@ -79,6 +79,8 @@ export function writtenTupleReadings(
 interface PlaceReads {
   /** The rests a count of places may still read the alternatives of. */
   left: number;
+  /** Some rest had no reads left to be counted by, so that the places up to it are only a bound. */
+  unread: boolean;
 }
 
 /**
@@ -91,11 +93,12 @@ interface PlaceReads {
 const PLACE_READS = 4096;
 
 /**
- * The most places any tuple has: TypeScript refuses a spread of a tuple past ten thousand elements
- * ("too large to represent"), so no count passes it. A count that has no reads left cannot say how
- * many places there are, and a short count drops a place a loop may assign an `Error` at, so it
- * stands for every place a tuple may have; a source read at each of them is the one the reader
- * could not clear, as every element is a candidate.
+ * What a rest that no reads are left to count stands for: TypeScript refuses a spread that leaves a
+ * tuple with ten thousand elements or more ("too large to represent"), so however long the tuple
+ * the rest is, the places there are up to it are under this. A short count would drop the place a
+ * loop may assign an `Error` at, so the rest counts as this many, or as the places already counted
+ * if more, and what is written after it is counted one by one, as TypeScript takes a tuple of any
+ * length written out. The sources are every place there may be, as every element is a candidate.
  */
 const TUPLE_PLACES = 10_000;
 
@@ -104,11 +107,12 @@ const TUPLE_PLACES = 10_000;
  * stands at one, and a rest at the most any alternative of it has. A written tuple has as many as
  * its own places; an array, a cycle or any operand the reader cannot expand has one, from which a
  * rest of unknown length supplies its elements. A count reads the alternatives of at most
- * `PLACE_READS` rests; one that needs more is `TUPLE_PLACES`, and never fewer than the places it
- * has. Undefined where the type is no tuple.
+ * `PLACE_READS` rests; once it has no reads left, each rest is `TUPLE_PLACES`, which the places
+ * counted so far give way to if more, and never fewer than the places the tuple has. Undefined
+ * where the type is no tuple.
  */
 export function writtenTuplePlaces(at: TypeReading, operands: Operands): number | undefined {
-  return countedPlaces(at, operands, [], { left: PLACE_READS });
+  return countedPlaces(at, operands, [], { left: PLACE_READS, unread: false });
 }
 
 /** A tuple's places, its lineage the written tuples above it, which no rest may return to. */
@@ -125,8 +129,12 @@ function countedPlaces(
   let places = 0;
   for (const element of tuple.elements) {
     const rest = writtenRestType(element);
-    places += rest === undefined ? 1 : restPlaces({ ...at, type: rest }, operands, lineage, reads);
-    if (places >= TUPLE_PLACES) return TUPLE_PLACES;
+    if (rest === undefined) {
+      places += 1;
+      continue;
+    }
+    const counted = restPlaces({ ...at, type: rest }, operands, lineage, reads);
+    places = reads.unread ? Math.max(places, TUPLE_PLACES) : places + counted;
   }
   return places;
 }
@@ -134,8 +142,9 @@ function countedPlaces(
 /**
  * The most places any alternative of a rest has, each counted on its own, so that a rest of an array
  * beside a written tuple has the places of the tuple and not the one of the array. A written tuple
- * that is not one above it has the places it is counted at; any other alternative has one. A rest
- * there are no reads left for has `TUPLE_PLACES`, which the places above it add up to or pass.
+ * that is not one above it has the places it is counted at; any other alternative has one. Where a
+ * rest, or one in what it holds, has no reads left, the count says nothing of it: the tuple it is
+ * in takes it as `TUPLE_PLACES`.
  */
 function restPlaces(
   rest: TypeReading,
@@ -143,7 +152,10 @@ function restPlaces(
   lineage: readonly TypeReading[],
   reads: PlaceReads,
 ): number {
-  if (reads.left <= 0) return TUPLE_PLACES;
+  if (reads.left <= 0) {
+    reads.unread = true;
+    return 0;
+  }
   reads.left -= 1;
   const alternatives = restOperands(rest, operands);
   if (alternatives.length === 0) return 1;
@@ -152,7 +164,7 @@ function restPlaces(
     const cycle = lineage.some((parent) => sameReading(parent, each));
     const places = cycle ? undefined : countedPlaces(each, operands, lineage, reads);
     most = Math.max(most, places ?? 1);
-    if (most >= TUPLE_PLACES) return TUPLE_PLACES;
+    if (reads.unread) break;
   }
   return most;
 }
