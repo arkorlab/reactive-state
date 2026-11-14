@@ -5,11 +5,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isErased, readsCodeGlobal } from '../src/compiler/code-globals.ts';
 
 /**
- * A function of the language's that reads a member by the key it is given, `Reflect.get`, reads it
+ * A function of the language's that reads a member by the key it is given, `Reflect.get`, is read
  * as well where the code borrows it: `Reflect.get.call(null, fn, 'constructor')`, `.apply(null, [fn,
- * 'constructor'])` — `call` and `apply` hand on what they are given after the `this` they take, and
- * the key written there reaches what made the function as written beside the function it reads.
- * What the code does not show — an array `apply` is given by a name, a key it computes — is not read.
+ * 'constructor'])`. A call that writes the text `'constructor'` among its arguments and holds the
+ * reader reads it, wherever the text stands: as the `this` `call` takes, or as the receiver, though
+ * the reader reads another member there. What the code does not show — an array `apply` is given by
+ * a name, a key it computes — is not read.
  */
 
 const CASES = [
@@ -54,12 +55,12 @@ const CASES = [
     what: 'another key, applied',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.call(run, 'constructor')"],
     source: "return Reflect.get.call(run, 'constructor');",
     what: "`'constructor'` as what is read, the `this` taken first",
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(run, ['constructor'])"],
     source: "return Reflect.get.apply(run, ['constructor']);",
     what: "`'constructor'` as what is read, applied",
   },
@@ -79,7 +80,7 @@ const CASES = [
     what: 'a function of the module',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.call(null, ...[run, 'name'] as const, 'constructor')"],
     source: "return Reflect.get.call(null, ...[run, 'name'] as const, 'constructor');",
     what: "`'constructor'` as the receiver, after a spread of the arguments",
   },
@@ -94,7 +95,7 @@ const CASES = [
     what: 'a `this` that a spread may be',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.apply(...[null, [run, 'name']], [run, 'constructor'])"],
     source: "return Reflect.get.apply(...[null, [run, 'name']], [run, 'constructor']);",
     what: 'an array of `apply` that a spread of the arguments before it moves',
   },

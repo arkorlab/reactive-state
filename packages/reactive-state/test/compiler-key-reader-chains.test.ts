@@ -5,22 +5,20 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { isErased, readsCodeGlobal } from '../src/compiler/code-globals.ts';
 
 /**
- * A function of the language's that reads a member by the key it is given, `Reflect.get`, reads it
- * however the code writes the call, as `Reflect.get(fn, 'constructor')` does: through `call`,
- * `apply` and `bind` — one of them given to another, `run.call.bind(Reflect.get)`,
- * or bound again, `Reflect.get.bind(null).bind(null, fn)` — and through `Reflect.apply`. The
- * methods of a function are those of any function, `fn.call`, `Reflect.get.call`. What each
- * of them is given after the `this` it takes reaches the reader in order, up to a spread, past which
- * where a value stands is for the code to tell. The key reads at the call that first gives it,
- * once: where a `bind` is given it, the `bind` is the read; where the call is, the call is. What the
- * code does not show — a function it holds by a name, an array it gives by a name, a key past a
- * spread — is not read.
+ * A function of the language's that reads a member by the key it is given, `Reflect.get`, is read by
+ * name, however the code writes the call: `Reflect.get(fn, 'constructor')`, through `call`, `apply`
+ * and `bind` — one of them given to another, `run.call.bind(Reflect.get)`, or bound again,
+ * `Reflect.get.bind(null).bind(null, fn)` — and through `Reflect.apply`. A call that writes the text
+ * `'constructor'` among its arguments, and holds a reader in its callee or in one of them, reads it,
+ * wherever the text stands: as the `this` a borrowed call takes, past a spread, after a key a bound
+ * reader already has, though the reader reads another member there. What the code does not show — a
+ * function it holds by a name, an array it gives by a name, a key it computes — is not read.
  *
  * `call`, `apply` and `bind` are read by their names, of whatever they are read of: an object that
- * writes one of its own, or none, is not told from a function, and the code that gives a reader's
- * key past it is refused (the rows that end `, refused`) — which is rare, and no member of an object
- * is followed to tell. The rows of such objects that read nothing are the ones the code does not
- * give a reader's key.
+ * writes one of its own, or none, is not told from a function, and the code that gives a reader to
+ * such a method beside the text is refused (the rows that end `, refused`) — which is rare, and no
+ * member of an object is followed to tell. The rows of such objects that read nothing are the ones
+ * the code does not give a reader.
  */
 
 const CASES = [
@@ -284,13 +282,17 @@ const CASES = [
   },
   // An apply array consumed: what it leaves of what a function takes is not given later.
   {
-    reads: [],
+    reads: [
+      "run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [])(null, 'constructor')",
+    ],
     source:
       "return run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [])(null, 'constructor');",
     what: 'an empty array `apply` is bound to, the key given after it',
   },
   {
-    reads: [],
+    reads: [
+      "run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [null])(null, 'constructor')",
+    ],
     source:
       "return run.apply.bind(run.call.bind(Reflect.get.bind(null, obj)), null, [null])(null, 'constructor');",
     what: 'an array of the `this` alone `apply` is bound to, the key given after it',
@@ -328,7 +330,7 @@ const CASES = [
     what: '`bind` of an object that has its own, called, refused',
   },
   {
-    reads: [],
+    reads: ["helper.call(Reflect.get, null, obj, 'constructor')"],
     source: "return helper.call(Reflect.get, null, obj, 'constructor');",
     what: 'an object that has its own `call`, called',
   },
@@ -701,7 +703,10 @@ const CASES = [
     what: 'a constant whose own method, which gives `this` nothing, is called, refused',
   },
   {
-    reads: ["helper.call.call(Reflect.get, null, obj, 'constructor')"],
+    reads: [
+      "helper.call(Reflect.get, null, obj, 'constructor')",
+      "helper.call.call(Reflect.get, null, obj, 'constructor')",
+    ],
     source:
       "const helper = { call: () => 42 };\n  helper.call(Reflect.get, null, obj, 'constructor');\n  return helper.call.call(Reflect.get, null, obj, 'constructor');",
     what: 'a constant whose own `call` is called, refused',
@@ -759,7 +764,7 @@ const CASES = [
   },
   // What is not a read.
   {
-    reads: [],
+    reads: ["Reflect.get(...[run, 'name'] as const, 'constructor')"],
     source: "return Reflect.get(...[run, 'name'] as const, 'constructor');",
     what: 'a key past the spread of an array, given directly',
   },
@@ -784,7 +789,7 @@ const CASES = [
     what: 'another key, given to a reader bound twice',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(null, run, 'name').bind(null)('constructor')"],
     source: "return Reflect.get.bind(null, run, 'name').bind(null)('constructor');",
     what: 'a key given after the one a bound reader already has',
   },
@@ -804,7 +809,7 @@ const CASES = [
     what: 'a reader bound twice, called not at all',
   },
   {
-    reads: [],
+    reads: ["Reflect.get.bind(run, 'constructor')"],
     source: "return Reflect.get.bind(run, 'constructor').bind(null)();",
     what: "`'constructor'` as what is read, the `this` taken first, bound twice",
   },
@@ -814,7 +819,7 @@ const CASES = [
     what: 'another key, given to `call` bound to the reader',
   },
   {
-    reads: [],
+    reads: ["run.call.bind(Reflect.get)('constructor')"],
     source: "return run.call.bind(Reflect.get)('constructor');",
     what: "`'constructor'` as the `this` `call` bound to the reader takes",
   },
@@ -829,7 +834,7 @@ const CASES = [
     what: 'another key, given to `call` called on the reader',
   },
   {
-    reads: [],
+    reads: ["run.call.call(Reflect.get, 'constructor')"],
     source: "return run.call.call(Reflect.get, 'constructor');",
     what: "`'constructor'` as the `this` of `call` called on the reader",
   },
@@ -859,7 +864,7 @@ const CASES = [
     what: 'a function `Reflect.apply` is given by a spread',
   },
   {
-    reads: [],
+    reads: ["Reflect.apply(Reflect.get, null, ['constructor', run])"],
     source: "return Reflect.apply(Reflect.get, null, ['constructor', run]);",
     what: "`'constructor'` as what is read, the first given",
   },

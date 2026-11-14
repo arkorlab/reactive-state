@@ -3338,9 +3338,9 @@ const CONVERSIONS = [
     converts: false,
   },
   {
-    id: 'member-call-beside-a-class-method-of-another-name-pin',
+    id: 'member-call-beside-a-class-method-of-another-name-refused',
     source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { other() { return 1; } } void L; const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'member-call-named-by-a-method-of-an-object-stays-refused',

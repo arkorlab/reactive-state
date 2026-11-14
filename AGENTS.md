@@ -124,6 +124,11 @@ it: a refusal is a message the developer can act on.
   are not read as naming an `Error`.
 - An angle-bracket assertion `<T>expr` is not peeled: what it wraps is read as a value the reader
   cannot see into.
+- A name that reaches a prototype is read where the code writes it whole. One assembled from joined
+  texts, a template or a constant of them (`'__pro' + 'to__'`), or made at run time, is not read.
+- A key reader of the language (`Reflect.get`) that the code keeps under a name of its own
+  (`const get = Reflect.get`) or takes apart by a pattern is not followed: only a call that holds the
+  reader, and writes `'constructor'` among its arguments, is read.
 
 ## Settled decisions
 

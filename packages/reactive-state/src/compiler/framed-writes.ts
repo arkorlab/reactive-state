@@ -58,7 +58,7 @@ import {
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
-import { isNamedFunction, madeWithin, runsItself } from './framed-recursion.ts';
+import { madeWithin, runsItself } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
@@ -221,13 +221,13 @@ function exitFollows(node: Node, body: Node): boolean {
 }
 
 /**
- * Whether a function around the loop that is called by a name runs itself again, unless the array
+ * Whether a function around the loop runs itself again, as any function may, unless the array
  * is made inside it and each run makes its own: the run can come again before it ends, and what a
  * write leaves reaches the loop in that run, though the first leaves its loop.
  */
 function runsAgainAround(body: Node, declared: Node): boolean {
   for (let at = body.parent; !isSourceFile(at); at = at.parent)
-    if (isNamedFunction(at) && !madeWithin(declared, at) && runsItself(at)) return true;
+    if (!madeWithin(declared, at) && runsItself(at)) return true;
   return false;
 }
 
