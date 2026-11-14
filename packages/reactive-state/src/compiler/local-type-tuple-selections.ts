@@ -76,15 +76,38 @@ export function writtenTupleReadings(
   return state.result;
 }
 
+interface PlaceReads {
+  /** The rests a count of places may still read the alternatives of. */
+  left: number;
+}
+
+/**
+ * The rests whose alternatives one count of a tuple's places reads. Shared aliases are met by every
+ * path that reaches them, and each alternative of a rest may reach the same one, so what a count
+ * costs grows with the ways to reach an alias, not with the aliases: twenty levels of
+ * `[...(T | [...T])]` are a million reads of one place. A selection reads each state once, as
+ * `repeatedState` has it; a count carries no state, and its reads are what it is bounded by.
+ */
+const PLACE_READS = 4096;
+
 /**
  * How many places a written tuple's members may stand at, the most any alternative has: each member
- * stands at one, a rest of written tuples at as many as its tuple has, and a rest of unknown length
- * at one, from which it supplies its elements. Undefined where the type is no tuple.
+ * stands at one, and a rest at the most any alternative of it has. A written tuple has as many as
+ * its own places; an array, a cycle or any operand the reader cannot expand has one, from which a
+ * rest of unknown length supplies its elements. A count reads the alternatives of at most
+ * `PLACE_READS` rests, and a rest it has none left for counts as one, as a cycle does. Undefined
+ * where the type is no tuple.
  */
-export function writtenTuplePlaces(
+export function writtenTuplePlaces(at: TypeReading, operands: Operands): number | undefined {
+  return countedPlaces(at, operands, [], { left: PLACE_READS });
+}
+
+/** A tuple's places, its lineage the written tuples above it, which no rest may return to. */
+function countedPlaces(
   at: TypeReading,
   operands: Operands,
-  parents: readonly TypeReading[] = [],
+  parents: readonly TypeReading[],
+  reads: PlaceReads,
 ): number | undefined {
   if (isExpressionWithTypeArguments(at.type)) return undefined;
   const tuple = unwrappedType(at.type);
@@ -93,14 +116,33 @@ export function writtenTuplePlaces(
   let places = 0;
   for (const element of tuple.elements) {
     const rest = writtenRestType(element);
-    const expanded =
-      rest === undefined ? undefined : finiteRestReadings({ ...at, type: rest }, operands, lineage);
-    places +=
-      expanded === undefined
-        ? 1
-        : Math.max(...expanded.map((each) => writtenTuplePlaces(each, operands, lineage) ?? 1));
+    places += rest === undefined ? 1 : restPlaces({ ...at, type: rest }, operands, lineage, reads);
   }
   return places;
+}
+
+/**
+ * The most places any alternative of a rest has, each counted on its own, so that a rest of an array
+ * beside a written tuple has the places of the tuple and not the one of the array. A written tuple
+ * that is not one above it has the places it is counted at; any other alternative has one.
+ */
+function restPlaces(
+  rest: TypeReading,
+  operands: Operands,
+  lineage: readonly TypeReading[],
+  reads: PlaceReads,
+): number {
+  if (reads.left <= 0) return 1;
+  reads.left -= 1;
+  const alternatives = restOperands(rest, operands);
+  if (alternatives.length === 0) return 1;
+  let most = 0;
+  for (const each of alternatives) {
+    const cycle = lineage.some((parent) => sameReading(parent, each));
+    const places = cycle ? undefined : countedPlaces(each, operands, lineage, reads);
+    most = Math.max(most, places ?? 1);
+  }
+  return most;
 }
 
 /**
@@ -165,17 +207,22 @@ function selectOpaqueRest(reading: TypeReading, path: Selection, state: TupleRea
   return path.pending.length === 0;
 }
 
+/** The operands of a rest as written: only the parentheses and `readonly` of each are taken off. */
+function restOperands(reading: TypeReading, operands: Operands): readonly TypeReading[] {
+  return operands(reading).map((each) => {
+    return isExpressionWithTypeArguments(each.type)
+      ? each
+      : { ...each, type: unwrappedType(each.type) };
+  });
+}
+
 /** Only entirely written tuple alternatives determine the offset of a following member. */
 function finiteRestReadings(
   reading: TypeReading,
   operands: Operands,
   parents: readonly TypeReading[],
 ): readonly TypeReading[] | undefined {
-  const readings = operands(reading).map((each) => {
-    return isExpressionWithTypeArguments(each.type)
-      ? each
-      : { ...each, type: unwrappedType(each.type) };
-  });
+  const readings = restOperands(reading, operands);
   if (
     readings.length === 0 ||
     readings.some(
