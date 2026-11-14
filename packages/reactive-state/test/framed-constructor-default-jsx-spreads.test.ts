@@ -18,16 +18,15 @@ import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-const
  * return among them, as a spread in an object literal does, and `{...items}` as a child iterates
  * it: the application's own code, so a default that holds one is not quiet.
  * The scan no longer follows what a construction supplies: a default, or a `super` argument,
- * that reads a member, an element or a pattern is not quiet whatever is supplied. The rows marked a
- * pin answer the same before that change as after it; those marked "was quiet" answered true
- * before it.
+ * that reads a member, an element or a pattern is not quiet whatever is supplied. The `super`
+ * argument of these rows is plain, so that it is the JSX the scan answers for.
  */
 
-/** A constructor whose default `view` is the element `element`, beside a default that reads. */
+/** A constructor whose default `view` is the element `element`, with a `super` argument that reads nothing. */
 const viewOf = (element: string): string =>
-  `class Failure extends Error { constructor(fallback: any, props: any, view = ${element}, options = fallback as { message: unknown }) { super(options.message as never); } }`;
+  `class Failure extends Error { constructor(props: any, view = ${element}) { super('fixed'); } }`;
 
-const MADE = 'new Failure({ message: error }, { get x() { return mutate(); } })';
+const MADE = 'new Failure({ get x() { return mutate(); } })';
 
 const CASES = [
   {
@@ -62,15 +61,15 @@ const CASES = [
   },
   {
     made: MADE,
-    quiet: false,
+    quiet: true,
     source: viewOf('<div a="1" />'),
-    what: 'an element of a written attribute (was quiet)',
+    what: 'an element of a written attribute, with no spread',
   },
   {
     made: MADE,
     quiet: false,
     source: viewOf('<div a={props.a} />'),
-    what: 'an element of an attribute that reads an unknown value (pin)',
+    what: 'an element of an attribute that reads a member (pin)',
   },
 ] as const;
 
