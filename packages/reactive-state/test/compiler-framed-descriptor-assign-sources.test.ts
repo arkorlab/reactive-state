@@ -182,6 +182,18 @@ const CASES = [
     values: ['first', 'e'],
   },
   {
+    id: 'object-assign-into-the-source-by-a-list',
+    source:
+      'const overrides = { value: first }; Object.assign(...[overrides, { value: e }]); Object.assign(d, overrides);',
+    values: ['first', 'e'],
+  },
+  {
+    id: 'object-assign-into-the-source-by-an-unread-list-pin',
+    source:
+      'const overrides = { value: first }; Object.assign(...extras, overrides, { value: e }); Object.assign(d, overrides);',
+    values: ['first'],
+  },
+  {
     id: 'logical-assignment-to-the-descriptor',
     source: 'd.value ??= e;',
     values: ['e'],

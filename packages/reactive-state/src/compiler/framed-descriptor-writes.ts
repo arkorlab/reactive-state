@@ -342,7 +342,7 @@ function writtenName(node: Node): string | undefined {
     isCallExpression(node) &&
     globalPathOf(unwrapped(node.expression))?.join('.') === 'Object.assign'
   ) {
-    const [first] = node.arguments;
+    const [first] = framedArgumentPrefix(node).values;
     receiver = first === undefined ? undefined : unwrapped(first);
   }
   return receiver !== undefined && isIdentifier(receiver) ? receiver.text : undefined;
