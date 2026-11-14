@@ -111,12 +111,20 @@ function callResultReading(at: TypeReading, operands: Operands): TypeReading | u
   });
 }
 
-/** Declared fields selected one literal step at a time, without flattening generic bindings. */
+/** What a value query's key starts with among the keys of a reading's alias path. */
+export const QUERY_KEY_PREFIX = 'value-query:';
+
+/**
+ * Declared fields selected one literal step at a time, without flattening generic bindings. A member
+ * starts no alias path of its own, but the value queries being read where the selection starts stay
+ * on it: a member that is one of them again is the query read within its own reading, and ends there.
+ */
 export function memberReadings(
   at: TypeReading,
   keys: readonly string[],
   operands: Operands,
 ): readonly TypeReading[] {
+  const queries = [...at.aliases].filter((key) => key.startsWith(QUERY_KEY_PREFIX));
   let selected = [at];
   for (const key of keys) {
     selected = selected.flatMap((reading) => {
@@ -130,19 +138,19 @@ export function memberReadings(
         if (mapped !== undefined) return memberReadings(mapped, [key], operands);
         const members = interfaceMemberReadings(source, key, operands);
         if (members !== undefined)
-          return members.map((member) => ({ ...member, aliases: new Set<string>() }));
+          return members.map((member) => ({ ...member, aliases: new Set(queries) }));
         if (isExpressionWithTypeArguments(source.type)) return [];
         if (/^(?:0|[1-9]\d*)$/u.test(key)) {
           const tuple = tupleReadings(source, Number(key), operands);
           if (tuple !== undefined)
-            return tuple.map((member) => ({ ...member, aliases: new Set<string>() }));
+            return tuple.map((member) => ({ ...member, aliases: new Set(queries) }));
         }
         const element = nativeArrayElement(source.type);
         const types =
           element !== undefined && /^(?:0|[1-9]\d*)$/u.test(key)
             ? [element]
             : selectedMemberTypes(source.type, [key]);
-        return types?.map((type) => ({ ...source, aliases: new Set<string>(), type })) ?? [];
+        return types?.map((type) => ({ ...source, aliases: new Set(queries), type })) ?? [];
       });
     });
   }
