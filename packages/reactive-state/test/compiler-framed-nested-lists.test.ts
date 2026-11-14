@@ -227,6 +227,81 @@ const PATTERNS = [
     "const source: any = { item: 'safe' }; const { item } = source; return String([item]);",
     false,
   ],
+  [
+    'source-reversed',
+    "const source: any[] = ['safe', error]; source.reverse(); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-sorted',
+    "const source: any[] = ['safe', error]; source.sort((a: any, b: any) => (a === 'safe' ? 1 : -1)); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-spliced',
+    "const source: any[] = ['safe', error]; source.splice(0, 1); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-shifted',
+    "const source: any[] = ['safe', error]; source.shift(); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-unshifted',
+    "const source: any[] = ['safe']; source.unshift(error); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-copied-within',
+    "const source: any[] = ['safe', error]; source.copyWithin(0, 1); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-filled',
+    "const source: any[] = ['safe', 'safe']; source.fill(error); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-popped',
+    "const source: any[] = [error, 'safe']; source.pop(); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-reversed-by-a-borrowed-method',
+    "const source: any[] = ['safe', error]; Array.prototype.reverse.call(source); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-reversed-through-an-alias',
+    "const source: any[] = ['safe', error]; const alias = source; alias.reverse(); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-emptied-by-its-length-stays-refused',
+    "const source: any[] = [error, 'safe']; source.length = 0; const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-copied-and-reversed-pin',
+    "const source: any[] = ['safe', error]; source.slice().reverse(); const [item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-reversed-into-a-copy-pin',
+    "const source: any[] = ['safe', error]; source.toReversed(); const [item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-searched-pin',
+    "const source: any[] = ['safe', error]; source.indexOf('safe'); const [item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-measured-pin',
+    "const source: any[] = ['safe']; void source.length; const [item] = source; return String([item]);",
+    false,
+  ],
 ] as const;
 
 /** Arrays of texts, typed names and error words stay followed as before; one of unknown elements hands them out. */

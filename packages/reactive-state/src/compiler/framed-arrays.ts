@@ -186,7 +186,7 @@ export function arrayError(value: Expression, words: ArrayWords, call: Node): bo
         destructuredList(
           each,
           (element, keys) => words.error(element, keys),
-          (source) => sourceChanged(source, call, (element, keys) => words.error(element, keys)),
+          (source) => sourceChanged(source, call),
         )) ||
       bindingArrayWords({ ...reading, value: each }, { call, words, pending, seen })
     )

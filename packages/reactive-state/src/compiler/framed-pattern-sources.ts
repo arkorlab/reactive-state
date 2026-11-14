@@ -8,7 +8,6 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
 import { writtenAsWhole } from './framed-array-identity.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
@@ -25,28 +24,22 @@ const CHAIN = 32;
 
 /**
  * Whether the name a pattern is given may hold something else than the literal it stands for: a name of
- * the chain is written as a whole, an element or a member of the literal is written (or may be, where a
- * use of the name is not one the compile follows), anywhere the conversion may follow. A literal written
+ * the chain is written as a whole, an element or a member of the literal is written, or an array that is
+ * reordered or resized (`reverse`, `sort`, `splice`, `shift`, `unshift`, `copyWithin`, `fill`, `pop`,
+ * `push`), or a use of the name is not one the compile follows, anywhere in the file. A literal written
  * where the pattern is, and a name that stands for no literal, are left as they are.
  */
-export function sourceChanged(
-  source: Expression,
-  read: Node,
-  scalar: (value: Expression, keys: readonly string[]) => boolean,
-): boolean {
+export function sourceChanged(source: Expression, read: Node): boolean {
   const named = unwrapped(source);
   if (!isIdentifier(named)) return false;
   const chain = bindingsOf(named);
-  if (chain === undefined) return false;
+  const last = chain?.at(-1);
+  if (chain === undefined || last === undefined) return false;
   if (chain.some((binding) => writtenAsWhole(binding))) return true;
-  const last = chain.at(-1);
-  const literal = last?.initializer === undefined ? undefined : unwrapped(last.initializer);
+  const literal = last.initializer === undefined ? undefined : unwrapped(last.initializer);
   if (literal !== undefined && isArrayLiteralExpression(literal))
-    return (
-      arrayWritesUnfollowed(named, read, scalar) || writtenArrayElements(named, read).length > 0
-    );
-  if (last === undefined || literal === undefined || !isObjectLiteralExpression(literal))
-    return false;
+    return !isVariableDeclaration(last) || !knownUsesOnly(last, 'echo');
+  if (literal === undefined || !isObjectLiteralExpression(literal)) return false;
   return objectChanged(last, read);
 }
 
