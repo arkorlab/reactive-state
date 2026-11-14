@@ -60,12 +60,12 @@ const CASES = [
   },
   {
     assignment: "({ __proto__: e = new Error('ours') } = { __proto__: base })",
-    sources: ['base', "new Error('ours')"],
+    sources: ['base', '{ __proto__: base }.__proto__', "new Error('ours')"],
     what: 'a prototype the reader cannot see, beside a default',
   },
   {
     assignment: "({ __proto__: e } = { __proto__: new Error('ours') })",
-    sources: ["new Error('ours')"],
+    sources: ["new Error('ours')", "{ __proto__: new Error('ours') }.__proto__"],
     what: 'a prototype that is an error',
   },
   {
@@ -113,7 +113,11 @@ const CASES = [
   {
     assignment:
       "({ __proto__: e = new Error('ours') } = { __proto__: { __proto__: new Error('inner') } })",
-    sources: ["{ __proto__: new Error('inner') }"],
+    sources: [
+      "{ __proto__: new Error('inner') }",
+      "{ __proto__: { __proto__: new Error('inner') } }.__proto__",
+      "new Error('ours')",
+    ],
     what: 'a prototype whose own prototype is a construction',
   },
   {
