@@ -1,5 +1,6 @@
 import {
   type CallExpression,
+  type ElementAccessExpression,
   type Expression,
   isBindingElement,
   isAssertionExpression,
@@ -19,6 +20,7 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isQualifiedName,
   isSatisfiesExpression,
   isSourceFile,
   isStringLiteral,
@@ -26,6 +28,7 @@ import {
   isTypeOfExpression,
   isVariableDeclaration,
   type Node,
+  type PropertyAccessExpression,
   type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
@@ -34,6 +37,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { framedKeyNames } from './framed-keys.ts';
+import { isTypeOnly } from './framed-references.ts';
 import { isWrittenMember } from './framed-written-members.ts';
 import { constantValue } from './numbers.ts';
 
@@ -44,9 +48,13 @@ const NAMES: ReadonlySet<string> = new Set(['__proto__', 'setPrototypeOf']);
 
 /**
  * The objects that hold those functions, and the global object that holds them: a member of one by a
- * name the code does not write, or one given to code that does, may be `setPrototypeOf`.
+ * name the code does not write, or one given to code that does, may be `setPrototypeOf`. `Array` and
+ * `Function` hold the prototypes of the arrays and the functions, which a member by a name the code does
+ * not write, or one given to code, may reach.
  */
 const HOLDERS: ReadonlySet<string> = new Set([
+  'Array',
+  'Function',
   'global',
   'globalThis',
   'Object',
@@ -136,9 +144,13 @@ function sourceOf(element: Node): Expression | undefined {
  * member of a holder out by one, gives a holder away, or gives the prototype of a native to a call.
  */
 function holds(node: Node): boolean {
-  if (isSourceFile(node)) return false;
-  if (isElementAccessExpression(node) && isHolder(unwrapped(node.expression)))
-    return mayBeName(node.argumentExpression);
+  if (isSourceFile(node) || readByType(node)) return false;
+  if (
+    isElementAccessExpression(node) &&
+    isHolder(unwrapped(node.expression)) &&
+    mayBeName(node.argumentExpression)
+  )
+    return true;
   if (isBindingElement(node) && node.propertyName !== undefined) {
     const source = sourceOf(node);
     return (
@@ -148,14 +160,41 @@ function holds(node: Node): boolean {
       mayBeName(node.propertyName.expression)
     );
   }
-  if (isHolder(node)) return gaveAway(node);
+  if (isHolder(node) && gaveAway(node)) return true;
   return writesPrototype(node);
+}
+
+/** Whether a name is read by a type only: `Array<string>`, `typeof Object`: a type names no value. */
+function readByType(node: Node): boolean {
+  let at = node.parent;
+  while (isQualifiedName(at)) at = at.parent;
+  return isTypeOnly(at);
 }
 
 /** Whether a node is the prototype of one of the language's own objects. */
 function isNativePrototype(node: Node): boolean {
-  const path = isPropertyAccessExpression(node) ? globalPathOf(node)?.join('.') : undefined;
+  const named = isPropertyAccessExpression(node) || isElementAccessExpression(node);
+  const path = named ? globalPathOf(node)?.join('.') : undefined;
   return path !== undefined && PROTOTYPES.has(path);
+}
+
+/**
+ * Whether a node reaches a prototype without naming a native one: `Object.getPrototypeOf(a)`, or the
+ * `prototype` of a `constructor` (`a.constructor.prototype`), by a name or a text.
+ */
+function isReachedPrototype(node: Node): boolean {
+  if (isCallExpression(node)) {
+    const callee = unwrapped(node.expression);
+    return isMemberAccess(callee) && frameMemberName(callee) === 'getPrototypeOf';
+  }
+  if (!isMemberAccess(node) || frameMemberName(node) !== 'prototype') return false;
+  const object = unwrapped(node.expression);
+  return isMemberAccess(object) && frameMemberName(object) === 'constructor';
+}
+
+/** Whether a node is a member read by a name or a key. */
+function isMemberAccess(node: Node): node is PropertyAccessExpression | ElementAccessExpression {
+  return isPropertyAccessExpression(node) || isElementAccessExpression(node);
 }
 
 /** Whether an expression reads the prototype an object has: its `prototype`, or `Object.getPrototypeOf(it)`. */
@@ -179,19 +218,30 @@ function changed(member: Node): boolean {
   );
 }
 
+/** The operators that compare what they are given and do nothing with it. */
+const COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.EqualsEqualsEqualsToken,
+  SyntaxKind.EqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsToken,
+]);
+
+/** Whether a prototype is given away, compared with no more than its identity, or has a member written. */
+function usedOtherwiseThanRead(node: Node): boolean {
+  let at: Node = node;
+  while (passes(at.parent, at)) at = at.parent;
+  const { parent } = at;
+  if (isBinaryExpression(parent) && COMPARISONS.has(parent.operatorToken.kind)) return false;
+  return !isMemberAccess(parent) || parent.expression !== at || changed(parent);
+}
+
 /**
  * Whether a node is a prototype of one of the language's own objects, or one an object has, whose
  * member is written or deleted, or which is given away, kept in a variable or a list: a read of a
  * member by a name written out does not change it.
  */
 function writesPrototype(node: Node): boolean {
-  if (isNativePrototype(node)) {
-    let at: Node = node;
-    while (passes(at.parent, at)) at = at.parent;
-    const { parent } = at;
-    const member = isPropertyAccessExpression(parent) || isElementAccessExpression(parent);
-    return !member || parent.expression !== at || changed(parent);
-  }
+  if (isNativePrototype(node) || isReachedPrototype(node)) return usedOtherwiseThanRead(node);
   const member = isPropertyAccessExpression(node) || isElementAccessExpression(node);
   return member && isPrototypeOf(node.expression) && changed(node);
 }
@@ -233,6 +283,8 @@ function gaveAway(node: Node): boolean {
   if (isNewExpression(parent)) return parent.expression !== at;
   if (isTypeOfExpression(parent) || isExpressionWithTypeArguments(parent)) return false;
   return !(
-    isBinaryExpression(parent) && parent.operatorToken.kind === SyntaxKind.InstanceOfKeyword
+    isBinaryExpression(parent) &&
+    (parent.operatorToken.kind === SyntaxKind.InstanceOfKeyword ||
+      COMPARISONS.has(parent.operatorToken.kind))
   );
 }
