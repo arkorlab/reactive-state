@@ -42,6 +42,7 @@ import {
   frameTypeOf,
 } from './framed-bindings.ts';
 import { concatSource } from './framed-concat-properties.ts';
+import { flatReturnAlternatives } from './framed-flat-alternatives.ts';
 import {
   flatMapOwnedSource,
   flatMapWrittenArray,
@@ -322,24 +323,26 @@ function flatMappedViews(
     return false;
   });
   if (known === undefined) return undefined;
-  const sole = returned[0];
-  if (sole !== undefined && returned.length === 1) {
+  const alternatives = returned.flatMap((each) => flatReturnAlternatives(each));
+  const sole = alternatives[0];
+  if (sole !== undefined && alternatives.length === 1) {
     const packed = mapperRestFlatViews(
-      sole,
+      sole.value,
       { ...mapping, index, stable, capture: call },
-      answeringOwner(sole.parent),
+      answeringOwner(sole.from.parent),
     );
     if (packed !== undefined) return packed;
   }
-  if (sole !== undefined && returned.length === 1 && directMappedInput(sole))
-    return identityMappedViews(sole, { ...mapping, index, stable, capture: call });
-  return returned.flatMap((value) => {
+  if (sole !== undefined && alternatives.length === 1 && directMappedInput(sole.value))
+    return identityMappedViews(sole.value, { ...mapping, index, stable, capture: call });
+  return alternatives.flatMap(({ value, from }) => {
     return flatReturnViews(value, {
       ...mapping,
       index,
       capture: call,
-      unique: returned.length === 1,
+      unique: alternatives.length === 1,
       fixedReceiver: stable(mapping.receiver),
+      owner: answeringOwner(from.parent),
       stable,
     });
   });
@@ -427,6 +430,7 @@ function flatReturnViews(
     readonly capture: CallExpression;
     readonly unique: boolean;
     readonly fixedReceiver: boolean;
+    readonly owner: Answering | undefined;
     readonly stable: (value: Expression) => boolean;
   },
 ): readonly ArrayElementView[] {
@@ -448,9 +452,8 @@ function flatReturnViews(
     ? elements.slice(index % elements.length, (index % elements.length) + 1)
     : elements;
   // An element written outside the mapper, of an alias it returns, is never the mapper's input.
-  const owner = answeringOwner(value.parent);
   return chosen.flatMap((element) =>
-    mappedReturns(element, { ...context, index: sourceIndex }, owner),
+    mappedReturns(element, { ...context, index: sourceIndex }, context.owner),
   );
 }
 
@@ -462,6 +465,7 @@ function expandedFlatReturn(
     readonly capture: CallExpression;
     readonly unique: boolean;
     readonly fixedReceiver: boolean;
+    readonly owner: Answering | undefined;
     readonly stable: (value: Expression) => boolean;
   },
 ): readonly ArrayElementView[] | undefined {
@@ -487,7 +491,7 @@ function expandedFlatReturn(
     ? expanded.slice(index % expanded.length, (index % expanded.length) + 1)
     : expanded;
   const found = selected.flatMap((element) =>
-    mappedReturns(element, { ...context, index: sourceIndex }, answeringOwner(value.parent)),
+    mappedReturns(element, { ...context, index: sourceIndex }, context.owner),
   );
   return found.every((each) => flatMapOwnedSource(each.value, value, context.capture) !== undefined)
     ? found
