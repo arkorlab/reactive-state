@@ -4,7 +4,6 @@ import {
   isExpressionWithTypeArguments,
   isFunctionTypeNode,
   isIdentifier,
-  isIntersectionTypeNode,
   isNamedTupleMember,
   isOptionalTypeNode,
   isRestTypeNode,
@@ -22,7 +21,11 @@ import { qualifiedBuiltinName } from './local-type-builtins.ts';
 import { callableQueryReading } from './local-type-callable-queries.ts';
 import type { TypeReading } from './local-type-environment.ts';
 import { instanceUtilityReading } from './local-type-instance-utilities.ts';
-import { interfaceMemberReadings, interfaceShapeReadings } from './local-type-interface-members.ts';
+import {
+  interfaceMemberReadings,
+  lastSignatureOf,
+  type ShapeSignature,
+} from './local-type-interface-members.ts';
 import {
   indexedKeyofReadings,
   keyedMemberTypes,
@@ -88,29 +91,24 @@ export function returnTypeReadings(
   });
 }
 
-/** The last written call signature supplies an overloaded callable's inferred result. */
+/**
+ * The last call signature supplies an overloaded callable's inferred result, as TypeScript lists
+ * signatures (`lastSignatureOf`): one the reader cannot read, an unreadable base's or one that writes
+ * no result, is the last when nothing it can read follows it.
+ */
 function callResultReading(at: TypeReading, operands: Operands): TypeReading | undefined {
-  let result: TypeReading | undefined;
-  const pending = [at];
-  for (let reading = pending.pop(); reading !== undefined; reading = pending.pop()) {
+  return lastSignatureOf(at, operands, (reading) => {
     const { type } = reading;
-    const interfaces = interfaceShapeReadings(reading, operands);
-    if (interfaces !== undefined) {
-      pending.push(...interfaces.sources.toReversed());
-    } else if (isIntersectionTypeNode(type)) {
-      const signatures = type.types.flatMap((member) => operands({ ...reading, type: member }));
-      pending.push(...signatures.toReversed());
-    } else if (isFunctionTypeNode(type) && type.type !== undefined) {
-      result = writtenReturnReading(reading, type);
-    } else if (isTypeLiteralNode(type)) {
+    if (isFunctionTypeNode(type)) return { result: writtenReturnReading(reading, type) };
+    let found: ShapeSignature<TypeReading>;
+    if (isTypeLiteralNode(type)) {
       for (const member of type.members) {
-        if (isCallSignatureDeclaration(member) && member.type !== undefined) {
-          result = writtenReturnReading(reading, member);
-        }
+        if (isCallSignatureDeclaration(member))
+          found = { result: writtenReturnReading(reading, member) };
       }
     }
-  }
-  return result;
+    return found;
+  });
 }
 
 /** Declared fields selected one literal step at a time, without flattening generic bindings. */
