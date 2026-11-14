@@ -17,9 +17,9 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
+import { peeled } from './framed-written-targets.ts';
 
 /**
  * Where `Object.fromEntries` converts to a name what an object holds. For each entry it reads the
@@ -45,7 +45,7 @@ export function valuesOf(expression: Expression): readonly Expression[] {
   const found: Expression[] = [];
   const pending = [expression];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    const value = unwrapped(at);
+    const value = peeled(at);
     if (isConditionalExpression(value)) pending.push(value.whenTrue, value.whenFalse);
     else if (!isBinaryExpression(value)) found.push(value);
     else if (value.operatorToken.kind === SyntaxKind.CommaToken) pending.push(value.right);

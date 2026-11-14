@@ -83,8 +83,11 @@ export function isWrapper(node: Node): boolean {
   );
 }
 
-/** The expression a target stands for past what wraps it, as the language writes to what it wraps. */
-function peeled(expression: Expression): Expression {
+/**
+ * The expression a node stands for past what wraps it: parentheses, a cast of any kind (`<T>x` too),
+ * a non-null assertion, `satisfies`.
+ */
+export function peeled(expression: Expression): Expression {
   let each = unwrapped(expression);
   while (isTypeAssertion(each)) each = unwrapped(each.expression);
   return each;
