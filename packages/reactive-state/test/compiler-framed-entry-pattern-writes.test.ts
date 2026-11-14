@@ -1658,6 +1658,55 @@ const CASES = [
     key: 'message',
     values: undefined,
   },
+  {
+    id: 'spread-setter-deleted-by-another-getter-then-written',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get a() { delete this.field; return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
+    id: 'spread-setter-deleted-by-a-later-getter-stays-refused',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept', get z() { delete this.field; return 0; } } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
+    id: 'spread-setter-deleted-by-a-getter-of-a-computed-name',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get a() { delete this[k]; return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
+  {
+    id: 'spread-setter-no-deletion-pin',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get a() { return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:'],
+  },
+  {
+    id: 'spread-named-setter-deleted-by-another-getter',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get a() { delete this.field; return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } })); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      "{ ...{ get a() { delete this.field; return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } }:field",
+      'error:',
+    ],
+  },
+  {
+    id: 'spread-named-setter-no-deletion-pin',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ field: entry[1] } = { ...{ get a() { return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } })); }`,
+    key: 'message',
+    values: [
+      "'safe':",
+      "{ ...{ get a() { return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } }:field",
+    ],
+  },
+  {
+    id: 'spread-setter-another-name-deleted-stays-refused',
+    source: `function frames(error: Error, name: string, k: string, other: any) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ({ [name]: entry[1] } = { ...{ get a() { delete this.other; return 0; }, get trigger() { this.field = error; return 0; }, set field(v: unknown) {}, other: 'kept' } })); }`,
+    key: 'message',
+    values: ["'kept':", "'safe':", '0:', '0:', 'error:'],
+  },
 ] as const;
 
 describe('entry tuple slots a destructuring write names', () => {

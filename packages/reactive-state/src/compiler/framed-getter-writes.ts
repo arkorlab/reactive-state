@@ -177,7 +177,7 @@ function accessorUses(
       }
     }
   }
-  const keep = found.some((each) => each.deleted.length > 0);
+  const keep = found.some((each) => each.deleted.length > 0) || deletedNames(object).length > 0;
   const consumed = new Set(
     setters.flatMap((each) => {
       const name = accessorName(each.name);
@@ -191,6 +191,45 @@ function accessorUses(
     named: found.flatMap((each) => each.named),
     deleted: found.flatMap((each) => each.deleted),
   };
+}
+
+/** What the accessors of each written object delete from it, judged once. */
+const DELETED = new WeakMap<ObjectLiteralExpression, readonly (string | undefined)[]>();
+
+/**
+ * The names the getters and the setters of a written object delete from it (`delete this.name`),
+ * none known where a name is computed or an accessor gives `this` on. Any of them may run before
+ * another reads or writes the object, and take away the accessor that the other's assignment was to
+ * run, so the assignment makes a field of the object.
+ */
+export function deletedNames(object: ObjectLiteralExpression): readonly (string | undefined)[] {
+  const known = DELETED.get(object);
+  if (known !== undefined) return known;
+  const names = object.properties.flatMap((each) => {
+    if (!isGetAccessorDeclaration(each) && !isSetAccessorDeclaration(each)) return [];
+    return thisUses(each)?.deleted ?? [undefined];
+  });
+  DELETED.set(object, names);
+  return names;
+}
+
+/**
+ * What may be deleted from a written object where something reads the fields it inherits (a
+ * conversion of a descriptor): the names its own accessors delete, and those the accessors of the
+ * prototype it sets delete on it, any name where the prototype is no written object.
+ */
+export function inheritedDeletions(
+  object: ObjectLiteralExpression,
+): readonly (string | undefined)[] {
+  const inherited = object.properties.find(
+    (each) => isPropertyAssignment(each) && setsProto(each) && !nullPrototype(each),
+  );
+  if (inherited === undefined || !isPropertyAssignment(inherited)) return deletedNames(object);
+  const proto = unwrapped(inherited.initializer);
+  return [
+    ...deletedNames(object),
+    ...(isObjectLiteralExpression(proto) ? inheritedDeletions(proto) : [undefined]),
+  ];
 }
 
 /**

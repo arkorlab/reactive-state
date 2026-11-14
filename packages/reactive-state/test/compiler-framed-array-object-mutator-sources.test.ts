@@ -1978,6 +1978,86 @@ const CONVERSIONS = [
     converts: false,
   },
   {
+    id: 'getter-deletes-an-accessor-then-writes-the-slot-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.assign(a, { get 0() { delete this[1]; this[1] = error; return 'safe'; }, get 1() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deleted-accessor-by-an-earlier-getter-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.assign(a, { get 0() { delete this[2]; return 'x'; }, get 1() { this[2] = error; return 'safe'; }, get 2() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deletes-a-computed-name-then-writes-the-slot-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; const key = flag ? 1 : 1; Object.assign(a, { get 0() { delete this[key as any]; this[1] = error; return 'safe'; }, get 1() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deletes-a-setter-of-another-getter-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.assign(a, { get 0() { delete this[2]; return 'x'; }, get 1() { this[2] = error; return 'safe'; }, set 2(v: unknown) {} }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deleted-accessor-of-a-map-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.defineProperties(a, { get 0() { delete this[1]; this[1] = { value: error }; return { value: 'safe' }; }, get 1() { return { value: 'safe' }; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deleted-accessor-of-a-map-by-an-earlier-getter-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.defineProperties(a, { get 0() { delete this[2]; return { value: 'x' }; }, get 1() { this[2] = { value: error }; return { value: 'safe' }; }, get 2() { return { value: 'safe' }; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-another-getter-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get enumerable() { delete this.value; return true; }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deletes-after-it-writes-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.assign(a, { get 0() { this[1] = error; delete this[1]; return 'safe'; }, get 1() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'getter-deleted-by-a-later-getter-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.assign(a, { get 1() { this[2] = error; return 'safe'; }, get 3() { delete this[2]; return 'x'; }, get 2() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-a-later-getter-stays-refused',
+    source: `function frames(error: Error, flag: boolean) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { get configurable() { this.value = error; return true; }, get writable() { delete this.value; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-a-getter-of-its-prototype-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { delete this.value; return true; } }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-may-be-deleted-by-an-unknown-prototype-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: original, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-a-getter-of-the-prototype-of-its-prototype-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { __proto__: { get enumerable() { delete this.value; return true; } } }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-with-a-prototype-that-deletes-nothing-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: { get enumerable() { return true; } }, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-with-a-null-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Object.defineProperty(a, 0, { __proto__: null, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptor-accessor-deleted-by-a-getter-of-a-held-prototype-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const p: any = { get enumerable() { delete this.value; return true; } }; Object.defineProperty(a, 0, { __proto__: p, get configurable() { this.value = error; return true; }, get value() { return 'safe'; } }); return String(a); }`,
+    converts: true,
+  },
+  {
     id: 'define-descriptor-alias-in-loop-converts',
     source: `function frames(error: Error) { const a = ['safe']; const descriptor: PropertyDescriptor = { configurable: true }; for (let at = 0; at < 2; at += 1) { const alias = descriptor; Object.defineProperty(a, 0, alias); descriptor.get = () => error; } return String(a); }`,
     converts: true,
