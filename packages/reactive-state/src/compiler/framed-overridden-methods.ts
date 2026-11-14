@@ -1,21 +1,29 @@
 import {
   type CallExpression,
+  type ClassElement,
   type Expression,
   isCallExpression,
+  isClassDeclaration,
+  isClassExpression,
   isComputedPropertyName,
   isDeleteExpression,
   isElementAccessExpression,
+  isGetAccessorDeclaration,
+  isMethodDeclaration,
   isNoSubstitutionTemplateLiteral,
   isObjectLiteralExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isPropertyDeclaration,
   isSpreadAssignment,
+  isSetAccessorDeclaration,
   isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
   type Node,
   type ObjectLiteralElementLike,
+  type PropertyName,
   type SourceFile,
 } from 'typescript/ast';
 
@@ -66,18 +74,41 @@ export function methodMayBeOverridden(
   return may;
 }
 
-/** Whether a node is a text of the name, or an object with a field the name, or a name that may be it, writes. */
+/**
+ * Whether a node is a text of the name, or an object or a class with a member the name, or a name
+ * that may be it, writes.
+ */
 function namedOf(node: Node, method: string): boolean {
   if (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node)) return node.text === method;
   if (isTemplateExpression(node)) return constantValue(node) === method;
+  if (isClassDeclaration(node) || isClassExpression(node))
+    return node.members.some((member) => memberMayBe(declaredMemberName(member), method));
   if (!isObjectLiteralExpression(node)) return false;
   return node.properties.some((property) => fieldMayBe(property, method));
 }
 
 /** Whether a field of an object written out is named by the name, or by one the code does not write. */
 function fieldMayBe(property: ObjectLiteralElementLike, method: string): boolean {
-  if (isSpreadAssignment(property)) return false;
-  const { name } = property;
+  return !isSpreadAssignment(property) && memberMayBe(property.name, method);
+}
+
+/** The name of a member of a class that gives a method, an accessor or a field: none for the others. */
+function declaredMemberName(member: ClassElement): PropertyName | undefined {
+  const named =
+    isMethodDeclaration(member) ||
+    isGetAccessorDeclaration(member) ||
+    isSetAccessorDeclaration(member) ||
+    isPropertyDeclaration(member);
+  return named ? member.name : undefined;
+}
+
+/**
+ * Whether the name of a field of an object, or of a member of a class (a method, an accessor, a property,
+ * static or not), is the name, or a name the code does not write. A member without a name, a constructor
+ * and a private name, is none.
+ */
+function memberMayBe(name: PropertyName | undefined, method: string): boolean {
+  if (name === undefined) return false;
   if (!isComputedPropertyName(name)) return writtenArrayKey(name) === method;
   const names = framedKeyNames(name.expression);
   return names === undefined || names.includes(method);

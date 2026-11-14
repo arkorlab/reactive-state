@@ -4,6 +4,7 @@ import {
   type CallExpression,
   type Node,
   type VariableDeclaration,
+  type ArrayLiteralExpression,
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
@@ -34,6 +35,7 @@ import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { heldMemberWrites } from './framed-held-member-writes.ts';
 import { consultedKnown } from './framed-known-forms.ts';
 import { knownUsesOnly } from './framed-known-mentions.ts';
+import type { Subject } from './framed-known-uses.ts';
 import {
   invokedTargets,
   type MutatorInvocation,
@@ -43,6 +45,7 @@ import {
   soleTarget,
 } from './framed-mutator-calls.ts';
 import { possibleKey } from './framed-mutator-keys.ts';
+import { holdsLists } from './framed-nested-lists.ts';
 import { objectMutatorElements } from './framed-object-mutator-elements.ts';
 import { madeWithin } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
@@ -54,11 +57,36 @@ export interface WrittenArrayElement extends AssignedFrameSource {
   readonly array?: boolean;
 }
 
+/** What was written for each array expression, read and index, found once: a walk of the file each. */
+const WRITTEN = new WeakMap<
+  Expression,
+  WeakMap<Node, Map<number | undefined, readonly WrittenArrayElement[]>>
+>();
+
 /** Source-written element assignments and native mutator inputs for one lexical literal-array identity. */
 export function writtenArrayElements(
   value: Expression,
   read: Node,
   index?: number,
+): readonly WrittenArrayElement[] {
+  const byRead =
+    WRITTEN.get(value) ??
+    new WeakMap<Node, Map<number | undefined, readonly WrittenArrayElement[]>>();
+  WRITTEN.set(value, byRead);
+  const byIndex = byRead.get(read) ?? new Map<number | undefined, readonly WrittenArrayElement[]>();
+  byRead.set(read, byIndex);
+  const known = byIndex.get(index);
+  if (known !== undefined) return known;
+  const found = collectWrittenElements(value, read, index);
+  byIndex.set(index, found);
+  return found;
+}
+
+/** The element assignments and native mutator inputs that may run before the read, in one walk of the file. */
+function collectWrittenElements(
+  value: Expression,
+  read: Node,
+  index: number | undefined,
 ): readonly WrittenArrayElement[] {
   const root = literalArrayBinding(value);
   if (root === undefined) return [];
@@ -111,9 +139,15 @@ function arrayUsesKnown(
     read,
     owner,
     receiver,
-  }: { readonly read: Node; readonly owner: Node; readonly receiver?: Expression },
+    subject,
+  }: {
+    readonly read: Node;
+    readonly owner: Node;
+    readonly receiver?: Expression;
+    readonly subject: Subject;
+  },
 ): boolean {
-  return knownUsesOnly(root, 'array', (name) => {
+  return knownUsesOnly(root, subject, (name) => {
     return (
       (receiver === undefined || unwrapped(receiver) !== name) &&
       possibleBefore(name, read, owner, root) &&
@@ -127,14 +161,29 @@ function arrayUsesKnown(
  * name that stands for it, that may run before the read and is no use the compile knows, or a native
  * mutator of it that is handed an argument written in a form no reader follows, or a name of the chain
  * the read goes by that is written as a whole elsewhere, which may hold another array than the one it
- * was given. Such an array holds what the compile cannot show, and the read is refused.
+ * was given. Such an array holds what the compile cannot show, and the read is refused. Where the
+ * elements of the array may be lists (`scalar` tells those that are not), every use that hands an
+ * element out is refused as well: a write through the copy or the callback's parameter is a write to
+ * the list the array holds.
  */
-export function arrayWritesUnfollowed(value: Expression, read: Node): boolean {
+export function arrayWritesUnfollowed(
+  value: Expression,
+  read: Node,
+  scalar?: (element: Expression, keys: readonly string[]) => boolean,
+): boolean {
   const root = literalArrayBinding(value);
   if (root === undefined || !isVariableDeclaration(root)) return false;
   if (arrayIdentity(value) === undefined) return true;
   const owner = executionOwner(read);
-  if (!arrayUsesKnown(root, { read, owner, receiver: value })) return true;
+  const lists =
+    scalar !== undefined &&
+    holdsLists(value, {
+      scalar,
+      literal: arrayLiteralOf,
+      written: (each) => writtenArrayElements(each, read),
+    });
+  const subject = lists ? 'carrier' : 'array';
+  if (!arrayUsesKnown(root, { read, owner, receiver: value, subject })) return true;
   const held: VariableDeclaration[] = [];
   const known = candidatesOf(root, read).every((node) => {
     const invoked = isCallExpression(node) ? mutatorInvocation(node) : undefined;
@@ -354,6 +403,15 @@ function possibleIndex(key: Expression, index: number | undefined): boolean {
   const value = constantValue(unwrapped(key));
   if (value === undefined) return true;
   return (typeof value === 'number' || typeof value === 'string') && possibleKey(value, index);
+}
+
+/** The array literal an array expression is, or stands for through the names that only hold it. */
+function arrayLiteralOf(value: Expression): ArrayLiteralExpression | undefined {
+  const each = unwrapped(value);
+  if (isArrayLiteralExpression(each)) return each;
+  const root = literalArrayBinding(value);
+  const initial = root?.initializer === undefined ? undefined : unwrapped(root.initializer);
+  return initial !== undefined && isArrayLiteralExpression(initial) ? initial : undefined;
 }
 
 /** A written literal array behind lexical whole-value aliases, excluding destructured projections. */

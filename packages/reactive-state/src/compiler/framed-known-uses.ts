@@ -44,13 +44,16 @@ import {
   ARRAY_METHODS,
   borrowedMethod,
   ELEMENT_RETURNING,
+  GIVING_READERS,
   DESCRIPTOR_FIELDS,
   callsBack,
+  COPIERS,
   copiesElements,
   handsArray,
   isFirstArgument,
   LIST_FIELDS,
   NO_FIELDS,
+  READ_ONLY_METHODS,
   READERS,
   readsWithoutCallback,
   type Borrowed,
@@ -58,6 +61,7 @@ import {
 import { arrayIdentity } from './framed-array-identity.ts';
 import { invokedAtOnce } from './framed-array-mutations.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
+import { consumed } from './framed-consumed-uses.ts';
 import { iterates } from './framed-iterated-uses.ts';
 import {
   coercesArgument,
@@ -65,6 +69,7 @@ import {
   nativePath,
   type MutatorInvocation,
 } from './framed-mutator-calls.ts';
+import { methodMayBeOverridden } from './framed-overridden-methods.ts';
 import { tested } from './framed-tested-uses.ts';
 import { namesThis } from './framed-this-functions.ts';
 
@@ -145,18 +150,6 @@ const MUTATING: ReadonlySet<string> = new Set([
   'sort',
   'splice',
   'unshift',
-]);
-
-/**
- * The natives that give the elements of an array to a new object: a new list, or the descriptors of its
- * fields, whose `value` is the element itself.
- */
-const COPIERS: ReadonlySet<string> = new Set([
-  'Array.from',
-  'Object.entries',
-  'Object.getOwnPropertyDescriptor',
-  'Object.getOwnPropertyDescriptors',
-  'Object.values',
 ]);
 
 /** The methods of an array that answer the array itself. */
@@ -355,7 +348,8 @@ function memberResult(access: Node, result: Node, { subject, depth, base }: Chai
     return methodCall(access, user, { subject, depth, base });
   if (written(result))
     return depth === 1 && FOLLOWED.has(subject) && !keepsThis(result) ? KNOWN : UNKNOWN;
-  return subject === 'array' ? KNOWN : resultUse(result, memberName(access), { depth, subject });
+  if (subject === 'array' && (base === 'length' || consumed(result))) return KNOWN;
+  return resultUse(result, memberName(access), { depth, subject });
 }
 
 /** Whether a member is given a function that names `this`, which runs with the array as `this`. */
@@ -367,13 +361,26 @@ function keepsThis(result: Node): boolean {
 }
 
 /**
+ * Whether a call on a member of a member of an array leaves the array as it was: the length is a
+ * number, and a read-only method of a text, a number or an array changes nothing it is called on, unless
+ * the file may give a member that name (a field, a text or a write of it: the member may be a method
+ * that writes). Any other method may write what the member holds, a list among them, through a name
+ * no reader follows.
+ */
+function memberCallRuns(access: Node, base: string | undefined): boolean {
+  if (base === 'length') return true;
+  const name = memberName(access);
+  if (name === undefined || !READ_ONLY_METHODS.has(name)) return false;
+  return !methodMayBeOverridden(access.getSourceFile(), name, mutatorInvocation);
+}
+
+/**
  * A method called on a mention: a native method of an array, whose answer goes where it is known and
  * which hands the array to no function of the program. A method of a member of the mention is a method
  * of something else.
  */
 function methodCall(access: Node, call: Node, { subject, depth, base }: Chain): Use {
-  if (depth > 1)
-    return isArray(subject) && (subject === 'array' || base === 'length') ? KNOWN : UNKNOWN;
+  if (depth > 1) return isArray(subject) && memberCallRuns(access, base) ? KNOWN : UNKNOWN;
   if (!isArray(subject)) return UNKNOWN;
   const name = memberName(access);
   if (name === undefined || !ARRAY_METHODS.has(name)) return UNKNOWN;
@@ -527,12 +534,16 @@ function dataFields(subject: Subject): ReadonlySet<string> {
   return subject === 'list' || isArray(subject) ? LIST_FIELDS : NO_FIELDS;
 }
 
-/** Whether a node is an argument of a native that reads and runs no application code. */
+/**
+ * Whether a node is an argument of a native that reads and runs no application code. A reader that
+ * answers the fields of what it reads (the descriptors) is one only where its answer is dropped.
+ */
 function readerArgument(at: Node): boolean {
   const { parent } = at;
   if (!isFirstArgument(parent, at)) return false;
   const path = nativePath(parent.expression);
-  return path !== undefined && READERS.has(path);
+  if (path === undefined || !READERS.has(path)) return false;
+  return !GIVING_READERS.has(path) || discarded(outermost(parent));
 }
 
 /** Whether a node is written: the left of an assignment, a pattern's place, a loop head, `delete`, `++`. */
@@ -667,7 +678,7 @@ function argumentUse(call: Node, flowing: Flowing, subject: Subject): Use {
   const position = invoked.args.findIndex((each) => outermost(each) === flowing.top);
   if (position === -1) return UNKNOWN;
   if (position === 0) return targetUse(call, flowing, subject);
-  if (isArray(subject)) return flowing.inLiteral ? UNKNOWN : KNOWN;
+  if (isArray(subject)) return flowing.inLiteral ? UNKNOWN : SPREADS;
   return followedArgument(invoked, position) ? KNOWN : UNKNOWN;
 }
 

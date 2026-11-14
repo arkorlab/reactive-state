@@ -4962,6 +4962,301 @@ const CONVERSIONS = [
     converts: true,
   },
   {
+    id: 'element-member-pushed-through-a-name-of-the-element-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-literal-member-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [[]]; a[0].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-of-an-element-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [[[]]]; a[0][0].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-kept-by-a-constant-and-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; const e = a[0]; e.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-handed-to-a-function-that-pushes-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; function f(x: any) { x.push(error); } f(a[0]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-given-to-a-borrowed-push-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; Array.prototype.push.call(a[0], error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-given-to-a-native-mutator-as-its-target-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; Object.assign(a[0], { 0: error }); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-with-a-string-key-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a['0'].push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-pushed-through-an-optional-call-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0]?.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-asserted-and-pushed-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0]!.push(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-pushed-through-call-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; a[0].push.call(a[0], error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-trimmed-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a[0].trim(); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-upper-cased-into-a-constant-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const u = a[0].toUpperCase(); void u; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-converted-by-to-string-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; a[0].toString(); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-joined-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'self-held-array-given-a-method-named-trim-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = []; Object.assign(a, { self: Object.assign(a, {}), trim: Array.prototype.push }); (a as any).self.trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'self-held-array-given-a-method-named-join-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = []; Object.assign(a, { self: Object.assign(a, {}), join: Array.prototype.push }); (a as any).self.join(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-of-a-list-given-a-method-by-a-write-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; const a: any[] = [inner]; (inner as any).trim = Array.prototype.push; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-text-elsewhere-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; const label = 'join'; void label; a[0].join(','); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-of-a-read-only-method-nothing-names-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-named-by-a-field-elsewhere-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; const o = { join: 1 }; void o; a[0].join(','); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-of-another-name-by-a-field-elsewhere-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [['safe']]; const o = { trim: 1 }; void o; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-named-by-a-method-of-a-class-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { trim(v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-property-of-a-class-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { trim: any = Array.prototype.push; } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-an-accessor-of-a-class-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { get trim() { return Array.prototype.push; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-method-of-a-class-expression-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const L: any = class extends Array<any> { trim(v: any) { this.push(v); return ''; } }; const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-method-written-as-a-text-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { 'trim'(v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-method-with-a-constant-computed-name-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { ['trim'](v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-beside-a-class-method-with-an-unknown-name-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { [key](v: any) { this.push(v); return ''; } } const inner: any = new L(); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-beside-a-class-with-only-a-static-of-another-name-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L { static trim() { return 1; } } void L; const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-beside-a-class-method-of-another-name-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { class L extends Array<any> { other() { return 1; } } void L; const a: any[] = [['safe']]; a[0].join(','); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'member-call-named-by-a-method-of-an-object-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any = { trim(v: any) { (this as any).items.push(v); return ''; }, items: [] as any[] }; const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-getter-defined-on-the-list-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any[] = []; Object.defineProperty(inner, 'trim', { get() { return Array.prototype.push; } }); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-getter-of-a-literal-given-to-the-list-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any = Object.assign([], { get trim() { return Array.prototype.push; } }); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'member-call-named-by-a-field-of-a-literal-given-to-the-list-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const inner: any = Object.assign([], { trim: Array.prototype.push }); const a: any[] = [inner]; (a[0] as any).trim(error); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'length-fixed-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; (a as any).length.toFixed(2); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-in-a-template-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = \`\${a[0]}\`; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-concatenated-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = a[0] + 'x'; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-compared-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; const t = a[0] < 2; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-converted-by-number-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['1']; const t = Number(a[0]); void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-typeof-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = typeof a[0]; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-condition-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; if (a[0]) { void 1; } return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-strict-equal-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const t = a[0] === 'safe'; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-tested-by-is-array-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [[1]]; const t = Array.isArray(a[0]); void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'length-kept-in-a-constant-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const n = a.length; void n; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-negated-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [1]; const t = -a[0]; void t; return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'element-kept-in-a-constant-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; const e = a[0]; void e; return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'element-given-to-a-native-function-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = ['safe']; Math.abs(a[0]); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-box-field-leaks-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptor(box, 'd') as any).value; leaked.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptors-of-a-box-leak-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptors(box) as any).d.value; leaked.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptors-of-a-map-leak-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const m: any = { 0: d }; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptors(m) as any)[0].value; leaked.get = () => error; Object.defineProperties(a, m); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-list-entry-leaks-the-descriptor-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const l: any[] = [d]; const a: any[] = ['safe']; const leaked = (Object.getOwnPropertyDescriptor(l, 0) as any).value; leaked.get = () => error; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-held-descriptor-field-stays-refused',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const a: any[] = ['safe']; const f = (Object.getOwnPropertyDescriptor(d, 'get') as any).value; void f; Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'descriptor-of-a-box-field-dropped-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.getOwnPropertyDescriptor(box, 'd'); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptors-of-a-map-dropped-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const m: any = { 0: d }; const a: any[] = ['safe']; Object.getOwnPropertyDescriptors(m); Object.defineProperties(a, m); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'descriptors-of-a-box-tested-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; if (Object.getOwnPropertyDescriptors(box)) { void 1; } Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'keys-of-a-box-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.keys(box); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'own-property-names-of-a-box-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.getOwnPropertyNames(box); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
+    id: 'frozen-test-of-a-box-pin',
+    source: `function frames(error: Error, flag: boolean, original: any) { const d: any = { get: () => 'safe' }; const box = { d }; const a: any[] = ['safe']; Object.isFrozen(box); Object.defineProperty(a, 0, d); return String(a); }`,
+    converts: false,
+  },
+  {
     id: 'element-of-at-tagged-through-a-member-refused',
     source: `function frames(error: Error, flag: boolean, original: any) { const a: any[] = [{ mutate(s: any) { (this as any).toString = () => String(error); } }]; (a.at(0) as any).mutate\`\`; return String(a); }`,
     converts: true,

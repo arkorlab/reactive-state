@@ -118,7 +118,7 @@ function defaultMayBeArray(name: Identifier): boolean {
  * its operands (a number, a string, a boolean), or a choice or a sequence that ends at such a value
  * on every path. A name, a member, an element and a call may hold an array, and are none of these.
  */
-function isNoArray(value: Expression): boolean {
+export function isNoArray(value: Expression): boolean {
   const pending = [value];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
     const written = unwrapped(each);
