@@ -162,6 +162,71 @@ const PATTERNS = [
     "const [a]: any = ['safe']; const [b]: any = ['safe']; const [c]: any = ['safe']; let [d]: any = ['safe']; d = [error]; return String(a) + String(b) + String(c);",
     false,
   ],
+  [
+    'source-element-written-before',
+    "const source: any[] = ['safe']; source[0] = error; const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-pushed-before',
+    "const source: any[] = ['safe']; source.push(error); const [first, second] = source; return String([second]);",
+    true,
+  ],
+  [
+    'source-written-as-a-whole',
+    "let source: any[] = ['safe']; source = [error]; const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-given-a-mutator',
+    "const source: any[] = ['safe']; Object.assign(source, { 0: error }); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-written-through-an-alias',
+    "const source: any[] = ['safe']; const alias = source; alias[0] = error; const [item] = alias; return String([item]);",
+    true,
+  ],
+  [
+    'source-handed-to-a-function',
+    "const source: any[] = ['safe']; mutate(source); const [item] = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-written-after-stays-refused',
+    "const source: any[] = ['safe']; const [item] = source; source[0] = error; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-member-written',
+    "const source: any = { item: 'safe' }; source.item = error; const { item } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-given-a-mutator',
+    "const source: any = { item: 'safe' }; Object.assign(source, { item: error }); const { item } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-written-as-a-whole',
+    "let source: any = { item: 'safe' }; source = { item: error }; const { item } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-object-handed-to-a-function',
+    "const source: any = { item: 'safe' }; mutate(source); const { item } = source; return String([item]);",
+    true,
+  ],
+  [
+    'source-named-and-never-written-pin',
+    "const source: any[] = ['safe']; const [item] = source; return String([item]);",
+    false,
+  ],
+  [
+    'source-object-named-and-never-written-pin',
+    "const source: any = { item: 'safe' }; const { item } = source; return String([item]);",
+    false,
+  ],
 ] as const;
 
 /** Arrays of texts, typed names and error words stay followed as before; one of unknown elements hands them out. */

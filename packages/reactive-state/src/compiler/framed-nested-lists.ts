@@ -212,11 +212,13 @@ function elementMayBeList(
  * Whether a name that a pattern takes apart from a literal written beside it holds a list: a name is
  * taken from a written object or array, and what is written through it is no write any reader of the
  * array follows (`const [item] = [[]]; item.push(error)`). A name of a parameter, a call or a loop is an
- * input of the program, and left as it was.
+ * input of the program, and left as it was. A name taken from a name that holds a literal reads what the
+ * name holds when the pattern runs: where the literal has been written since (`changed`), it is refused.
  */
 export function destructuredList(
   name: Identifier,
   scalar: (value: Expression, keys: readonly string[]) => boolean,
+  changed: (source: Expression) => boolean,
 ): boolean {
   const declared = frameDeclarationOf(name);
   if (declared === undefined || !isVariableDeclaration(declared)) return false;
@@ -225,6 +227,7 @@ export function destructuredList(
   if (declared.initializer === undefined) return false;
   const source = literalSource(declared.initializer);
   if (source === undefined) return false;
+  if (changed(declared.initializer)) return true;
   const selected = frameBindingOf(name);
   if (selected === undefined || defaultMayBeList(name, declared.name, scalar)) return true;
   const value = selection(source, selected.keys);
