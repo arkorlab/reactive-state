@@ -19,6 +19,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
+import { framedArgumentPrefix } from './framed-keys.ts';
 
 /**
  * Where `Object.fromEntries` converts to a name what an object holds. For each entry it reads the
@@ -103,14 +104,19 @@ function entrySlots(entry: Expression): readonly Node[] {
   return isObjectLiteralExpression(entry) ? objectSlots(entry, 0) : [];
 }
 
-const SLOTS = new WeakMap<CallExpression, readonly Node[]>();
+const SLOTS = new WeakMap<CallExpression, readonly Node[] | undefined>();
 
-/** The places of the entries of the call's argument that may be names, whatever the entry is written as. */
-function nameSlots(call: CallExpression): readonly Node[] {
-  const known = SLOTS.get(call);
-  if (known !== undefined) return known;
+/**
+ * The places of the entries of the call's iterable that may be names, whatever the entry is written
+ * as. The iterable is the first argument the call is given, as `framedEntryValues` takes it: past
+ * the spreads of lists written out that give the arguments (`...[list]`, `...[...[list]]`, `...[], list`).
+ * None where a spread the compile cannot read may bring it, which is every place of what the call holds.
+ */
+function nameSlots(call: CallExpression): readonly Node[] | undefined {
+  if (SLOTS.has(call)) return SLOTS.get(call);
   const slots: Node[] = [];
-  const lists = call.arguments.slice(0, 1).flatMap((each) => valuesOf(each));
+  const prefix = framedArgumentPrefix(call, call.arguments, 1);
+  const lists = prefix.values.flatMap((each) => valuesOf(each));
   for (let list = lists.pop(); list !== undefined; list = lists.pop()) {
     if (!isArrayLiteralExpression(list)) continue;
     for (const element of list.elements) {
@@ -118,8 +124,9 @@ function nameSlots(call: CallExpression): readonly Node[] {
       else slots.push(...valuesOf(element).flatMap((entry) => entrySlots(entry)));
     }
   }
-  SLOTS.set(call, slots);
-  return slots;
+  const found = prefix.unknown ? undefined : slots;
+  SLOTS.set(call, found);
+  return found;
 }
 
 /** Whether a node lies within another. */
@@ -133,7 +140,9 @@ function within(node: Node, container: Node): boolean {
  * converted may be.
  */
 export function convertedToName(made: Node, call: CallExpression): boolean {
-  return nameSlots(call).some((slot) => {
+  const slots = nameSlots(call);
+  if (slots === undefined) return true;
+  return slots.some((slot) => {
     const values = isExpression(slot) ? valuesOf(slot) : [slot];
     return values.some((value) => value !== made && within(made, value));
   });

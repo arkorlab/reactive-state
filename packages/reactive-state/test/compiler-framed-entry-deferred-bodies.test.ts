@@ -703,6 +703,104 @@ const CASES = [
     key: 'message',
     values: ["'safe':"],
   },
+  {
+    id: 'hook-of-a-key-in-an-iterable-given-by-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[[[{ toString: () => (reviewed(entry), 'k') }, 0], entry]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-after-the-tuple-in-an-iterable-given-by-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[[entry, [{ toString: () => (reviewed(entry), 'k') }, 0]]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-in-an-iterable-given-by-a-nested-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[...[[[{ toString: () => (reviewed(entry), 'k') }, 0], entry]]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-in-an-iterable-given-after-an-empty-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[], [[{ toString: () => (reviewed(entry), 'k') }, 0], entry]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-in-an-iterable-given-after-two-spreads',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[], ...[[[{ toString: () => (reviewed(entry), 'k') }, 0], entry]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-of-an-object-entry-in-an-iterable-given-by-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[[entry, { 0: { toString: () => (reviewed(entry), 'k') }, 1: 0 }]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-the-prototype-has-in-an-iterable-given-by-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[[entry, { __proto__: { 0: { toString: () => (reviewed(entry), 'k') } }, 1: 0 }]]); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'hook-of-a-key-in-a-held-iterable-given-by-a-spread',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; const rows = [[{ toString: () => (reviewed(entry), 'k') }, 0], entry]; return Object.fromEntries(...[rows]); }",
+    key: 'message',
+    values: ['0:', 'entry:1'],
+  },
+  {
+    id: 'hook-of-a-key-in-arguments-held-by-a-name',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; const given = [[[{ toString: () => (reviewed(entry), 'k') }, 0], entry]]; return Object.fromEntries(...given); }",
+    key: 'message',
+    values: ['0:', 'entry:1'],
+  },
+  {
+    id: 'hook-of-a-key-in-an-iterable-given-by-a-condition-of-spreads',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...(flag ? [[[{ toString: () => (reviewed(entry), 'k') }, 0], entry]] : [[entry]])); }",
+    key: 'message',
+    values: undefined,
+  },
+  {
+    id: 'function-in-a-value-in-an-iterable-given-by-a-spread-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[[entry, ['unused', { run: () => reviewed(entry) }]]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'function-as-the-key-in-an-iterable-given-by-a-spread-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries(...[[[() => reviewed(entry), 0], entry]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'hook-in-an-argument-the-call-does-not-take-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], ...[[[{ toString: () => (reviewed(entry), 'k') }, 0]]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
+  {
+    id: 'hook-in-a-second-argument-the-call-does-not-take-pin',
+    source:
+      "function frames(error: Error, flag: boolean, proto: object, reviewed: (row: unknown) => void) { const entry: [string, unknown] = ['message', 'safe']; return Object.fromEntries([entry], [[{ toString: () => (reviewed(entry), 'k') }, 0]]); }",
+    key: 'message',
+    values: ["'safe':"],
+  },
 ] as const;
 
 describe('entry tuples a function of the argument list is given', () => {
