@@ -16,7 +16,8 @@ import { framedNativeConstructor } from './framed-sources.ts';
 
 /** Source-known native invocations retain their consumed arguments across ordinary wrappers. */
 
-const WRAPPER = { slots: 4 } as const;
+/** `slots` holds the fixed positions of the wrappers that hand a list; a `call` hands every argument. */
+const WRAPPER = { calls: Infinity, slots: 4 } as const;
 
 interface NativeFrameArguments {
   readonly target: Expression;
@@ -57,7 +58,7 @@ function indirectArguments(
     !framedNativeConstructor(callee.expression, names)
   )
     return undefined;
-  const values = knownArguments(call);
+  const values = knownArguments(call, method === 'call' ? WRAPPER.calls : WRAPPER.slots);
   if (values?.[0] === undefined) return undefined;
   const applied = method === 'apply' ? values[1] : undefined;
   return {
@@ -74,7 +75,7 @@ function reflectedArguments(
   names: ReadonlySet<string>,
   constructed: boolean,
 ): NativeFrameArguments | undefined {
-  const values = knownArguments(call);
+  const values = knownArguments(call, WRAPPER.slots);
   const target = values?.[0];
   const applied = values?.[constructed ? 1 : 2];
   if (target === undefined || applied === undefined || !framedNativeConstructor(target, names))
@@ -82,9 +83,13 @@ function reflectedArguments(
   return { target, applied, args: framedAppliedArguments(call, applied), constructed };
 }
 
-/** Only a known prefix establishes where a wrapper's receiver and argument list occur. */
-function knownArguments(call: CallExpression): readonly Expression[] | undefined {
-  const prefix = framedArgumentPrefix(call, call.arguments, WRAPPER.slots);
+/**
+ * Only a known prefix establishes where a wrapper's receiver and argument list occur. A prefix of a
+ * `call` is every argument it passes on: one that stopped before the last, or before a spread it
+ * cannot read, would give the native fewer arguments than it is called with.
+ */
+function knownArguments(call: CallExpression, limit: number): readonly Expression[] | undefined {
+  const prefix = framedArgumentPrefix(call, call.arguments, limit);
   return prefix.unknown || (prefix.alternatives?.length ?? 0) > 0 ? undefined : prefix.values;
 }
 
