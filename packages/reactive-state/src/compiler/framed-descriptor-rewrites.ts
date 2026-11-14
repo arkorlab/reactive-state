@@ -16,7 +16,12 @@ import {
 import { unwrapped } from './bounded.ts';
 import type { WrittenArrayElement } from './framed-array-elements.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
-import { assignedNames, getterWrites, inheritedDeletions } from './framed-getter-writes.ts';
+import {
+  assignedNames,
+  getterWrites,
+  inheritedDeletions,
+  settingPrototype,
+} from './framed-getter-writes.ts';
 import { functionReturns } from './framed-mutator-getters.ts';
 import { selectedValues } from './framed-selected-sources.ts';
 import { namesThis } from './framed-this-functions.ts';
@@ -218,7 +223,10 @@ function slotsOf(descriptor: ObjectLiteralExpression, name: string): ReadonlySet
     else for (const each of made) slots.add(each);
   }
   const deleted = inheritedDeletions(descriptor);
-  if (deleted.includes(undefined) || deleted.includes(name)) slots.add('data');
+  if (deleted.includes(undefined) || deleted.includes(name)) {
+    slots.add('data');
+    slots.add('absent');
+  }
   return slots;
 }
 
@@ -308,16 +316,20 @@ function setsProto(property: ObjectLiteralElementLike): boolean {
   );
 }
 
-/** Whether a write of a getter runs a setter that names `this`: it may write the descriptor as it likes. */
+/**
+ * Whether a write of a getter runs a setter that names `this`: it may write the descriptor as it likes.
+ * A name the descriptor lacks meets the setters of the prototype it sets, which are not read.
+ */
 function runsWritingSetter(
   descriptor: ObjectLiteralExpression,
   names: readonly (string | undefined)[],
 ): boolean {
   const setters = descriptor.properties.filter((one) => isSetAccessorDeclaration(one));
+  const inherits = settingPrototype(descriptor);
   return names.some((name) => {
-    return name === undefined
-      ? setters.some((one) => namesThis(one))
-      : slotsOf(descriptor, name).has('setter');
+    if (name === undefined) return inherits || setters.some((one) => namesThis(one));
+    const slots = slotsOf(descriptor, name);
+    return slots.has('setter') || (inherits && slots.has('absent'));
   });
 }
 

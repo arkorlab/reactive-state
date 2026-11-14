@@ -1419,6 +1419,98 @@ const ELEMENTS = [
     ],
   },
   {
+    id: 'define-descriptor-getter-write-may-run-a-setter-of-its-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate = 0; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      "{ __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate = 0; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-increment-may-run-a-setter-of-its-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate++; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      "{ __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate++; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-arithmetic-assignment-may-run-a-setter-of-its-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate += 1; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      "{ __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate += 1; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-computed-write-may-run-a-setter-of-its-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this[k] = 0; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      '0:',
+      "{ __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this[k] = 0; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-write-may-run-a-setter-of-an-unknown-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: other, get enumerable() { this.activate = 0; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      'other:value',
+      "'safe':",
+      "{ __proto__: other, get enumerable() { this.activate = 0; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-write-may-run-a-setter-of-its-grandparent',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { __proto__: { set activate(_value: unknown) { this.value = error; } } }, get enumerable() { this.activate = 0; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      "{ __proto__: { __proto__: { set activate(_value: unknown) { this.value = error; } } }, get enumerable() { this.activate = 0; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-write-meets-a-null-prototype-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: null, get enumerable() { this.activate = 0; return true; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: ['null:value', "'safe':"],
+  },
+  {
+    id: 'define-descriptor-getter-write-hidden-from-the-prototype-setter-by-an-own-field-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate = 0; return true; }, activate: 1, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-descriptor-getter-write-hidden-from-the-prototype-setter-by-an-own-getter-pin',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate = 0; return true; }, get activate() { return 1; }, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: ["'safe':"],
+  },
+  {
+    id: 'define-map-descriptor-getter-write-may-run-a-setter-of-its-prototype',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperties(values, { 0: { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate = 0; return true; }, value: 'safe' } }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      "{ __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { this.activate = 0; return true; }, value: 'safe' }:value",
+    ],
+  },
+  {
+    id: 'define-descriptor-getter-deletes-an-own-field-then-assigns-to-meet-the-prototype-setter',
+    source: `function frames(error: Error, flag: boolean, k: string, other: any) { const values: unknown[] = ['safe']; Object.defineProperty(values, 0, { __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { delete this.activate; this.activate = 0; return true; }, activate: 1, value: 'safe' }); return values; }`,
+    index: 0,
+    elements: [
+      "'safe':",
+      "{ __proto__: { set activate(_value: unknown) { this.value = error; } }, get enumerable() { delete this.activate; this.activate = 0; return true; }, activate: 1, value: 'safe' }:value",
+    ],
+  },
+  {
     id: 'assign-getter-unknown-key-after-indices-pin',
     source: `function frames(error: Error, key: string) { const values: unknown[] = ['safe']; Object.assign(values, { get probe() { this[key] = error; return 1; }, 0: 'safe', 1: 'safe' }); return values; }`,
     index: undefined,
