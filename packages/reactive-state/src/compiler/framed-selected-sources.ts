@@ -65,6 +65,11 @@ import { outermost } from './framed-written-targets.ts';
  * is one the compile does not follow, not one it takes to be safe.
  */
 
+/** The names, each once, in an order that does not depend on the order they were collected in. */
+function uniqueSorted(names: readonly string[]): readonly string[] {
+  return [...new Set(names)].toSorted((left, right) => left.localeCompare(right));
+}
+
 /** What a selection has read already: each object, for each path it was asked at, leaving out which names. */
 type Visited = Map<Node, Set<string>>;
 
@@ -111,7 +116,7 @@ function select(
   const held = valueOf(value, names);
   if (isFunctionDeclaration(held)) return whole;
   const paths = reading.visited.get(held) ?? new Set<string>();
-  const path = `${reading.own ? 'own' : 'all'}\0${[...new Set(reading.without)].toSorted((left, right) => left.localeCompare(right)).join(',')}\0${keys.join('\0')}`;
+  const path = JSON.stringify([reading.own, uniqueSorted(reading.without), keys]);
   if (paths.has(path)) return [];
   reading.visited.set(held, paths.add(path));
   const alternatives = alternativesOf(held);

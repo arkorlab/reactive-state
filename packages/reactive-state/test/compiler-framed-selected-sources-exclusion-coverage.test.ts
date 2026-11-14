@@ -8,7 +8,8 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 /**
  * A selection reads each object once for each path it is asked at, and it is asked under the names the
  * rest copy it goes through was made without: two writes that leave out different fields of one
- * source are two selections of it, and what the first left out is what the second reads.
+ * source are two selections of it, and what the first left out is what the second reads. The names are
+ * told apart whatever they hold: the empty name, a name with a comma, a name with a NUL.
  */
 const CASES = [
   {
@@ -40,6 +41,41 @@ const CASES = [
     id: 'branch-without-the-error-field-and-nothing',
     source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; const source = { bad: { get: () => error }, good: { value: 'safe' } }; if (flag) ({ bad: ignored, ...holder.m } = source); else ({ ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
     converts: true,
+  },
+  {
+    id: 'empty-name-excluded-in-the-first-branch',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { '': { get: () => error }, good: { value: 'safe' } }; if (flag) ({ '': ignored, ...holder.m } = source); else ({ ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'empty-name-excluded-in-the-second-branch',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { '': { get: () => error }, good: { value: 'safe' } }; if (flag) ({ ...holder.m } = source); else ({ '': ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'joined-name-excluded-in-the-first-branch',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { 'bad,good': { get: () => error }, bad: { value: 'safe' }, good: { value: 'safe' } }; if (flag) ({ 'bad,good': ignored, ...holder.m } = source); else ({ bad: ignored, good: other, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'two-names-excluded-in-the-first-branch',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { 'bad,good': { get: () => error }, bad: { value: 'safe' }, good: { value: 'safe' } }; if (flag) ({ bad: ignored, good: other, ...holder.m } = source); else ({ 'bad,good': ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'name-with-a-nul-excluded-in-the-first-branch',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { 'a\0b': { get: () => error }, a: { value: 'safe' } }; if (flag) ({ 'a\0b': ignored, ...holder.m } = source); else ({ a: ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'name-with-a-nul-excluded-in-the-second-branch',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { 'a\0b': { get: () => error }, a: { value: 'safe' } }; if (flag) ({ a: ignored, ...holder.m } = source); else ({ 'a\0b': ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: true,
+  },
+  {
+    id: 'same-exclusion-twice-pin',
+    source: `function frames(error: Error, flag: boolean, name: string) { const a = ['safe']; const maps: PropertyDescriptorMap = {}; const holder: any = {}; let ignored: unknown; let other: unknown; const source = { '': { get: () => error }, good: { value: 'safe' } }; if (flag) ({ '': ignored, ...holder.m } = source); else ({ '': ignored, ...holder.m } = source); ({ m: { [name]: maps[0] } } = holder); Object.defineProperties(a, maps); return String(a); }`,
+    converts: false,
   },
 ] as const;
 
