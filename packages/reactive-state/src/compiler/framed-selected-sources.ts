@@ -65,7 +65,7 @@ import { outermost } from './framed-written-targets.ts';
  * is one the compile does not follow, not one it takes to be safe.
  */
 
-/** What a selection has read already: each object, for each path it was asked at. */
+/** What a selection has read already: each object, for each path it was asked at, leaving out which names. */
 type Visited = Map<Node, Set<string>>;
 
 /** What a selection shares: what it has read, and whether it reads a copy, own fields only. */
@@ -111,7 +111,7 @@ function select(
   const held = valueOf(value, names);
   if (isFunctionDeclaration(held)) return whole;
   const paths = reading.visited.get(held) ?? new Set<string>();
-  const path = `${reading.own ? 'own' : 'all'}\0${keys.join('\0')}`;
+  const path = `${reading.own ? 'own' : 'all'}\0${[...new Set(reading.without)].toSorted((left, right) => left.localeCompare(right)).join(',')}\0${keys.join('\0')}`;
   if (paths.has(path)) return [];
   reading.visited.set(held, paths.add(path));
   const alternatives = alternativesOf(held);
