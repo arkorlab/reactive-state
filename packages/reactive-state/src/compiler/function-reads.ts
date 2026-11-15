@@ -28,6 +28,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  type PropertyAssignment,
   type PropertyName,
   SyntaxKind,
   type TypeNode,
@@ -80,14 +81,14 @@ export function functionRead(node: Node): string | undefined {
       return undefined;
     }
     const kind = functionKind(unwrapped(read.of), new Set());
-    return kind === undefined || (read.name === 'name' && kind === 'entry')
+    return kind === undefined || (kind === 'entry' && read.name === 'name')
       ? undefined
       : `reads \`${read.name}\` of a function, which each side's bundle writes otherwise`;
   }
   const written = textOf(node);
-  return written !== undefined && functionKind(unwrapped(written), new Set()) !== undefined
-    ? "writes a function as text, which each side's bundle writes otherwise"
-    : undefined;
+  return written === undefined || functionKind(unwrapped(written), new Set()) === undefined
+    ? undefined
+    : "writes a function as text, which each side's bundle writes otherwise";
 }
 
 /**
@@ -213,10 +214,12 @@ function entryFunctionKind(
     : kind;
 }
 
-/** Accumulated entry kind and spread uncertainty across a dynamic object-literal lookup. */
+/** Surviving static-key classifications and spread/dynamic uncertainty across a table scan. */
 interface TableScan {
-  kind: FunctionKind | undefined;
-  unverifiedSpread: boolean;
+  dynamicEntry: boolean;
+  readonly entries: Map<string, FunctionKind | undefined>;
+  stickyRenamed: boolean;
+  unverified: boolean;
 }
 
 /** Updates the classification of entry `name` as each object-literal element is visited in order. */
@@ -231,11 +234,11 @@ function nextEntryKind(
   }
   const key = propertyKey(property);
   if (key === undefined) {
-    return current === 'entry' && propertyFunctionKind(property, key, seen) !== undefined
+    return current === 'entry' && propertyFunctionKind(property, key, new Set(seen)) !== undefined
       ? 'renamed'
       : current;
   }
-  return key === name ? propertyFunctionKind(property, key, seen) : current;
+  return key === name ? propertyFunctionKind(property, key, new Set(seen)) : current;
 }
 
 /** Classifies how `...source` affects static entry `name` of an enclosing object literal. */
@@ -273,54 +276,112 @@ function spreadOmitsKey(source: Expression, name: string, seen: Set<Node>): bool
 /** Classifies a dynamic lookup across all entries of a written object literal. */
 function tableFunctionKind(resolved: ResolvedObject, seen: Set<Node>): FunctionKind | undefined {
   const scan = scanTable(resolved, seen);
-  return scan.kind === 'entry' && scan.unverifiedSpread ? 'renamed' : scan.kind;
+  if (scan.stickyRenamed || hasScanKind(scan.entries, 'renamed')) {
+    return 'renamed';
+  }
+  if (scan.dynamicEntry || hasScanKind(scan.entries, 'entry')) {
+    return scan.unverified ? 'renamed' : 'entry';
+  }
+  return undefined;
 }
 
-/** Scans all properties and spreads of `resolved` without letting later methods mask `'renamed'`. */
+/** Whether any surviving static key in `entries` has classification `target`. */
+function hasScanKind(
+  entries: ReadonlyMap<string, FunctionKind | undefined>,
+  target: FunctionKind,
+): boolean {
+  for (const kind of entries.values()) {
+    if (kind === target) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Scans all properties and spreads of `resolved` in evaluation order, tracking overwritten keys. */
 function scanTable(resolved: ResolvedObject, seen: Set<Node>): TableScan {
   const scan: TableScan = {
-    kind: undefined,
-    unverifiedSpread: !resolved.constant || anyEntryReplaced(resolved.object),
+    dynamicEntry: false,
+    entries: new Map(),
+    stickyRenamed: false,
+    unverified: !resolved.constant || anyEntryReplaced(resolved.object),
   };
   for (const property of resolved.object.properties) {
     if (isSpreadAssignment(property)) {
-      if (mergeSpreadTable(unwrapped(property.expression), scan, seen)) {
-        return scan;
-      }
-      continue;
-    }
-    const each = propertyFunctionKind(property, propertyKey(property), seen);
-    if (each === 'renamed') {
-      scan.kind = 'renamed';
-      return scan;
-    }
-    if (each === 'entry' && scan.kind === undefined) {
-      scan.kind = 'entry';
+      mergeSpreadTable(unwrapped(property.expression), scan, seen);
+    } else {
+      recordTableProperty(property, scan, seen);
     }
   }
   return scan;
 }
 
-/** Merges a spread source into `scan`; answers `true` when `'renamed'` short-circuits the scan. */
-function mergeSpreadTable(source: Expression, scan: TableScan, seen: Set<Node>): boolean {
+/** Records one static, computed, or prototype property into `scan`. */
+function recordTableProperty(
+  property: ObjectLiteralElementLike,
+  scan: TableScan,
+  seen: Set<Node>,
+): void {
+  const key = propertyKey(property);
+  if (isPrototypeProperty(property, key)) {
+    if (unwrapped(property.initializer).kind !== SyntaxKind.NullKeyword) {
+      scan.unverified = true;
+    }
+    return;
+  }
+  const each = propertyFunctionKind(property, key, new Set(seen));
+  if (key !== undefined) {
+    scan.entries.set(key, each);
+  } else if (each === 'renamed') {
+    scan.stickyRenamed = true;
+  } else if (each === 'entry') {
+    scan.dynamicEntry = true;
+  }
+}
+
+/** Whether `property` is a non-computed `__proto__: ...` prototype setter. */
+function isPrototypeProperty(
+  property: ObjectLiteralElementLike,
+  key: string | undefined,
+): property is PropertyAssignment {
+  return (
+    key === '__proto__' && isPropertyAssignment(property) && !isComputedPropertyName(property.name)
+  );
+}
+
+/** Merges a spread source's surviving entries and uncertainty flags into `scan`. */
+function mergeSpreadTable(source: Expression, scan: TableScan, seen: Set<Node>): void {
   const branchSeen = new Set(seen);
   const spread = holderObject(source, branchSeen);
   if (spread === undefined) {
-    scan.unverifiedSpread = true;
-    return false;
+    scan.unverified = true;
+    return;
   }
   const inner = scanTable(spread, branchSeen);
-  if (inner.unverifiedSpread) {
-    scan.unverifiedSpread = true;
+  if (inner.unverified) {
+    mergeUnverifiedSpread(inner, scan);
+    return;
   }
-  if (inner.kind === 'renamed') {
-    scan.kind = 'renamed';
-    return true;
+  if (inner.dynamicEntry) {
+    scan.dynamicEntry = true;
   }
-  if (inner.kind === 'entry' && scan.kind === undefined) {
-    scan.kind = 'entry';
+  if (inner.stickyRenamed) {
+    scan.stickyRenamed = true;
   }
-  return false;
+  for (const [key, kind] of inner.entries) {
+    scan.entries.set(key, kind);
+  }
+}
+
+/** Merges an unverified spread's flags without letting uncertain keys erase surviving entries. */
+function mergeUnverifiedSpread(inner: TableScan, scan: TableScan): void {
+  scan.unverified = true;
+  if (inner.stickyRenamed || hasScanKind(inner.entries, 'renamed')) {
+    scan.stickyRenamed = true;
+  }
+  if (inner.dynamicEntry || hasScanKind(inner.entries, 'entry')) {
+    scan.dynamicEntry = true;
+  }
 }
 
 /** Resolves an inline or lexically bound object literal expression. */
@@ -385,10 +446,13 @@ function isConstInitializer(initializer: Expression): boolean {
 
 /** Static property key of an object literal element. */
 function propertyKey(property: ObjectLiteralElementLike): string | undefined {
+  if (isSpreadAssignment(property)) {
+    return undefined;
+  }
   if (isShorthandPropertyAssignment(property)) {
     return isIdentifier(property.name) ? property.name.text : undefined;
   }
-  return 'name' in property && property.name !== undefined ? keyOf(property.name) : undefined;
+  return keyOf(property.name);
 }
 
 /** The name of an entry the code writes: of a name, text, or a number; none of another. */
