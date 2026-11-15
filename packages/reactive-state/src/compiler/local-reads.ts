@@ -1,11 +1,15 @@
 import {
   type Expression,
   isBinaryExpression,
+  isBindingElement,
   isCallExpression,
   isElementAccessExpression,
   isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
+  isObjectBindingPattern,
+  isObjectLiteralExpression,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isStringLiteral,
   isTemplateExpression,
@@ -16,6 +20,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
+import { framedMemberNames } from './framed-keys.ts';
 import { declarationOf, namesType, parameterOf } from './framed.ts';
 
 /**
@@ -65,8 +70,13 @@ export const LOCAL_METHODS: ReadonlySet<string> = new Set([
  * runs; none of another.
  */
 export function localRead(node: Node): string | undefined {
-  const name = readName(node);
-  return name === undefined ? undefined : localNamed(name);
+  for (const name of readNames(node)) {
+    const found = localNamed(name);
+    if (found !== undefined) {
+      return found;
+    }
+  }
+  return undefined;
 }
 
 /** What a read of the method `name` reads, where it is one of `LOCAL_METHODS`: `toLocaleString`. */
@@ -77,18 +87,43 @@ export function localNamed(name: string): string | undefined {
 }
 
 /**
- * The name `node` reads of what it reads it of: a member's, or an entry's a pattern takes apart,
- * by a name the code writes in brackets too, `{ ['getHours']: hours }` (`patternKey`).
+ * The names `node` may read of what it reads them of: a member's, or an entry's a pattern takes
+ * apart, by a literal, constant, or conditional name in brackets too (`framedMemberNames`, `patternKey`).
  */
-function readName(node: Node): string | undefined {
-  if (isPropertyAccessExpression(node)) {
-    return node.name.text;
+function readNames(node: Node): readonly string[] {
+  const framed = framedMemberNames(node);
+  if (framed !== undefined) {
+    return framed;
   }
-  if (isElementAccessExpression(node)) {
-    const key = unwrapped(node.argumentExpression);
-    return isStringLiteral(key) || isNoSubstitutionTemplateLiteral(key) ? key.text : undefined;
+  const single =
+    (isElementAccessExpression(node) ? staticText(node.argumentExpression) : undefined) ??
+    patternKey(node);
+  return single === undefined ? [] : [single];
+}
+
+/** The literal text `node` writes of strings, templates, and string additions alone; none otherwise. */
+function staticText(node: Expression): string | undefined {
+  const value = unwrapped(node);
+  if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) {
+    return value.text;
   }
-  return patternKey(node);
+  if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.PlusToken) {
+    const left = staticText(value.left);
+    const right = staticText(value.right);
+    return left !== undefined && right !== undefined ? `${left}${right}` : undefined;
+  }
+  if (!isTemplateExpression(value)) {
+    return undefined;
+  }
+  let text = value.head.text;
+  for (const span of value.templateSpans) {
+    const part = staticText(span.expression);
+    if (part === undefined) {
+      return undefined;
+    }
+    text += `${part}${span.literal.text}`;
+  }
+  return text;
 }
 
 /** The operators that make text of a date beside them: `+`, `+=`. */
@@ -96,8 +131,9 @@ const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, Syn
 
 /**
  * What of `node` writes a date as text of the time zone where it runs — `toString` of a date the code
- * makes, `new Date(0).toString()`, or of `Date.prototype`, `String(date)`, a date in a template,
- * `${date}`, or added, `date + ''` — none of another, nor of a value the code shows no date of.
+ * makes, `new Date(0).toString()`, `new Date(0)['toString']()`, or of `Date.prototype`, `String(date)`,
+ * a date in a template, `${date}`, or added, `date + ''` — none of another, nor of a value the code
+ * shows no date of.
  */
 export function dateText(node: Node): string | undefined {
   const of = datedOf(node);
@@ -108,8 +144,9 @@ export function dateText(node: Node): string | undefined {
 
 /** What `node` writes as text where it writes it so: `toString`'s receiver, `String`'s argument, an operand. */
 function datedOf(node: Node): Expression | undefined {
-  if (isPropertyAccessExpression(node) && node.name.text === 'toString') {
-    return node.expression;
+  const receiver = toStringReceiver(node);
+  if (receiver !== undefined) {
+    return receiver;
   }
   if (isCallExpression(node) && globalPathOf(unwrapped(node.expression))?.join('.') === 'String') {
     return node.arguments[0];
@@ -122,6 +159,35 @@ function datedOf(node: Node): Expression | undefined {
     return undefined;
   }
   return isDate(unwrapped(node.left), new Set()) ? node.left : node.right;
+}
+
+/** The receiver whose `toString` method `node` reads by member access or takes apart by pattern. */
+function toStringReceiver(node: Node): Expression | undefined {
+  if (!readNames(node).includes('toString')) {
+    return undefined;
+  }
+  if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
+    return node.expression;
+  }
+  if (
+    isBindingElement(node) &&
+    node.dotDotDotToken === undefined &&
+    isObjectBindingPattern(node.parent)
+  ) {
+    const holder = node.parent.parent;
+    return isVariableDeclaration(holder) || isParameterDeclaration(holder)
+      ? holder.initializer
+      : undefined;
+  }
+  if (!isObjectLiteralExpression(node.parent)) {
+    return undefined;
+  }
+  const assignment = node.parent.parent;
+  return isBinaryExpression(assignment) &&
+    assignment.operatorToken.kind === SyntaxKind.EqualsToken &&
+    unwrapped(assignment.left) === node.parent
+    ? assignment.right
+    : undefined;
 }
 
 /** The type a date is said to be of. */
