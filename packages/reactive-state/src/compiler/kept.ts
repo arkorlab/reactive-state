@@ -12,7 +12,6 @@ import {
   isClassDeclaration,
   isClassExpression,
   isConditionalExpression,
-  isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -20,7 +19,6 @@ import {
   isMethodDeclaration,
   isNewExpression,
   isObjectLiteralExpression,
-  isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
   isReturnStatement,
@@ -40,15 +38,21 @@ import { isIterator } from './iterators.ts';
 import { keptAliasOf } from './kept-aliases.ts';
 import {
   declares,
+  type HolderEdge,
+  holderEdgesIn,
   isCalledAsLoads,
   isCalledInPlace,
   isCodeAt,
   isFunctionCode,
-  isTypeWrapper,
   isWithin,
+  watchedDeclarations,
+  type WrittenBy,
+  writtenDeclarations,
 } from './kept-scopes.ts';
 import { readsBinding } from './scope.ts';
-import { writtenArgumentBy, writtenCallValues } from './written.ts';
+import { writtenCallValues } from './written.ts';
+
+export { rootOf, targetsOf } from './kept-scopes.ts';
 
 /**
  * What a shared module holds once, as it loads, which a function of its may write between calls
@@ -65,11 +69,9 @@ const EITHER: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionToken,
 ]);
 
-/** What a node writes into, where it writes: what it assigns, counts up, deletes, changes in place. */
-type WrittenBy = (node: Node) => Node | undefined;
-
 /** What `handedOut` finds within a function: the functions what it answers holds, the names followed. */
 interface Handing {
+  readonly edges: readonly HolderEdge[];
   readonly fn: Node;
   readonly handed: Set<Node>;
   readonly followed: Set<Node>;
@@ -150,7 +152,8 @@ function keepsCall({
  * its own they read by name, in turn.
  */
 function handedOut(fn: Node, writtenBy: WrittenBy): ReadonlySet<Node> {
-  const handing: Handing = { fn, followed: new Set(), handed: new Set(), writtenBy };
+  const edges = holderEdgesIn(fn, writtenBy);
+  const handing: Handing = { edges, fn, followed: new Set(), handed: new Set(), writtenBy };
   for (const answer of answersOf(fn)) {
     hold(answer, handing);
   }
@@ -318,70 +321,27 @@ function holdDeclared(name: Identifier, handing: Handing): void {
  * what it hands a method or a global's function that changes it, `handlers.push(() => ++n)`.
  */
 function holdWritten(declared: Declared, handing: Handing): void {
+  const watched = watchedDeclarations(declared, handing.edges);
   const visit = (node: Node): void => {
-    const written = handing.writtenBy(node);
-    const changed =
-      written === undefined ? writtenArgumentBy(node) : [written, ...writtenArgumentBy(node)];
-    const writes = changed
-      .flatMap((each) => targetsOf(each))
-      .some((target) => {
-        const root = rootOf(target);
-        return root !== undefined && declarationOf(root) === declared;
-      });
-    if (writes) {
-      if (isBinaryExpression(node)) {
-        hold(node.right, handing);
-      } else if (isCallExpression(node)) {
-        for (const each of writtenCallValues(node)) {
-          hold(each, handing);
-        }
-      }
+    if (writtenDeclarations(node, handing.writtenBy).some((owner) => watched.has(owner))) {
+      holdWriteValues(node, handing);
     }
     node.forEachChild(visit);
   };
   visit(handing.fn);
 }
 
-/**
- * What `node`, what an assignment or a loop writes into, writes into each: of a pattern, each of its
- * targets, in turn — `[n] = [n + 1]`, `({ a: kept.x } = value)`, a default's, `[n = 0] = …`, a
- * rest's — of anything else, itself.
- */
-export function targetsOf(node: Node): readonly Node[] {
-  let target = node;
-  while (isTypeWrapper(target)) target = target.expression;
-  if (isArrayLiteralExpression(target)) {
-    return target.elements.flatMap((element) =>
-      targetsOf(isSpreadElement(element) ? element.expression : element),
-    );
+/** Retains functions supplied on the right-hand side or call arguments of a write node. */
+function holdWriteValues(node: Node, handing: Handing): void {
+  if (isBinaryExpression(node)) {
+    hold(node.right, handing);
+    return;
   }
-  if (isObjectLiteralExpression(target)) {
-    return target.properties.flatMap((property): readonly Node[] => {
-      if (isPropertyAssignment(property)) {
-        return targetsOf(property.initializer);
-      }
-      if (isShorthandPropertyAssignment(property)) {
-        return [property.name];
-      }
-      return isSpreadAssignment(property) ? targetsOf(property.expression) : [];
-    });
+  if (isCallExpression(node)) {
+    for (const each of writtenCallValues(node)) {
+      hold(each, handing);
+    }
   }
-  return isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken
-    ? targetsOf(target.left)
-    : [target];
-}
-
-/** The name `node` is of, past the members it reads and what wraps it: `cache` of `cache[key].x`. */
-export function rootOf(node: Node): Identifier | undefined {
-  let each = node;
-  while (
-    isPropertyAccessExpression(each) ||
-    isElementAccessExpression(each) ||
-    isTypeWrapper(each)
-  ) {
-    each = each.expression;
-  }
-  return isIdentifier(each) && readsBinding(each) ? each : undefined;
 }
 
 /**

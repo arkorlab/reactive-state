@@ -2,18 +2,10 @@ import {
   type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
-  isArrayLiteralExpression,
-  isAsExpression,
-  isIdentifier,
   isNewExpression,
-  isNonNullExpression,
-  isParenthesizedExpression,
-  isSatisfiesExpression,
   isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
-  isVariableDeclaration,
-  isVariableDeclarationList,
   isVoidExpression,
   type NewExpression,
   type Node,
@@ -22,10 +14,9 @@ import {
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
 import { BUILT_INS } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
+import { unmutatedTuple } from './tuple-spreads.ts';
 
 /** Synchronous callback classification and tuple-spread expansion for native invocations. */
 
@@ -184,69 +175,4 @@ function expandNativeArguments(given: readonly Expression[]): ExpandedArguments 
     stack.push(...tuple.elements.toReversed());
   }
   return { unresolvedAt, values };
-}
-
-/** An inline array literal, or a const array literal read exclusively as a spread operand. */
-function unmutatedTuple(expression: Expression): ArrayLiteralExpression | undefined {
-  const value = unwrapped(expression);
-  if (isArrayLiteralExpression(value)) {
-    return value;
-  }
-  if (!isIdentifier(value)) {
-    return undefined;
-  }
-  const declared = frameDeclarationOf(value);
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    !isIdentifier(declared.name) ||
-    !isVariableDeclarationList(declared.parent) ||
-    !/^const\b/u.test(declared.parent.getText(declared.getSourceFile())) ||
-    declared.initializer === undefined
-  ) {
-    return undefined;
-  }
-  const initial = unwrapped(declared.initializer);
-  return isArrayLiteralExpression(initial) && spreadOnlyReads(declared, declared.name)
-    ? initial
-    : undefined;
-}
-
-/** Whether every reference to `declared` in its file appears solely as a spread operand. */
-function spreadOnlyReads(declared: Node, boundName: Node & { readonly text: string }): boolean {
-  const pending: Node[] = [declared.getSourceFile()];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    if (
-      current !== boundName &&
-      isIdentifier(current) &&
-      current.text === boundName.text &&
-      frameDeclarationOf(current) === declared &&
-      !isSpreadOperand(current)
-    ) {
-      return false;
-    }
-    current.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return true;
-}
-
-/** Whether `node` (past parentheses and type wrappers) is the direct operand of `...node`. */
-function isSpreadOperand(node: Node): boolean {
-  let current = node;
-  while (isTransparentWrapper(current.parent) && current.parent.expression === current) {
-    current = current.parent;
-  }
-  return isSpreadElement(current.parent) && current.parent.expression === current;
-}
-
-/** Parentheses, casts, satisfies and non-null assertions preserve the spread operand. */
-function isTransparentWrapper(node: Node): node is Node & { readonly expression: Expression } {
-  return (
-    isParenthesizedExpression(node) ||
-    isAsExpression(node) ||
-    isSatisfiesExpression(node) ||
-    isNonNullExpression(node)
-  );
 }

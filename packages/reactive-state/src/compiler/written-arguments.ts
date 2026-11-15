@@ -1,4 +1,5 @@
 import {
+  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   isArrayLiteralExpression,
@@ -23,6 +24,7 @@ import { globalPathOf } from './code-globals.ts';
 import { initializerOf } from './framed.ts';
 import { constantValue } from './numbers.ts';
 import { patternSymbolName } from './pattern-writes.ts';
+import { constFollowedValue, unmutatedTuple } from './tuple-spreads.ts';
 
 /**
  * Call arguments mutated beside a method's receiver: `structuredClone` transfer lists, explicit
@@ -41,7 +43,7 @@ interface GlobalCall {
 
 interface ReflectSpreadContext {
   readonly index: number;
-  readonly seen: Set<Expression>;
+  readonly seen: Set<ArrayLiteralExpression>;
   readonly stack: CallArgument[];
   readonly targets: Node[];
 }
@@ -93,7 +95,7 @@ export function globalCallOf(call: CallExpression): GlobalCall | undefined {
 /** Selects the argument at `slot` after expanding known tuple spreads, or an covering spread holder. */
 export function argumentAt(given: readonly CallArgument[], slot: number): Expression | undefined {
   const stack = given.toReversed();
-  const seen = new Set<Expression>();
+  const seen = new Set<ArrayLiteralExpression>();
   let index = 0;
   for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
     if (current.spread) {
@@ -116,7 +118,7 @@ export function argumentAt(given: readonly CallArgument[], slot: number): Expres
 export function reflectSetReceivers(given: readonly CallArgument[]): readonly Node[] {
   const targets: Node[] = [];
   const stack = given.toReversed();
-  const seen = new Set<Expression>();
+  const seen = new Set<ArrayLiteralExpression>();
   let index = 0;
   let shifted = false;
   for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
@@ -156,18 +158,18 @@ export function transferredBy(options: Expression | undefined): readonly Node[] 
   return [];
 }
 
-/** Pushes an array-literal spread's elements onto `stack` when statically known. */
+/** Pushes an unchanged array-literal spread's elements onto `stack` when statically known. */
 function expandTupleSpread(
   expression: Expression,
-  seen: Set<Expression>,
+  seen: Set<ArrayLiteralExpression>,
   stack: CallArgument[],
 ): boolean {
-  const value = followedValue(expression);
-  if (!isArrayLiteralExpression(value) || seen.has(value)) {
+  const tuple = unmutatedTuple(expression);
+  if (tuple === undefined || seen.has(tuple)) {
     return false;
   }
-  seen.add(value);
-  stack.push(...asCallArguments(value.elements).toReversed());
+  seen.add(tuple);
+  stack.push(...asCallArguments(tuple.elements).toReversed());
   return true;
 }
 
@@ -224,13 +226,14 @@ export function appliedArguments(node: Expression | undefined): readonly CallArg
   if (node === undefined) {
     return [];
   }
-  const value = followedValue(node);
+  const value = constFollowedValue(node);
   if (value.kind === SyntaxKind.NullKeyword || globalPathOf(value)?.join('.') === 'undefined') {
     return [];
   }
-  return isArrayLiteralExpression(value)
-    ? asCallArguments(value.elements)
-    : [{ expression: unwrapped(node), spread: true }];
+  const tuple = unmutatedTuple(node);
+  return tuple === undefined
+    ? [{ expression: unwrapped(node), spread: true }]
+    : asCallArguments(tuple.elements);
 }
 
 /** The name `node` reads of what it reads it of, by its name or by text in brackets; none of another. */
