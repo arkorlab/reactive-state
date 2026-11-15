@@ -1,8 +1,11 @@
 import {
+  type BindingElement,
+  type BindingName,
   type Expression,
   type FunctionDeclaration,
   isAsExpression,
   isAwaitExpression,
+  isBindingElement,
   isComputedPropertyName,
   isDecorator,
   isFunctionLikeDeclaration,
@@ -32,7 +35,15 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './page-shape.ts';
-import { type Held, type Scope, SEARCH, type Source, valueOf } from './page-values.ts';
+import {
+  type Held,
+  namesRead,
+  OTHER,
+  type Scope,
+  SEARCH,
+  type Source,
+  valueOf,
+} from './page-values.ts';
 import { bindingIdentifiers, isTypeOnly } from './scope.ts';
 import { isConstant } from './statements.ts';
 
@@ -162,6 +173,103 @@ function paramsOf(pattern: ObjectBindingPattern): ReadonlyMap<string, string> | 
   return params;
 }
 
+interface ElementStep {
+  readonly element: BindingElement;
+  readonly kind: 'element';
+  readonly rest: { tainted: boolean };
+  readonly tainted: boolean;
+}
+
+interface PatternStep {
+  readonly kind: 'pattern';
+  readonly pattern: BindingName;
+  readonly tainted: boolean;
+}
+
+type SearchStep = ElementStep | PatternStep;
+
+interface SearchWalk {
+  readonly pending: SearchStep[];
+  readonly scope: Scope;
+  readonly uninitialized: Set<string>;
+}
+
+/** Whether `expression` reads nothing still uninitialized, and computes only of search params or constants. */
+function isSearchValue(expression: Expression, walk: SearchWalk): boolean {
+  if (namesRead(expression).some((identifier) => walk.uninitialized.has(identifier.text))) {
+    return false;
+  }
+  const held = valueOf(expression, walk.scope);
+  return held.kind === 'constant' || held.kind === 'search';
+}
+
+/** Binds an identifier or queues the elements of a destructuring pattern in left-to-right order. */
+function stepPattern(step: PatternStep, walk: SearchWalk): void {
+  const { pattern, tainted } = step;
+  if (isIdentifier(pattern)) {
+    walk.uninitialized.delete(pattern.text);
+    walk.scope.locals.set(pattern.text, tainted ? OTHER : SEARCH);
+    return;
+  }
+  const rest = { tainted };
+  const elements = isObjectBindingPattern(pattern)
+    ? pattern.elements
+    : pattern.elements.filter((element) => isBindingElement(element));
+  for (const element of elements.toReversed()) {
+    walk.pending.push({ element, kind: 'element', rest, tainted });
+  }
+}
+
+/** Evaluates one destructuring element's computed key and default before queuing its target binding. */
+function stepElement(step: ElementStep, walk: SearchWalk): void {
+  const { element, rest, tainted } = step;
+  const { name } = element;
+  if (name === undefined) {
+    return;
+  }
+  if (element.dotDotDotToken !== undefined) {
+    walk.pending.push({ kind: 'pattern', pattern: name, tainted: rest.tainted });
+    return;
+  }
+  const badKey =
+    element.propertyName !== undefined &&
+    isComputedPropertyName(element.propertyName) &&
+    !isSearchValue(element.propertyName.expression, walk);
+  if (badKey) {
+    rest.tainted = true;
+  }
+  const badDefault = element.initializer !== undefined && !isSearchValue(element.initializer, walk);
+  walk.pending.push({
+    kind: 'pattern',
+    pattern: name,
+    tainted: tainted || badKey || badDefault,
+  });
+}
+
+/** Binds what `name = await searchParams` declares, tainting bindings whose keys or defaults read more. */
+function bindSearch(name: Node, scope: Scope): boolean {
+  if (!isIdentifier(name) && !isObjectBindingPattern(name)) {
+    return false;
+  }
+  const identifiers = bindingIdentifiers(name);
+  if (identifiers.length === 0) {
+    return false;
+  }
+  const walk: SearchWalk = {
+    pending: [{ kind: 'pattern', pattern: name, tainted: false }],
+    scope,
+    uninitialized: new Set(identifiers.map((identifier) => identifier.text)),
+  };
+  for (let step = walk.pending.pop(); step !== undefined; step = walk.pending.pop()) {
+    if (step.kind === 'pattern') {
+      stepPattern(step, walk);
+    } else {
+      stepElement(step, walk);
+    }
+  }
+  return true;
+}
+
 /** Holds what one declaration of a `const` declares; whether it is of a shape read. */
 function bindDeclaration(
   declaration: { readonly name: Node; readonly initializer?: Expression | undefined },
@@ -187,12 +295,7 @@ function bindDeclaration(
     return true;
   }
   if (source === 'searchParams') {
-    const names =
-      isIdentifier(name) || isObjectBindingPattern(name) ? bindingIdentifiers(name) : [];
-    for (const identifier of names) {
-      locals.set(identifier.text, SEARCH);
-    }
-    return names.length > 0;
+    return bindSearch(name, reading.scope);
   }
   if (!isIdentifier(name)) {
     return false;
