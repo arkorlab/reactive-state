@@ -37,7 +37,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { declarationOf, initializerOf } from './framed.ts';
+import { initializerOf } from './framed.ts';
 import { runsPerCall } from './kept.ts';
 import { freeReads } from './scope.ts';
 import {
@@ -47,6 +47,7 @@ import {
   finalizeRestPath,
   isNonNegativeIndex,
   shiftedStepKey,
+  unchangedLocalInitializer,
 } from './this-rest-defaults.ts';
 
 /** A missing property differs from a getter or an unproven member. */
@@ -94,7 +95,7 @@ export function freshReceiverDefault(
     return false;
   }
   const adjusted = finalizeRestPath(name, walk, path);
-  return adjusted === undefined ? false : freshValue(walk.value, adjusted, name);
+  return adjusted !== undefined && freshValue(walk.value, adjusted, name);
 }
 
 /** The member a reference selects without evaluating a computed key. */
@@ -258,18 +259,14 @@ function projectedValue(
   while (!seen.has(value)) {
     seen.add(value);
     if (isIdentifier(value)) {
-      const declared = declarationOf(value);
-      if (
-        local === undefined ||
-        declared === undefined ||
-        !isVariableDeclaration(declared) ||
-        declared.initializer === undefined ||
-        functionOf(declared) !== functionOf(local) ||
-        !/^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
-      ) {
+      const initializer =
+        local === undefined
+          ? undefined
+          : unchangedLocalInitializer(value, functionOf(local), functionOf);
+      if (initializer === undefined) {
         return undefined;
       }
-      value = unwrapped(declared.initializer);
+      value = unwrapped(initializer);
       continue;
     }
     if (index >= path.length) {

@@ -4,15 +4,36 @@ import {
   type Identifier,
   isArrayBindingPattern,
   isArrayLiteralExpression,
+  isAsExpression,
   isBindingElement,
+  isCallExpression,
+  isDoStatement,
+  isExpressionStatement,
+  isForInStatement,
+  isForOfStatement,
+  isForStatement,
   isIdentifier,
+  isNonNullExpression,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
+  isParenthesizedExpression,
+  isSatisfiesExpression,
+  isSourceFile,
   isSpreadElement,
+  isTypeAssertion,
   isVariableDeclaration,
+  isVariableStatement,
+  isVoidExpression,
+  isWhileStatement,
   type Node,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
-import { patternKey } from './code-globals.ts';
+import { unwrapped } from './bounded.ts';
+import { globalPathOf, patternKey } from './code-globals.ts';
+import { declarationOf } from './framed.ts';
+import { readsOf } from './local-module-reads.ts';
+import { isTypeOnly } from './scope.ts';
 
 /** Mutable walk state while stepping through destructuring bindings and chosen defaults. */
 export interface DefaultWalk {
@@ -21,6 +42,14 @@ export interface DefaultWalk {
   offset: number;
   value: Expression | undefined;
 }
+
+/** Built-in calls that lock an object in place without changing its own entry values. */
+const LOCKING_CALLS: ReadonlySet<string> = new Set([
+  'Object.freeze',
+  'Object.preventExtensions',
+  'Object.seal',
+  'Reflect.preventExtensions',
+]);
 
 /** Binding projections in their evaluation order, including defaults at outer pattern levels. */
 export function bindingSteps(name: Identifier): readonly BindingElement[] {
@@ -85,7 +114,7 @@ export function advanceRestStep(
     walk.value = current;
     return true;
   }
-  if (!isIdentifier(step.name) || !isObjectLiteralExpression(current)) {
+  if (step.name === undefined || !isIdentifier(step.name) || !isObjectLiteralExpression(current)) {
     return false;
   }
   const excluded = excludedObjectKeys(step);
@@ -137,6 +166,129 @@ export function isNonNegativeIndex(key: string): boolean {
   return Number.isSafeInteger(index) && index >= 0 && String(index) === key;
 }
 
+/**
+ * Resolves `read`'s initializer only when `read` names a same-function `const` binding in the same
+ * loop scope whose only lexical reads are `read` itself, `void`, or discarded locking calls.
+ */
+export function unchangedLocalInitializer(
+  read: Identifier,
+  localOwner: Node | undefined,
+  ownerOf: (node: Node) => Node | undefined,
+): Expression | undefined {
+  const declared = declarationOf(read);
+  if (
+    localOwner === undefined ||
+    declared === undefined ||
+    !isVariableDeclaration(declared) ||
+    !validLocalDeclaration(declared, read, localOwner, ownerOf)
+  ) {
+    return undefined;
+  }
+  return isIdentifier(declared.name) && !hasUnsafeLocalRead(declared.name, read, localOwner)
+    ? declared.initializer
+    : undefined;
+}
+
+/** Whether `declared` is a pre-evaluated `const` identifier declaration in `localOwner`'s loop scope. */
+function validLocalDeclaration(
+  declared: VariableDeclaration,
+  read: Identifier,
+  localOwner: Node,
+  ownerOf: (node: Node) => Node | undefined,
+): boolean {
+  return (
+    isIdentifier(declared.name) &&
+    declared.initializer !== undefined &&
+    read.pos > declared.end &&
+    ownerOf(declared) === localOwner &&
+    /^const\s/u.test(declared.parent.getText(declared.getSourceFile())) &&
+    !crossesLoop(read, declared)
+  );
+}
+
+/** Whether any loop body sits between `read` and the block or statement owning `declared`. */
+function crossesLoop(read: Identifier, declared: VariableDeclaration): boolean {
+  const statement = declared.parent.parent;
+  const container: Node = isVariableStatement(statement) ? statement.parent : statement;
+  for (let at: Node = read.parent; at !== container && !isSourceFile(at); at = at.parent) {
+    if (
+      isDoStatement(at) ||
+      isForInStatement(at) ||
+      isForOfStatement(at) ||
+      isForStatement(at) ||
+      isWhileStatement(at)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether `owner` contains any lexical read of `binding` other than `activeRead` and harmless locks. */
+function hasUnsafeLocalRead(binding: Identifier, activeRead: Identifier, owner: Node): boolean {
+  const isRead = readsOf(binding, binding.getSourceFile());
+  let unsafe = false;
+  const visit = (node: Node): void => {
+    if (unsafe || isTypeOnly(node)) {
+      return;
+    }
+    if (
+      node !== binding &&
+      isIdentifier(node) &&
+      isRead(node) &&
+      !safeLocalRead(node, activeRead)
+    ) {
+      unsafe = true;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  visit(owner);
+  return unsafe;
+}
+
+/** Whether `node` is `activeRead` itself, discarded via `void`, or passed to a discarded lock call. */
+function safeLocalRead(node: Identifier, activeRead: Identifier): boolean {
+  if (node === activeRead) {
+    return true;
+  }
+  const top = topExpression(node);
+  return isVoidExpression(top.parent) || isDiscardedLockCall(top);
+}
+
+/** Whether `argument` is the sole argument of a discarded `Object.freeze`/`seal`/`preventExtensions`. */
+function isDiscardedLockCall(argument: Expression): boolean {
+  const parent = argument.parent;
+  if (
+    !isCallExpression(parent) ||
+    parent.arguments.length !== 1 ||
+    parent.arguments[0] !== argument
+  ) {
+    return false;
+  }
+  const path = globalPathOf(unwrapped(parent.expression))?.join('.');
+  if (path === undefined || !LOCKING_CALLS.has(path)) {
+    return false;
+  }
+  const callTop = topExpression(parent);
+  return isExpressionStatement(callTop.parent) || isVoidExpression(callTop.parent);
+}
+
+/** Walks up reference-preserving expression wrappers around `node`. */
+function topExpression(node: Expression): Expression {
+  let at = node;
+  while (
+    isParenthesizedExpression(at.parent) ||
+    isNonNullExpression(at.parent) ||
+    isAsExpression(at.parent) ||
+    isSatisfiesExpression(at.parent) ||
+    isTypeAssertion(at.parent)
+  ) {
+    at = at.parent;
+  }
+  return at;
+}
+
 /** An object binding's written key or an array binding's position. */
 function patternName(step: BindingElement): string | undefined {
   return isArrayBindingPattern(step.parent)
@@ -146,7 +298,7 @@ function patternName(step: BindingElement): string | undefined {
 
 /** Static sibling property keys excluded before `rest` in an object binding pattern. */
 function excludedObjectKeys(rest: BindingElement): ReadonlySet<string> | undefined {
-  if (isArrayBindingPattern(rest.parent)) {
+  if (!isObjectBindingPattern(rest.parent)) {
     return undefined;
   }
   const excluded = new Set<string>();
