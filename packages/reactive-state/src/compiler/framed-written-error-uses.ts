@@ -12,11 +12,14 @@ import {
   isConditionalExpression,
   isConstructorDeclaration,
   isDeleteExpression,
+  isDoStatement,
   isElementAccessExpression,
   isForInStatement,
   isForOfStatement,
+  isForStatement,
   isGetAccessorDeclaration,
   isIdentifier,
+  isIfStatement,
   isNewExpression,
   isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
@@ -44,6 +47,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   isVoidExpression,
+  isWhileStatement,
   type Node,
   type PropertyName,
   SyntaxKind,
@@ -110,7 +114,7 @@ export function nonEscapingErrorRead(reference: Identifier): boolean {
   );
 }
 
-/** Direct `String(error)`, untagged templates, strict guards, and `+` / `+=` conversions. */
+/** Direct `String(error)`, untagged templates, strict/boolean guards, and `+` / `+=` conversions. */
 function directTextOrTestUse(at: Node, parent: Node): boolean {
   return (
     directStringConversion(at, parent) ||
@@ -118,9 +122,62 @@ function directTextOrTestUse(at: Node, parent: Node): boolean {
     safeBinaryUse(at, parent) ||
     isTypeOfExpression(parent) ||
     isVoidExpression(parent) ||
-    (isPrefixUnaryExpression(parent) && parent.operator === SyntaxKind.ExclamationToken) ||
-    (isConditionalExpression(parent) && parent.condition === at)
+    pureBooleanTestUse(at, parent)
   );
+}
+
+/** Truthiness tests consume `ToBoolean` directly without retaining or exposing the reference. */
+function pureBooleanTestUse(at: Node, parent: Node): boolean {
+  let current = at;
+  let container = parent;
+  while (booleanBranchOperand(current, container)) {
+    const outer = useOf(container);
+    current = outer.at;
+    container = outer.parent;
+  }
+  return immediateBooleanTest(current, container);
+}
+
+/** Logical and conditional branch slots forward a value only when enclosed in a boolean test. */
+function booleanBranchOperand(at: Node, parent: Node): boolean {
+  if (isConditionalExpression(parent)) {
+    return parent.whenTrue === at || parent.whenFalse === at;
+  }
+  return (
+    isBinaryExpression(parent) &&
+    RETURN_BINARY_OPERATORS.has(parent.operatorToken.kind) &&
+    (parent.left === at || parent.right === at)
+  );
+}
+
+/** Control-flow conditions, `!`, `?:` conditions, and unshadowed `Boolean(value)` calls. */
+function immediateBooleanTest(at: Node, parent: Node): boolean {
+  if (
+    (isIfStatement(parent) || isWhileStatement(parent) || isDoStatement(parent)) &&
+    parent.expression === at
+  ) {
+    return true;
+  }
+  if ((isForStatement(parent) || isConditionalExpression(parent)) && parent.condition === at) {
+    return true;
+  }
+  if (
+    isPrefixUnaryExpression(parent) &&
+    parent.operator === SyntaxKind.ExclamationToken &&
+    parent.operand === at
+  ) {
+    return true;
+  }
+  return directBooleanConversion(at, parent);
+}
+
+/** Unshadowed single-argument `Boolean(value)` call converting to a primitive boolean. */
+function directBooleanConversion(at: Node, parent: Node): boolean {
+  if (!isCallExpression(parent) || parent.arguments.length !== 1 || parent.arguments[0] !== at) {
+    return false;
+  }
+  const callee = unwrapped(parent.expression);
+  return globalPathOf(callee)?.join('.') === 'Boolean';
 }
 
 /** Unshadowed single-argument `String(value)` or `new String(value)` conversion. */
