@@ -11,6 +11,8 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isTaggedTemplateExpression,
+  isTemplateExpression,
   type Node,
   type ObjectLiteralExpression,
   type PropertyAccessExpression,
@@ -22,6 +24,7 @@ import { isTakenApart, useOf } from './code-globals.ts';
 import { sourceArrayFunction, sourceArrayMethod } from './framed-array-functions.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { computedBindingContainer, framedKeyNames, framedMemberNames } from './framed-keys.ts';
+import { framedNativeConstructor } from './framed-sources.ts';
 import { assignedNames, localDateOwnData, localDateOwnMethod } from './local-date-inputs.ts';
 import { dateText, localNamed } from './local-reads.ts';
 import { renderDateText } from './render-date-text.ts';
@@ -47,6 +50,7 @@ const LOCALE_MEMBERS: ReadonlySet<string> = new Set([
   'toLocaleString',
   'toLocaleUpperCase',
 ]);
+const RAW_TAGS: ReadonlySet<string> = new Set(['String.raw']);
 
 /**
  * Native locale members and a formatter's methods — read as a member, by `Reflect.get`, or taken
@@ -63,7 +67,19 @@ export function renderLocalInput(node: Node): string | undefined {
     const member = renderIntlInput(node) ?? memberLocaleInput(node);
     if (member !== undefined) return member;
   }
-  return patternLocaleMember(node) ?? renderDateText(node) ?? dateText(node);
+  return patternLocaleMember(node) ?? renderDateText(node) ?? localDateText(node);
+}
+
+/** Tagged templates pass Date substitutions raw unless native String.raw converts them to text. */
+function localDateText(node: Node): string | undefined {
+  if (
+    isTemplateExpression(node) &&
+    isTaggedTemplateExpression(node.parent) &&
+    node.parent.template === node &&
+    !framedNativeConstructor(node.parent.tag, RAW_TAGS)
+  )
+    return undefined;
+  return dateText(node);
 }
 
 /** Direct, constant-key and multi-branch bracket reads retain native locale methods unless own. */
