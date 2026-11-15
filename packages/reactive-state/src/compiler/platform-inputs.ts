@@ -420,18 +420,26 @@ function handedCall(
 }
 
 /** Whether `held` may evaluate to a mutable object rather than a primitive value. */
-function isMutableHolding(held: Expression | undefined): boolean {
+function isMutableHolding(held: Expression | undefined, seen = new Set<Identifier>()): boolean {
   if (held === undefined) {
     return true;
   }
   const value = unwrapped(held);
+  const undefinedGlobal = globalPathOf(value)?.join('.') === 'undefined';
+  if (isIdentifier(value) && !undefinedGlobal) {
+    if (seen.has(value)) {
+      return true;
+    }
+    seen.add(value);
+    return isMutableHolding(platformInitializer(value, value), seen);
+  }
   return (
     constantValue(value) === undefined &&
     value.kind !== SyntaxKind.NullKeyword &&
     !isBigIntLiteral(value) &&
     !isVoidExpression(value) &&
     !isTemplateExpression(value) &&
-    globalPathOf(value)?.join('.') !== 'undefined'
+    !undefinedGlobal
   );
 }
 
