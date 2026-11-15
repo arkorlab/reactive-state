@@ -22,8 +22,10 @@ import { framedSubclassMessages } from '../src/compiler/framed-subclass-messages
  * is not taken, and no path is followed through it. The path does not stand alone: where it stops
  * at a value the compile cannot read into (an `Error` the construction supplies, whose own `message`
  * is read), or meets a member that another default writes (`options[1] = options[0]`), what the
- * default selects it of is forwarded whole as well, as it is where the path is not followed. The
- * rows marked a pin answer the same before the change as after it.
+ * default selects it of is forwarded whole as well, as it is where the path is not followed, and
+ * so is what it selects the last member of where the path has two keys or more (`{ inner: error }`
+ * for `options.inner.message`, read at `inner`). The rows marked a pin answer the same before the
+ * change as after it.
  */
 
 interface Case {
@@ -193,6 +195,62 @@ const CASES: readonly Case[] = [
       'class Failure extends Error { constructor(fallback: unknown, options = fallback as { message: unknown }) { super(options.message as never, { cause: Math.abs(1) }); } } new Failure({ message: error });',
     supplied: '{ message: error }',
     what: 'a call in the `super` argument beside the message',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, options = fallback as { inner: { message: unknown } }) { super(options.inner.message as never); } } new Failure({ inner: error });',
+    supplied: '{ inner: error }',
+    what: 'a member read one member deeper than the default',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, { inner } = fallback as { inner: { message: unknown } }) { super(inner.message as never); } } new Failure({ inner: error });',
+    supplied: '{ inner: error }',
+    what: 'a name a pattern default binds, read one member deeper',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, { inner: { message } } = fallback as { inner: { message: unknown } }) { super(message as never); } } new Failure({ inner: error });',
+    supplied: '{ inner: error }',
+    what: 'a name a nested pattern default binds',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, options = fallback as { inner: unknown }, picked = (options as { inner: { message: unknown } }).inner) { super(picked.message as never); } } new Failure({ inner: error });',
+    supplied: '{ inner: error }',
+    what: 'a member read through two defaults',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, options = fallback as { inner?: { message: unknown } }) { super(options?.inner?.message as never); } } new Failure({ inner: error });',
+    supplied: '{ inner: error }',
+    what: 'the same by an optional chain',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, key: string, options = fallback as { inner: Record<string, unknown> }) { super(options.inner[key] as never); } } new Failure({ inner: error }, "message");',
+    supplied: '{ inner: error }',
+    what: 'a key the compile cannot read after a member',
+  },
+  {
+    forwarded: false,
+    path: '',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, options = fallback as { inner: { message: unknown } }) { super(options.inner.message as never); } } new Failure({ inner: { message: "fixed" }, other: error });',
+    supplied: 'error',
+    what: 'an Error held by a member no read selects, two keys deep (pin)',
   },
   {
     forwarded: false,

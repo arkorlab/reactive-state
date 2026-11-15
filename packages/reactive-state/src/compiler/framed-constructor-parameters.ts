@@ -26,7 +26,7 @@ import {
   frameMemberName,
 } from './framed-bindings.ts';
 import { framedDefaultTaken } from './framed-constructor-defaults.ts';
-import { bindingIdentifiers, readsBinding } from './scope.ts';
+import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
 
 /** What a constructor's `super` arguments read of its parameters, by a construction's arguments. */
 
@@ -176,7 +176,9 @@ function parameterReads(
   const source = forwardedRoot(root.value);
   const pending: Node[] = [root.value];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    // A bare typeof operand is inspected without copying its words into the native argument.
+    // A bare typeof operand is inspected without copying its words into the native argument, and a
+    // type is erased: the name of a member in `fallback as { inner: unknown }` reads nothing.
+    if (isTypeOnly(node)) continue;
     if (isTypeOfExpression(node) && isIdentifier(unwrapped(node.expression))) continue;
     node.forEachChild((child) => {
       pending.push(child);
@@ -186,21 +188,9 @@ function parameterReads(
     if (read === undefined) return undefined;
     values.push(...read.whole);
     if (node === source && root.selected) {
-      values.push(...read.values.map((each) => continuedValue(each, root)));
-      defaults.push(
-        ...read.defaults.map((each) => {
-          return {
-            ...continuedValue(each, root),
-            selected: each.selected,
-          };
-        }),
-      );
-      // The path may stop at a value the compile cannot read into, an Error's own `message`, or
-      // meet a member another default writes: what the default selects it of stays whole too.
-      if (root.keys.length > 0 || root.any === true) {
-        values.push(...read.values);
-        defaults.push(...read.defaults.map((each) => ({ ...each, selected: false })));
-      }
+      const selected = selectedRead(root, read);
+      values.push(...selected.values);
+      defaults.push(...selected.defaults);
     } else {
       values.push(...read.values);
       defaults.push(
@@ -209,6 +199,28 @@ function parameterReads(
     }
   }
   return { defaults, values };
+}
+
+/**
+ * What one parameter read inside a selected default passes on, read along the path the default is
+ * selected by: its values and defaults continued along that path and, where the path has a key,
+ * as they stand (what the default selects the path of) and, where it has two or more, read up to
+ * the key before the last (what it selects the last member of). The path may stop at a value the
+ * compile cannot read into, an Error's own `message`, or meet a member another default writes.
+ */
+function selectedRead(root: DefaultValue, read: ParameterRead): Reads {
+  const values = read.values.map((each) => continuedValue(each, root));
+  const defaults = read.defaults.map((each) => {
+    return {
+      ...continuedValue(each, root),
+      selected: each.selected,
+    };
+  });
+  if (root.keys.length === 0 && root.any !== true) return { defaults, values };
+  return {
+    defaults: [...defaults, ...read.defaults.map((each) => ({ ...each, selected: false }))],
+    values: [...values, ...read.values, ...heldBy(read.values, root)],
+  };
 }
 
 /** Bare noncoercing comparison operands supply only their boolean result to the message. */
@@ -425,6 +437,12 @@ function receivers(
   return given
     .filter((each) => any || keys.length > 1 || each.keys.length > 0 || !isLiteral(each.value))
     .map((each) => selectedValue(each, read, false));
+}
+
+/** What the path a default is read along selects a member of, where it has a key before the last. */
+function heldBy(given: readonly ForwardedValue[], root: DefaultValue): readonly ForwardedValue[] {
+  const read = root.any === true ? root.keys : root.keys.slice(0, -1);
+  return read.length === 0 ? [] : given.map((each) => selectedValue(each, read, false));
 }
 
 /** What a read of a rest parameter selects a member of: the argument at a position, as `receivers`. */
