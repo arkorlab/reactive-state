@@ -41,9 +41,11 @@ export function framedRegExpReceiver(expression: Expression): boolean {
 export function framedOwnRegExpMethod(call: CallExpression): boolean {
   const member = unwrapped(call.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return false;
+  const method = frameMemberName(member);
   const source = patternSource(member.expression);
   const { at, parent } = useOf(call);
   if (
+    method === undefined ||
     source === undefined ||
     !isExpression(at) ||
     (!isReturnStatement(parent) && !isExpressionStatement(parent)) ||
@@ -60,7 +62,7 @@ export function framedOwnRegExpMethod(call: CallExpression): boolean {
   const target = unwrapped(assignment.left);
   return (
     (isPropertyAccessExpression(target) || isElementAccessExpression(target)) &&
-    frameMemberName(target) === frameMemberName(member) &&
+    frameMemberName(target) === method &&
     patternSource(target.expression) === source &&
     sourceArrayFunction(assignment.right) &&
     unexposedPattern(source, assignment, call)
