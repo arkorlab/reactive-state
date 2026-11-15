@@ -41,7 +41,7 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import { type Answering, isAnswering } from './answers.ts';
+import { type Answering, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
@@ -175,13 +175,14 @@ function ignoresErrorSlots(fn: Answering, slots: readonly number[]): boolean {
 
 /** Checks one substitution index against preceding rest parameters and its positional parameter. */
 function ignoresSlot(fn: Answering, slot: number): boolean {
+  const parameters = parametersOf(fn);
   const targetIndex = slot + 1;
-  for (const [index, parameter] of fn.parameters.entries()) {
+  for (const [index, parameter] of parameters.entries()) {
     if (parameter.dotDotDotToken !== undefined && index <= targetIndex) {
       return safeParameterReads(fn, parameter, false);
     }
   }
-  const parameter = fn.parameters[targetIndex];
+  const parameter = parameters[targetIndex];
   return parameter === undefined || safeParameterReads(fn, parameter, true);
 }
 
@@ -193,7 +194,7 @@ function safeParameterReads(
 ): boolean {
   if (!isIdentifier(parameter.name) || fn.body === undefined) return false;
   const name = parameter.name.text;
-  const pending: Node[] = [...fn.parameters, fn.body];
+  const pending: Node[] = [...parametersOf(fn), fn.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
     if (
@@ -227,7 +228,7 @@ function nonCoercingTestUse(node: Identifier): boolean {
 /** Non-arrow functions expose unnamed arguments when `arguments` is read in the same binding scope. */
 function mentionsOwnArguments(fn: Answering): boolean {
   if (fn.body === undefined) return false;
-  const pending: Node[] = [...fn.parameters, fn.body];
+  const pending: Node[] = [...parametersOf(fn), fn.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node) || (node !== fn && bindsOwnArguments(node))) continue;
     if (
