@@ -8,8 +8,10 @@ import {
   isAsExpression,
   isBinaryExpression,
   isClassStaticBlockDeclaration,
+  isComputedPropertyName,
   isConditionalExpression,
   isConstructorDeclaration,
+  isDecorator,
   isForInStatement,
   isForOfStatement,
   isFunctionDeclaration,
@@ -230,20 +232,56 @@ function mentionsOwnArguments(fn: Answering): boolean {
   if (fn.body === undefined) return false;
   const pending: Node[] = [...parametersOf(fn), fn.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node) || (node !== fn && bindsOwnArguments(node))) continue;
-    if (
-      isIdentifier(node) &&
-      node.text === 'arguments' &&
-      readsBinding(node) &&
-      frameDeclarationOf(node) === undefined
-    ) {
-      return true;
+    if (isTypeOnly(node)) continue;
+    if (node !== fn && bindsOwnArguments(node)) {
+      pushOuterScopeHeader(node, pending);
+      continue;
     }
+    if (readsOwnArgumentsIdentifier(node)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return false;
+}
+
+/** Matches an unshadowed `arguments` value read within the current callable scope. */
+function readsOwnArgumentsIdentifier(node: Node): boolean {
+  return (
+    isIdentifier(node) &&
+    node.text === 'arguments' &&
+    readsBinding(node) &&
+    frameDeclarationOf(node) === undefined
+  );
+}
+
+/** Computed member names and decorators evaluate in the enclosing callable's `arguments` scope. */
+function pushOuterScopeHeader(node: Node, pending: Node[]): void {
+  if (
+    (isMethodDeclaration(node) ||
+      isGetAccessorDeclaration(node) ||
+      isSetAccessorDeclaration(node)) &&
+    isComputedPropertyName(node.name)
+  ) {
+    pending.push(node.name.expression);
+  }
+  if (
+    isMethodDeclaration(node) ||
+    isGetAccessorDeclaration(node) ||
+    isSetAccessorDeclaration(node) ||
+    isConstructorDeclaration(node)
+  ) {
+    pushDecorators(node.modifiers, pending);
+    for (const parameter of node.parameters) pushDecorators(parameter.modifiers, pending);
+  }
+}
+
+/** Queues decorator expressions from a modifier list for outer-scope traversal. */
+function pushDecorators(modifiers: readonly Node[] | undefined, pending: Node[]): void {
+  if (modifiers === undefined) return;
+  for (const modifier of modifiers) {
+    if (isDecorator(modifier)) pending.push(modifier.expression);
+  }
 }
 
 /** Nested non-arrow functions and class blocks bind their own `arguments` rather than `fn`'s. */
