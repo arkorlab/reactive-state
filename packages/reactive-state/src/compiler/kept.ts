@@ -49,6 +49,7 @@ import { isIterator } from './iterators.ts';
 import { keptAliasOf } from './kept-aliases.ts';
 import { startupField } from './kept-fields.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
+import { writtenArgumentBy } from './written.ts';
 
 /**
  * What a shared module holds once, as it loads, which a function of its may write between calls
@@ -371,10 +372,14 @@ function holdDeclared(name: Identifier, handing: Handing): void {
 function holdWritten(declared: Declared, handing: Handing): void {
   const visit = (node: Node): void => {
     const written = handing.writtenBy(node);
-    const writes = (written === undefined ? [] : targetsOf(written)).some((target) => {
-      const root = rootOf(target);
-      return root !== undefined && declarationOf(root) === declared;
-    });
+    const changed =
+      written === undefined ? writtenArgumentBy(node) : [written, ...writtenArgumentBy(node)];
+    const writes = changed
+      .flatMap((each) => targetsOf(each))
+      .some((target) => {
+        const root = rootOf(target);
+        return root !== undefined && declarationOf(root) === declared;
+      });
     if (writes) {
       if (isBinaryExpression(node)) {
         hold(node.right, handing);

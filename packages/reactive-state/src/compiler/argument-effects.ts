@@ -50,7 +50,7 @@ import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { rootOf, targetsOf } from './kept.ts';
 import { bindingIdentifiers, isBlockScoped, readsBinding } from './scope.ts';
-import { writtenBy } from './written.ts';
+import { writtenArgumentBy, writtenBy } from './written.ts';
 
 interface Execution {
   readonly root: Node;
@@ -131,11 +131,11 @@ export function argumentChanges(argument: Expression, calleeOf: CalleeOf): boole
         definedClass(node, visit);
         return;
       }
-      const written = writtenBy(node);
-      status.changed =
-        written !== undefined &&
-        writeTargets(node, written).some((target) => !localWrite(target, node, context.fn));
+      status.changed = allWrittenTargets(node).some(
+        (target) => !localWrite(target, node, context.fn),
+      );
       if (!status.changed && invoked(node)) {
+        const written = writtenBy(node);
         const local = written !== undefined && localArrayCall(node, written, context.fn);
         status.changed = !local && !queueInvocation(node, { ...context, trail }, pending);
       }
@@ -365,6 +365,13 @@ function generator(node: Node): boolean {
   );
 }
 
+/** Every binding, member or argument target `node` mutates. */
+function allWrittenTargets(node: Node): readonly Node[] {
+  const written = writtenBy(node);
+  const primary = written === undefined ? [] : writeTargets(node, written);
+  return [...primary, ...writtenArgumentBy(node).flatMap((each) => targetsOf(each))];
+}
+
 /** Each binding or member target an assignment, loop or in-place write mutates. */
 function writeTargets(node: Node, written: Node): readonly Node[] {
   const patterned =
@@ -430,11 +437,7 @@ function compromisesLocalArray(node: Node, declared: Node, name: string): boolea
   ) {
     return true;
   }
-  const written = writtenBy(node);
-  if (written === undefined) {
-    return false;
-  }
-  return writeTargets(node, written).some((target) => !preservesLocalArray(node, target, declared));
+  return allWrittenTargets(node).some((target) => !preservesLocalArray(node, target, declared));
 }
 
 /** Whether a write inside `fn` leaves `declared` bound to its original un-customized array. */
