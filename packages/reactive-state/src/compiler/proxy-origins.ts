@@ -1,4 +1,5 @@
 import {
+  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   type Identifier,
@@ -21,6 +22,8 @@ import { unwrapped } from './bounded.ts';
 import { metadataCallee } from './input-callees.ts';
 import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
 import {
+  arrayChangedBefore,
+  arrayIndex,
   type Context,
   createPresenceCache,
   heldConstant,
@@ -31,6 +34,7 @@ import {
   type ProxyReading,
   sourcePath,
   sourceValue,
+  spreadElementOrigins,
   writtenBefore,
 } from './proxy-values.ts';
 
@@ -165,42 +169,46 @@ function originsOf(at: Origin): readonly Origin[] {
 
 /** Containers and source calls retain the origins of values they actually return or store. */
 function containerOrigins(at: Origin): readonly Origin[] {
-  const { keys, value } = at;
+  const { value } = at;
   if (isCallExpression(value)) {
     return callOrigins(value, at);
   }
   if (isObjectLiteralExpression(value)) {
     return objectOrigins(value, at);
   }
-  if (isArrayLiteralExpression(value)) {
-    const [key, ...rest] = keys;
-    const expanded = argumentOrigins(
-      value.elements.map((each) => ({
-        ...at,
-        excluded: undefined,
-        keys: [],
-        spread: undefined,
-        value: each,
-      })),
-    );
-    if (expanded === undefined) {
-      return [];
-    }
-    const elements = key === undefined ? expanded : [expanded[Number(key)]];
-    return elements.flatMap((each) =>
-      each === undefined
-        ? []
-        : [
-            {
-              ...each,
-              excluded: key === undefined ? undefined : at.excluded,
-              keys: [...each.keys, ...rest],
-              spread: key === undefined ? undefined : at.spread,
-            },
-          ],
-    );
+  return isArrayLiteralExpression(value) ? arrayOrigins(value, at) : [];
+}
+
+/** Projects indexed elements or non-excluded object-spread entries from an array literal. */
+function arrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origin[] {
+  const [key, ...rest] = at.keys;
+  const expanded = argumentOrigins(
+    value.elements.map((each) => ({
+      ...at,
+      excluded: undefined,
+      keys: [],
+      spread: undefined,
+      value: each,
+    })),
+  );
+  if (expanded === undefined) {
+    return [];
   }
-  return [];
+  if (key === undefined) {
+    return spreadElementOrigins(expanded, at);
+  }
+  const index = arrayIndex(key);
+  const selected = index === undefined ? undefined : expanded[index];
+  return selected === undefined
+    ? []
+    : [
+        {
+          ...selected,
+          excluded: at.excluded,
+          keys: [...selected.keys, ...rest],
+          spread: at.spread,
+        },
+      ];
 }
 
 /** A parameter's actual argument or a lexical constant, with the argument's original scope. */
@@ -210,11 +218,15 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return parameterOrigins(name, binding, at);
   }
   const held = heldConstant(name, at.context);
-  if (
-    held === undefined ||
-    (isObjectLiteralExpression(unwrapped(held)) && writtenBefore(name, at.context))
-  ) {
+  if (held === undefined) {
     return [];
+  }
+  const target = unwrapped(held);
+  if (isObjectLiteralExpression(target) && writtenBefore(name, at.context)) {
+    return [];
+  }
+  if (isArrayLiteralExpression(target) && arrayChangedBefore(name, at.context)) {
+    return at.keys.length === 0 ? [{ ...at, excluded: undefined, value: held }] : [];
   }
   return [{ ...at, value: held }];
 }

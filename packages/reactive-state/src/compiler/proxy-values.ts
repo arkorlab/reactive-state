@@ -1,20 +1,27 @@
 import {
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
+  isCallExpression,
   isComputedPropertyName,
   isElementAccessExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
+  isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  isSpreadElement,
   isStringLiteral,
+  isTaggedTemplateExpression,
+  isVariableDeclaration,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -27,7 +34,9 @@ import { globalOf, unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { metadataInitializer } from './input-callees.ts';
 import { rootOf, targetsOf } from './kept.ts';
+import { readsOf } from './local-module-reads.ts';
 import type { Resolve } from './numbers.ts';
+import { freeReads } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Source-written values that can carry a Proxy to a measured call result or container entry. */
@@ -186,12 +195,92 @@ export function writtenBefore(name: Identifier, reading: ProxyReading): boolean 
   return visit(name.getSourceFile());
 }
 
+/** Parses a canonical non-negative integer property key (`'0'`, `'1'`, ...) into an index. */
+export function arrayIndex(key: string): number | undefined {
+  const index = Number(key);
+  return Number.isInteger(index) && index >= 0 && String(index) === key ? index : undefined;
+}
+
+/** Filters array or rest elements by `at.excluded` when spread into an object literal. */
+export function spreadElementOrigins(elements: readonly Origin[], at: Origin): readonly Origin[] {
+  return elements.flatMap((each, index) =>
+    at.spread === true && at.excluded?.has(String(index))
+      ? []
+      : [
+          {
+            ...each,
+            excluded: undefined,
+            keys: each.keys,
+            spread: undefined,
+          },
+        ],
+  );
+}
+
+/** Whether an array constant was mutated or handed to a call before `name` reads it. */
+export function arrayChangedBefore(name: Identifier, reading: ProxyReading): boolean {
+  if (writtenBefore(name, reading)) {
+    return true;
+  }
+  const declared = metadataInitializer(name)?.parent;
+  if (declared === undefined || !isVariableDeclaration(declared) || !isIdentifier(declared.name)) {
+    return false;
+  }
+  const sourceFile = name.getSourceFile();
+  const isRead = readsOf(declared.name, sourceFile);
+  const visit = (node: Node): boolean => {
+    if (node.pos >= name.pos || node.end <= declared.end) {
+      return false;
+    }
+    if (passesArrayBinding(node, isRead)) {
+      return true;
+    }
+    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
+  };
+  return visit(sourceFile);
+}
+
+/** Checks whether `node` passes a binding matched by `isRead` as a non-spread call argument. */
+export function passesArrayBinding(node: Node, isRead: (name: Identifier) => boolean): boolean {
+  let given: readonly Expression[] = [];
+  if (isCallExpression(node) || isNewExpression(node)) {
+    given = node.arguments ?? [];
+  } else if (isTaggedTemplateExpression(node)) {
+    given = [node.template];
+  }
+  return given.some(
+    (each) => !isSpreadElement(each) && [...freeReads(each)].some((name) => isRead(name)),
+  );
+}
+
+/** Guaranteed own enumerable numeric keys copied when spreading a fresh inline array literal. */
+function inlineArraySpreadKeys(node: Expression): ReadonlySet<string> | undefined {
+  const current = unwrapped(node);
+  if (!isArrayLiteralExpression(current)) {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  for (const [index, element] of current.elements.entries()) {
+    if (isSpreadElement(element)) {
+      break;
+    }
+    if (!isOmittedExpression(element)) {
+      keys.add(String(index));
+    }
+  }
+  return keys;
+}
+
 /** Keys guaranteed to be copied as own enumerable properties when spreading `node`. */
 function guaranteedSpreadKeys(
   node: Expression,
   context: Context,
   seen = new Set<Expression>(),
 ): ReadonlySet<string> {
+  const inlineKeys = inlineArraySpreadKeys(node);
+  if (inlineKeys !== undefined) {
+    return inlineKeys;
+  }
   const literal = unmutatedObjectLiteral(node, context, seen);
   if (literal === undefined) {
     return new Set();

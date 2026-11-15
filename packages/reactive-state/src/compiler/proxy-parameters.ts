@@ -19,7 +19,14 @@ import {
   parameterFrame,
   type ParameterFrame,
 } from './proxy-presence.ts';
-import { type Frame, type Origin, sourceValue, writtenBefore } from './proxy-values.ts';
+import {
+  arrayIndex,
+  type Frame,
+  type Origin,
+  sourceValue,
+  spreadElementOrigins,
+  writtenBefore,
+} from './proxy-values.ts';
 import { hoistedIn } from './scope.ts';
 import { interveningEvaluation } from './written-evaluation.ts';
 
@@ -47,11 +54,8 @@ export function parameterOrigins(
   if (replaced !== undefined) {
     return [{ ...at, value: replaced.value }];
   }
-  const rest = parameter.dotDotDotToken !== undefined;
-  if (rest) {
-    return frame.given === undefined || bindingChanged(frame.fn, parameter.name, true)
-      ? []
-      : restOrigins(frame.given.slice(index), at.keys);
+  if (parameter.dotDotDotToken !== undefined) {
+    return restParameterOrigins(binding, parameter.name, at);
   }
   const assigned = assignedParameterValues(frame.fn, parameter.name).map((value) => ({
     ...at,
@@ -86,15 +90,42 @@ function incomingParameterOrigins(
   return presence === 'defined' ? [forwarded] : [forwarded, ...fallback];
 }
 
-/** A rest array is fresh; only its indexed elements retain actual argument identities. */
-function restOrigins(given: readonly Origin[], keys: readonly string[]): readonly Origin[] {
-  const [key, ...rest] = keys;
-  if (key === undefined) {
-    return given;
+/** Resolves a rest parameter read, preserving index exclusions only when the rest array is intact. */
+function restParameterOrigins(
+  binding: ParameterFrame,
+  declared: Identifier,
+  at: Origin,
+): readonly Origin[] {
+  const { frame, index } = binding;
+  const assigned = assignedParameterValues(frame.fn, declared).map((value) => ({ ...at, value }));
+  if (frame.given === undefined) {
+    return assigned;
   }
-  const index = Number(key);
-  const selected = String(index) === key && index >= 0 ? given[index] : undefined;
-  return selected === undefined ? [] : [{ ...selected, keys: [...selected.keys, ...rest] }];
+  const given = frame.given.slice(index);
+  if (bindingChanged(frame.fn, declared, true)) {
+    return at.keys.length === 0 ? [...assigned, ...given] : assigned;
+  }
+  return restOrigins(given, at);
+}
+
+/** A rest array is fresh; only its indexed elements retain actual argument identities. */
+function restOrigins(given: readonly Origin[], at: Origin): readonly Origin[] {
+  const [key, ...rest] = at.keys;
+  if (key === undefined) {
+    return spreadElementOrigins(given, at);
+  }
+  const index = arrayIndex(key);
+  const selected = index === undefined ? undefined : given[index];
+  return selected === undefined
+    ? []
+    : [
+        {
+          ...selected,
+          excluded: at.excluded,
+          keys: [...selected.keys, ...rest],
+          spread: at.spread,
+        },
+      ];
 }
 
 /** Collects unshadowed assignments and hoisted `var` initializers targeting `declared`. */

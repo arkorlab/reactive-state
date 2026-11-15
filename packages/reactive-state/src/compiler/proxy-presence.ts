@@ -18,8 +18,6 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isRegularExpressionLiteral,
-  isSpreadElement,
-  isTaggedTemplateExpression,
   isTemplateExpression,
   isTypeOfExpression,
   isVoidExpression,
@@ -38,12 +36,13 @@ import {
   type Context,
   type Frame,
   type Origin,
+  passesArrayBinding,
   type PresenceCache,
   type PresenceMode,
   sourcePath,
   sourceValue,
 } from './proxy-values.ts';
-import { freeReads, hoistedIn } from './scope.ts';
+import { hoistedIn } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Bound parameter metadata for a reference inside an active call frame. */
@@ -97,7 +96,7 @@ export function parameterFrame(
 export function bindingChanged(fn: Answering, declared: Identifier, members = false): boolean {
   const isRead = readsOf(declared, fn);
   const visit = (node: Node): boolean => {
-    if (members && handedParameter(node, isRead)) {
+    if (members && passesArrayBinding(node, isRead)) {
       return true;
     }
     const target = !members && isCallExpression(node) ? undefined : writtenBy(node);
@@ -113,19 +112,6 @@ export function bindingChanged(fn: Answering, declared: Identifier, members = fa
     return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
   };
   return fn.body !== undefined && visit(fn.body);
-}
-
-/** A handed rest array can have its entries replaced before its selected value is returned. */
-function handedParameter(node: Node, isRead: (name: Identifier) => boolean): boolean {
-  let given: readonly Expression[] = [];
-  if (isCallExpression(node) || isNewExpression(node)) {
-    given = node.arguments ?? [];
-  } else if (isTaggedTemplateExpression(node)) {
-    given = [node.template];
-  }
-  return given.some(
-    (each) => !isSpreadElement(each) && [...freeReads(each)].some((name) => isRead(name)),
-  );
 }
 
 /** Classifies whether an argument origin is guaranteed `undefined`, defined, or possibly either. */
