@@ -15,6 +15,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type SpreadAssignment,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { literalName, unwrapped } from './bounded.ts';
@@ -28,20 +29,35 @@ import { patternSymbolName } from './pattern-writes.ts';
  * 4th-argument receivers of `Reflect.set`, and direct, borrowed or bound global invocations.
  */
 
+export interface CallArgument {
+  readonly expression: Expression;
+  readonly spread: boolean;
+}
+
 interface GlobalCall {
+  readonly given: readonly CallArgument[];
   readonly path: string;
-  readonly given: readonly Expression[];
 }
 
 interface ReflectSpreadContext {
   readonly index: number;
   readonly seen: Set<Expression>;
-  readonly stack: Expression[];
+  readonly stack: CallArgument[];
   readonly targets: Node[];
 }
 
-const REFLECT_SET_RECEIVER = 3;
+const SLOTS = { reflectSetReceiver: 3 } as const;
 const PRIMITIVE_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN', 'undefined']);
+
+/** Wraps ordinary and spread call-site argument nodes into uniform `CallArgument` descriptors. */
+export function asCallArguments(list: readonly Expression[]): readonly CallArgument[] {
+  return list.map((each) => {
+    if (isSpreadElement(each)) {
+      return { expression: each.expression, spread: true };
+    }
+    return { expression: each, spread: false };
+  });
+}
 
 /** A direct, aliased, borrowed or bound invocation of a global function and its arguments. */
 export function globalCallOf(call: CallExpression): GlobalCall | undefined {
@@ -50,7 +66,7 @@ export function globalCallOf(call: CallExpression): GlobalCall | undefined {
   if (direct === 'Reflect.apply') {
     const [first, , third] = call.arguments;
     const target = first === undefined ? undefined : globalPathOf(followedValue(first))?.join('.');
-    return target === undefined ? undefined : { path: target, given: appliedArguments(third) };
+    return target === undefined ? undefined : { given: appliedArguments(third), path: target };
   }
   const member =
     isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
@@ -63,29 +79,53 @@ export function globalCallOf(call: CallExpression): GlobalCall | undefined {
     const target = globalPathOf(followedValue(callee.expression))?.join('.');
     if (target !== undefined) {
       const given =
-        member === 'apply' ? appliedArguments(call.arguments[1]) : call.arguments.slice(1);
-      return { path: target, given };
+        member === 'apply'
+          ? appliedArguments(call.arguments[1])
+          : asCallArguments(call.arguments.slice(1));
+      return { given, path: target };
     }
   }
   return direct === undefined
-    ? boundGlobalCall(callee, call.arguments)
-    : { path: direct, given: call.arguments };
+    ? boundGlobalCall(callee, asCallArguments(call.arguments))
+    : { given: asCallArguments(call.arguments), path: direct };
+}
+
+/** Selects the argument at `slot` after expanding known tuple spreads, or an covering spread holder. */
+export function argumentAt(given: readonly CallArgument[], slot: number): Expression | undefined {
+  const stack = given.toReversed();
+  const seen = new Set<Expression>();
+  let index = 0;
+  for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
+    if (current.spread) {
+      if (!expandTupleSpread(current.expression, seen, stack)) {
+        return index <= slot ? current.expression : undefined;
+      }
+      continue;
+    }
+    if (index === slot) {
+      return current.expression.kind === SyntaxKind.OmittedExpression
+        ? undefined
+        : current.expression;
+    }
+    index += 1;
+  }
+  return undefined;
 }
 
 /** Explicit 4th-argument receivers of `Reflect.set`, through known tuple spreads or opaque spreads. */
-export function reflectSetReceivers(given: readonly Expression[]): readonly Node[] {
+export function reflectSetReceivers(given: readonly CallArgument[]): readonly Node[] {
   const targets: Node[] = [];
   const stack = given.toReversed();
   const seen = new Set<Expression>();
   let index = 0;
   let shifted = false;
   for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
-    if (isSpreadElement(current)) {
+    if (current.spread) {
       shifted = pushReflectSpread(current.expression, { index, seen, stack, targets }) || shifted;
       continue;
     }
-    if (receivesReflectSet(current, index, shifted)) {
-      targets.push(current);
+    if (receivesReflectSet(current.expression, index, shifted)) {
+      targets.push(current.expression);
     }
     index += 1;
   }
@@ -116,15 +156,27 @@ export function transferredBy(options: Expression | undefined): readonly Node[] 
   return [];
 }
 
-/** Expands a known array-literal spread onto `stack`, or records an opaque spread target. */
-function pushReflectSpread(expression: Expression, context: ReflectSpreadContext): boolean {
+/** Pushes an array-literal spread's elements onto `stack` when statically known. */
+function expandTupleSpread(
+  expression: Expression,
+  seen: Set<Expression>,
+  stack: CallArgument[],
+): boolean {
   const value = followedValue(expression);
-  if (isArrayLiteralExpression(value) && !context.seen.has(value)) {
-    context.seen.add(value);
-    context.stack.push(...value.elements.toReversed());
+  if (!isArrayLiteralExpression(value) || seen.has(value)) {
     return false;
   }
-  if (context.index <= REFLECT_SET_RECEIVER) {
+  seen.add(value);
+  stack.push(...asCallArguments(value.elements).toReversed());
+  return true;
+}
+
+/** Expands a known array-literal spread onto `stack`, or records an opaque spread target. */
+function pushReflectSpread(expression: Expression, context: ReflectSpreadContext): boolean {
+  if (expandTupleSpread(expression, context.seen, context.stack)) {
+    return false;
+  }
+  if (context.index <= SLOTS.reflectSetReceiver) {
     context.targets.push(expression);
   }
   return true;
@@ -132,14 +184,19 @@ function pushReflectSpread(expression: Expression, context: ReflectSpreadContext
 
 /** Whether a positional `Reflect.set` argument can act as its object receiver. */
 function receivesReflectSet(argument: Expression, index: number, shifted: boolean): boolean {
-  const inSlot = index === REFLECT_SET_RECEIVER || (shifted && index < REFLECT_SET_RECEIVER);
-  return inSlot && !PRIMITIVE_GLOBALS.has(globalPathOf(unwrapped(argument))?.join('.') ?? '');
+  const inSlot =
+    index === SLOTS.reflectSetReceiver || (shifted && index < SLOTS.reflectSetReceiver);
+  return (
+    inSlot &&
+    argument.kind !== SyntaxKind.OmittedExpression &&
+    !PRIMITIVE_GLOBALS.has(globalPathOf(unwrapped(argument))?.join('.') ?? '')
+  );
 }
 
 /** A global function bound through `.bind(...)` and later called with trailing arguments. */
 function boundGlobalCall(
   callee: Expression,
-  trailing: readonly Expression[],
+  trailing: readonly CallArgument[],
 ): GlobalCall | undefined {
   if (!isCallExpression(callee)) {
     return undefined;
@@ -154,16 +211,21 @@ function boundGlobalCall(
   const target = globalPathOf(followedValue(binder.expression))?.join('.');
   return target === undefined
     ? undefined
-    : { path: target, given: [...callee.arguments.slice(1), ...trailing] };
+    : { given: [...asCallArguments(callee.arguments.slice(1)), ...trailing], path: target };
 }
 
-/** The arguments written for `apply`, or their holder where the code does not write them apart. */
-export function appliedArguments(node: Expression | undefined): readonly Expression[] {
+/** The arguments written for `apply`, or an unknown-list spread where the code does not write them apart. */
+export function appliedArguments(node: Expression | undefined): readonly CallArgument[] {
   if (node === undefined) {
     return [];
   }
   const value = followedValue(node);
-  return isArrayLiteralExpression(value) ? value.elements : [value];
+  if (value.kind === SyntaxKind.NullKeyword || globalPathOf(value)?.join('.') === 'undefined') {
+    return [];
+  }
+  return isArrayLiteralExpression(value)
+    ? asCallArguments(value.elements)
+    : [{ expression: unwrapped(node), spread: true }];
 }
 
 /** The name `node` reads of what it reads it of, by its name or by text in brackets; none of another. */
@@ -264,7 +326,7 @@ function transferAlias(value: Expression): Expression | undefined {
 }
 
 /** What a name is declared of, through other names; itself where it shows none. */
-function followedValue(node: Expression): Expression {
+export function followedValue(node: Expression): Expression {
   let value = unwrapped(node);
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {

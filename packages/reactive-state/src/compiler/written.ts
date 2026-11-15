@@ -12,7 +12,6 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
-  isSpreadElement,
   isVariableDeclarationList,
   type Node,
   SyntaxKind,
@@ -24,6 +23,9 @@ import { initializerOf, takenApartOf } from './framed.ts';
 import { isStickyPattern, keepsPatternIndex, symbolPatternChanges } from './pattern-writes.ts';
 import {
   appliedArguments,
+  argumentAt,
+  asCallArguments,
+  type CallArgument,
   globalCallOf,
   memberNameOf,
   reflectSetReceivers,
@@ -242,7 +244,7 @@ export function writtenArgumentBy(node: Node): readonly Node[] {
   }
   const globalCall = globalCallOf(node);
   if (globalCall?.path === 'structuredClone') {
-    return transferredBy(globalCall.given[1]);
+    return transferredBy(argumentAt(globalCall.given, 1));
   }
   if (globalCall?.path === 'Reflect.set') {
     return reflectSetReceivers(globalCall.given);
@@ -251,11 +253,8 @@ export function writtenArgumentBy(node: Node): readonly Node[] {
   if ((invoked?.method ?? methodOf(node)) !== 'dispatchEvent') {
     return [];
   }
-  const [argument] = invoked?.given ?? node.arguments;
-  if (argument === undefined) {
-    return [];
-  }
-  return [isSpreadElement(argument) ? argument.expression : argument];
+  const argument = argumentAt(invoked?.given ?? asCallArguments(node.arguments), 0);
+  return argument === undefined ? [] : [argument];
 }
 
 /**
@@ -268,8 +267,7 @@ function calledWrite(call: CallExpression): Node | undefined {
   // global, though its name is a method's that changes what it is called on.
   const globalCall = globalCallOf(call);
   if (globalCall !== undefined && CHANGING_FUNCTIONS.has(globalCall.path)) {
-    const [first] = globalCall.given;
-    return first !== undefined && isSpreadElement(first) ? first.expression : first;
+    return argumentAt(globalCall.given, 0);
   }
   const borrowed = borrowedOf(call) ?? boundOf(call);
   if (borrowed !== undefined) {
@@ -366,7 +364,10 @@ function borrowedOf(call: CallExpression): LentMethod | undefined {
   ) {
     return undefined;
   }
-  const given = callee.name.text === 'apply' ? appliedArguments(second) : call.arguments.slice(1);
+  const given =
+    callee.name.text === 'apply'
+      ? appliedArguments(second)
+      : asCallArguments(call.arguments.slice(1));
   return lentOf(callee.expression, first, given);
 }
 
@@ -389,24 +390,24 @@ function boundOf(call: CallExpression): LentMethod | undefined {
   return named === 'bind' &&
     (isPropertyAccessExpression(binder) || isElementAccessExpression(binder))
     ? lentOf(binder.expression, binding.arguments[0], [
-        ...binding.arguments.slice(1),
-        ...call.arguments,
+        ...asCallArguments(binding.arguments.slice(1)),
+        ...asCallArguments(call.arguments),
       ])
     : undefined;
 }
 
 /** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
 interface LentMethod {
+  readonly given: readonly CallArgument[];
   readonly method: string;
   readonly receiver: Expression;
-  readonly given: readonly Expression[];
 }
 
 /** The name of the method `method` reads, lent to `receiver`; none of a method the compile cannot name. */
 function lentOf(
   method: Expression | undefined,
   receiver: Expression | undefined,
-  given: readonly Expression[],
+  given: readonly CallArgument[],
 ): LentMethod | undefined {
   const name = memberNameOf(method);
   return name === undefined || receiver === undefined
