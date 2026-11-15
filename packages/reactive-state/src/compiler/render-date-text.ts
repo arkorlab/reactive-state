@@ -5,6 +5,7 @@ import {
   isBinaryExpression,
   isCallExpression,
   isNewExpression,
+  isTaggedTemplateExpression,
   isTemplateExpression,
   type Node,
   SyntaxKind,
@@ -59,8 +60,9 @@ function stringDate(node: CallExpression): boolean {
   return value !== undefined && projectedDate(value);
 }
 
-/** Each template substitution becomes text before any later expression is evaluated. */
+/** Each untagged template substitution becomes text before any later expression is evaluated. */
 function templateDate(node: TemplateExpression): boolean {
+  if (isTaggedTemplateExpression(node.parent)) return false;
   for (const span of node.templateSpans) {
     if (projectedDate(span.expression)) return true;
     if (!framedQuietPrimitive(span.expression)) return false;
