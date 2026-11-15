@@ -39,6 +39,8 @@ export interface ForwardedValue {
   readonly keys: readonly string[];
   readonly any?: boolean;
   readonly continued?: boolean;
+  /** The compile could not follow where the value goes: any member of it, at any depth, may be it. */
+  readonly unfollowed?: boolean;
 }
 
 /** The values each argument position may hold. */
@@ -119,8 +121,9 @@ const LIMITS = { forwarded: 512 } as const;
  * is initialized, which throws where it runs) make a path that grows without end where each
  * default is taken: a taken default entered again, in a state not scanned yet, is such a circle,
  * and the program is read as one the compile cannot follow, so `undefined`, which keeps every
- * argument possible. A circle that adds no key, or of defaults the construction replaces (which
- * drop the path), meets a state it scanned and ends of itself.
+ * argument, and any member of it at any depth, possible (`unfollowed`). A circle that adds no key,
+ * or of defaults the construction replaces (which drop the path), meets a state it scanned and
+ * ends of itself.
  *
  * A value is forwarded once, whichever way it is reached (the same written value read up to the
  * same key), so that the layers of a chain of constructors, each of which passes on what it was

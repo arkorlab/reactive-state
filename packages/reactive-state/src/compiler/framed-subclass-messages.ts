@@ -56,9 +56,17 @@ export function framedSubclassMessages(
     for (const argument of call.arguments) written.push({ value: argument, keys: [] });
     slots = slots === undefined ? undefined : superSlots(constructor, call, slots);
   }
-  if (slots === undefined) return [...construction.whole, ...written];
+  if (slots === undefined) return unfollowed([...construction.whole, ...written]);
   const known = slots;
   return messageSlots(chain.base).flatMap((index) => known[index] ?? []);
+}
+
+/**
+ * Values the compile could not follow into the constructors: each stands for any member of it, at
+ * any depth, as an `Error` a wrapper holds may reach the message through them.
+ */
+function unfollowed(values: readonly ForwardedValue[]): readonly ForwardedValue[] {
+  return values.map((each) => ({ ...each, unfollowed: true }));
 }
 
 /** A `new` or `Reflect.construct` target and its argument positions, where they are known. */

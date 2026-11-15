@@ -24,6 +24,10 @@ const MESSAGES = fileURLToPath(
   new URL('../src/compiler/framed-subclass-messages.ts', import.meta.url),
 );
 const TYPESCRIPT = fileURLToPath(new URL('../src/compiler/typescript.ts', import.meta.url));
+const REFUSALS = fileURLToPath(
+  new URL('../src/compiler/framed-error-messages.ts', import.meta.url),
+);
+const BOUNDED = fileURLToPath(new URL('../src/compiler/bounded.ts', import.meta.url));
 const SECONDS = 5000;
 const ROW_SECONDS = 20_000;
 
@@ -45,6 +49,25 @@ const SCRIPT = [
   "  [...each.keys, ...(each.any === true ? ['*'] : [])].join('.'),",
   ']);',
   'console.log(JSON.stringify(answers));',
+  'process.exit(0);',
+].join('\n');
+
+/** The same, and whether the construction is refused, where `error` is the one name that is an `Error`. */
+const REFUSED_SCRIPT = [
+  "import { isIdentifier, isNewExpression } from 'typescript/ast';",
+  `const { framedErrorMessage } = await import(${JSON.stringify(REFUSALS)});`,
+  `const { unwrapped } = await import(${JSON.stringify(BOUNDED)});`,
+  `const { openTypeScript, parseModule } = await import(${JSON.stringify(TYPESCRIPT)});`,
+  'const api = openTypeScript();',
+  "const parsed = parseModule(api, 'cycle.ts', process.argv[1]);",
+  'let made;',
+  'const visit = (node) => {',
+  '  if (made === undefined && isNewExpression(node) && isIdentifier(node.expression)) made = node;',
+  '  node.forEachChild(visit);',
+  '};',
+  'visit(parsed.sourceFile);',
+  "const isError = (value, keys = []) => keys.length === 0 && isIdentifier(unwrapped(value)) && unwrapped(value).text === 'error';",
+  "console.log(JSON.stringify(framedErrorMessage(made, new Set(['Error']), isError, () => false)));",
   'process.exit(0);',
 ].join('\n');
 
@@ -128,6 +151,51 @@ describe('constructor defaults that read one another in a circle', () => {
         forwarded: answers.some(([written, path]) => written === 'error' && path === ''),
         signal: ran.signal,
       }).toStrictEqual({ forwarded: closed, signal: null });
+    },
+    ROW_SECONDS,
+  );
+});
+
+/**
+ * A program read as one the compile cannot follow keeps every argument possible, and an `Error` a
+ * wrapper holds, at any depth, may reach the message through them: it is refused, where the same
+ * wrapper of a text is not.
+ */
+const NESTED = [
+  {
+    id: 'an-error-held-two-members-deep',
+    refused: true,
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored?: unknown) { super(a); } } new Failure(undefined, undefined, { inner: { deeper: error } });',
+  },
+  {
+    id: 'an-error-held-in-an-array-in-a-member',
+    refused: true,
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored?: unknown) { super(a); } } new Failure(undefined, undefined, { list: [error] });',
+  },
+  {
+    id: 'a-text-held-two-members-deep-pin',
+    refused: false,
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored?: unknown) { super(a); } } new Failure(undefined, undefined, { inner: { deeper: "fixed" } });',
+  },
+] as const;
+
+describe('constructor defaults that read one another in a circle, given a wrapper', () => {
+  it.each(NESTED)(
+    '$id',
+    ({ refused, source }) => {
+      const ran = spawnSync(
+        process.execPath,
+        ['--input-type=module', '--eval', REFUSED_SCRIPT, `declare const error: Error; ${source}`],
+        { cwd: PACKAGE, encoding: 'utf8', killSignal: 'SIGKILL', timeout: SECONDS },
+      );
+
+      expect({ refused: ran.stdout.trim() === 'true', signal: ran.signal }).toStrictEqual({
+        refused,
+        signal: null,
+      });
     },
     ROW_SECONDS,
   );

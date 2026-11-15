@@ -11,14 +11,21 @@ import { describe, expect, it } from 'vitest';
  * as a program the compile cannot follow, which keeps every argument of the construction possible
  * (the argument `{ value: error }` stays among what is forwarded). Before, each layer doubled the
  * values it was given, and twenty layers of a class hierarchy made 2^20 of them: the compile ran
- * out of stack. Each row runs in a process of its own, killed after a few seconds. The process
- * starts in the package's own directory, where `typescript/ast` is the package's TypeScript,
- * whichever directory the tests are run from.
+ * out of stack. A program read as one the compile cannot follow is refused where an `Error` may
+ * reach the message through any member of an argument, at any depth: a wrapper nested as deep as
+ * the chain (`{ inner: { value: { inner: { value: error } } } }`) is refused, as it is where the
+ * chain is followed, and the same wrapper of a text is not. Each row runs in a process of its own,
+ * killed after a few seconds. The process starts in the package's own directory, where
+ * `typescript/ast` is the package's TypeScript, whichever directory the tests are run from.
  */
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const MESSAGES = fileURLToPath(
   new URL('../src/compiler/framed-subclass-messages.ts', import.meta.url),
 );
+const REFUSALS = fileURLToPath(
+  new URL('../src/compiler/framed-error-messages.ts', import.meta.url),
+);
+const BOUNDED = fileURLToPath(new URL('../src/compiler/bounded.ts', import.meta.url));
 const TYPESCRIPT = fileURLToPath(new URL('../src/compiler/typescript.ts', import.meta.url));
 const SECONDS = 8000;
 const ROW_SECONDS = 30_000;
@@ -27,6 +34,8 @@ const LAYERS = { few: 4, many: 20 } as const;
 const SCRIPT = [
   "import { isIdentifier, isNewExpression } from 'typescript/ast';",
   `const { framedSubclassMessages } = await import(${JSON.stringify(MESSAGES)});`,
+  `const { framedErrorMessage } = await import(${JSON.stringify(REFUSALS)});`,
+  `const { unwrapped } = await import(${JSON.stringify(BOUNDED)});`,
   `const { openTypeScript, parseModule } = await import(${JSON.stringify(TYPESCRIPT)});`,
   'const api = openTypeScript();',
   "const parsed = parseModule(api, 'chain.ts', process.argv[1]);",
@@ -36,12 +45,15 @@ const SCRIPT = [
   '  node.forEachChild(visit);',
   '};',
   'visit(parsed.sourceFile);',
-  "const values = framedSubclassMessages(made, new Set(['Error'])) ?? [];",
+  "const names = new Set(['Error']);",
+  'const values = framedSubclassMessages(made, names) ?? [];',
+  "const isError = (value, keys = []) => keys.length === 0 && isIdentifier(unwrapped(value)) && unwrapped(value).text === 'error';",
+  'const refused = framedErrorMessage(made, names, isError, () => false);',
   'const answers = values.map((each) => [',
   '  each.value.getText(parsed.sourceFile),',
   "  [...each.keys, ...(each.any === true ? ['*'] : [])].join('.'),",
   ']);',
-  'console.log(JSON.stringify(answers));',
+  'console.log(JSON.stringify({ answers, refused }));',
   'process.exit(0);',
 ].join('\n');
 
@@ -104,23 +116,44 @@ const CASES: readonly Case[] = [
   },
 ];
 
-/** The values the construction of the last of `layers` layers forwards, `[written, path]`. */
-function forwardedBy(
-  { constructor, made }: Case,
+/** What the construction of the last of `layers` layers forwards, `[written, path]`, and whether it is refused. */
+function run(
+  source: string,
+  constructor: string,
   layers: number,
-): { readonly answers: readonly (readonly [string, string])[]; readonly signal: string | null } {
-  const source = `declare const error: Error; ${chain(layers, constructor)} ${made(layers)}`;
-  const ran = spawnSync(process.execPath, ['--input-type=module', '--eval', SCRIPT, source], {
+): {
+  readonly answers: readonly (readonly [string, string])[];
+  readonly refused: boolean;
+  readonly signal: string | null;
+} {
+  const text = `declare const error: Error; ${chain(layers, constructor)} ${source}`;
+  const ran = spawnSync(process.execPath, ['--input-type=module', '--eval', SCRIPT, text], {
     cwd: PACKAGE,
     encoding: 'utf8',
     killSignal: 'SIGKILL',
     timeout: SECONDS,
   });
   const out = ran.stdout.trim();
-  return {
-    answers: out === '' ? [] : (JSON.parse(out) as []),
-    signal: ran.signal,
-  };
+  const parsed = out === '' ? { answers: [], refused: false } : JSON.parse(out);
+  return { ...(parsed as { answers: []; refused: boolean }), signal: ran.signal };
+}
+
+function forwardedBy({ constructor, made }: Case, layers: number): ReturnType<typeof run> {
+  return run(made(layers), constructor, layers);
+}
+
+/** `inner` wrapped `depth` times around `leaf`, each wrapper `{ inner: { value: … } }`. */
+function wrapped(depth: number, leaf: string): string {
+  let text = leaf;
+  for (let level = 0; level < depth; level += 1) text = `{ inner: { value: ${text} } }`;
+  return text;
+}
+
+/** `leaf` wrapped `depth` times as `{ value: … }`. */
+function valued(depth: number, leaf: string): string {
+  let text = leaf;
+  for (let level = 0; level < depth; level += 1) text = `{ value: ${text} }`;
+  return text;
 }
 
 describe('a chain of constructors that pass on what they read of a parameter', () => {
@@ -150,4 +183,46 @@ describe('a chain of constructors that pass on what they read of a parameter', (
     },
     ROW_SECONDS,
   );
+});
+
+describe('an Error nested as deep as a chain of constructors is long', () => {
+  const DEPTHS = [9, 20, 40] as const;
+  const PATHS = [
+    {
+      constructor: 'constructor(options: any) { super(options.inner.value); }',
+      nest: wrapped,
+      what: 'a path of two keys',
+    },
+    {
+      constructor: 'constructor(options: any) { super(options.value); }',
+      nest: valued,
+      what: 'a member',
+    },
+  ] as const;
+
+  describe.each(PATHS)('$what', ({ constructor, nest }) => {
+    it.each(DEPTHS)(
+      'is refused with %i layers',
+      (layers) => {
+        const { refused, signal } = run(
+          `new C${layers}(${nest(layers, 'error')});`,
+          constructor,
+          layers,
+        );
+
+        expect({ refused, signal }).toStrictEqual({ refused: true, signal: null });
+      },
+      ROW_SECONDS,
+    );
+
+    it(
+      'is taken where it holds a text, with twenty layers (pin)',
+      () => {
+        const { refused, signal } = run(`new C20(${nest(20, '"fixed"')});`, constructor, 20);
+
+        expect({ refused, signal }).toStrictEqual({ refused: false, signal: null });
+      },
+      ROW_SECONDS,
+    );
+  });
 });
