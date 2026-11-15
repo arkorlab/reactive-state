@@ -234,20 +234,31 @@ function queuePattern(
       continue;
     }
     for (const element of name.elements) {
-      if (!isBindingElement(element)) {
-        continue;
-      }
-      if (element.propertyName !== undefined && isComputedPropertyName(element.propertyName)) {
-        pending.push({ ...current, root: element.propertyName.expression, fn });
-      }
-      if (element.initializer !== undefined) {
-        pending.push({ ...current, root: element.initializer, fn });
-      }
-      if (!isIdentifier(element.name)) {
-        stack.push(element.name);
+      const nested = queuePatternElement(element, fn, current, pending);
+      if (nested !== undefined) {
+        stack.push(nested);
       }
     }
   }
+}
+
+/** Queues one binding element's computed key and default, returning any nested binding pattern. */
+function queuePatternElement(
+  element: Node,
+  fn: Callable,
+  current: Execution,
+  pending: Execution[],
+): BindingName | undefined {
+  if (!isBindingElement(element)) {
+    return undefined;
+  }
+  if (element.propertyName !== undefined && isComputedPropertyName(element.propertyName)) {
+    pending.push({ ...current, root: element.propertyName.expression, fn });
+  }
+  if (element.initializer !== undefined) {
+    pending.push({ ...current, root: element.initializer, fn });
+  }
+  return element.name === undefined || isIdentifier(element.name) ? undefined : element.name;
 }
 
 /** A source-proven present value skips a default; other actuals retain its possible effects. */
