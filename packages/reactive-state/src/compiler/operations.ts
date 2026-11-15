@@ -6,7 +6,6 @@ import {
   isIdentifier,
   isNamedExports,
   isVariableStatement,
-  type SourceFile,
   type Statement,
   SyntaxKind,
   type VariableStatement,
@@ -56,7 +55,7 @@ export function operationExports(parsed: ParsedModule): readonly string[] {
         statement,
       );
     }
-    for (const name of exportedBy(statement, parsed.sourceFile)) {
+    for (const name of exportedBy(statement)) {
       if (names.includes(name)) {
         fail(`\`${name}\` is exported twice.`, statement);
       }
@@ -91,7 +90,7 @@ function exportedFunction(statement: FunctionDeclaration): readonly string[] {
   return statement.name === undefined ? [] : [statement.name.text];
 }
 
-function exportedBy(statement: Statement, sourceFile: SourceFile): readonly string[] {
+function exportedBy(statement: Statement): readonly string[] {
   if (isFunctionDeclaration(statement)) {
     return exportedFunction(statement);
   }
@@ -113,7 +112,7 @@ function exportedBy(statement: Statement, sourceFile: SourceFile): readonly stri
   ) {
     return statement.exportClause.elements
       .filter((element) => !element.isTypeOnly)
-      .map((element) => element.name.getText(sourceFile));
+      .map((element) => element.name.text);
   }
   return [];
 }
