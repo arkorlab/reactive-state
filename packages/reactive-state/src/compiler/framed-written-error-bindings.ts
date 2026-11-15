@@ -1,65 +1,40 @@
 import {
   type Expression,
   type Identifier,
-  isArrayLiteralExpression,
-  isAsExpression,
-  isBinaryExpression,
-  isCallExpression,
   isCatchClause,
-  isDeleteExpression,
-  isElementAccessExpression,
-  isForInStatement,
-  isForOfStatement,
   isIdentifier,
-  isNonNullExpression,
-  isObjectLiteralExpression,
   isParameterDeclaration,
-  isParenthesizedExpression,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
-  isPropertyAccessExpression,
-  isPropertyAssignment,
-  isSatisfiesExpression,
-  isShorthandPropertyAssignment,
   isSourceFile,
-  isSpreadAssignment,
-  isSpreadElement,
-  isTypeAssertion,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
-  SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
 import { framedArrayCallbackError } from './framed-array-callback-errors.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPatternDefaults } from './framed-pattern-defaults.ts';
+import { framedSourceValues } from './framed-sources.ts';
 import { framedAssignedSources } from './framed-writes.ts';
+import { lexicalErrorAlias, nonEscapingErrorRead } from './framed-written-error-uses.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
 import { bindingIdentifiers, freeReads, isBlockScoped, isTypeOnly, readsBinding } from './scope.ts';
-import { useOf } from './uses.ts';
+import { peeled } from './uses.ts';
 
 /**
  * Unmutated local variable bindings whose initializer is positively proven to construct an error
  * with source-written words keep that word proof even when annotated `: Error`, while `.stack`
- * (`made === true`), catch bindings, parameters, reassignments, and object mutators remain flagged.
+ * (`made === true`), catch bindings, parameters, reassignments, alias writes, and escaping
+ * references remain flagged.
  */
 
-const CAUGHT_READS = new WeakMap<Node, ReadonlySet<Identifier>>();
+interface SourceVariableReads {
+  readonly reads: ReadonlyMap<VariableDeclaration, readonly Identifier[]>;
+  readonly varCounts: ReadonlyMap<string, number>;
+}
 
-const TARGET_MUTATORS: ReadonlySet<string> = new Set([
-  'Object.assign',
-  'Object.defineProperties',
-  'Object.defineProperty',
-  'Object.setPrototypeOf',
-  'Reflect.defineProperty',
-  'Reflect.deleteProperty',
-  'Reflect.set',
-  'Reflect.setPrototypeOf',
-]);
+const CAUGHT_READS = new WeakMap<Node, ReadonlySet<Identifier>>();
+const VARIABLE_READS = new WeakMap<Node, SourceVariableReads>();
 
 type ErrorCheck = (value: Expression, made: boolean) => boolean;
 
@@ -81,7 +56,11 @@ function isCaughtBinding(name: Identifier): boolean {
 
 /** Whether `initializer` constructs a local error whose words are written by the source. */
 export function framedWrittenErrorInitializer(initializer: Expression, check: ErrorCheck): boolean {
-  return !check(initializer, false) && check(initializer, true);
+  return (
+    unmutatedInitializerSources(initializer) &&
+    !check(initializer, false) &&
+    check(initializer, true)
+  );
 }
 
 /** Whether `value` reads an unmutated local variable initialized to source-written error words. */
@@ -131,101 +110,107 @@ export function framedNamedError(
   );
 }
 
-/** Ensures the lexical variable is never reassigned, redeclared, or targeted by member mutators. */
-function unmutatedVariableBinding(declared: VariableDeclaration, read: Identifier): boolean {
-  if (!isVariableDeclarationList(declared.parent)) return false;
-  const blockScoped = isBlockScoped(declared.parent);
-  if (!blockScoped && declared.end > read.pos) return false;
-  const name = isIdentifier(declared.name) ? declared.name.text : undefined;
-  if (name === undefined) return false;
-  const pending: Node[] = [declared.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      !blockScoped &&
-      isVariableDeclaration(node) &&
-      node !== declared &&
-      bindingIdentifiers(node.name).some((bound) => bound.text === name)
-    ) {
-      return false;
+/** Every variable source inside `initializer` must itself stay unmutated and non-escaping. */
+function unmutatedInitializerSources(initializer: Expression): boolean {
+  const pending: Expression[] = [initializer];
+  const seen = new Set<Node>();
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const current = peeled(next);
+    if (seen.has(current)) continue;
+    seen.add(current);
+    if (isIdentifier(current)) {
+      if (!unmutatedReadIdentifier(current)) return false;
+      continue;
     }
-    if (
-      isIdentifier(node) &&
-      node !== declared.name &&
-      node.text === name &&
-      readsBinding(node) &&
-      frameDeclarationOf(node) === declared &&
-      mutatesBindingOrTarget(node)
-    ) {
-      return false;
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
+    const sources = framedSourceValues(current);
+    if (sources !== undefined) pending.push(...sources);
   }
   return true;
 }
 
-/** Direct reassignments, member writes/deletes, and `Object`/`Reflect` target mutators. */
-function mutatesBindingOrTarget(name: Identifier): boolean {
-  if (reassignedIdentifier(name)) return true;
-  const { at, parent } = useOf(name);
-  if (
-    (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
-    parent.expression === at
-  ) {
-    const outer = useOf(parent);
-    if (isDeleteExpression(outer.parent)) return true;
-    return isAssignmentLeft(outer.at, outer.parent);
+/** Checks that an identifier reading a local variable resolves to an unmutated error binding. */
+function unmutatedReadIdentifier(read: Identifier): boolean {
+  if (isCaughtBinding(read)) return false;
+  const declared = frameDeclarationOf(read);
+  return (
+    declared !== undefined &&
+    isVariableDeclaration(declared) &&
+    isIdentifier(declared.name) &&
+    !isCatchClause(declared.parent) &&
+    unmutatedVariableBinding(declared, read)
+  );
+}
+
+/** Follows whole lexical aliases and requires every reference to stay read-only and non-escaping. */
+function unmutatedVariableBinding(declared: VariableDeclaration, read: Identifier): boolean {
+  if (!isVariableDeclarationList(declared.parent) || !isIdentifier(declared.name)) return false;
+  const blockScoped = isBlockScoped(declared.parent);
+  if (!blockScoped && declared.end > read.pos) return false;
+  const indexed = sourceVariableReads(declared.getSourceFile());
+  if (!blockScoped && (indexed.varCounts.get(declared.name.text) ?? 0) > 1) return false;
+  const bindings: VariableDeclaration[] = [declared];
+  const seen = new Set<VariableDeclaration>([declared]);
+  for (const current of bindings) {
+    if (!safeBindingReferences(indexed.reads.get(current) ?? [], bindings, seen)) return false;
   }
-  if (!isCallExpression(parent) || parent.arguments[0] !== at) return false;
-  const path = globalPathOf(unwrapped(parent.expression))?.join('.');
-  return path !== undefined && TARGET_MUTATORS.has(path);
+  return true;
 }
 
-/** Checks whether `target` sits on the left-hand side of an assignment or update operator. */
-function isAssignmentLeft(target: Node, parent: Node): boolean {
-  if (isBinaryExpression(parent) && parent.left === target) {
-    const kind = parent.operatorToken.kind;
-    return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
+/** Indexes variable binding reads and hoisted `var` counts once per source file. */
+function sourceVariableReads(sourceFile: Node): SourceVariableReads {
+  const cached = VARIABLE_READS.get(sourceFile);
+  if (cached !== undefined) return cached;
+  const reads = new Map<VariableDeclaration, Identifier[]>();
+  const varCounts = new Map<string, number>();
+  const pending: Node[] = [sourceFile];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    recordHoistedDeclaration(node, varCounts);
+    recordVariableRead(node, reads);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
   }
-  if (isForInStatement(parent) || isForOfStatement(parent)) return parent.initializer === target;
-  return (
-    (isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) &&
-    (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)
-  );
+  const indexed: SourceVariableReads = { reads, varCounts };
+  VARIABLE_READS.set(sourceFile, indexed);
+  return indexed;
 }
 
-/** Walks through transparent wrappers and destructuring patterns to detect binding writes. */
-function reassignedIdentifier(name: Identifier): boolean {
-  let target: Node = name;
-  while (assignmentWrapper(target)) target = target.parent;
-  return isAssignmentLeft(target, target.parent);
+/** Counts non-block-scoped `var` bindings by name to detect duplicate hoisted declarations. */
+function recordHoistedDeclaration(node: Node, varCounts: Map<string, number>): void {
+  if (!isVariableDeclaration(node) || !isVariableDeclarationList(node.parent)) return;
+  if (isBlockScoped(node.parent)) return;
+  for (const bound of bindingIdentifiers(node.name)) {
+    varCounts.set(bound.text, (varCounts.get(bound.text) ?? 0) + 1);
+  }
 }
 
-/** Transparent expressions and assignment patterns propagate writes to their bound target. */
-function assignmentWrapper(target: Node): boolean {
-  const parent = target.parent;
-  return (
-    (transparentExpression(parent) && parent.expression === target) ||
-    isArrayLiteralExpression(parent) ||
-    isObjectLiteralExpression(parent) ||
-    isSpreadElement(parent) ||
-    isSpreadAssignment(parent) ||
-    (isPropertyAssignment(parent) && parent.initializer === target) ||
-    (isShorthandPropertyAssignment(parent) && parent.name === target)
-  );
+/** Groups non-declaration identifier reads under their resolved `VariableDeclaration`. */
+function recordVariableRead(node: Node, reads: Map<VariableDeclaration, Identifier[]>): void {
+  if (!isIdentifier(node) || !readsBinding(node)) return;
+  const declared = frameDeclarationOf(node);
+  if (declared === undefined || !isVariableDeclaration(declared) || node === declared.name) return;
+  const existing = reads.get(declared);
+  if (existing === undefined) reads.set(declared, [node]);
+  else existing.push(node);
 }
 
-/** Parentheses, type assertions, non-null markers and satisfies preserve the target reference. */
-function transparentExpression(
-  node: Node,
-): node is Expression & { readonly expression: Expression } {
-  return (
-    isParenthesizedExpression(node) ||
-    isAsExpression(node) ||
-    isTypeAssertion(node) ||
-    isNonNullExpression(node) ||
-    isSatisfiesExpression(node)
-  );
+/** Queues whole lexical aliases and verifies every other reference is a pure read. */
+function safeBindingReferences(
+  references: readonly Identifier[],
+  bindings: VariableDeclaration[],
+  seen: Set<VariableDeclaration>,
+): boolean {
+  for (const reference of references) {
+    const alias = lexicalErrorAlias(reference);
+    if (alias !== undefined) {
+      if (!seen.has(alias)) {
+        seen.add(alias);
+        bindings.push(alias);
+      }
+      continue;
+    }
+    if (!nonEscapingErrorRead(reference)) return false;
+  }
+  return true;
 }
