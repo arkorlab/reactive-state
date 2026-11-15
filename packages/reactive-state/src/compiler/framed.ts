@@ -247,24 +247,35 @@ function thrownText(node: Node, textValue: ErrorObservation['words']): boolean {
   if (framedRegExpText(node, textValue, arrayErrorType)) return true;
   if (framedErrorMessage(node, ERRORS, textValue, arrayErrorType)) return true;
   if (framedErrorComparison(node, ERRORS, textValue)) return true;
-  if (framedArrayText(node, { error: textValue, typed: arrayErrorType })) return true;
+  const words = { error: textValue, typed: arrayErrorType };
+  if (framedArrayText(node, words)) return true;
   if (framedStringText(node, textValue, arrayErrorType)) return true;
+  return convertedTextAt(node, words);
+}
+
+/** Explicit `String(...)`, template spans, and `+` / `+=` convert errors and error arrays. */
+function convertedTextAt(
+  node: Node,
+  words: {
+    readonly error: ErrorObservation['words'];
+    readonly typed: (value: Expression) => boolean;
+  },
+): boolean {
+  const converts = (value: Expression | undefined): boolean =>
+    words.error(value) || framedArrayString(value, words, node);
   if (
     (isCallExpression(node) || isNewExpression(node)) &&
     globalPathOf(unwrapped(node.expression))?.join('.') === 'String'
   ) {
-    return (
-      textValue(node.arguments?.[0]) ||
-      framedArrayString(node.arguments?.[0], { error: textValue, typed: arrayErrorType }, node)
-    );
+    return converts(node.arguments?.[0]);
   }
   if (isTemplateExpression(node)) {
-    return node.templateSpans.some((span) => textValue(span.expression));
+    return node.templateSpans.some((span) => converts(span.expression));
   }
   return (
     isBinaryExpression(node) &&
     ADDING.has(node.operatorToken.kind) &&
-    (textValue(node.left) || textValue(node.right))
+    (converts(node.left) || converts(node.right))
   );
 }
 
