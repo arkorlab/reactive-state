@@ -25,6 +25,7 @@ import { rootOf, targetsOf } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
 import { parameterValue } from './parameter-values.ts';
 import {
+  argumentPresence,
   type Context,
   type Frame,
   heldConstant,
@@ -203,26 +204,7 @@ function containerOrigins(at: Origin): readonly Origin[] {
 function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
   const binding = parameterFrame(name, at);
   if (binding !== undefined) {
-    const { frame, index, parameter } = binding;
-    if (!isIdentifier(parameter.name)) {
-      return [];
-    }
-    const replaced = parameterValue(frame.fn, parameter.name, name);
-    if (replaced !== undefined) {
-      return [{ ...at, value: replaced.value }];
-    }
-    const rest = parameter.dotDotDotToken !== undefined;
-    if (frame.given === undefined || bindingChanged(frame.fn, parameter.name, rest)) {
-      return [];
-    }
-    if (rest) {
-      return restOrigins(frame.given.slice(index), at.keys);
-    }
-    const given = frame.given[index];
-    if (given !== undefined) {
-      return [{ ...given, keys: [...given.keys, ...at.keys] }];
-    }
-    return parameter.initializer === undefined ? [] : [{ ...at, value: parameter.initializer }];
+    return parameterOrigins(name, binding, at);
   }
   const held = heldConstant(name, at.context);
   if (
@@ -232,6 +214,49 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return [];
   }
   return [{ ...at, value: held }];
+}
+
+/** Resolves a parameter read through replacements, actual arguments, and `undefined` defaults. */
+function parameterOrigins(
+  name: Identifier,
+  binding: ParameterFrame,
+  at: Origin,
+): readonly Origin[] {
+  const { frame, index, parameter } = binding;
+  if (!isIdentifier(parameter.name)) {
+    return [];
+  }
+  const replaced = parameterValue(frame.fn, parameter.name, name);
+  if (replaced !== undefined) {
+    return [{ ...at, value: replaced.value }];
+  }
+  const rest = parameter.dotDotDotToken !== undefined;
+  if (bindingChanged(frame.fn, parameter.name, rest)) {
+    return [];
+  }
+  const fallback: readonly Origin[] =
+    !rest && parameter.initializer !== undefined ? [{ ...at, value: parameter.initializer }] : [];
+  if (frame.given === undefined) {
+    return fallback;
+  }
+  if (rest) {
+    return restOrigins(frame.given.slice(index), at.keys);
+  }
+  const given = frame.given[index];
+  if (given === undefined) {
+    return fallback;
+  }
+  const forwarded: Origin = {
+    ...given,
+    excluded: at.excluded,
+    keys: [...given.keys, ...at.keys],
+    spread: at.spread,
+  };
+  const presence = argumentPresence(given);
+  if (presence === 'undefined') {
+    return fallback;
+  }
+  return presence === 'defined' ? [forwarded] : [forwarded, ...fallback];
 }
 
 /** The nearest active source invocation whose lexical formal this identifier reads. */

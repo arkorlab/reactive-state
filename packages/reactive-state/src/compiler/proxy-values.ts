@@ -1,20 +1,36 @@
 import {
+  type BinaryExpression,
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isBigIntLiteral,
+  isBinaryExpression,
+  isCallExpression,
+  isClassExpression,
   isComputedPropertyName,
+  isConditionalExpression,
   isElementAccessExpression,
-  isIdentifier,
+  isFunctionExpression,
   isGetAccessorDeclaration,
+  isIdentifier,
   isMethodDeclaration,
+  isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isRegularExpressionLiteral,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isStringLiteral,
+  isTemplateExpression,
+  isTypeOfExpression,
+  isVoidExpression,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -27,7 +43,7 @@ import { globalOf, unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { metadataInitializer } from './input-callees.ts';
 import { rootOf, targetsOf } from './kept.ts';
-import type { Resolve } from './numbers.ts';
+import { constantValue, type Resolve } from './numbers.ts';
 import { writtenBy } from './written.ts';
 
 /** Source-written values that can carry a Proxy to a measured call result or container entry. */
@@ -345,4 +361,97 @@ function dataProperty(property: ObjectLiteralElementLike, at: Origin): readonly 
   return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
     ? [{ ...at, value: property.name }]
     : [];
+}
+
+/** Built-in calls whose completion value is never `undefined`. */
+const DEFINED_CALLS: ReadonlySet<string> = new Set([
+  'Boolean',
+  'Number',
+  'Proxy.revocable',
+  'String',
+  'Symbol',
+]);
+
+/** Classifies whether an argument origin is guaranteed `undefined`, defined, or possibly either. */
+export function argumentPresence(given: Origin): 'defined' | 'possible' | 'undefined' {
+  if (given.keys.length > 0) {
+    return 'possible';
+  }
+  const value = sourceValue(given.value, given.context);
+  if (isVoidExpression(value) || globalOf(value) === 'undefined') {
+    return 'undefined';
+  }
+  return guaranteedDefined(value, given.context, new Set(), true) ? 'defined' : 'possible';
+}
+
+/** Checks whether `node` never evaluates to `undefined` (or `null` when `!nullable`). */
+function guaranteedDefined(
+  node: Expression,
+  reading: ProxyReading,
+  seen: ReadonlySet<Expression>,
+  nullable: boolean,
+): boolean {
+  const value = sourceValue(node, reading);
+  if (seen.has(value)) {
+    return false;
+  }
+  const following = new Set([...seen, value]);
+  if (constantValue(value) !== undefined || nonUndefinedLeaf(value, nullable)) {
+    return true;
+  }
+  if (isConditionalExpression(value)) {
+    return (
+      guaranteedDefined(value.whenTrue, reading, following, nullable) &&
+      guaranteedDefined(value.whenFalse, reading, following, nullable)
+    );
+  }
+  if (isBinaryExpression(value)) {
+    return guaranteedDefinedBinary(value, reading, following, nullable);
+  }
+  return isCallExpression(value) && DEFINED_CALLS.has(sourcePath(value.expression, reading) ?? '');
+}
+
+/** Checks binary operators whose result is guaranteed non-`undefined`. */
+function guaranteedDefinedBinary(
+  value: BinaryExpression,
+  reading: ProxyReading,
+  seen: Set<Expression>,
+  nullable: boolean,
+): boolean {
+  const kind = value.operatorToken.kind;
+  if (kind === SyntaxKind.CommaToken || kind === SyntaxKind.BarBarToken) {
+    return guaranteedDefined(value.right, reading, seen, nullable);
+  }
+  if (kind === SyntaxKind.QuestionQuestionToken) {
+    return (
+      guaranteedDefined(value.left, reading, seen, false) ||
+      guaranteedDefined(value.right, reading, seen, nullable)
+    );
+  }
+  return (
+    kind === SyntaxKind.AmpersandAmpersandToken &&
+    guaranteedDefined(value.left, reading, seen, nullable) &&
+    guaranteedDefined(value.right, reading, seen, nullable)
+  );
+}
+
+/** Checks literal, unary, and constructed expressions that never evaluate to `undefined`. */
+function nonUndefinedLeaf(value: Expression, nullable: boolean): boolean {
+  return (
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    value.kind === SyntaxKind.TrueKeyword ||
+    value.kind === SyntaxKind.FalseKeyword ||
+    isBigIntLiteral(value) ||
+    isTemplateExpression(value) ||
+    isRegularExpressionLiteral(value) ||
+    isObjectLiteralExpression(value) ||
+    isArrayLiteralExpression(value) ||
+    isArrowFunction(value) ||
+    isFunctionExpression(value) ||
+    isClassExpression(value) ||
+    isNewExpression(value) ||
+    isTypeOfExpression(value) ||
+    isPrefixUnaryExpression(value) ||
+    isPostfixUnaryExpression(value)
+  );
 }
