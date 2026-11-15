@@ -80,18 +80,6 @@ const COMPARING: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ExclamationEqualsToken,
 ]);
 
-/** Whether entry `name` of `object` may be replaced or mutated after construction. */
-export function entryReplaced(object: ObjectLiteralExpression, name: string): boolean {
-  const writes = objectWrites(object);
-  return writes.all || writes.keys.has(name);
-}
-
-/** Whether any entry of `object` may be replaced or mutated after construction. */
-export function anyEntryReplaced(object: ObjectLiteralExpression): boolean {
-  const writes = objectWrites(object);
-  return writes.all || writes.keys.size > 0;
-}
-
 /** Static key of an element access expression, including string, template and numeric literals. */
 export function elementEntryKey(node: ElementAccessExpression): string | undefined {
   const name = literalName(node);
@@ -103,7 +91,7 @@ export function elementEntryKey(node: ElementAccessExpression): string | undefin
 }
 
 /** Computes and caches post-declaration writes affecting `object` across its source file. */
-function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
+export function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
   const cached = WRITES.get(object);
   if (cached !== undefined) {
     return cached;
