@@ -24,6 +24,7 @@ import {
 } from './framed-native-evaluation.ts';
 import { framedQuietOwnerPrefix } from './framed-native-prefix.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
+import { framedPrimitiveInputType } from './framed-string-receivers.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Added array argument conversions require quiet complete evaluation and native text ordering. */
@@ -60,13 +61,6 @@ const NATIVE_TEXT_INPUTS = new Set([
 ]);
 
 const CONSTRUCTIBLE_TEXT_INPUTS: ReadonlySet<string> = new Set(['String']);
-
-const PRIMITIVE_INPUTS = new Set([
-  SyntaxKind.BigIntKeyword,
-  SyntaxKind.BooleanKeyword,
-  SyntaxKind.NumberKeyword,
-  SyntaxKind.StringKeyword,
-]);
 
 interface ArrayTextWords {
   readonly error: (value: Expression) => boolean;
@@ -156,8 +150,8 @@ function quietReceiverValue(value: Expression, call: CallExpression): boolean {
   if (framedQuietPrimitive(value)) return true;
   const reading = frameTypeOf(value);
   return (
-    reading?.keys.length === 0 &&
-    PRIMITIVE_INPUTS.has(reading.type.kind) &&
+    reading !== undefined &&
+    framedPrimitiveInputType(reading.type, reading.keys) &&
     framedNativeErrorInput(value, call)
   );
 }
