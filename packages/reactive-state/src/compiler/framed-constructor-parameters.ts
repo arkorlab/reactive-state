@@ -23,7 +23,6 @@ import {
   frameDeclarationOf,
   frameMemberName,
 } from './framed-bindings.ts';
-import { framedConstructorDefaultEvaluation } from './framed-constructor-default-evaluation.ts';
 import { framedDefaultTaken } from './framed-constructor-defaults.ts';
 import { bindingIdentifiers, readsBinding } from './scope.ts';
 
@@ -45,6 +44,7 @@ export type Slots = readonly (readonly ForwardedValue[])[];
 
 /** What a parameter read was given, and the defaults it may take instead. */
 interface DefaultValue extends ForwardedValue {
+  /** Whether the default is the value in use: the argument it stands for is left `undefined`. */
   readonly selected: boolean;
 }
 
@@ -84,13 +84,15 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
 /**
  * A written `super` argument, what the parameters it reads were given, and the defaults they may
  * take instead, whose own parameter reads count whole. `undefined` where `arguments` or a pattern
- * the compile cannot follow hides which argument a read takes.
+ * the compile cannot follow hides which argument a read takes. The member path a read selects is
+ * followed through each default the construction leaves taken, whatever else the constructor's
+ * code holds: a call, an operator or a member read there does not show that the path selects
+ * nothing the native base converts.
  */
 export function framedSlotValues(
   argument: Expression,
   parameters: readonly ParameterDeclaration[],
   slots: Slots,
-  evaluated: readonly Expression[] = [argument],
 ): readonly ForwardedValue[] | undefined {
   const values: ForwardedValue[] = [];
   const scanned = new Set<string>();
@@ -98,7 +100,7 @@ export function framedSlotValues(
     {
       keys: [],
       value: argument,
-      selected: framedConstructorDefaultEvaluation(parameters, evaluated),
+      selected: true,
     },
   ];
   for (let scan = pending.pop(); scan !== undefined; scan = pending.pop()) {
