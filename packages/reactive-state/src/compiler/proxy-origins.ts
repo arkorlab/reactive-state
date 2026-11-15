@@ -13,6 +13,7 @@ import {
   isPropertyAccessExpression,
   isSpreadElement,
   isTaggedTemplateExpression,
+  isVariableDeclaration,
   type Node,
   type ParameterDeclaration,
   SyntaxKind,
@@ -60,7 +61,10 @@ export function proxyOrigin(
 ): Node | undefined {
   const context: Context = { ...reading, calls: new Set(), frames: [] };
   const visited = new WeakMap<Context, Map<Expression, Set<string>>>();
-  const pending: Origin[] = values.map((value) => ({ context, keys: [], seen: new Set(), value }));
+  const pending: Origin[] = [
+    ...values.map((value) => ({ context, keys: [], seen: new Set<Expression>(), value })),
+    ...callableReturnOrigins(reading),
+  ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const value = unwrapped(next.value);
     if (next.seen.has(value) || markVisited(visited, next.context, value, originStateKey(next))) {
@@ -73,6 +77,19 @@ export function proxyOrigin(
     pending.push(...originsOf(at));
   }
   return undefined;
+}
+
+/** Seeds return expressions of exported callables inside each callable's own parameter frame. */
+function callableReturnOrigins(reading: ProxyReading): readonly Origin[] {
+  return (reading.callables ?? []).flatMap((fn) => {
+    const context: Context = { ...reading, calls: new Set(), frames: [{ fn, given: undefined }] };
+    return returnedBy(fn).map((value) => ({
+      context,
+      keys: [],
+      seen: new Set<Expression>(),
+      value,
+    }));
+  });
 }
 
 /** Records `(context, value, state)` and reports whether that analysis state was already explored. */
@@ -232,7 +249,9 @@ function parameterOrigins(
   }
   const rest = parameter.dotDotDotToken !== undefined;
   if (bindingChanged(frame.fn, parameter.name, rest)) {
-    return [];
+    return rest
+      ? []
+      : assignedParameterValues(frame.fn, parameter.name).map((value) => ({ ...at, value }));
   }
   const fallback: readonly Origin[] =
     !rest && parameter.initializer !== undefined ? [{ ...at, value: parameter.initializer }] : [];
@@ -283,6 +302,34 @@ function restOrigins(given: readonly Origin[], keys: readonly string[]): readonl
   const index = Number(key);
   const selected = String(index) === key && index >= 0 ? given[index] : undefined;
   return selected === undefined ? [] : [{ ...selected, keys: [...selected.keys, ...rest] }];
+}
+
+/** Collects direct RHS values assigned to `declared` when no single replacement dominates. */
+function assignedParameterValues(fn: Answering, declared: Identifier): readonly Expression[] {
+  if (fn.body === undefined) {
+    return [];
+  }
+  const isRead = readsOf(declared, fn);
+  const found: Expression[] = [];
+  const visit = (node: Node): void => {
+    if (
+      isBinaryExpression(node) &&
+      node.operatorToken.kind === SyntaxKind.EqualsToken &&
+      isRead(unwrapped(node.left))
+    ) {
+      found.push(node.right);
+    } else if (
+      isVariableDeclaration(node) &&
+      isIdentifier(node.name) &&
+      node.name.text === declared.text &&
+      node.initializer !== undefined
+    ) {
+      found.push(node.initializer);
+    }
+    node.forEachChild(visit);
+  };
+  visit(fn.body);
+  return found;
 }
 
 /** A possibly reassigned parameter no longer proves that its original argument is returned. */

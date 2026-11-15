@@ -48,6 +48,7 @@ import { writtenBy } from './written.ts';
 
 /** Source-written values that can carry a Proxy to a measured call result or container entry. */
 export interface ProxyReading {
+  readonly callables?: readonly Answering[];
   readonly follow?: Resolve;
   readonly functionOf?: (callee: Expression) => Answering | undefined;
 }
