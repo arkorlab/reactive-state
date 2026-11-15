@@ -392,23 +392,23 @@ function paddingArguments(
   if ((hasSize || !prefix.unknown) && !paddingRequired(receiver, size)) return false;
   if (!prefix.unknown) {
     const fill = prefix.values[1];
-    return fill !== undefined && words.error(fill);
+    return fill !== undefined && concatArguments([fill], words, call);
   }
   const values = framedConsumedArguments(call, args, 2);
   return concatArguments(hasSize ? values.filter((each) => each !== first) : values, words, call);
 }
 
-/** A literal padding apply list retains positions; opaque lists keep a possible error fill. */
+/** A resolved padding apply list retains positions; opaque lists keep a possible error fill. */
 function paddingApply(
   expression: Expression,
   words: TextWords,
   call: CallExpression,
   receiver: Expression,
 ): boolean {
-  const value = unwrapped(expression);
-  return isArrayLiteralExpression(value)
-    ? paddingArguments(value.elements, words, call, receiver)
-    : arrayError(value, words, call);
+  const applied = framedAppliedArguments(call, expression);
+  return applied === undefined
+    ? arrayError(unwrapped(expression), words, call)
+    : paddingArguments(applied, words, call, receiver);
 }
 
 /** A known nonpositive length or a source-proven sufficiently long receiver avoids fill conversion. */

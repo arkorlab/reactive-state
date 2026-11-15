@@ -50,6 +50,8 @@ const NATIVE_TEXT_INPUTS = new Set([
   'String.prototype.localeCompare',
   'String.prototype.match',
   'String.prototype.matchAll',
+  'String.prototype.padEnd',
+  'String.prototype.padStart',
   'String.prototype.replace',
   'String.prototype.replaceAll',
   'String.prototype.search',
