@@ -38,7 +38,7 @@ import {
   quietDefinitionPrefix,
 } from './middleware-array-conversions.ts';
 import { middlewareCopyOrigins } from './middleware-array-copy-origins.ts';
-import { middlewareArraySplice } from './middleware-array-splices.ts';
+import { middlewareArraySplice, middlewareCopySlotIndex } from './middleware-array-splices.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
@@ -49,6 +49,7 @@ interface SelectionCall {
   readonly method: string;
   readonly receiver: Expression;
   readonly given: readonly Expression[] | undefined;
+  readonly applied?: Expression;
   readonly borrowed: boolean;
 }
 
@@ -75,7 +76,15 @@ const DEFINERS = new Set(['Object.defineProperty', 'Reflect.defineProperty']);
 const DEFINER_GLOBALS = new Set(['Array', 'Object', 'Reflect']);
 const DEFINITION = { slots: 3 } as const;
 const ARRAY_COPIES = new Set(['slice', 'toReversed', 'toSorted', 'toSpliced']);
-const RETAINED_COPIES = new Set(['concat', 'filter', 'flat', 'flatMap', 'map', 'with']);
+const RETAINED_COPIES = new Set([
+  'concat',
+  'filter',
+  'flat',
+  'flatMap',
+  'map',
+  'toSpliced',
+  'with',
+]);
 const ARRAY_SELECTORS: ReadonlySet<string> = new Set([
   'at',
   'find',
@@ -124,7 +133,7 @@ export function middlewareArrayCopiedOrigins(
   call: CallExpression,
   keys: readonly string[],
   relative: boolean,
-): ReturnType<typeof middlewareCopyOrigins> {
+): ReturnType<typeof middlewareArraySplice> {
   const selected = nativeSelectionCall(call);
   if (
     selected === undefined ||
@@ -139,7 +148,12 @@ export function middlewareArrayCopiedOrigins(
     source.elements.some((element) => isSpreadElement(element))
   )
     return [];
-  return middlewareCopyOrigins(call, keys, selected, relative);
+  return selected.method === 'toSpliced'
+    ? middlewareArraySplice(
+        { call, keys, ...selected, length: source.elements.length, relative },
+        { start: sliceBound, count: nativeIndex },
+      )
+    : middlewareCopyOrigins(call, keys, selected, relative);
 }
 
 /** A selected shallow-copy payload retains its original collection, never the fresh wrapper. */
@@ -148,15 +162,8 @@ export function middlewareArraySlice(
   keys: readonly string[],
   relative = false,
 ): SliceProjection | undefined {
-  const key = keys[0];
-  const index = Number(key);
-  if (
-    key === undefined ||
-    String(index) !== key ||
-    !Number.isSafeInteger(index) ||
-    (!relative && index < 0)
-  )
-    return undefined;
+  const index = middlewareCopySlotIndex(keys[0], relative);
+  if (index === undefined) return undefined;
   const original = sliceSource(call);
   if (original === undefined) return undefined;
   return sliceProjection(call, keys, original, { index, relative });
@@ -171,19 +178,13 @@ function sliceProjection(
 ): SliceProjection | undefined {
   const { index, relative } = selection;
   const { selected, source } = original;
-  if (selected.method === 'toSpliced')
-    return middlewareArraySplice(
-      {
-        call,
-        keys,
-        receiver: selected.receiver,
-        given: selected.given,
-        length: source.elements.length,
-        index,
-        relative,
-      },
+  if (selected.method === 'toSpliced') {
+    const spliced = middlewareArraySplice(
+      { call, keys, ...selected, length: source.elements.length, relative },
       { start: sliceBound, count: nativeIndex },
     );
+    return spliced.length === 1 ? spliced[0] : undefined;
+  }
   if (selected.method !== 'slice') return reorderedProjection(keys, original, selection);
   const prefix =
     selected.given === undefined ? undefined : framedArgumentPrefix(call, selected.given, 2);
@@ -372,7 +373,7 @@ function nativeSelectionCall(call: CallExpression): SelectionCall | undefined {
       borrowed.applied === undefined
         ? borrowed.given
         : framedAppliedArguments(call, borrowed.applied);
-    return { method, receiver: borrowed.receiver, given, borrowed: true };
+    return { method, receiver: borrowed.receiver, given, applied, borrowed: true };
   }
   const member = unwrapped(call.expression);
   if (
