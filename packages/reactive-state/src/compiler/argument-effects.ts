@@ -1,9 +1,11 @@
 import {
-  type ClassLikeDeclaration,
+  type BindingName,
   type CallExpression,
+  type ClassLikeDeclaration,
   type ConstructorDeclaration,
   type Expression,
   isArrayLiteralExpression,
+  isBindingElement,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
@@ -21,6 +23,7 @@ import {
   isPropertyAccessExpression,
   isPropertyDeclaration,
   isSetAccessorDeclaration,
+  isSpreadElement,
   isStringLiteral,
   isTaggedTemplateExpression,
   isTemplateExpression,
@@ -28,9 +31,8 @@ import {
   isVoidExpression,
   type NewExpression,
   type Node,
-  type ParameterDeclaration,
-  type TaggedTemplateExpression,
   SyntaxKind,
+  type TaggedTemplateExpression,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
@@ -260,7 +262,7 @@ function queueFields(callee: ClassLikeDeclaration, current: Execution, pending: 
   }
 }
 
-/** Omitted, undefined or unproven actual values may execute a parameter default. */
+/** Omitted, undefined, spread-shifted or unproven actual values may execute a parameter default. */
 function queueDefaults(
   fn: Callable,
   given: readonly Expression[],
@@ -268,15 +270,52 @@ function queueDefaults(
   pending: Execution[],
 ): void {
   let index = 0;
-  const parameters = (fn.parameters as readonly ParameterDeclaration[] | undefined) ?? [];
-  for (const parameter of parameters) {
+  let shifted = false;
+  for (const parameter of fn.parameters) {
     if (isIdentifier(parameter.name) && parameter.name.text === 'this') {
       continue;
     }
-    if (parameter.initializer !== undefined && mayBeUndefined(given[index], current.calleeOf)) {
+    const actual = given[index];
+    shifted ||= actual !== undefined && isSpreadElement(actual);
+    if (
+      parameter.initializer !== undefined &&
+      (shifted || mayBeUndefined(actual, current.calleeOf))
+    ) {
       pending.push({ ...current, root: parameter.initializer, fn });
     }
+    if (!isIdentifier(parameter.name)) {
+      queuePattern(parameter.name, fn, current, pending);
+    }
     index += 1;
+  }
+}
+
+/** Binding-element defaults and computed keys inside a destructured parameter pattern. */
+function queuePattern(
+  root: BindingName,
+  fn: Callable,
+  current: Execution,
+  pending: Execution[],
+): void {
+  const stack: BindingName[] = [root];
+  for (let name = stack.pop(); name !== undefined; name = stack.pop()) {
+    if (isIdentifier(name)) {
+      continue;
+    }
+    for (const element of name.elements) {
+      if (!isBindingElement(element)) {
+        continue;
+      }
+      if (element.propertyName !== undefined && isComputedPropertyName(element.propertyName)) {
+        pending.push({ ...current, root: element.propertyName.expression, fn });
+      }
+      if (element.initializer !== undefined) {
+        pending.push({ ...current, root: element.initializer, fn });
+      }
+      if (!isIdentifier(element.name)) {
+        stack.push(element.name);
+      }
+    }
   }
 }
 
