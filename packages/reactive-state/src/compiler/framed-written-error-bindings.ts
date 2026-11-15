@@ -11,18 +11,27 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
+import type { Answering } from './answers.ts';
 import { framedArrayCallbackError } from './framed-array-callback-errors.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPatternDefaults } from './framed-pattern-defaults.ts';
-import { framedSourceValues } from './framed-sources.ts';
 import { framedAssignedSources } from './framed-writes.ts';
-import { lexicalErrorAlias, nonEscapingErrorRead } from './framed-written-error-uses.ts';
+import {
+  provenWrittenErrorInitializer,
+  type ResolvedErrorVariable,
+  type WrittenErrorCheck,
+} from './framed-written-error-initializers.ts';
+import {
+  enclosingValueScope,
+  lexicalErrorAlias,
+  nonEscapingErrorRead,
+  returnedFromScope,
+} from './framed-written-error-uses.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
 import { bindingIdentifiers, freeReads, isBlockScoped, isTypeOnly, readsBinding } from './scope.ts';
-import { peeled } from './uses.ts';
 
 /**
- * Unmutated local variable bindings whose initializer is positively proven to construct an error
+ * Unmutated local variable bindings whose initializer is universally proven to construct an error
  * with source-written words keep that word proof even when annotated `: Error`, while `.stack`
  * (`made === true`), catch bindings, parameters, reassignments, alias writes, and escaping
  * references remain flagged.
@@ -35,8 +44,6 @@ interface SourceVariableReads {
 
 const CAUGHT_READS = new WeakMap<Node, ReadonlySet<Identifier>>();
 const VARIABLE_READS = new WeakMap<Node, SourceVariableReads>();
-
-type ErrorCheck = (value: Expression, made: boolean) => boolean;
 
 /** Whether `name` is what an enclosing `catch` clause binds. */
 function isCaughtBinding(name: Identifier): boolean {
@@ -55,34 +62,25 @@ function isCaughtBinding(name: Identifier): boolean {
 }
 
 /** Whether `initializer` constructs a local error whose words are written by the source. */
-export function framedWrittenErrorInitializer(initializer: Expression, check: ErrorCheck): boolean {
-  return (
-    unmutatedInitializerSources(initializer) &&
-    !check(initializer, false) &&
-    check(initializer, true)
-  );
+export function framedWrittenErrorInitializer(
+  initializer: Expression,
+  check: WrittenErrorCheck,
+): boolean {
+  return provenWrittenErrorInitializer(initializer, {
+    check,
+    resolveVariable: resolveUnmutatedVariable,
+  });
 }
 
 /** Whether `value` reads an unmutated local variable initialized to source-written error words. */
 export function framedWrittenErrorVariable(
   value: Expression,
   selection: { readonly keys: readonly string[]; readonly made: boolean },
-  check: ErrorCheck,
+  check: WrittenErrorCheck,
 ): boolean {
   if (selection.made || selection.keys.length > 0 || !isIdentifier(value)) return false;
-  if (isCaughtBinding(value)) return false;
-  const declared = frameDeclarationOf(value);
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    !isIdentifier(declared.name) ||
-    isCatchClause(declared.parent) ||
-    declared.initializer === undefined ||
-    !unmutatedVariableBinding(declared, value)
-  ) {
-    return false;
-  }
-  return framedWrittenErrorInitializer(declared.initializer, check);
+  const resolved = resolveUnmutatedVariable(value, undefined);
+  return resolved !== undefined && framedWrittenErrorInitializer(resolved.initializer, check);
 }
 
 /** Resolves a lexical error binding after explicit receiver syntax and written-word proofs. */
@@ -110,39 +108,36 @@ export function framedNamedError(
   );
 }
 
-/** Every variable source inside `initializer` must itself stay unmutated and non-escaping. */
-function unmutatedInitializerSources(initializer: Expression): boolean {
-  const pending: Expression[] = [initializer];
-  const seen = new Set<Node>();
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const current = peeled(next);
-    if (seen.has(current)) continue;
-    seen.add(current);
-    if (isIdentifier(current)) {
-      if (!unmutatedReadIdentifier(current)) return false;
-      continue;
-    }
-    const sources = framedSourceValues(current);
-    if (sources !== undefined) pending.push(...sources);
-  }
-  return true;
-}
-
-/** Checks that an identifier reading a local variable resolves to an unmutated error binding. */
-function unmutatedReadIdentifier(read: Identifier): boolean {
-  if (isCaughtBinding(read)) return false;
+/** Resolves an identifier read to an unmutated lexical `VariableDeclaration` and its initializer. */
+function resolveUnmutatedVariable(
+  read: Identifier,
+  returnScope: Answering | undefined,
+): ResolvedErrorVariable | undefined {
+  if (isCaughtBinding(read)) return undefined;
   const declared = frameDeclarationOf(read);
-  return (
-    declared !== undefined &&
-    isVariableDeclaration(declared) &&
-    isIdentifier(declared.name) &&
-    !isCatchClause(declared.parent) &&
-    unmutatedVariableBinding(declared, read)
-  );
+  if (
+    declared === undefined ||
+    !isVariableDeclaration(declared) ||
+    !isIdentifier(declared.name) ||
+    isCatchClause(declared.parent) ||
+    declared.initializer === undefined
+  ) {
+    return undefined;
+  }
+  const allowedReturn =
+    returnScope !== undefined && enclosingValueScope(declared) === returnScope
+      ? returnScope
+      : undefined;
+  if (!unmutatedVariableBinding(declared, read, allowedReturn)) return undefined;
+  return { initializer: declared.initializer, nextReturnScope: allowedReturn };
 }
 
 /** Follows whole lexical aliases and requires every reference to stay read-only and non-escaping. */
-function unmutatedVariableBinding(declared: VariableDeclaration, read: Identifier): boolean {
+function unmutatedVariableBinding(
+  declared: VariableDeclaration,
+  read: Identifier,
+  allowedReturn: Answering | undefined,
+): boolean {
   if (!isVariableDeclarationList(declared.parent) || !isIdentifier(declared.name)) return false;
   const blockScoped = isBlockScoped(declared.parent);
   if (!blockScoped && declared.end > read.pos) return false;
@@ -151,7 +146,8 @@ function unmutatedVariableBinding(declared: VariableDeclaration, read: Identifie
   const bindings: VariableDeclaration[] = [declared];
   const seen = new Set<VariableDeclaration>([declared]);
   for (const current of bindings) {
-    if (!safeBindingReferences(indexed.reads.get(current) ?? [], bindings, seen)) return false;
+    const references = indexed.reads.get(current) ?? [];
+    if (!safeBindingReferences(references, bindings, seen, allowedReturn)) return false;
   }
   return true;
 }
@@ -195,11 +191,12 @@ function recordVariableRead(node: Node, reads: Map<VariableDeclaration, Identifi
   else existing.push(node);
 }
 
-/** Queues whole lexical aliases and verifies every other reference is a pure read. */
+/** Queues whole lexical aliases and verifies every other reference is a pure read or factory return. */
 function safeBindingReferences(
   references: readonly Identifier[],
   bindings: VariableDeclaration[],
   seen: Set<VariableDeclaration>,
+  allowedReturn: Answering | undefined,
 ): boolean {
   for (const reference of references) {
     const alias = lexicalErrorAlias(reference);
@@ -210,7 +207,9 @@ function safeBindingReferences(
       }
       continue;
     }
-    if (!nonEscapingErrorRead(reference)) return false;
+    const allowedFactoryReturn =
+      allowedReturn !== undefined && returnedFromScope(reference, allowedReturn);
+    if (!allowedFactoryReturn && !nonEscapingErrorRead(reference)) return false;
   }
   return true;
 }

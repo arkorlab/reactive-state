@@ -2,16 +2,20 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
+  isArrowFunction,
   isAsExpression,
   isBigIntLiteral,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isClassStaticBlockDeclaration,
   isConditionalExpression,
+  isConstructorDeclaration,
   isDeleteExpression,
   isElementAccessExpression,
   isForInStatement,
   isForOfStatement,
+  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
   isNonNullExpression,
@@ -24,8 +28,11 @@ import {
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isReturnStatement,
   isSatisfiesExpression,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
+  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
@@ -43,6 +50,7 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
+import { type Answering, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
@@ -66,6 +74,12 @@ const PRIMITIVE_LITERAL_KINDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.FalseKeyword,
   SyntaxKind.NullKeyword,
   SyntaxKind.TrueKeyword,
+]);
+
+const RETURN_BINARY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
 ]);
 
 /** Matches `const alias = error` and `let alias = error` without `using` disposal hooks. */
@@ -288,7 +302,7 @@ function isAssignmentLeft(target: Node, parent: Node): boolean {
 }
 
 /** Walks through transparent wrappers and destructuring patterns to detect writes. */
-function reassignedTarget(node: Node): boolean {
+export function reassignedTarget(node: Node): boolean {
   let target: Node = node;
   while (assignmentWrapper(target)) target = target.parent;
   return isAssignmentLeft(target, target.parent);
@@ -319,4 +333,47 @@ function transparentExpression(
     isNonNullExpression(node) ||
     isSatisfiesExpression(node)
   );
+}
+
+/** Nearest enclosing callable or static-block execution scope for a declaration or statement. */
+export function enclosingValueScope(node: Node): Node | undefined {
+  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
+    if (
+      isAnswering(at) ||
+      isConstructorDeclaration(at) ||
+      isGetAccessorDeclaration(at) ||
+      isSetAccessorDeclaration(at) ||
+      isClassStaticBlockDeclaration(at)
+    ) {
+      return at;
+    }
+  }
+  return undefined;
+}
+
+/** Whether `reference` flows exclusively out as a returned value of `scope`. */
+export function returnedFromScope(reference: Identifier, scope: Answering): boolean {
+  if (reassignedTarget(reference)) return false;
+  let current: Node = reference;
+  while (returnResultWrapper(current)) current = current.parent;
+  const parent = current.parent;
+  if (isArrowFunction(parent)) return parent === scope && parent.body === current;
+  return (
+    isReturnStatement(parent) &&
+    parent.expression === current &&
+    enclosingValueScope(parent) === scope
+  );
+}
+
+/** Value-forwarding wrappers and branch operands that preserve a returned expression slot. */
+function returnResultWrapper(node: Node): boolean {
+  const parent = node.parent;
+  if (transparentExpression(parent) && parent.expression === node) return true;
+  if (isConditionalExpression(parent)) {
+    return parent.whenTrue === node || parent.whenFalse === node;
+  }
+  if (!isBinaryExpression(parent)) return false;
+  const kind = parent.operatorToken.kind;
+  if (kind === SyntaxKind.CommaToken) return parent.right === node;
+  return RETURN_BINARY_OPERATORS.has(kind) && (parent.left === node || parent.right === node);
 }
