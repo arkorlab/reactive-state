@@ -309,36 +309,48 @@ export function importDeclarations(lines: readonly ImportLine[]): readonly strin
   }
   return order.flatMap((from) => {
     const { run, typed } = byModule.get(from) ?? { run: [], typed: [] };
-    const written: string[] = [];
-    // A namespace import is a declaration of its own: `import a, * as b` is the one way to name
-    // both, and named bindings cannot join one.
-    const namespaces = run.filter((line) => line.binding.form === 'namespace');
-    const others = run.filter((line) => line.binding.form !== 'namespace');
-    if (others.length > 0) {
-      written.push(`import ${clauseOf(others)} from ${from};`);
-    }
-    for (const namespace of namespaces) {
-      written.push(`import * as ${localOf(namespace)} from ${from};`);
-    }
-    for (const form of ['default', 'namespace', 'named'] as const) {
-      const ofForm = typed.filter(
-        (line) =>
-          line.binding.form === form && run.every((other) => localOf(other) !== localOf(line)),
-      );
-      if (ofForm.length > 0) {
-        written.push(`import type ${clauseOf(ofForm)} from ${from};`);
-      }
-    }
-    return written;
+    return moduleImports(run, typed, from);
   });
 }
 
-/** An import clause of `lines`, all of one module: `a, { b, c as d }` or `* as e`. */
+/** The import declarations of one module's runtime and type-only bindings. */
+function moduleImports(
+  run: readonly ImportLine[],
+  typed: readonly ImportLine[],
+  from: string,
+): readonly string[] {
+  const written: string[] = [];
+  // A namespace import is a declaration of its own: `import a, * as b` is the one way to name
+  // both, and named bindings cannot join one.
+  const namespaces = run.filter((line) => line.binding.form === 'namespace');
+  const others = run.filter((line) => line.binding.form !== 'namespace');
+  if (others.length > 0) {
+    written.push(`import ${clauseOf(others)} from ${from};`);
+  }
+  for (const namespace of namespaces) {
+    written.push(`import * as ${localOf(namespace)} from ${from};`);
+  }
+  const typedOnly = typed.filter((line) => run.every((other) => localOf(other) !== localOf(line)));
+  const defaults = typedOnly.filter((line) => line.binding.form === 'default');
+  for (const line of defaults) {
+    written.push(`import type ${localOf(line)} from ${from};`);
+  }
+  const typedNamespaces = typedOnly.filter((line) => line.binding.form === 'namespace');
+  for (const line of typedNamespaces) {
+    written.push(`import type * as ${localOf(line)} from ${from};`);
+  }
+  const named = typedOnly.filter((line) => line.binding.form === 'named');
+  if (named.length > 0) {
+    written.push(`import type ${clauseOf(named)} from ${from};`);
+  }
+  return written;
+}
+
+/** An import clause of `lines`, all of one module's default or named bindings: `a, { b, c as d }`. */
 function clauseOf(lines: readonly ImportLine[]): string {
   const byDefault = lines.find(
     (line) => line.binding.form === 'default' && line.local === undefined,
   );
-  const namespace = lines.find((line) => line.binding.form === 'namespace');
   const named = lines
     .filter(
       (line) =>
@@ -356,9 +368,7 @@ function clauseOf(lines: readonly ImportLine[]): string {
         : `${exported} as ${local}`;
     });
   const parts = byDefault === undefined ? [] : [localOf(byDefault)];
-  if (namespace !== undefined) {
-    parts.push(`* as ${localOf(namespace)}`);
-  } else if (named.length > 0) {
+  if (named.length > 0) {
     parts.push(`{ ${named.join(', ')} }`);
   }
   return parts.join(', ');
