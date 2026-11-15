@@ -477,6 +477,34 @@ function givenTo(
 }
 
 /**
+ * What the names an object parameter destructures hold of the props it is `given`: each, the prop
+ * of the page's it was given under its name; none where an element is a rest, has a default or
+ * destructures further.
+ */
+function patternSources(
+  pattern: ObjectBindingPattern,
+  given: ReadonlyMap<string, Source>,
+): ReadonlyMap<string, Held> | undefined {
+  const sources = new Map<string, Held>();
+  for (const element of pattern.elements) {
+    const key = element.propertyName ?? element.name;
+    const source = key !== undefined && isIdentifier(key) ? given.get(key.text) : undefined;
+    const { name } = element;
+    if (
+      source === undefined ||
+      name === undefined ||
+      element.dotDotDotToken !== undefined ||
+      element.initializer !== undefined ||
+      !isIdentifier(name)
+    ) {
+      return undefined;
+    }
+    sources.set(name.text, { kind: 'source', source });
+  }
+  return sources;
+}
+
+/**
  * What the names a function's one parameter holds of the props it is `given`: each destructured,
  * the prop of the page's it was given under its name; or the props whole, with what each of them
  * is (`Held.handed`).
@@ -492,28 +520,13 @@ function parameterSources(
   if (parameter === undefined) {
     return new Map();
   }
+  if (parameter.dotDotDotToken !== undefined || parameter.initializer !== undefined) {
+    return undefined;
+  }
   if (isIdentifier(parameter.name)) {
     return new Map([[parameter.name.text, { handed: given, kind: 'source', source: 'props' }]]);
   }
-  if (!isObjectBindingPattern(parameter.name)) {
-    return undefined;
-  }
-  const sources = new Map<string, Held>();
-  for (const element of parameter.name.elements) {
-    const key = element.propertyName ?? element.name;
-    const source = key !== undefined && isIdentifier(key) ? given.get(key.text) : undefined;
-    const { name } = element;
-    if (
-      source === undefined ||
-      name === undefined ||
-      element.initializer !== undefined ||
-      !isIdentifier(name)
-    ) {
-      return undefined;
-    }
-    sources.set(name.text, { kind: 'source', source });
-  }
-  return sources;
+  return isObjectBindingPattern(parameter.name) ? patternSources(parameter.name, given) : undefined;
 }
 
 /** The page's own props: `params` and `searchParams`, as Next.js gives a page them. */
