@@ -2,29 +2,29 @@ import {
   type Expression,
   type FunctionDeclaration,
   type Identifier,
-  isAwaitExpression,
   isConditionalExpression,
   isIdentifier,
-  isJsxAttribute,
   isJsxElement,
   isJsxExpression,
   isJsxFragment,
   isJsxSelfClosingElement,
-  isJsxSpreadAttribute,
-  isObjectBindingPattern,
   isPropertyAccessExpression,
   isReturnStatement,
-  isVariableStatement,
-  type JsxAttributeLike,
   type JsxElement,
   type JsxSelfClosingElement,
   type Node,
-  type ObjectBindingPattern,
   type SourceFile,
-  type Statement,
 } from 'typescript/ast';
 
 import { unshadowedReads } from './code-globals.ts';
+import {
+  bindStatement,
+  givenTo,
+  holdsSearchParams,
+  parameterSources,
+  type Reading,
+  scanAwaits,
+} from './page-bindings.ts';
 import {
   isBlank,
   isPageFunction,
@@ -41,12 +41,9 @@ import {
   moduleNamesOf,
   propsOfAll,
   type Scope,
-  SEARCH,
   type Source,
-  valueOf,
 } from './page-values.ts';
-import { bindingIdentifiers, declaredWithin } from './scope.ts';
-import { isConstant } from './statements.ts';
+import { declaredWithin } from './scope.ts';
 
 /**
  * A page that renders one reactive root of more than its route's params — its search params, the
@@ -77,119 +74,10 @@ export interface PageRender {
   readonly given: readonly string[];
   /** The params the page destructures. */
   readonly destructured: readonly string[];
-  /** Whether it awaits its params, or its search params, outside any `<Suspense>`. */
+  /** Whether it awaits — its params, its search params, or anything else — outside any `<Suspense>`. */
   readonly blocking: boolean;
   /** Whether it reads its search params. */
   readonly searched: boolean;
-}
-
-/**
- * The prop of the page's that `props.params`, `props.searchParams` reads of props whole: the one
- * handed under that name (`Held.handed`) — the page's own of the page's — none of another name.
- */
-function propertySource(target: Expression, scope: Scope): Source | undefined {
-  if (!isPropertyAccessExpression(target) || !isIdentifier(target.expression)) {
-    return undefined;
-  }
-  const whole = scope.locals.get(target.expression.text);
-  const property = target.name.text;
-  const read = property === 'params' || property === 'searchParams';
-  return read && whole?.kind === 'source' && whole.source === 'props'
-    ? whole.handed?.get(property)
-    : undefined;
-}
-
-/** The prop of the page's an expression awaits: `await params`, `await props.searchParams`. */
-function awaitedSource(expression: Expression, scope: Scope): Source | undefined {
-  const value = unwrapped(expression);
-  if (!isAwaitExpression(value)) {
-    return undefined;
-  }
-  const target = unwrapped(value.expression);
-  if (!isIdentifier(target)) {
-    return propertySource(target, scope);
-  }
-  const held = scope.locals.get(target.text);
-  return held?.kind === 'source' && held.source !== 'props' ? held.source : undefined;
-}
-
-/** `{ a, b: c } = await params`: each local name, with the param it is; none for another pattern. */
-function paramsOf(pattern: ObjectBindingPattern): ReadonlyMap<string, string> | undefined {
-  const params = new Map<string, string>();
-  for (const element of pattern.elements) {
-    const key = element.propertyName ?? element.name;
-    const { name } = element;
-    if (
-      key === undefined ||
-      name === undefined ||
-      element.dotDotDotToken !== undefined ||
-      element.initializer !== undefined ||
-      !isIdentifier(name) ||
-      !isIdentifier(key)
-    ) {
-      return undefined;
-    }
-    params.set(name.text, key.text);
-  }
-  return params;
-}
-
-/** What a function of the page reads its props in, and what it awaits of them. */
-interface Reading {
-  readonly scope: Scope;
-  awaits: boolean;
-  searched: boolean;
-  readonly destructured: string[];
-}
-
-/** Holds what one declaration of a `const` declares; whether it is of a shape read. */
-function bindDeclaration(
-  declaration: { readonly name: Node; readonly initializer?: Expression | undefined },
-  reading: Reading,
-): boolean {
-  const { initializer, name } = declaration;
-  if (initializer === undefined) {
-    return false;
-  }
-  const { locals } = reading.scope;
-  const source = awaitedSource(initializer, reading.scope);
-  reading.awaits ||= source !== undefined;
-  if (source === 'params') {
-    const params = isObjectBindingPattern(name) ? paramsOf(name) : undefined;
-    if (params === undefined) {
-      return false;
-    }
-    for (const [local, param] of params) {
-      locals.set(local, { kind: 'param', param });
-      reading.destructured.push(param);
-    }
-    return true;
-  }
-  if (source === 'searchParams') {
-    reading.searched = true;
-    const names =
-      isIdentifier(name) || isObjectBindingPattern(name) ? bindingIdentifiers(name) : [];
-    for (const identifier of names) {
-      locals.set(identifier.text, SEARCH);
-    }
-    return names.length > 0;
-  }
-  if (!isIdentifier(name)) {
-    return false;
-  }
-  locals.set(name.text, valueOf(initializer, reading.scope));
-  return true;
-}
-
-/** Holds what a statement before a function's `return` declares; whether it is a `const` read. */
-function bindStatement(statement: Statement, reading: Reading, sourceFile: SourceFile): boolean {
-  return (
-    isVariableStatement(statement) &&
-    isConstant(statement, sourceFile) &&
-    statement.declarationList.declarations.every((declaration) =>
-      bindDeclaration(declaration, reading),
-    )
-  );
 }
 
 /** An element of the root, or of a function of the page's, as the page renders it. */
@@ -384,16 +272,6 @@ interface RenderContext {
   readonly module: Scope['module'];
 }
 
-/** Whether one of `sources` is the page's search params, destructured. */
-function holdsSearchParams(sources: ReadonlyMap<string, Held>): boolean {
-  for (const held of sources.values()) {
-    if (held.kind === 'source' && held.source === 'searchParams') {
-      return true;
-    }
-  }
-  return false;
-}
-
 /** What `fn`, a function of the page given `sources`, renders; none where it is written otherwise. */
 function renderedBy(
   fn: FunctionDeclaration,
@@ -420,113 +298,11 @@ function renderedBy(
       return undefined;
     }
   }
+  scanAwaits(returned.expression, reading);
   const sites = sitesIn(returned.expression, context.tags);
   return sites.refused || !isPlaced(returned.expression, sites, context.tags)
     ? undefined
     : { reading, sites };
-}
-
-/** What an attribute hands a function of the page's: its value, or what it spreads. */
-function handed(attribute: JsxAttributeLike): Expression | undefined {
-  if (isJsxSpreadAttribute(attribute)) {
-    return unwrapped(attribute.expression);
-  }
-  const { initializer } = attribute;
-  return initializer !== undefined && isJsxExpression(initializer)
-    ? initializer.expression
-    : undefined;
-}
-
-/** Holds in `given` what props whole hand on as they are spread: each prop they were handed. */
-function handOn(given: Map<string, Source>, whole: ReadonlyMap<string, Source> | undefined): void {
-  if (whole === undefined) {
-    return;
-  }
-  for (const [name, source] of whole) {
-    given.set(name, source);
-  }
-}
-
-/** The page's props an element hands a function of the page's, by the names it hands them under. */
-function givenTo(
-  element: JsxElement | JsxSelfClosingElement,
-  page: Scope,
-): ReadonlyMap<string, Source> | undefined {
-  const given = new Map<string, Source>();
-  const attributes = isJsxElement(element) ? element.openingElement.attributes : element.attributes;
-  for (const attribute of attributes.properties) {
-    const value = handed(attribute);
-    const held =
-      value !== undefined && isIdentifier(value) ? page.locals.get(value.text) : undefined;
-    if (held?.kind !== 'source') {
-      return undefined;
-    }
-    if (isJsxSpreadAttribute(attribute) && held.source === 'props') {
-      handOn(given, held.handed);
-    } else if (
-      isJsxAttribute(attribute) &&
-      isIdentifier(attribute.name) &&
-      held.source !== 'props'
-    ) {
-      given.set(attribute.name.text, held.source);
-    } else {
-      return undefined;
-    }
-  }
-  return given;
-}
-
-/**
- * What the names an object parameter destructures hold of the props it is `given`: each, the prop
- * of the page's it was given under its name; none where an element is a rest, has a default or
- * destructures further.
- */
-function patternSources(
-  pattern: ObjectBindingPattern,
-  given: ReadonlyMap<string, Source>,
-): ReadonlyMap<string, Held> | undefined {
-  const sources = new Map<string, Held>();
-  for (const element of pattern.elements) {
-    const key = element.propertyName ?? element.name;
-    const source = key !== undefined && isIdentifier(key) ? given.get(key.text) : undefined;
-    const { name } = element;
-    if (
-      source === undefined ||
-      name === undefined ||
-      element.dotDotDotToken !== undefined ||
-      element.initializer !== undefined ||
-      !isIdentifier(name)
-    ) {
-      return undefined;
-    }
-    sources.set(name.text, { kind: 'source', source });
-  }
-  return sources;
-}
-
-/**
- * What the names a function's one parameter holds of the props it is `given`: each destructured,
- * the prop of the page's it was given under its name; or the props whole, with what each of them
- * is (`Held.handed`).
- */
-function parameterSources(
-  fn: FunctionDeclaration,
-  given: ReadonlyMap<string, Source>,
-): ReadonlyMap<string, Held> | undefined {
-  const [parameter, ...more] = fn.parameters;
-  if (more.length > 0) {
-    return undefined;
-  }
-  if (parameter === undefined) {
-    return new Map();
-  }
-  if (parameter.dotDotDotToken !== undefined || parameter.initializer !== undefined) {
-    return undefined;
-  }
-  if (isIdentifier(parameter.name)) {
-    return new Map([[parameter.name.text, { handed: given, kind: 'source', source: 'props' }]]);
-  }
-  return isObjectBindingPattern(parameter.name) ? patternSources(parameter.name, given) : undefined;
 }
 
 /** The page's own props: `params` and `searchParams`, as Next.js gives a page them. */
