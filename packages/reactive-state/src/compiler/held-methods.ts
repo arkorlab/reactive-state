@@ -162,12 +162,13 @@ export function writesThis(
   writtenBy: (node: Node) => Node | undefined,
   context: { readonly seen: Set<string>; readonly call: CallExpression | undefined },
 ): boolean {
-  const { seen } = context;
+  const { seen, call } = context;
   const candidates = methods.get(name);
-  if (candidates === undefined || seen.has(name)) {
+  const state = call !== undefined && discardedCall(call) ? `${name}:0` : `${name}:1`;
+  if (candidates === undefined || seen.has(state)) {
     return false;
   }
-  seen.add(name);
+  seen.add(state);
   return candidates.some((method) => candidateWritesThis(method, methods, writtenBy, context));
 }
 
