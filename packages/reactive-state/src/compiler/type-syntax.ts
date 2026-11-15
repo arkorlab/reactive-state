@@ -4,6 +4,7 @@ import {
   isInterfaceDeclaration,
   isTypeNode,
   type Node,
+  NodeFlags,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -22,4 +23,15 @@ export function isTypeSyntax(node: Node): boolean {
     isHeritageClause(clause) &&
     (clause.token === SyntaxKind.ImplementsKeyword || isInterfaceDeclaration(clause.parent))
   );
+}
+
+/**
+ * Whether `node` is ambient: it says `declare`, stands within a declaration that does — `declare
+ * namespace`, `declare global`, `declare module 'x'` — or is written in a declaration file.
+ * TypeScript emits nothing for what is ambient, so no name it gives is a binding that runs: a read
+ * of that name is the global's, or the enclosing scope's. A name is a binding where the code emits one.
+ */
+export function isAmbient(node: Node): boolean {
+  // eslint-disable-next-line no-bitwise -- TypeScript exposes ambient declarations through this flag.
+  return (node.flags & NodeFlags.Ambient) !== 0;
 }
