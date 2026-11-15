@@ -23,7 +23,6 @@ import {
   frameDeclarationOf,
   frameMemberName,
 } from './framed-bindings.ts';
-import { framedConstructorDefaultEvaluation } from './framed-constructor-default-evaluation.ts';
 import { framedDefaultTaken } from './framed-constructor-defaults.ts';
 import { bindingIdentifiers, readsBinding } from './scope.ts';
 
@@ -45,7 +44,13 @@ export type Slots = readonly (readonly ForwardedValue[])[];
 
 /** What a parameter read was given, and the defaults it may take instead. */
 interface DefaultValue extends ForwardedValue {
+  /** Whether the default is the value in use: the argument it stands for is left `undefined`. */
   readonly selected: boolean;
+}
+
+/** A default, and the defaults the reads that led to it passed through, outermost first. */
+interface EnteredValue extends DefaultValue {
+  readonly entered: readonly string[];
 }
 
 /** The inputs and defaults for one parameter read. */
@@ -84,40 +89,54 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
 /**
  * A written `super` argument, what the parameters it reads were given, and the defaults they may
  * take instead, whose own parameter reads count whole. `undefined` where `arguments` or a pattern
- * the compile cannot follow hides which argument a read takes.
+ * the compile cannot follow hides which argument a read takes. The member path a read selects is
+ * followed through each default the construction leaves taken, whatever else the constructor's
+ * code holds: a call, an operator or a member read there does not show that the path selects
+ * nothing the native base converts. What a default selects the path of is forwarded whole beside
+ * it, for the path may stop at a value the compile cannot read into.
+ *
+ * Defaults that read one another in a circle (`a = b.x, b = a.y`, a read of a parameter before it
+ * is initialized, which throws where it runs) make a path that grows without end where each
+ * default is taken: a taken default entered again, in a state not scanned yet, is such a circle,
+ * and the program is read as one the compile cannot follow, so `undefined`, which keeps every
+ * argument possible. A circle that adds no key, or of defaults the construction replaces (which
+ * drop the path), meets a state it scanned and ends of itself.
  */
 export function framedSlotValues(
   argument: Expression,
   parameters: readonly ParameterDeclaration[],
   slots: Slots,
-  evaluated: readonly Expression[] = [argument],
 ): readonly ForwardedValue[] | undefined {
   const values: ForwardedValue[] = [];
   const scanned = new Set<string>();
-  const pending: DefaultValue[] = [
-    {
-      keys: [],
-      value: argument,
-      selected: framedConstructorDefaultEvaluation(parameters, evaluated),
-    },
-  ];
+  const pending: EnteredValue[] = [{ entered: [], keys: [], value: argument, selected: true }];
   for (let scan = pending.pop(); scan !== undefined; scan = pending.pop()) {
-    const seen = JSON.stringify([
-      scan.value.pos,
-      scan.keys,
-      scan.any === true,
-      scan.selected,
-      scan.continued === true,
-    ]);
+    const seen = scanState(scan);
     if (scanned.has(seen)) continue;
     scanned.add(seen);
     values.push(scan);
     const reads = parameterReads(scan, parameters, slots);
     if (reads === undefined) return undefined;
     values.push(...reads.values);
-    pending.push(...reads.defaults);
+    for (const each of reads.defaults) {
+      const at = `${each.value.pos}:${each.value.end}`;
+      if (each.selected && scan.entered.includes(at) && !scanned.has(scanState(each)))
+        return undefined;
+      pending.push({ ...each, entered: [...scan.entered, at] });
+    }
   }
   return values;
+}
+
+/** What a scan of a default stands for: the same state is scanned once. */
+function scanState(scan: DefaultValue): string {
+  return JSON.stringify([
+    scan.value.pos,
+    scan.keys,
+    scan.any === true,
+    scan.selected,
+    scan.continued === true,
+  ]);
 }
 
 /** The position of the rest parameter a spread passes on whole. */
@@ -162,6 +181,12 @@ function parameterReads(
           };
         }),
       );
+      // The path may stop at a value the compile cannot read into, an Error's own `message`, or
+      // meet a member another default writes: what the default selects it of stays whole too.
+      if (root.keys.length > 0 || root.any === true) {
+        values.push(...read.values);
+        defaults.push(...read.defaults.map((each) => ({ ...each, selected: false })));
+      }
     } else {
       values.push(...read.values);
       defaults.push(

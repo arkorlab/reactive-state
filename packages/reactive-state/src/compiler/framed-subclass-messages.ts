@@ -159,7 +159,7 @@ function superSlots(
   const result: (readonly ForwardedValue[])[] = [];
   for (const argument of call.arguments) {
     if (!isSpreadElement(argument)) {
-      const values = framedSlotValues(argument, parameters, slots, call.arguments);
+      const values = framedSlotValues(argument, parameters, slots);
       if (values === undefined) return undefined;
       result.push(values);
       continue;
