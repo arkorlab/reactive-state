@@ -38,31 +38,85 @@ import { constantValue } from './numbers.ts';
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 
+interface AnalysisState {
+  readonly cuts: { count: number };
+  readonly formData: Map<Expression, boolean>;
+  readonly readings: Map<Expression, Map<Node, BodyReading>>;
+  readonly seen: ReadonlySet<Expression>;
+}
+
 const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
 const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
 
+/** Fresh memoization tables and empty cycle trail for one multipart construction check. */
+function startAnalysis(): AnalysisState {
+  return {
+    cuts: { count: 0 },
+    formData: new Map(),
+    readings: new Map(),
+    seen: new Set(),
+  };
+}
+
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 export function multipartMaking(node: NewExpression, path: string | undefined): string | undefined {
+  const state = startAnalysis();
   const first = node.arguments?.[0];
-  const bodies = path === 'Response' && first !== undefined ? [first] : requestBodies(node, path);
-  return bodies.some((body) => isFormData(body, new Set()))
+  const bodies =
+    path === 'Response' && first !== undefined ? [first] : requestBodies(node, path, state);
+  return bodies.some((body) => isFormData(body, { ...state, seen: new Set() }))
     ? 'makes a `Request` or `Response` of `FormData`, whose multipart boundary is random'
     : undefined;
 }
 
 /** What a Request's options show of its body, after aliases, mutations and object spreads. */
-function requestBodies(node: NewExpression, path: string | undefined): readonly Expression[] {
+function requestBodies(
+  node: NewExpression,
+  path: string | undefined,
+  state: AnalysisState,
+): readonly Expression[] {
   const options = path === 'Request' ? node.arguments?.[1] : undefined;
-  return options === undefined ? [] : bodiesOf(options, node, new Set()).bodies;
+  return options === undefined ? [] : bodiesOf(options, node, state).bodies;
 }
 
-/** The surviving body property of options the code writes; none of options it does not show. */
-function bodiesOf(node: Expression, point: Node, seen: ReadonlySet<Expression>): BodyReading {
+/** The surviving body property of options the code writes, memoized across cycle-free subwalks. */
+function bodiesOf(node: Expression, point: Node, state: AnalysisState): BodyReading {
   const value = unwrapped(node);
-  if (seen.has(value)) {
+  const cachePoint = isObjectLiteralExpression(value) ? value : point;
+  const cached = state.readings.get(value)?.get(cachePoint);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (state.seen.has(value)) {
+    state.cuts.count += 1;
     return EMPTY_BODIES;
   }
-  const following = new Set([...seen, value]);
+  const cutsBefore = state.cuts.count;
+  const following: AnalysisState = { ...state, seen: new Set([...state.seen, value]) };
+  const reading = computeBodiesOf(value, cachePoint, following);
+  if (state.cuts.count === cutsBefore) {
+    rememberReading(state.readings, value, cachePoint, reading);
+  }
+  return reading;
+}
+
+/** Stores a cycle-free `BodyReading` indexed by unwrapped expression and evaluation point. */
+function rememberReading(
+  readings: Map<Expression, Map<Node, BodyReading>>,
+  value: Expression,
+  point: Node,
+  reading: BodyReading,
+): void {
+  let byPoint = readings.get(value);
+  if (byPoint === undefined) {
+    byPoint = new Map();
+    readings.set(value, byPoint);
+  }
+  byPoint.set(point, reading);
+}
+
+/** Evaluates `BodyReading` for one unwrapped options expression without consulting the cache. */
+function computeBodiesOf(value: Expression, point: Node, following: AnalysisState): BodyReading {
   if (isIdentifier(value)) {
     return identifierBodies(value, point, following);
   }
@@ -84,17 +138,14 @@ function bodiesOf(node: Expression, point: Node, seen: ReadonlySet<Expression>):
 }
 
 /** Surviving body candidates across the properties and spreads of a written options literal. */
-function literalBodies(
-  value: ObjectLiteralExpression,
-  following: ReadonlySet<Expression>,
-): BodyReading {
+function literalBodies(value: ObjectLiteralExpression, following: AnalysisState): BodyReading {
   let current = EMPTY_BODIES;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
       current = mergeSpread(current, bodiesOf(property.expression, property, following));
       continue;
     }
-    current = propertyBodies(property, current);
+    current = propertyBodies(property, current, following);
   }
   return current;
 }
@@ -103,7 +154,7 @@ function literalBodies(
 function objectAssignBodies(
   args: readonly Expression[],
   point: Node,
-  following: ReadonlySet<Expression>,
+  following: AnalysisState,
 ): BodyReading {
   let current = EMPTY_BODIES;
   for (const argument of args) {
@@ -124,20 +175,16 @@ function mergeSpread(previous: BodyReading, spread: BodyReading): BodyReading {
 }
 
 /** Possible request bodies carried by a variable or parameter options alias at `point`. */
-function identifierBodies(
-  name: Identifier,
-  point: Node,
-  seen: ReadonlySet<Expression>,
-): BodyReading {
+function identifierBodies(name: Identifier, point: Node, state: AnalysisState): BodyReading {
   const selected = frameBindingOf(name);
   if (selected === undefined) {
     return EMPTY_BODIES;
   }
   if (isVariableDeclaration(selected.binding)) {
-    return variableBodies(name, selected.binding, point, seen);
+    return variableBodies(name, selected.binding, point, state);
   }
   return isParameterDeclaration(selected.binding)
-    ? parameterBodies(name, selected.binding, point, (each, at) => bodiesOf(each, at, seen))
+    ? parameterBodies(name, selected.binding, point, (each, at) => bodiesOf(each, at, state))
     : EMPTY_BODIES;
 }
 
@@ -146,7 +193,7 @@ function variableBodies(
   name: Identifier,
   declaration: VariableDeclaration,
   point: Node,
-  seen: ReadonlySet<Expression>,
+  state: AnalysisState,
 ): BodyReading {
   const whole = framedHeldValues(name, [], name);
   const bodyHeld = framedHeldValues(name, ['body'], point);
@@ -155,7 +202,7 @@ function variableBodies(
   }
   const entries =
     bodyHeld.initial === undefined ? bodyHeld.held : [bodyHeld.initial, ...bodyHeld.held];
-  const bodies = entries.flatMap((entry) => heldOptionBodies(entry, point, seen));
+  const bodies = entries.flatMap((entry) => heldOptionBodies(entry, point, state));
   const holder = framedHeldVariable(declaration);
   const deleted = framedMemberDeletes(name.getSourceFile()).some((each) => each.holder === holder);
   if (deleted) {
@@ -168,23 +215,19 @@ function variableBodies(
   const overwrites =
     wholeEntries.length > 0 &&
     wholeEntries.every(
-      (each) => each.keys.length === 0 && bodiesOf(each.value, each.value, seen).overwrites,
+      (each) => each.keys.length === 0 && bodiesOf(each.value, each.value, state).overwrites,
     );
   return { bodies, overwrites };
 }
 
 /** Body expressions selected by one held options path. */
-function heldOptionBodies(
-  entry: Held,
-  point: Node,
-  seen: ReadonlySet<Expression>,
-): readonly Expression[] {
+function heldOptionBodies(entry: Held, point: Node, state: AnalysisState): readonly Expression[] {
   if (entry.keys.length === 0) {
     return [entry.value];
   }
   if (entry.keys.length === 1 && entry.keys[0] === 'body') {
     const at = isIdentifier(unwrapped(entry.value)) ? point : entry.value;
-    return bodiesOf(entry.value, at, seen).bodies;
+    return bodiesOf(entry.value, at, state).bodies;
   }
   return (framedObjectSources(entry.value, entry.keys) ?? [])
     .filter((each) => each.keys.length === 0)
@@ -192,7 +235,11 @@ function heldOptionBodies(
 }
 
 /** What a surviving property proves or may add to the possible request bodies. */
-function propertyBodies(property: ObjectLiteralElementLike, previous: BodyReading): BodyReading {
+function propertyBodies(
+  property: ObjectLiteralElementLike,
+  previous: BodyReading,
+  state: AnalysisState,
+): BodyReading {
   if (isSpreadAssignment(property)) {
     return previous;
   }
@@ -201,7 +248,7 @@ function propertyBodies(property: ObjectLiteralElementLike, previous: BodyReadin
   if (key === 'body') {
     return { bodies: held === undefined ? [] : [held], overwrites: true };
   }
-  return key === undefined && held !== undefined && isFormData(held, new Set())
+  return key === undefined && held !== undefined && isFormData(held, { ...state, seen: new Set() })
     ? { ...previous, bodies: [...previous.bodies, held] }
     : previous;
 }
@@ -292,13 +339,28 @@ function singleIdentifierValue(name: Identifier): Expression | undefined {
   return only !== undefined && only.keys.length === 0 ? only.value : undefined;
 }
 
-/** Whether a body is FormData the code constructs, assigns, or annotates as a parameter. */
-function isFormData(node: Expression, seen: ReadonlySet<Expression>): boolean {
+/** Whether a body is FormData the code constructs, assigns, or annotates, memoized across DAGs. */
+function isFormData(node: Expression, state: AnalysisState): boolean {
   const value = unwrapped(node);
-  if (seen.has(value)) {
+  const cached = state.formData.get(value);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (state.seen.has(value)) {
+    state.cuts.count += 1;
     return false;
   }
-  const following = new Set([...seen, value]);
+  const cutsBefore = state.cuts.count;
+  const following: AnalysisState = { ...state, seen: new Set([...state.seen, value]) };
+  const result = computeFormData(value, following);
+  if (state.cuts.count === cutsBefore) {
+    state.formData.set(value, result);
+  }
+  return result;
+}
+
+/** Evaluates whether one unwrapped body expression may hold `FormData` without consulting cache. */
+function computeFormData(value: Expression, following: AnalysisState): boolean {
   if (isIdentifier(value)) {
     return identifierFormData(value, following);
   }
@@ -312,7 +374,7 @@ function isFormData(node: Expression, seen: ReadonlySet<Expression>): boolean {
 }
 
 /** Whether a variable or parameter read may hold a `FormData` instance at `name`. */
-function identifierFormData(name: Identifier, seen: ReadonlySet<Expression>): boolean {
+function identifierFormData(name: Identifier, state: AnalysisState): boolean {
   const selected = frameBindingOf(name);
   if (selected === undefined) {
     return false;
@@ -326,7 +388,7 @@ function identifierFormData(name: Identifier, seen: ReadonlySet<Expression>): bo
     if (entries.length === 0) {
       return selected.keys.length === 0 && namesType(selected.binding.type, FORM_DATA_NAMES);
     }
-    return entries.some((entry) => heldFormData(entry, seen));
+    return entries.some((entry) => heldFormData(entry, state));
   }
   if (!isParameterDeclaration(selected.binding)) {
     return false;
@@ -336,18 +398,18 @@ function identifierFormData(name: Identifier, seen: ReadonlySet<Expression>): bo
       ? parameterValues(name, selected.binding)
       : { replaced: false, values: [] };
   if (resolved.replaced) {
-    return resolved.values.some((each) => isFormData(each, seen));
+    return resolved.values.some((each) => isFormData(each, state));
   }
-  const assigned = framedAssignedSources(name).some((each) => heldFormData(each, seen));
+  const assigned = framedAssignedSources(name).some((each) => heldFormData(each, state));
   const typed = selected.keys.length === 0 && namesType(selected.binding.type, FORM_DATA_NAMES);
   return assigned || typed;
 }
 
 /** Whether a held value or destructured member path may evaluate to `FormData`. */
-function heldFormData(entry: Held, seen: ReadonlySet<Expression>): boolean {
+function heldFormData(entry: Held, state: AnalysisState): boolean {
   if (entry.keys.length === 0) {
-    return isFormData(entry.value, seen);
+    return isFormData(entry.value, state);
   }
   const sources = framedObjectSources(entry.value, entry.keys) ?? [];
-  return sources.some((each) => each.keys.length === 0 && isFormData(each.value, seen));
+  return sources.some((each) => each.keys.length === 0 && isFormData(each.value, state));
 }
