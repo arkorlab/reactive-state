@@ -4,16 +4,21 @@ import {
   type Expression,
   type FunctionDeclaration,
   type Identifier,
+  isArrowFunction,
   isBinaryExpression,
   isBlock,
   isCallExpression,
   isConditionalExpression,
+  isConstructorDeclaration,
   isFunctionDeclaration,
+  isGetAccessorDeclaration,
   isIdentifier,
   isIfStatement,
   isInterfaceDeclaration,
   isNewExpression,
   isReturnStatement,
+  isSetAccessorDeclaration,
+  isSourceFile,
   isSpreadElement,
   isTypeAliasDeclaration,
   isVariableDeclaration,
@@ -43,7 +48,7 @@ import { reassignedTarget } from './framed-written-error-uses.ts';
 import { nonInterceptingWrappedTarget } from './framed-written-error-wrappers.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
 import { constantValue } from './numbers.ts';
-import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 
 /**
  * Universal proof that every reachable branch and local factory return feeding an annotated
@@ -244,25 +249,81 @@ function validConstructedLeaf(
   return !state.check(node, false) && state.check(node, true);
 }
 
-/** Checks whether constructor arguments inside `fn` read any of `fn`'s own parameters. */
+/** Checks whether `construction` inside `fn` reads `fn`'s parameters or own `arguments` object. */
 function readsScopeParameter(construction: Expression, fn: Answering): boolean {
   if (!isCallExpression(construction) && !isNewExpression(construction)) return false;
-  const parameterSet = new Set(parametersOf(fn));
-  if (parameterSet.size === 0) return false;
-  const names = new Set<string>();
-  for (const parameter of parameterSet) {
-    for (const id of bindingIdentifiers(parameter.name)) names.add(id.text);
-  }
-  const pending: Node[] = [...(construction.arguments ?? [])];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+  const context = {
+    fn,
+    parameterSet: new Set<Node>(parametersOf(fn)),
+    pending: [construction] as Node[],
+    seen: new Set<Node>(),
+  };
+  for (
+    let current = context.pending.pop();
+    current !== undefined;
+    current = context.pending.pop()
+  ) {
     if (isTypeOnly(current)) continue;
-    if (isIdentifier(current) && names.has(current.text) && readsBinding(current)) {
-      const declared = frameDeclarationOf(current);
-      if (declared !== undefined && parameterSet.has(declared as never)) return true;
+    if (
+      isIdentifier(current) &&
+      readsBinding(current) &&
+      inspectScopeIdentifier(current, context)
+    ) {
+      return true;
     }
     current.forEachChild((child) => {
-      pending.push(child);
+      context.pending.push(child);
     });
+  }
+  return false;
+}
+
+/** Matches direct parameters, `fn`'s own `arguments`, and local declarations inside `fn`. */
+function inspectScopeIdentifier(
+  identifier: Identifier,
+  context: {
+    readonly fn: Answering;
+    readonly parameterSet: ReadonlySet<Node>;
+    readonly pending: Node[];
+    readonly seen: Set<Node>;
+  },
+): boolean {
+  const declared = frameDeclarationOf(identifier);
+  if (declared === undefined) {
+    return identifier.text === 'arguments' && ownsArgumentsBinding(identifier, context.fn);
+  }
+  if (context.parameterSet.has(declared)) return true;
+  if (!declaredWithinScope(declared, context.fn) || context.seen.has(declared)) return false;
+  context.seen.add(declared);
+  if (isVariableDeclaration(declared) && declared.initializer !== undefined) {
+    context.pending.push(declared.initializer);
+  } else if (isFunctionDeclaration(declared) && declared.body !== undefined) {
+    context.pending.push(declared.body);
+  }
+  return false;
+}
+
+/** Whether `node` is lexically nested inside `scope`. */
+function declaredWithinScope(node: Node, scope: Node): boolean {
+  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
+    if (at === scope) return true;
+  }
+  return false;
+}
+
+/** Whether an unbound `arguments` identifier refers to `fn`'s own non-arrow `arguments` object. */
+function ownsArgumentsBinding(identifier: Identifier, fn: Answering): boolean {
+  if (isArrowFunction(fn)) return false;
+  for (let at: Node = identifier.parent; !isSourceFile(at); at = at.parent) {
+    if (isArrowFunction(at)) continue;
+    if (
+      isAnswering(at) ||
+      isConstructorDeclaration(at) ||
+      isGetAccessorDeclaration(at) ||
+      isSetAccessorDeclaration(at)
+    ) {
+      return at === fn;
+    }
   }
   return false;
 }
