@@ -98,6 +98,13 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
+ * How many values one `super` argument forwards at most. A chain of constructors passes each
+ * layer's values on to the next, and a path that adds keys at each layer makes more of them than
+ * the layers are many: a chain deeper than the limit allows is not followed.
+ */
+const LIMITS = { forwarded: 512 } as const;
+
+/**
  * A written `super` argument, what the parameters it reads were given, and the defaults they may
  * take instead, whose own parameter reads count whole. `undefined` where `arguments` or a pattern
  * the compile cannot follow hides which argument a read takes. The member path a read selects is
@@ -114,6 +121,11 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
  * and the program is read as one the compile cannot follow, so `undefined`, which keeps every
  * argument possible. A circle that adds no key, or of defaults the construction replaces (which
  * drop the path), meets a state it scanned and ends of itself.
+ *
+ * A value is forwarded once, whichever way it is reached (the same written value read up to the
+ * same key), so that the layers of a chain of constructors, each of which passes on what it was
+ * given beside what it reads of it, forward as many values as there are different ones; and more
+ * than `LIMITS.forwarded` of them is read as a program the compile cannot follow: `undefined`.
  */
 export function framedSlotValues(
   argument: Expression,
@@ -121,16 +133,17 @@ export function framedSlotValues(
   slots: Slots,
 ): readonly ForwardedValue[] | undefined {
   const values: ForwardedValue[] = [];
+  const forwarded = new Set<string>();
   const scanned = new Set<string>();
   const pending: EnteredValue[] = [{ entered: [], keys: [], value: argument, selected: true }];
   for (let scan = pending.pop(); scan !== undefined; scan = pending.pop()) {
     const seen = scanState(scan);
     if (scanned.has(seen)) continue;
     scanned.add(seen);
-    values.push(scan);
     const reads = parameterReads(scan, parameters, slots);
     if (reads === undefined) return undefined;
-    values.push(...reads.values);
+    addForwarded(values, forwarded, [scan, ...reads.values]);
+    if (values.length > LIMITS.forwarded) return undefined;
     for (const each of reads.defaults) {
       const at = `${each.value.pos}:${each.value.end}`;
       if (each.selected && scan.entered.includes(at) && !scanned.has(scanState(each)))
@@ -139,6 +152,31 @@ export function framedSlotValues(
     }
   }
   return values;
+}
+
+/** Adds the values of `added` that `values` does not hold: a value is forwarded once. */
+function addForwarded(
+  values: ForwardedValue[],
+  forwarded: Set<string>,
+  added: readonly ForwardedValue[],
+): void {
+  for (const each of added) {
+    const key = forwardedState(each);
+    if (forwarded.has(key)) continue;
+    forwarded.add(key);
+    values.push(each);
+  }
+}
+
+/** What a forwarded value stands for to the reader: the written value, read up to its keys. */
+function forwardedState(each: ForwardedValue): string {
+  return JSON.stringify([
+    each.value.pos,
+    each.value.end,
+    each.keys,
+    each.any === true,
+    each.continued === true,
+  ]);
 }
 
 /** What a scan of a default stands for: the same state is scanned once. */
