@@ -1,6 +1,5 @@
 import {
   type BindingName,
-  type CallExpression,
   type ClassLikeDeclaration,
   type ConstructorDeclaration,
   type Expression,
@@ -34,16 +33,18 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTaggedTemplateExpression,
-  isTemplateExpression,
   isVariableDeclaration,
-  isVoidExpression,
-  type NewExpression,
   type Node,
   SyntaxKind,
-  type TaggedTemplateExpression,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
+import {
+  type CalleeLookup,
+  classifyNativeInvocation,
+  type NativeInvocation,
+  tagArguments,
+} from './argument-native-calls.ts';
 import { unwrapped } from './bounded.ts';
 import { BUILT_INS, PLATFORM_ALIKE } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
@@ -56,45 +57,10 @@ interface Execution {
   readonly root: Node;
   readonly fn: Node | undefined;
   readonly trail: ReadonlySet<Node>;
-  readonly calleeOf: CalleeOf;
+  readonly calleeOf: CalleeLookup;
 }
-type CalleeOf = (node: Expression) => Node | undefined;
-type Invocation = CallExpression | NewExpression | TaggedTemplateExpression;
 type Callable = Answering | ConstructorDeclaration;
 const LOCAL_ARRAY_CALLS = new Set(['pop', 'push', 'shift', 'unshift']);
-const SECOND_CALLBACK_NATIVES: ReadonlySet<string> = new Set([
-  'Array.from',
-  'JSON.parse',
-  'JSON.stringify',
-  'Map.groupBy',
-  'Object.groupBy',
-]);
-const STREAM_CONSTRUCTORS: ReadonlySet<string> = new Set([
-  'ReadableStream',
-  'TransformStream',
-  'WritableStream',
-]);
-const UNSAFE_NATIVES: ReadonlySet<string> = new Set([
-  'Array.fromAsync',
-  'eval',
-  'Promise.try',
-  'ReadableStream.from',
-  'Reflect.apply',
-  'Reflect.construct',
-]);
-const IGNORED_JSON_CALLBACKS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.ArrayLiteralExpression,
-  SyntaxKind.BigIntLiteral,
-  SyntaxKind.FalseKeyword,
-  SyntaxKind.NoSubstitutionTemplateLiteral,
-  SyntaxKind.NullKeyword,
-  SyntaxKind.NumericLiteral,
-  SyntaxKind.ObjectLiteralExpression,
-  SyntaxKind.RegularExpressionLiteral,
-  SyntaxKind.StringLiteral,
-  SyntaxKind.TemplateExpression,
-  SyntaxKind.TrueKeyword,
-]);
 const DEFINED: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ArrayLiteralExpression,
   SyntaxKind.ArrowFunction,
@@ -114,7 +80,7 @@ const DEFINED: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /** Executing an argument can invalidate values another argument selected before the callee runs. */
-export function argumentChanges(argument: Expression, calleeOf: CalleeOf): boolean {
+export function argumentChanges(argument: Expression, calleeOf: CalleeLookup): boolean {
   const pending: Execution[] = [{ root: argument, fn: undefined, trail: new Set(), calleeOf }];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     if (current.trail.has(current.root)) {
@@ -152,12 +118,16 @@ export function argumentChanges(argument: Expression, calleeOf: CalleeOf): boole
 }
 
 /** Calls, constructions and tags execute source code; a function merely passed as a value does not. */
-function invoked(node: Node): node is Invocation {
+function invoked(node: Node): node is NativeInvocation {
   return isCallExpression(node) || isNewExpression(node) || isTaggedTemplateExpression(node);
 }
 
 /** Source invocation roots, preserving generator suspension and native call handling. */
-function queueInvocation(node: Invocation, current: Execution, pending: Execution[]): boolean {
+function queueInvocation(
+  node: NativeInvocation,
+  current: Execution,
+  pending: Execution[],
+): boolean {
   const callee = current.calleeOf(isTaggedTemplateExpression(node) ? node.tag : node.expression);
   if (callee === undefined) {
     return false;
@@ -171,77 +141,27 @@ function queueInvocation(node: Invocation, current: Execution, pending: Executio
 
 /** Known globals with no synchronous hook, or whose callback body can be queued directly. */
 function queueNative(
-  node: Invocation,
+  node: NativeInvocation,
   path: readonly string[],
   current: Execution,
   pending: Execution[],
 ): boolean {
-  const [root = ''] = path;
-  const named = path.join('.');
-  if (
-    root === 'WebAssembly' ||
-    UNSAFE_NATIVES.has(named) ||
-    path.includes('prototype') ||
-    path.at(-1) === 'call' ||
-    path.at(-1) === 'apply'
-  ) {
+  const decision = classifyNativeInvocation(node, path, current.calleeOf);
+  if (decision.kind === 'rejected') {
     return false;
   }
-  const given = isTaggedTemplateExpression(node) ? tagArguments(node) : (node.arguments ?? []);
-  if (STREAM_CONSTRUCTORS.has(named)) {
-    return given.length === 0;
-  }
-  const callback = nativeCallbackArgument(node, named, path, given);
-  return callback === undefined || queueNativeCallback(callback, named, current, pending);
-}
-
-/** The callback expression a built-in executes synchronously, or none when it takes none. */
-function nativeCallbackArgument(
-  node: Invocation,
-  named: string,
-  path: readonly string[],
-  given: readonly Expression[],
-): Expression | undefined {
-  if (named === 'Promise' && isNewExpression(node)) {
-    return given[0];
-  }
-  const [root = '', member] = path;
-  const typedFrom =
-    path.length === 2 && member === 'from' && root.endsWith('Array') && BUILT_INS.has(root);
-  return SECOND_CALLBACK_NATIVES.has(named) || typedFrom ? given[1] : undefined;
-}
-
-/** Queues a synchronous native callback's defaults and body, or rejects an unproven callable. */
-function queueNativeCallback(
-  callback: Expression,
-  named: string,
-  current: Execution,
-  pending: Execution[],
-): boolean {
-  const fn = current.calleeOf(callback);
-  if (fn === undefined) {
-    return false;
-  }
-  if (
-    isVoidExpression(fn) ||
-    globalPathOf(fn)?.join('.') === 'undefined' ||
-    ((named === 'JSON.parse' || named === 'JSON.stringify') && IGNORED_JSON_CALLBACKS.has(fn.kind))
-  ) {
-    return true;
-  }
-  if (!isAnswering(fn) || fn.body === undefined) {
-    return false;
-  }
-  queueDefaults(fn, [], current, pending);
-  if (!generator(fn)) {
-    pending.push({ ...current, root: fn.body, fn });
+  if (decision.kind === 'callback') {
+    queueDefaults(decision.fn, [], current, pending);
+    if (!generator(decision.fn)) {
+      pending.push({ ...current, root: decision.body, fn: decision.fn });
+    }
   }
   return true;
 }
 
 /** A known source function's immediate defaults, body and instance fields. */
 function queueSource(
-  node: Invocation,
+  node: NativeInvocation,
   callee: Node,
   current: Execution,
   pending: Execution[],
@@ -331,23 +251,12 @@ function queuePattern(
 }
 
 /** A source-proven present value skips a default; other actuals retain its possible effects. */
-function mayBeUndefined(value: Expression | undefined, calleeOf: CalleeOf): boolean {
+function mayBeUndefined(value: Expression | undefined, calleeOf: CalleeLookup): boolean {
   const held = value === undefined ? undefined : calleeOf(value);
   return (
     held === undefined ||
     (!DEFINED.has(held.kind) && !isAnswering(held) && !isClassDeclaration(held))
   );
-}
-
-/** Native tag strings are present before any substitutions. */
-function tagArguments(node: Node): readonly Expression[] {
-  if (!isTaggedTemplateExpression(node)) {
-    return [];
-  }
-  const substitutions = isTemplateExpression(node.template)
-    ? node.template.templateSpans.map((span) => span.expression)
-    : [];
-  return [node.template, ...substitutions];
 }
 
 /** A source constructor or an ordinary function called with new. */
