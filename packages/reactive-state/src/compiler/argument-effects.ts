@@ -3,10 +3,6 @@ import {
   type ClassLikeDeclaration,
   type ConstructorDeclaration,
   type Expression,
-  type Identifier,
-  isArrayLiteralExpression,
-  isAsExpression,
-  isBinaryExpression,
   isBindingElement,
   isCallExpression,
   isClassDeclaration,
@@ -14,44 +10,31 @@ import {
   isClassStaticBlockDeclaration,
   isComputedPropertyName,
   isConstructorDeclaration,
-  isElementAccessExpression,
-  isForInStatement,
-  isForOfStatement,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
   isNewExpression,
-  isNonNullExpression,
-  isNumericLiteral,
-  isParenthesizedExpression,
-  isPropertyAccessExpression,
   isPropertyDeclaration,
-  isSatisfiesExpression,
   isSetAccessorDeclaration,
   isSpreadElement,
-  isStringLiteral,
   isTaggedTemplateExpression,
-  isVariableDeclaration,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
+import { allWrittenTargets, localArrayCall, localWrite } from './argument-local-arrays.ts';
 import {
   type CalleeLookup,
   classifyNativeInvocation,
   type NativeInvocation,
   tagArguments,
 } from './argument-native-calls.ts';
-import { unwrapped } from './bounded.ts';
 import { BUILT_INS, PLATFORM_ALIKE } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
-import { rootOf, targetsOf } from './kept.ts';
-import { bindingIdentifiers, isBlockScoped, readsBinding } from './scope.ts';
-import { writtenArgumentBy, writtenBy } from './written.ts';
+import { writtenBy } from './written.ts';
 
 interface Execution {
   readonly root: Node;
@@ -60,7 +43,6 @@ interface Execution {
   readonly calleeOf: CalleeLookup;
 }
 type Callable = Answering | ConstructorDeclaration;
-const LOCAL_ARRAY_CALLS = new Set(['pop', 'push', 'shift', 'unshift']);
 const DEFINED: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ArrayLiteralExpression,
   SyntaxKind.ArrowFunction,
@@ -283,149 +265,6 @@ function generator(node: Node): boolean {
     (isFunctionDeclaration(node) || isFunctionExpression(node) || isMethodDeclaration(node)) &&
     node.asteriskToken !== undefined
   );
-}
-
-/** Every binding, member or argument target `node` mutates. */
-function allWrittenTargets(node: Node): readonly Node[] {
-  const written = writtenBy(node);
-  const primary = written === undefined ? [] : writeTargets(node, written);
-  return [...primary, ...writtenArgumentBy(node).flatMap((each) => targetsOf(each))];
-}
-
-/** Each binding or member target an assignment, loop or in-place write mutates. */
-function writeTargets(node: Node, written: Node): readonly Node[] {
-  const patterned =
-    (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) ||
-    isForOfStatement(node) ||
-    isForInStatement(node);
-  return patterned ? targetsOf(written) : [written];
-}
-
-/** Rebinding a local or changing a fresh, un-reassigned local array's own storage stays local. */
-function localWrite(target: Node, operation: Node, fn: Node | undefined): boolean {
-  if (fn === undefined) {
-    return false;
-  }
-  const binding = directIdentifier(target);
-  if (binding !== undefined && !isCallExpression(operation)) {
-    const declared = frameDeclarationOf(binding);
-    return declared !== undefined && within(declared, fn);
-  }
-  const arrayRoot = isCallExpression(operation) ? binding : arrayStorageRoot(target);
-  const declared = arrayRoot === undefined ? undefined : frameDeclarationOf(arrayRoot);
-  return declared !== undefined && within(declared, fn) && freshLocalArray(declared, fn);
-}
-
-/** Array insertion/removal has no callback when called on an uncompromised fresh local array. */
-function localArrayCall(node: Node, target: Node, fn: Node | undefined): boolean {
-  if (!isCallExpression(node) || !localWrite(target, node, fn)) {
-    return false;
-  }
-  const member = unwrapped(node.expression);
-  return isPropertyAccessExpression(member) && LOCAL_ARRAY_CALLS.has(member.name.text);
-}
-
-/** A local variable initialized to an array literal that is never rebound or given own methods. */
-function freshLocalArray(declared: Node, fn: Node): boolean {
-  if (
-    !isVariableDeclaration(declared) ||
-    !isIdentifier(declared.name) ||
-    declared.initializer === undefined ||
-    !isArrayLiteralExpression(unwrapped(declared.initializer))
-  ) {
-    return false;
-  }
-  const name = declared.name.text;
-  const status = { compromised: false };
-  const visit = (each: Node): void => {
-    status.compromised ||= compromisesLocalArray(each, declared, name);
-    if (!status.compromised) {
-      each.forEachChild(visit);
-    }
-  };
-  visit(fn);
-  return !status.compromised;
-}
-
-/** Rebindings, duplicate vars, own-method writes or external calls invalidate a fresh-array proof. */
-function compromisesLocalArray(node: Node, declared: Node, name: string): boolean {
-  if (
-    isVariableDeclaration(node) &&
-    node !== declared &&
-    !isBlockScoped(node.parent) &&
-    bindingIdentifiers(node.name).some((bound) => bound.text === name)
-  ) {
-    return true;
-  }
-  return allWrittenTargets(node).some((target) => !preservesLocalArray(node, target, declared));
-}
-
-/** Whether a write inside `fn` leaves `declared` bound to its original un-customized array. */
-function preservesLocalArray(node: Node, target: Node, declared: Node): boolean {
-  const root = rootOf(target);
-  if (root === undefined || frameDeclarationOf(root) !== declared) {
-    return true;
-  }
-  if (isCallExpression(node)) {
-    const member = unwrapped(node.expression);
-    const receiver = isPropertyAccessExpression(member)
-      ? directIdentifier(member.expression)
-      : undefined;
-    return receiver !== undefined && frameDeclarationOf(receiver) === declared;
-  }
-  return arrayStorageRoot(target) !== undefined;
-}
-
-/** The direct local array binding when `node` names its `length` or a literal integer slot. */
-function arrayStorageRoot(node: Node): Identifier | undefined {
-  const plain = plainTarget(node);
-  if (isPropertyAccessExpression(plain)) {
-    return plain.name.text === 'length' ? directIdentifier(plain.expression) : undefined;
-  }
-  if (!isElementAccessExpression(plain)) {
-    return undefined;
-  }
-  const key = unwrapped(plain.argumentExpression);
-  const integerSlot =
-    (isNumericLiteral(key) || isStringLiteral(key)) &&
-    /^(?:0|[1-9]\d*)$/u.test(key.text) &&
-    Number.isSafeInteger(Number(key.text));
-  return integerSlot ? directIdentifier(plain.expression) : undefined;
-}
-
-/** A direct binding read rather than a member or nested element access. */
-function directIdentifier(node: Node): Identifier | undefined {
-  const plain = plainTarget(node);
-  return isIdentifier(plain) && readsBinding(plain) ? plain : undefined;
-}
-
-/** A write target peeled of parentheses, casts and non-null assertions. */
-function plainTarget(node: Node): Node {
-  let each = node;
-  while (
-    isParenthesizedExpression(each) ||
-    isAsExpression(each) ||
-    isSatisfiesExpression(each) ||
-    isNonNullExpression(each)
-  ) {
-    each = each.expression;
-  }
-  return each;
-}
-
-/** A declaration owned by this invocation rather than captured from a caller. */
-function within(node: Node, owner: Node): boolean {
-  for (let at: Node = node; !isSourceFileNode(at); at = at.parent) {
-    if (at === owner) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** SourceFile is the outer boundary of lexical ownership. */
-function isSourceFileNode(node: Node): boolean {
-  return node.kind === SyntaxKind.SourceFile;
 }
 
 /** Class definition evaluates names and static members while deferring instance bodies. */
