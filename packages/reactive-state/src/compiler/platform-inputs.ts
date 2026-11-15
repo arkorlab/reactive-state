@@ -3,27 +3,39 @@ import {
   type Expression,
   type Identifier,
   isAsExpression,
+  isBigIntLiteral,
+  isBinaryExpression,
   isCallExpression,
-  isElementAccessExpression,
+  isConditionalExpression,
   isDoStatement,
+  isElementAccessExpression,
   isForInStatement,
   isForOfStatement,
   isForStatement,
   isFunctionDeclaration,
+  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
   isNonNullExpression,
+  isObjectLiteralExpression,
   isParenthesizedExpression,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isSatisfiesExpression,
   isShorthandPropertyAssignment,
   isSourceFile,
+  isSpreadAssignment,
+  isSpreadElement,
   isTemplateExpression,
+  isTypeOfExpression,
   isVariableDeclaration,
+  isVariableStatement,
+  isVoidExpression,
   isWhileStatement,
   type NewExpression,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, isAnswering, parametersOf } from './answers.ts';
@@ -47,6 +59,37 @@ interface Binding {
 
 /** A narrow proof that a particular write retains the platform property being checked. */
 type PlatformWrite = (write: Node, target: Node, held: Expression | undefined) => boolean;
+
+/** Platform constructors that read input options without storing or returning an alias to them. */
+const SAFE_PLATFORM_NEW: ReadonlySet<string> = new Set([
+  'Blob',
+  'CustomEvent',
+  'Event',
+  'File',
+  'FormData',
+  'Headers',
+  'Request',
+  'Response',
+  'URL',
+  'URLSearchParams',
+]);
+
+/** Built-in calls that neither mutate an argument object nor return a mutable alias to it. */
+const SAFE_PLATFORM_CALL: ReadonlySet<string> = new Set([
+  'Boolean',
+  'Object.hasOwn',
+  'Object.is',
+  'Reflect.has',
+  'Response.redirect',
+]);
+
+/** Equality operators that compare identity without coercing or retaining an object reference. */
+const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.EqualsEqualsEqualsToken,
+  SyntaxKind.EqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsToken,
+]);
 
 /** A variable's initializer only where binding and mutable-value writes cannot have changed it. */
 export function platformInitializer(
@@ -101,9 +144,10 @@ function changedBinding(binding: Binding, pending: Binding[]): boolean {
       withinFunction(read, owner)
     );
   };
-  const mutable =
-    held === undefined ||
-    (constantValue(held) === undefined && !isTemplateExpression(unwrapped(held)));
+  const mutable = isMutableHolding(held);
+  if (mutable && isExportedVariable(name)) {
+    return true;
+  }
   const visit = (node: Node): boolean => {
     const eligible = relevant(node);
     const target = eligible ? writtenBy(node) : undefined;
@@ -258,7 +302,7 @@ function bindsTarget(
   );
 }
 
-/** Mutable aliases and source parameters retain their lexical identity during unknown handoffs. */
+/** Mutable aliases and source parameters retain lexical identity only across non-escaping uses. */
 function handedUnknown(name: Identifier, binding: Binding, pending: Binding[]): boolean {
   let node: Expression = name;
   while (wrappedBy(node.parent)) {
@@ -266,31 +310,142 @@ function handedUnknown(name: Identifier, binding: Binding, pending: Binding[]): 
   }
   const parent = node.parent;
   if (isVariableDeclaration(parent) && parent.initializer === node) {
-    if (!isIdentifier(parent.name)) {
+    if (!isIdentifier(parent.name) || isExportedVariable(parent.name)) {
       return true;
     }
-    pending.push(bindingOf(parent.name, node, binding.before));
+    pending.push(bindingOf(parent.name, binding.held, binding.before));
     return false;
   }
-  if (!isCallExpression(parent) && !isNewExpression(parent)) {
+  if (isPassiveUse(node, parent, binding.held)) {
     return false;
   }
-  const index = parent.arguments?.indexOf(node) ?? -1;
-  if (index < 0 || globalPathOf(unwrapped(parent.expression)) !== undefined) {
-    return false;
+  if (isCallExpression(parent) || isNewExpression(parent)) {
+    return handedCall(node, parent, binding, pending);
   }
-  const fn = sourceFunction(parent.expression);
-  if (fn === undefined) {
+  return true;
+}
+
+/** Whether `parent` inspects `node` without storing, returning, or invoking methods on it. */
+function isPassiveUse(node: Expression, parent: Node, held: Expression | undefined): boolean {
+  if (isSpreadAssignment(parent) && parent.expression === node) {
+    return hasNoGetter(held);
+  }
+  if (
+    (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
+    parent.expression === node
+  ) {
+    return plainRead(parent, held);
+  }
+  if (isVoidExpression(parent) || isTypeOfExpression(parent)) {
     return true;
   }
-  const parameter = parametersOf(fn)[index];
-  if (parameter !== undefined) {
-    if (!isIdentifier(parameter.name)) {
-      return true;
-    }
-    pending.push(bindingOf(parameter.name, undefined));
+  if (isPrefixUnaryExpression(parent) && parent.operator === SyntaxKind.ExclamationToken) {
+    return true;
   }
+  if (isConditionalExpression(parent) && parent.condition === node) {
+    return true;
+  }
+  return isBinaryExpression(parent) && EQUALITY_OPERATORS.has(parent.operatorToken.kind);
+}
+
+/** Whether reading a member path on `access` neither runs a getter nor invokes a method. */
+function plainRead(access: Expression, held: Expression | undefined): boolean {
+  if (!hasNoGetter(held)) {
+    return false;
+  }
+  let current: Expression = access;
+  for (;;) {
+    const next = current.parent;
+    if (
+      wrappedBy(next) ||
+      ((isPropertyAccessExpression(next) || isElementAccessExpression(next)) &&
+        next.expression === current)
+    ) {
+      current = next as Expression;
+    } else {
+      break;
+    }
+  }
+  const outer = current.parent;
+  return !((isCallExpression(outer) || isNewExpression(outer)) && outer.expression === current);
+}
+
+/** Whether an initializer literal carries no getter that could run during property reads. */
+function hasNoGetter(held: Expression | undefined): boolean {
+  if (held === undefined) {
+    return true;
+  }
+  const value = unwrapped(held);
+  return (
+    !isObjectLiteralExpression(value) ||
+    !value.properties.some((each) => isGetAccessorDeclaration(each))
+  );
+}
+
+/** Whether passing `node` into `call` can mutate or expose it beyond tracked parameters. */
+function handedCall(
+  node: Expression,
+  call: CallExpression | NewExpression,
+  binding: Binding,
+  pending: Binding[],
+): boolean {
+  const args = call.arguments;
+  const index = args?.indexOf(node) ?? -1;
+  if (index < 0) {
+    return true;
+  }
+  const path = globalPathOf(unwrapped(call.expression))?.join('.');
+  if (path !== undefined) {
+    return isNewExpression(call)
+      ? !(SAFE_PLATFORM_NEW.has(path) && hasNoGetter(binding.held))
+      : !SAFE_PLATFORM_CALL.has(path);
+  }
+  if (
+    isNewExpression(call) ||
+    args?.slice(0, index + 1).some((each) => isSpreadElement(each)) === true
+  ) {
+    return true;
+  }
+  const fn = sourceFunction(call.expression);
+  const parameter = fn === undefined || answersLater(fn) ? undefined : parametersOf(fn)[index];
+  if (
+    parameter === undefined ||
+    parameter.dotDotDotToken !== undefined ||
+    !isIdentifier(parameter.name)
+  ) {
+    return true;
+  }
+  pending.push(bindingOf(parameter.name, binding.held));
   return false;
+}
+
+/** Whether `held` may evaluate to a mutable object rather than a primitive value. */
+function isMutableHolding(held: Expression | undefined): boolean {
+  if (held === undefined) {
+    return true;
+  }
+  const value = unwrapped(held);
+  return (
+    constantValue(value) === undefined &&
+    value.kind !== SyntaxKind.NullKeyword &&
+    !isBigIntLiteral(value) &&
+    !isVoidExpression(value) &&
+    !isTemplateExpression(value) &&
+    globalPathOf(value)?.join('.') !== 'undefined'
+  );
+}
+
+/** Whether a variable binding is directly exported from its enclosing statement. */
+function isExportedVariable(name: Identifier): boolean {
+  const declaration = name.parent;
+  if (!isVariableDeclaration(declaration)) {
+    return false;
+  }
+  const statement = declaration.parent.parent;
+  return (
+    isVariableStatement(statement) &&
+    statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true
+  );
 }
 
 /** A source-backed local callable, without assuming what an unknown or imported callback does. */
