@@ -92,13 +92,15 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
  * the compile cannot follow hides which argument a read takes. The member path a read selects is
  * followed through each default the construction leaves taken, whatever else the constructor's
  * code holds: a call, an operator or a member read there does not show that the path selects
- * nothing the native base converts. Defaults that read one another in a circle
- * (`a = b.x, b = a.y`, a read of a parameter before it is initialized, which throws where it runs)
- * make a path that grows without end where each default is taken: a taken default entered again, in
- * a state not scanned yet, is such a circle, and the program is read as one the compile cannot
- * follow, so `undefined`, which keeps every argument possible. A circle that adds no key, or of
- * defaults the construction replaces (which drop the path), meets a state it scanned and ends of
- * itself.
+ * nothing the native base converts. What a default selects the path of is forwarded whole beside
+ * it, for the path may stop at a value the compile cannot read into.
+ *
+ * Defaults that read one another in a circle (`a = b.x, b = a.y`, a read of a parameter before it
+ * is initialized, which throws where it runs) make a path that grows without end where each
+ * default is taken: a taken default entered again, in a state not scanned yet, is such a circle,
+ * and the program is read as one the compile cannot follow, so `undefined`, which keeps every
+ * argument possible. A circle that adds no key, or of defaults the construction replaces (which
+ * drop the path), meets a state it scanned and ends of itself.
  */
 export function framedSlotValues(
   argument: Expression,
@@ -179,6 +181,12 @@ function parameterReads(
           };
         }),
       );
+      // The path may stop at a value the compile cannot read into, an Error's own `message`, or
+      // meet a member another default writes: what the default selects it of stays whole too.
+      if (root.keys.length > 0 || root.any === true) {
+        values.push(...read.values);
+        defaults.push(...read.defaults.map((each) => ({ ...each, selected: false })));
+      }
     } else {
       values.push(...read.values);
       defaults.push(

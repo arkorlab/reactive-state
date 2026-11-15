@@ -19,8 +19,11 @@ import { framedSubclassMessages } from '../src/compiler/framed-subclass-messages
  * construction supplies, a call and an operator alike. The rows say which written argument is
  * forwarded at which path; the path being lost leaves the argument whole (`{ message: error }`, a
  * plain object, which converts to none of an error's words). A default the construction replaces
- * is not taken, and no path is followed through it. The rows marked a pin answer the same before
- * the change as after it.
+ * is not taken, and no path is followed through it. The path does not stand alone: where it stops
+ * at a value the compile cannot read into (an `Error` the construction supplies, whose own `message`
+ * is read), or meets a member that another default writes (`options[1] = options[0]`), what the
+ * default selects it of is forwarded whole as well, as it is where the path is not followed. The
+ * rows marked a pin answer the same before the change as after it.
  */
 
 interface Case {
@@ -212,6 +215,45 @@ const CASES: readonly Case[] = [
       'class Failure extends Error { constructor(fallback: unknown, options = fallback as { message: unknown }) { super("fixed"); } } new Failure({ message: error });',
     supplied: '{ message: error }',
     what: 'a `super` argument that reads no parameter (pin)',
+  },
+  {
+    forwarded: true,
+    path: '',
+    source: `${FAILURE_OF_OPTIONS} new Failure(error);`,
+    supplied: 'error',
+    what: 'an Error supplied whole, whose own message the path reads',
+  },
+  {
+    forwarded: true,
+    path: '',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, options = fallback as { message: unknown }, count = Math.abs(1)) { super(options.message as never); } } new Failure(error);',
+    supplied: 'error',
+    what: 'the same beside a call in another default',
+  },
+  {
+    forwarded: true,
+    path: 'inner',
+    source:
+      'class Failure extends Error { constructor(fallback: unknown, options = (fallback as { inner: { message: unknown } }).inner) { super(options.message as never); } } new Failure({ inner: error });',
+    supplied: '{ inner: error }',
+    what: 'an Error held by the argument, whose own message the path reads',
+  },
+  {
+    forwarded: true,
+    path: '',
+    source:
+      "class Failure extends Error { constructor(fallback: unknown[], options = fallback, ignored = (options[1] = options[0])) { super(options[1] as never); } } new Failure([error, 'fixed']);",
+    supplied: "[error, 'fixed']",
+    what: 'an array that another default writes an element of',
+  },
+  {
+    forwarded: true,
+    path: '',
+    source:
+      "class Failure extends Error { constructor(fallback: unknown[], options = fallback, ignored = options.reverse()) { super(options[1] as never); } } new Failure([error, 'fixed']);",
+    supplied: "[error, 'fixed']",
+    what: 'an array that another default reorders',
   },
 ];
 
