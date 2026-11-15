@@ -40,6 +40,7 @@ import { framedNativeErrorCreation } from './framed-receivers.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedValueShape } from './framed-values.ts';
 import { reassignedTarget } from './framed-written-error-uses.ts';
+import { nonInterceptingWrappedTarget } from './framed-written-error-wrappers.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
@@ -50,14 +51,6 @@ import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
  */
 
 const ERRORS: ReadonlySet<string> = new Set([...STANDARD_ERRORS, 'AggregateError', 'DOMException']);
-
-const IDENTITY_WRAPPERS: ReadonlySet<string> = new Set([
-  'Object',
-  'Object.freeze',
-  'Object.preventExtensions',
-  'Object.seal',
-  'structuredClone',
-]);
 
 export type WrittenErrorCheck = (value: Expression, made: boolean) => boolean;
 
@@ -158,7 +151,7 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
   if (directLocalErrorConstruction(value)) {
     return validConstructedLeaf(node, value, state, frame);
   }
-  const inner = identityWrappedArgument(value);
+  const inner = nonInterceptingWrappedTarget(value);
   if (inner !== undefined) {
     return (
       !state.check(node, false) &&
@@ -272,17 +265,6 @@ function readsScopeParameter(construction: Expression, fn: Answering): boolean {
     });
   }
   return false;
-}
-
-/** Single-argument native identity and clone helpers preserve a proven inner Error. */
-function identityWrappedArgument(value: Expression): Expression | undefined {
-  if (!isCallExpression(value) && !isNewExpression(value)) return undefined;
-  const path = globalPathOf(unwrapped(value.expression))?.join('.');
-  if (path === undefined || !IDENTITY_WRAPPERS.has(path)) return undefined;
-  if (isNewExpression(value) && path !== 'Object') return undefined;
-  const args = value.arguments;
-  const first = args?.length === 1 ? args[0] : undefined;
-  return first !== undefined && !isSpreadElement(first) ? first : undefined;
 }
 
 /** Requires a resolved synchronous local factory to return proven local Errors on every path. */
