@@ -2,22 +2,31 @@ import {
   type CallExpression,
   type ElementAccessExpression,
   type Expression,
+  type Identifier,
   isAsExpression,
   isBinaryExpression,
+  isBindingElement,
   isBlock,
   isCallExpression,
+  isClassDeclaration,
+  isClassExpression,
   isClassStaticBlockDeclaration,
   isConstructorDeclaration,
   isElementAccessExpression,
+  isEnumDeclaration,
+  isExportDeclaration,
+  isExportSpecifier,
   isExpression,
+  isExpressionStatement,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
+  isImportDeclaration,
   isMethodDeclaration,
-  isNewExpression,
   isNonNullExpression,
   isNumericLiteral,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isParameterDeclaration,
   isParenthesizedExpression,
@@ -28,18 +37,23 @@ import {
   isSetAccessorDeclaration,
   isSourceFile,
   isSpreadAssignment,
-  isTaggedTemplateExpression,
   isTypeAssertion,
+  isTypeOfExpression,
+  isVariableDeclaration,
+  isVariableDeclarationList,
+  isVariableStatement,
+  isVoidExpression,
   type Node,
   type ObjectLiteralExpression,
   SyntaxKind,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { literalName, unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
+import { globalPathOf, isTakenApart, useOf } from './code-globals.ts';
 import { initializerOf } from './framed.ts';
 import { targetsOf } from './kept.ts';
-import { freeReads, isTypeOnly } from './scope.ts';
+import { isTypeOnly, readsBinding } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Recorded post-declaration mutations against an object literal's own entries. */
@@ -51,12 +65,19 @@ interface ObjectWrites {
 const EMPTY_WRITES: ObjectWrites = { all: false, keys: new Set() };
 const WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
 
-/** Built-in calls that restrict future mutations on their target without replacing existing entries. */
-const LOCKING_FUNCTIONS: ReadonlySet<string> = new Set([
-  'Object.freeze',
+/** Non-freezing extension locks that keep existing entries safe only when their return is discarded. */
+const DISCARDED_LOCKS: ReadonlySet<string> = new Set([
   'Object.preventExtensions',
   'Object.seal',
   'Reflect.preventExtensions',
+]);
+
+/** Equality operators that inspect object identity without handing the reference onward. */
+const COMPARING: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.EqualsEqualsEqualsToken,
+  SyntaxKind.EqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsEqualsToken,
+  SyntaxKind.ExclamationEqualsToken,
 ]);
 
 /** Whether entry `name` of `object` may be replaced or mutated after construction. */
@@ -94,7 +115,7 @@ function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
   const keys = new Set<string>();
   const state = { all: false };
   const visit = (node: Node): void => {
-    if (state.all) {
+    if (state.all || isSkippedSyntax(node)) {
       return;
     }
     if (recordsAllWrites(node, object, keys)) {
@@ -109,26 +130,35 @@ function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
   return result;
 }
 
+/** Whether `node` is erased at compile time or belongs to a type-only import/export. */
+function isSkippedSyntax(node: Node): boolean {
+  return (
+    isTypeOnly(node) ||
+    isImportDeclaration(node) ||
+    (isExportDeclaration(node) && node.isTypeOnly) ||
+    (isExportSpecifier(node) && node.isTypeOnly)
+  );
+}
+
 /** Whether `object` stands directly as the receiver of an inline member access (`({ pick() {} }).pick`). */
 function isInlineMemberReceiver(object: ObjectLiteralExpression): boolean {
-  const top = topWrapper(object);
-  const parent = top.parent;
+  const { at, parent } = useOf(object);
   return (
     (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
-    parent.expression === top
+    parent.expression === at
   );
 }
 
 /** Records writes from `node` into `keys`, returning `true` when all keys of `object` become uncertain. */
 function recordsAllWrites(node: Node, object: ObjectLiteralExpression, keys: Set<string>): boolean {
-  if (isCallExpression(node) && isLockingCall(node)) {
+  if (isCallExpression(node) && isSafeLockCall(node)) {
     return false;
   }
   const written = writtenBy(node);
   if (written !== undefined && writesUnknownKey(written, object, keys)) {
     return true;
   }
-  return escapesObject(node, object);
+  return isDirectObjectReference(node, object) && !isSafeDirectUse(node);
 }
 
 /** Updates `keys` for every assignment or mutation target in `written`; answers `true` for whole/dynamic writes. */
@@ -171,74 +201,90 @@ function unwrapTarget(node: Node): Node {
   return each;
 }
 
-/** Whether `node` hands `object` itself to a call, constructor, tagged template or mutable assignment. */
-function escapesObject(node: Node, object: ObjectLiteralExpression): boolean {
-  if (isCallExpression(node) || isNewExpression(node)) {
-    return node.arguments?.some((argument) => containsDirectRead(argument, object)) === true;
+/** Whether `node` evaluates directly to `object` via literal, lexical alias, or enclosing `this`. */
+function isDirectObjectReference(node: Node, object: ObjectLiteralExpression): boolean {
+  if (node === object) {
+    return true;
   }
-  if (isTaggedTemplateExpression(node)) {
-    return containsDirectRead(node.template, object);
+  if (node.kind === SyntaxKind.ThisKeyword) {
+    return isExpression(node) && enclosingMethodObject(node) === object;
   }
   return (
-    isBinaryExpression(node) &&
-    node.operatorToken.kind === SyntaxKind.EqualsToken &&
-    containsDirectRead(node.right, object)
+    isIdentifier(node) &&
+    !isDeclaredIdentifier(node) &&
+    readsBinding(node) &&
+    refersToObject(node, object)
   );
 }
 
-/** Whether `node` contains a direct reference to `object` rather than a member projection or object spread. */
-function containsDirectRead(node: Node, object: ObjectLiteralExpression): boolean {
-  for (const read of freeReads(node)) {
-    if (!isProjectedHolder(read) && refersToObject(read, object)) {
-      return true;
-    }
-  }
-  return containsDirectThisRead(node, object);
+/** Whether `node` stands as the declared identifier of a variable, parameter, binding, function, class or enum. */
+function isDeclaredIdentifier(node: Identifier): boolean {
+  const { parent } = node;
+  return (
+    (isVariableDeclaration(parent) ||
+      isParameterDeclaration(parent) ||
+      isBindingElement(parent) ||
+      isFunctionDeclaration(parent) ||
+      isFunctionExpression(parent) ||
+      isClassDeclaration(parent) ||
+      isClassExpression(parent) ||
+      isEnumDeclaration(parent)) &&
+    parent.name === node
+  );
 }
 
-/** Whether `node` hands an unprojected `this` bound to `object` into an expression. */
-function containsDirectThisRead(node: Node, object: ObjectLiteralExpression): boolean {
-  let found = false;
-  const visit = (current: Node): void => {
-    if (found || isTypeOnly(current)) {
-      return;
-    }
-    if (current.kind === SyntaxKind.ThisKeyword && isExpression(current)) {
-      found = !isProjectedHolder(current) && enclosingMethodObject(current) === object;
-      return;
-    }
-    current.forEachChild(visit);
-  };
-  visit(node);
-  return found;
-}
-
-/** Whether `read` is only used as the receiver of a property/element access or an object spread source. */
-function isProjectedHolder(read: Expression): boolean {
-  const top = topWrapper(read);
-  const parent = top.parent;
-  if (isSpreadAssignment(parent)) {
+/** Whether `node` projects, spreads, inspects, locks, or tracks `object` without escaping it. */
+function isSafeDirectUse(node: Node): boolean {
+  const { at, parent } = useOf(node);
+  if (isProjectedOrSpreadUse(at, parent) || isPassiveInspectionUse(at, parent)) {
     return true;
+  }
+  if (isVariableDeclaration(parent) && parent.initializer === at) {
+    return isObjectBindingPattern(parent.name) || isTrackedConstAlias(parent);
+  }
+  return (
+    isCallExpression(parent) &&
+    parent.arguments.length === 1 &&
+    parent.arguments[0] === at &&
+    isSafeLockCall(parent)
+  );
+}
+
+/** Whether `at` stands only as a member-access receiver or an object-literal spread source. */
+function isProjectedOrSpreadUse(at: Node, parent: Node): boolean {
+  if (isSpreadAssignment(parent)) {
+    return !isTakenApart(parent.parent);
   }
   return (
     (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
-    parent.expression === top
+    parent.expression === at
   );
 }
 
-/** Walks up reference-preserving expression wrappers around `node`. */
-function topWrapper(node: Expression): Expression {
-  let at = node;
-  while (
-    isParenthesizedExpression(at.parent) ||
-    isNonNullExpression(at.parent) ||
-    isAsExpression(at.parent) ||
-    isSatisfiesExpression(at.parent) ||
-    isTypeAssertion(at.parent)
-  ) {
-    at = at.parent;
+/** Whether `at` is discarded or inspected without yielding an untracked reference to `object`. */
+function isPassiveInspectionUse(at: Node, parent: Node): boolean {
+  if (isExpressionStatement(parent) || isVoidExpression(parent) || isTypeOfExpression(parent)) {
+    return true;
   }
-  return at;
+  if (!isBinaryExpression(parent)) {
+    return false;
+  }
+  const operator = parent.operatorToken.kind;
+  return COMPARING.has(operator) || (operator === SyntaxKind.InKeyword && parent.right === at);
+}
+
+/** Whether `declared` is an unexported block/module `const` identifier alias followed by `initializerOf`. */
+function isTrackedConstAlias(declared: VariableDeclaration): boolean {
+  if (!isIdentifier(declared.name) || !isVariableDeclarationList(declared.parent)) {
+    return false;
+  }
+  const statement = declared.parent.parent;
+  return (
+    isVariableStatement(statement) &&
+    (isBlock(statement.parent) || isSourceFile(statement.parent)) &&
+    /^const\s/u.test(declared.parent.getText(declared.getSourceFile())) &&
+    statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) !== true
+  );
 }
 
 /** Narrowing wrapper around `refersToObject` for arbitrary write target syntax nodes. */
@@ -309,13 +355,23 @@ function bindsOwnThis(at: Node, within: Node): boolean {
 
 /** Object literal directly owning a method, accessor or function-expression property `callable`. */
 function callableOwnerObject(callable: Node): ObjectLiteralExpression | undefined {
-  const top = isFunctionExpression(callable) ? topWrapper(callable) : callable;
+  const top = isFunctionExpression(callable) ? useOf(callable).at : callable;
   const owner = isPropertyAssignment(top.parent) ? top.parent.parent : top.parent;
   return isObjectLiteralExpression(owner) ? owner : undefined;
 }
 
-/** Whether `call` invokes a locking global (`Object.freeze`, `Object.seal`, `preventExtensions`). */
-function isLockingCall(call: CallExpression): boolean {
+/** Whether `call` invokes `Object.freeze` or a discarded `seal`/`preventExtensions` on a single target. */
+function isSafeLockCall(call: CallExpression): boolean {
+  if (call.arguments.length !== 1) {
+    return false;
+  }
   const path = globalPathOf(unwrapped(call.expression))?.join('.');
-  return path !== undefined && LOCKING_FUNCTIONS.has(path);
+  if (path === 'Object.freeze') {
+    return true;
+  }
+  if (path === undefined || !DISCARDED_LOCKS.has(path)) {
+    return false;
+  }
+  const { parent } = useOf(call);
+  return isExpressionStatement(parent) || isVoidExpression(parent);
 }
