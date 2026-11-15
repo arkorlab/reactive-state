@@ -2,13 +2,14 @@ import {
   type CallExpression,
   type ElementAccessExpression,
   type Expression,
-  type Identifier,
-  isArrowFunction,
   isAsExpression,
   isBinaryExpression,
+  isBlock,
   isCallExpression,
+  isClassStaticBlockDeclaration,
   isConstructorDeclaration,
   isElementAccessExpression,
+  isExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -18,9 +19,11 @@ import {
   isNonNullExpression,
   isNumericLiteral,
   isObjectLiteralExpression,
+  isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
   isSatisfiesExpression,
   isSetAccessorDeclaration,
   isSourceFile,
@@ -36,7 +39,7 @@ import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { initializerOf } from './framed.ts';
 import { targetsOf } from './kept.ts';
-import { freeReads } from './scope.ts';
+import { freeReads, isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Recorded post-declaration mutations against an object literal's own entries. */
@@ -190,11 +193,28 @@ function containsDirectRead(node: Node, object: ObjectLiteralExpression): boolea
       return true;
     }
   }
-  return false;
+  return containsDirectThisRead(node, object);
+}
+
+/** Whether `node` hands an unprojected `this` bound to `object` into an expression. */
+function containsDirectThisRead(node: Node, object: ObjectLiteralExpression): boolean {
+  let found = false;
+  const visit = (current: Node): void => {
+    if (found || isTypeOnly(current)) {
+      return;
+    }
+    if (current.kind === SyntaxKind.ThisKeyword && isExpression(current)) {
+      found = !isProjectedHolder(current) && enclosingMethodObject(current) === object;
+      return;
+    }
+    current.forEachChild(visit);
+  };
+  visit(node);
+  return found;
 }
 
 /** Whether `read` is only used as the receiver of a property/element access or an object spread source. */
-function isProjectedHolder(read: Identifier): boolean {
+function isProjectedHolder(read: Expression): boolean {
   const top = topWrapper(read);
   const parent = top.parent;
   if (isSpreadAssignment(parent)) {
@@ -256,23 +276,42 @@ function refersToObject(node: Expression, object: ObjectLiteralExpression): bool
   return false;
 }
 
-/** Object literal owning the nearest enclosing function/accessor/method of `node`, if any. */
+/** Object literal owning the nearest non-arrow `this`-binding callable around `node`, if any. */
 function enclosingMethodObject(node: Node): ObjectLiteralExpression | undefined {
-  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
-    if (
-      isMethodDeclaration(at) ||
-      isFunctionExpression(at) ||
-      isFunctionDeclaration(at) ||
-      isArrowFunction(at) ||
-      isGetAccessorDeclaration(at) ||
-      isSetAccessorDeclaration(at) ||
-      isConstructorDeclaration(at)
-    ) {
-      const owner = isPropertyAssignment(at.parent) ? at.parent.parent : at.parent;
-      return isObjectLiteralExpression(owner) ? owner : undefined;
+  for (
+    let at: Node = node.parent, within: Node = node;
+    !isSourceFile(at);
+    within = at, at = at.parent
+  ) {
+    if (bindsOwnThis(at, within)) {
+      return callableOwnerObject(at);
     }
   }
   return undefined;
+}
+
+/** Whether `at` introduces its own non-arrow `this` binding around child `within`. */
+function bindsOwnThis(at: Node, within: Node): boolean {
+  if (isFunctionDeclaration(at) || isFunctionExpression(at) || isClassStaticBlockDeclaration(at)) {
+    return true;
+  }
+  if (isPropertyDeclaration(at)) {
+    return isExpression(within) && within === at.initializer;
+  }
+  return (
+    (isMethodDeclaration(at) ||
+      isGetAccessorDeclaration(at) ||
+      isSetAccessorDeclaration(at) ||
+      isConstructorDeclaration(at)) &&
+    ((isBlock(within) && within === at.body) || isParameterDeclaration(within))
+  );
+}
+
+/** Object literal directly owning a method, accessor or function-expression property `callable`. */
+function callableOwnerObject(callable: Node): ObjectLiteralExpression | undefined {
+  const top = isFunctionExpression(callable) ? topWrapper(callable) : callable;
+  const owner = isPropertyAssignment(top.parent) ? top.parent.parent : top.parent;
+  return isObjectLiteralExpression(owner) ? owner : undefined;
 }
 
 /** Whether `call` invokes a locking global (`Object.freeze`, `Object.seal`, `preventExtensions`). */
