@@ -25,6 +25,7 @@ import {
   isTaggedTemplateExpression,
   isTemplateExpression,
   isVariableDeclaration,
+  isVoidExpression,
   type NewExpression,
   type Node,
   type ParameterDeclaration,
@@ -50,6 +51,39 @@ type CalleeOf = (node: Expression) => Node | undefined;
 type Invocation = CallExpression | NewExpression | TaggedTemplateExpression;
 type Callable = Answering | ConstructorDeclaration;
 const LOCAL_ARRAY_CALLS = new Set(['pop', 'push', 'shift', 'unshift']);
+const SECOND_CALLBACK_NATIVES: ReadonlySet<string> = new Set([
+  'Array.from',
+  'JSON.parse',
+  'JSON.stringify',
+  'Map.groupBy',
+  'Object.groupBy',
+]);
+const STREAM_CONSTRUCTORS: ReadonlySet<string> = new Set([
+  'ReadableStream',
+  'TransformStream',
+  'WritableStream',
+]);
+const UNSAFE_NATIVES: ReadonlySet<string> = new Set([
+  'Array.fromAsync',
+  'eval',
+  'Promise.try',
+  'ReadableStream.from',
+  'Reflect.apply',
+  'Reflect.construct',
+]);
+const IGNORED_JSON_CALLBACKS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.ArrayLiteralExpression,
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.NullKeyword,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.ObjectLiteralExpression,
+  SyntaxKind.RegularExpressionLiteral,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.TemplateExpression,
+  SyntaxKind.TrueKeyword,
+]);
 const DEFINED: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ArrayLiteralExpression,
   SyntaxKind.ArrowFunction,
@@ -117,9 +151,79 @@ function queueInvocation(node: Invocation, current: Execution, pending: Executio
   }
   const path = globalPathOf(callee);
   if (path !== undefined && (BUILT_INS.has(path[0] ?? '') || PLATFORM_ALIKE.has(path[0] ?? ''))) {
-    return true;
+    return queueNative(node, path, current, pending);
   }
   return queueSource(node, callee, current, pending);
+}
+
+/** Known globals with no synchronous hook, or whose callback body can be queued directly. */
+function queueNative(
+  node: Invocation,
+  path: readonly string[],
+  current: Execution,
+  pending: Execution[],
+): boolean {
+  const [root = ''] = path;
+  const named = path.join('.');
+  if (
+    root === 'WebAssembly' ||
+    UNSAFE_NATIVES.has(named) ||
+    path.includes('prototype') ||
+    path.at(-1) === 'call' ||
+    path.at(-1) === 'apply'
+  ) {
+    return false;
+  }
+  const given = isTaggedTemplateExpression(node) ? tagArguments(node) : (node.arguments ?? []);
+  if (STREAM_CONSTRUCTORS.has(named)) {
+    return given.length === 0;
+  }
+  const callback = nativeCallbackArgument(node, named, path, given);
+  return callback === undefined || queueNativeCallback(callback, named, current, pending);
+}
+
+/** The callback expression a built-in executes synchronously, or none when it takes none. */
+function nativeCallbackArgument(
+  node: Invocation,
+  named: string,
+  path: readonly string[],
+  given: readonly Expression[],
+): Expression | undefined {
+  if (named === 'Promise' && isNewExpression(node)) {
+    return given[0];
+  }
+  const [root = '', member] = path;
+  const typedFrom =
+    path.length === 2 && member === 'from' && root.endsWith('Array') && BUILT_INS.has(root);
+  return SECOND_CALLBACK_NATIVES.has(named) || typedFrom ? given[1] : undefined;
+}
+
+/** Queues a synchronous native callback's defaults and body, or rejects an unproven callable. */
+function queueNativeCallback(
+  callback: Expression,
+  named: string,
+  current: Execution,
+  pending: Execution[],
+): boolean {
+  const fn = current.calleeOf(callback);
+  if (fn === undefined) {
+    return false;
+  }
+  if (
+    isVoidExpression(fn) ||
+    globalPathOf(fn)?.join('.') === 'undefined' ||
+    ((named === 'JSON.parse' || named === 'JSON.stringify') && IGNORED_JSON_CALLBACKS.has(fn.kind))
+  ) {
+    return true;
+  }
+  if (!isAnswering(fn) || fn.body === undefined) {
+    return false;
+  }
+  queueDefaults(fn, [], current, pending);
+  if (!generator(fn)) {
+    pending.push({ ...current, root: fn.body, fn });
+  }
+  return true;
 }
 
 /** A known source function's immediate defaults, body and instance fields. */
