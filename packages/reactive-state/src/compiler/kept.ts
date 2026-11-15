@@ -3,8 +3,6 @@ import {
   type CallExpression,
   type ClassElement,
   type ClassLikeDeclaration,
-  isElementAccessExpression,
-  isPropertyAccessExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -15,9 +13,10 @@ import {
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
-  isConditionalExpression,
   isComputedPropertyName,
+  isConditionalExpression,
   isConstructorDeclaration,
+  isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -27,6 +26,7 @@ import {
   isNonNullExpression,
   isObjectLiteralExpression,
   isParenthesizedExpression,
+  isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
   isReturnStatement,
@@ -109,12 +109,20 @@ function isCodeAt(node: Node, child: Node): boolean {
   );
 }
 
+/** Parentheses, type assertions and `!` preserve the runtime expression they wrap. */
+function isTypeWrapper(node: Node): node is Node & { readonly expression: Expression } {
+  return (
+    isParenthesizedExpression(node) ||
+    isAsExpression(node) ||
+    isSatisfiesExpression(node) ||
+    isNonNullExpression(node)
+  );
+}
+
 /** Whether `fn`, a function, is called where it is written, once: `(() => { … })()`. */
 function isCalledInPlace(fn: Node): boolean {
   let at = fn;
-  while (isParenthesizedExpression(at.parent)) {
-    at = at.parent;
-  }
+  while (isTypeWrapper(at.parent)) at = at.parent;
   const call = at.parent;
   return isCallExpression(call) && call.expression === at;
 }
@@ -387,13 +395,15 @@ function holdWritten(declared: Declared, handing: Handing): void {
  * rest's — of anything else, itself.
  */
 export function targetsOf(node: Node): readonly Node[] {
-  if (isArrayLiteralExpression(node)) {
-    return node.elements.flatMap((element) =>
+  let target = node;
+  while (isTypeWrapper(target)) target = target.expression;
+  if (isArrayLiteralExpression(target)) {
+    return target.elements.flatMap((element) =>
       targetsOf(isSpreadElement(element) ? element.expression : element),
     );
   }
-  if (isObjectLiteralExpression(node)) {
-    return node.properties.flatMap((property): readonly Node[] => {
+  if (isObjectLiteralExpression(target)) {
+    return target.properties.flatMap((property): readonly Node[] => {
       if (isPropertyAssignment(property)) {
         return targetsOf(property.initializer);
       }
@@ -403,25 +413,20 @@ export function targetsOf(node: Node): readonly Node[] {
       return isSpreadAssignment(property) ? targetsOf(property.expression) : [];
     });
   }
-  return isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken
-    ? targetsOf(node.left)
-    : [node];
+  return isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken
+    ? targetsOf(target.left)
+    : [target];
 }
 
 /** The name `node` is of, past the members it reads and what wraps it: `cache` of `cache[key].x`. */
 export function rootOf(node: Node): Identifier | undefined {
   let each = node;
-  for (;;) {
-    if (
-      isPropertyAccessExpression(each) ||
-      isElementAccessExpression(each) ||
-      isParenthesizedExpression(each) ||
-      isNonNullExpression(each)
-    ) {
-      each = each.expression;
-    } else {
-      break;
-    }
+  while (
+    isPropertyAccessExpression(each) ||
+    isElementAccessExpression(each) ||
+    isTypeWrapper(each)
+  ) {
+    each = each.expression;
   }
   return isIdentifier(each) && readsBinding(each) ? each : undefined;
 }
@@ -537,14 +542,7 @@ function nameOf(fn: Node): Identifier | undefined {
     return fn.name;
   }
   let at = fn.parent;
-  while (
-    isParenthesizedExpression(at) ||
-    isAsExpression(at) ||
-    isSatisfiesExpression(at) ||
-    isNonNullExpression(at)
-  ) {
-    at = at.parent;
-  }
+  while (isTypeWrapper(at)) at = at.parent;
   return isVariableDeclaration(at) && isIdentifier(at.name) ? at.name : undefined;
 }
 
