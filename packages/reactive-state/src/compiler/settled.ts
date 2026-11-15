@@ -93,6 +93,16 @@ const GLOBAL_HOLDERS: ReadonlySet<string> = new Set(['global', 'globalThis', 'se
 /** The methods of an object that test whether it holds an entry of its own, by the name given. */
 const OWNING: ReadonlySet<string> = new Set(['hasOwnProperty', 'propertyIsEnumerable']);
 
+/** Static built-ins that test or read a property of their first argument by key. */
+const STATIC_PROBES: ReadonlySet<string> = new Set([
+  'Object.getOwnPropertyDescriptor',
+  'Object.hasOwn',
+  'Object.prototype.hasOwnProperty.call',
+  'Object.prototype.propertyIsEnumerable.call',
+  'Reflect.getOwnPropertyDescriptor',
+  'Reflect.has',
+]);
+
 /** The functions of globals each engine answers of its own: `Atomics.isLockFree` of most sizes. */
 const ENGINE_ANSWERS: ReadonlySet<string> = new Set(['Atomics.isLockFree']);
 
@@ -265,20 +275,12 @@ function outerOf(node: Node): Node {
  * written there (`isAlike`).
  */
 function probedHolder(node: Node): string | undefined {
-  let tested: { readonly holder: Expression; readonly key: Node | undefined } | undefined;
-  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.InKeyword) {
-    tested = { holder: node.right, key: node.left };
-  } else if (isCallExpression(node)) {
-    const callee = unwrapped(node.expression);
-    if (isPropertyAccessExpression(callee) && OWNING.has(callee.name.text)) {
-      tested = { holder: callee.expression, key: node.arguments[0] };
-    }
-  }
+  const tested = testedHolder(node);
   const held = tested === undefined ? undefined : globalPathOf(unwrapped(tested.holder));
   if (held?.length !== 1 || !GLOBAL_HOLDERS.has(held[0] ?? '')) {
     return undefined;
   }
-  const key = tested?.key;
+  const key = tested?.key === undefined ? undefined : unwrapped(tested.key);
   const name =
     key !== undefined && (isStringLiteral(key) || isNoSubstitutionTemplateLiteral(key))
       ? key.text
@@ -288,6 +290,43 @@ function probedHolder(node: Node): string | undefined {
   }
   const what = name === undefined ? 'a name it computes' : `\`${name}\``;
   return `tests whether the global object holds ${what}, which tells where it runs`;
+}
+
+/** Extracts the target holder and key expression from an ownership or presence probe. */
+function testedHolder(
+  node: Node,
+): { readonly holder: Expression; readonly key: Expression | undefined } | undefined {
+  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.InKeyword) {
+    return { holder: node.right, key: node.left };
+  }
+  if (!isCallExpression(node)) {
+    return undefined;
+  }
+  const callee = unwrapped(node.expression);
+  const path = globalPathOf(callee)?.join('.');
+  if (path !== undefined && STATIC_PROBES.has(path)) {
+    const [first, second] = node.arguments;
+    if (first === undefined || isSpreadElement(first)) {
+      return undefined;
+    }
+    return {
+      holder: first,
+      key: second === undefined || isSpreadElement(second) ? undefined : second,
+    };
+  }
+  const method = methodOf(node);
+  if (
+    method !== undefined &&
+    OWNING.has(method) &&
+    (isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
+  ) {
+    const [first] = node.arguments;
+    return {
+      holder: callee.expression,
+      key: first === undefined || isSpreadElement(first) ? undefined : first,
+    };
+  }
+  return undefined;
 }
 
 /**
