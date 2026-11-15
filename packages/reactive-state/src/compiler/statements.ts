@@ -3,34 +3,46 @@ import {
   type ArrowFunction,
   type BindingName,
   type CallExpression,
+  type ConstructorDeclaration,
   type Expression,
   type FunctionExpression,
+  type GetAccessorDeclaration,
   type Identifier,
   isArrayBindingPattern,
   isArrowFunction,
   isBindingElement,
   isCallExpression,
+  isComputedPropertyName,
+  isConstructorDeclaration,
+  isDecorator,
   isExpressionWithTypeArguments,
+  isFunctionDeclaration,
   isFunctionExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
+  isMethodDeclaration,
   isObjectBindingPattern,
   isOmittedExpression,
   isParenthesizedExpression,
+  isPropertyDeclaration,
+  isSetAccessorDeclaration,
   isTypeAssertion,
   isVariableStatement,
+  type MethodDeclaration,
   type Node,
   NodeFlags,
+  type SetAccessorDeclaration,
   type SourceFile,
   type Statement,
+  SyntaxKind,
   type VariableDeclaration,
   type VariableStatement,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { runsLater } from './deferred-syntax.ts';
 import type { Fail } from './errors.ts';
 import { INTRINSIC } from './imports.ts';
-import { isTypeSyntax } from './type-syntax.ts';
+import { isTypeOnly } from './scope.ts';
 
 /**
  * The statements that declare state, in a component or in a custom hook: `useReactiveState` itself,
@@ -136,6 +148,12 @@ function directStateCall(
     : undefined;
 }
 
+type DeferredMember =
+  | ConstructorDeclaration
+  | GetAccessorDeclaration
+  | MethodDeclaration
+  | SetAccessorDeclaration;
+
 /** Any synchronous state or custom-hook call within `root`, other than `allowed` itself. */
 function nestedStateCall(
   root: Node,
@@ -144,7 +162,7 @@ function nestedStateCall(
 ): CalledState | undefined {
   let found: CalledState | undefined;
   const visit = (node: Node): void => {
-    if (found !== undefined || isTypeSyntax(node) || runsLater(node)) {
+    if (found !== undefined || isSkippedNode(node)) {
       return;
     }
     if (isCallExpression(node) && node !== allowed) {
@@ -153,10 +171,83 @@ function nestedStateCall(
         return;
       }
     }
-    node.forEachChild(visit);
+    forEachImmediateChild(node, visit);
   };
   root.forEachChild(visit);
   return found;
+}
+
+/** Whether `node` is erased with the types or is a function whose whole body runs only when called. */
+function isSkippedNode(node: Node): boolean {
+  if (
+    isTypeOnly(node) ||
+    hasModifier(node, SyntaxKind.DeclareKeyword) ||
+    isArrowFunction(node) ||
+    isFunctionExpression(node) ||
+    isFunctionDeclaration(node)
+  ) {
+    return true;
+  }
+  return isPropertyDeclaration(node) && hasModifier(node, SyntaxKind.AbstractKeyword);
+}
+
+/** Visits the children of `node` that evaluate synchronously where `node` is written. */
+function forEachImmediateChild(node: Node, visit: (child: Node) => void): void {
+  if (isDeferredMember(node)) {
+    visitMemberHeader(node, visit);
+    return;
+  }
+  if (isPropertyDeclaration(node) && !hasModifier(node, SyntaxKind.StaticKeyword)) {
+    node.forEachChild((child) => {
+      if (child !== node.initializer) {
+        visit(child);
+      }
+    });
+    return;
+  }
+  node.forEachChild(visit);
+}
+
+function isDeferredMember(node: Node): node is DeferredMember {
+  return (
+    isMethodDeclaration(node) ||
+    isGetAccessorDeclaration(node) ||
+    isSetAccessorDeclaration(node) ||
+    isConstructorDeclaration(node)
+  );
+}
+
+/** Visits decorators, computed property keys, and parameter decorators on a method or accessor. */
+function visitMemberHeader(member: DeferredMember, visit: (child: Node) => void): void {
+  visitDecorators(member.modifiers, visit);
+  if (!isConstructorDeclaration(member) && isComputedPropertyName(member.name)) {
+    visit(member.name);
+  }
+  for (const parameter of member.parameters) {
+    visitDecorators(parameter.modifiers, visit);
+  }
+}
+
+function visitDecorators(
+  modifiers: readonly Node[] | undefined,
+  visit: (child: Node) => void,
+): void {
+  if (modifiers === undefined) {
+    return;
+  }
+  for (const modifier of modifiers) {
+    if (isDecorator(modifier)) {
+      visit(modifier);
+    }
+  }
+}
+
+function hasModifier(node: Node, kind: SyntaxKind): boolean {
+  return (
+    (node as { readonly modifiers?: readonly Node[] }).modifiers?.some(
+      (each) => each.kind === kind,
+    ) === true
+  );
 }
 
 /** The state or custom-hook call `call` makes, unwrapping parentheses or assertions on its callee. */
