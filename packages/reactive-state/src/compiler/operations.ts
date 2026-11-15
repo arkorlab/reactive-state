@@ -3,10 +3,8 @@ import {
   isExportAssignment,
   isExportDeclaration,
   isFunctionDeclaration,
-  isIdentifier,
   isNamedExports,
   isVariableStatement,
-  type SourceFile,
   type Statement,
   SyntaxKind,
   type VariableStatement,
@@ -15,6 +13,7 @@ import {
 import { failIn } from './errors.ts';
 import type { ParsedModule } from './modules.ts';
 import type { OperationCallable } from './operation-callables.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /**
  * A `'use server'` module a component, or a hook, imports: the authority runs it as an operation
@@ -56,7 +55,7 @@ export function operationExports(parsed: ParsedModule): readonly string[] {
         statement,
       );
     }
-    for (const name of exportedBy(statement, parsed.sourceFile)) {
+    for (const name of exportedBy(statement)) {
       if (names.includes(name)) {
         fail(`\`${name}\` is exported twice.`, statement);
       }
@@ -66,7 +65,7 @@ export function operationExports(parsed: ParsedModule): readonly string[] {
   return names;
 }
 
-/** Whether a declaration carries `modifier`: `export`, `default`. */
+/** Whether a declaration carries `modifier`: `export`, `default`, `declare`. */
 function carries(
   statement: FunctionDeclaration | VariableStatement,
   modifier: SyntaxKind,
@@ -74,20 +73,31 @@ function carries(
   return statement.modifiers?.some((each) => each.kind === modifier) === true;
 }
 
-function exportedBy(statement: Statement, sourceFile: SourceFile): readonly string[] {
+/** Whether a declaration exports a runtime binding rather than an erased `declare` signature. */
+function exportsRuntime(statement: FunctionDeclaration | VariableStatement): boolean {
+  return (
+    carries(statement, SyntaxKind.ExportKeyword) && !carries(statement, SyntaxKind.DeclareKeyword)
+  );
+}
+
+function exportedFunction(statement: FunctionDeclaration): readonly string[] {
+  if (statement.body === undefined || !exportsRuntime(statement)) {
+    return [];
+  }
+  if (carries(statement, SyntaxKind.DefaultKeyword)) {
+    return ['default'];
+  }
+  return statement.name === undefined ? [] : [statement.name.text];
+}
+
+function exportedBy(statement: Statement): readonly string[] {
   if (isFunctionDeclaration(statement)) {
-    if (!carries(statement, SyntaxKind.ExportKeyword)) {
-      return [];
-    }
-    if (carries(statement, SyntaxKind.DefaultKeyword)) {
-      return ['default'];
-    }
-    return statement.name === undefined ? [] : [statement.name.text];
+    return exportedFunction(statement);
   }
   if (isVariableStatement(statement)) {
-    return carries(statement, SyntaxKind.ExportKeyword)
+    return exportsRuntime(statement)
       ? statement.declarationList.declarations.flatMap((declaration) =>
-          isIdentifier(declaration.name) ? [declaration.name.text] : [],
+          bindingIdentifiers(declaration.name).map((bound) => bound.text),
         )
       : [];
   }
@@ -102,7 +112,7 @@ function exportedBy(statement: Statement, sourceFile: SourceFile): readonly stri
   ) {
     return statement.exportClause.elements
       .filter((element) => !element.isTypeOnly)
-      .map((element) => element.name.getText(sourceFile));
+      .map((element) => element.name.text);
   }
   return [];
 }
