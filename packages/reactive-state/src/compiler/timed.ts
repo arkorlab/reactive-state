@@ -156,8 +156,16 @@ function declaredValue(node: Expression, before: Node): Expression {
   return value;
 }
 
-/** Whether a timestamp expression is shown defined, so a File cannot default it to the current time. */
-function definedValue(node: Expression, before: Node, seen = new Set<Expression>()): boolean {
+/**
+ * Whether a timestamp expression is shown defined — and non-null where `nullable` is false — so a
+ * File cannot default `lastModified` to the current time across `??` fallbacks.
+ */
+function definedValue(
+  node: Expression,
+  before: Node,
+  seen = new Set<Expression>(),
+  nullable = true,
+): boolean {
   const value = declaredValue(node, before);
   if (seen.has(value)) {
     return false;
@@ -168,22 +176,26 @@ function definedValue(node: Expression, before: Node, seen = new Set<Expression>
   }
   if (isConditionalExpression(value)) {
     return (
-      definedValue(value.whenTrue, before, following) &&
-      definedValue(value.whenFalse, before, following)
+      definedValue(value.whenTrue, before, following, nullable) &&
+      definedValue(value.whenFalse, before, following, nullable)
     );
   }
   if (isBinaryExpression(value)) {
-    return definedBinary(value, before, following);
+    return definedBinary(value, before, following, nullable);
   }
   if (isCallExpression(value)) {
     return ['Boolean', 'Number', 'String'].includes(
       globalPathOf(unwrapped(value.expression))?.join('.') ?? '',
     );
   }
+  return definedLiteral(value, nullable);
+}
+
+/** Literals and constructions that always supply a value, excluding `null` when `!nullable`. */
+function definedLiteral(value: Expression, nullable: boolean): boolean {
   return (
-    [SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword, SyntaxKind.TrueKeyword].includes(
-      value.kind,
-    ) ||
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    [SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword].includes(value.kind) ||
     isBigIntLiteral(value) ||
     isArrayLiteralExpression(value) ||
     isObjectLiteralExpression(value) ||
@@ -197,15 +209,24 @@ function definedValue(node: Expression, before: Node, seen = new Set<Expression>
 }
 
 /** Whether an expression selecting a value has no branch that may answer undefined. */
-function definedBinary(value: Expression, before: Node, seen: Set<Expression>): boolean {
+function definedBinary(
+  value: Expression,
+  before: Node,
+  seen: Set<Expression>,
+  nullable: boolean,
+): boolean {
   if (!isBinaryExpression(value)) {
     return false;
   }
   if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
-    return definedValue(value.left, before, seen) || definedValue(value.right, before, seen);
+    return (
+      definedValue(value.left, before, seen, false) ||
+      definedValue(value.right, before, seen, nullable)
+    );
   }
   return (
-    value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, before, seen)
+    value.operatorToken.kind === SyntaxKind.BarBarToken &&
+    definedValue(value.right, before, seen, nullable)
   );
 }
 
