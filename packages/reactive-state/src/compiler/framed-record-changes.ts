@@ -3,35 +3,27 @@ import {
   type Identifier,
   isIdentifier,
   isObjectLiteralExpression,
-  isVariableDeclaration,
   type Node,
   type ObjectLiteralExpression,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
 import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
 import { framedHeldFields, framedHeldValues, type Held } from './framed-held-members.ts';
 import {
-  framedHeldVariable,
-  framedMemberWrites,
-  type MemberWrite,
-} from './framed-member-writes.ts';
+  type CapturedRecord,
+  type RecordFields,
+  toRecordFields,
+  withCapturedWrites,
+} from './framed-record-captured-writes.ts';
 import { framedRecordOrigin } from './framed-record-origins.ts';
 import { framedSourceValues } from './framed-sources.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 
 /** What a saved record may hold where a native conversion reads it, after possible changes. */
 
-const NO_BLOCKED: ReadonlySet<FrameBinding> = new Set();
+export type { RecordFields } from './framed-record-captured-writes.ts';
 
-/** A record's entries: each definite name's possible values, and values under unread names. */
-export interface RecordFields {
-  readonly named: ReadonlyMap<string, readonly Expression[]>;
-  readonly unknown: readonly Expression[];
-}
+const NO_BLOCKED: ReadonlySet<FrameBinding> = new Set();
 
 /** How a written record literal's own fields are read. */
 type FieldsOf = (record: ObjectLiteralExpression) => RecordFields;
@@ -74,13 +66,15 @@ export function framedChangedRecord(
 ): RecordFields {
   const name = unwrapped(expression);
   if (!isIdentifier(name)) return fields;
-  return changedRecord(name, fields, point, {
-    consumer: point,
-    fieldsOf: cachedFields(fieldsOf),
-    aliases: new Map(),
-    origins: new Map(),
-    seen: new Set(),
-  }).fields;
+  return toRecordFields(
+    changedRecord(name, fields, point, {
+      consumer: point,
+      fieldsOf: cachedFields(fieldsOf),
+      aliases: new Map(),
+      origins: new Map(),
+      seen: new Set(),
+    }).captured,
+  );
 }
 
 /** Resolves a variable's reachable fields while guarding cyclic record-alias assignments. */
@@ -89,10 +83,15 @@ function changedRecord(
   fields: RecordFields,
   point: Node,
   context: RecordContext,
-): { readonly fields: RecordFields; readonly blocked: ReadonlySet<FrameBinding> } {
+): { readonly captured: CapturedRecord; readonly blocked: ReadonlySet<FrameBinding> } {
   const whole = framedHeldValues(name, [], point);
   const written = framedHeldFields(name, point);
-  if (whole === undefined || written === undefined) return { fields, blocked: NO_BLOCKED };
+  if (whole === undefined || written === undefined) {
+    return {
+      captured: { named: fields.named, optional: new Map(), unknown: fields.unknown },
+      blocked: NO_BLOCKED,
+    };
+  }
   const binding = frameBindingOf(name)?.binding;
   const seen = binding === undefined ? context.seen : new Set([...context.seen, binding]);
   const reading: RecordReading = {
@@ -111,26 +110,27 @@ function changedRecord(
   addWholeReplacements(whole.held, reading, { keys, unknown, blocked });
   const keepsNamed = whole.initial !== undefined && whole.held.length === 0;
   return {
-    fields: collectKeyFields(keys, keepsNamed, reading, { unknown, blocked }),
+    captured: collectKeyFields(keys, keepsNamed, reading, { unknown, blocked }),
     blocked,
   };
 }
 
-/** Collects deduplicated values per candidate key, keeping only still-definite names in `named`. */
+/** Collects deduplicated values per candidate key, separating definite and optional names. */
 function collectKeyFields(
   keys: ReadonlySet<string>,
   keepsNamed: boolean,
   reading: RecordReading,
   state: { readonly unknown: Set<Expression>; readonly blocked: Set<FrameBinding> },
-): RecordFields {
+): CapturedRecord {
   const named = new Map<string, readonly Expression[]>();
+  const optional = new Map<string, readonly Expression[]>();
   for (const key of keys) {
     const values = keyFieldValues(key, reading, state.blocked);
     if (values === undefined) continue;
     if (keepsNamed && reading.fields.named.has(key)) named.set(key, values);
-    else addExpressions(state.unknown, values);
+    else optional.set(key, values);
   }
-  return { named, unknown: [...state.unknown] };
+  return { named, optional, unknown: [...state.unknown] };
 }
 
 /** Memoizes literal field readings across whole-record and per-key lookups. */
@@ -262,113 +262,24 @@ function aliasRecords(value: Expression, reading: RecordReading): AliasResolutio
   const binding = frameBindingOf(value)?.binding;
   if (binding === undefined) return { records: [], blocked: NO_BLOCKED };
   if (reading.seen.has(binding)) return { records: [], blocked: new Set([binding]) };
-  const captured = changedRecord(value, base, value, {
+  const resolved = changedRecord(value, base, value, {
     consumer: reading.consumer,
     fieldsOf: reading.fieldsOf,
     aliases: reading.aliases,
     origins: reading.origins,
     seen: reading.seen,
   });
-  const records = [withCapturedWrites(captured.fields, value, binding, reading.consumer)];
-  const blocked = withoutBinding(captured.blocked, binding);
+  const records = [
+    withCapturedWrites(resolved.captured, {
+      capture: value,
+      binding,
+      origin: origin.record,
+      consumer: reading.consumer,
+    }),
+  ];
+  const blocked = withoutBinding(resolved.blocked, binding);
   if (blocked.size === 0) reading.aliases.set(value, records);
   return { records, blocked };
-}
-
-/** Retains member writes on a captured alias that may run after assignment and before `consumer`. */
-function withCapturedWrites(
-  captured: RecordFields,
-  capture: Identifier,
-  binding: FrameBinding,
-  consumer: Node,
-): RecordFields {
-  const holders = aliasHolders(binding);
-  if (holders.size === 0) return captured;
-  const writes = postCaptureWrites(capture, holders, consumer);
-  if (writes.length === 0) return captured;
-  const named = new Map<string, Set<Expression>>();
-  for (const [key, values] of captured.named) named.set(key, new Set(values));
-  const unknown = new Set<Expression>(captured.unknown);
-  for (const write of writes) {
-    const [first] = write.path;
-    if (first === undefined) unknown.add(write.value);
-    else addCapturedFieldWrite(first, write.value, named, unknown);
-  }
-  const settled = new Map<string, readonly Expression[]>();
-  for (const [key, values] of named) settled.set(key, [...values]);
-  return { named: settled, unknown: [...unknown] };
-}
-
-/** Appends a post-capture write to each named field still kept, or to `unknown` otherwise. */
-function addCapturedFieldWrite(
-  names: readonly string[],
-  value: Expression,
-  named: Map<string, Set<Expression>>,
-  unknown: Set<Expression>,
-): void {
-  for (const key of names) {
-    const existing = named.get(key);
-    if (existing === undefined) unknown.add(value);
-    else existing.add(value);
-  }
-}
-
-/** Variable declarations along an alias's initializer chain whose object reference may be shared. */
-function aliasHolders(binding: FrameBinding): ReadonlySet<VariableDeclaration> {
-  const holders = new Set<VariableDeclaration>();
-  let current: FrameBinding | undefined = binding;
-  while (current !== undefined && isVariableDeclaration(current) && !holders.has(current)) {
-    holders.add(framedHeldVariable(current));
-    holders.add(current);
-    current = nextInitializerBinding(current);
-  }
-  return holders;
-}
-
-/** Follows an identifier initializer to the declaration it aliases, if any. */
-function nextInitializerBinding(declaration: VariableDeclaration): FrameBinding | undefined {
-  if (declaration.initializer === undefined) return undefined;
-  const initial = unwrapped(declaration.initializer);
-  return isIdentifier(initial) ? frameBindingOf(initial)?.binding : undefined;
-}
-
-/** Member writes on `holders` that may execute after `capture` and still reach `consumer`. */
-function postCaptureWrites(
-  capture: Identifier,
-  holders: ReadonlySet<VariableDeclaration>,
-  consumer: Node,
-): readonly MemberWrite[] {
-  return framedMemberWrites(capture.getSourceFile()).filter((write) => {
-    return (
-      holders.has(write.holder) &&
-      write.path.length === 1 &&
-      reachesConsumer(write.node, write.holder, consumer) &&
-      runsAfterCapture(write.node, capture, write.holder)
-    );
-  });
-}
-
-/** Whether a member write can run before `consumer` evaluates. */
-function reachesConsumer(write: Node, holder: VariableDeclaration, consumer: Node): boolean {
-  if (!framedPossibleBranch(write)) return false;
-  const owner = executionOwner(consumer);
-  return (
-    executionOwner(write) !== owner ||
-    write.pos < consumer.end ||
-    destructuredFirst(write, consumer) ||
-    repeatedFrameRead(write, consumer, holder, owner)
-  );
-}
-
-/** Whether a member write is not confined strictly before the alias capture evaluates. */
-function runsAfterCapture(write: Node, capture: Identifier, holder: VariableDeclaration): boolean {
-  const owner = executionOwner(capture);
-  return (
-    executionOwner(write) !== owner ||
-    write.end > capture.end ||
-    destructuredFirst(capture, write) ||
-    repeatedFrameRead(write, capture, holder, owner)
-  );
 }
 
 /** Adds candidate expressions without duplicating AST nodes across shared replacement paths. */
