@@ -16,6 +16,7 @@ import {
   isOmittedExpression,
   isParenthesizedExpression,
   isVariableStatement,
+  NodeFlags,
   type SourceFile,
   type Statement,
   type VariableDeclaration,
@@ -127,8 +128,13 @@ function hookAlone(name: string): string {
 }
 
 /** Whether a statement declares with `const`. */
-export function isConstant(statement: VariableStatement, sourceFile: SourceFile): boolean {
-  return /^const\s/u.test(statement.declarationList.getText(sourceFile));
+export function isConstant(
+  statement: VariableStatement,
+  sourceFile?: SourceFile | undefined,
+): boolean;
+export function isConstant(statement: VariableStatement): boolean {
+  // eslint-disable-next-line no-bitwise -- TypeScript says `const` in these flags (`AwaitUsing` sets `Const | Using`).
+  return (statement.declarationList.flags & NodeFlags.BlockScoped) === NodeFlags.Const;
 }
 
 function pairOf(
