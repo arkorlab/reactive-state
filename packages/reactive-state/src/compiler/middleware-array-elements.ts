@@ -38,7 +38,11 @@ import {
   quietDefinitionPrefix,
 } from './middleware-array-conversions.ts';
 import { middlewareCopyOrigins } from './middleware-array-copy-origins.ts';
-import { middlewareArraySplice } from './middleware-array-splices.ts';
+import {
+  middlewareArraySplice,
+  middlewareCopySlotIndex,
+  middlewareSliceProjection,
+} from './middleware-array-splices.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
@@ -49,6 +53,7 @@ interface SelectionCall {
   readonly method: string;
   readonly receiver: Expression;
   readonly given: readonly Expression[] | undefined;
+  readonly applied?: Expression;
   readonly borrowed: boolean;
 }
 
@@ -75,7 +80,15 @@ const DEFINERS = new Set(['Object.defineProperty', 'Reflect.defineProperty']);
 const DEFINER_GLOBALS = new Set(['Array', 'Object', 'Reflect']);
 const DEFINITION = { slots: 3 } as const;
 const ARRAY_COPIES = new Set(['slice', 'toReversed', 'toSorted', 'toSpliced']);
-const RETAINED_COPIES = new Set(['concat', 'filter', 'flat', 'flatMap', 'map', 'with']);
+const RETAINED_COPIES = new Set([
+  'concat',
+  'filter',
+  'flat',
+  'flatMap',
+  'map',
+  'toSpliced',
+  'with',
+]);
 const ARRAY_SELECTORS: ReadonlySet<string> = new Set([
   'at',
   'find',
@@ -124,7 +137,7 @@ export function middlewareArrayCopiedOrigins(
   call: CallExpression,
   keys: readonly string[],
   relative: boolean,
-): ReturnType<typeof middlewareCopyOrigins> {
+): ReturnType<typeof middlewareArraySplice> {
   const selected = nativeSelectionCall(call);
   if (
     selected === undefined ||
@@ -139,7 +152,12 @@ export function middlewareArrayCopiedOrigins(
     source.elements.some((element) => isSpreadElement(element))
   )
     return [];
-  return middlewareCopyOrigins(call, keys, selected, relative);
+  return selected.method === 'toSpliced'
+    ? middlewareArraySplice(
+        { call, keys, ...selected, length: source.elements.length, relative },
+        { start: sliceBound, count: nativeIndex },
+      )
+    : middlewareCopyOrigins(call, keys, selected, relative);
 }
 
 /** A selected shallow-copy payload retains its original collection, never the fresh wrapper. */
@@ -148,86 +166,14 @@ export function middlewareArraySlice(
   keys: readonly string[],
   relative = false,
 ): SliceProjection | undefined {
-  const key = keys[0];
-  const index = Number(key);
-  if (
-    key === undefined ||
-    String(index) !== key ||
-    !Number.isSafeInteger(index) ||
-    (!relative && index < 0)
-  )
-    return undefined;
+  const index = middlewareCopySlotIndex(keys[0], relative);
+  if (index === undefined) return undefined;
   const original = sliceSource(call);
   if (original === undefined) return undefined;
-  return sliceProjection(call, keys, original, { index, relative });
-}
-
-/** Known slice windows map a copied slot back to its original position without retaining the wrapper. */
-function sliceProjection(
-  call: CallExpression,
-  keys: readonly string[],
-  original: SliceSource,
-  selection: { readonly index: number; readonly relative: boolean },
-): SliceProjection | undefined {
-  const { index, relative } = selection;
-  const { selected, source } = original;
-  if (selected.method === 'toSpliced')
-    return middlewareArraySplice(
-      {
-        call,
-        keys,
-        receiver: selected.receiver,
-        given: selected.given,
-        length: source.elements.length,
-        index,
-        relative,
-      },
-      { start: sliceBound, count: nativeIndex },
-    );
-  if (selected.method !== 'slice') return reorderedProjection(keys, original, selection);
-  const prefix =
-    selected.given === undefined ? undefined : framedArgumentPrefix(call, selected.given, 2);
-  const definite = prefix !== undefined && !prefix.unknown && prefix.alternatives === undefined;
-  const start = definite ? sliceBound(prefix.values[0], source.elements.length, 0) : undefined;
-  const end = definite
-    ? sliceBound(prefix.values[1], source.elements.length, source.elements.length)
-    : undefined;
-  const tail = keys.slice(1);
-  if (start === undefined || end === undefined) {
-    if (!possibleCollection(source.elements, [])) return undefined;
-    const possible = { of: selected.receiver, keys: [], tail };
-    return index < 0 ? possible : { ...possible, slot: String(index) };
-  }
-  const length = Math.max(end - start, 0);
-  const offset = relative && index < 0 ? length + index : index;
-  const position = start + offset;
-  const element = source.elements[position];
-  if (element === undefined || offset < 0 || offset >= length || isOmittedExpression(element))
-    return undefined;
-  return { of: selected.receiver, keys: [String(position), ...tail], tail, slot: String(offset) };
-}
-
-/** Reversal fixes its copied position; sorting retains possible original payloads without assuming order. */
-function reorderedProjection(
-  keys: readonly string[],
-  original: SliceSource,
-  selection: { readonly index: number; readonly relative: boolean },
-): SliceProjection | undefined {
-  const { selected, source } = original;
-  const { index, relative } = selection;
-  const length = source.elements.length;
-  const offset = relative && index < 0 ? length + index : index;
-  if (offset < 0 || offset >= length) return undefined;
-  const tail = keys.slice(1);
-  if (selected.method === 'toSorted')
-    return possibleCollection(source.elements, [])
-      ? { of: selected.receiver, keys: [], tail, slot: String(offset) }
-      : undefined;
-  const position = length - 1 - offset;
-  const element = source.elements[position];
-  return element === undefined || isOmittedExpression(element)
-    ? undefined
-    : { of: selected.receiver, keys: [String(position), ...tail], tail, slot: String(offset) };
+  return middlewareSliceProjection(
+    { call, keys, ...original.selected, source: original.source, index, relative },
+    { start: sliceBound, count: nativeIndex },
+  );
 }
 
 /** A quiet native at selects one copied slot without changing the wrapper before that read. */
@@ -372,7 +318,7 @@ function nativeSelectionCall(call: CallExpression): SelectionCall | undefined {
       borrowed.applied === undefined
         ? borrowed.given
         : framedAppliedArguments(call, borrowed.applied);
-    return { method, receiver: borrowed.receiver, given, borrowed: true };
+    return { method, receiver: borrowed.receiver, given, applied, borrowed: true };
   }
   const member = unwrapped(call.expression);
   if (
