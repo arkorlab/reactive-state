@@ -2,8 +2,13 @@ import {
   type Expression,
   type Identifier,
   isCatchClause,
+  isClassStaticBlockDeclaration,
+  isConstructorDeclaration,
+  isGetAccessorDeclaration,
   isIdentifier,
+  isModuleDeclaration,
   isParameterDeclaration,
+  isSetAccessorDeclaration,
   isSourceFile,
   isVariableDeclaration,
   isVariableDeclarationList,
@@ -11,7 +16,7 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import type { Answering } from './answers.ts';
+import { type Answering, isAnswering } from './answers.ts';
 import { framedArrayCallbackError } from './framed-array-callback-errors.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPatternDefaults } from './framed-pattern-defaults.ts';
@@ -39,7 +44,7 @@ import { bindingIdentifiers, freeReads, isBlockScoped, isTypeOnly, readsBinding 
 
 interface SourceVariableReads {
   readonly reads: ReadonlyMap<VariableDeclaration, readonly Identifier[]>;
-  readonly varCounts: ReadonlyMap<string, number>;
+  readonly varCounts: ReadonlyMap<Node, ReadonlyMap<string, number>>;
 }
 
 const CAUGHT_READS = new WeakMap<Node, ReadonlySet<Identifier>>();
@@ -142,7 +147,10 @@ function unmutatedVariableBinding(
   const blockScoped = isBlockScoped(declared.parent);
   if (!blockScoped && declared.end > read.pos) return false;
   const indexed = sourceVariableReads(declared.getSourceFile());
-  if (!blockScoped && (indexed.varCounts.get(declared.name.text) ?? 0) > 1) return false;
+  if (!blockScoped) {
+    const scopeCounts = indexed.varCounts.get(hoistedVarScope(declared));
+    if ((scopeCounts?.get(declared.name.text) ?? 0) > 1) return false;
+  }
   const bindings: VariableDeclaration[] = [declared];
   const seen = new Set<VariableDeclaration>([declared]);
   for (const current of bindings) {
@@ -152,12 +160,12 @@ function unmutatedVariableBinding(
   return true;
 }
 
-/** Indexes variable binding reads and hoisted `var` counts once per source file. */
+/** Indexes variable binding reads and per-scope hoisted `var` counts once per source file. */
 function sourceVariableReads(sourceFile: Node): SourceVariableReads {
   const cached = VARIABLE_READS.get(sourceFile);
   if (cached !== undefined) return cached;
   const reads = new Map<VariableDeclaration, Identifier[]>();
-  const varCounts = new Map<string, number>();
+  const varCounts = new Map<Node, Map<string, number>>();
   const pending: Node[] = [sourceFile];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
@@ -172,13 +180,36 @@ function sourceVariableReads(sourceFile: Node): SourceVariableReads {
   return indexed;
 }
 
-/** Counts non-block-scoped `var` bindings by name to detect duplicate hoisted declarations. */
-function recordHoistedDeclaration(node: Node, varCounts: Map<string, number>): void {
+/** Counts non-block-scoped `var` bindings per execution scope to detect duplicate hoisted names. */
+function recordHoistedDeclaration(node: Node, varCounts: Map<Node, Map<string, number>>): void {
   if (!isVariableDeclaration(node) || !isVariableDeclarationList(node.parent)) return;
   if (isBlockScoped(node.parent)) return;
-  for (const bound of bindingIdentifiers(node.name)) {
-    varCounts.set(bound.text, (varCounts.get(bound.text) ?? 0) + 1);
+  const scope = hoistedVarScope(node);
+  let counts = varCounts.get(scope);
+  if (counts === undefined) {
+    counts = new Map();
+    varCounts.set(scope, counts);
   }
+  for (const bound of bindingIdentifiers(node.name)) {
+    counts.set(bound.text, (counts.get(bound.text) ?? 0) + 1);
+  }
+}
+
+/** Resolves the callable, accessor, constructor, static-block, namespace, or file hoisting scope. */
+function hoistedVarScope(node: Node): Node {
+  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
+    if (
+      isAnswering(at) ||
+      isConstructorDeclaration(at) ||
+      isGetAccessorDeclaration(at) ||
+      isSetAccessorDeclaration(at) ||
+      isClassStaticBlockDeclaration(at) ||
+      isModuleDeclaration(at)
+    ) {
+      return at;
+    }
+  }
+  return node.getSourceFile();
 }
 
 /** Groups non-declaration identifier reads under their resolved `VariableDeclaration`. */
