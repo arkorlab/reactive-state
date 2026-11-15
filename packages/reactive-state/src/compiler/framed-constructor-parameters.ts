@@ -2,11 +2,13 @@ import {
   type Expression,
   type Identifier,
   isArrayBindingPattern,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
   isElementAccessExpression,
   isIdentifier,
+  isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
   isTypeOfExpression,
@@ -53,10 +55,19 @@ interface EnteredValue extends DefaultValue {
   readonly entered: readonly string[];
 }
 
-/** The inputs and defaults for one parameter read. */
-interface ParameterRead {
+/** The inputs and defaults of the parameter reads of an expression. */
+interface Reads {
   readonly values: readonly ForwardedValue[];
   readonly defaults: readonly DefaultValue[];
+}
+
+/**
+ * The inputs and defaults for one parameter read, and `whole`: what the member the read selects is
+ * a member of, each given value read up to the key before the last, or up to the keys read where a
+ * later one is not.
+ */
+interface ParameterRead extends Reads {
+  readonly whole: readonly ForwardedValue[];
 }
 
 /** The member path a read selects, and whether a key after it is one the compile cannot read. */
@@ -93,7 +104,9 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
  * followed through each default the construction leaves taken, whatever else the constructor's
  * code holds: a call, an operator or a member read there does not show that the path selects
  * nothing the native base converts. What a default selects the path of is forwarded whole beside
- * it, for the path may stop at a value the compile cannot read into.
+ * it, for the path may stop at a value the compile cannot read into, and so is what a read of a
+ * parameter selects a member of, up to the key before the last (`receivers`): the `message` of an
+ * `Error` the construction gives is the words each engine writes, as a direct read of it is.
  *
  * Defaults that read one another in a circle (`a = b.x, b = a.y`, a read of a parameter before it
  * is initialized, which throws where it runs) make a path that grows without end where each
@@ -157,7 +170,7 @@ function parameterReads(
   root: DefaultValue,
   parameters: readonly ParameterDeclaration[],
   slots: Slots,
-): ParameterRead | undefined {
+): Reads | undefined {
   const values: ForwardedValue[] = [];
   const defaults: DefaultValue[] = [];
   const source = forwardedRoot(root.value);
@@ -171,6 +184,7 @@ function parameterReads(
     if (!isIdentifier(node) || !readsBinding(node) || noncoercingComparison(node)) continue;
     const read = parameterValues(node, parameters, slots);
     if (read === undefined) return undefined;
+    values.push(...read.whole);
     if (node === source && root.selected) {
       values.push(...read.values.map((each) => continuedValue(each, root)));
       defaults.push(
@@ -232,9 +246,11 @@ function parameterValues(
   const keys = [...selected.keys, ...path.keys];
   const declared = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
   if (parameter.dotDotDotToken !== undefined) {
+    const rest = slots.slice(index);
     return {
       defaults: declared === undefined ? [] : restDefaults(declared),
-      values: restValues(slots.slice(index), keys, path.any),
+      values: restValues(rest, keys, path.any),
+      whole: restReceivers(rest, keys, path.any),
     };
   }
   const given = slots[index] ?? [];
@@ -247,7 +263,11 @@ function parameterValues(
     declared === undefined ? [] : elementDefaults(declared, selected.keys, path, effective);
   if (parameter.initializer !== undefined)
     defaults.push({ any: path.any, keys, value: parameter.initializer, selected: takesDefault });
-  return { defaults, values: given.map((each) => selectedValue(each, keys, path.any)) };
+  return {
+    defaults,
+    values: given.map((each) => selectedValue(each, keys, path.any)),
+    whole: receivers(given, keys, path.any),
+  };
 }
 
 /**
@@ -264,7 +284,7 @@ function restRead(
   const index = parameterIndex(declared, parameters);
   const parameter = parameters[index];
   if (parameter === undefined)
-    return name.text === 'arguments' ? undefined : { defaults: [], values: [] };
+    return name.text === 'arguments' ? undefined : { defaults: [], values: [], whole: [] };
   const element = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
   const rest = element?.parent;
   if (rest === undefined || !isBindingElement(rest) || rest.dotDotDotToken === undefined)
@@ -282,7 +302,11 @@ function restRead(
     parameter.initializer === undefined
       ? []
       : [{ any: true, keys: outer, value: parameter.initializer, selected: false }];
-  return { defaults, values: given.map((each) => selectedValue(each, keys, selection.any)) };
+  return {
+    defaults,
+    values: given.map((each) => selectedValue(each, keys, selection.any)),
+    whole: receivers(given, keys, selection.any),
+  };
 }
 
 /** An array rest's written index, counted from the rest's position; another read, any element. */
@@ -383,6 +407,42 @@ function restValues(rest: Slots, keys: readonly string[], any: boolean): readonl
   if (position === undefined) return rest.flat().map((each) => selectedValue(each, [], any));
   const given = rest[position] ?? [];
   return given.map((each) => selectedValue(each, remaining, any));
+}
+
+/**
+ * What a read selects a member of: each given value read up to the key before the last, or up to
+ * the keys read where a later one is not. A member of a value the compile cannot read into, an
+ * `Error`'s own `message`, is the words each engine writes, which the path alone does not show. A
+ * literal read by one key is read into by the path, which resolves the member it holds.
+ */
+function receivers(
+  given: readonly ForwardedValue[],
+  keys: readonly string[],
+  any: boolean,
+): readonly ForwardedValue[] {
+  if (!any && keys.length === 0) return [];
+  const read = any ? keys : keys.slice(0, -1);
+  return given
+    .filter((each) => any || keys.length > 1 || each.keys.length > 0 || !isLiteral(each.value))
+    .map((each) => selectedValue(each, read, false));
+}
+
+/** What a read of a rest parameter selects a member of: the argument at a position, as `receivers`. */
+function restReceivers(
+  rest: Slots,
+  keys: readonly string[],
+  any: boolean,
+): readonly ForwardedValue[] {
+  if (keys.length < 2 && !(any && keys.length === 1)) return [];
+  return restValues(rest, any ? keys : keys.slice(0, -1), false).filter(
+    (each) => any || keys.length > 2 || each.keys.length > 0 || !isLiteral(each.value),
+  );
+}
+
+/** An object or an array written as a literal, which a path of one key is resolved in. */
+function isLiteral(value: Expression): boolean {
+  const written = unwrapped(value);
+  return isObjectLiteralExpression(written) || isArrayLiteralExpression(written);
 }
 
 /** A canonical array index, as a written key spells it. */
