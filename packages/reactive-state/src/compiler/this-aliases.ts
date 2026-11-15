@@ -20,7 +20,7 @@ import {
 import { readsOf } from './local-module-reads.ts';
 import { bindingIdentifiers } from './scope.ts';
 import { freshReceiverDefault, receiverKey } from './this-defaults.ts';
-import { adjustRestPath, projectedKeys } from './this-rest-defaults.ts';
+import { prependBindingPath } from './this-rest-defaults.ts';
 
 /** Constant aliases of this, including retained members selected by a binding pattern. */
 interface Alias {
@@ -101,10 +101,8 @@ function aliasValue(name: Identifier, state: WalkState): Expression | undefined 
   ) {
     return undefined;
   }
-  if (alias.rest) {
-    adjustRestPath(alias.name, state.path);
-  } else if (alias.projected) {
-    state.path.unshift(...projectedKeys(alias.name));
+  if (alias.projected) {
+    prependBindingPath(alias.name, state.path);
     state.selected = true;
   }
   return alias.value;

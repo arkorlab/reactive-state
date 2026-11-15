@@ -62,27 +62,35 @@ export function bindingSteps(name: Identifier): readonly BindingElement[] {
   return steps;
 }
 
-/** Static member keys projected by a non-rest destructuring binding; `[undefined]` when defaulted. */
-export function projectedKeys(name: Identifier): readonly (string | undefined)[] {
-  const keys: (string | undefined)[] = [];
-  for (const step of bindingSteps(name)) {
-    if (step.initializer !== undefined || step.dotDotDotToken !== undefined) {
-      return [undefined];
+/** Prepends and shifts every destructuring step of `name` onto `path` from innermost to outermost. */
+export function prependBindingPath(name: Identifier, path: (string | undefined)[]): void {
+  const steps = bindingSteps(name);
+  for (let index = steps.length - 1; index >= 0; index -= 1) {
+    const step = steps[index];
+    if (step !== undefined) {
+      prependBindingStep(step, path);
     }
-    keys.push(patternName(step));
   }
-  return keys;
 }
 
-/** Adjusts `path` in place when stepping backward through an unchosen rest container binding. */
-export function adjustRestPath(name: Identifier, path: (string | undefined)[]): void {
-  const step = name.parent;
-  if (!isBindingElement(step)) {
+/** Applies one destructuring `BindingElement` backward onto `path`. */
+function prependBindingStep(step: BindingElement, path: (string | undefined)[]): void {
+  if (step.initializer !== undefined) {
+    path.unshift(undefined);
     return;
   }
+  if (step.dotDotDotToken === undefined) {
+    path.unshift(patternName(step));
+    return;
+  }
+  applyRestStep(step, path);
+}
+
+/** Shifts an array-rest index or rejects excluded object-rest keys at the front of `path`. */
+function applyRestStep(step: BindingElement, path: (string | undefined)[]): void {
+  const first = path[0];
   if (isArrayBindingPattern(step.parent)) {
     const restIndex = step.parent.elements.indexOf(step);
-    const first = path[0];
     if (first === undefined) {
       path.unshift(undefined);
     } else if (restIndex > 0) {
@@ -91,7 +99,6 @@ export function adjustRestPath(name: Identifier, path: (string | undefined)[]): 
     return;
   }
   const excluded = excludedObjectKeys(step);
-  const first = path[0];
   if (first === undefined || excluded === undefined || excluded.has(first)) {
     path.unshift(undefined);
   }
