@@ -7,20 +7,13 @@ import {
   isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isSetAccessorDeclaration,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
   type Node,
-  type ObjectLiteralElementLike,
-  type ObjectLiteralExpression,
   type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
@@ -32,10 +25,13 @@ import { rootOf, targetsOf } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
 import { parameterValue } from './parameter-values.ts';
 import {
+  type Context,
+  type Frame,
   heldConstant,
   literalTruth,
+  objectOrigins,
+  type Origin,
   originKey,
-  propertyKey,
   type ProxyReading,
   sourcePath,
   sourceValue,
@@ -47,27 +43,10 @@ import { writtenBy } from './written.ts';
 
 export type { ProxyReading } from './proxy-values.ts';
 
-interface Frame {
-  readonly fn: Answering;
-  readonly given: readonly Origin[] | undefined;
-}
-
 interface ParameterFrame {
   readonly frame: Frame;
   readonly index: number;
   readonly parameter: ParameterDeclaration;
-}
-
-interface Context extends ProxyReading {
-  readonly calls: ReadonlySet<Node>;
-  readonly frames: readonly Frame[];
-}
-
-interface Origin {
-  readonly value: Expression;
-  readonly keys: readonly string[];
-  readonly context: Context;
-  readonly seen: ReadonlySet<Expression>;
 }
 
 /** Native calls whose result cannot retain the identity of an object they consume. */
@@ -119,9 +98,20 @@ function markVisited(
   return false;
 }
 
-/** Encodes the member projection carried by `origin` without ambiguity across key boundaries. */
+/** Encodes the member projection and spread state carried by `origin` unambiguously. */
 function originStateKey(origin: Origin): string {
-  return origin.keys.map((key) => `${key.length}:${key}`).join(',');
+  const path = origin.keys.map((key) => `${key.length}:${key}`).join(',');
+  if (origin.spread !== true) {
+    return path;
+  }
+  const skipped =
+    origin.excluded === undefined
+      ? ''
+      : [...origin.excluded]
+          .toSorted()
+          .map((key) => `${key.length}:${key}`)
+          .join(',');
+  return `${path}|spread|${skipped}`;
 }
 
 /** Whether the value itself, or the known proxy member of a revocable pair, is a Proxy. */
@@ -181,14 +171,29 @@ function containerOrigins(at: Origin): readonly Origin[] {
   if (isArrayLiteralExpression(value)) {
     const [key, ...rest] = keys;
     const expanded = argumentOrigins(
-      value.elements.map((each) => ({ ...at, keys: [], value: each })),
+      value.elements.map((each) => ({
+        ...at,
+        excluded: undefined,
+        keys: [],
+        spread: undefined,
+        value: each,
+      })),
     );
     if (expanded === undefined) {
       return [];
     }
     const elements = key === undefined ? expanded : [expanded[Number(key)]];
     return elements.flatMap((each) =>
-      each === undefined ? [] : [{ ...each, keys: [...each.keys, ...rest] }],
+      each === undefined
+        ? []
+        : [
+            {
+              ...each,
+              excluded: key === undefined ? undefined : at.excluded,
+              keys: [...each.keys, ...rest],
+              spread: key === undefined ? undefined : at.spread,
+            },
+          ],
     );
   }
   return [];
@@ -303,7 +308,15 @@ function callOrigins(call: CallExpression, at: Origin): readonly Origin[] {
   if (target === undefined || !isAnswering(target) || answersLater(target)) {
     return [];
   }
-  const given = argumentOrigins(call.arguments.map((value) => ({ ...at, keys: [], value })));
+  const given = argumentOrigins(
+    call.arguments.map((value) => ({
+      ...at,
+      excluded: undefined,
+      keys: [],
+      spread: undefined,
+      value,
+    })),
+  );
   const context: Context = {
     ...at.context,
     calls: new Set([...at.context.calls, call]),
@@ -378,66 +391,6 @@ function spreadBinding(
   return isIdentifier(parameter.name) && !bindingChanged(frame.fn, parameter.name, true)
     ? { values: frame.given?.slice(index) }
     : {};
-}
-
-/** Own data entries are measured; an accessor is executed only when its member is selected. */
-function objectOrigins(object: ObjectLiteralExpression, at: Origin): readonly Origin[] {
-  const [key, ...rest] = at.keys;
-  if (key === undefined) {
-    return dataOrigins(object, at);
-  }
-  let setter = false;
-  for (const property of object.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      return [];
-    }
-    const named = propertyKey(property.name, at.context);
-    if (named === undefined) {
-      return [];
-    }
-    if (named !== key) {
-      continue;
-    }
-    if (isSetAccessorDeclaration(property)) {
-      setter = true;
-      continue;
-    }
-    if (isGetAccessorDeclaration(property)) {
-      return returnedBy(property).map((value) => ({ ...at, keys: rest, value }));
-    }
-    return setter ? [] : dataProperty(property, { ...at, keys: rest });
-  }
-  return [];
-}
-
-/** Only surviving data entries are traversed; accessors are not invoked by measurement. */
-function dataOrigins(object: ObjectLiteralExpression, at: Origin): readonly Origin[] {
-  const found: Origin[] = [];
-  const seen = new Set<string>();
-  for (const property of object.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      break;
-    }
-    const key = propertyKey(property.name, at.context);
-    if (key === undefined) {
-      break;
-    }
-    if (!seen.has(key)) {
-      found.push(...dataProperty(property, at));
-      seen.add(key);
-    }
-  }
-  return found;
-}
-
-/** A data entry's value, rather than a deferred accessor or method body. */
-function dataProperty(property: ObjectLiteralElementLike, at: Origin): readonly Origin[] {
-  if (isPropertyAssignment(property)) {
-    return [{ ...at, value: property.initializer }];
-  }
-  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
-    ? [{ ...at, value: property.name }]
-    : [];
 }
 
 /** A logical operator's possible result values, respecting known skipped operands. */
