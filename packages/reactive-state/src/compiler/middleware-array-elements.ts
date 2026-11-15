@@ -172,7 +172,7 @@ export function middlewareArraySlice(
   if (original === undefined) return undefined;
   return middlewareSliceProjection(
     { call, keys, ...original.selected, source: original.source, index, relative },
-    { start: sliceBound, count: nativeIndex, possible: possibleCollection },
+    { start: sliceBound, count: nativeIndex },
   );
 }
 

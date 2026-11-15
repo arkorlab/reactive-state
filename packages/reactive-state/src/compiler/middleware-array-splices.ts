@@ -2,17 +2,20 @@ import {
   type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
-  type Identifier,
-  isArrayLiteralExpression,
   isOmittedExpression,
-  isSpreadElement,
-  type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
-import { framedSourceValues } from './framed-sources.ts';
-import { middlewareLiteralOwners, middlewareStableCopy } from './middleware-array-copy-origins.ts';
+import { framedQuietPrimitive } from './framed-native-evaluation.ts';
+import {
+  type MiddlewareCopyOrigin,
+  middlewareElementOrigin,
+  middlewareInsertedOrigins,
+  middlewareLiteralOwners,
+  middlewareStableCopy,
+  middlewareWholeOrigin,
+} from './middleware-array-copy-arguments.ts';
 
 /** Native shallow-copy slots retain original payloads or inserted argument nodes while stable. */
 
@@ -45,7 +48,6 @@ interface NativeBounds {
     fallback: number,
   ) => number | undefined;
   readonly count: (value: Expression | undefined) => number | undefined;
-  readonly possible?: (elements: readonly Expression[], keys: readonly string[]) => boolean;
 }
 
 interface SpliceWindow {
@@ -59,10 +61,6 @@ interface SliceProjection {
   readonly keys: readonly string[];
   readonly tail: readonly string[];
   readonly slot?: string;
-}
-
-interface SpliceOrigin extends SliceProjection {
-  readonly references: readonly Identifier[];
 }
 
 /** Canonical integer keys select copied slots; negative keys apply only to relative at reads. */
@@ -80,7 +78,7 @@ export function middlewareCopySlotIndex(
 /** Known slice windows map a copied slot back to its original position while the copy is stable. */
 export function middlewareSliceProjection(
   input: SliceCopyInput,
-  bounds: Required<NativeBounds>,
+  bounds: NativeBounds,
 ): SliceProjection | undefined {
   const { call, keys, method, receiver, given, applied, source, index, relative } = input;
   if (method === 'toSpliced') {
@@ -91,9 +89,8 @@ export function middlewareSliceProjection(
     return spliced.length === 1 ? spliced[0] : undefined;
   }
   const tail = keys.slice(1);
-  if (!middlewareStableCopy(call, receiver, given))
-    return unknownSliceOrigin(receiver, source, index, { tail, possible: bounds.possible });
-  if (method !== 'slice') return reorderedSliceOrigin(input, tail, bounds.possible);
+  if (!middlewareStableCopy(call, receiver, given)) return wholeSliceOrigin(receiver, index, tail);
+  if (method !== 'slice') return reorderedSliceOrigin(input, tail);
   const prefix = given === undefined ? undefined : framedArgumentPrefix(call, given, 2);
   const definite = prefix !== undefined && !prefix.unknown && prefix.alternatives === undefined;
   const start = definite ? bounds.start(prefix.values[0], source.elements.length, 0) : undefined;
@@ -101,7 +98,7 @@ export function middlewareSliceProjection(
     ? bounds.start(prefix.values[1], source.elements.length, source.elements.length)
     : undefined;
   if (start === undefined || end === undefined)
-    return unknownSliceOrigin(receiver, source, index, { tail, possible: bounds.possible });
+    return unknownSliceOrigin(receiver, source, index, { relative, tail });
   const length = Math.max(end - start, 0);
   const offset = relative && index < 0 ? length + index : index;
   const position = start + offset;
@@ -115,7 +112,7 @@ export function middlewareSliceProjection(
 export function middlewareArraySplice(
   input: SpliceInput,
   bounds: NativeBounds,
-): readonly SpliceOrigin[] {
+): readonly MiddlewareCopyOrigin[] {
   const index = middlewareCopySlotIndex(input.keys[0], input.relative);
   if (index === undefined) return [];
   const { call, given, length, receiver } = input;
@@ -138,35 +135,42 @@ export function middlewareArraySplice(
   return selectedSpliceSlot(input, index, { start, removed, inserted: args.slice(2) });
 }
 
-/** Opaque bounds or unstable receivers retain possible collections without an exact slot offset. */
+/** Unstable copy arguments or receivers retain the whole original array without a negative slot. */
+function wholeSliceOrigin(
+  receiver: Expression,
+  index: number,
+  tail: readonly string[],
+): SliceProjection {
+  const base = { of: receiver, keys: [], tail };
+  return index < 0 ? base : { ...base, slot: String(index) };
+}
+
+/** Opaque bounds on a stable literal retain the receiver whenever a non-hole slot can fit. */
 function unknownSliceOrigin(
   receiver: Expression,
   source: ArrayLiteralExpression,
   index: number,
-  options: {
-    readonly tail: readonly string[];
-    readonly possible: (elements: readonly Expression[], keys: readonly string[]) => boolean;
-  },
+  options: { readonly relative: boolean; readonly tail: readonly string[] },
 ): SliceProjection | undefined {
-  if (!options.possible(source.elements, [])) return undefined;
-  const base = { of: receiver, keys: [], tail: options.tail };
-  return index < 0 ? base : { ...base, slot: String(index) };
+  const length = source.elements.length;
+  const inRange = index >= 0 ? index < length : options.relative && length + index >= 0;
+  if (!inRange || source.elements.every((element) => knownScalarElement(element))) return undefined;
+  return wholeSliceOrigin(receiver, index, options.tail);
 }
 
-/** Reversal fixes its copied position; sorting retains possible original payloads without assuming order. */
+/** Reversal fixes its copied position; sorting retains the original array without assuming order. */
 function reorderedSliceOrigin(
   input: SliceCopyInput,
   tail: readonly string[],
-  possible: (elements: readonly Expression[], keys: readonly string[]) => boolean,
 ): SliceProjection | undefined {
   const { method, receiver, source, index, relative } = input;
   const length = source.elements.length;
   const offset = relative && index < 0 ? length + index : index;
   if (offset < 0 || offset >= length) return undefined;
   if (method === 'toSorted')
-    return possible(source.elements, [])
-      ? { of: receiver, keys: [], tail, slot: String(offset) }
-      : undefined;
+    return source.elements.every((element) => knownScalarElement(element))
+      ? undefined
+      : { of: receiver, keys: [], tail, slot: String(offset) };
   const position = length - 1 - offset;
   const element = source.elements[position];
   return element === undefined || isOmittedExpression(element)
@@ -179,7 +183,7 @@ function selectedSpliceSlot(
   input: SpliceInput,
   index: number,
   window: SpliceWindow,
-): readonly SpliceOrigin[] {
+): readonly MiddlewareCopyOrigin[] {
   const { receiver, keys, length, relative } = input;
   const { start, removed, inserted } = window;
   const tail = keys.slice(1);
@@ -189,7 +193,7 @@ function selectedSpliceSlot(
   const slot = String(offset);
   if (offset >= start && offset < start + inserted.length) {
     const value = inserted[offset - start];
-    return value === undefined ? [] : [{ ...elementOrigin(value, tail), slot }];
+    return value === undefined ? [] : [{ ...middlewareElementOrigin(value, tail), slot }];
   }
   const position = offset < start ? offset : offset - inserted.length + removed;
   return [
@@ -204,106 +208,24 @@ function selectedSpliceSlot(
 }
 
 /** Opaque bounds, spreads or side-effecting arguments retain receiver and inserted candidates. */
-function unknownSpliceOrigins(input: SpliceInput, index: number): readonly SpliceOrigin[] {
+function unknownSpliceOrigins(input: SpliceInput, index: number): readonly MiddlewareCopyOrigin[] {
   const tail = input.keys.slice(1);
   const slot = index < 0 ? undefined : String(index);
   const origins = [
-    wholeOrigin(input.receiver, tail),
-    ...insertedOrigins(input.call, input.given, input.applied, tail),
+    middlewareWholeOrigin(input.receiver, tail),
+    ...middlewareInsertedOrigins(
+      { call: input.call, given: input.given, applied: input.applied, tail },
+      'splice',
+    ),
   ];
   return slot === undefined ? origins : origins.map((origin) => ({ ...origin, slot }));
 }
 
-/** Candidate inserted values come from arguments past the two bounds or unresolved spread tuples. */
-function insertedOrigins(
-  call: CallExpression,
-  given: readonly Expression[] | undefined,
-  applied: Expression | undefined,
-  tail: readonly string[],
-): readonly SpliceOrigin[] {
-  if (given === undefined)
-    return applied === undefined ? [] : spreadOrigins(applied, tail, new Set());
-  const prefix = framedArgumentPrefix(call, given, Infinity);
-  if (!prefix.unknown && prefix.alternatives === undefined)
-    return prefix.values.slice(2).map((value) => elementOrigin(value, tail));
-  return mixedArgumentOrigins(call, given, tail);
-}
-
-/** Arguments after an unresolved spread may land in the inserted range regardless of written index. */
-function mixedArgumentOrigins(
-  call: CallExpression,
-  given: readonly Expression[],
-  tail: readonly string[],
-): readonly SpliceOrigin[] {
-  const origins: SpliceOrigin[] = [];
-  const state = { position: 0, afterSpread: false };
-  for (const argument of given) {
-    if (!isSpreadElement(argument)) {
-      appendInserted(origins, [argument], state, tail);
-      continue;
-    }
-    const expanded = framedArgumentPrefix(call, [argument], Infinity);
-    if (!expanded.unknown && expanded.alternatives === undefined) {
-      appendInserted(origins, expanded.values, state, tail);
-      continue;
-    }
-    state.afterSpread = true;
-    origins.push(...spreadOrigins(argument.expression, tail, new Set()));
-  }
-  return origins;
-}
-
-/** Only argument slots at or after index two, or shifted past an opaque spread, insert items. */
-function appendInserted(
-  origins: SpliceOrigin[],
-  values: readonly Expression[],
-  state: { position: number; afterSpread: boolean },
-  tail: readonly string[],
-): void {
-  for (const value of values) {
-    if (state.afterSpread || state.position >= 2) origins.push(elementOrigin(value, tail));
-    state.position += 1;
-  }
-}
-
-/** Unresolved spread expressions keep whole array containers and literal branch elements. */
-function spreadOrigins(
-  expression: Expression,
-  tail: readonly string[],
-  seen: Set<Node>,
-): readonly SpliceOrigin[] {
-  const value = unwrapped(expression);
-  if (seen.has(value)) return [];
-  seen.add(value);
-  if (isArrayLiteralExpression(value)) return arraySpreadOrigins(value.elements, tail, seen);
-  const branches = framedSourceValues(value);
-  if (branches !== undefined)
-    return branches.flatMap((branch) => spreadOrigins(branch, tail, seen));
-  return [wholeOrigin(expression, tail)];
-}
-
-/** Literal spread arrays contribute each non-hole element and recurse into nested spreads. */
-function arraySpreadOrigins(
-  elements: readonly Expression[],
-  tail: readonly string[],
-  seen: Set<Node>,
-): readonly SpliceOrigin[] {
-  const origins: SpliceOrigin[] = [];
-  for (const element of elements) {
-    if (isOmittedExpression(element)) continue;
-    if (isSpreadElement(element)) origins.push(...spreadOrigins(element.expression, tail, seen));
-    else origins.push(elementOrigin(element, tail));
-  }
-  return origins;
-}
-
-/** An inserted argument supplies the selected element directly under the remaining member tail. */
-function elementOrigin(of: Expression, tail: readonly string[]): SpliceOrigin {
-  return { of, keys: tail, tail, references: middlewareLiteralOwners(of) };
-}
-
-/** An array container with an unknown selected slot retains its whole collection identity. */
-function wholeOrigin(expression: Expression, tail: readonly string[]): SpliceOrigin {
-  const of = unwrapped(expression);
-  return { of, keys: [], tail, references: middlewareLiteralOwners(of) };
+/** Omitted slots and quiet primitive literals hold no mutable object identity on a stable copy. */
+function knownScalarElement(element: Expression): boolean {
+  return (
+    isOmittedExpression(element) ||
+    element.kind === SyntaxKind.BigIntLiteral ||
+    framedQuietPrimitive(element)
+  );
 }
