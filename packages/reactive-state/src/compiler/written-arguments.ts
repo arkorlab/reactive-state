@@ -193,25 +193,30 @@ function receivesReflectSet(argument: Expression, index: number, shifted: boolea
   );
 }
 
-/** A global function bound through `.bind(...)` and later called with trailing arguments. */
+/** A global function bound through `.bind(...)` chains and later called with trailing arguments. */
 function boundGlobalCall(
   callee: Expression,
   trailing: readonly CallArgument[],
 ): GlobalCall | undefined {
-  if (!isCallExpression(callee)) {
-    return undefined;
+  const segments: (readonly CallArgument[])[] = [trailing];
+  const seen = new Set<Expression>();
+  let current = callee;
+  while (isCallExpression(current) && !seen.has(current)) {
+    seen.add(current);
+    const binder = unwrapped(current.expression);
+    if (
+      (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
+      memberNameOf(binder) !== 'bind'
+    ) {
+      return undefined;
+    }
+    segments.push(asCallArguments(current.arguments.slice(1)));
+    current = followedValue(binder.expression);
   }
-  const binder = unwrapped(callee.expression);
-  if (
-    (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
-    memberNameOf(binder) !== 'bind'
-  ) {
-    return undefined;
-  }
-  const target = globalPathOf(followedValue(binder.expression))?.join('.');
-  return target === undefined
+  const target = globalPathOf(current)?.join('.');
+  return target === undefined || segments.length === 1
     ? undefined
-    : { given: [...asCallArguments(callee.arguments.slice(1)), ...trailing], path: target };
+    : { given: segments.toReversed().flat(), path: target };
 }
 
 /** The arguments written for `apply`, or an unknown-list spread where the code does not write them apart. */

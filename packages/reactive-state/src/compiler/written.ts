@@ -26,6 +26,7 @@ import {
   argumentAt,
   asCallArguments,
   type CallArgument,
+  followedValue,
   globalCallOf,
   memberNameOf,
   reflectSetReceivers,
@@ -238,6 +239,19 @@ export function writtenBy(node: Node): Node | undefined {
  * What a call writes beside its receiver: the event `dispatchEvent` is given, whose target and
  * cancellation flags a dispatch changes, or the buffers a structured clone's transfer list detaches.
  */
+/** The argument expressions supplied to `call`, including prebound and applied arguments. */
+export function writtenCallValues(call: CallExpression): readonly Expression[] {
+  const globalCall = globalCallOf(call);
+  if (globalCall !== undefined) {
+    return globalCall.given.map((each) => each.expression);
+  }
+  const lent = borrowedOf(call) ?? boundOf(call);
+  if (lent !== undefined) {
+    return lent.given.map((each) => each.expression);
+  }
+  return asCallArguments(call.arguments).map((each) => each.expression);
+}
+
 export function writtenArgumentBy(node: Node): readonly Node[] {
   if (!isCallExpression(node)) {
     return [];
@@ -372,28 +386,30 @@ function borrowedOf(call: CallExpression): LentMethod | undefined {
 }
 
 /**
- * The method a name `call` calls holds bound, and what it is bound to — `push` of `const push =
- * items.push.bind(items)`, of `Array.prototype.push.bind(items)` — none of another call.
+ * The method `call` holds bound through `.bind(...)`, and what its first bind bound `this` to —
+ * `push` of `const push = items.push.bind(items)` or `Array.prototype.push.bind(items)`.
  */
 function boundOf(call: CallExpression): LentMethod | undefined {
-  const callee = unwrapped(call.expression);
-  const declared = isIdentifier(callee) ? initializerOf(callee) : undefined;
-  const binding = declared === undefined ? undefined : unwrapped(declared);
-  if (binding === undefined || !isCallExpression(binding)) {
-    return undefined;
+  const segments: (readonly CallArgument[])[] = [asCallArguments(call.arguments)];
+  const seen = new Set<Expression>();
+  let current = followedValue(call.expression);
+  let receiver: Expression | undefined;
+  while (isCallExpression(current) && !seen.has(current)) {
+    seen.add(current);
+    const binder = unwrapped(current.expression);
+    if (
+      (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
+      memberNameOf(binder) !== 'bind'
+    ) {
+      return undefined;
+    }
+    receiver = current.arguments[0];
+    segments.push(asCallArguments(current.arguments.slice(1)));
+    current = followedValue(binder.expression);
   }
-  const binder = unwrapped(binding.expression);
-  const named =
-    isPropertyAccessExpression(binder) || isElementAccessExpression(binder)
-      ? memberNameOf(binder)
-      : undefined;
-  return named === 'bind' &&
-    (isPropertyAccessExpression(binder) || isElementAccessExpression(binder))
-    ? lentOf(binder.expression, binding.arguments[0], [
-        ...asCallArguments(binding.arguments.slice(1)),
-        ...asCallArguments(call.arguments),
-      ])
-    : undefined;
+  return segments.length === 1
+    ? undefined
+    : lentOf(current, receiver, segments.toReversed().flat());
 }
 
 /** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
