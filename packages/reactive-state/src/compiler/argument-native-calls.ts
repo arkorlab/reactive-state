@@ -72,20 +72,18 @@ export function classifyNativeInvocation(
   path: readonly string[],
   calleeOf: CalleeLookup,
 ): NativeDecision {
-  const [root = ''] = path;
   const named = path.join('.');
-  if (
-    root === 'WebAssembly' ||
-    UNSAFE_NATIVES.has(named) ||
-    path.includes('prototype') ||
-    path.at(-1) === 'call' ||
-    path.at(-1) === 'apply'
-  ) {
+  if (isUnsafeNativePath(named, path)) {
     return { kind: 'rejected' };
+  }
+  const streamConstructor = STREAM_CONSTRUCTORS.has(named);
+  const slot = nativeCallbackSlot(node, named, path);
+  if (!streamConstructor && slot === undefined) {
+    return { kind: 'accepted' };
   }
   const given = isTaggedTemplateExpression(node) ? tagArguments(node) : (node.arguments ?? []);
   const expanded = expandNativeArguments(given);
-  if (STREAM_CONSTRUCTORS.has(named)) {
+  if (streamConstructor) {
     return {
       kind:
         expanded.values.length === 0 && expanded.unresolvedAt === undefined
@@ -93,18 +91,38 @@ export function classifyNativeInvocation(
           : 'rejected',
     };
   }
-  const slot = nativeCallbackSlot(node, named, path);
-  if (slot === undefined) {
-    return { kind: 'accepted' };
-  }
+  return slot === undefined
+    ? { kind: 'accepted' }
+    : classifyExpandedSlot(expanded, slot, named, calleeOf);
+}
+
+/** Rejects reflective, prototype, borrowed, eval and WebAssembly global paths. */
+function isUnsafeNativePath(named: string, path: readonly string[]): boolean {
+  const [root = ''] = path;
+  const tail = path.at(-1);
+  return (
+    root === 'WebAssembly' ||
+    UNSAFE_NATIVES.has(named) ||
+    path.includes('prototype') ||
+    tail === 'call' ||
+    tail === 'apply'
+  );
+}
+
+/** Inspects `slot` on expanded native arguments after checking for covering unresolved spreads. */
+function classifyExpandedSlot(
+  expanded: ExpandedArguments,
+  slot: number,
+  named: string,
+  calleeOf: CalleeLookup,
+): NativeDecision {
   if (expanded.unresolvedAt !== undefined && expanded.unresolvedAt <= slot) {
     return { kind: 'rejected' };
   }
   const callback = expanded.values[slot];
-  if (callback === undefined || callback.kind === SyntaxKind.OmittedExpression) {
-    return { kind: 'accepted' };
-  }
-  return classifyNativeCallback(callback, named, calleeOf);
+  return callback === undefined || callback.kind === SyntaxKind.OmittedExpression
+    ? { kind: 'accepted' }
+    : classifyNativeCallback(callback, named, calleeOf);
 }
 
 /** Native tag strings are present before any substitutions. */

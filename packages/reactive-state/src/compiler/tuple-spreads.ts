@@ -12,6 +12,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
+  type SourceFile,
   type VariableDeclaration,
 } from 'typescript/ast';
 
@@ -20,7 +21,9 @@ import { frameDeclarationOf } from './framed-bindings.ts';
 import { readsBinding } from './scope.ts';
 import { isTypeSyntax } from './type-syntax.ts';
 
-/** Unmutated constant tuple-spread resolution shared across call-argument analyses. */
+/** Cached unmutated constant tuple-spread resolution shared across call-argument analyses. */
+
+const NON_SPREAD_DECLARATIONS = new WeakMap<SourceFile, ReadonlySet<Node>>();
 
 /** An inline array literal, or a const array literal read exclusively as a spread operand. */
 export function unmutatedTuple(expression: Expression): ArrayLiteralExpression | undefined {
@@ -37,7 +40,8 @@ export function unmutatedTuple(expression: Expression): ArrayLiteralExpression |
     return undefined;
   }
   const initial = unwrapped(declared.initializer);
-  return isArrayLiteralExpression(initial) && spreadOnlyReads(declared, declared.name)
+  return isArrayLiteralExpression(initial) &&
+    !nonSpreadDeclarationsIn(declared.getSourceFile()).has(declared)
     ? initial
     : undefined;
 }
@@ -69,28 +73,46 @@ function constVariableDeclaration(name: Identifier): VariableDeclaration | undef
     : undefined;
 }
 
-/** Whether every runtime binding reference to `declared` in its file is a spread operand. */
-function spreadOnlyReads(declared: Node, boundName: Identifier): boolean {
-  const pending: Node[] = [declared.getSourceFile()];
+/** Indexes declarations referenced outside a spread operand once per `file`. */
+function nonSpreadDeclarationsIn(file: SourceFile): ReadonlySet<Node> {
+  const cached = NON_SPREAD_DECLARATIONS.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const nonSpread = new Set<Node>();
+  const pending: Node[] = [file];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     if (isTypeSyntax(current)) {
       continue;
     }
-    if (
-      current !== boundName &&
-      isIdentifier(current) &&
-      current.text === boundName.text &&
-      readsBinding(current) &&
-      frameDeclarationOf(current) === declared &&
-      !isSpreadOperand(current)
-    ) {
-      return false;
-    }
+    recordNonSpreadReference(current, nonSpread);
     current.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return true;
+  NON_SPREAD_DECLARATIONS.set(file, nonSpread);
+  return nonSpread;
+}
+
+/** Marks `node`'s resolved declaration when `node` references a binding outside `...node`. */
+function recordNonSpreadReference(node: Node, nonSpread: Set<Node>): void {
+  if (
+    !isIdentifier(node) ||
+    isOwnVariableName(node) ||
+    !readsBinding(node) ||
+    isSpreadOperand(node)
+  ) {
+    return;
+  }
+  const declared = frameDeclarationOf(node);
+  if (declared !== undefined) {
+    nonSpread.add(declared);
+  }
+}
+
+/** Whether `node` is the bound identifier of its enclosing `VariableDeclaration`. */
+function isOwnVariableName(node: Identifier): boolean {
+  return isVariableDeclaration(node.parent) && node.parent.name === node;
 }
 
 /** Whether `node` (past parentheses and type wrappers) is the direct operand of `...node`. */
