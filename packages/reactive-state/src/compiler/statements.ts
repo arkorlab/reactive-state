@@ -10,12 +10,15 @@ import {
   isArrowFunction,
   isBindingElement,
   isCallExpression,
+  isExpressionWithTypeArguments,
   isFunctionExpression,
   isIdentifier,
   isObjectBindingPattern,
   isOmittedExpression,
   isParenthesizedExpression,
+  isTypeAssertion,
   isVariableStatement,
+  type Node,
   NodeFlags,
   type SourceFile,
   type Statement,
@@ -23,8 +26,11 @@ import {
   type VariableStatement,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
+import { runsLater } from './deferred-syntax.ts';
 import type { Fail } from './errors.ts';
 import { INTRINSIC } from './imports.ts';
+import { isTypeSyntax } from './type-syntax.ts';
 
 /**
  * The statements that declare state, in a component or in a custom hook: `useReactiveState` itself,
@@ -76,6 +82,12 @@ export interface Reading {
 const STATE_ALONE =
   'State is declared on its own, with `const`: `const [value, setValue] = useReactiveState(initial)`, or `const [value] = …` where the state is read alone.';
 
+interface CalledState {
+  readonly call: CallExpression;
+  readonly callee: Identifier;
+  readonly intrinsic: boolean;
+}
+
 /**
  * The state `statement` declares, or `null` where it declares none. A statement that declares one in
  * any other form is refused.
@@ -89,23 +101,85 @@ export function stateStatementOf(
     return null;
   }
   const [declaration, ...others] = statement.declarationList.declarations;
-  const call = declaration?.initializer;
+  const direct =
+    declaration !== undefined && others.length === 0 && isConstant(statement)
+      ? directStateCall(declaration.initializer, reading)
+      : undefined;
+  const nested = nestedStateCall(statement.declarationList, reading, direct?.call);
+  if (nested !== undefined) {
+    return fail(nested.intrinsic ? STATE_ALONE : hookAlone(nested.callee.text), statement);
+  }
+  return direct === undefined || declaration === undefined
+    ? null
+    : declaredStateOf(statement, declaration, direct, fail);
+}
+
+/** The state or custom-hook call an initializer writes directly: `useReactiveState(…)` or `useHook(…)`. */
+function directStateCall(
+  initializer: Expression | undefined,
+  reading: Reading,
+): CalledState | undefined {
   if (
-    declaration === undefined ||
-    call === undefined ||
-    !isCallExpression(call) ||
-    !isIdentifier(call.expression)
+    initializer === undefined ||
+    !isCallExpression(initializer) ||
+    initializer.questionDotToken !== undefined
   ) {
-    return null;
+    return undefined;
   }
-  const callee = call.expression;
+  const { expression } = initializer;
+  if (!isIdentifier(expression)) {
+    return undefined;
+  }
+  const intrinsic = expression.text === INTRINSIC;
+  return intrinsic || reading.isHook(expression)
+    ? { call: initializer, callee: expression, intrinsic }
+    : undefined;
+}
+
+/** Any synchronous state or custom-hook call within `root`, other than `allowed` itself. */
+function nestedStateCall(
+  root: Node,
+  reading: Reading,
+  allowed: CallExpression | undefined,
+): CalledState | undefined {
+  let found: CalledState | undefined;
+  const visit = (node: Node): void => {
+    if (found !== undefined || isTypeSyntax(node) || runsLater(node)) {
+      return;
+    }
+    if (isCallExpression(node) && node !== allowed) {
+      found = calledState(node, reading);
+      if (found !== undefined) {
+        return;
+      }
+    }
+    node.forEachChild(visit);
+  };
+  root.forEachChild(visit);
+  return found;
+}
+
+/** The state or custom-hook call `call` makes, unwrapping parentheses or assertions on its callee. */
+function calledState(call: CallExpression, reading: Reading): CalledState | undefined {
+  let callee = unwrapped(call.expression);
+  while (isExpressionWithTypeArguments(callee) || isTypeAssertion(callee)) {
+    callee = unwrapped(callee.expression);
+  }
+  if (!isIdentifier(callee)) {
+    return undefined;
+  }
   const intrinsic = callee.text === INTRINSIC;
-  if (!intrinsic && !reading.isHook(callee)) {
-    return null;
-  }
-  if (others.length > 0 || !isConstant(statement, reading.sourceFile)) {
-    return fail(intrinsic ? STATE_ALONE : hookAlone(callee.text), statement);
-  }
+  return intrinsic || reading.isHook(callee) ? { call, callee, intrinsic } : undefined;
+}
+
+/** The validated `StateStatement` of a single `const` declarator whose initializer is `direct`. */
+function declaredStateOf(
+  statement: VariableStatement,
+  declaration: VariableDeclaration,
+  direct: CalledState,
+  fail: Fail,
+): StateStatement {
+  const { call, callee, intrinsic } = direct;
   if (!intrinsic) {
     return {
       binding: hookBindingOf(declaration.name, callee.text, fail),
