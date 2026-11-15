@@ -9,6 +9,8 @@ import {
   isCallExpression,
   isClassExpression,
   isConditionalExpression,
+  isForInStatement,
+  isForOfStatement,
   isFunctionExpression,
   isIdentifier,
   isNewExpression,
@@ -33,9 +35,9 @@ import { readsOf } from './local-module-reads.ts';
 import { constantValue } from './numbers.ts';
 import { parameterValue } from './parameter-values.ts';
 import {
+  type Context,
   type Frame,
   type Origin,
-  type ProxyReading,
   sourcePath,
   sourceValue,
   writtenBefore,
@@ -49,6 +51,12 @@ export interface ParameterFrame {
   readonly frame: Frame;
   readonly index: number;
   readonly parameter: ParameterDeclaration;
+}
+
+interface PresenceState {
+  readonly context: Context;
+  readonly nullable: boolean;
+  readonly seen: ReadonlySet<Expression>;
 }
 
 /** Assignment operators whose right-hand expression can become the target binding's value. */
@@ -242,61 +250,176 @@ function argumentPresence(given: Origin): 'defined' | 'possible' | 'undefined' {
   if (given.keys.length > 0) {
     return 'possible';
   }
-  const value = sourceValue(given.value, given.context);
-  if (isVoidExpression(value) || globalOf(value) === 'undefined') {
+  if (guaranteedUndefined(given, new Set())) {
     return 'undefined';
   }
-  return guaranteedDefined(value, given.context, new Set(), true) ? 'defined' : 'possible';
+  const defined = guaranteedDefined(given.value, {
+    context: given.context,
+    nullable: true,
+    seen: new Set(),
+  });
+  return defined ? 'defined' : 'possible';
 }
 
-/** Checks whether `node` never evaluates to `undefined` (or `null` when `!nullable`). */
-function guaranteedDefined(
-  node: Expression,
-  reading: ProxyReading,
-  seen: ReadonlySet<Expression>,
-  nullable: boolean,
-): boolean {
-  const value = sourceValue(node, reading);
+/** Checks whether `given` evaluates to `undefined` on every path across active parameter frames. */
+function guaranteedUndefined(given: Origin, seen: ReadonlySet<Expression>): boolean {
+  if (given.keys.length > 0) {
+    return false;
+  }
+  const direct = unwrapped(given.value);
+  const value =
+    isIdentifier(direct) && parameterFrame(direct, given.context.frames) !== undefined
+      ? direct
+      : sourceValue(direct, given.context);
   if (seen.has(value)) {
     return false;
   }
-  const following = new Set([...seen, value]);
-  if (constantValue(value) !== undefined || nonUndefinedLeaf(value, nullable)) {
+  if (isVoidExpression(value) || globalOf(value) === 'undefined') {
     return true;
   }
-  if (isConditionalExpression(value)) {
+  return isIdentifier(value) && parameterUndefined(value, given.context, new Set([...seen, value]));
+}
+
+/** Checks whether a parameter reference `name` evaluates to `undefined` on every path. */
+function parameterUndefined(
+  name: Identifier,
+  context: Context,
+  seen: ReadonlySet<Expression>,
+): boolean {
+  const binding = parameterFrame(name, context.frames);
+  if (binding === undefined || !isIdentifier(binding.parameter.name)) {
+    return false;
+  }
+  const { frame, index, parameter } = binding;
+  const scoped = frameContextOf(context, frame);
+  const replaced = parameterValue(frame.fn, parameter.name, name);
+  if (replaced !== undefined) {
+    return guaranteedUndefined({ context: scoped, keys: [], seen, value: replaced.value }, seen);
+  }
+  if (
+    parameter.dotDotDotToken !== undefined ||
+    parameterReassigned(frame.fn, parameter.name) ||
+    frame.given === undefined
+  ) {
+    return false;
+  }
+  const given = frame.given[index];
+  if (given === undefined || guaranteedUndefined(given, seen)) {
     return (
-      guaranteedDefined(value.whenTrue, reading, following, nullable) &&
-      guaranteedDefined(value.whenFalse, reading, following, nullable)
+      parameter.initializer === undefined ||
+      guaranteedUndefined({ context: scoped, keys: [], seen, value: parameter.initializer }, seen)
     );
   }
-  if (isBinaryExpression(value)) {
-    return guaranteedDefinedBinary(value, reading, following, nullable);
+  return false;
+}
+
+/** Checks whether `node` never evaluates to `undefined` (or `null` when `!state.nullable`). */
+function guaranteedDefined(node: Expression, state: PresenceState): boolean {
+  const direct = unwrapped(node);
+  const value =
+    isIdentifier(direct) && parameterFrame(direct, state.context.frames) !== undefined
+      ? direct
+      : sourceValue(direct, state.context);
+  if (state.seen.has(value)) {
+    return false;
   }
-  return isCallExpression(value) && DEFINED_CALLS.has(sourcePath(value.expression, reading) ?? '');
+  const next: PresenceState = { ...state, seen: new Set([...state.seen, value]) };
+  if (constantValue(value) !== undefined || nonUndefinedLeaf(value, state.nullable)) {
+    return true;
+  }
+  if (isIdentifier(value)) {
+    return parameterDefined(value, next);
+  }
+  if (isConditionalExpression(value)) {
+    return guaranteedDefined(value.whenTrue, next) && guaranteedDefined(value.whenFalse, next);
+  }
+  if (isBinaryExpression(value)) {
+    return guaranteedDefinedBinary(value, next);
+  }
+  return (
+    isCallExpression(value) && DEFINED_CALLS.has(sourcePath(value.expression, state.context) ?? '')
+  );
+}
+
+/** Checks whether a parameter reference `name` never evaluates to `undefined` (or `null`). */
+function parameterDefined(name: Identifier, state: PresenceState): boolean {
+  const binding = parameterFrame(name, state.context.frames);
+  if (binding === undefined || !isIdentifier(binding.parameter.name)) {
+    return false;
+  }
+  const { frame, index, parameter } = binding;
+  const scoped = { ...state, context: frameContextOf(state.context, frame) };
+  const replaced = parameterValue(frame.fn, parameter.name, name);
+  if (replaced !== undefined) {
+    return guaranteedDefined(replaced.value, scoped);
+  }
+  if (parameterReassigned(frame.fn, parameter.name)) {
+    return false;
+  }
+  if (parameter.dotDotDotToken !== undefined) {
+    return true;
+  }
+  return incomingParameterDefined(frame, index, parameter.initializer, scoped);
+}
+
+/** Checks whether an unchanged parameter's incoming argument and default are guaranteed defined. */
+function incomingParameterDefined(
+  frame: Frame,
+  index: number,
+  initializer: Expression | undefined,
+  state: PresenceState,
+): boolean {
+  const defaultDefined = initializer !== undefined && guaranteedDefined(initializer, state);
+  if (frame.given === undefined) {
+    return state.nullable && defaultDefined;
+  }
+  const given = frame.given[index];
+  if (given === undefined || guaranteedUndefined(given, state.seen)) {
+    return defaultDefined;
+  }
+  const givenDefined =
+    given.keys.length === 0 && guaranteedDefined(given.value, { ...state, context: given.context });
+  return givenDefined || (state.nullable && defaultDefined);
+}
+
+/** Whether `fn` writes to `declared` or declares an initialized or loop-head `var` of its name. */
+function parameterReassigned(fn: Answering, declared: Identifier): boolean {
+  if (bindingChanged(fn, declared)) {
+    return true;
+  }
+  const declarations = fn.body === undefined ? [] : hoistedIn([fn.body]);
+  return declarations.some(
+    (each) =>
+      isIdentifier(each.name) &&
+      each.name.text === declared.text &&
+      (each.initializer !== undefined ||
+        isForInStatement(each.parent.parent) ||
+        isForOfStatement(each.parent.parent)),
+  );
+}
+
+/** Trims `context.frames` to `frame` and its enclosing callers when evaluating `frame`'s code. */
+function frameContextOf(context: Context, frame: Frame): Context {
+  const index = context.frames.lastIndexOf(frame);
+  return index === -1 ? context : { ...context, frames: context.frames.slice(0, index + 1) };
 }
 
 /** Checks binary operators whose result is guaranteed non-`undefined`. */
-function guaranteedDefinedBinary(
-  value: BinaryExpression,
-  reading: ProxyReading,
-  seen: Set<Expression>,
-  nullable: boolean,
-): boolean {
+function guaranteedDefinedBinary(value: BinaryExpression, state: PresenceState): boolean {
   const kind = value.operatorToken.kind;
   if (kind === SyntaxKind.CommaToken || kind === SyntaxKind.BarBarToken) {
-    return guaranteedDefined(value.right, reading, seen, nullable);
+    return guaranteedDefined(value.right, state);
   }
   if (kind === SyntaxKind.QuestionQuestionToken) {
     return (
-      guaranteedDefined(value.left, reading, seen, false) ||
-      guaranteedDefined(value.right, reading, seen, nullable)
+      guaranteedDefined(value.left, { ...state, nullable: false }) ||
+      guaranteedDefined(value.right, state)
     );
   }
   return (
     kind === SyntaxKind.AmpersandAmpersandToken &&
-    guaranteedDefined(value.left, reading, seen, nullable) &&
-    guaranteedDefined(value.right, reading, seen, nullable)
+    guaranteedDefined(value.left, state) &&
+    guaranteedDefined(value.right, state)
   );
 }
 
