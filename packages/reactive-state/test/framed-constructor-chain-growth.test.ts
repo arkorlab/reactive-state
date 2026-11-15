@@ -7,16 +7,16 @@ import { describe, expect, it } from 'vitest';
  * A chain of local subclasses whose constructors each pass on what they read of their parameter,
  * `super(options.value)`, hands the values one layer forwards to the next: each layer forwards
  * what it was given, beside what it reads of it. A value reached two ways is forwarded once, so a
- * chain forwards as many values as there are different ones, and more than a limit of them is read
- * as a program the compile cannot follow, which keeps every argument of the construction possible
- * (the argument `{ value: error }` stays among what is forwarded). Before, each layer doubled the
- * values it was given, and twenty layers of a class hierarchy made 2^20 of them: the compile ran
- * out of stack. A program read as one the compile cannot follow is refused where an `Error` may
- * reach the message through any member of an argument, at any depth: a wrapper nested as deep as
- * the chain (`{ inner: { value: { inner: { value: error } } } }`) is refused, as it is where the
- * chain is followed, and the same wrapper of a text is not. Each row runs in a process of its own,
- * killed after a few seconds. The process starts in the package's own directory, where
- * `typescript/ast` is the package's TypeScript, whichever directory the tests are run from.
+ * chain forwards as many values as there are different ones (before, each layer doubled the values
+ * it was given, and twenty layers of a class hierarchy made 2^20 of them: the compile ran out of
+ * stack). More than a limit of them is a program no constructor is written as, and it is refused
+ * outright, whatever the construction supplies and whatever a default holds: a wrapper nested as
+ * deep as the chain (`{ inner: { value: { inner: { value: error } } } }`) is refused, and so is an
+ * `Error` that a default of the last class alone holds. A chain under the limit is followed: its
+ * argument stays among what is forwarded, and a wrapper of a text is taken. Each row runs in a
+ * process of its own, killed after a few seconds. The process starts in the package's own
+ * directory, where `typescript/ast` is the package's TypeScript, whichever directory the tests are
+ * run from.
  */
 const PACKAGE = fileURLToPath(new URL('..', import.meta.url));
 const MESSAGES = fileURLToPath(
@@ -57,11 +57,16 @@ const SCRIPT = [
   'process.exit(0);',
 ].join('\n');
 
-/** The classes of a chain, each extending the one before, whose constructor is `constructor`. */
-function chain(layers: number, constructor: string): string {
-  const classes = [`class C0 extends Error { ${constructor} }`];
+/**
+ * The classes of a chain, each extending the one before, whose constructor is `constructor`, the
+ * last one's `last`.
+ */
+function chain(layers: number, constructor: string, last = constructor): string {
+  const classes = [`class C0 extends Error { ${layers === 0 ? last : constructor} }`];
   for (let layer = 1; layer <= layers; layer += 1)
-    classes.push(`class C${layer} extends C${layer - 1} { ${constructor} }`);
+    classes.push(
+      `class C${layer} extends C${layer - 1} { ${layer === layers ? last : constructor} }`,
+    );
   return classes.join(' ');
 }
 
@@ -121,12 +126,13 @@ function run(
   source: string,
   constructor: string,
   layers: number,
+  last = constructor,
 ): {
   readonly answers: readonly (readonly [string, string])[];
   readonly refused: boolean;
   readonly signal: string | null;
 } {
-  const text = `declare const error: Error; ${chain(layers, constructor)} ${source}`;
+  const text = `declare const error: Error; ${chain(layers, constructor, last)} ${source}`;
   const ran = spawnSync(process.execPath, ['--input-type=module', '--eval', SCRIPT, text], {
     cwd: PACKAGE,
     encoding: 'utf8',
@@ -160,11 +166,11 @@ describe('a chain of constructors that pass on what they read of a parameter', (
   it.each(CASES)(
     'forwards a bounded number of values through many layers: $what',
     (each) => {
-      const { answers, signal } = forwardedBy(each, LAYERS.many);
+      const { answers, refused, signal } = forwardedBy(each, LAYERS.many);
 
       expect({
         bounded: answers.length > 0 && answers.length < 1000,
-        keepsTheArgument: answers.some(([written]) => written === each.supplied),
+        keepsTheArgument: refused || answers.some(([written]) => written === each.supplied),
         signal,
       }).toStrictEqual({ bounded: true, keepsTheArgument: true, signal: null });
     },
@@ -216,13 +222,139 @@ describe('an Error nested as deep as a chain of constructors is long', () => {
     );
 
     it(
-      'is taken where it holds a text, with twenty layers (pin)',
+      'is taken where it holds a text, with four layers (pin)',
       () => {
-        const { refused, signal } = run(`new C20(${nest(20, '"fixed"')});`, constructor, 20);
+        const { refused, signal } = run(`new C4(${nest(4, '"fixed"')});`, constructor, 4);
 
         expect({ refused, signal }).toStrictEqual({ refused: false, signal: null });
       },
       ROW_SECONDS,
     );
   });
+});
+
+describe('a chain of constructors that forwards more than it can follow, or stays under the limit', () => {
+  it(
+    'follows a chain of nine layers of one key that holds a text, and takes it (pin)',
+    () => {
+      const { refused, signal } = run(
+        `new C9(${valued(9, '"fixed"')});`,
+        'constructor(options: any) { super(options.value); }',
+        9,
+      );
+
+      expect({ refused, signal }).toStrictEqual({ refused: false, signal: null });
+    },
+    ROW_SECONDS,
+  );
+
+  it(
+    'follows twenty layers of one key that hold a text, and takes it (pin)',
+    () => {
+      const { refused, signal } = run(
+        `new C20(${valued(20, '"fixed"')});`,
+        'constructor(options: any) { super(options.value); }',
+        20,
+      );
+
+      expect({ refused, signal }).toStrictEqual({ refused: false, signal: null });
+    },
+    ROW_SECONDS,
+  );
+
+  it(
+    'refuses twenty layers of a path of two keys, whatever it holds: no constructor is written so',
+    () => {
+      const { refused, signal } = run(
+        `new C20(${wrapped(20, '"fixed"')});`,
+        'constructor(options: any) { super(options.inner.value); }',
+        20,
+      );
+
+      expect({ refused, signal }).toStrictEqual({ refused: true, signal: null });
+    },
+    ROW_SECONDS,
+  );
+});
+
+describe('an Error a default of the last class holds, nested as deep as the chain is long', () => {
+  const DEPTHS = [10, 20, 40] as const;
+  const PATHS = [
+    {
+      constructor: 'constructor(options: any) { super(options.inner.value); }',
+      last: (nested: string) =>
+        `constructor(options: any = ${nested}) { super(options.inner.value); }`,
+      nest: wrapped,
+      what: 'a path of two keys',
+    },
+    {
+      constructor: 'constructor(options: any) { super(options.value); }',
+      last: (nested: string) => `constructor(options: any = ${nested}) { super(options.value); }`,
+      nest: valued,
+      what: 'a member',
+    },
+  ] as const;
+
+  describe.each(PATHS)('$what', ({ constructor, last, nest }) => {
+    it.each(DEPTHS)(
+      'is refused with %i layers, supplied by the default alone',
+      (layers) => {
+        const { refused, signal } = run(
+          `new C${layers}();`,
+          constructor,
+          layers,
+          last(nest(layers, 'error')),
+        );
+
+        expect({ refused, signal }).toStrictEqual({ refused: true, signal: null });
+      },
+      ROW_SECONDS,
+    );
+  });
+});
+
+describe('a program the compile cannot follow into the constructors', () => {
+  const UNFOLLOWED = [
+    {
+      constructor:
+        'constructor(...[{ ...rest } = { message: error }]: any[]) { super(rest.message); }',
+      source: 'new C0();',
+      what: 'an Error a default of a pattern holds, supplied by the default alone',
+    },
+    {
+      constructor:
+        'constructor(...[{ ...rest } = { message: { inner: error } }]: any[]) { super(rest.message.inner); }',
+      source: 'new C0();',
+      what: 'an Error a default of a pattern holds below the top, by the default alone',
+    },
+    {
+      constructor: 'constructor(...[{ ...rest }]: any[]) { super(rest.message); }',
+      source: 'new C0({ message: error });',
+      what: 'an Error an argument holds, given to a pattern that is not followed',
+    },
+  ] as const;
+
+  it.each(UNFOLLOWED)(
+    'is refused: $what',
+    ({ constructor, source }) => {
+      const { refused, signal } = run(source, constructor, 0);
+
+      expect({ refused, signal }).toStrictEqual({ refused: true, signal: null });
+    },
+    ROW_SECONDS,
+  );
+
+  it(
+    'is taken where what it holds is a text (pin)',
+    () => {
+      const { refused, signal } = run(
+        'new C0({ message: "fixed" });',
+        'constructor(...[{ ...rest }]: any[]) { super(rest.message); }',
+        0,
+      );
+
+      expect({ refused, signal }).toStrictEqual({ refused: false, signal: null });
+    },
+    ROW_SECONDS,
+  );
 });

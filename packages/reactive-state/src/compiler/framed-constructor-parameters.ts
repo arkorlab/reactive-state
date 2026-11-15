@@ -41,6 +41,8 @@ export interface ForwardedValue {
   readonly continued?: boolean;
   /** The compile could not follow where the value goes: any member of it, at any depth, may be it. */
   readonly unfollowed?: boolean;
+  /** No constructor is written as the program is: an `Error` may be among what it supplies. */
+  readonly refused?: boolean;
 }
 
 /** The values each argument position may hold. */
@@ -119,16 +121,17 @@ const LIMITS = { forwarded: 512 } as const;
  *
  * Defaults that read one another in a circle (`a = b.x, b = a.y`, a read of a parameter before it
  * is initialized, which throws where it runs) make a path that grows without end where each
- * default is taken: a taken default entered again, in a state not scanned yet, is such a circle,
- * and the program is read as one the compile cannot follow, so `undefined`, which keeps every
- * argument, and any member of it at any depth, possible (`unfollowed`). A circle that adds no key,
- * or of defaults the construction replaces (which drop the path), meets a state it scanned and
- * ends of itself.
+ * default is taken: a taken default entered again, in a state not scanned yet, is such a circle.
+ * A circle that adds no key, or of defaults the construction replaces (which drop the path),
+ * meets a state it scanned and ends of itself.
  *
  * A value is forwarded once, whichever way it is reached (the same written value read up to the
  * same key), so that the layers of a chain of constructors, each of which passes on what it was
- * given beside what it reads of it, forward as many values as there are different ones; and more
- * than `LIMITS.forwarded` of them is read as a program the compile cannot follow: `undefined`.
+ * given beside what it reads of it, forward as many values as there are different ones.
+ *
+ * A circle, and more than `LIMITS.forwarded` values, are programs no constructor is written as: the
+ * answer is a value that is refused (`refused`), whatever the construction supplies, for what it
+ * supplies, or a default holds, is not followed to the message.
  */
 export function framedSlotValues(
   argument: Expression,
@@ -146,15 +149,20 @@ export function framedSlotValues(
     const reads = parameterReads(scan, parameters, slots);
     if (reads === undefined) return undefined;
     addForwarded(values, forwarded, [scan, ...reads.values]);
-    if (values.length > LIMITS.forwarded) return undefined;
+    if (values.length > LIMITS.forwarded) return refusal(argument);
     for (const each of reads.defaults) {
       const at = `${each.value.pos}:${each.value.end}`;
       if (each.selected && scan.entered.includes(at) && !scanned.has(scanState(each)))
-        return undefined;
+        return refusal(argument);
       pending.push({ ...each, entered: [...scan.entered, at] });
     }
   }
   return values;
+}
+
+/** The one value of an answer that is refused, whatever the construction supplies. */
+function refusal(argument: Expression): readonly ForwardedValue[] {
+  return [{ keys: [], refused: true, value: argument }];
 }
 
 /** Adds the values of `added` that `values` does not hold: a value is forwarded once. */
@@ -179,6 +187,8 @@ function forwardedState(each: ForwardedValue): string {
     each.keys,
     each.any === true,
     each.continued === true,
+    each.refused === true,
+    each.unfollowed === true,
   ]);
 }
 
@@ -354,7 +364,15 @@ function restRead(
   const defaults =
     parameter.initializer === undefined
       ? []
-      : [{ any: true, keys: outer, value: parameter.initializer, selected: false }];
+      : [
+          {
+            any: true,
+            keys: outer,
+            selected: false,
+            unfollowed: true,
+            value: parameter.initializer,
+          },
+        ];
   return {
     defaults,
     values: given.map((each) => selectedValue(each, keys, selection.any)),
@@ -419,7 +437,13 @@ function restDefaults(name: Identifier): DefaultValue[] {
   const defaults: DefaultValue[] = [];
   for (let at: Node = name.parent; isBindingElement(at); at = at.parent.parent) {
     if (at.initializer !== undefined)
-      defaults.push({ any: true, keys: [], value: at.initializer, selected: false });
+      defaults.push({
+        any: true,
+        keys: [],
+        selected: false,
+        unfollowed: true,
+        value: at.initializer,
+      });
   }
   return defaults;
 }
