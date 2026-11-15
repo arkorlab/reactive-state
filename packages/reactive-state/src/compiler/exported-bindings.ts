@@ -3,6 +3,7 @@ import {
   type ExportDeclaration,
   type Expression,
   type FunctionDeclaration,
+  type ImportClause,
   type ImportDeclaration,
   isClassDeclaration,
   isEnumDeclaration,
@@ -34,24 +35,31 @@ import { isConstant } from './statements.ts';
 export type DeclaredValue = ClassDeclaration | Expression | FunctionDeclaration;
 
 interface ExportLookup {
-  readonly kind: 'exported' | 'none';
+  readonly kind: 'cycle' | 'exported' | 'none';
   readonly value?: DeclaredValue | undefined;
 }
 
 interface LookupState {
-  cycled: boolean;
   readonly memo: Map<string, ExportLookup>;
-  readonly visiting: Set<string>;
+  minCycleDepth: number;
+  readonly visiting: Map<string, number>;
 }
 
 interface ModuleReading {
+  readonly depth: number;
   readonly file: string;
   readonly modules: Modules;
   readonly sourceFile: SourceFile;
   readonly state: LookupState;
 }
 
+interface ImportTarget {
+  readonly exported: string;
+  readonly file: string | undefined;
+}
+
 const NO_EXPORT: ExportLookup = { kind: 'none' };
+const CYCLE_EXPORT: ExportLookup = { kind: 'cycle' };
 const EXPORTED_UNKNOWN: ExportLookup = { kind: 'exported', value: undefined };
 
 /**
@@ -70,6 +78,7 @@ export function exportedValue(
 export function settledValue(modules: Modules, value: DeclaredValue): DeclaredValue | undefined {
   const sourceFile = value.getSourceFile();
   return settled(value, {
+    depth: 0,
     file: sourceFile.fileName,
     modules,
     sourceFile,
@@ -78,7 +87,7 @@ export function settledValue(modules: Modules, value: DeclaredValue): DeclaredVa
 }
 
 function freshState(): LookupState {
-  return { cycled: false, memo: new Map(), visiting: new Set() };
+  return { memo: new Map(), minCycleDepth: Infinity, visiting: new Map() };
 }
 
 function lookupExport(
@@ -92,14 +101,17 @@ function lookupExport(
   if (cached !== undefined) {
     return cached;
   }
-  if (state.visiting.has(key)) {
-    state.cycled = true;
-    return NO_EXPORT;
+  const activeDepth = state.visiting.get(key);
+  if (activeDepth !== undefined) {
+    state.minCycleDepth = Math.min(state.minCycleDepth, activeDepth);
+    return CYCLE_EXPORT;
   }
-  const savedCycled = state.cycled;
-  state.cycled = false;
-  state.visiting.add(key);
+  const depth = state.visiting.size;
+  const savedMinDepth = state.minCycleDepth;
+  state.minCycleDepth = Infinity;
+  state.visiting.set(key, depth);
   const reading: ModuleReading = {
+    depth,
     file,
     modules,
     sourceFile: modules.parse(file, false).sourceFile,
@@ -107,10 +119,12 @@ function lookupExport(
   };
   const result = resolveModuleExport(reading, name);
   state.visiting.delete(key);
-  const childCycled = state.cycled;
-  state.cycled = savedCycled || childCycled;
-  if (!childCycled) {
+  const childMinDepth = state.minCycleDepth;
+  if (childMinDepth >= depth) {
     state.memo.set(key, result);
+    state.minCycleDepth = savedMinDepth;
+  } else {
+    state.minCycleDepth = Math.min(savedMinDepth, childMinDepth);
   }
   return result;
 }
@@ -119,11 +133,22 @@ function resolveModuleExport(reading: ModuleReading, name: string): ExportLookup
   const { statements } = reading.sourceFile;
   for (const statement of statements) {
     const found = exportedBy(statement, name, reading);
-    if (found.kind === 'exported') {
-      return found;
+    if (found.kind !== 'none') {
+      return closeCycleAtRoot(found, reading, EXPORTED_UNKNOWN);
     }
   }
-  return name === 'default' ? NO_EXPORT : starExported(statements, name, reading);
+  if (name === 'default') {
+    return NO_EXPORT;
+  }
+  return closeCycleAtRoot(starExported(statements, name, reading), reading, NO_EXPORT);
+}
+
+function closeCycleAtRoot(
+  found: ExportLookup,
+  reading: ModuleReading,
+  closed: ExportLookup,
+): ExportLookup {
+  return found.kind === 'cycle' && reading.state.minCycleDepth >= reading.depth ? closed : found;
 }
 
 /** What `export * from …` re-exports as `name`, where the file declares no explicit export of it. */
@@ -139,9 +164,7 @@ function starExported(
       continue;
     }
     const found = lookupExport(reading.modules, other, name, reading.state);
-    if (found.kind === 'exported') {
-      star = mergeStarLookup(star, found);
-    }
+    star = mergeStarLookup(star, found);
   }
   return star;
 }
@@ -155,8 +178,11 @@ function starTargetOf(statement: Statement, reading: ModuleReading): string | un
 }
 
 function mergeStarLookup(current: ExportLookup, next: ExportLookup): ExportLookup {
-  if (current.kind === 'none') {
-    return next;
+  if (current.kind === 'none' || next.kind === 'none') {
+    return current.kind === 'none' ? next : current;
+  }
+  if (current.kind === 'cycle' || next.kind === 'cycle') {
+    return current.kind === 'cycle' ? next : current;
   }
   return current.value !== undefined && current.value === next.value ? current : EXPORTED_UNKNOWN;
 }
@@ -244,16 +270,34 @@ function namedExport(
     return NO_EXPORT;
   }
   const original = (element.propertyName ?? element.name).text;
-  if (statement.moduleSpecifier === undefined) {
-    const local = localValue(original, reading);
-    return local === undefined ? EXPORTED_UNKNOWN : settledExport(local, reading);
+  return statement.moduleSpecifier === undefined
+    ? localNamedExport(original, reading)
+    : reexportedLookup(fileOf(statement.moduleSpecifier, reading), original, reading);
+}
+
+function localNamedExport(original: string, reading: ModuleReading): ExportLookup {
+  for (const statement of reading.sourceFile.statements) {
+    if (isImportDeclaration(statement)) {
+      const target = importTargetOf(statement, original, reading);
+      if (target !== undefined) {
+        return reexportedLookup(target.file, target.exported, reading);
+      }
+    }
   }
-  const other = fileOf(statement.moduleSpecifier, reading);
-  const remote =
-    other === undefined
-      ? undefined
-      : lookupExport(reading.modules, other, original, reading.state).value;
-  return remote === undefined ? EXPORTED_UNKNOWN : settledExport(remote, reading);
+  const local = localValue(original, reading);
+  return local === undefined ? EXPORTED_UNKNOWN : settledExport(local, reading);
+}
+
+function reexportedLookup(
+  other: string | undefined,
+  exported: string,
+  reading: ModuleReading,
+): ExportLookup {
+  if (other === undefined) {
+    return EXPORTED_UNKNOWN;
+  }
+  const remote = lookupExport(reading.modules, other, exported, reading.state);
+  return remote.kind === 'none' ? EXPORTED_UNKNOWN : remote;
 }
 
 function settledExport(value: DeclaredValue, reading: ModuleReading): ExportLookup {
@@ -305,11 +349,12 @@ function stepSettled(
     return { done: true, value: each };
   }
   const key = `${reading.file}#local:${named.text}`;
-  if (reading.state.visiting.has(key)) {
-    reading.state.cycled = true;
+  const activeDepth = reading.state.visiting.get(key);
+  if (activeDepth !== undefined) {
+    reading.state.minCycleDepth = Math.min(reading.state.minCycleDepth, activeDepth);
     return { done: true, value: undefined };
   }
-  reading.state.visiting.add(key);
+  reading.state.visiting.set(key, reading.state.visiting.size);
   localKeys.push(key);
   const found = localValue(named.text, reading);
   if (found === undefined) {
@@ -364,29 +409,44 @@ function constantIn(
   return declaration?.initializer;
 }
 
+function importTargetOf(
+  statement: ImportDeclaration,
+  name: string,
+  reading: ModuleReading,
+): ImportTarget | undefined {
+  const { importClause: clause } = statement;
+  if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
+    return undefined;
+  }
+  const exported = importedExportName(clause, name);
+  return exported === undefined
+    ? undefined
+    : { exported, file: fileOf(statement.moduleSpecifier, reading) };
+}
+
+function importedExportName(clause: ImportClause, name: string): string | undefined {
+  if (clause.name?.text === name) {
+    return 'default';
+  }
+  if (clause.namedBindings === undefined || !isNamedImports(clause.namedBindings)) {
+    return undefined;
+  }
+  const element = clause.namedBindings.elements.find(
+    (each) => !each.isTypeOnly && each.name.text === name,
+  );
+  return element === undefined ? undefined : (element.propertyName ?? element.name).text;
+}
+
 /** What an import declaration binds as `name`, as the module it imports exports it. */
 function importedValue(
   statement: ImportDeclaration,
   name: string,
   reading: ModuleReading,
 ): DeclaredValue | undefined {
-  const clause = statement.importClause;
-  if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) {
-    return undefined;
-  }
-  let exported: string | undefined;
-  if (clause.name?.text === name) {
-    exported = 'default';
-  } else if (clause.namedBindings !== undefined && isNamedImports(clause.namedBindings)) {
-    const element = clause.namedBindings.elements.find(
-      (each) => !each.isTypeOnly && each.name.text === name,
-    );
-    exported = element === undefined ? undefined : (element.propertyName ?? element.name).text;
-  }
-  const other = exported === undefined ? undefined : fileOf(statement.moduleSpecifier, reading);
-  return other === undefined || exported === undefined
+  const target = importTargetOf(statement, name, reading);
+  return target?.file === undefined
     ? undefined
-    : lookupExport(reading.modules, other, exported, reading.state).value;
+    : lookupExport(reading.modules, target.file, target.exported, reading.state).value;
 }
 
 function isExported(statement: Statement): boolean {
