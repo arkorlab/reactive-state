@@ -2,10 +2,8 @@ import {
   type BindingElement,
   type Expression,
   type Identifier,
-  isArrayBindingPattern,
   isArrayLiteralExpression,
   isArrowFunction,
-  isBindingElement,
   isCallExpression,
   isComputedPropertyName,
   isConstructorDeclaration,
@@ -38,10 +36,18 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, patternKey } from './code-globals.ts';
+import { globalPathOf } from './code-globals.ts';
 import { declarationOf, initializerOf } from './framed.ts';
 import { runsPerCall } from './kept.ts';
 import { freeReads } from './scope.ts';
+import {
+  advanceRestStep,
+  bindingSteps,
+  type DefaultWalk,
+  finalizeRestPath,
+  isNonNegativeIndex,
+  shiftedStepKey,
+} from './this-rest-defaults.ts';
 
 /** A missing property differs from a getter or an unproven member. */
 const MISSING = { kind: 'missing' } as const;
@@ -73,25 +79,22 @@ export function freshReceiverDefault(
   if (steps.every((step) => step.initializer === undefined)) {
     return false;
   }
-  let value = receiverLiteral(source);
-  let chosen = false;
+  const walk: DefaultWalk = {
+    chosen: false,
+    excluded: undefined,
+    offset: 0,
+    value: receiverLiteral(source),
+  };
   for (const step of steps) {
-    const key = patternName(step);
-    const selected = value === undefined || key === undefined ? undefined : selectedOf(value, key);
-    if (selected === undefined) {
+    if (!advanceStep(step, walk, name)) {
       return false;
     }
-    if (selected.kind === MISSING.kind || undefinedValue(selected)) {
-      if (step.initializer === undefined) {
-        return false;
-      }
-      value = step.initializer;
-      chosen = true;
-    } else {
-      value = selected;
-    }
   }
-  return chosen && value !== undefined && freshValue(value, path, name);
+  if (!walk.chosen || walk.value === undefined) {
+    return false;
+  }
+  const adjusted = finalizeRestPath(name, walk, path);
+  return adjusted === undefined ? false : freshValue(walk.value, adjusted, name);
 }
 
 /** The member a reference selects without evaluating a computed key. */
@@ -104,22 +107,33 @@ export function receiverKey(node: Node): string | undefined {
     : undefined;
 }
 
-/** Binding projections in their evaluation order, including defaults at outer pattern levels. */
-function bindingSteps(name: Identifier): readonly BindingElement[] {
-  const steps: BindingElement[] = [];
-  for (let at: Node = name; !isVariableDeclaration(at); at = at.parent) {
-    if (isBindingElement(at)) {
-      steps.unshift(at);
-    }
+/** Advances `walk` across one destructuring `BindingElement`, handling defaults and rest patterns. */
+function advanceStep(step: BindingElement, walk: DefaultWalk, name: Identifier): boolean {
+  const current =
+    walk.chosen && walk.value !== undefined ? projectedValue(walk.value, [], name) : walk.value;
+  if (current === undefined) {
+    return false;
   }
-  return steps;
-}
-
-/** An object binding's written key or an array binding's position. */
-function patternName(step: BindingElement): string | undefined {
-  return isArrayBindingPattern(step.parent)
-    ? String(step.parent.elements.indexOf(step))
-    : patternKey(step);
+  if (step.dotDotDotToken !== undefined) {
+    return advanceRestStep(step, unwrapped(current), walk);
+  }
+  const key = shiftedStepKey(step, walk.offset);
+  const selected = key === undefined ? undefined : selectedOf(current, key);
+  if (selected === undefined) {
+    return false;
+  }
+  walk.offset = 0;
+  walk.excluded = undefined;
+  if (selected.kind === MISSING.kind || undefinedValue(selected)) {
+    if (step.initializer === undefined) {
+      return false;
+    }
+    walk.value = step.initializer;
+    walk.chosen = true;
+    return true;
+  }
+  walk.value = selected;
+  return true;
 }
 
 /** A receiver's unchanged written object, including a projection of one of its data members. */
@@ -164,10 +178,7 @@ function receiverLiteral(source: Expression): Expression | undefined {
 function selectedOf(node: Expression, key: string): Selection {
   const value = unwrapped(node);
   if (isArrayLiteralExpression(value) && !value.elements.some((each) => isSpreadElement(each))) {
-    const index = Number(key);
-    return Number.isSafeInteger(index) && index >= 0 && String(index) === key
-      ? (value.elements[index] ?? MISSING)
-      : undefined;
+    return isNonNegativeIndex(key) ? (value.elements[Number(key)] ?? MISSING) : undefined;
   }
   return isObjectLiteralExpression(value) ? objectMember(value, key) : undefined;
 }
