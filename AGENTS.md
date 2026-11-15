@@ -116,65 +116,47 @@ it: a refusal is a message the developer can act on.
 
 ## Known limits
 
-- A value query that a path of indexes enters again more than four times is read as unreadable, so a
-  path of five steps through a type that refers to itself does not name its `Error`.
-- Unfilled type parameters that each constrain another through an index (`T0 extends { a:
-  T1['a'] | … }`) cost work that grows faster than their count.
-- `{ [key: string]: Error }[string]`, and `ReturnType<T>` for a `T` constrained to `() => Error`,
-  are not read as naming an `Error`.
-- An angle-bracket assertion `<T>expr` is not peeled: what it wraps is read as a value the reader
-  cannot see into.
-- A name that reaches a prototype is read where the code writes it whole. One assembled from joined
-  texts, a template or a constant of them (`'__pro' + 'to__'`), or made at run time, is not read.
-- A key reader of the language (`Reflect.get`) that the code keeps under a name of its own
-  (`const get = Reflect.get`) or takes apart by a pattern is not followed: only a call that holds the
-  reader, and writes `'constructor'` among its arguments, is read.
-- The rest of an array pattern after its first position holds the tail of what the pattern takes
-  apart. An index or a member path read of it is moved by the places before the rest (`rest[0]` of
-  `[first, ...rest]` is slot one), but only by type: a value the pattern takes apart is not followed
-  into such a rest, and a method that names an element (`rest.at(0)`) reads the type of the whole at
-  that index, so the tail of a tuple may be read at another slot than the one it holds.
-- A list's entry reached through an alias is not followed by the reader of a list's entries: the name it
-  is taken into, a loop variable, a reference a call returns (`list[1].at(0).push(e)`,
-  `for (const each of list) each.push(e)`). A write to a key's tuple through another binding of it
-  (`const other = tuple; other[0] = …`) or by a destructuring is not among the alternatives.
-- A tuple reached through more than 32 aliases in a row is read as one place.
-- `type ErrorTree = Error | ErrorTree[]` does not name its elements' `Error`, and `Rows[number]` for
-  `type Rows = (Rows | Error)[]` loses its elements likewise.
-- An own method that `Object.assign` writes onto an array literal is taken for the own method of a
-  rest copy of it: `const [...values] = Object.assign([error], { join: () => 'safe' })` is read as
-  `'safe'`. A spread inside an object literal given to a native mutator
-  (`Object.defineProperties(a, { ...descriptors })`) is not read for a method it defines on the array.
-- A `call`, `apply` or `bind` that the program writes onto a function (`assign.call = …`) is read as
-  the language's where the function is called through a constant alias of it
-  (`const g = f; g.call(…)`); written to through the name it is called by, it is refused.
-- A parameter, or a name no declaration of the file gives, handed to `Object.assign` as its source is
-  read by the type the code declares for it: one typed `any` is not read for an `Error` it holds.
-- A `this`, or a write through it, in the computed name of a method of an object literal
-  (`{ [this.slot = 'x']() {} }`) is not read as the receiver's. A method that reaches the array through
-  `super`, whose prototype's setter then writes `this[0]`, is read as one that names no `this`.
-- A `using` declaration is read as running no code: a disposer that runs the analysed function again,
-  or that rewrites a tuple's entry before the tuple is applied (`Reflect.get.apply(null, tuple)`), is
-  not seen.
-- A native mutator that writes the `length` of an entry's tuple while the arguments of
-  `Object.fromEntries` are evaluated is read for the slots it installs alone. An argument after the
-  predicate of `filter` that mutates the filtered array (`source.filter(() => true, source.shift())`)
-  is not read.
-- A getter of an object, or of its prototype, that rewrites one of the methods the object holds
-  (`get trigger() { this.join = … }`) is not followed where a pattern reads the getter before it
-  selects the method (`const { trigger, join } = methods`): `join` is read as the source wrote it.
-  Nor is a getter of the source literal of an object destructuring assignment that rewrites a later
-  property of its own object.
-- A key variable gotten by destructuring or iterating a constant text (`[k] = 'ab'`,
-  `for (k of 'ab')`) reads its names from the whole constant.
-- A callback that mutates the array it is called on during the same call
+Each entry names a family of forms, with an example. The instances that review settled are in the
+Standing decisions of the pull requests that settled them.
+
+- **Types that go in circles or grow.** A value query that a path of indexes enters again more than
+  four times, or a tuple reached through more than 32 aliases, is read as unreadable
+  (`type ErrorTree = Error | ErrorTree[]` does not name its elements' `Error`, nor does `Rows[number]`
+  for `type Rows = (Rows | Error)[]`). Unfilled type parameters that each constrain another through an
+  index (`T0 extends { a: T1['a'] | … }`) cost work that grows faster than their count.
+  `{ [key: string]: Error }[string]`, and `ReturnType<T>` for a `T` constrained to `() => Error`, are
+  not read as naming an `Error`.
+- **Names the code assembles or keeps under another name.** A name that reaches a prototype is read
+  where the code writes it whole: one assembled from joined texts (`'__pro' + 'to__'`) or made at run
+  time is not. A key reader of the language (`Reflect.get`) kept under a name of its own
+  (`const get = Reflect.get`) or taken apart by a pattern is not followed, and a key variable gotten by
+  destructuring or iterating a constant text (`[k] = 'ab'`) reads its names from the whole constant. An
+  angle-bracket assertion `<T>expr` is not peeled.
+- **Aliases and the rest of a pattern.** A list's entry reached through an alias (the name it is taken
+  into, a loop variable, a reference a call returns: `list[1].at(0).push(e)`) and a key's tuple written
+  through another binding (`const other = tuple; other[0] = …`) are not followed. The rest of an array
+  pattern after its first position is read by type only: an index read of it is moved by the places
+  before the rest (`rest[0]` of `[first, ...rest]` is slot one), a value the pattern takes apart is not
+  followed into it, and `rest.at(0)` reads the type of the whole at that index.
+- **Methods the program replaces.** An own method that `Object.assign` writes onto an array literal is
+  taken for the own method of a rest copy of it, and a spread inside an object given to a native
+  mutator is not read for a method it defines. A `call`, `apply` or `bind` the program writes onto a
+  function (`assign.call = …`) is read as the language's where the function is called through a
+  constant alias of it. A method that reaches the array through `super`, whose prototype's setter then
+  writes `this[0]`, is read as one that names no `this`. A parameter, or a name no declaration of the
+  file gives, handed to `Object.assign` as its source is read by the type the code declares for it.
+- **Code that runs where the analysis does not look.** A getter that rewrites a method of its object or
+  a later property of its own object (`get trigger() { this.join = … }`), a `using` disposer that runs
+  the analysed function again or rewrites a tuple's entry, a `this` in the computed name of a method of
+  an object literal (`{ [this.slot = 'x']() {} }`), a native mutator that writes the `length` of an
+  entry's tuple while `Object.fromEntries` evaluates its arguments, and an argument after the predicate
+  of `filter` that mutates the filtered array are not followed.
+- **Callbacks and promises.** A callback that mutates the array it is called on during the same call
   (`[1,,].map((value, index, array) => { array[1] = error; return value; })`, or a write through a name
-  the callback closes over) is not followed: a mapper's result is read as the first parameter's source
-  slot and the callback's returns, so an `Error` written into a later hole or slot is not in the answer.
-- `async () => false` kept under a name and read elsewhere is read as selecting nothing, where the
-  returned Promise is truthy and `find` selects the element.
-- A value declared as `Error`, or as a primitive, is read as an immediately fulfilled value even where
-  it has a `then` member (a subclass): promise resolution of a thenable may give another value.
+  it closes over) is not followed: a mapper's result is read as the first parameter's source slot and
+  the callback's returns. `async () => false` kept under a name and read elsewhere is read as selecting
+  nothing, where the Promise is truthy. A value declared `Error`, or a primitive, is read as
+  immediately fulfilled even where it has a `then` member (a subclass).
 
 ## Settled decisions
 
