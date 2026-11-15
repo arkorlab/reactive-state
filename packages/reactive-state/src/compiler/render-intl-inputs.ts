@@ -20,6 +20,7 @@ import {
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSourceFile,
   isSpreadAssignment,
@@ -268,16 +269,22 @@ function objectTargetNext(
   literal: ObjectLiteralExpression,
   accessor: string,
 ): readonly Expression[] | undefined {
+  let shadowed = false;
   for (const entry of literal.properties.toReversed()) {
-    if (isGetAccessorDeclaration(entry)) {
-      const key = optionName(entry.name);
-      if (key === undefined || key === accessor) return undefined;
-    } else if (ownDataPropertyNamed(entry, accessor)) {
-      return [];
-    }
+    if (matchingGetter(entry, accessor)) return undefined;
+    if (ownDataPropertyNamed(entry, accessor)) return [];
+    if (isSetAccessorDeclaration(entry) && optionName(entry.name) === accessor) shadowed = true;
   }
+  if (shadowed) return [];
   const prototype = prototypeAssignment(literal);
   return prototype === undefined ? [] : [prototype];
+}
+
+/** Own or dynamically named getters run with `Reflect.get`'s supplied receiver. */
+function matchingGetter(entry: ObjectLiteralElementLike, accessor: string): boolean {
+  if (!isGetAccessorDeclaration(entry)) return false;
+  const key = optionName(entry.name);
+  return key === undefined || key === accessor;
 }
 
 /** Own data or method entries shadow prototype accessors without invoking a supplied receiver. */
