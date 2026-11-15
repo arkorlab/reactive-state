@@ -9,6 +9,7 @@ import {
   isClassDeclaration,
   isClassExpression,
   isConditionalExpression,
+  isElementAccessExpression,
   isExpressionStatement,
   isFunctionDeclaration,
   isFunctionExpression,
@@ -26,7 +27,13 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { declarationOf, type Declared, initializerOf } from './framed.ts';
-import { instanceMethods, keyOf, memberMethods, ownsThis } from './held-class-methods.ts';
+import {
+  instanceMethods,
+  keyOf,
+  literalKey,
+  memberMethods,
+  ownsThis,
+} from './held-class-methods.ts';
 import { answersOf } from './kept.ts';
 import { receiverOf, receiverWrite } from './this-aliases.ts';
 
@@ -189,10 +196,13 @@ function candidateWritesThis(
     const written = writtenBy(node);
     const invocation = isCallExpression(node) ? node : undefined;
     const called =
-      invocation === undefined ? undefined : thisCalled(unwrapped(invocation.expression));
+      invocation === undefined ? [] : thisCalledKeys(unwrapped(invocation.expression), methods);
     found =
       (written !== undefined && receiverWrite(written, node)) ||
-      (called !== undefined && writesThis(methods, called, writtenBy, { seen, call: invocation }));
+      (invocation !== undefined &&
+        called.some((target) =>
+          writesThis(methods, target, writtenBy, { seen, call: invocation }),
+        ));
     if (!found) {
       node.forEachChild(visit);
     }
@@ -240,9 +250,18 @@ function discardedCall(call: CallExpression): boolean {
   }
 }
 
-/** The name of the method of `this` that `callee` reads, `this.add`; none of another. */
-function thisCalled(callee: Node): string | undefined {
-  return isPropertyAccessExpression(callee) && receiverOf(callee.expression, true)
-    ? keyOf(callee.name)
-    : undefined;
+/** The candidate method keys of `this` that `callee` invokes by dot or bracket access. */
+function thisCalledKeys(
+  callee: Node,
+  methods: ReadonlyMap<string, readonly Node[]>,
+): readonly string[] {
+  if (isPropertyAccessExpression(callee) && receiverOf(callee.expression, true)) {
+    const key = keyOf(callee.name);
+    return key === undefined ? [] : [key];
+  }
+  if (!isElementAccessExpression(callee) || !receiverOf(callee.expression, true)) {
+    return [];
+  }
+  const key = literalKey(unwrapped(callee.argumentExpression));
+  return key === undefined ? [...methods.keys()].filter((each) => !each.startsWith('#')) : [key];
 }

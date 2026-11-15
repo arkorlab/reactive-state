@@ -16,6 +16,7 @@ import {
   isMethodDeclaration,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectLiteralExpression,
   isPrivateIdentifier,
   isPropertyAssignment,
@@ -85,7 +86,15 @@ export function memberMethods(
   return methods;
 }
 
-/** The name of a member the code writes: of a name, a private one, or text; none of another. */
+/** A static string, template or numeric property key as its runtime property name. */
+export function literalKey(node: Node): string | undefined {
+  if (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node)) {
+    return node.text;
+  }
+  return isNumericLiteral(node) ? String(Number(node.text)) : undefined;
+}
+
+/** The name of a member the code writes: of a name, a private one, text, or a number. */
 export function keyOf(name: PropertyName | undefined): string | undefined {
   if (name === undefined) {
     return undefined;
@@ -94,12 +103,9 @@ export function keyOf(name: PropertyName | undefined): string | undefined {
     return privateName(name);
   }
   if (isComputedPropertyName(name)) {
-    const value = unwrapped(name.expression);
-    return isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)
-      ? value.text
-      : undefined;
+    return literalKey(unwrapped(name.expression));
   }
-  return isIdentifier(name) || isStringLiteral(name) ? name.text : undefined;
+  return isIdentifier(name) ? name.text : literalKey(name);
 }
 
 /** Whether `node` is code of a `this` of its own: a function but an arrow, a class. */
