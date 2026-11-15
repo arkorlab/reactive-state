@@ -3,7 +3,6 @@ import {
   isExportAssignment,
   isExportDeclaration,
   isFunctionDeclaration,
-  isIdentifier,
   isNamedExports,
   isVariableStatement,
   type Statement,
@@ -14,6 +13,7 @@ import {
 import { failIn } from './errors.ts';
 import type { ParsedModule } from './modules.ts';
 import type { OperationCallable } from './operation-callables.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /**
  * A `'use server'` module a component, or a hook, imports: the authority runs it as an operation
@@ -97,7 +97,7 @@ function exportedBy(statement: Statement): readonly string[] {
   if (isVariableStatement(statement)) {
     return exportsRuntime(statement)
       ? statement.declarationList.declarations.flatMap((declaration) =>
-          isIdentifier(declaration.name) ? [declaration.name.text] : [],
+          bindingIdentifiers(declaration.name).map((bound) => bound.text),
         )
       : [];
   }

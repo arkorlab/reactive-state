@@ -2,7 +2,6 @@ import {
   type FunctionDeclaration,
   isExportDeclaration,
   isFunctionDeclaration,
-  isIdentifier,
   isNamedExports,
   isStringLiteral,
   isVariableStatement,
@@ -12,6 +11,7 @@ import {
 } from 'typescript/ast';
 
 import type { Modules } from './modules.ts';
+import { bindingIdentifiers } from './scope.ts';
 import { isScript } from './typescript.ts';
 
 /**
@@ -48,8 +48,8 @@ function namesExport(statement: Statement, name: string): boolean {
   if (isVariableStatement(statement)) {
     return (
       exportsByName(statement) &&
-      statement.declarationList.declarations.some(
-        (declaration) => isIdentifier(declaration.name) && declaration.name.text === name,
+      statement.declarationList.declarations.some((declaration) =>
+        bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
       )
     );
   }
