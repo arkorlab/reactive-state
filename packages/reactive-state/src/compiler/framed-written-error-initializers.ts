@@ -2,23 +2,17 @@ import {
   type BinaryExpression,
   type CallExpression,
   type Expression,
-  type FunctionDeclaration,
   type Identifier,
-  isArrowFunction,
   isBinaryExpression,
   isBlock,
   isCallExpression,
   isConditionalExpression,
-  isConstructorDeclaration,
   isFunctionDeclaration,
-  isGetAccessorDeclaration,
   isIdentifier,
   isIfStatement,
   isInterfaceDeclaration,
   isNewExpression,
   isReturnStatement,
-  isSetAccessorDeclaration,
-  isSourceFile,
   isSpreadElement,
   isTypeAliasDeclaration,
   isVariableDeclaration,
@@ -27,10 +21,9 @@ import {
   type Node,
   type Statement,
   SyntaxKind,
-  type VariableStatement,
 } from 'typescript/ast';
 
-import { type Answering, answersLater, isAnswering, parametersOf } from './answers.ts';
+import { type Answering, answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
@@ -40,15 +33,18 @@ import {
   framedSubclassOwnWords,
 } from './framed-constructors.ts';
 import { framedFactoryCall } from './framed-factory-calls.ts';
-import { framedQuietPrimitive } from './framed-native-evaluation.ts';
 import { framedNativeErrorCreation } from './framed-receivers.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedValueShape } from './framed-values.ts';
-import { reassignedTarget } from './framed-written-error-uses.ts';
+import {
+  constantStatement,
+  quietFactoryCall,
+  readsScopeParameter,
+  unchangedFunctionDeclaration,
+} from './framed-written-error-parameters.ts';
 import { nonInterceptingWrappedTarget } from './framed-written-error-wrappers.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
 import { constantValue } from './numbers.ts';
-import { isTypeOnly, readsBinding } from './scope.ts';
 
 /**
  * Universal proof that every reachable branch and local factory return feeding an annotated
@@ -80,8 +76,8 @@ interface ProofState extends ProofContext {
 }
 
 interface FactoryFrame {
-  readonly quietArgs: boolean;
   readonly returnScope: Answering | undefined;
+  readonly unquietScopes: readonly Answering[];
 }
 
 interface StatementFlow {
@@ -89,7 +85,7 @@ interface StatementFlow {
   readonly returns: readonly Expression[];
 }
 
-const TOP_FRAME: FactoryFrame = { quietArgs: false, returnScope: undefined };
+const TOP_FRAME: FactoryFrame = { returnScope: undefined, unquietScopes: [] };
 
 /** Requires every reachable expression of `initializer` to construct a local known-word `Error`. */
 export function provenWrittenErrorInitializer(
@@ -119,11 +115,12 @@ function evaluateWrittenError(node: Expression, state: ProofState, frame: Factor
   return proven;
 }
 
-/**Assigns monotonic numeric IDs to AST nodes for exact memoization keys. */
+/** Assigns monotonic numeric IDs to AST nodes and active unquiet scopes for exact memoization. */
 function stateKey(node: Node, frame: FactoryFrame, ids: Map<Node, number>): string {
   const nodeId = assignedId(node, ids);
   const scopeId = frame.returnScope === undefined ? 0 : assignedId(frame.returnScope, ids);
-  return `${nodeId}:${scopeId}:${frame.quietArgs ? 1 : 0}`;
+  const unquietIds = frame.unquietScopes.map((scope) => assignedId(scope, ids)).join(',');
+  return `${nodeId}:${scopeId}:${unquietIds}`;
 }
 
 /** Looks up or allocates a dense positive integer ID for `node`. */
@@ -148,8 +145,8 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
     const resolved = state.resolveVariable(value, frame.returnScope);
     if (resolved === undefined) return false;
     const nextFrame: FactoryFrame = {
-      quietArgs: frame.quietArgs,
       returnScope: resolved.nextReturnScope,
+      unquietScopes: frame.unquietScopes,
     };
     return evaluateWrittenError(resolved.initializer, state, nextFrame);
   }
@@ -164,7 +161,7 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
       evaluateWrittenError(inner, state, frame)
     );
   }
-  return isCallExpression(value) && evaluateFactoryCall(value, state);
+  return isCallExpression(value) && evaluateFactoryCall(value, state, frame);
 }
 
 /** Conditional, comma, and logical expressions yield their reachable value branches. */
@@ -232,104 +229,25 @@ function directLocalErrorConstruction(value: Expression): boolean {
   );
 }
 
-/** Verifies local-word checks and guards against unproven factory parameter forwarding. */
+/** Verifies local-word checks and guards against unproven enclosing factory parameter reads. */
 function validConstructedLeaf(
   node: Expression,
   value: Expression,
   state: ProofState,
   frame: FactoryFrame,
 ): boolean {
-  if (
-    frame.returnScope !== undefined &&
-    !frame.quietArgs &&
-    readsScopeParameter(value, frame.returnScope)
-  ) {
+  if (frame.unquietScopes.some((scope) => readsScopeParameter(value, scope))) {
     return false;
   }
   return !state.check(node, false) && state.check(node, true);
 }
 
-/** Checks whether `construction` inside `fn` reads `fn`'s parameters or own `arguments` object. */
-function readsScopeParameter(construction: Expression, fn: Answering): boolean {
-  if (!isCallExpression(construction) && !isNewExpression(construction)) return false;
-  const context = {
-    fn,
-    parameterSet: new Set<Node>(parametersOf(fn)),
-    pending: [construction] as Node[],
-    seen: new Set<Node>(),
-  };
-  for (
-    let current = context.pending.pop();
-    current !== undefined;
-    current = context.pending.pop()
-  ) {
-    if (isTypeOnly(current)) continue;
-    if (
-      isIdentifier(current) &&
-      readsBinding(current) &&
-      inspectScopeIdentifier(current, context)
-    ) {
-      return true;
-    }
-    current.forEachChild((child) => {
-      context.pending.push(child);
-    });
-  }
-  return false;
-}
-
-/** Matches direct parameters, `fn`'s own `arguments`, and local declarations inside `fn`. */
-function inspectScopeIdentifier(
-  identifier: Identifier,
-  context: {
-    readonly fn: Answering;
-    readonly parameterSet: ReadonlySet<Node>;
-    readonly pending: Node[];
-    readonly seen: Set<Node>;
-  },
-): boolean {
-  const declared = frameDeclarationOf(identifier);
-  if (declared === undefined) {
-    return identifier.text === 'arguments' && ownsArgumentsBinding(identifier, context.fn);
-  }
-  if (context.parameterSet.has(declared)) return true;
-  if (!declaredWithinScope(declared, context.fn) || context.seen.has(declared)) return false;
-  context.seen.add(declared);
-  if (isVariableDeclaration(declared) && declared.initializer !== undefined) {
-    context.pending.push(declared.initializer);
-  } else if (isFunctionDeclaration(declared) && declared.body !== undefined) {
-    context.pending.push(declared.body);
-  }
-  return false;
-}
-
-/** Whether `node` is lexically nested inside `scope`. */
-function declaredWithinScope(node: Node, scope: Node): boolean {
-  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
-    if (at === scope) return true;
-  }
-  return false;
-}
-
-/** Whether an unbound `arguments` identifier refers to `fn`'s own non-arrow `arguments` object. */
-function ownsArgumentsBinding(identifier: Identifier, fn: Answering): boolean {
-  if (isArrowFunction(fn)) return false;
-  for (let at: Node = identifier.parent; !isSourceFile(at); at = at.parent) {
-    if (isArrowFunction(at)) continue;
-    if (
-      isAnswering(at) ||
-      isConstructorDeclaration(at) ||
-      isGetAccessorDeclaration(at) ||
-      isSetAccessorDeclaration(at)
-    ) {
-      return at === fn;
-    }
-  }
-  return false;
-}
-
 /** Requires a resolved synchronous local factory to return proven local Errors on every path. */
-function evaluateFactoryCall(call: CallExpression, state: ProofState): boolean {
+function evaluateFactoryCall(
+  call: CallExpression,
+  state: ProofState,
+  frame: FactoryFrame,
+): boolean {
   const invocation = framedFactoryCall(call, (callee) => localFactory(callee), frameDeclarationOf);
   if (invocation === undefined) return false;
   const { fn, given } = invocation;
@@ -344,13 +262,21 @@ function evaluateFactoryCall(call: CallExpression, state: ProofState): boolean {
   if (given.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
   const returns = completeFactoryReturns(fn);
   if (returns === undefined || returns.length === 0) return false;
-  const quietArgs = given.every((arg) => !isSpreadElement(arg) && framedQuietPrimitive(arg));
+  const unquietScopes = quietFactoryCall(fn, given)
+    ? frame.unquietScopes
+    : appendUnquietScope(frame.unquietScopes, fn);
+  const nextFrame: FactoryFrame = { returnScope: fn, unquietScopes };
   state.activeFactories.add(fn);
   try {
-    return returns.every((ret) => evaluateWrittenError(ret, state, { quietArgs, returnScope: fn }));
+    return returns.every((ret) => evaluateWrittenError(ret, state, nextFrame));
   } finally {
     state.activeFactories.delete(fn);
   }
+}
+
+/** Retains enclosing unquiet factory scopes while adding `fn` once when its call is unquiet. */
+function appendUnquietScope(scopes: readonly Answering[], fn: Answering): readonly Answering[] {
+  return scopes.includes(fn) ? scopes : [...scopes, fn];
 }
 
 /** Resolves inline functions, unchanged function declarations, and whole `const` aliases. */
@@ -372,40 +298,6 @@ function localFactory(callee: Expression): Answering | undefined {
     current = framedValueShape(declared.initializer).value;
   }
   return undefined;
-}
-
-/** Rejects duplicate function bodies in the same scope and lexical reassignments. */
-function unchangedFunctionDeclaration(declared: FunctionDeclaration): boolean {
-  if (declared.body === undefined || declared.name === undefined) return false;
-  const name = declared.name.text;
-  const siblings = 'statements' in declared.parent ? declared.parent.statements : undefined;
-  if (
-    siblings?.some(
-      (each) =>
-        each !== declared &&
-        isFunctionDeclaration(each) &&
-        each.body !== undefined &&
-        each.name?.text === name,
-    ) === true
-  ) {
-    return false;
-  }
-  const pending: Node[] = [declared.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      node.text === name &&
-      reassignedTarget(node) &&
-      frameDeclarationOf(node) === declared
-    ) {
-      return false;
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return true;
 }
 
 /** Collects every return expression of `fn` only when no control-flow path can fall through. */
@@ -473,9 +365,4 @@ function transparentDeclaration(statement: Statement): boolean {
     isInterfaceDeclaration(statement) ||
     (isVariableStatement(statement) && constantStatement(statement))
   );
-}
-
-/** Checks that a variable statement declares `const` bindings. */
-function constantStatement(statement: VariableStatement): boolean {
-  return /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile()));
 }
