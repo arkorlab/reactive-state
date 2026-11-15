@@ -1,13 +1,10 @@
 import {
-  type BinaryExpression,
   type Expression,
   type Identifier,
   isBinaryExpression,
-  isBlock,
   isCallExpression,
   isComputedPropertyName,
   isConditionalExpression,
-  isExpressionStatement,
   isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
@@ -15,7 +12,6 @@ import {
   isParameterDeclaration,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
-  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
@@ -24,7 +20,6 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
-  type ParameterDeclaration,
   type PropertyName,
   SyntaxKind,
   type VariableDeclaration,
@@ -32,21 +27,16 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { executionOwner } from './framed-array-mutations.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
 import { framedHeldVariable, framedMemberDeletes } from './framed-member-writes.ts';
 import { framedObjectSources } from './framed-object-members.ts';
 import { framedAssignedSources } from './framed-writes.ts';
 import { namesType } from './framed.ts';
+import { type BodyReading, parameterBodies, parameterValues } from './multipart-parameters.ts';
 import { constantValue } from './numbers.ts';
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
-
-interface BodyReading {
-  readonly bodies: readonly Expression[];
-  readonly overwrites: boolean;
-}
 
 const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
 const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
@@ -147,7 +137,7 @@ function identifierBodies(
     return variableBodies(name, selected.binding, point, seen);
   }
   return isParameterDeclaration(selected.binding)
-    ? parameterBodies(name, selected.binding, seen)
+    ? parameterBodies(name, selected.binding, point, (each, at) => bodiesOf(each, at, seen))
     : EMPTY_BODIES;
 }
 
@@ -165,7 +155,7 @@ function variableBodies(
   }
   const entries =
     bodyHeld.initial === undefined ? bodyHeld.held : [bodyHeld.initial, ...bodyHeld.held];
-  const bodies = entries.flatMap((entry) => heldOptionBodies(entry, seen));
+  const bodies = entries.flatMap((entry) => heldOptionBodies(entry, point, seen));
   const holder = framedHeldVariable(declaration);
   const deleted = framedMemberDeletes(name.getSourceFile()).some((each) => each.holder === holder);
   if (deleted) {
@@ -184,31 +174,21 @@ function variableBodies(
 }
 
 /** Body expressions selected by one held options path. */
-function heldOptionBodies(entry: Held, seen: ReadonlySet<Expression>): readonly Expression[] {
+function heldOptionBodies(
+  entry: Held,
+  point: Node,
+  seen: ReadonlySet<Expression>,
+): readonly Expression[] {
   if (entry.keys.length === 0) {
     return [entry.value];
   }
   if (entry.keys.length === 1 && entry.keys[0] === 'body') {
-    return bodiesOf(entry.value, entry.value, seen).bodies;
+    const at = isIdentifier(unwrapped(entry.value)) ? point : entry.value;
+    return bodiesOf(entry.value, at, seen).bodies;
   }
   return (framedObjectSources(entry.value, entry.keys) ?? [])
     .filter((each) => each.keys.length === 0)
     .map((each) => each.value);
-}
-
-/** Possible request bodies carried by a reassigned or untouched options parameter. */
-function parameterBodies(
-  name: Identifier,
-  parameter: ParameterDeclaration,
-  seen: ReadonlySet<Expression>,
-): BodyReading {
-  const resolved = parameterValues(name, parameter);
-  const readings = resolved.values.map((each) => bodiesOf(each, each, seen));
-  return {
-    bodies: readings.flatMap((each) => each.bodies),
-    overwrites:
-      resolved.replaced && readings.length > 0 && readings.every((each) => each.overwrites),
-  };
 }
 
 /** What a surviving property proves or may add to the possible request bodies. */
@@ -370,70 +350,4 @@ function heldFormData(entry: Held, seen: ReadonlySet<Expression>): boolean {
   }
   const sources = framedObjectSources(entry.value, entry.keys) ?? [];
   return sources.some((each) => each.keys.length === 0 && isFormData(each.value, seen));
-}
-
-/** Values assigned to a parameter before `name`, noting whether a definite write replaced the initial binding. */
-function parameterValues(
-  name: Identifier,
-  parameter: ParameterDeclaration,
-): { readonly replaced: boolean; readonly values: readonly Expression[] } {
-  const owner = executionOwner(name);
-  const cut = lastDefiniteParameterWrite(name, parameter, owner);
-  const assigned = framedAssignedSources(name)
-    .filter((each) => each.keys.length === 0)
-    .map((each) => each.value);
-  if (cut === undefined) {
-    return { replaced: false, values: assigned };
-  }
-  const later = assigned.filter(
-    (each) => each !== cut.right && (each.pos > cut.pos || executionOwner(each) !== owner),
-  );
-  return { replaced: true, values: [cut.right, ...later] };
-}
-
-/** Latest plain statement assignment to `parameter` in an enclosing block before `name`. */
-function lastDefiniteParameterWrite(
-  name: Identifier,
-  parameter: ParameterDeclaration,
-  owner: Node,
-): BinaryExpression | undefined {
-  let latest: BinaryExpression | undefined;
-  for (let at: Node = name; at !== owner && !isSourceFile(at); at = at.parent) {
-    const parent = at.parent;
-    if (!isBlock(parent) && !isSourceFile(parent)) {
-      continue;
-    }
-    for (const statement of parent.statements) {
-      if (statement === at) {
-        break;
-      }
-      const write = directParameterWrite(statement, parameter, owner);
-      if (write !== undefined && (latest === undefined || write.pos > latest.pos)) {
-        latest = write;
-      }
-    }
-  }
-  return latest;
-}
-
-/** Plain `param = rhs` expression statement in the same execution owner. */
-function directParameterWrite(
-  statement: Node,
-  parameter: ParameterDeclaration,
-  owner: Node,
-): BinaryExpression | undefined {
-  if (!isExpressionStatement(statement)) {
-    return undefined;
-  }
-  const expression = unwrapped(statement.expression);
-  if (
-    isBinaryExpression(expression) &&
-    expression.operatorToken.kind === SyntaxKind.EqualsToken &&
-    isIdentifier(expression.left) &&
-    frameDeclarationOf(expression.left) === parameter &&
-    executionOwner(expression) === owner
-  ) {
-    return expression;
-  }
-  return undefined;
 }
