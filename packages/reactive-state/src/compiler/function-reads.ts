@@ -37,6 +37,7 @@ import {
 import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
 import { declarationOf, namesType, parameterOf, takenApartOf } from './framed.ts';
+import { anyEntryReplaced, elementEntryKey, entryReplaced } from './function-entry-writes.ts';
 
 /**
  * What of a shared module's code reads what each side's bundle writes otherwise of a function of its
@@ -185,7 +186,7 @@ function elementEntryKind(
   seen: Set<Node>,
 ): FunctionKind | undefined {
   const holder = unwrapped(node.expression);
-  const key = elementKey(node);
+  const key = elementEntryKey(node);
   if (key !== undefined) {
     return entryFunctionKind(holder, key, seen);
   }
@@ -207,7 +208,9 @@ function entryFunctionKind(
   for (const property of resolved.object.properties) {
     kind = nextEntryKind(property, name, kind, seen);
   }
-  return kind === 'entry' && !resolved.constant ? 'renamed' : kind;
+  return kind === 'entry' && (!resolved.constant || entryReplaced(resolved.object, name))
+    ? 'renamed'
+    : kind;
 }
 
 /** Updates the classification of entry `name` as each object-literal element is visited in order. */
@@ -247,7 +250,9 @@ function tableFunctionKind(resolved: ResolvedObject, seen: Set<Node>): FunctionK
       kind = 'entry';
     }
   }
-  return kind === 'entry' && !resolved.constant ? 'renamed' : kind;
+  return kind === 'entry' && (!resolved.constant || anyEntryReplaced(resolved.object))
+    ? 'renamed'
+    : kind;
 }
 
 /** Resolves an inline or lexically bound object literal expression. */
@@ -316,16 +321,6 @@ function propertyKey(property: ObjectLiteralElementLike): string | undefined {
     return isIdentifier(property.name) ? property.name.text : undefined;
   }
   return 'name' in property && property.name !== undefined ? keyOf(property.name) : undefined;
-}
-
-/** Static key of an element access expression, including string, template and numeric literals. */
-function elementKey(node: ElementAccessExpression): string | undefined {
-  const name = literalName(node);
-  if (name !== undefined) {
-    return name;
-  }
-  const argument = unwrapped(node.argumentExpression);
-  return isNumericLiteral(argument) ? String(Number(argument.text)) : undefined;
 }
 
 /** The name of an entry the code writes: of a name, text, or a number; none of another. */
