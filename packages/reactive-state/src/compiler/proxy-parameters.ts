@@ -1,63 +1,29 @@
 import {
-  type BinaryExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isArrowFunction,
-  isBigIntLiteral,
   isBinaryExpression,
-  isCallExpression,
-  isClassExpression,
-  isConditionalExpression,
-  isForInStatement,
-  isForOfStatement,
-  isFunctionExpression,
   isIdentifier,
-  isNewExpression,
-  isObjectLiteralExpression,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
-  isRegularExpressionLiteral,
-  isSpreadElement,
-  isTaggedTemplateExpression,
-  isTemplateExpression,
-  isTypeOfExpression,
-  isVoidExpression,
   type Node,
   type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, parametersOf } from './answers.ts';
-import { globalOf, unwrapped } from './bounded.ts';
-import { rootOf, targetsOf } from './kept.ts';
+import type { Answering } from './answers.ts';
+import { unwrapped } from './bounded.ts';
 import { readsOf } from './local-module-reads.ts';
-import { constantValue } from './numbers.ts';
 import { parameterValue } from './parameter-values.ts';
 import {
-  type Context,
-  type Frame,
-  type Origin,
-  sourcePath,
-  sourceValue,
-  writtenBefore,
-} from './proxy-values.ts';
-import { freeReads, hoistedIn } from './scope.ts';
+  argumentPresence,
+  bindingChanged,
+  parameterFrame,
+  type ParameterFrame,
+} from './proxy-presence.ts';
+import { type Frame, type Origin, sourceValue, writtenBefore } from './proxy-values.ts';
+import { hoistedIn } from './scope.ts';
 import { interveningEvaluation } from './written-evaluation.ts';
-import { writtenBy } from './written.ts';
 
-/** Bound parameter metadata for a reference inside an active call frame. */
-export interface ParameterFrame {
-  readonly frame: Frame;
-  readonly index: number;
-  readonly parameter: ParameterDeclaration;
-}
-
-interface PresenceState {
-  readonly context: Context;
-  readonly nullable: boolean;
-  readonly seen: ReadonlySet<Expression>;
-}
+export { type ParameterFrame, parameterFrame } from './proxy-presence.ts';
 
 /** Assignment operators whose right-hand expression can become the target binding's value. */
 const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
@@ -66,33 +32,6 @@ const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.EqualsToken,
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
-
-/** Built-in calls whose completion value is never `undefined`. */
-const DEFINED_CALLS: ReadonlySet<string> = new Set([
-  'Boolean',
-  'Number',
-  'Proxy.revocable',
-  'String',
-  'Symbol',
-]);
-
-/** The nearest active source invocation whose lexical formal this identifier reads. */
-export function parameterFrame(
-  name: Identifier,
-  frames: readonly Frame[],
-): ParameterFrame | undefined {
-  for (const frame of frames.toReversed()) {
-    const parameters = parametersOf(frame.fn);
-    const index = parameters.findIndex(
-      (parameter) => isIdentifier(parameter.name) && readsOf(parameter.name, frame.fn)(name),
-    );
-    const parameter = parameters[index];
-    if (parameter !== undefined) {
-      return { frame, index, parameter };
-    }
-  }
-  return undefined;
-}
 
 /** Resolves a parameter read through replacements, reassignments, arguments, and defaults. */
 export function parameterOrigins(
@@ -188,41 +127,6 @@ function assignedParameterValues(fn: Answering, declared: Identifier): readonly 
   return found;
 }
 
-/** A possibly reassigned or mutated rest parameter no longer preserves its incoming tuple arity. */
-function bindingChanged(fn: Answering, declared: Identifier, members = false): boolean {
-  const isRead = readsOf(declared, fn);
-  const visit = (node: Node): boolean => {
-    if (members && handedParameter(node, isRead)) {
-      return true;
-    }
-    const target = !members && isCallExpression(node) ? undefined : writtenBy(node);
-    if (
-      target !== undefined &&
-      targetsOf(target).some((each) => {
-        const name = members ? rootOf(each) : each;
-        return name !== undefined && isIdentifier(name) && isRead(name);
-      })
-    ) {
-      return true;
-    }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return fn.body !== undefined && visit(fn.body);
-}
-
-/** A handed rest array can have its entries replaced before its selected value is returned. */
-function handedParameter(node: Node, isRead: (name: Identifier) => boolean): boolean {
-  let given: readonly Expression[] = [];
-  if (isCallExpression(node) || isNewExpression(node)) {
-    given = node.arguments ?? [];
-  } else if (isTaggedTemplateExpression(node)) {
-    given = [node.template];
-  }
-  return given.some(
-    (each) => !isSpreadElement(each) && [...freeReads(each)].some((name) => isRead(name)),
-  );
-}
-
 /** A rest array's entries, or an explicitly unknown binding after a prior write/evaluation. */
 export function spreadBinding(
   name: Identifier,
@@ -243,203 +147,4 @@ export function spreadBinding(
   return isIdentifier(parameter.name) && !bindingChanged(frame.fn, parameter.name, true)
     ? { values: frame.given?.slice(index) }
     : {};
-}
-
-/** Classifies whether an argument origin is guaranteed `undefined`, defined, or possibly either. */
-function argumentPresence(given: Origin): 'defined' | 'possible' | 'undefined' {
-  if (given.keys.length > 0) {
-    return 'possible';
-  }
-  if (guaranteedUndefined(given, new Set())) {
-    return 'undefined';
-  }
-  const defined = guaranteedDefined(given.value, {
-    context: given.context,
-    nullable: true,
-    seen: new Set(),
-  });
-  return defined ? 'defined' : 'possible';
-}
-
-/** Checks whether `given` evaluates to `undefined` on every path across active parameter frames. */
-function guaranteedUndefined(given: Origin, seen: ReadonlySet<Expression>): boolean {
-  if (given.keys.length > 0) {
-    return false;
-  }
-  const direct = unwrapped(given.value);
-  const value =
-    isIdentifier(direct) && parameterFrame(direct, given.context.frames) !== undefined
-      ? direct
-      : sourceValue(direct, given.context);
-  if (seen.has(value)) {
-    return false;
-  }
-  if (isVoidExpression(value) || globalOf(value) === 'undefined') {
-    return true;
-  }
-  return isIdentifier(value) && parameterUndefined(value, given.context, new Set([...seen, value]));
-}
-
-/** Checks whether a parameter reference `name` evaluates to `undefined` on every path. */
-function parameterUndefined(
-  name: Identifier,
-  context: Context,
-  seen: ReadonlySet<Expression>,
-): boolean {
-  const binding = parameterFrame(name, context.frames);
-  if (binding === undefined || !isIdentifier(binding.parameter.name)) {
-    return false;
-  }
-  const { frame, index, parameter } = binding;
-  const scoped = frameContextOf(context, frame);
-  const replaced = parameterValue(frame.fn, parameter.name, name);
-  if (replaced !== undefined) {
-    return guaranteedUndefined({ context: scoped, keys: [], seen, value: replaced.value }, seen);
-  }
-  if (
-    parameter.dotDotDotToken !== undefined ||
-    parameterReassigned(frame.fn, parameter.name) ||
-    frame.given === undefined
-  ) {
-    return false;
-  }
-  const given = frame.given[index];
-  if (given === undefined || guaranteedUndefined(given, seen)) {
-    return (
-      parameter.initializer === undefined ||
-      guaranteedUndefined({ context: scoped, keys: [], seen, value: parameter.initializer }, seen)
-    );
-  }
-  return false;
-}
-
-/** Checks whether `node` never evaluates to `undefined` (or `null` when `!state.nullable`). */
-function guaranteedDefined(node: Expression, state: PresenceState): boolean {
-  const direct = unwrapped(node);
-  const value =
-    isIdentifier(direct) && parameterFrame(direct, state.context.frames) !== undefined
-      ? direct
-      : sourceValue(direct, state.context);
-  if (state.seen.has(value)) {
-    return false;
-  }
-  const next: PresenceState = { ...state, seen: new Set([...state.seen, value]) };
-  if (constantValue(value) !== undefined || nonUndefinedLeaf(value, state.nullable)) {
-    return true;
-  }
-  if (isIdentifier(value)) {
-    return parameterDefined(value, next);
-  }
-  if (isConditionalExpression(value)) {
-    return guaranteedDefined(value.whenTrue, next) && guaranteedDefined(value.whenFalse, next);
-  }
-  if (isBinaryExpression(value)) {
-    return guaranteedDefinedBinary(value, next);
-  }
-  return (
-    isCallExpression(value) && DEFINED_CALLS.has(sourcePath(value.expression, state.context) ?? '')
-  );
-}
-
-/** Checks whether a parameter reference `name` never evaluates to `undefined` (or `null`). */
-function parameterDefined(name: Identifier, state: PresenceState): boolean {
-  const binding = parameterFrame(name, state.context.frames);
-  if (binding === undefined || !isIdentifier(binding.parameter.name)) {
-    return false;
-  }
-  const { frame, index, parameter } = binding;
-  const scoped = { ...state, context: frameContextOf(state.context, frame) };
-  const replaced = parameterValue(frame.fn, parameter.name, name);
-  if (replaced !== undefined) {
-    return guaranteedDefined(replaced.value, scoped);
-  }
-  if (parameterReassigned(frame.fn, parameter.name)) {
-    return false;
-  }
-  if (parameter.dotDotDotToken !== undefined) {
-    return true;
-  }
-  return incomingParameterDefined(frame, index, parameter.initializer, scoped);
-}
-
-/** Checks whether an unchanged parameter's incoming argument and default are guaranteed defined. */
-function incomingParameterDefined(
-  frame: Frame,
-  index: number,
-  initializer: Expression | undefined,
-  state: PresenceState,
-): boolean {
-  const defaultDefined = initializer !== undefined && guaranteedDefined(initializer, state);
-  if (frame.given === undefined) {
-    return state.nullable && defaultDefined;
-  }
-  const given = frame.given[index];
-  if (given === undefined || guaranteedUndefined(given, state.seen)) {
-    return defaultDefined;
-  }
-  const givenDefined =
-    given.keys.length === 0 && guaranteedDefined(given.value, { ...state, context: given.context });
-  return givenDefined || (state.nullable && defaultDefined);
-}
-
-/** Whether `fn` writes to `declared` or declares an initialized or loop-head `var` of its name. */
-function parameterReassigned(fn: Answering, declared: Identifier): boolean {
-  if (bindingChanged(fn, declared)) {
-    return true;
-  }
-  const declarations = fn.body === undefined ? [] : hoistedIn([fn.body]);
-  return declarations.some(
-    (each) =>
-      isIdentifier(each.name) &&
-      each.name.text === declared.text &&
-      (each.initializer !== undefined ||
-        isForInStatement(each.parent.parent) ||
-        isForOfStatement(each.parent.parent)),
-  );
-}
-
-/** Trims `context.frames` to `frame` and its enclosing callers when evaluating `frame`'s code. */
-function frameContextOf(context: Context, frame: Frame): Context {
-  const index = context.frames.lastIndexOf(frame);
-  return index === -1 ? context : { ...context, frames: context.frames.slice(0, index + 1) };
-}
-
-/** Checks binary operators whose result is guaranteed non-`undefined`. */
-function guaranteedDefinedBinary(value: BinaryExpression, state: PresenceState): boolean {
-  const kind = value.operatorToken.kind;
-  if (kind === SyntaxKind.CommaToken || kind === SyntaxKind.BarBarToken) {
-    return guaranteedDefined(value.right, state);
-  }
-  if (kind === SyntaxKind.QuestionQuestionToken) {
-    return (
-      guaranteedDefined(value.left, { ...state, nullable: false }) ||
-      guaranteedDefined(value.right, state)
-    );
-  }
-  return (
-    kind === SyntaxKind.AmpersandAmpersandToken &&
-    guaranteedDefined(value.left, state) &&
-    guaranteedDefined(value.right, state)
-  );
-}
-
-/** Checks literal, unary, and constructed expressions that never evaluate to `undefined`. */
-function nonUndefinedLeaf(value: Expression, nullable: boolean): boolean {
-  return (
-    (nullable && value.kind === SyntaxKind.NullKeyword) ||
-    value.kind === SyntaxKind.TrueKeyword ||
-    value.kind === SyntaxKind.FalseKeyword ||
-    isBigIntLiteral(value) ||
-    isTemplateExpression(value) ||
-    isRegularExpressionLiteral(value) ||
-    isObjectLiteralExpression(value) ||
-    isArrayLiteralExpression(value) ||
-    isArrowFunction(value) ||
-    isFunctionExpression(value) ||
-    isClassExpression(value) ||
-    isNewExpression(value) ||
-    isTypeOfExpression(value) ||
-    isPrefixUnaryExpression(value) ||
-    isPostfixUnaryExpression(value)
-  );
 }

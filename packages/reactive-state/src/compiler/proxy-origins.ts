@@ -22,6 +22,7 @@ import { metadataCallee } from './input-callees.ts';
 import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
 import {
   type Context,
+  createPresenceCache,
   heldConstant,
   literalTruth,
   objectOrigins,
@@ -43,7 +44,13 @@ export function proxyOrigin(
   values: readonly Expression[],
   reading: ProxyReading = {},
 ): Node | undefined {
-  const context: Context = { ...reading, calls: new Set(), frames: [], spreadKeys: new Map() };
+  const context: Context = {
+    ...reading,
+    calls: new Set(),
+    frames: [],
+    presence: createPresenceCache(),
+    spreadKeys: new Map(),
+  };
   const visited = new WeakMap<Context, Map<Expression, Set<string>>>();
   const pending: Origin[] = [
     ...values.map((value) => ({ context, keys: [], seen: new Set<Expression>(), value })),

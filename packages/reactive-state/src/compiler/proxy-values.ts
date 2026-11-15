@@ -43,11 +43,33 @@ export interface Frame {
   readonly given: readonly Origin[] | undefined;
 }
 
+/** Query kind for memoized parameter and argument definedness checks. */
+export type PresenceMode = 'defined' | 'non-nullish' | 'undefined';
+
+/** Per-walk memoization and Tarjan cycle tracking for argument presence queries. */
+export interface PresenceCache {
+  readonly active: Map<Frame | undefined, Map<PresenceMode, Map<Expression, number>>>;
+  readonly lowlinks: number[];
+  readonly permanent: Map<Frame | undefined, Map<PresenceMode, Map<Expression, boolean>>>;
+  readonly provisional: Map<Frame | undefined, Map<PresenceMode, Map<Expression, number>>>;
+}
+
 /** Call-stack state carried alongside an expression during Proxy origin traversal. */
 export interface Context extends ProxyReading {
   readonly calls: ReadonlySet<Node>;
   readonly frames: readonly Frame[];
+  readonly presence: PresenceCache;
   readonly spreadKeys: Map<ObjectLiteralExpression, ReadonlySet<string>>;
+}
+
+/** Creates an empty per-walk cache for `argumentPresence` queries. */
+export function createPresenceCache(): PresenceCache {
+  return {
+    active: new Map(),
+    lowlinks: [],
+    permanent: new Map(),
+    provisional: new Map(),
+  };
 }
 
 /** Candidate expression state, optional member projection path, and active spread context. */
