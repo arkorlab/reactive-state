@@ -2,6 +2,7 @@ import path from 'node:path';
 
 import {
   type ElementAccessExpression,
+  type ExportSpecifier,
   type Identifier,
   type ImportDeclaration,
   isCallExpression,
@@ -10,11 +11,13 @@ import {
   isExportDeclaration,
   isExportSpecifier,
   isIdentifier,
+  isImportAttribute,
   isImportClause,
   isImportDeclaration,
   isImportEqualsDeclaration,
   isImportSpecifier,
   isNamedExports,
+  isNamespaceExport,
   isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
   isPropertyAccessExpression,
@@ -103,7 +106,9 @@ function ownName(statement: Statement, exported: string): readonly string[] {
       : [];
   }
   const clause =
-    isExportDeclaration(statement) && statement.moduleSpecifier === undefined
+    isExportDeclaration(statement) &&
+    !statement.isTypeOnly &&
+    statement.moduleSpecifier === undefined
       ? statement.exportClause
       : undefined;
   return clause !== undefined && isNamedExports(clause)
@@ -259,15 +264,35 @@ function membersPast(node: Node): readonly string[] {
   return names;
 }
 
+/**
+ * Whether `read`, within `specifier`, names an exported alias, a re-export's binding, or a type
+ * alone — not a value of `sourceFile`'s own that `specifier` reads (`export { db }`, `export { db
+ * as store }`).
+ */
+function isListedExport(read: Identifier, specifier: ExportSpecifier): boolean {
+  const declaration = specifier.parent.parent;
+  return (
+    specifier.isTypeOnly ||
+    !isExportDeclaration(declaration) ||
+    declaration.isTypeOnly ||
+    declaration.moduleSpecifier !== undefined ||
+    (specifier.propertyName ?? specifier.name) !== read
+  );
+}
+
 /** Whether `read` names what an import or an export lists, not a value it reads. */
 function isListed(read: Identifier): boolean {
   const { parent } = read;
+  if (isExportSpecifier(parent)) {
+    return isListedExport(read, parent);
+  }
   return (
     isImportSpecifier(parent) ||
     isImportClause(parent) ||
     isNamespaceImport(parent) ||
-    isImportEqualsDeclaration(parent) ||
-    isExportSpecifier(parent)
+    isNamespaceExport(parent) ||
+    isImportAttribute(parent) ||
+    isImportEqualsDeclaration(parent)
   );
 }
 
@@ -360,10 +385,7 @@ export function databaseUseIn(sourceFile: SourceFile, holding: Holding): string 
   const own = path.resolve(sourceFile.fileName) === path.resolve(holding.database.file);
   const namespaces = namespacesOf(sourceFile, holding);
   for (const read of freeReads(sourceFile)) {
-    const use =
-      isListed(read) && !isExportSpecifier(read.parent)
-        ? undefined
-        : useAt(read, holding, namespaces);
+    const use = isListed(read) ? undefined : useAt(read, holding, namespaces);
     if (use !== undefined && !(own && isOwnExport(read))) {
       return use;
     }
