@@ -1,6 +1,7 @@
 import {
   type Expression,
   type FunctionDeclaration,
+  type Identifier,
   isAwaitExpression,
   isConditionalExpression,
   isIdentifier,
@@ -23,6 +24,7 @@ import {
   type Statement,
 } from 'typescript/ast';
 
+import { unshadowedReads } from './code-globals.ts';
 import {
   isBlank,
   isPageFunction,
@@ -207,6 +209,8 @@ interface Sites {
 /** What tells a root's element, and an element of a function of the page's, from the rest. */
 interface Tags {
   readonly names: PageNames;
+  /** The reads in the file's code that no scope around them declares again (`unshadowedReads`). */
+  readonly free: ReadonlySet<Identifier>;
   /** Whether a specifier names a reactive root the compile compiled. */
   readonly isRoot: (specifier: string) => boolean;
   readonly page: FunctionDeclaration;
@@ -217,10 +221,18 @@ function isEmpty(element: JsxElement | JsxSelfClosingElement): boolean {
   return !isJsxElement(element) || element.children.every((child) => isBlank(child));
 }
 
+/** Whether `element` is `react`'s `Suspense`, with no scope around it declaring the name again. */
+function isSuspenseElement(element: JsxElement | JsxSelfClosingElement, tags: Tags): boolean {
+  const tag = tagOf(element);
+  const root = isPropertyAccessExpression(tag) ? tag.expression : tag;
+  return isIdentifier(root) && tags.free.has(root) && isSuspense(tag, tags.names);
+}
+
 /** Whether `element` is the root's: of a default import of a reactive root the compile compiled. */
 function isRootElement(element: JsxElement | JsxSelfClosingElement, tags: Tags): boolean {
   const tag = tagOf(element);
-  const specifier = isIdentifier(tag) ? tags.names.defaults.get(tag.text) : undefined;
+  const specifier =
+    isIdentifier(tag) && tags.free.has(tag) ? tags.names.defaults.get(tag.text) : undefined;
   return specifier !== undefined && tags.isRoot(specifier);
 }
 
@@ -231,7 +243,7 @@ function innerOf(
 ): FunctionDeclaration | undefined {
   const tag = tagOf(element);
   const fn =
-    isIdentifier(tag) && !isRootElement(element, tags)
+    isIdentifier(tag) && tags.free.has(tag) && !isRootElement(element, tags)
       ? tags.names.functions.get(tag.text)
       : undefined;
   return fn === tags.page ? undefined : fn;
@@ -267,7 +279,7 @@ function sitesIn(node: Node, tags: Tags): Sites {
     const [each, suspended] = next;
     const element = isJsxElement(each) || isJsxSelfClosingElement(each) ? each : undefined;
     if (element === undefined || !recordSite({ element, suspended }, sites, tags)) {
-      const within = suspended || (element !== undefined && isSuspense(tagOf(element), tags.names));
+      const within = suspended || (element !== undefined && isSuspenseElement(element, tags));
       each.forEachChild((child) => {
         pending.push([child, within]);
       });
@@ -574,7 +586,7 @@ export function pageRenderOf(
   const context: RenderContext = {
     module: moduleNamesOf(sourceFile),
     sourceFile,
-    tags: { isRoot, names, page },
+    tags: { free: unshadowedReads(sourceFile), isRoot, names, page },
   };
   const rendered = renderedBy(page, sources, context);
   if (rendered === undefined) {
