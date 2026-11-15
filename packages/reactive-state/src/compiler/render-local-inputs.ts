@@ -1,4 +1,5 @@
 import {
+  type ElementAccessExpression,
   type Expression,
   isBinaryExpression,
   isBindingElement,
@@ -12,6 +13,7 @@ import {
   isShorthandPropertyAssignment,
   type Node,
   type ObjectLiteralExpression,
+  type PropertyAccessExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -21,7 +23,7 @@ import { sourceArrayFunction, sourceArrayMethod } from './framed-array-functions
 import { frameMemberName } from './framed-bindings.ts';
 import { computedBindingContainer, framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { assignedNames, localDateOwnData, localDateOwnMethod } from './local-date-inputs.ts';
-import { dateText, localNamed, localRead } from './local-reads.ts';
+import { dateText, localNamed } from './local-reads.ts';
 import { renderDateText } from './render-date-text.ts';
 import { renderIntlInput } from './render-intl-inputs.ts';
 import { reflectedRead } from './render-intl-reflections.ts';
@@ -58,13 +60,21 @@ export function renderLocalInput(node: Node): string | undefined {
     );
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
     if (writeOnly(node)) return undefined;
-    const formatter = renderIntlInput(node);
-    if (formatter !== undefined) return formatter;
-    const name = frameMemberName(node);
-    if (name !== undefined && LOCALE_MEMBERS.has(name))
-      return sourceArrayFunction(node) || localDateOwnData(node) ? undefined : localRead(node);
+    const member = renderIntlInput(node) ?? memberLocaleInput(node);
+    if (member !== undefined) return member;
   }
   return patternLocaleMember(node) ?? renderDateText(node) ?? dateText(node);
+}
+
+/** Direct, constant-key and multi-branch bracket reads retain native locale methods unless own. */
+function memberLocaleInput(
+  node: ElementAccessExpression | PropertyAccessExpression,
+): string | undefined {
+  const name = frameMemberName(node);
+  if (name === undefined)
+    return localeMemberOf(framedMemberNames(node), { keys: [], source: node.expression });
+  if (!LOCALE_MEMBERS.has(name)) return undefined;
+  return sourceArrayFunction(node) || localDateOwnData(node) ? undefined : localNamed(name);
 }
 
 /**
