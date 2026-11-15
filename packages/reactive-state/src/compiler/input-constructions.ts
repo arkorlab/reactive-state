@@ -121,7 +121,7 @@ export function constructionSources(
     return proxySources(given, source);
   }
   if (nativeFresh(path)) {
-    return [];
+    return nativeConstructionSources(value, path, given, source.bindings);
   }
   const fields = instanceFields(callee);
   const fn = constructorOf(callee);
@@ -311,12 +311,32 @@ function trapOf(node: Node): Answering | undefined {
   return fn !== undefined && isAnswering(fn) ? fn : undefined;
 }
 
+/** Synchronous callback effects of a direct native construction such as `new Promise(executor)`. */
+function nativeConstructionSources(
+  value: NewExpression,
+  path: string | undefined,
+  given: readonly Expression[],
+  bindings: MetadataSource['bindings'],
+): readonly MetadataSource[] | undefined {
+  const pending: Execution[] = [];
+  if (
+    !nativeCallbackEffects(path, given, { bindings, root: value, trail: new Set([value]) }, pending)
+  ) {
+    return undefined;
+  }
+  return executionPending(pending);
+}
+
 /** Input writes reached while a constructor or trap executes, even when call results are discarded. */
 function executionSources(
   roots: readonly Node[],
   bindings: MetadataSource['bindings'],
 ): readonly MetadataSource[] | undefined {
-  const pending: Execution[] = roots.map((root) => ({ bindings, root, trail: new Set() }));
+  return executionPending(roots.map((root) => ({ bindings, root, trail: new Set() })));
+}
+
+/** Pending execution roots and the input holders mutated before suspension or return. */
+function executionPending(pending: Execution[]): readonly MetadataSource[] | undefined {
   const found: MetadataSource[] = [];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     if (current.trail.has(current.root)) {
