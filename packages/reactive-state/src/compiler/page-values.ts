@@ -61,7 +61,7 @@ export type Held =
     };
 
 const CONSTANT: Held = { kind: 'constant' };
-const OTHER: Held = { kind: 'other' };
+export const OTHER: Held = { kind: 'other' };
 export const SEARCH: Held = { kind: 'search' };
 
 /** What a page's function reads its names in: its own, the file's, and those declared within it. */
@@ -131,7 +131,7 @@ export function moduleNamesOf(sourceFile: SourceFile): ReadonlyMap<string, 'cons
 }
 
 /** Each name `node` reads at run time, outside its types. */
-function namesRead(node: Node): readonly Identifier[] {
+export function namesRead(node: Node): readonly Identifier[] {
   const read: Identifier[] = [];
   const pending = [node];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {

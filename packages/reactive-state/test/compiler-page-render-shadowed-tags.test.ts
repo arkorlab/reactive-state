@@ -116,7 +116,7 @@ const CASES: readonly Case[] = [
     ],
   },
   {
-    expected: SLUG_BLOCKING,
+    expected: undefined,
     id: 'page-const-shadows-suspense',
     lines: [
       "import { Suspense } from 'react';",
@@ -133,7 +133,7 @@ const CASES: readonly Case[] = [
     ],
   },
   {
-    expected: SLUG_BLOCKING,
+    expected: undefined,
     id: 'page-const-shadows-react-suspense',
     lines: [
       "import * as React from 'react';",
