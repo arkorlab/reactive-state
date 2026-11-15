@@ -1,6 +1,7 @@
 import {
   type ElementAccessExpression,
   type Expression,
+  type Identifier,
   isArrowFunction,
   isBinaryExpression,
   isBindingElement,
@@ -20,6 +21,7 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isSpreadAssignment,
   isStringLiteral,
   isTemplateExpression,
   isVariableDeclaration,
@@ -29,17 +31,27 @@ import {
   type PropertyName,
   SyntaxKind,
   type TypeNode,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
-import { declarationOf, namesType, parameterOf } from './framed.ts';
+import { declarationOf, namesType, parameterOf, takenApartOf } from './framed.ts';
 
 /**
  * What of a shared module's code reads what each side's bundle writes otherwise of a function of its
  * (`settled.ts`): its source, which a bundle's transforms and its minifier write anew, and its name,
  * which a minifier may shorten — `pick.toString()`, `String(pick)`, `pick.name`.
  */
+
+/** Whether a function's runtime `.name` comes from an unminified entry key or a minifiable binding. */
+type FunctionKind = 'entry' | 'renamed';
+
+/** Resolved object literal together with whether its binding chain is immutable (`const`). */
+interface ResolvedObject {
+  readonly constant: boolean;
+  readonly object: ObjectLiteralExpression;
+}
 
 /** The members of a function each side's bundle writes otherwise: its source, its name. */
 const BUNDLED: ReadonlySet<string> = new Set(['name', 'toString']);
@@ -56,22 +68,23 @@ const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, Syn
 
 /**
  * What of `node` reads what each side's bundle writes otherwise of a function the code shows it
- * writes (`isFunction`): its source — `toString` of it, `String(pick)`, a template, `pick + ''` — or
- * the name it is declared by, `pick.name`; none of another, nor of a value the code shows no
- * function of, nor the name of an entry of an object, which no bundle shortens.
+ * writes (`functionKind`): its source — `toString` of it, `String(pick)`, a template, `pick + ''` —
+ * or a `.name` that comes from a declaration, variable or named expression rather than a static
+ * object entry key.
  */
 export function functionRead(node: Node): string | undefined {
   const read = memberRead(node);
   if (read !== undefined) {
-    const of = unwrapped(read.of);
-    const named =
-      read.name === 'name' && (isPropertyAccessExpression(of) || isElementAccessExpression(of));
-    return !named && BUNDLED.has(read.name) && isFunction(of, new Set())
-      ? `reads \`${read.name}\` of a function, which each side's bundle writes otherwise`
-      : undefined;
+    if (!BUNDLED.has(read.name)) {
+      return undefined;
+    }
+    const kind = functionKind(unwrapped(read.of), new Set());
+    return kind === undefined || (read.name === 'name' && kind === 'entry')
+      ? undefined
+      : `reads \`${read.name}\` of a function, which each side's bundle writes otherwise`;
   }
   const written = textOf(node);
-  return written !== undefined && isFunction(unwrapped(written), new Set())
+  return written !== undefined && functionKind(unwrapped(written), new Set()) !== undefined
     ? "writes a function as text, which each side's bundle writes otherwise"
     : undefined;
 }
@@ -106,78 +119,141 @@ function textOf(node: Node): Expression | undefined {
     return node.arguments[0];
   }
   if (isTemplateExpression(node)) {
-    return node.templateSpans.find((span) => isFunction(unwrapped(span.expression), new Set()))
-      ?.expression;
+    return node.templateSpans.find(
+      (span) => functionKind(unwrapped(span.expression), new Set()) !== undefined,
+    )?.expression;
   }
   if (!isBinaryExpression(node) || !ADDING.has(node.operatorToken.kind)) {
     return undefined;
   }
-  return isFunction(unwrapped(node.left), new Set()) ? node.left : node.right;
+  return functionKind(unwrapped(node.left), new Set()) === undefined ? node.right : node.left;
 }
 
-/**
- * Whether `node` is a function the code shows it writes: an arrow, a function, a class; an entry of
- * an object it writes (`helpers.pick`, `helpers['pick']`); what a name around it is declared of; or
- * a parameter said to be one, `(pick: () => string)`.
- */
-function isFunction(node: Expression, seen: Set<Node>): boolean {
+/** Classifies `node` as an object-entry-named function, a minifiable function, or neither. */
+function functionKind(node: Expression, seen: Set<Node>): FunctionKind | undefined {
   if (isArrowFunction(node) || isFunctionExpression(node) || isClassExpression(node)) {
-    return true;
+    return 'renamed';
   }
   if (isPropertyAccessExpression(node)) {
-    return isEntryFunction(unwrapped(node.expression), node.name.text, seen);
+    return entryFunctionKind(unwrapped(node.expression), node.name.text, seen);
   }
   if (isElementAccessExpression(node)) {
-    return isElementEntryFunction(node, seen);
+    return elementEntryKind(node, seen);
   }
-  if (!isIdentifier(node)) {
-    return false;
-  }
-  const declared = declarationOf(node);
-  if (declared === undefined) {
-    return isFunctionType(parameterOf(node)?.type);
-  }
-  if (seen.has(declared)) {
-    return false;
-  }
-  seen.add(declared);
-  return (
-    !isVariableDeclaration(declared) ||
-    isFunctionType(declared.type) ||
-    (declared.initializer !== undefined && isFunction(unwrapped(declared.initializer), seen))
-  );
+  return isIdentifier(node) ? identifierKind(node, seen) : undefined;
 }
 
-/** Whether bracket access `node` reads a function entry from a written object literal. */
-function isElementEntryFunction(node: ElementAccessExpression, seen: Set<Node>): boolean {
+/** Resolves an identifier through declarations, destructured object entries, and function parameters. */
+function identifierKind(node: Identifier, seen: Set<Node>): FunctionKind | undefined {
+  const declared = declarationOf(node);
+  if (declared === undefined) {
+    return undeclaredKind(node, seen);
+  }
+  if (seen.has(declared)) {
+    return undefined;
+  }
+  seen.add(declared);
+  return isVariableDeclaration(declared) ? variableKind(declared, seen) : 'renamed';
+}
+
+/** Resolves destructured object bindings (`const { pick } = helpers`) or typed function parameters. */
+function undeclaredKind(node: Identifier, seen: Set<Node>): FunctionKind | undefined {
+  const taken = takenApartOf(node);
+  if (taken === undefined || seen.has(taken.of)) {
+    return isFunctionType(parameterOf(node)?.type) ? 'renamed' : undefined;
+  }
+  seen.add(taken.of);
+  const kind = entryFunctionKind(unwrapped(taken.of), taken.key, seen);
+  return kind === 'entry' && !isConstInitializer(taken.of) ? 'renamed' : kind;
+}
+
+/** Preserves `'entry'` across `const` aliases while degrading mutable `let` bindings to `'renamed'`. */
+function variableKind(declared: VariableDeclaration, seen: Set<Node>): FunctionKind | undefined {
+  const fromInit =
+    declared.initializer === undefined
+      ? undefined
+      : functionKind(unwrapped(declared.initializer), seen);
+  if (fromInit !== undefined) {
+    return isConstDeclaration(declared) ? fromInit : 'renamed';
+  }
+  return isFunctionType(declared.type) ? 'renamed' : undefined;
+}
+
+/** Classifies a bracket entry read on a written object literal, with static or dynamic key. */
+function elementEntryKind(
+  node: ElementAccessExpression,
+  seen: Set<Node>,
+): FunctionKind | undefined {
   const holder = unwrapped(node.expression);
   const key = elementKey(node);
   if (key !== undefined) {
-    return isEntryFunction(holder, key, seen);
+    return entryFunctionKind(holder, key, seen);
   }
-  const object = holderObject(holder, seen);
-  return object !== undefined && object.properties.some((each) => propertyIsFunction(each, seen));
+  const resolved = holderObject(holder, seen);
+  return resolved === undefined ? undefined : tableFunctionKind(resolved, seen);
 }
 
-/** Whether `holder`, an object literal or name of one, holds a function as its entry `name`. */
-function isEntryFunction(holder: Expression, name: string, seen: Set<Node>): boolean {
-  const object = holderObject(holder, seen);
-  if (object === undefined) {
-    return false;
+/** Classifies entry `name` of `holder` when `holder` resolves to a written object literal. */
+function entryFunctionKind(
+  holder: Expression,
+  name: string,
+  seen: Set<Node>,
+): FunctionKind | undefined {
+  const resolved = holderObject(holder, seen);
+  if (resolved === undefined) {
+    return undefined;
   }
-  let matched = false;
-  for (const property of object.properties) {
-    if (propertyKey(property) === name) {
-      matched = propertyIsFunction(property, seen);
+  let kind: FunctionKind | undefined;
+  for (const property of resolved.object.properties) {
+    kind = nextEntryKind(property, name, kind, seen);
+  }
+  return kind === 'entry' && !resolved.constant ? 'renamed' : kind;
+}
+
+/** Updates the classification of entry `name` as each object-literal element is visited in order. */
+function nextEntryKind(
+  property: ObjectLiteralElementLike,
+  name: string,
+  current: FunctionKind | undefined,
+  seen: Set<Node>,
+): FunctionKind | undefined {
+  if (isSpreadAssignment(property)) {
+    return current === 'entry' ? 'renamed' : current;
+  }
+  const key = propertyKey(property);
+  if (key === undefined) {
+    return current === 'entry' && propertyFunctionKind(property, key, seen) !== undefined
+      ? 'renamed'
+      : current;
+  }
+  return key === name ? propertyFunctionKind(property, key, seen) : current;
+}
+
+/** Classifies a dynamic lookup across all entries of a written object literal. */
+function tableFunctionKind(resolved: ResolvedObject, seen: Set<Node>): FunctionKind | undefined {
+  let kind: FunctionKind | undefined;
+  for (const property of resolved.object.properties) {
+    if (isSpreadAssignment(property)) {
+      if (kind === 'entry') {
+        kind = 'renamed';
+      }
+      continue;
+    }
+    const each = propertyFunctionKind(property, propertyKey(property), seen);
+    if (each === 'renamed') {
+      return 'renamed';
+    }
+    if (each === 'entry') {
+      kind = 'entry';
     }
   }
-  return matched;
+  return kind === 'entry' && !resolved.constant ? 'renamed' : kind;
 }
 
 /** Resolves an inline or lexically bound object literal expression. */
-function holderObject(holder: Expression, seen: Set<Node>): ObjectLiteralExpression | undefined {
+function holderObject(holder: Expression, seen: Set<Node>): ResolvedObject | undefined {
   if (isObjectLiteralExpression(holder)) {
-    return holder;
+    return { constant: true, object: holder };
   }
   const declared = isIdentifier(holder) ? declarationOf(holder) : undefined;
   if (
@@ -189,22 +265,49 @@ function holderObject(holder: Expression, seen: Set<Node>): ObjectLiteralExpress
     return undefined;
   }
   seen.add(declared);
-  return holderObject(unwrapped(declared.initializer), seen);
+  const inner = holderObject(unwrapped(declared.initializer), seen);
+  return inner === undefined
+    ? undefined
+    : { constant: inner.constant && isConstDeclaration(declared), object: inner.object };
 }
 
-/** Whether `property` of an object literal defines a function value. */
-function propertyIsFunction(property: ObjectLiteralElementLike, seen: Set<Node>): boolean {
+/** Classifies a single object-literal property as `'entry'`, `'renamed'`, or non-function. */
+function propertyFunctionKind(
+  property: ObjectLiteralElementLike,
+  key: string | undefined,
+  seen: Set<Node>,
+): FunctionKind | undefined {
   if (isMethodDeclaration(property)) {
-    return true;
+    return 'entry';
   }
   if (isPropertyAssignment(property)) {
-    return isFunction(unwrapped(property.initializer), seen);
+    const value = unwrapped(property.initializer);
+    if (key !== undefined && key !== '__proto__' && isAnonymousDefinition(value)) {
+      return 'entry';
+    }
+    return functionKind(value, seen);
   }
-  return (
-    isShorthandPropertyAssignment(property) &&
-    isIdentifier(property.name) &&
-    isFunction(property.name, seen)
-  );
+  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
+    ? functionKind(property.name, seen)
+    : undefined;
+}
+
+/** Whether `node` receives its `.name` from an enclosing property assignment via `NamedEvaluation`. */
+function isAnonymousDefinition(node: Expression): boolean {
+  if (isArrowFunction(node)) {
+    return true;
+  }
+  return (isFunctionExpression(node) || isClassExpression(node)) && node.name === undefined;
+}
+
+/** Whether `declared` belongs to a `const` declaration list. */
+function isConstDeclaration(declared: VariableDeclaration): boolean {
+  return /^const\s/u.test(declared.parent.getText(declared.getSourceFile()));
+}
+
+/** Whether `initializer` is the RHS of a `const` variable declaration. */
+function isConstInitializer(initializer: Expression): boolean {
+  return isVariableDeclaration(initializer.parent) && isConstDeclaration(initializer.parent);
 }
 
 /** Static property key of an object literal element. */
