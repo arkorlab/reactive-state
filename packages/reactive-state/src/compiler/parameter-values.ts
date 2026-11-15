@@ -4,15 +4,18 @@ import {
   isBinaryExpression,
   isBlock,
   isCallExpression,
+  isDoStatement,
   isElementAccessExpression,
   isExpressionStatement,
   isForInStatement,
   isForOfStatement,
+  isForStatement,
   isIdentifier,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isVariableStatement,
+  isWhileStatement,
   type Node,
   type Statement,
   SyntaxKind,
@@ -95,8 +98,7 @@ function uncertainReplacement(
       (declaration.initializer !== undefined ||
         isForInStatement(declaration.parent.parent) ||
         isForOfStatement(declaration.parent.parent)) &&
-      declaration.pos >= replacement.value.end &&
-      declaration.pos < name.pos
+      precedesRead(declaration, name, replacement, fn)
     );
   });
   if (laterVar) {
@@ -104,15 +106,56 @@ function uncertainReplacement(
   }
   const visit = (node: Node): boolean => {
     const target = isCallExpression(node) ? undefined : writtenBy(node);
-    if (target !== undefined && assignsBinding(target, isRead)) {
-      const later = node.pos >= replacement.value.end && node.pos < name.pos;
-      if (later || withinFunction(node, fn)) {
-        return true;
-      }
+    if (
+      target !== undefined &&
+      assignsBinding(target, isRead) &&
+      (precedesRead(node, name, replacement, fn) || withinFunction(node, fn))
+    ) {
+      return true;
     }
     return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
   };
   return fn.body !== undefined && visit(fn.body);
+}
+
+/** Whether `write` can run after `replacement` and before `read`, including an earlier iteration. */
+function precedesRead(
+  write: Node,
+  read: Identifier,
+  replacement: ParameterValue,
+  fn: Answering,
+): boolean {
+  return (
+    write.pos >= replacement.value.end && (write.pos < read.pos || repeatsBefore(write, read, fn))
+  );
+}
+
+/** Whether an enclosing loop can carry `write` into a subsequent execution of `read`. */
+function repeatsBefore(write: Node, read: Node, fn: Answering): boolean {
+  for (let each = read; each !== fn; each = each.parent) {
+    const parent = each.parent;
+    if (!isLoop(parent) || write.pos < parent.pos || write.end > parent.end) {
+      continue;
+    }
+    const once =
+      (isForStatement(parent) && parent.initializer === each) ||
+      ((isForOfStatement(parent) || isForInStatement(parent)) && parent.expression === each);
+    if (!once) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether `node` is a loop statement. */
+function isLoop(node: Node): boolean {
+  return (
+    isForStatement(node) ||
+    isForOfStatement(node) ||
+    isForInStatement(node) ||
+    isWhileStatement(node) ||
+    isDoStatement(node)
+  );
 }
 
 /** A direct binding write, including destructuring targets, but no write through a member. */
