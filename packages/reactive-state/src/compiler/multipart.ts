@@ -26,12 +26,19 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf } from './code-globals.ts';
+import { destructuredFirst } from './destructuring-order.ts';
+import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
-import { framedHeldVariable, framedMemberDeletes } from './framed-member-writes.ts';
+import {
+  framedHeldVariable,
+  framedMemberDeletes,
+  type MemberDelete,
+} from './framed-member-writes.ts';
 import { framedObjectSources } from './framed-object-members.ts';
-import { framedAssignedSources } from './framed-writes.ts';
+import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { namesType } from './framed.ts';
 import { type BodyReading, parameterBodies, parameterValues } from './multipart-parameters.ts';
 import { constantValue } from './numbers.ts';
@@ -45,6 +52,7 @@ interface AnalysisState {
   readonly seen: ReadonlySet<Expression>;
 }
 
+const BODY_KEY = 'body';
 const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
 const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
 
@@ -196,7 +204,7 @@ function variableBodies(
   state: AnalysisState,
 ): BodyReading {
   const whole = framedHeldValues(name, [], name);
-  const bodyHeld = framedHeldValues(name, ['body'], point);
+  const bodyHeld = framedHeldValues(name, [BODY_KEY], point);
   if (whole === undefined || bodyHeld === undefined) {
     return EMPTY_BODIES;
   }
@@ -204,8 +212,7 @@ function variableBodies(
     bodyHeld.initial === undefined ? bodyHeld.held : [bodyHeld.initial, ...bodyHeld.held];
   const bodies = entries.flatMap((entry) => heldOptionBodies(entry, point, state));
   const holder = framedHeldVariable(declaration);
-  const deleted = framedMemberDeletes(name.getSourceFile()).some((each) => each.holder === holder);
-  if (deleted) {
+  if (removesHolderBody(name, holder, point)) {
     return { bodies, overwrites: false };
   }
   if (whole.initial !== undefined && whole.held.length === 0 && bodyHeld.initial === undefined) {
@@ -215,7 +222,9 @@ function variableBodies(
   const overwrites =
     wholeEntries.length > 0 &&
     wholeEntries.every(
-      (each) => each.keys.length === 0 && bodiesOf(each.value, each.value, state).overwrites,
+      (each) =>
+        each.keys.length === 0 &&
+        bodiesOf(each.value, readingPoint(each.value, point), state).overwrites,
     );
   return { bodies, overwrites };
 }
@@ -225,13 +234,54 @@ function heldOptionBodies(entry: Held, point: Node, state: AnalysisState): reado
   if (entry.keys.length === 0) {
     return [entry.value];
   }
-  if (entry.keys.length === 1 && entry.keys[0] === 'body') {
-    const at = isIdentifier(unwrapped(entry.value)) ? point : entry.value;
-    return bodiesOf(entry.value, at, state).bodies;
+  if (entry.keys.length === 1 && entry.keys[0] === BODY_KEY) {
+    return bodiesOf(entry.value, readingPoint(entry.value, point), state).bodies;
   }
   return (framedObjectSources(entry.value, entry.keys) ?? [])
     .filter((each) => each.keys.length === 0)
     .map((each) => each.value);
+}
+
+/** Evaluation point where an option source's own fields are read rather than forwarded by reference. */
+function readingPoint(expression: Expression, point: Node): Node {
+  const value = unwrapped(expression);
+  return isCallExpression(value) || isObjectLiteralExpression(value) ? value : point;
+}
+
+/** Whether any reachable deletion or whole-object hand-off on `holder` may remove its `body` field. */
+function removesHolderBody(name: Identifier, holder: VariableDeclaration, point: Node): boolean {
+  return framedMemberDeletes(name.getSourceFile()).some(
+    (each) =>
+      each.holder === holder &&
+      removesBodyField(each) &&
+      reachesHolderRead(each.node, holder, point),
+  );
+}
+
+/** Whether a recorded deletion or hand-off targets `body`, an unknown key, or the root holder itself. */
+function removesBodyField(change: MemberDelete): boolean {
+  if (change.handed) {
+    return change.path.length === 0;
+  }
+  return change.path.length === 1 && change.path[0]?.includes(BODY_KEY) !== false;
+}
+
+/** Whether `change` can execute before `point`, from another owner, on a shared holder, or via a loop. */
+function reachesHolderRead(change: Node, holder: VariableDeclaration, point: Node): boolean {
+  if (!framedPossibleBranch(change)) {
+    return false;
+  }
+  const owner = executionOwner(point);
+  if (
+    executionOwner(change) !== owner ||
+    executionOwner(holder) !== owner ||
+    change.pos < point.end ||
+    destructuredFirst(change, point) ||
+    ownerKeyFirst(change, point)
+  ) {
+    return true;
+  }
+  return repeatedFrameRead(change, point, holder, owner);
 }
 
 /** What a surviving property proves or may add to the possible request bodies. */
@@ -245,7 +295,7 @@ function propertyBodies(
   }
   const key = optionKey(property.name);
   const held = propertyValue(property);
-  if (key === 'body') {
+  if (key === BODY_KEY) {
     return { bodies: held === undefined ? [] : [held], overwrites: true };
   }
   return key === undefined && held !== undefined && isFormData(held, { ...state, seen: new Set() })
