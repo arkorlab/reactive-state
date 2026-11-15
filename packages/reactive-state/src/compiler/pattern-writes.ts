@@ -1,19 +1,27 @@
 import {
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
+  isConditionalExpression,
   isFunctionDeclaration,
   isIdentifier,
   isLiteralTypeNode,
   isNewExpression,
+  isObjectLiteralExpression,
   isParameterDeclaration,
   isParenthesizedTypeNode,
+  isPropertyAssignment,
   isRegularExpressionLiteral,
+  isShorthandPropertyAssignment,
+  isSpreadElement,
+  isStringLiteral,
   isUnionTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
+  type ObjectLiteralElementLike,
   SyntaxKind,
   type TypeNode,
 } from 'typescript/ast';
@@ -22,6 +30,7 @@ import { unwrapped } from './bounded.ts';
 import { BUILT_INS, PLATFORM_ALIKE } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
+import { framedHeldValues } from './framed-held-members.ts';
 import { constantValue } from './numbers.ts';
 
 /** What matching a retained regular expression changes of its lastIndex. */
@@ -69,8 +78,21 @@ const PATTERN_CAPABLE_CONSTRUCTORS: ReadonlySet<string> = new Set(['Object', 'Pr
 
 /** The global symbol a method key names, through aliases; none of another key or a shadowed Symbol. */
 export function patternSymbolName(key: Expression): string | undefined {
-  const path = globalPathOf(patternValue(key))?.join('.');
-  return path !== undefined && INDEXING_SYMBOLS.has(path) ? path : undefined;
+  const pending: Expression[] = [key];
+  const seen = new Set<Expression>();
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    const value = unwrapped(current);
+    if (seen.has(value)) {
+      continue;
+    }
+    seen.add(value);
+    const path = globalPathOf(value)?.join('.');
+    if (path !== undefined && INDEXING_SYMBOLS.has(path)) {
+      return path;
+    }
+    pending.push(...symbolKeyCandidates(value));
+  }
+  return undefined;
 }
 
 /**
@@ -108,14 +130,12 @@ function flagsOf(pattern: Expression): string | null | undefined {
     }
     const given = patternArguments(value);
     if (given === undefined) {
-      if (seen.size > 1) {
-        return primitivePatternSource(value) ? '' : null;
-      }
-      return nonPatternValue(value) ? undefined : null;
+      return unconstructedFlags(value, seen.size > 1);
     }
     const [source, flags] = given;
-    if (flags !== undefined && globalPathOf(unwrapped(flags))?.join('.') !== 'undefined') {
-      return writtenFlags(flags);
+    const explicit = explicitPatternFlags(flags);
+    if (explicit !== undefined) {
+      return explicit;
     }
     if (source === undefined) {
       return '';
@@ -123,6 +143,22 @@ function flagsOf(pattern: Expression): string | null | undefined {
     value = unwrapped(source);
   }
   return null;
+}
+
+/** Flags when `value` is not a literal or `RegExp(...)` construction. */
+function unconstructedFlags(value: Expression, copied: boolean): string | null | undefined {
+  if (copied) {
+    return primitivePatternSource(value) ? '' : null;
+  }
+  return nonPatternValue(value) ? undefined : null;
+}
+
+/** Explicit 2nd-argument flags on `RegExp(source, flags)`, or `undefined` when omitted. */
+function explicitPatternFlags(flags: Expression | undefined): string | null | undefined {
+  if (flags === undefined || globalPathOf(unwrapped(flags))?.join('.') === 'undefined') {
+    return undefined;
+  }
+  return writtenFlags(flags);
 }
 
 /** The flags written as text through constants, or null where they may keep an index. */
@@ -224,7 +260,7 @@ function constInitializer(name: Identifier): Expression | undefined {
     : undefined;
 }
 
-/** What a pattern or symbol key's constant name is declared of, without following an alias twice. */
+/** What a pattern's constant name is declared of, without following an alias twice. */
 function patternValue(node: Expression): Expression {
   let value = unwrapped(node);
   const seen = new Set<Expression>();
@@ -244,5 +280,84 @@ function patternArguments(value: Expression): readonly Expression[] | undefined 
   return (isNewExpression(value) || isCallExpression(value)) &&
     globalPathOf(patternValue(value.expression))?.join('.') === 'RegExp'
     ? (value.arguments ?? [])
+    : undefined;
+}
+
+/** Candidate expressions that `value` can evaluate to when used as a bracketed symbol key. */
+function symbolKeyCandidates(value: Expression): readonly Expression[] {
+  if (isConditionalExpression(value)) {
+    return [value.whenTrue, value.whenFalse];
+  }
+  return isIdentifier(value) ? identifierSymbolCandidates(value) : [];
+}
+
+/** Held initializers, assignments or parameter defaults reaching `name` at its read site. */
+function identifierSymbolCandidates(name: Identifier): readonly Expression[] {
+  const held = framedHeldValues(name, [], name);
+  if (held !== undefined) {
+    const entries = held.initial === undefined ? held.held : [held.initial, ...held.held];
+    return entries.flatMap((entry) => selectedLiteralValues(entry.value, entry.keys));
+  }
+  const declared = frameDeclarationOf(name);
+  return declared !== undefined &&
+    isParameterDeclaration(declared) &&
+    isIdentifier(declared.name) &&
+    declared.initializer !== undefined
+    ? [declared.initializer]
+    : [];
+}
+
+/** Projects destructured `keys` across literal containers, or returns `[root]` when whole. */
+function selectedLiteralValues(root: Expression, keys: readonly string[]): readonly Expression[] {
+  let values: readonly Expression[] = [root];
+  for (const key of keys) {
+    values = values.flatMap((each) => literalStepValues(unwrapped(each), key));
+  }
+  return values;
+}
+
+/** Selects one static property or unshifted tuple slot `key` from `node`. */
+function literalStepValues(node: Expression, key: string): readonly Expression[] {
+  if (isArrayLiteralExpression(node)) {
+    const slot = Number(key);
+    if (
+      !Number.isSafeInteger(slot) ||
+      slot < 0 ||
+      node.elements.slice(0, slot + 1).some((each) => isSpreadElement(each))
+    ) {
+      return [];
+    }
+    const item = node.elements[slot];
+    return item === undefined ? [] : [item];
+  }
+  if (!isObjectLiteralExpression(node)) {
+    return [];
+  }
+  const matches: Expression[] = [];
+  for (const property of node.properties) {
+    const value = objectPropertyValue(property, key);
+    if (value !== undefined) {
+      matches.push(value);
+    }
+  }
+  return matches;
+}
+
+/** A static own property value matching `key` inside an object literal. */
+function objectPropertyValue(
+  property: ObjectLiteralElementLike,
+  key: string,
+): Expression | undefined {
+  if (
+    isPropertyAssignment(property) &&
+    (isIdentifier(property.name) || isStringLiteral(property.name)) &&
+    property.name.text === key
+  ) {
+    return property.initializer;
+  }
+  return isShorthandPropertyAssignment(property) &&
+    isIdentifier(property.name) &&
+    property.name.text === key
+    ? property.name
     : undefined;
 }
