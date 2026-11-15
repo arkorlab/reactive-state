@@ -38,7 +38,11 @@ import {
   quietDefinitionPrefix,
 } from './middleware-array-conversions.ts';
 import { middlewareCopyOrigins } from './middleware-array-copy-origins.ts';
-import { middlewareArraySplice, middlewareCopySlotIndex } from './middleware-array-splices.ts';
+import {
+  middlewareArraySplice,
+  middlewareCopySlotIndex,
+  middlewareSliceProjection,
+} from './middleware-array-splices.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
@@ -166,69 +170,10 @@ export function middlewareArraySlice(
   if (index === undefined) return undefined;
   const original = sliceSource(call);
   if (original === undefined) return undefined;
-  return sliceProjection(call, keys, original, { index, relative });
-}
-
-/** Known slice windows map a copied slot back to its original position without retaining the wrapper. */
-function sliceProjection(
-  call: CallExpression,
-  keys: readonly string[],
-  original: SliceSource,
-  selection: { readonly index: number; readonly relative: boolean },
-): SliceProjection | undefined {
-  const { index, relative } = selection;
-  const { selected, source } = original;
-  if (selected.method === 'toSpliced') {
-    const spliced = middlewareArraySplice(
-      { call, keys, ...selected, length: source.elements.length, relative },
-      { start: sliceBound, count: nativeIndex },
-    );
-    return spliced.length === 1 ? spliced[0] : undefined;
-  }
-  if (selected.method !== 'slice') return reorderedProjection(keys, original, selection);
-  const prefix =
-    selected.given === undefined ? undefined : framedArgumentPrefix(call, selected.given, 2);
-  const definite = prefix !== undefined && !prefix.unknown && prefix.alternatives === undefined;
-  const start = definite ? sliceBound(prefix.values[0], source.elements.length, 0) : undefined;
-  const end = definite
-    ? sliceBound(prefix.values[1], source.elements.length, source.elements.length)
-    : undefined;
-  const tail = keys.slice(1);
-  if (start === undefined || end === undefined) {
-    if (!possibleCollection(source.elements, [])) return undefined;
-    const possible = { of: selected.receiver, keys: [], tail };
-    return index < 0 ? possible : { ...possible, slot: String(index) };
-  }
-  const length = Math.max(end - start, 0);
-  const offset = relative && index < 0 ? length + index : index;
-  const position = start + offset;
-  const element = source.elements[position];
-  if (element === undefined || offset < 0 || offset >= length || isOmittedExpression(element))
-    return undefined;
-  return { of: selected.receiver, keys: [String(position), ...tail], tail, slot: String(offset) };
-}
-
-/** Reversal fixes its copied position; sorting retains possible original payloads without assuming order. */
-function reorderedProjection(
-  keys: readonly string[],
-  original: SliceSource,
-  selection: { readonly index: number; readonly relative: boolean },
-): SliceProjection | undefined {
-  const { selected, source } = original;
-  const { index, relative } = selection;
-  const length = source.elements.length;
-  const offset = relative && index < 0 ? length + index : index;
-  if (offset < 0 || offset >= length) return undefined;
-  const tail = keys.slice(1);
-  if (selected.method === 'toSorted')
-    return possibleCollection(source.elements, [])
-      ? { of: selected.receiver, keys: [], tail, slot: String(offset) }
-      : undefined;
-  const position = length - 1 - offset;
-  const element = source.elements[position];
-  return element === undefined || isOmittedExpression(element)
-    ? undefined
-    : { of: selected.receiver, keys: [String(position), ...tail], tail, slot: String(offset) };
+  return middlewareSliceProjection(
+    { call, keys, ...original.selected, source: original.source, index, relative },
+    { start: sliceBound, count: nativeIndex, possible: possibleCollection },
+  );
 }
 
 /** A quiet native at selects one copied slot without changing the wrapper before that read. */

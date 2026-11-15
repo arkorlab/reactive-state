@@ -3,23 +3,30 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isExpression,
+  isArrowFunction,
+  isCallExpression,
   isElementAccessExpression,
+  isExpression,
+  isFunctionExpression,
   isIdentifier,
+  isNewExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
   isSourceFile,
   isSpreadElement,
   isVariableDeclaration,
+  isVoidExpression,
   type Node,
 } from 'typescript/ast';
 
 import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { memberPath } from './exported-values.ts';
 import { arrayCopyViews } from './framed-array-copies.ts';
 import { arrayProjectedViews } from './framed-array-projections.ts';
 import type { ArrayElementView } from './framed-array-rest.ts';
-import { argumentArrayExposed } from './framed-array-selections.ts';
+import { argumentArrayReached } from './framed-array-selections.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { concatQuietArguments, concatSource } from './framed-concat-properties.ts';
 import { framedConcatSegment } from './framed-concat-spreads.ts';
@@ -49,6 +56,15 @@ interface Segment {
 
 const WRAPPER = { reflect: 3 } as const;
 
+/** Native copy indexing stays exact only while arguments are quiet and the receiver is unexposed. */
+export function middlewareStableCopy(
+  call: CallExpression,
+  receiver: Expression,
+  given: readonly Expression[] | undefined,
+): boolean {
+  return copyArgumentsQuiet(call, given) && stableSource(receiver);
+}
+
 /** Native copies use the original source view; unsupported annotation-only views add no runtime proof. */
 export function middlewareCopyOrigins(
   call: CallExpression,
@@ -65,13 +81,15 @@ export function middlewareCopyOrigins(
     (!relative && index < 0)
   )
     return [];
+  const quiet = copyArgumentsQuiet(call, selected.given);
+  const stable = (value: Expression) => quiet && stableSource(value);
   const copied =
     selected.method === 'concat' ? concatenatedViews(call, selected, index) : undefined;
   const views =
     copied?.views ??
-    arrayProjectedViews(call, index, stableSource) ??
-    arrayCopyViews(call, index, stableSource);
-  const slot = copied === undefined ? fixedCopySlot(selected, index) : copied.slot;
+    arrayProjectedViews(call, index, stable) ??
+    arrayCopyViews(call, index, stable);
+  const slot = copied === undefined ? fixedCopySlot(selected, index, stable) : copied.slot;
   if (views === undefined) return [];
   return views.flatMap((view) => {
     if (
@@ -87,7 +105,7 @@ export function middlewareCopyOrigins(
       of: view.value,
       keys: projected,
       tail,
-      references: literalOwners(view.value),
+      references: middlewareLiteralOwners(view.value),
       originalView: view,
     };
     return slot === undefined ? [origin] : [{ ...origin, slot }];
@@ -103,10 +121,14 @@ function originKeys(view: ArrayElementView, tail: readonly string[]): readonly s
 }
 
 /** Length-preserving native copies retain the normalized fresh-wrapper slot for negative at. */
-function fixedCopySlot(selected: CopyCall, index: number): string | undefined {
+function fixedCopySlot(
+  selected: CopyCall,
+  index: number,
+  stable: (value: Expression) => boolean,
+): string | undefined {
   if (index >= 0) return String(index);
   if (selected.method !== 'map' && selected.method !== 'with') return undefined;
-  const source = concatSource(selected.receiver, stableSource);
+  const source = concatSource(selected.receiver, stable);
   if (
     source === undefined ||
     !isArrayLiteralExpression(source) ||
@@ -117,20 +139,58 @@ function fixedCopySlot(selected: CopyCall, index: number): string | undefined {
   return position < 0 ? undefined : String(position);
 }
 
-/** Original literal descendants retain their lexical collection owner, stopping at callable creation. */
-function literalOwners(value: Expression): readonly Identifier[] {
+/** Original literal descendants retain their lexical collection owner, stopping at call or callable boundaries. */
+export function middlewareLiteralOwners(value: Expression): readonly Identifier[] {
   let within: Node = value;
   for (let node: Node = value.parent; !isSourceFile(node); within = node, node = node.parent) {
-    if (isAnswering(node)) return [];
+    if (isAnswering(node) || isCallExpression(node) || isNewExpression(node)) return [];
     if (isVariableDeclaration(node) && isExpression(within) && node.initializer === within)
       return isIdentifier(node.name) ? [node.name] : [];
   }
   return [];
 }
 
+/** Every evaluated argument and borrowed apply tail must stay quiet before copying starts. */
+function copyArgumentsQuiet(
+  call: CallExpression,
+  given: readonly Expression[] | undefined,
+): boolean {
+  if (given === undefined) return false;
+  const prefix = framedArgumentPrefix(call, given, Infinity);
+  if (prefix.unknown || prefix.alternatives !== undefined) return false;
+  return [...prefix.values, ...wrapperTail(call)].every((value) => quietCopyArgument(value));
+}
+
+/** Closure creation, holes and quiet primitive or literal data run no pre-copy mutations. */
+function quietCopyArgument(expression: Expression): boolean {
+  const pending: Expression[] = [expression];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const value = unwrapped(next);
+    if (
+      isArrowFunction(value) ||
+      isFunctionExpression(value) ||
+      isOmittedExpression(value) ||
+      concatQuietArguments([value], stableSource)
+    )
+      continue;
+    const children = copyLiteralValues(value);
+    if (children === undefined) return false;
+    pending.push(...children);
+  }
+  return true;
+}
+
+/** Void operands and spread-free literal arrays expose nested closures to the quiet check. */
+function copyLiteralValues(value: Expression): readonly Expression[] | undefined {
+  if (isVoidExpression(value)) return [value.expression];
+  if (!isArrayLiteralExpression(value)) return undefined;
+  if (value.elements.some((element) => isSpreadElement(element))) return undefined;
+  return value.elements;
+}
+
 /** Original whole-array stability is the same exposure proof used by the shared native copy readers. */
 function stableSource(expression: Expression, at: Expression = expression): boolean {
-  let value = unwrapped(expression);
+  let value = memberPath(expression).root;
   const aliases = new Set<FrameBinding>();
   while (isIdentifier(value)) {
     const selected = frameBindingOf(value);
@@ -138,9 +198,9 @@ function stableSource(expression: Expression, at: Expression = expression): bool
       return false;
     aliases.add(selected.binding);
     if (selected.binding.initializer === undefined) return false;
-    value = unwrapped(selected.binding.initializer);
+    value = memberPath(selected.binding.initializer).root;
   }
-  return !argumentArrayExposed(at, aliases);
+  return !argumentArrayReached(memberPath(at).root, aliases);
 }
 
 /** Quiet known concat segments retain alias lengths without materializing or synthesizing an array. */
