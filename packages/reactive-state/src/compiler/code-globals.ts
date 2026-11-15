@@ -43,6 +43,7 @@ import {
 import { globalOf, unwrapped } from './bounded.ts';
 import { holdsValues, mergedExports, namespaceStatements } from './local-type-namespaces.ts';
 import { bindingIdentifiers, freeReads, hoistedIn, readsBinding } from './scope.ts';
+import { isAmbient } from './type-syntax.ts';
 import { isTakenApart, useOf } from './uses.ts';
 
 /**
@@ -269,7 +270,7 @@ function widened(names: ReadonlySet<string>, more: Iterable<string>): ReadonlySe
  * The names a scope gives a value — the module's top level, a namespace's body: what `declared`
  * declare — a variable, a function, a class, an enum, a namespace — or import, and the `var`s of
  * the blocks of `own`, the scope's own statements, which are the scope's. A nested namespace's
- * `var`s are that namespace's.
+ * `var`s are that namespace's. An ambient declaration gives none (`isAmbient`).
  */
 function scopeNames(
   declared: readonly Statement[],
@@ -278,6 +279,9 @@ function scopeNames(
   const names = new Set(declared.flatMap((statement) => namesOf(statement)));
   const code = own.filter((statement) => !isModuleDeclaration(statement));
   for (const declaration of hoistedIn(code)) {
+    if (isAmbient(declaration)) {
+      continue;
+    }
     for (const name of bindingIdentifiers(declaration.name)) {
       names.add(name.text);
     }
@@ -285,8 +289,18 @@ function scopeNames(
   return names;
 }
 
-/** The names a statement of a module's top level, or of a namespace's body, declares or imports. */
+/**
+ * The names a statement of a module's top level, or of a namespace's body, declares or imports:
+ * none of an ambient one, which emits nothing — `declare const process: unknown`, `declare
+ * namespace process { … }` — so that a read of its name is the global's, where nothing else gives
+ * the name. A namespace written without `declare` gives its name where it holds a value
+ * (`holdsValues`), as TypeScript emits it; an ambient one merged with a function, a class or an
+ * enum leaves the name theirs.
+ */
 function namesOf(statement: Statement): readonly string[] {
+  if (isAmbient(statement)) {
+    return [];
+  }
   if (isVariableStatement(statement)) {
     return statement.declarationList.declarations.flatMap((declaration) =>
       bindingIdentifiers(declaration.name).map((name) => name.text),
