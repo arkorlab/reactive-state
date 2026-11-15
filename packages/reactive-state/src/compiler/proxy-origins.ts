@@ -12,23 +12,16 @@ import {
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
-  isTaggedTemplateExpression,
-  isVariableDeclaration,
   type Node,
-  type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, answersLater, isAnswering, parametersOf, returnedBy } from './answers.ts';
+import { answersLater, isAnswering, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { metadataCallee } from './input-callees.ts';
-import { rootOf, targetsOf } from './kept.ts';
-import { readsOf } from './local-module-reads.ts';
-import { parameterValue } from './parameter-values.ts';
+import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
 import {
-  argumentPresence,
   type Context,
-  type Frame,
   heldConstant,
   literalTruth,
   objectOrigins,
@@ -39,17 +32,8 @@ import {
   sourceValue,
   writtenBefore,
 } from './proxy-values.ts';
-import { freeReads } from './scope.ts';
-import { interveningEvaluation } from './written-evaluation.ts';
-import { writtenBy } from './written.ts';
 
 export type { ProxyReading } from './proxy-values.ts';
-
-interface ParameterFrame {
-  readonly frame: Frame;
-  readonly index: number;
-  readonly parameter: ParameterDeclaration;
-}
 
 /** Native calls whose result cannot retain the identity of an object they consume. */
 const SCALARS: ReadonlySet<string> = new Set(['Boolean', 'JSON.stringify', 'Number', 'String']);
@@ -214,7 +198,7 @@ function containerOrigins(at: Origin): readonly Origin[] {
 
 /** A parameter's actual argument or a lexical constant, with the argument's original scope. */
 function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
-  const binding = parameterFrame(name, at);
+  const binding = parameterFrame(name, at.context.frames);
   if (binding !== undefined) {
     return parameterOrigins(name, binding, at);
   }
@@ -226,140 +210,6 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return [];
   }
   return [{ ...at, value: held }];
-}
-
-/** Resolves a parameter read through replacements, actual arguments, and `undefined` defaults. */
-function parameterOrigins(
-  name: Identifier,
-  binding: ParameterFrame,
-  at: Origin,
-): readonly Origin[] {
-  const { frame, index, parameter } = binding;
-  if (!isIdentifier(parameter.name)) {
-    return [];
-  }
-  const replaced = parameterValue(frame.fn, parameter.name, name);
-  if (replaced !== undefined) {
-    return [{ ...at, value: replaced.value }];
-  }
-  const rest = parameter.dotDotDotToken !== undefined;
-  if (bindingChanged(frame.fn, parameter.name, rest)) {
-    return rest
-      ? []
-      : assignedParameterValues(frame.fn, parameter.name).map((value) => ({ ...at, value }));
-  }
-  const fallback: readonly Origin[] =
-    !rest && parameter.initializer !== undefined ? [{ ...at, value: parameter.initializer }] : [];
-  if (frame.given === undefined) {
-    return fallback;
-  }
-  if (rest) {
-    return restOrigins(frame.given.slice(index), at.keys);
-  }
-  const given = frame.given[index];
-  if (given === undefined) {
-    return fallback;
-  }
-  const forwarded: Origin = {
-    ...given,
-    excluded: at.excluded,
-    keys: [...given.keys, ...at.keys],
-    spread: at.spread,
-  };
-  const presence = argumentPresence(given);
-  if (presence === 'undefined') {
-    return fallback;
-  }
-  return presence === 'defined' ? [forwarded] : [forwarded, ...fallback];
-}
-
-/** The nearest active source invocation whose lexical formal this identifier reads. */
-function parameterFrame(name: Identifier, at: Origin): ParameterFrame | undefined {
-  for (const frame of at.context.frames.toReversed()) {
-    const parameters = parametersOf(frame.fn);
-    const index = parameters.findIndex(
-      (parameter) => isIdentifier(parameter.name) && readsOf(parameter.name, frame.fn)(name),
-    );
-    const parameter = parameters[index];
-    if (parameter !== undefined) {
-      return { frame, index, parameter };
-    }
-  }
-  return undefined;
-}
-
-/** A rest array is fresh; only its indexed elements retain actual argument identities. */
-function restOrigins(given: readonly Origin[], keys: readonly string[]): readonly Origin[] {
-  const [key, ...rest] = keys;
-  if (key === undefined) {
-    return given;
-  }
-  const index = Number(key);
-  const selected = String(index) === key && index >= 0 ? given[index] : undefined;
-  return selected === undefined ? [] : [{ ...selected, keys: [...selected.keys, ...rest] }];
-}
-
-/** Collects direct RHS values assigned to `declared` when no single replacement dominates. */
-function assignedParameterValues(fn: Answering, declared: Identifier): readonly Expression[] {
-  if (fn.body === undefined) {
-    return [];
-  }
-  const isRead = readsOf(declared, fn);
-  const found: Expression[] = [];
-  const visit = (node: Node): void => {
-    if (
-      isBinaryExpression(node) &&
-      node.operatorToken.kind === SyntaxKind.EqualsToken &&
-      isRead(unwrapped(node.left))
-    ) {
-      found.push(node.right);
-    } else if (
-      isVariableDeclaration(node) &&
-      isIdentifier(node.name) &&
-      node.name.text === declared.text &&
-      node.initializer !== undefined
-    ) {
-      found.push(node.initializer);
-    }
-    node.forEachChild(visit);
-  };
-  visit(fn.body);
-  return found;
-}
-
-/** A possibly reassigned parameter no longer proves that its original argument is returned. */
-function bindingChanged(fn: Answering, declared: Identifier, members = false): boolean {
-  const isRead = readsOf(declared, fn);
-  const visit = (node: Node): boolean => {
-    if (members && handedParameter(node, isRead)) {
-      return true;
-    }
-    const target = !members && isCallExpression(node) ? undefined : writtenBy(node);
-    if (
-      target !== undefined &&
-      targetsOf(target).some((each) => {
-        const name = members ? rootOf(each) : each;
-        return name !== undefined && isIdentifier(name) && isRead(name);
-      })
-    ) {
-      return true;
-    }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return fn.body !== undefined && visit(fn.body);
-}
-
-/** A handed rest array can have its entries replaced before its selected value is returned. */
-function handedParameter(node: Node, isRead: (name: Identifier) => boolean): boolean {
-  let given: readonly Expression[] = [];
-  if (isCallExpression(node) || isNewExpression(node)) {
-    given = node.arguments ?? [];
-  } else if (isTaggedTemplateExpression(node)) {
-    given = [node.template];
-  }
-  return given.some(
-    (each) => !isSpreadElement(each) && [...freeReads(each)].some((name) => isRead(name)),
-  );
 }
 
 /** A source call's returned expressions, binding ordinary parameters to their actual arguments. */
@@ -436,28 +286,6 @@ function spreadOrigins(origin: Origin): readonly Origin[] | undefined {
     }
     at = next;
   }
-}
-
-/** A rest array's entries, or an explicitly unknown binding after a prior write/evaluation. */
-function spreadBinding(
-  name: Identifier,
-  at: Origin,
-): { readonly values?: readonly Origin[] | undefined } | undefined {
-  if (writtenBefore(name, at.context)) {
-    return {};
-  }
-  const held = sourceValue(name, at.context);
-  if (isArrayLiteralExpression(held) && interveningEvaluation(held, name)) {
-    return {};
-  }
-  const binding = parameterFrame(name, at);
-  if (binding?.parameter.dotDotDotToken === undefined || at.keys.length > 0) {
-    return undefined;
-  }
-  const { frame, index, parameter } = binding;
-  return isIdentifier(parameter.name) && !bindingChanged(frame.fn, parameter.name, true)
-    ? { values: frame.given?.slice(index) }
-    : {};
 }
 
 /** A logical operator's possible result values, respecting known skipped operands. */
