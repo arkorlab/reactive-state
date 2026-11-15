@@ -213,6 +213,12 @@ function entryFunctionKind(
     : kind;
 }
 
+/** Accumulated entry kind and spread uncertainty across a dynamic object-literal lookup. */
+interface TableScan {
+  kind: FunctionKind | undefined;
+  unverifiedSpread: boolean;
+}
+
 /** Updates the classification of entry `name` as each object-literal element is visited in order. */
 function nextEntryKind(
   property: ObjectLiteralElementLike,
@@ -221,7 +227,7 @@ function nextEntryKind(
   seen: Set<Node>,
 ): FunctionKind | undefined {
   if (isSpreadAssignment(property)) {
-    return current === 'entry' ? 'renamed' : current;
+    return spreadEntryKind(unwrapped(property.expression), name, current, seen);
   }
   const key = propertyKey(property);
   if (key === undefined) {
@@ -232,27 +238,89 @@ function nextEntryKind(
   return key === name ? propertyFunctionKind(property, key, seen) : current;
 }
 
+/** Classifies how `...source` affects static entry `name` of an enclosing object literal. */
+function spreadEntryKind(
+  source: Expression,
+  name: string,
+  current: FunctionKind | undefined,
+  seen: Set<Node>,
+): FunctionKind | undefined {
+  const fromSpread = entryFunctionKind(source, name, new Set(seen));
+  if (fromSpread !== undefined) {
+    return fromSpread;
+  }
+  if (current === 'entry' && !spreadOmitsKey(source, name, new Set(seen))) {
+    return 'renamed';
+  }
+  return current;
+}
+
+/** Whether `source` is an unchanged constant object literal whose static keys all differ from `name`. */
+function spreadOmitsKey(source: Expression, name: string, seen: Set<Node>): boolean {
+  const spread = holderObject(source, seen);
+  if (spread === undefined || !spread.constant || anyEntryReplaced(spread.object)) {
+    return false;
+  }
+  return spread.object.properties.every((property) => {
+    if (isSpreadAssignment(property)) {
+      return spreadOmitsKey(unwrapped(property.expression), name, new Set(seen));
+    }
+    const key = propertyKey(property);
+    return key !== undefined && key !== name;
+  });
+}
+
 /** Classifies a dynamic lookup across all entries of a written object literal. */
 function tableFunctionKind(resolved: ResolvedObject, seen: Set<Node>): FunctionKind | undefined {
-  let kind: FunctionKind | undefined;
+  const scan = scanTable(resolved, seen);
+  return scan.kind === 'entry' && scan.unverifiedSpread ? 'renamed' : scan.kind;
+}
+
+/** Scans all properties and spreads of `resolved` without letting later methods mask `'renamed'`. */
+function scanTable(resolved: ResolvedObject, seen: Set<Node>): TableScan {
+  const scan: TableScan = {
+    kind: undefined,
+    unverifiedSpread: !resolved.constant || anyEntryReplaced(resolved.object),
+  };
   for (const property of resolved.object.properties) {
     if (isSpreadAssignment(property)) {
-      if (kind === 'entry') {
-        kind = 'renamed';
+      if (mergeSpreadTable(unwrapped(property.expression), scan, seen)) {
+        return scan;
       }
       continue;
     }
     const each = propertyFunctionKind(property, propertyKey(property), seen);
     if (each === 'renamed') {
-      return 'renamed';
+      scan.kind = 'renamed';
+      return scan;
     }
-    if (each === 'entry') {
-      kind = 'entry';
+    if (each === 'entry' && scan.kind === undefined) {
+      scan.kind = 'entry';
     }
   }
-  return kind === 'entry' && (!resolved.constant || anyEntryReplaced(resolved.object))
-    ? 'renamed'
-    : kind;
+  return scan;
+}
+
+/** Merges a spread source into `scan`; answers `true` when `'renamed'` short-circuits the scan. */
+function mergeSpreadTable(source: Expression, scan: TableScan, seen: Set<Node>): boolean {
+  const branchSeen = new Set(seen);
+  const spread = holderObject(source, branchSeen);
+  if (spread === undefined) {
+    scan.unverifiedSpread = true;
+    return false;
+  }
+  const inner = scanTable(spread, branchSeen);
+  if (inner.unverifiedSpread) {
+    scan.unverifiedSpread = true;
+  }
+  if (inner.kind === 'renamed') {
+    scan.kind = 'renamed';
+    return true;
+  }
+  if (inner.kind === 'entry' && scan.kind === undefined) {
+    scan.kind = 'entry';
+  }
+  return false;
 }
 
 /** Resolves an inline or lexically bound object literal expression. */
