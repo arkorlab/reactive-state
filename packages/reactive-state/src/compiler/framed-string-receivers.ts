@@ -92,6 +92,7 @@ const OTHER_PRIMITIVE_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
 
 type LeafKind = 'never' | 'non-primitive' | 'nullish' | 'opaque' | 'other-primitive' | 'string';
 
+const NULLISH_COMPATIBLE: ReadonlySet<LeafKind> = new Set(['nullish', 'opaque']);
 const PRIMITIVE_OR_OPAQUE_LEAVES: ReadonlySet<LeafKind> = new Set([
   'opaque',
   'other-primitive',
@@ -284,35 +285,44 @@ function intersectionLeafStep(
   at: TypeReading,
   operands: Operands,
 ): StepResult {
-  let hasString = false;
-  let hasOtherPrimitive = false;
-  let allOpaque = true;
+  let current: ReadonlySet<LeafKind> | undefined;
   for (const member of types) {
     const expanded = expandReadingLeaves([{ ...at, type: member }], operands);
     if (expanded === undefined) return { kind: 'unresolved' };
     const active = expanded.filter((leaf) => leaf !== 'never');
-    if (active.length === 0) return { kind: 'step', leaves: ['never'], next: [] };
-    if (active.every((leaf) => leaf === 'string')) hasString = true;
-    if (active.every((leaf) => leaf === 'other-primitive')) hasOtherPrimitive = true;
-    if (!active.every((leaf) => leaf === 'opaque')) allOpaque = false;
+    current = current === undefined ? new Set(active) : intersectLeafSets(current, active);
+    if (current.size === 0) return { kind: 'step', leaves: ['never'], next: [] };
   }
-  return {
-    kind: 'step',
-    leaves: [intersectionLeafKind(hasString, hasOtherPrimitive, allOpaque)],
-    next: [],
-  };
+  return { kind: 'step', leaves: current === undefined ? ['never'] : [...current], next: [] };
 }
 
-/** Picks the resulting leaf kind for an inhabited intersection of classified conjuncts. */
-function intersectionLeafKind(
-  hasString: boolean,
-  hasOtherPrimitive: boolean,
-  allOpaque: boolean,
-): LeafKind {
-  if (hasString && hasOtherPrimitive) return 'never';
-  if (hasString) return 'string';
-  if (hasOtherPrimitive) return 'other-primitive';
-  return allOpaque ? 'opaque' : 'non-primitive';
+/** Distributes intersection across finite classified union branches. */
+function intersectLeafSets(left: ReadonlySet<LeafKind>, right: readonly LeafKind[]): Set<LeafKind> {
+  const combined = new Set<LeafKind>();
+  for (const first of left) {
+    for (const second of right) {
+      const both = intersectTwoLeaves(first, second);
+      if (both !== 'never') combined.add(both);
+    }
+  }
+  return combined;
+}
+
+/** Intersects two single leaf classifications while preserving primitive and opaque brand bases. */
+function intersectTwoLeaves(left: LeafKind, right: LeafKind): LeafKind {
+  if (left === 'never' || right === 'never') return 'never';
+  if (left === 'nullish' || right === 'nullish') {
+    return NULLISH_COMPATIBLE.has(left) && NULLISH_COMPATIBLE.has(right) ? 'nullish' : 'never';
+  }
+  if (
+    (left === 'string' && right === 'other-primitive') ||
+    (left === 'other-primitive' && right === 'string')
+  ) {
+    return 'never';
+  }
+  if (left === 'string' || right === 'string') return 'string';
+  if (left === 'other-primitive' || right === 'other-primitive') return 'other-primitive';
+  return left === 'opaque' || right === 'opaque' ? 'opaque' : 'non-primitive';
 }
 
 /** Resolves `typeof x` queries through local declarations while keeping imported values opaque. */
