@@ -26,6 +26,15 @@ import {
 } from 'typescript/ast';
 
 import { globalOf, unwrapped } from './bounded.ts';
+import {
+  EXPORTED_UNKNOWN,
+  type ExportLookup,
+  type ExportRule,
+  type ExportTarget,
+  exportTarget,
+  NO_EXPORT,
+  resolveExportGraph,
+} from './exported-graph.ts';
 import { holdsValues } from './local-type-namespaces.ts';
 import type { Modules } from './modules.ts';
 import { bindingIdentifiers } from './scope.ts';
@@ -34,23 +43,10 @@ import { isConstant } from './statements.ts';
 /** A value a module declares: a function's or a class's declaration, or a constant's initializer. */
 export type DeclaredValue = ClassDeclaration | Expression | FunctionDeclaration;
 
-interface ExportLookup {
-  readonly kind: 'cycle' | 'exported' | 'none';
-  readonly value?: DeclaredValue | undefined;
-}
-
-interface LookupState {
-  readonly memo: Map<string, ExportLookup>;
-  minCycleDepth: number;
-  readonly visiting: Map<string, number>;
-}
-
 interface ModuleReading {
-  readonly depth: number;
   readonly file: string;
   readonly modules: Modules;
   readonly sourceFile: SourceFile;
-  readonly state: LookupState;
 }
 
 interface ImportTarget {
@@ -58,9 +54,18 @@ interface ImportTarget {
   readonly file: string | undefined;
 }
 
-const NO_EXPORT: ExportLookup = { kind: 'none' };
-const CYCLE_EXPORT: ExportLookup = { kind: 'cycle' };
-const EXPORTED_UNKNOWN: ExportLookup = { kind: 'exported', value: undefined };
+type LocalTrace =
+  | { readonly dep: ExportTarget; readonly kind: 'import' }
+  | { readonly kind: 'next'; readonly next: DeclaredValue }
+  | { readonly kind: 'value'; readonly value: DeclaredValue | undefined };
+
+type TracedValue =
+  | { readonly dep: ExportTarget; readonly kind: 'import' }
+  | { readonly kind: 'value'; readonly value: DeclaredValue | undefined };
+
+const CONST_NONE: ExportRule<DeclaredValue> = { kind: 'const', lookup: NO_EXPORT };
+const CONST_UNKNOWN: ExportRule<DeclaredValue> = { kind: 'const', lookup: EXPORTED_UNKNOWN };
+const MODULE_MEMOS = new WeakMap<Modules, Map<string, ExportLookup<DeclaredValue>>>();
 
 /**
  * What `file` exports as `name`, where it declares it — its own explicit runtime export first, and
@@ -71,102 +76,83 @@ export function exportedValue(
   file: string,
   name: string,
 ): DeclaredValue | undefined {
-  return lookupExport(modules, file, name, freshState()).value;
+  return lookupModuleExport(modules, file, name, memoOf(modules)).value;
 }
 
 /** Settles `value` against the declarations and imports of the module `value` stands in. */
 export function settledValue(modules: Modules, value: DeclaredValue): DeclaredValue | undefined {
   const sourceFile = value.getSourceFile();
-  return settled(value, {
-    depth: 0,
+  const traced = traceLocalValue(value, {
     file: sourceFile.fileName,
     modules,
     sourceFile,
-    state: freshState(),
   });
+  return traced.kind === 'value'
+    ? traced.value
+    : lookupModuleExport(modules, traced.dep.file, traced.dep.name, memoOf(modules)).value;
 }
 
-function freshState(): LookupState {
-  return { memo: new Map(), minCycleDepth: Infinity, visiting: new Map() };
+function memoOf(modules: Modules): Map<string, ExportLookup<DeclaredValue>> {
+  const existing = MODULE_MEMOS.get(modules);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const created = new Map<string, ExportLookup<DeclaredValue>>();
+  MODULE_MEMOS.set(modules, created);
+  return created;
 }
 
-function lookupExport(
+function lookupModuleExport(
   modules: Modules,
   file: string,
   name: string,
-  state: LookupState,
-): ExportLookup {
-  const key = `${file}#${name}`;
-  const cached = state.memo.get(key);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const activeDepth = state.visiting.get(key);
-  if (activeDepth !== undefined) {
-    state.minCycleDepth = Math.min(state.minCycleDepth, activeDepth);
-    return CYCLE_EXPORT;
-  }
-  const depth = state.visiting.size;
-  const savedMinDepth = state.minCycleDepth;
-  state.minCycleDepth = Infinity;
-  state.visiting.set(key, depth);
-  const reading: ModuleReading = {
-    depth,
-    file,
-    modules,
-    sourceFile: modules.parse(file, false).sourceFile,
-    state,
-  };
-  const result = resolveModuleExport(reading, name);
-  state.visiting.delete(key);
-  const childMinDepth = state.minCycleDepth;
-  if (childMinDepth >= depth) {
-    state.memo.set(key, result);
-    state.minCycleDepth = savedMinDepth;
-  } else {
-    state.minCycleDepth = Math.min(savedMinDepth, childMinDepth);
-  }
-  return result;
+  memo: Map<string, ExportLookup<DeclaredValue>>,
+): ExportLookup<DeclaredValue> {
+  return resolveExportGraph(
+    exportTarget(file, name),
+    (target) =>
+      inspectModuleExport(
+        {
+          file: target.file,
+          modules,
+          sourceFile: modules.parse(target.file, false).sourceFile,
+        },
+        target.name,
+      ),
+    memo,
+  );
 }
 
-function resolveModuleExport(reading: ModuleReading, name: string): ExportLookup {
+function inspectModuleExport(reading: ModuleReading, name: string): ExportRule<DeclaredValue> {
   const { statements } = reading.sourceFile;
   for (const statement of statements) {
-    const found = exportedBy(statement, name, reading);
-    if (found.kind !== 'none') {
-      return closeCycleAtRoot(found, reading, EXPORTED_UNKNOWN);
+    const explicit = exportedBy(statement, name, reading);
+    if (explicit !== undefined) {
+      return explicit;
     }
   }
   if (name === 'default') {
-    return NO_EXPORT;
+    return CONST_NONE;
   }
-  return closeCycleAtRoot(starExported(statements, name, reading), reading, NO_EXPORT);
-}
-
-function closeCycleAtRoot(
-  found: ExportLookup,
-  reading: ModuleReading,
-  closed: ExportLookup,
-): ExportLookup {
-  return found.kind === 'cycle' && reading.state.minCycleDepth >= reading.depth ? closed : found;
+  return starExportRule(statements, name, reading);
 }
 
 /** What `export * from …` re-exports as `name`, where the file declares no explicit export of it. */
-function starExported(
+function starExportRule(
   statements: readonly Statement[],
   name: string,
   reading: ModuleReading,
-): ExportLookup {
-  let star: ExportLookup = NO_EXPORT;
+): ExportRule<DeclaredValue> {
+  const deps: ExportTarget[] = [];
+  const seenFiles = new Set<string>();
   for (const statement of statements) {
     const other = starTargetOf(statement, reading);
-    if (other === undefined) {
-      continue;
+    if (other !== undefined && !seenFiles.has(other)) {
+      seenFiles.add(other);
+      deps.push(exportTarget(other, name));
     }
-    const found = lookupExport(reading.modules, other, name, reading.state);
-    star = mergeStarLookup(star, found);
   }
-  return star;
+  return deps.length === 0 ? CONST_NONE : { deps, kind: 'star' };
 }
 
 function starTargetOf(statement: Statement, reading: ModuleReading): string | undefined {
@@ -177,28 +163,22 @@ function starTargetOf(statement: Statement, reading: ModuleReading): string | un
     : undefined;
 }
 
-function mergeStarLookup(current: ExportLookup, next: ExportLookup): ExportLookup {
-  if (current.kind === 'none' || next.kind === 'none') {
-    return current.kind === 'none' ? next : current;
-  }
-  if (current.kind === 'cycle' || next.kind === 'cycle') {
-    return current.kind === 'cycle' ? next : current;
-  }
-  return current.value !== undefined && current.value === next.value ? current : EXPORTED_UNKNOWN;
-}
-
-/** What `statement` explicitly exports at run time as `name`. */
-function exportedBy(statement: Statement, name: string, reading: ModuleReading): ExportLookup {
+/** What `statement` explicitly exports at run time as `name`, or `undefined` when it does not. */
+function exportedBy(
+  statement: Statement,
+  name: string,
+  reading: ModuleReading,
+): ExportRule<DeclaredValue> | undefined {
   if (isExportDeclaration(statement)) {
     return namedExport(statement, name, reading);
   }
   if (isExportAssignment(statement)) {
     return name === 'default' && !statement.isExportEquals
-      ? settledExport(statement.expression, reading)
-      : NO_EXPORT;
+      ? settledRuleOf(statement.expression, reading)
+      : undefined;
   }
   if (!isExported(statement) || isDeclaredAmbient(statement)) {
-    return NO_EXPORT;
+    return undefined;
   }
   return exportedDeclaration(statement, name, reading);
 }
@@ -207,31 +187,35 @@ function exportedDeclaration(
   statement: Statement,
   name: string,
   reading: ModuleReading,
-): ExportLookup {
+): ExportRule<DeclaredValue> | undefined {
   if (isFunctionDeclaration(statement)) {
     return statement.body !== undefined && exportName(statement) === name
-      ? { kind: 'exported', value: statement }
-      : NO_EXPORT;
+      ? constKnownRule(statement)
+      : undefined;
   }
   if (isClassDeclaration(statement)) {
-    return exportName(statement) === name ? { kind: 'exported', value: statement } : NO_EXPORT;
+    return exportName(statement) === name ? constKnownRule(statement) : undefined;
   }
   if (isVariableStatement(statement)) {
     return variableExport(statement, name, reading);
   }
-  return exportsOpaqueRuntimeBinding(statement, name) ? EXPORTED_UNKNOWN : NO_EXPORT;
+  return exportsOpaqueRuntimeBinding(statement, name) ? CONST_UNKNOWN : undefined;
+}
+
+function constKnownRule(value: DeclaredValue | undefined): ExportRule<DeclaredValue> {
+  return { kind: 'const', lookup: { kind: 'exported', value } };
 }
 
 function variableExport(
   statement: VariableStatement,
   name: string,
   reading: ModuleReading,
-): ExportLookup {
+): ExportRule<DeclaredValue> | undefined {
   if (!declaresVariable(statement, name)) {
-    return NO_EXPORT;
+    return undefined;
   }
   const found = constantIn(statement, name, reading);
-  return found === undefined ? EXPORTED_UNKNOWN : settledExport(found, reading);
+  return found === undefined ? CONST_UNKNOWN : settledRuleOf(found, reading);
 }
 
 function declaresVariable(statement: VariableStatement, name: string): boolean {
@@ -257,124 +241,130 @@ function namedExport(
   statement: ExportDeclaration,
   name: string,
   reading: ModuleReading,
-): ExportLookup {
+): ExportRule<DeclaredValue> | undefined {
   const { exportClause: clause } = statement;
   if (statement.isTypeOnly || clause === undefined) {
-    return NO_EXPORT;
+    return undefined;
   }
   if (!isNamedExports(clause)) {
-    return clause.name.text === name ? EXPORTED_UNKNOWN : NO_EXPORT;
+    return clause.name.text === name ? CONST_UNKNOWN : undefined;
   }
   const element = clause.elements.find((each) => !each.isTypeOnly && each.name.text === name);
   if (element === undefined) {
-    return NO_EXPORT;
+    return undefined;
   }
   const original = (element.propertyName ?? element.name).text;
   return statement.moduleSpecifier === undefined
     ? localNamedExport(original, reading)
-    : reexportedLookup(fileOf(statement.moduleSpecifier, reading), original, reading);
+    : reexportRule(fileOf(statement.moduleSpecifier, reading), original);
 }
 
-function localNamedExport(original: string, reading: ModuleReading): ExportLookup {
+function localNamedExport(original: string, reading: ModuleReading): ExportRule<DeclaredValue> {
   for (const statement of reading.sourceFile.statements) {
     if (isImportDeclaration(statement)) {
       const target = importTargetOf(statement, original, reading);
       if (target !== undefined) {
-        return reexportedLookup(target.file, target.exported, reading);
+        return reexportRule(target.file, target.exported);
       }
     }
   }
-  const local = localValue(original, reading);
-  return local === undefined ? EXPORTED_UNKNOWN : settledExport(local, reading);
+  const local = localDeclarationOf(original, reading);
+  return local === undefined ? CONST_UNKNOWN : settledRuleOf(local, reading);
 }
 
-function reexportedLookup(
-  other: string | undefined,
-  exported: string,
-  reading: ModuleReading,
-): ExportLookup {
-  if (other === undefined) {
-    return EXPORTED_UNKNOWN;
-  }
-  const remote = lookupExport(reading.modules, other, exported, reading.state);
-  return remote.kind === 'none' ? EXPORTED_UNKNOWN : remote;
+function reexportRule(other: string | undefined, exported: string): ExportRule<DeclaredValue> {
+  return other === undefined
+    ? CONST_UNKNOWN
+    : { dep: exportTarget(other, exported), kind: 'reexport' };
 }
 
-function settledExport(value: DeclaredValue, reading: ModuleReading): ExportLookup {
-  return { kind: 'exported', value: settled(value, reading) };
+function settledRuleOf(value: DeclaredValue, reading: ModuleReading): ExportRule<DeclaredValue> {
+  const traced = traceLocalValue(value, reading);
+  return traced.kind === 'value'
+    ? constKnownRule(traced.value)
+    : { dep: traced.dep, kind: 'settledImport' };
 }
 
 /**
- * `value`, or, where it is a name the file declares otherwise — `export default fill`,
- * `export const helper = fill` — what that declares, followed so, but a name under way already; a
- * global's name — `Infinity`, `undefined` — as itself, which what reads it reads as the global.
+ * Follows `value` through local `const` aliases within `reading.sourceFile`, stopping at a
+ * declaration, expression, global identifier, or cross-module import target.
  */
-type SettledStep =
-  | { readonly done: false; readonly next: DeclaredValue }
-  | { readonly done: true; readonly value: DeclaredValue | undefined };
-
-function settled(value: DeclaredValue, reading: ModuleReading): DeclaredValue | undefined {
-  const localKeys: string[] = [];
+function traceLocalValue(value: DeclaredValue, reading: ModuleReading): TracedValue {
+  const seenLocal = new Set<string>();
   let each = value;
-  try {
-    for (;;) {
-      const stepped = stepSettled(each, reading, localKeys);
-      if (stepped.done) {
-        return stepped.value;
-      }
-      each = stepped.next;
+  for (;;) {
+    const stepped = stepLocalValue(each, reading, seenLocal);
+    if (stepped.kind !== 'next') {
+      return stepped;
     }
-  } finally {
-    for (const key of localKeys) {
-      reading.state.visiting.delete(key);
-    }
+    each = stepped.next;
   }
 }
 
-function stepSettled(
+function stepLocalValue(
   each: DeclaredValue,
   reading: ModuleReading,
-  localKeys: string[],
-): SettledStep {
-  // What another module declares, it settled where it declares it (`exportedValue`).
+  seenLocal: Set<string>,
+): LocalTrace {
   if (
     isFunctionDeclaration(each) ||
     isClassDeclaration(each) ||
     each.getSourceFile() !== reading.sourceFile
   ) {
-    return { done: true, value: each };
+    return { kind: 'value', value: each };
   }
   const named = unwrapped(each);
   if (!isIdentifier(named)) {
-    return { done: true, value: each };
+    return { kind: 'value', value: each };
   }
-  const key = `${reading.file}#local:${named.text}`;
-  const activeDepth = reading.state.visiting.get(key);
-  if (activeDepth !== undefined) {
-    reading.state.minCycleDepth = Math.min(reading.state.minCycleDepth, activeDepth);
-    return { done: true, value: undefined };
+  if (seenLocal.has(named.text)) {
+    return { kind: 'value', value: undefined };
   }
-  reading.state.visiting.set(key, reading.state.visiting.size);
-  localKeys.push(key);
-  const found = localValue(named.text, reading);
-  if (found === undefined) {
-    return { done: true, value: globalOf(named) === undefined ? undefined : named };
-  }
-  return { done: false, next: found };
+  seenLocal.add(named.text);
+  return resolveLocalIdentifier(named, reading);
 }
 
-/** What the file declares, or imports, as `name`. */
-function localValue(name: string, reading: ModuleReading): DeclaredValue | undefined {
+function resolveLocalIdentifier(
+  named: Node & { readonly text: string },
+  reading: ModuleReading,
+): LocalTrace {
   for (const statement of reading.sourceFile.statements) {
-    const found = localStatementValue(statement, name, reading);
-    if (found !== undefined) {
-      return found;
+    const matched = matchLocalStatement(statement, named.text, reading);
+    if (matched !== undefined) {
+      return matched;
+    }
+  }
+  const globalValue = isIdentifier(named) && globalOf(named) !== undefined ? named : undefined;
+  return { kind: 'value', value: globalValue };
+}
+
+function matchLocalStatement(
+  statement: Statement,
+  name: string,
+  reading: ModuleReading,
+): LocalTrace | undefined {
+  const declared = localStatementDeclaration(statement, name, reading);
+  if (declared !== undefined) {
+    return isVariableStatement(statement)
+      ? { kind: 'next', next: declared }
+      : { kind: 'value', value: declared };
+  }
+  return !isDeclaredAmbient(statement) && isImportDeclaration(statement)
+    ? importedTrace(statement, name, reading)
+    : undefined;
+}
+
+function localDeclarationOf(name: string, reading: ModuleReading): DeclaredValue | undefined {
+  for (const statement of reading.sourceFile.statements) {
+    const declared = localStatementDeclaration(statement, name, reading);
+    if (declared !== undefined) {
+      return declared;
     }
   }
   return undefined;
 }
 
-function localStatementValue(
+function localStatementDeclaration(
   statement: Statement,
   name: string,
   reading: ModuleReading,
@@ -388,10 +378,7 @@ function localStatementValue(
   if (isClassDeclaration(statement)) {
     return statement.name?.text === name ? statement : undefined;
   }
-  if (isVariableStatement(statement)) {
-    return constantIn(statement, name, reading);
-  }
-  return isImportDeclaration(statement) ? importedValue(statement, name, reading) : undefined;
+  return isVariableStatement(statement) ? constantIn(statement, name, reading) : undefined;
 }
 
 /** The initializer of the constant `name` a `const` statement declares. */
@@ -437,16 +424,18 @@ function importedExportName(clause: ImportClause, name: string): string | undefi
   return element === undefined ? undefined : (element.propertyName ?? element.name).text;
 }
 
-/** What an import declaration binds as `name`, as the module it imports exports it. */
-function importedValue(
+function importedTrace(
   statement: ImportDeclaration,
   name: string,
   reading: ModuleReading,
-): DeclaredValue | undefined {
+): LocalTrace | undefined {
   const target = importTargetOf(statement, name, reading);
-  return target?.file === undefined
-    ? undefined
-    : lookupExport(reading.modules, target.file, target.exported, reading.state).value;
+  if (target === undefined) {
+    return undefined;
+  }
+  return target.file === undefined
+    ? { kind: 'value', value: undefined }
+    : { dep: exportTarget(target.file, target.exported), kind: 'import' };
 }
 
 function isExported(statement: Statement): boolean {
