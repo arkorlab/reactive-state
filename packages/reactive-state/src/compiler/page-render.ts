@@ -2,18 +2,25 @@ import {
   type Expression,
   type FunctionDeclaration,
   type Identifier,
+  type ImportSpecifier,
   isConditionalExpression,
   isIdentifier,
+  isImportDeclaration,
   isJsxElement,
   isJsxExpression,
   isJsxFragment,
+  isJsxNamespacedName,
   isJsxSelfClosingElement,
+  isNamedImports,
   isPropertyAccessExpression,
   isReturnStatement,
+  isStringLiteral,
   type JsxElement,
   type JsxSelfClosingElement,
   type Node,
   type SourceFile,
+  type Statement,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unshadowedReads } from './code-globals.ts';
@@ -57,9 +64,9 @@ import { declaredWithin } from './scope.ts';
  * it renders. A prop of anything else — a value computed of a param, what a module answers — is no
  * page of a root the compile can map to its route, and is left as it is: unregistered; and so is a
  * page that renders the root on some paths alone, whose request may render none — a root under
- * `&&`, `||` or `??`, in a branch of a `?:` the other of which renders none, in a callback, in what
- * an element is handed as a prop, or past an early `return`, the statements before a function's
- * `return` being its constants alone.
+ * `&&`, `||` or `??`, in a branch of a `?:` the other of which renders none, inside an unanalyzed
+ * wrapper component, in a callback, in what an element is handed as a prop, or past an early
+ * `return`, the statements before a function's `return` being its constants alone.
  */
 
 /** A page of one reactive root, as this reading finds it. */
@@ -97,6 +104,8 @@ interface Sites {
 /** What tells a root's element, and an element of a function of the page's, from the rest. */
 interface Tags {
   readonly names: PageNames;
+  /** Local names that value-import `Fragment` by name from `'react'`. */
+  readonly fragments: ReadonlySet<string>;
   /** The reads in the file's code that no scope around them declares again (`unshadowedReads`). */
   readonly free: ReadonlySet<Identifier>;
   /** Whether a specifier names a reactive root the compile compiled. */
@@ -104,9 +113,42 @@ interface Tags {
   readonly page: FunctionDeclaration;
 }
 
+/** Named import specifiers of a value `import { … } from 'react'` statement. */
+function reactNamedImports(statement: Statement): readonly ImportSpecifier[] {
+  if (!isImportDeclaration(statement) || !isStringLiteral(statement.moduleSpecifier)) {
+    return [];
+  }
+  const clause = statement.importClause;
+  const named = clause?.namedBindings;
+  const fromReact =
+    statement.moduleSpecifier.text === 'react' &&
+    clause !== undefined &&
+    clause.phaseModifier !== SyntaxKind.TypeKeyword;
+  return fromReact && named !== undefined && isNamedImports(named) ? named.elements : [];
+}
+
+/** Local names that import `Fragment` as a value from `'react'`. */
+function fragmentNamesOf(sourceFile: SourceFile): ReadonlySet<string> {
+  const fragments = new Set<string>();
+  for (const statement of sourceFile.statements) {
+    for (const element of reactNamedImports(statement)) {
+      if (!element.isTypeOnly && (element.propertyName ?? element.name).text === 'Fragment') {
+        fragments.add(element.name.text);
+      }
+    }
+  }
+  return fragments;
+}
+
 /** Whether an element holds nothing but white space, and comments, between its tags. */
 function isEmpty(element: JsxElement | JsxSelfClosingElement): boolean {
   return !isJsxElement(element) || element.children.every((child) => isBlank(child));
+}
+
+/** Whether `element` is an intrinsic browser element (`<main>`, `<svg:g>`), not a component value. */
+function isIntrinsicElement(element: JsxElement): boolean {
+  const tag = tagOf(element);
+  return isJsxNamespacedName(tag) || (isIdentifier(tag) && /^[a-z]/u.test(tag.text));
 }
 
 /** Whether `element` is `react`'s `Suspense`, with no scope around it declaring the name again. */
@@ -114,6 +156,32 @@ function isSuspenseElement(element: JsxElement | JsxSelfClosingElement, tags: Ta
   const tag = tagOf(element);
   const root = isPropertyAccessExpression(tag) ? tag.expression : tag;
   return isIdentifier(root) && tags.free.has(root) && isSuspense(tag, tags.names);
+}
+
+/** Whether `element` is `react`'s `Fragment`, with no scope around it declaring the name again. */
+function isFragmentElement(element: JsxElement, tags: Tags): boolean {
+  const tag = tagOf(element);
+  const root = isPropertyAccessExpression(tag) ? tag.expression : tag;
+  if (!isIdentifier(root) || !tags.free.has(root)) {
+    return false;
+  }
+  if (isIdentifier(tag)) {
+    return tags.fragments.has(tag.text);
+  }
+  return (
+    isPropertyAccessExpression(tag) &&
+    tags.names.reactNamespaces.has(root.text) &&
+    tag.name.text === 'Fragment'
+  );
+}
+
+/** Whether `element` always renders its JSX children: an intrinsic tag, `Fragment` or `Suspense`. */
+function isTransparentElement(element: JsxElement, tags: Tags): boolean {
+  return (
+    isIntrinsicElement(element) ||
+    isFragmentElement(element, tags) ||
+    isSuspenseElement(element, tags)
+  );
 }
 
 /** Whether `element` is the root's: of a default import of a reactive root the compile compiled. */
@@ -177,9 +245,12 @@ function sitesIn(node: Node, tags: Tags): Sites {
 }
 
 /** What `node`, JSX a function of the page's renders, renders of its own: its children, or `{…}`'s. */
-function childrenRendered(node: Node): readonly Node[] {
-  if (isJsxElement(node) || isJsxFragment(node)) {
+function childrenRendered(node: Node, tags: Tags): readonly Node[] {
+  if (isJsxFragment(node)) {
     return node.children;
+  }
+  if (isJsxElement(node)) {
+    return isTransparentElement(node, tags) ? node.children : [];
   }
   return isJsxExpression(node) && node.expression !== undefined ? [unwrapped(node.expression)] : [];
 }
@@ -187,8 +258,8 @@ function childrenRendered(node: Node): readonly Node[] {
 /**
  * Whether `node`, where a function of the page's renders it, renders the root whatever path it
  * takes: the root's element; a function's of the page's whose `return` does, one deep — none
- * `nested` in one; an element, a fragment or `{…}` one of whose children does; or a `?:` both of
- * whose branches do.
+ * `nested` in one; an intrinsic element, `Fragment`, `Suspense` or `{…}` one of whose children
+ * does; or a `?:` both of whose branches do.
  */
 function rendersRoot(node: Node, tags: Tags, nested: boolean): boolean {
   const element = isJsxElement(node) || isJsxSelfClosingElement(node) ? node : undefined;
@@ -205,7 +276,7 @@ function rendersRoot(node: Node, tags: Tags, nested: boolean): boolean {
       rendersRoot(unwrapped(node.whenFalse), tags, nested)
     );
   }
-  return childrenRendered(node).some((child) => rendersRoot(child, tags, nested));
+  return childrenRendered(node, tags).some((child) => rendersRoot(child, tags, nested));
 }
 
 /** Whether `fn`, a function of the page's, returns what renders the root whatever path it takes. */
@@ -225,7 +296,7 @@ function returnsRoot(fn: FunctionDeclaration, tags: Tags): boolean {
  */
 function renderedWhenever(node: Node, tags: Tags): readonly Node[] {
   if (!isConditionalExpression(node)) {
-    return childrenRendered(node);
+    return childrenRendered(node, tags);
   }
   return rendersRoot(node, tags, false)
     ? [unwrapped(node.whenTrue), unwrapped(node.whenFalse)]
@@ -234,9 +305,10 @@ function renderedWhenever(node: Node, tags: Tags): readonly Node[] {
 
 /**
  * Collects into `placed` each element of the root's, or of a function's of the page's, that `node`
- * renders whatever path it takes: one an element, a fragment or `{…}` holds, or a branch of a `?:`
- * both of whose branches render the root (`renderedWhenever`) — none under `&&`, `||` or `??`, in a
- * branch of another `?:`, in a callback, or in what an element is handed as a prop.
+ * renders whatever path it takes: one an intrinsic element, `Fragment`, `Suspense` or `{…}` holds,
+ * or a branch of a `?:` both of whose branches render the root (`renderedWhenever`) — none under
+ * `&&`, `||` or `??`, in a branch of another `?:`, inside a custom wrapper, in a callback, or in
+ * what an element is handed as a prop.
  */
 function placedIn(node: Node, tags: Tags, placed: Set<Node>): void {
   if (isSite(node, tags)) {
@@ -375,7 +447,13 @@ export function pageRenderOf(
   const context: RenderContext = {
     module: moduleNamesOf(sourceFile),
     sourceFile,
-    tags: { free: unshadowedReads(sourceFile), isRoot, names, page },
+    tags: {
+      fragments: fragmentNamesOf(sourceFile),
+      free: unshadowedReads(sourceFile),
+      isRoot,
+      names,
+      page,
+    },
   };
   const rendered = renderedBy(page, sources, context);
   if (rendered === undefined) {
