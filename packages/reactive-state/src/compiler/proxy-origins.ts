@@ -5,14 +5,11 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
-  isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
@@ -20,33 +17,35 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
   isTaggedTemplateExpression,
   type Node,
-  type ObjectLiteralExpression,
   type ObjectLiteralElementLike,
+  type ObjectLiteralExpression,
   type ParameterDeclaration,
-  type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, isAnswering, parametersOf, returnedBy } from './answers.ts';
-import { globalOf, unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
-import { metadataCallee, metadataInitializer } from './input-callees.ts';
+import { unwrapped } from './bounded.ts';
+import { metadataCallee } from './input-callees.ts';
 import { rootOf, targetsOf } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
-import type { Resolve } from './numbers.ts';
 import { parameterValue } from './parameter-values.ts';
+import {
+  heldConstant,
+  literalTruth,
+  originKey,
+  propertyKey,
+  type ProxyReading,
+  sourcePath,
+  sourceValue,
+  writtenBefore,
+} from './proxy-values.ts';
 import { freeReads } from './scope.ts';
 import { interveningEvaluation } from './written-evaluation.ts';
 import { writtenBy } from './written.ts';
 
-/** Source-written values that can carry a Proxy to a measured call result or container entry. */
-export interface ProxyReading {
-  readonly follow?: Resolve;
-  readonly functionOf?: (callee: Expression) => Answering | undefined;
-}
+export type { ProxyReading } from './proxy-values.ts';
 
 interface Frame {
   readonly fn: Answering;
@@ -80,10 +79,11 @@ export function proxyOrigin(
   reading: ProxyReading = {},
 ): Node | undefined {
   const context: Context = { ...reading, calls: new Set(), frames: [] };
+  const visited = new WeakMap<Context, Map<Expression, Set<string>>>();
   const pending: Origin[] = values.map((value) => ({ context, keys: [], seen: new Set(), value }));
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const value = unwrapped(next.value);
-    if (next.seen.has(value)) {
+    if (next.seen.has(value) || markVisited(visited, next.context, value, originStateKey(next))) {
       continue;
     }
     const at = { ...next, seen: new Set([...next.seen, value]), value };
@@ -93,6 +93,35 @@ export function proxyOrigin(
     pending.push(...originsOf(at));
   }
   return undefined;
+}
+
+/** Records `(context, value, state)` and reports whether that analysis state was already explored. */
+function markVisited(
+  visited: WeakMap<Context, Map<Expression, Set<string>>>,
+  context: Context,
+  value: Expression,
+  state: string,
+): boolean {
+  let byExpression = visited.get(context);
+  if (byExpression === undefined) {
+    byExpression = new Map();
+    visited.set(context, byExpression);
+  }
+  let states = byExpression.get(value);
+  if (states === undefined) {
+    states = new Set();
+    byExpression.set(value, states);
+  }
+  if (states.has(state)) {
+    return true;
+  }
+  states.add(state);
+  return false;
+}
+
+/** Encodes the member projection carried by `origin` without ambiguity across key boundaries. */
+function originStateKey(origin: Origin): string {
+  return origin.keys.map((key) => `${key.length}:${key}`).join(',');
 }
 
 /** Whether the value itself, or the known proxy member of a revocable pair, is a Proxy. */
@@ -261,11 +290,6 @@ function handedParameter(node: Node, isRead: (name: Identifier) => boolean): boo
   );
 }
 
-/** A lexical constant's initializer, or a source module's imported constant. */
-function heldConstant(name: Identifier, context: ProxyReading): Expression | undefined {
-  return metadataInitializer(name) ?? context.follow?.(name);
-}
-
 /** A source call's returned expressions, binding ordinary parameters to their actual arguments. */
 function callOrigins(call: CallExpression, at: Origin): readonly Origin[] {
   if (at.context.calls.has(call)) {
@@ -416,31 +440,6 @@ function dataProperty(property: ObjectLiteralElementLike, at: Origin): readonly 
     : [];
 }
 
-/** Ordinary property names are literal, and computed names follow primitive constant keys. */
-function propertyKey(name: PropertyName, reading: ProxyReading): string | undefined {
-  if (isIdentifier(name)) {
-    return name.text;
-  }
-  return isComputedPropertyName(name) ? originKey(name.expression, reading) : literalKey(name);
-}
-
-/** A key whose source is a literal, without application conversion or evaluation. */
-function originKey(value: Expression, reading: ProxyReading): string | undefined {
-  return literalKey(sourceValue(value, reading));
-}
-
-/** A written boolean or nullish condition, without executing application code. */
-function literalTruth(value: Expression): boolean | undefined {
-  if (value.kind === SyntaxKind.TrueKeyword) {
-    return true;
-  }
-  return value.kind === SyntaxKind.FalseKeyword ||
-    value.kind === SyntaxKind.NullKeyword ||
-    globalOf(value) === 'undefined'
-    ? false
-    : undefined;
-}
-
 /** A logical operator's possible result values, respecting known skipped operands. */
 function logicalOrigins(
   left: Expression,
@@ -464,78 +463,4 @@ function logicalOrigins(
     return [{ ...at, value: choosesRight ? right : left }];
   }
   return [left, right].map((each) => ({ ...at, value: each }));
-}
-
-/** A lexical constant followed without executing application code or constructing compiler modules. */
-function sourceValue(node: Expression, reading: ProxyReading): Expression {
-  let value = unwrapped(node);
-  const seen = new Set<Expression>();
-  while (isIdentifier(value) && !seen.has(value)) {
-    seen.add(value);
-    const held = heldConstant(value, reading);
-    if (held === undefined) {
-      break;
-    }
-    value = unwrapped(held);
-  }
-  return value;
-}
-
-/** A global callee reached through lexical aliases and source-written member keys. */
-function sourcePath(node: Expression, reading: ProxyReading): string | undefined {
-  const keys: string[] = [];
-  const seen = new Set<Expression>();
-  let value = sourceValue(node, reading);
-  while (!seen.has(value)) {
-    seen.add(value);
-    const path = globalPathOf(value);
-    if (path !== undefined) {
-      return [...path, ...keys].join('.');
-    }
-    if (isPropertyAccessExpression(value)) {
-      keys.unshift(value.name.text);
-    } else if (isElementAccessExpression(value)) {
-      const key = originKey(value.argumentExpression, reading);
-      if (key === undefined) {
-        return undefined;
-      }
-      keys.unshift(key);
-    } else {
-      return undefined;
-    }
-    value = sourceValue(value.expression, reading);
-  }
-  return undefined;
-}
-
-/** A key represented by source text or a number alone. */
-function literalKey(node: Node): string | undefined {
-  return isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node) || isNumericLiteral(node)
-    ? node.text
-    : undefined;
-}
-
-/** A prior explicit write prevents projecting a captured literal's original data entries. */
-function writtenBefore(name: Identifier, reading: ProxyReading): boolean {
-  const declared = metadataInitializer(name)?.parent;
-  if (declared === undefined) {
-    return false;
-  }
-  const visit = (node: Node): boolean => {
-    if (node.pos >= name.pos || node.end <= declared.end) {
-      return false;
-    }
-    const target = writtenBy(node);
-    if (
-      target !== undefined &&
-      targetsOf(target).some((each) => {
-        const root = rootOf(each);
-        return root !== undefined && sourceValue(root, reading) === sourceValue(name, reading);
-      })
-    ) {
-      return true;
-    }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return visit(name.getSourceFile());
 }
