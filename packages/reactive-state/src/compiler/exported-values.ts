@@ -87,9 +87,7 @@ function exportedValue(
   seen = new Set<string>(),
 ): DeclaredValue | undefined {
   const key = `${file}#${name}`;
-  if (seen.has(key)) {
-    return undefined;
-  }
+  if (seen.has(key)) return undefined;
   seen.add(key);
   const reading: Reading = {
     file,
@@ -100,19 +98,29 @@ function exportedValue(
   const { statements } = reading.sourceFile;
   for (const statement of statements) {
     const found = exportedBy(statement, name, reading);
-    if (found !== undefined) {
-      return settled(found, reading);
-    }
+    if (found !== undefined) return settled(found, reading);
   }
+  return name === 'default' ? undefined : starExported(statements, name, reading);
+}
+
+/** What `export * from …` re-exports as `name`, where the file exports none of its own. */
+function starExported(
+  statements: readonly Statement[],
+  name: string,
+  reading: Reading,
+): DeclaredValue | undefined {
   for (const statement of statements) {
-    // `export * from './panels'`, where the file exports no such name of its own.
-    if (isExportDeclaration(statement) && statement.exportClause === undefined) {
-      const other = fileOf(statement.moduleSpecifier, reading);
-      const found = other === undefined ? undefined : exportedValue(modules, other, name, seen);
-      if (found !== undefined) {
-        return found;
-      }
+    if (
+      !isExportDeclaration(statement) ||
+      statement.isTypeOnly ||
+      statement.exportClause !== undefined
+    ) {
+      continue;
     }
+    const other = fileOf(statement.moduleSpecifier, reading);
+    const found =
+      other === undefined ? undefined : exportedValue(reading.modules, other, name, reading.seen);
+    if (found !== undefined) return found;
   }
   return undefined;
 }
@@ -473,20 +481,12 @@ function namedExport(
   reading: Reading,
 ): DeclaredValue | undefined {
   const clause = statement.exportClause;
-  if (clause === undefined) {
-    return undefined;
-  }
-  const element = isNamedExports(clause)
-    ? clause.elements.find((each) => each.name.text === name)
-    : undefined;
-  if (element === undefined) {
-    return undefined;
-  }
+  if (statement.isTypeOnly || clause === undefined || !isNamedExports(clause)) return undefined;
+  const element = clause.elements.find((each) => !each.isTypeOnly && each.name.text === name);
+  if (element === undefined) return undefined;
   const original = (element.propertyName ?? element.name).text;
-  if (statement.moduleSpecifier === undefined) {
-    // `export { fill as helper }`, of what the file declares or imports.
-    return localValue(original, reading);
-  }
+  // `export { fill as helper }`, of what the file declares or imports.
+  if (statement.moduleSpecifier === undefined) return localValue(original, reading);
   const other = fileOf(statement.moduleSpecifier, reading);
   return other === undefined
     ? undefined
@@ -501,25 +501,23 @@ function namedExport(
 function settled(value: DeclaredValue, reading: Reading): DeclaredValue | undefined {
   let each = value;
   for (;;) {
-    if (isFunctionDeclaration(each) || isClassDeclaration(each)) {
+    // What another module declares, it settled where it declares it (`exportedValue`).
+    if (
+      isFunctionDeclaration(each) ||
+      isClassDeclaration(each) ||
+      each.getSourceFile() !== reading.sourceFile
+    ) {
       return each;
     }
     const named = unwrapped(each);
-    if (!isIdentifier(named)) {
-      return each;
-    }
+    if (!isIdentifier(named)) return each;
     const key = `${reading.file}#local:${named.text}`;
-    if (reading.seen.has(key)) {
-      return undefined;
-    }
+    if (reading.seen.has(key)) return undefined;
     reading.seen.add(key);
     const found = localValue(named.text, reading);
     if (found === undefined) {
+      reading.seen.delete(key);
       return globalOf(named) === undefined ? undefined : named;
-    }
-    // What another module declares, it settled where it declares it (`exportedValue`).
-    if (found.getSourceFile() !== reading.sourceFile) {
-      return found;
     }
     each = found;
   }
@@ -581,15 +579,16 @@ function importedValue(
   name: string,
   reading: Reading,
 ): DeclaredValue | undefined {
-  if (!isImportDeclaration(statement) || statement.importClause === undefined) {
-    return undefined;
-  }
+  if (!isImportDeclaration(statement)) return undefined;
   const clause = statement.importClause;
+  if (clause === undefined || clause.phaseModifier === SyntaxKind.TypeKeyword) return undefined;
   let exported: string | undefined;
   if (clause.name?.text === name) {
     exported = 'default';
   } else if (clause.namedBindings !== undefined && isNamedImports(clause.namedBindings)) {
-    const element = clause.namedBindings.elements.find((each) => each.name.text === name);
+    const element = clause.namedBindings.elements.find(
+      (each) => !each.isTypeOnly && each.name.text === name,
+    );
     exported = element === undefined ? undefined : (element.propertyName ?? element.name).text;
   }
   const other = exported === undefined ? undefined : fileOf(statement.moduleSpecifier, reading);
