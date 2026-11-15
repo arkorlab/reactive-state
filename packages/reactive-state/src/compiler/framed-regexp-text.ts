@@ -1,17 +1,16 @@
 import {
   type CallExpression,
   type Expression,
-  type NewExpression,
   isCallExpression,
-  isNewExpression,
   isElementAccessExpression,
+  isNewExpression,
   isPropertyAccessExpression,
   isSpreadElement,
+  type NewExpression,
   type Node,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { arrayError } from './framed-arrays.ts';
 import { frameMemberName } from './framed-bindings.ts';
@@ -25,6 +24,8 @@ import { framedConsumedArguments } from './framed-text-arguments.ts';
 /** Native RegExp converts its consumed pattern and flags, including Error words and array elements. */
 
 const PATTERN = new Set(['RegExp']);
+const REFLECT_APPLY = new Set(['Reflect.apply']);
+const REFLECT_CONSTRUCT = new Set(['Reflect.construct']);
 const PATTERN_METHODS = new Set(['compile', 'exec', 'test']);
 const BORROWED = { callSlots: 3 } as const;
 
@@ -47,13 +48,14 @@ export function framedRegExpText(
   if (!isCallExpression(node) && !isNewExpression(node)) return false;
   const words = { error, typed };
   const native = framedNativeArguments(node, PATTERN);
-  if (
-    native?.args !== undefined &&
-    framedRegExpPattern(node, native.args, native.constructed, error)
-  )
-    return true;
-  if (framedNativeConstructor(node.expression, PATTERN)) {
-    return convertedArguments(node, node.arguments ?? [], words);
+  if (native !== undefined) {
+    if (native.args === undefined) {
+      return native.applied !== undefined && arrayError(native.applied, words, node);
+    }
+    return (
+      framedRegExpPattern(node, native.args, native.constructed, error) ||
+      convertedArguments(node, native.args, words)
+    );
   }
   if (!isCallExpression(node)) return false;
   const method = patternMethod(node);
@@ -81,12 +83,15 @@ function convertedArguments(
   });
 }
 
-/** Existing ordinary borrowing and a fully known literal spread retain the same consumed slots. */
+/** Existing ordinary borrowing and reflected construction wrappers retain the same consumed slots. */
 function patternArguments(call: CallExpression): PatternArguments | undefined {
   const borrowed = borrowedTextCall(call);
-  if (borrowed !== undefined) return borrowed.path.join('.') === 'RegExp' ? borrowed : undefined;
+  if (borrowed !== undefined) return borrowedPatternArguments(call, borrowed);
   const callee = unwrapped(call.expression);
-  if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
+  if (framedNativeConstructor(callee, REFLECT_CONSTRUCT)) {
+    return constructTargetArguments(knownPrefix(call, 2));
+  }
+  if (framedNativeConstructor(callee, REFLECT_APPLY)) {
     const values = knownPrefix(call, BORROWED.callSlots);
     const [target, receiver, applied] = values ?? [];
     return target !== undefined &&
@@ -108,6 +113,35 @@ function patternArguments(call: CallExpression): PatternArguments | undefined {
   return method === 'call'
     ? { given: values.slice(1), applied: undefined }
     : { given: [], applied: values[1] };
+}
+
+/** Resolves borrowed `RegExp` calls and borrowed `Reflect.construct(RegExp, ...)` wrappers. */
+function borrowedPatternArguments(
+  call: CallExpression,
+  borrowed: NonNullable<ReturnType<typeof borrowedTextCall>>,
+): PatternArguments | undefined {
+  const path = borrowed.path.join('.');
+  if (path === 'RegExp') return borrowed;
+  if (path !== 'Reflect.construct') return undefined;
+  const list =
+    borrowed.applied === undefined
+      ? borrowed.given
+      : framedAppliedArguments(call, borrowed.applied);
+  if (list === undefined) return undefined;
+  const prefix = framedArgumentPrefix(call, list, 2);
+  const values =
+    prefix.unknown || (prefix.alternatives?.length ?? 0) > 0 ? undefined : prefix.values;
+  return constructTargetArguments(values);
+}
+
+/** Extracts the argument list passed to `Reflect.construct` when its target is native `RegExp`. */
+function constructTargetArguments(
+  values: readonly Expression[] | undefined,
+): PatternArguments | undefined {
+  const [target, applied] = values ?? [];
+  return target !== undefined && applied !== undefined && framedNativeConstructor(target, PATTERN)
+    ? { given: [], applied }
+    : undefined;
 }
 
 /** Only an unambiguous prefix can establish where a borrowed receiver or apply list sits. */
