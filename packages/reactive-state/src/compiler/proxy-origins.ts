@@ -59,11 +59,11 @@ export function proxyOrigin(
   values: readonly Expression[],
   reading: ProxyReading = {},
 ): Node | undefined {
-  const context: Context = { ...reading, calls: new Set(), frames: [] };
+  const context: Context = { ...reading, calls: new Set(), frames: [], spreadKeys: new Map() };
   const visited = new WeakMap<Context, Map<Expression, Set<string>>>();
   const pending: Origin[] = [
     ...values.map((value) => ({ context, keys: [], seen: new Set<Expression>(), value })),
-    ...callableReturnOrigins(reading),
+    ...callableReturnOrigins(context),
   ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const value = unwrapped(next.value);
@@ -80,15 +80,10 @@ export function proxyOrigin(
 }
 
 /** Seeds return expressions of exported callables inside each callable's own parameter frame. */
-function callableReturnOrigins(reading: ProxyReading): readonly Origin[] {
-  return (reading.callables ?? []).flatMap((fn) => {
-    const context: Context = { ...reading, calls: new Set(), frames: [{ fn, given: undefined }] };
-    return returnedBy(fn).map((value) => ({
-      context,
-      keys: [],
-      seen: new Set<Expression>(),
-      value,
-    }));
+function callableReturnOrigins(base: Context): readonly Origin[] {
+  return (base.callables ?? []).flatMap((fn) => {
+    const context: Context = { ...base, frames: [{ fn, given: undefined }] };
+    return returnedBy(fn).map((value) => ({ context, keys: [], seen: new Set(), value }));
   });
 }
 

@@ -63,6 +63,7 @@ export interface Frame {
 export interface Context extends ProxyReading {
   readonly calls: ReadonlySet<Node>;
   readonly frames: readonly Frame[];
+  readonly spreadKeys: Map<ObjectLiteralExpression, ReadonlySet<string>>;
 }
 
 /** Candidate expression state, optional member projection path, and active spread context. */
@@ -180,22 +181,27 @@ export function writtenBefore(name: Identifier, reading: ProxyReading): boolean 
 }
 
 /** Keys guaranteed to be copied as own enumerable properties when spreading `node`. */
-export function guaranteedSpreadKeys(
+function guaranteedSpreadKeys(
   node: Expression,
-  reading: ProxyReading,
+  context: Context,
   seen = new Set<Expression>(),
 ): ReadonlySet<string> {
-  const literal = unmutatedObjectLiteral(node, reading, seen);
+  const literal = unmutatedObjectLiteral(node, context, seen);
   if (literal === undefined) {
     return new Set();
+  }
+  const cached = context.spreadKeys.get(literal);
+  if (cached !== undefined) {
+    return cached;
   }
   const following = new Set([...seen, literal]);
   const keys = new Set<string>();
   for (const property of literal.properties) {
-    for (const each of spreadEntryKeys(property, reading, following)) {
+    for (const each of spreadEntryKeys(property, context, following)) {
       keys.add(each);
     }
   }
+  context.spreadKeys.set(literal, keys);
   return keys;
 }
 
@@ -224,11 +230,11 @@ function unmutatedObjectLiteral(
 /** Guaranteed own enumerable keys contributed by one object literal element during spread. */
 function spreadEntryKeys(
   property: ObjectLiteralElementLike,
-  reading: ProxyReading,
+  context: Context,
   seen: Set<Expression>,
 ): ReadonlySet<string> {
   if (isSpreadAssignment(property)) {
-    return guaranteedSpreadKeys(property.expression, reading, seen);
+    return guaranteedSpreadKeys(property.expression, context, seen);
   }
   if (
     isPropertyAssignment(property) ||
@@ -237,7 +243,7 @@ function spreadEntryKeys(
     isSetAccessorDeclaration(property) ||
     isMethodDeclaration(property)
   ) {
-    const key = propertyKey(property.name, reading);
+    const key = propertyKey(property.name, context);
     if (key !== undefined && (isComputedPropertyName(property.name) || key !== '__proto__')) {
       return new Set([key]);
     }
