@@ -21,7 +21,6 @@ import {
   isPropertyAccessExpression,
   isSourceFile,
   isSetAccessorDeclaration,
-  isTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -85,6 +84,7 @@ import { framedReflectedObjectValues } from './framed-reflected-objects.ts';
 import { framedRegExpText } from './framed-regexp-text.ts';
 import { framedSourceValues } from './framed-sources.ts';
 import { framedObservedNames } from './framed-symbol-keys.ts';
+import { framedTemplateText } from './framed-template-text.ts';
 import { framedStringText } from './framed-text.ts';
 import { framedCallReturns, framedValueShape } from './framed-values.ts';
 import { framedAssignedSources } from './framed-writes.ts';
@@ -269,8 +269,8 @@ function convertedTextAt(
   ) {
     return converts(node.arguments?.[0]);
   }
-  if (isTemplateExpression(node)) {
-    return node.templateSpans.some((span) => converts(span.expression));
+  if (framedTemplateText(node, converts)) {
+    return true;
   }
   return (
     isBinaryExpression(node) &&
