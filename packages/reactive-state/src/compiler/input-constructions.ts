@@ -48,7 +48,7 @@ import {
   skipsReviver,
 } from './input-native-callbacks.ts';
 import { metadataTag } from './input-tags.ts';
-import { rootOf } from './kept.ts';
+import { targetsOf } from './kept.ts';
 import { constantValue } from './numbers.ts';
 import { writtenBy } from './written.ts';
 
@@ -329,17 +329,8 @@ function executionSources(
       if (status.uncertain) {
         return;
       }
-      const written = writtenBy(node);
-      if (
-        written !== undefined &&
-        (isCallExpression(node) ||
-          isPropertyAccessExpression(written) ||
-          isElementAccessExpression(written))
-      ) {
-        const root = rootOf(written);
-        if (root !== undefined) {
-          found.push({ bindings: execution.bindings, value: root });
-        }
+      for (const holder of writtenHolders(node)) {
+        found.push({ bindings: execution.bindings, value: holder });
       }
       if (isCallExpression(node) || isNewExpression(node)) {
         status.uncertain = !invokedEffects(node, { ...execution, trail }, pending);
@@ -356,6 +347,29 @@ function executionSources(
     }
   }
   return found;
+}
+
+/** Object holders mutated by an assignment, unary update, delete or in-place call. */
+function writtenHolders(node: Node): readonly Expression[] {
+  const written = writtenBy(node);
+  if (written === undefined) {
+    return [];
+  }
+  if (isCallExpression(node)) {
+    const holder = isExpression(written) ? unwrapped(written) : undefined;
+    return holder === undefined || holder.kind === SyntaxKind.ThisKeyword ? [] : [holder];
+  }
+  return targetsOf(written).flatMap((target) => {
+    const each = isExpression(target) ? unwrapped(target) : undefined;
+    if (
+      each === undefined ||
+      (!isPropertyAccessExpression(each) && !isElementAccessExpression(each))
+    ) {
+      return [];
+    }
+    const holder = unwrapped(each.expression);
+    return holder.kind === SyntaxKind.ThisKeyword ? [] : [holder];
+  });
 }
 
 /** A source tag runs defaults immediately, while an acquired generator body remains suspended. */
