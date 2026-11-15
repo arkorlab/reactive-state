@@ -8,7 +8,9 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { type FrameBinding, frameBindingOf } from './framed-bindings.ts';
 import { framedHeldFields, framedHeldValues, type Held } from './framed-held-members.ts';
+import { framedRecordOrigin } from './framed-record-origins.ts';
 import { framedSourceValues } from './framed-sources.ts';
 
 /** What a saved record may hold where a native conversion reads it, after possible changes. */
@@ -27,6 +29,7 @@ interface RecordReading {
   readonly fields: RecordFields;
   readonly point: Node;
   readonly fieldsOf: FieldsOf;
+  readonly seen: ReadonlySet<FrameBinding>;
 }
 
 /**
@@ -43,16 +46,28 @@ export function framedChangedRecord(
 ): RecordFields {
   const name = unwrapped(expression);
   if (!isIdentifier(name)) return fields;
+  return changedRecord(name, fields, point, { fieldsOf: cachedFields(fieldsOf), seen: new Set() });
+}
+
+/** Resolves a variable's reachable fields while guarding cyclic record-alias assignments. */
+function changedRecord(
+  name: Identifier,
+  fields: RecordFields,
+  point: Node,
+  context: { readonly fieldsOf: FieldsOf; readonly seen: ReadonlySet<FrameBinding> },
+): RecordFields {
   const whole = framedHeldValues(name, [], point);
   const written = framedHeldFields(name, point);
   if (whole === undefined || written === undefined) return fields;
-  const reading: RecordReading = { name, fields, point, fieldsOf: cachedFields(fieldsOf) };
+  const binding = frameBindingOf(name)?.binding;
+  const seen = binding === undefined ? context.seen : new Set([...context.seen, binding]);
+  const reading: RecordReading = { name, fields, point, fieldsOf: context.fieldsOf, seen };
   const named = new Map<string, readonly Expression[]>();
   const unknown = written.unknown.map((each) => each.value);
   if (whole.initial !== undefined) unknown.push(...fields.unknown);
   const keys = new Set(fields.named.keys());
   for (const each of written.names) keys.add(each);
-  addWholeReplacements(whole.held, reading.fieldsOf, keys, unknown);
+  addWholeReplacements(whole.held, reading, keys, unknown);
   const keepsNamed = whole.initial !== undefined && whole.held.length === 0;
   for (const key of keys) {
     const values = keyFieldValues(key, reading);
@@ -78,13 +93,13 @@ function cachedFields(fieldsOf: FieldsOf): FieldsOf {
 /** Includes named keys and unread-key values from reachable whole-record replacements. */
 function addWholeReplacements(
   replacements: readonly Held[],
-  fieldsOf: FieldsOf,
+  reading: RecordReading,
   keys: Set<string>,
   unknown: Expression[],
 ): void {
   for (const each of replacements) {
     if (each.keys.length > 0) continue;
-    for (const record of replacementRecords(each.value, fieldsOf)) {
+    for (const record of replacementRecords(each.value, reading)) {
       for (const key of record.named.keys()) keys.add(key);
       unknown.push(...record.unknown);
     }
@@ -96,34 +111,54 @@ function keyFieldValues(key: string, reading: RecordReading): readonly Expressio
   const held = framedHeldValues(reading.name, [key], reading.point);
   if (held === undefined) return undefined;
   const values = held.initial === undefined ? [] : [...(reading.fields.named.get(key) ?? [])];
-  for (const each of held.held) values.push(...heldFieldValues(each, reading.fieldsOf));
+  for (const each of held.held) values.push(...heldFieldValues(each, reading));
   return values;
 }
 
-/** What a held value puts in the field: itself, or what an assigned literal holds under its name. */
-function heldFieldValues(held: Held, fieldsOf: FieldsOf): readonly Expression[] {
+/** What a held value puts in the field: itself, or what an assigned record holds under its name. */
+function heldFieldValues(held: Held, reading: RecordReading): readonly Expression[] {
   if (held.keys.length === 0) return [held.value];
   const [key, ...rest] = held.keys;
   if (key === undefined || rest.length > 0) return [];
   const values: Expression[] = [];
-  for (const record of replacementRecords(held.value, fieldsOf)) {
+  for (const record of replacementRecords(held.value, reading)) {
     values.push(...(record.named.get(key) ?? []));
   }
   return values;
 }
 
-/** Reads each source-written object literal reachable from an assigned expression. */
-function replacementRecords(expression: Expression, fieldsOf: FieldsOf): readonly RecordFields[] {
+/** Reads each source-written literal or record alias reachable from an assigned expression. */
+function replacementRecords(
+  expression: Expression,
+  reading: RecordReading,
+): readonly RecordFields[] {
   const pending: Expression[] = [expression];
   const records: RecordFields[] = [];
-  const seen = new Set<Node>();
+  const visited = new Set<Node>();
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     const value = unwrapped(current);
-    if (seen.has(value)) continue;
-    seen.add(value);
+    if (visited.has(value)) continue;
+    visited.add(value);
     const branched = framedSourceValues(value);
     if (branched !== undefined) pending.push(...branched);
-    else if (isObjectLiteralExpression(value)) records.push(fieldsOf(value));
+    else if (isObjectLiteralExpression(value)) records.push(reading.fieldsOf(value));
+    else records.push(...aliasRecords(value, reading));
   }
   return records;
+}
+
+/** Resolves a source-known record alias at its assignment site and at the consumer read. */
+function aliasRecords(value: Expression, reading: RecordReading): readonly RecordFields[] {
+  const origin = framedRecordOrigin(value, reading.point, true);
+  if (origin === undefined) return [];
+  const base = reading.fieldsOf(origin.record);
+  if (origin.unchanged) return [base];
+  if (!isIdentifier(value)) return [];
+  const binding = frameBindingOf(value)?.binding;
+  if (binding === undefined || reading.seen.has(binding)) return [];
+  const nested = { fieldsOf: reading.fieldsOf, seen: reading.seen };
+  return [
+    changedRecord(value, base, value, nested),
+    changedRecord(value, base, reading.point, nested),
+  ];
 }
