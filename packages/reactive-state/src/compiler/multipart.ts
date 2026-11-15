@@ -31,55 +31,64 @@ export function multipartMaking(node: NewExpression, path: string | undefined): 
     : undefined;
 }
 
+interface BodyReading {
+  readonly bodies: readonly Expression[];
+  readonly overwrites: boolean;
+}
+
+const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
+
 /** What a Request's options show of its body, after ordinary aliases and object spreads. */
 function requestBodies(node: NewExpression, path: string | undefined): readonly Expression[] {
   const options = path === 'Request' ? node.arguments?.[1] : undefined;
-  return options === undefined ? [] : bodiesOf(options, new Set());
+  return options === undefined ? [] : bodiesOf(options, new Set()).bodies;
 }
 
 /** The surviving body property of options the code writes; none of options it does not show. */
-function bodiesOf(node: Expression, seen: Set<Expression>): readonly Expression[] {
+function bodiesOf(node: Expression, seen: Set<Expression>): BodyReading {
   const value = declaredOf(node, seen);
   if (seen.has(value)) {
-    return [];
+    return EMPTY_BODIES;
   }
   const following = new Set([...seen, value]);
   const alternatives = selectedValues(value);
   if (alternatives !== undefined) {
-    return alternatives.flatMap((each) => bodiesOf(each, new Set(following)));
+    const readings = alternatives.map((each) => bodiesOf(each, new Set(following)));
+    return {
+      bodies: readings.flatMap((each) => each.bodies),
+      overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
+    };
   }
   if (!isObjectLiteralExpression(value)) {
-    return [];
+    return EMPTY_BODIES;
   }
-  let bodies: readonly Expression[] = [];
+  let current = EMPTY_BODIES;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
       const spread = bodiesOf(property.expression, new Set(following));
-      if (spread.length > 0) {
-        bodies = spread;
-      }
+      current = {
+        bodies: spread.overwrites ? spread.bodies : [...current.bodies, ...spread.bodies],
+        overwrites: current.overwrites || spread.overwrites,
+      };
       continue;
     }
-    bodies = propertyBodies(property, bodies);
+    current = propertyBodies(property, current);
   }
-  return bodies;
+  return current;
 }
 
 /** What a surviving property proves or may add to the possible request bodies. */
-function propertyBodies(
-  property: ObjectLiteralElementLike,
-  previous: readonly Expression[],
-): readonly Expression[] {
+function propertyBodies(property: ObjectLiteralElementLike, previous: BodyReading): BodyReading {
   if (isSpreadAssignment(property)) {
     return previous;
   }
   const key = optionKey(property.name);
   const held = propertyValue(property);
   if (key === 'body') {
-    return held === undefined ? [] : [held];
+    return { bodies: held === undefined ? [] : [held], overwrites: true };
   }
   return key === undefined && held !== undefined && isFormData(held, new Set())
-    ? [...previous, held]
+    ? { ...previous, bodies: [...previous.bodies, held] }
     : previous;
 }
 
