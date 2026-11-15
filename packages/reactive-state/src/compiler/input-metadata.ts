@@ -3,8 +3,10 @@ import {
   type Identifier,
   isCallExpression,
   isConditionalExpression,
+  isElementAccessExpression,
   isIdentifier,
   isNewExpression,
+  isPropertyAccessExpression,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -16,6 +18,7 @@ import { handedGlobal } from './handed-globals.ts';
 import { parameterSources, type MetadataSource } from './input-bindings.ts';
 import { metadataInitializer } from './input-callees.ts';
 import { constructionSources } from './input-constructions.ts';
+import { memberSources } from './input-members.ts';
 import { isKept, rootOf } from './kept.ts';
 import { writtenBy } from './written.ts';
 
@@ -62,6 +65,9 @@ function inputSources(source: MetadataSource): readonly MetadataSource[] | undef
   }
   if (isIdentifier(value)) {
     return identifierSources(value, source);
+  }
+  if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
+    return memberSources(value, source);
   }
   return isConditionalExpression(value)
     ? [value.whenTrue, value.whenFalse].map((each) => ({ ...source, value: each }))
