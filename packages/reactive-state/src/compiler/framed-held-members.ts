@@ -427,8 +427,9 @@ function plainMember(literal: ObjectLiteralExpression, key: string): Expression 
   if (framedLiteralAccessor(literal, key)) return undefined;
   let found: Expression | undefined;
   for (const property of literal.properties) {
-    if (isSpreadAssignment(property)) found = undefined;
-    else if (writtenArrayKey(property.name) === key)
+    const name = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
+    if (name === undefined) found = undefined;
+    else if (name === key)
       found = isPropertyAssignment(property) ? property.initializer : undefined;
   }
   if (found === undefined) return undefined;
