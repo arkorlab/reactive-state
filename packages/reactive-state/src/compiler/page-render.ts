@@ -1,6 +1,7 @@
 import {
   type Expression,
   type FunctionDeclaration,
+  type Identifier,
   isAwaitExpression,
   isConditionalExpression,
   isIdentifier,
@@ -23,6 +24,7 @@ import {
   type Statement,
 } from 'typescript/ast';
 
+import { unshadowedReads } from './code-globals.ts';
 import {
   isBlank,
   isPageFunction,
@@ -207,6 +209,8 @@ interface Sites {
 /** What tells a root's element, and an element of a function of the page's, from the rest. */
 interface Tags {
   readonly names: PageNames;
+  /** The reads in the file's code that no scope around them declares again (`unshadowedReads`). */
+  readonly free: ReadonlySet<Identifier>;
   /** Whether a specifier names a reactive root the compile compiled. */
   readonly isRoot: (specifier: string) => boolean;
   readonly page: FunctionDeclaration;
@@ -217,10 +221,18 @@ function isEmpty(element: JsxElement | JsxSelfClosingElement): boolean {
   return !isJsxElement(element) || element.children.every((child) => isBlank(child));
 }
 
+/** Whether `element` is `react`'s `Suspense`, with no scope around it declaring the name again. */
+function isSuspenseElement(element: JsxElement | JsxSelfClosingElement, tags: Tags): boolean {
+  const tag = tagOf(element);
+  const root = isPropertyAccessExpression(tag) ? tag.expression : tag;
+  return isIdentifier(root) && tags.free.has(root) && isSuspense(tag, tags.names);
+}
+
 /** Whether `element` is the root's: of a default import of a reactive root the compile compiled. */
 function isRootElement(element: JsxElement | JsxSelfClosingElement, tags: Tags): boolean {
   const tag = tagOf(element);
-  const specifier = isIdentifier(tag) ? tags.names.defaults.get(tag.text) : undefined;
+  const specifier =
+    isIdentifier(tag) && tags.free.has(tag) ? tags.names.defaults.get(tag.text) : undefined;
   return specifier !== undefined && tags.isRoot(specifier);
 }
 
@@ -231,7 +243,7 @@ function innerOf(
 ): FunctionDeclaration | undefined {
   const tag = tagOf(element);
   const fn =
-    isIdentifier(tag) && !isRootElement(element, tags)
+    isIdentifier(tag) && tags.free.has(tag) && !isRootElement(element, tags)
       ? tags.names.functions.get(tag.text)
       : undefined;
   return fn === tags.page ? undefined : fn;
@@ -267,7 +279,7 @@ function sitesIn(node: Node, tags: Tags): Sites {
     const [each, suspended] = next;
     const element = isJsxElement(each) || isJsxSelfClosingElement(each) ? each : undefined;
     if (element === undefined || !recordSite({ element, suspended }, sites, tags)) {
-      const within = suspended || (element !== undefined && isSuspense(tagOf(element), tags.names));
+      const within = suspended || (element !== undefined && isSuspenseElement(element, tags));
       each.forEachChild((child) => {
         pending.push([child, within]);
       });
@@ -465,6 +477,34 @@ function givenTo(
 }
 
 /**
+ * What the names an object parameter destructures hold of the props it is `given`: each, the prop
+ * of the page's it was given under its name; none where an element is a rest, has a default or
+ * destructures further.
+ */
+function patternSources(
+  pattern: ObjectBindingPattern,
+  given: ReadonlyMap<string, Source>,
+): ReadonlyMap<string, Held> | undefined {
+  const sources = new Map<string, Held>();
+  for (const element of pattern.elements) {
+    const key = element.propertyName ?? element.name;
+    const source = key !== undefined && isIdentifier(key) ? given.get(key.text) : undefined;
+    const { name } = element;
+    if (
+      source === undefined ||
+      name === undefined ||
+      element.dotDotDotToken !== undefined ||
+      element.initializer !== undefined ||
+      !isIdentifier(name)
+    ) {
+      return undefined;
+    }
+    sources.set(name.text, { kind: 'source', source });
+  }
+  return sources;
+}
+
+/**
  * What the names a function's one parameter holds of the props it is `given`: each destructured,
  * the prop of the page's it was given under its name; or the props whole, with what each of them
  * is (`Held.handed`).
@@ -480,28 +520,13 @@ function parameterSources(
   if (parameter === undefined) {
     return new Map();
   }
+  if (parameter.dotDotDotToken !== undefined || parameter.initializer !== undefined) {
+    return undefined;
+  }
   if (isIdentifier(parameter.name)) {
     return new Map([[parameter.name.text, { handed: given, kind: 'source', source: 'props' }]]);
   }
-  if (!isObjectBindingPattern(parameter.name)) {
-    return undefined;
-  }
-  const sources = new Map<string, Held>();
-  for (const element of parameter.name.elements) {
-    const key = element.propertyName ?? element.name;
-    const source = key !== undefined && isIdentifier(key) ? given.get(key.text) : undefined;
-    const { name } = element;
-    if (
-      source === undefined ||
-      name === undefined ||
-      element.initializer !== undefined ||
-      !isIdentifier(name)
-    ) {
-      return undefined;
-    }
-    sources.set(name.text, { kind: 'source', source });
-  }
-  return sources;
+  return isObjectBindingPattern(parameter.name) ? patternSources(parameter.name, given) : undefined;
 }
 
 /** The page's own props: `params` and `searchParams`, as Next.js gives a page them. */
@@ -574,7 +599,7 @@ export function pageRenderOf(
   const context: RenderContext = {
     module: moduleNamesOf(sourceFile),
     sourceFile,
-    tags: { isRoot, names, page },
+    tags: { free: unshadowedReads(sourceFile), isRoot, names, page },
   };
   const rendered = renderedBy(page, sources, context);
   if (rendered === undefined) {
