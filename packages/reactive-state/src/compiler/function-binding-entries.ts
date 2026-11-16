@@ -7,9 +7,8 @@ import {
   isArrayBindingPattern,
   isArrayLiteralExpression,
   isBindingElement,
-  isConstructorTypeNode,
   isDecorator,
-  isFunctionTypeNode,
+  isExpression,
   isIdentifier,
   isObjectBindingPattern,
   isOmittedExpression,
@@ -19,14 +18,19 @@ import {
   isVoidExpression,
   type Node,
   type ParameterDeclaration,
-  type TypeNode,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
-import { namesType } from './framed.ts';
+import {
+  type AssignedBindingSource,
+  bindingReassignments,
+  declaredBindingTarget,
+  isFunctionType,
+  isPatternStepFunctionType,
+} from './function-binding-types.ts';
 import {
   combineBranchKinds,
   type EntryKind,
@@ -45,12 +49,8 @@ import {
 } from './function-table-entries.ts';
 import { bindingIdentifiers } from './scope.ts';
 
-/** The types a parameter is said to be a function of by their names: `Function`, and its kin. */
-const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  'CallableFunction',
-  'Function',
-  'NewableFunction',
-]);
+const MISSING_CLEAN = 'missing-clean';
+const NON_FUNCTION: EntryKind = 'non-function';
 
 /** Classifies a dynamic lookup across all entries of a written object literal. */
 export function dynamicObjectEntryKind(holder: Expression, context: ScanContext): EntryKind {
@@ -126,11 +126,25 @@ function variableEntryKind(
     declared.initializer === undefined
       ? { kind: 'unknown' }
       : { kind: 'expr', value: unwrapped(declared.initializer) };
-  const resolved = patternEntryKind(node.text, declared.name, source, context);
-  return constant ? resolved : degradeMutableKind(resolved);
+  const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
+  const steps = bound === undefined ? [] : patternSteps(bound);
+  const resolved =
+    bound === undefined ? 'unknown' : evaluateBindingSteps(source, steps, 0, context);
+  if (constant) {
+    return resolved === 'unknown' && isPatternStepFunctionType(declared.type, steps, 0)
+      ? 'renamed'
+      : resolved;
+  }
+  if (
+    degradeMutableKind(resolved) === 'renamed' ||
+    isPatternStepFunctionType(declared.type, steps, 0)
+  ) {
+    return 'renamed';
+  }
+  return reassignedBindingEntryKind(declaredBindingTarget(node, declared), context);
 }
 
-/** Preserves `'entry'` and `'non-function'` across `const` aliases while degrading `let`/`var`. */
+/** Preserves `'entry'` and `NON_FUNCTION` across `const` aliases while checking mutable types/writes. */
 function simpleVariableEntryKind(
   declared: VariableDeclaration,
   constant: boolean,
@@ -140,10 +154,36 @@ function simpleVariableEntryKind(
     declared.initializer === undefined
       ? 'unknown'
       : context.classifyExpression(unwrapped(declared.initializer), context);
-  if (fromInit === 'unknown' && isFunctionType(declared.type)) {
+  if (constant) {
+    return fromInit === 'unknown' && isFunctionType(declared.type) ? 'renamed' : fromInit;
+  }
+  if (degradeMutableKind(fromInit) === 'renamed' || isFunctionType(declared.type)) {
     return 'renamed';
   }
-  return constant ? fromInit : degradeMutableKind(fromInit);
+  return reassignedBindingEntryKind(declared.name, context);
+}
+
+/** Checks post-declaration reassignments of `binding` for any function value. */
+function reassignedBindingEntryKind(binding: Node, context: ScanContext): EntryKind {
+  const sources = bindingReassignments(binding.getSourceFile()).get(binding) ?? [];
+  for (const source of sources) {
+    const each = withBranch(context, (branch) => assignedSourceEntryKind(source, branch));
+    if (each === 'entry' || each === 'renamed') {
+      return 'renamed';
+    }
+  }
+  return 'unknown';
+}
+
+/** Classifies a single reassignment source assigned to a mutable binding. */
+function assignedSourceEntryKind(source: AssignedBindingSource, context: ScanContext): EntryKind {
+  if (source.kind === 'expr') {
+    return context.classifyExpression(source.value, context);
+  }
+  if (source.kind === 'member') {
+    return memberEntryKind(source.holder, source.key, context);
+  }
+  return arraySlotEntryKind(source.holder, source.index, context);
 }
 
 /** Classifies simple or destructured parameter bindings, combining caller input with defaults. */
@@ -181,7 +221,7 @@ function parameterEntryKind(
   return degradeMutableKind(combineBranchKinds(callerKind, defaultKind));
 }
 
-/** Degrades `'entry'` to `'renamed'` and `'non-function'` to `'unknown'` on mutable/caller bindings. */
+/** Degrades `'entry'` to `'renamed'` and `NON_FUNCTION` to `'unknown'` on mutable/caller bindings. */
 function degradeMutableKind(kind: EntryKind): EntryKind {
   return kind === 'entry' || kind === 'renamed' ? 'renamed' : 'unknown';
 }
@@ -200,7 +240,7 @@ function patternEntryKind(
 }
 
 /** Collects enclosing `BindingElement`s from outermost pattern to innermost binding `bound`. */
-function patternSteps(bound: Identifier): readonly BindingElement[] {
+export function patternSteps(bound: Identifier): readonly BindingElement[] {
   const steps: BindingElement[] = [];
   for (
     let at: Node = bound.parent;
@@ -266,7 +306,7 @@ function intermediateStepEntryKind(
   const selected = selectIntermediateSlot(source, step, context);
   const { initializer } = step;
   if (initializer === undefined) {
-    return selected.kind === 'missing-clean'
+    return selected.kind === MISSING_CLEAN
       ? 'unknown'
       : evaluateBindingSteps(selected, steps, index + 1, context);
   }
@@ -274,7 +314,7 @@ function intermediateStepEntryKind(
     evaluateBindingSteps({ kind: 'expr', value: unwrapped(initializer) }, steps, index + 1, branch),
   );
   if (
-    selected.kind === 'missing-clean' ||
+    selected.kind === MISSING_CLEAN ||
     (selected.kind === 'expr' && isGuaranteedUndefined(selected.value))
   ) {
     return defaultBranch;
@@ -291,8 +331,8 @@ function slotEntryKind(
   step: BindingElement,
   context: ScanContext,
 ): EntryKind {
-  if (source.kind === 'missing-clean') {
-    return 'non-function';
+  if (source.kind === MISSING_CLEAN) {
+    return NON_FUNCTION;
   }
   if (source.kind === 'unknown') {
     return 'unknown';
@@ -340,7 +380,7 @@ function selectInlineArrayElement(holder: Expression, index: number): ResolvedPr
   }
   const element = holder.elements[index];
   if (element === undefined || isOmittedExpression(element)) {
-    return { kind: 'missing-clean' };
+    return { kind: MISSING_CLEAN };
   }
   return { kind: 'expr', value: unwrapped(element) };
 }
@@ -348,8 +388,8 @@ function selectInlineArrayElement(holder: Expression, index: number): ResolvedPr
 /** Classifies element `index` of an inline or variable-bound array literal in array destructuring. */
 function arraySlotEntryKind(holder: Expression, index: number, context: ScanContext): EntryKind {
   const inline = selectInlineArrayElement(holder, index);
-  if (inline.kind === 'missing-clean') {
-    return 'non-function';
+  if (inline.kind === MISSING_CLEAN) {
+    return NON_FUNCTION;
   }
   if (inline.kind === 'expr') {
     return context.classifyExpression(inline.value, context);
@@ -367,7 +407,7 @@ function unverifiedArraySlotKind(
   if (array === undefined || index < 0) {
     return 'unknown';
   }
-  if (!array.elements.slice(0, index + 1).some((each) => isSpreadElement(each))) {
+  if (array.elements.slice(0, index + 1).every((each) => !isSpreadElement(each))) {
     const element = array.elements[index];
     return element === undefined || isOmittedExpression(element)
       ? 'unknown'
@@ -391,29 +431,34 @@ function resolveArrayLiteral(
   holder: Expression,
   context: ScanContext,
 ): ArrayLiteralExpression | undefined {
-  if (isArrayLiteralExpression(holder)) {
-    return holder;
+  let current: Expression = holder;
+  for (;;) {
+    if (isArrayLiteralExpression(current)) {
+      return current;
+    }
+    const declared = isIdentifier(current) ? frameDeclarationOf(current) : undefined;
+    if (
+      declared === undefined ||
+      !isVariableDeclaration(declared) ||
+      !isIdentifier(declared.name) ||
+      declared.initializer === undefined
+    ) {
+      return undefined;
+    }
+    if (context.seen.has(declared)) {
+      context.hitCycle = true;
+      return undefined;
+    }
+    context.seen.add(declared);
+    current = unwrapped(declared.initializer);
   }
-  const declared = isIdentifier(holder) ? frameDeclarationOf(holder) : undefined;
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    declared.initializer === undefined
-  ) {
-    return undefined;
-  }
-  if (context.seen.has(declared)) {
-    context.hitCycle = true;
-    return undefined;
-  }
-  context.seen.add(declared);
-  return resolveArrayLiteral(unwrapped(declared.initializer), context);
 }
 
 /** Whether `node` stands directly as a destructuring initializer with no identifier alias to mutate it. */
 function isInlinePatternSource(node: ArrayLiteralExpression): boolean {
   const { at, parent } = useOf(node);
   return (
+    isExpression(at) &&
     (isVariableDeclaration(parent) || isBindingElement(parent)) &&
     parent.initializer === at &&
     !isIdentifier(parent.name)
@@ -426,15 +471,4 @@ function bindingElementKey(step: BindingElement): string | undefined {
     return keyOf(step.propertyName);
   }
   return step.name !== undefined && isIdentifier(step.name) ? step.name.text : undefined;
-}
-
-/**
- * Whether `type`, written, says a function: a function's type, `() => string`, a class's,
- * `new () => object`, or `Function`'s and its kin's (`FUNCTION_TYPES`), in a union too.
- */
-function isFunctionType(type: TypeNode | undefined): boolean {
-  return (
-    type !== undefined &&
-    (isFunctionTypeNode(type) || isConstructorTypeNode(type) || namesType(type, FUNCTION_TYPES))
-  );
 }
