@@ -58,6 +58,41 @@ const CASES = [
     source: `function make(value: unknown) { const box = { text: 'fixed' }; return (Object.assign(box, { text: String(value) }), new Error(box.text)); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
   },
   {
+    framed: true,
+    id: 'factory-return-void-nullish-coalescing-operand-mutates-holder',
+    source: `function make(value: unknown) { const box = { text: 'fixed' }; return void Object.assign(box, { text: String(value) }) ?? new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-return-logical-or-falsy-prefix-mutates-holder',
+    source: `function make(value: unknown) { const box = { text: 'fixed', setTime: () => 0 }; return Object.assign(box, { text: String(value) }).setTime(Infinity) || new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return local.message; }`,
+  },
+  {
+    framed: true,
+    id: 'factory-return-logical-and-truthy-prefix-mutates-holder',
+    source: `function make(value: unknown) { const box = { text: 'fixed', setTime: () => 0 }; return !Object.assign(box, { text: String(value) }).setTime(Infinity) && new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-nested-helper-call-argument-mutates-holder',
+    source: `function make(value: unknown) { const box = { text: 'fixed' }; const inner = (_unused: unknown) => new Error(box.text); return inner(Object.assign(box, { text: String(value) })); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-nested-helper-unused-default-mutates-holder',
+    source: `function make(value: unknown) { const box = { text: 'fixed' }; const inner = (_unused = Object.assign(box, { text: String(value) })) => new Error(box.text); return inner(); } function text(externalError: Error) { const local: Error = make([externalError]); return local.message; }`,
+  },
+  {
+    framed: true,
+    id: 'factory-reflected-object-call-receiver-mutates-holder',
+    source: `function make(value: unknown) { const box = { text: 'fixed' }; return Object.call(Object.assign(box, { text: String(value) }), new Error(box.text)); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
+  {
+    framed: false,
+    id: 'factory-pure-void-nullish-coalescing-fallback-preserved',
+    source: `function make(_value: unknown) { const box = { text: 'fixed' }; return void box.text ?? new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
+  {
     framed: false,
     id: 'factory-unmutated-const-holder-fixed-words-preserved',
     source: `function make(_value: unknown) { const box = { text: 'fixed' }; return new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,

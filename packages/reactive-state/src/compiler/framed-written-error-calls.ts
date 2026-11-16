@@ -54,7 +54,7 @@ import { framedFactoryCall } from './framed-factory-calls.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedQuietData, framedQuietPrimitive } from './framed-native-evaluation.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
-import { constantStatement } from './framed-written-error-parameters.ts';
+import { constantStatement, suppliedQuietParameter } from './framed-written-error-parameters.ts';
 import { nonInterceptingWrappedTarget } from './framed-written-error-wrappers.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
 import { isTypeOnly } from './scope.ts';
@@ -239,6 +239,20 @@ function pushDecorators(modifiers: readonly Node[] | undefined, pending: Node[])
   }
 }
 
+/** Rejects factory parameter patterns or active defaults that could run side effects. */
+export function sideEffectFreeFactoryParameters(
+  fn: Answering,
+  given: readonly Expression[],
+): boolean {
+  return parametersOf(fn).every((param, index) => {
+    if (suppliedQuietParameter(param, given, index)) return true;
+    return (
+      isIdentifier(param.name) &&
+      (param.initializer === undefined || sideEffectFreeExpression(param.initializer))
+    );
+  });
+}
+
 /** Requires a `const` statement to bind plain identifiers to side-effect-free initializers. */
 export function sideEffectFreeVariableStatement(statement: VariableStatement): boolean {
   if (!constantStatement(statement)) return false;
@@ -254,11 +268,12 @@ function sideEffectFreeDeclaration(declaration: VariableDeclaration): boolean {
 }
 
 /** Rejects calls, assignments, destructuring hooks, spreads, and coercing operators. */
-export function sideEffectFreeExpression(root: Expression): boolean {
+export function sideEffectFreeExpression(root: Expression, exempt?: Expression): boolean {
+  const target = exempt === undefined ? undefined : unwrapped(exempt);
   const pending: Expression[] = [root];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     const expr = unwrapped(current);
-    if (isPureLeafExpression(expr)) continue;
+    if (expr === target || isPureLeafExpression(expr)) continue;
     if (!queueCompositeOperands(expr, pending)) return false;
   }
   return true;
@@ -340,7 +355,7 @@ function queueObjectProperties(expr: ObjectLiteralExpression, pending: Expressio
 
 function queueObjectElement(prop: ObjectLiteralElementLike, pending: Expression[]): boolean {
   if (isShorthandPropertyAssignment(prop)) {
-    if (prop.objectAssignmentInitializer !== undefined) return false;
+    if (prop.objectAssignmentInitializer !== undefined || !isIdentifier(prop.name)) return false;
     pending.push(prop.name);
     return true;
   }
@@ -367,10 +382,34 @@ function queuePureInvocation(expr: CallExpression | NewExpression, pending: Expr
   }
   const wrapped = nonInterceptingWrappedTarget(expr);
   if (wrapped !== undefined && !isBinaryExpression(callee)) {
-    pending.push(wrapped);
-    return true;
+    return queueInvocationParts(expr, wrapped, pending);
+  }
+  if (
+    isCallExpression(expr) &&
+    globalPathOf(callee)?.join('.') === 'Proxy.revocable' &&
+    expr.arguments.length === 2
+  ) {
+    return queuePlainArguments(expr.arguments, pending);
   }
   if (!isIdentifier(callee) || !framedNativeConstructor(callee, ERRORS)) return false;
   const args = expr.arguments ?? [];
   return args.every((arg) => !isSpreadElement(arg) && framedQuietData(arg));
+}
+
+function queueInvocationParts(
+  expr: CallExpression | NewExpression,
+  wrapped: Expression,
+  pending: Expression[],
+): boolean {
+  if (!queuePlainArguments(expr.arguments ?? [], pending)) return false;
+  pending.push(expr.expression, wrapped);
+  return true;
+}
+
+function queuePlainArguments(args: readonly Expression[], pending: Expression[]): boolean {
+  for (const arg of args) {
+    if (isSpreadElement(arg)) return false;
+    pending.push(arg);
+  }
+  return true;
 }

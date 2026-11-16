@@ -39,6 +39,7 @@ import {
   factoryMentionsThis,
   framedWrittenFactoryCall,
   sideEffectFreeExpression,
+  sideEffectFreeFactoryParameters,
   sideEffectFreeVariableStatement,
 } from './framed-written-error-calls.ts';
 import {
@@ -140,7 +141,7 @@ function assignedId(node: Node, ids: Map<Node, number>): number {
 /** Evaluates branches, unmutated lexical bindings, local constructions, and local factories. */
 function computeWrittenError(node: Expression, state: ProofState, frame: FactoryFrame): boolean {
   const { value } = framedValueShape(node);
-  const inFactory = frame.returnScope !== undefined || frame.unquietScopes.length > 0;
+  const inFactory = inFactoryFrame(frame);
   const branches = reachableValueBranches(value, inFactory);
   if (branches !== undefined) {
     return (
@@ -162,6 +163,7 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
   const inner = nonInterceptingWrappedTarget(value);
   if (inner !== undefined) {
     return (
+      (!inFactory || sideEffectFreeExpression(value, inner)) &&
       !state.check(node, false) &&
       state.check(node, true) &&
       evaluateWrittenError(inner, state, frame)
@@ -191,32 +193,45 @@ function binaryValueBranches(
 ): readonly Expression[] | undefined {
   const kind = node.operatorToken.kind;
   if (kind === SyntaxKind.CommaToken) {
-    return !inFactory || sideEffectFreeExpression(node.left) ? [node.right] : undefined;
+    return allowedDroppedPrefix(node.left, inFactory) ? [node.right] : undefined;
   }
   if (kind === SyntaxKind.BarBarToken) {
-    const branch = framedCondition(node.left);
-    if (branch === undefined) return [node.left, node.right];
-    return [branch ? node.left : node.right];
+    return logicalBranches(node.left, node.right, false, inFactory);
   }
   if (kind === SyntaxKind.AmpersandAmpersandToken) {
-    const branch = framedCondition(node.left);
-    if (branch === true) return [node.right];
-    return branch === false ? [node.left] : [node.left, node.right];
+    return logicalBranches(node.left, node.right, true, inFactory);
   }
   return kind === SyntaxKind.QuestionQuestionToken
-    ? nullishBranches(node.left, node.right)
+    ? nullishBranches(node.left, node.right, inFactory)
     : undefined;
 }
 
+/** Prunes constant `||` / `&&` branches only when a discarded left operand is side-effect-free. */
+function logicalBranches(
+  left: Expression,
+  right: Expression,
+  dropWhenTruthy: boolean,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
+  const branch = framedCondition(left);
+  if (branch === undefined) return [left, right];
+  if (branch !== dropWhenTruthy) return [left];
+  return allowedDroppedPrefix(left, inFactory) ? [right] : undefined;
+}
+
 /** Selects the fallback for literal nullish left operands and keeps known non-nullish values. */
-function nullishBranches(left: Expression, right: Expression): readonly Expression[] {
+function nullishBranches(
+  left: Expression,
+  right: Expression,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
   const inner = unwrapped(left);
   if (
     inner.kind === SyntaxKind.NullKeyword ||
     isVoidExpression(inner) ||
     globalPathOf(inner)?.join('.') === 'undefined'
   ) {
-    return [right];
+    return allowedDroppedPrefix(left, inFactory) ? [right] : undefined;
   }
   if (
     inner.kind === SyntaxKind.TrueKeyword ||
@@ -227,6 +242,14 @@ function nullishBranches(left: Expression, right: Expression): readonly Expressi
     return [left];
   }
   return [left, right];
+}
+
+function allowedDroppedPrefix(prefix: Expression, inFactory: boolean): boolean {
+  return !inFactory || sideEffectFreeExpression(prefix);
+}
+
+function inFactoryFrame(frame: FactoryFrame): boolean {
+  return frame.returnScope !== undefined || frame.unquietScopes.length > 0;
 }
 
 /** Native Error creations and local own-word Error subclasses construct fresh local errors. */
@@ -265,19 +288,10 @@ function evaluateFactoryCall(
   frame: FactoryFrame,
 ): boolean {
   const invocation = framedWrittenFactoryCall(call, (callee) => localFactory(callee));
-  if (invocation === undefined) return false;
-  const { extra, fn, given, receiver } = invocation;
-  if (
-    fn.body === undefined ||
-    answersLater(fn) ||
-    state.activeFactories.has(fn) ||
-    factoryMentionsThis(fn)
-  ) {
+  if (invocation === undefined || !validFactoryInvocation(invocation, state, frame)) {
     return false;
   }
-  const inputs = receiver === undefined ? [...given, ...extra] : [receiver, ...given, ...extra];
-  if (inputs.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
-  if (extra.some((arg) => !sideEffectFreeExpression(arg))) return false;
+  const { fn, given } = invocation;
   const returns = completeFactoryReturns(fn);
   if (returns === undefined || returns.length === 0) return false;
   const unquietScopes = quietFactoryCall(fn, given)
@@ -290,6 +304,28 @@ function evaluateFactoryCall(
   } finally {
     state.activeFactories.delete(fn);
   }
+}
+
+/** Verifies factory body eligibility, parameter purity, and call-argument side effects. */
+function validFactoryInvocation(
+  invocation: NonNullable<ReturnType<typeof framedWrittenFactoryCall>>,
+  state: ProofState,
+  frame: FactoryFrame,
+): boolean {
+  const { extra, fn, given, receiver } = invocation;
+  if (
+    fn.body === undefined ||
+    answersLater(fn) ||
+    state.activeFactories.has(fn) ||
+    factoryMentionsThis(fn) ||
+    !sideEffectFreeFactoryParameters(fn, given)
+  ) {
+    return false;
+  }
+  const inputs = receiver === undefined ? [...given, ...extra] : [receiver, ...given, ...extra];
+  if (inputs.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
+  const checked = inFactoryFrame(frame) ? inputs : extra;
+  return checked.every((arg) => sideEffectFreeExpression(arg));
 }
 
 /** Retains enclosing unquiet factory scopes while adding `fn` once when its call is unquiet. */

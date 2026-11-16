@@ -68,7 +68,7 @@ function quietFactoryParameter(
 }
 
 /** Whether positional `param` receives a non-`undefined` quiet primitive with no prior spread. */
-function suppliedQuietParameter(
+export function suppliedQuietParameter(
   param: ParameterDeclaration,
   args: readonly Expression[],
   index: number,
