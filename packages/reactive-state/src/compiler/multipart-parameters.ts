@@ -4,19 +4,13 @@ import {
   type Expression,
   type Identifier,
   isBinaryExpression,
-  isBlock,
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
-  isExpressionStatement,
-  isIdentifier,
   isNewExpression,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isSourceFile,
   isSpreadElement,
-  isVariableDeclaration,
-  isVariableDeclarationList,
   type NewExpression,
   type Node,
   type ParameterDeclaration,
@@ -25,30 +19,38 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
 import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
-import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { repeatedFrameRead } from './framed-writes.ts';
+import {
+  type BodyReading,
+  definitelyBefore,
+  parameterCaptureOf,
+  type ParameterResolution,
+  parameterValues,
+  reachesPoint,
+  supersededBefore,
+  uniqueExpressions,
+} from './multipart-readings.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Request options and body tracking across reassigned and mutated parameters. */
 
-export interface BodyReading {
-  readonly bodies: readonly Expression[];
-  readonly overwrites: boolean;
-}
-
-export interface ParameterResolution {
-  readonly cut?: BinaryExpression | undefined;
-  readonly replaced: boolean;
-  readonly values: readonly Expression[];
+export interface OptionsReader {
+  readonly readAssign: (
+    call: CallExpression,
+    sources: readonly Expression[],
+    at: Node,
+  ) => BodyReading;
+  readonly readOptions: (value: Expression, at: Node) => BodyReading;
 }
 
 interface ParameterBodyWrite {
+  readonly assignCall?: CallExpression;
   readonly assignSources?: readonly Expression[];
+  readonly capture: Identifier;
   readonly exactBody: boolean;
   readonly node: Node;
   readonly values: readonly Expression[];
@@ -59,6 +61,7 @@ interface CutContext {
   readonly name: Identifier;
   readonly parameter: ParameterDeclaration;
   readonly point: Node;
+  readonly soleFreshCut: BinaryExpression | undefined;
 }
 
 const BODY_KEY = 'body';
@@ -79,19 +82,25 @@ export function parameterBodies(
   name: Identifier,
   parameter: ParameterDeclaration,
   point: Node,
-  readOptions: (value: Expression, at: Node) => BodyReading,
+  reader: OptionsReader,
 ): BodyReading {
   const resolved = parameterValues(name, parameter);
-  const baseContext: CutContext = { cut: resolved.cut, name, parameter, point };
-  const writes = collectParameterBodyWrites(parameter, baseContext);
-  const memberCut = definiteBodyMemberCut(resolved, writes, point, readOptions);
+  const baseContext: CutContext = {
+    cut: resolved.cut,
+    name,
+    parameter,
+    point,
+    soleFreshCut: soleFreshReplacement(resolved),
+  };
+  const writes = collectParameterBodyWrites(baseContext);
+  const memberCut = definiteBodyMemberCut(baseContext, writes, reader);
   if (memberCut !== undefined) {
     const afterCut = writes.filter(
       (each) => each === memberCut || !supersededBefore(each.node, memberCut.node, point),
     );
-    const deleted = hasReachableBodyDelete(parameter, { ...baseContext, cut: memberCut.node });
+    const deleted = hasReachableBodyDelete({ ...baseContext, cut: memberCut.node });
     return {
-      bodies: afterCut.flatMap((each) => writeBodies(each, readOptions)),
+      bodies: uniqueExpressions(afterCut.flatMap((each) => writeBodies(each, reader))),
       overwrites: !deleted,
     };
   }
@@ -99,11 +108,11 @@ export function parameterBodies(
     resolved.replaced || parameter.initializer === undefined
       ? resolved.values
       : [parameter.initializer, ...resolved.values];
-  const wholeReadings = wholeValues.map((each) => readOptions(each, each));
-  const memberBodies = writes.flatMap((each) => writeBodies(each, readOptions));
-  const deleted = resolved.replaced && hasReachableBodyDelete(parameter, baseContext);
+  const wholeReadings = wholeValues.map((each) => reader.readOptions(each, each));
+  const memberBodies = writes.flatMap((each) => writeBodies(each, reader));
+  const deleted = resolved.replaced && hasReachableBodyDelete(baseContext);
   return {
-    bodies: [...wholeReadings.flatMap((each) => each.bodies), ...memberBodies],
+    bodies: uniqueExpressions([...wholeReadings.flatMap((each) => each.bodies), ...memberBodies]),
     overwrites:
       resolved.replaced &&
       !deleted &&
@@ -112,55 +121,40 @@ export function parameterBodies(
   };
 }
 
-/** Values assigned to a parameter before `name`, noting whether a definite write replaced the initial binding. */
-export function parameterValues(
-  name: Identifier,
-  parameter: ParameterDeclaration,
-): ParameterResolution {
-  const owner = executionOwner(name);
-  const cut = lastDefiniteParameterWrite(name, parameter, owner);
-  const assigned = framedAssignedSources(name)
-    .filter((each) => each.keys.length === 0)
-    .map((each) => each.value);
-  if (cut === undefined) {
-    return { replaced: false, values: assigned };
-  }
-  const later = assigned.filter(
-    (each) => each !== cut.right && (each.pos > cut.pos || executionOwner(each) !== owner),
-  );
-  return { cut, replaced: true, values: [cut.right, ...later] };
-}
-
 /** Body expressions contributed by one parameter member write or `Object.assign` call. */
-function writeBodies(
-  write: ParameterBodyWrite,
-  readOptions: (value: Expression, at: Node) => BodyReading,
-): readonly Expression[] {
-  if (write.assignSources === undefined) {
-    return write.values;
+function writeBodies(write: ParameterBodyWrite, reader: OptionsReader): readonly Expression[] {
+  if (write.assignCall !== undefined) {
+    return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node).bodies;
   }
-  return write.assignSources.flatMap((source) => readOptions(source, write.node).bodies);
+  return write.values;
 }
 
-/** Finds the latest definite exact-`body` member write after a fresh whole-parameter replacement. */
+/** Single fresh replacement assignment when no later write can rebind `parameter`. */
+function soleFreshReplacement(resolved: ParameterResolution): BinaryExpression | undefined {
+  return resolved.cut !== undefined &&
+    resolved.ambiguous !== true &&
+    resolved.values.length === 1 &&
+    freshBodyObject(resolved.cut.right)
+    ? resolved.cut
+    : undefined;
+}
+
+/** Finds the latest definite exact-`body` member write on the same fresh parameter replacement. */
 function definiteBodyMemberCut(
-  resolved: ParameterResolution,
+  context: CutContext,
   writes: readonly ParameterBodyWrite[],
-  point: Node,
-  readOptions: (value: Expression, at: Node) => BodyReading,
+  reader: OptionsReader,
 ): ParameterBodyWrite | undefined {
-  if (
-    resolved.cut === undefined ||
-    resolved.values.length !== 1 ||
-    !freshBodyObject(resolved.cut.right)
-  ) {
+  const freshCut = context.soleFreshCut;
+  if (freshCut === undefined) {
     return undefined;
   }
   let latest: ParameterBodyWrite | undefined;
   for (const write of writes) {
     if (
-      definitelyOverwritesBody(write, readOptions) &&
-      definitelyBefore(write.node, point) &&
+      capturesSameFreshCut(write.capture, freshCut, context.parameter) &&
+      definitelyOverwritesBody(write, reader) &&
+      definitelyBefore(write.node, context.point) &&
       (latest === undefined || write.node.pos > latest.node.pos)
     ) {
       latest = write;
@@ -169,13 +163,20 @@ function definiteBodyMemberCut(
   return latest;
 }
 
-/** Whether a member write unconditionally replaces the `body` property when executed. */
-function definitelyOverwritesBody(
-  write: ParameterBodyWrite,
-  readOptions: (value: Expression, at: Node) => BodyReading,
+/** Whether `capture` definitely reads the exact replacement `cut` with no intervening rebinding. */
+function capturesSameFreshCut(
+  capture: Identifier,
+  cut: BinaryExpression,
+  parameter: ParameterDeclaration,
 ): boolean {
-  if (write.assignSources !== undefined) {
-    return write.assignSources.some((source) => readOptions(source, write.node).overwrites);
+  const atCapture = parameterValues(capture, parameter);
+  return atCapture.cut === cut && atCapture.ambiguous !== true && atCapture.values.length === 1;
+}
+
+/** Whether a member write unconditionally replaces the `body` property when executed. */
+function definitelyOverwritesBody(write: ParameterBodyWrite, reader: OptionsReader): boolean {
+  if (write.assignCall !== undefined) {
+    return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node).overwrites;
   }
   return write.exactBody;
 }
@@ -187,18 +188,19 @@ function freshBodyObject(node: Expression): boolean {
 }
 
 /** Collects reachable member writes to `body` on `parameter` (or whole `const` aliases) after `cut`. */
-function collectParameterBodyWrites(
-  parameter: ParameterDeclaration,
-  context: CutContext,
-): readonly ParameterBodyWrite[] {
+function collectParameterBodyWrites(context: CutContext): readonly ParameterBodyWrite[] {
   const found: ParameterBodyWrite[] = [];
-  const pending: Node[] = [parameter.getSourceFile()];
+  const pending: Node[] = [context.parameter.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) {
       continue;
     }
-    const write = parameterBodyWriteAt(node, parameter);
-    if (write !== undefined && activeAtRead(write.node, context)) {
+    const write = parameterBodyWriteAt(node, context.parameter);
+    if (
+      write !== undefined &&
+      activeCapture(write.capture, context) &&
+      activeAtRead(write.node, context)
+    ) {
       found.push(write);
     }
     node.forEachChild((child) => {
@@ -228,7 +230,8 @@ function binaryParameterBodyWrite(
   if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) {
     return undefined;
   }
-  if (!holdsParameter(target.expression, parameter)) {
+  const capture = parameterCaptureOf(target.expression, parameter);
+  if (capture === undefined) {
     return undefined;
   }
   const names = framedMemberNames(target);
@@ -239,7 +242,7 @@ function binaryParameterBodyWrite(
     node.operatorToken.kind === SyntaxKind.EqualsToken &&
     names?.length === 1 &&
     names[0] === BODY_KEY;
-  return { exactBody, node, values: [node.right] };
+  return { capture, exactBody, node, values: [node.right] };
 }
 
 /** Extracts `Object.assign(options, ...)` and `Object.defineProperty(options, 'body', ...)` writes. */
@@ -249,12 +252,34 @@ function callParameterBodyWrite(
 ): ParameterBodyWrite | undefined {
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (path === OBJECT_ASSIGN) {
-    const [target, ...sources] = framedArgumentPrefix(node, node.arguments, Infinity).values;
-    return target !== undefined && holdsParameter(target, parameter) && sources.length > 0
-      ? { assignSources: sources, exactBody: false, node, values: [] }
-      : undefined;
+    return objectAssignParameterWrite(node, parameter);
   }
   return path === DEFINE_PROPERTY ? definePropertyBodyWrite(node, parameter) : undefined;
+}
+
+/** Extracts `Object.assign(options, ...sources)` while keeping remaining spread sources intact. */
+function objectAssignParameterWrite(
+  node: CallExpression,
+  parameter: ParameterDeclaration,
+): ParameterBodyWrite | undefined {
+  const [first, ...rest] = node.arguments;
+  if (first === undefined) {
+    return undefined;
+  }
+  if (!isSpreadElement(first)) {
+    const capture = parameterCaptureOf(first, parameter);
+    return capture !== undefined && rest.length > 0
+      ? { assignCall: node, assignSources: rest, capture, exactBody: false, node, values: [] }
+      : undefined;
+  }
+  const expanded = framedArgumentPrefix(node, [first], Infinity);
+  const [target, ...leadingSources] = expanded.values;
+  const capture =
+    !expanded.unknown && target !== undefined ? parameterCaptureOf(target, parameter) : undefined;
+  const sources = [...leadingSources, ...rest];
+  return capture !== undefined && sources.length > 0
+    ? { assignCall: node, assignSources: sources, capture, exactBody: false, node, values: [] }
+    : undefined;
 }
 
 /** Extracts `Object.defineProperty(options, key, { value })` when `key` may name `body`. */
@@ -267,12 +292,8 @@ function definePropertyBodyWrite(
     node.arguments,
     DEFINED.slots,
   ).values;
-  if (
-    target === undefined ||
-    key === undefined ||
-    descriptor === undefined ||
-    !holdsParameter(target, parameter)
-  ) {
+  const capture = target === undefined ? undefined : parameterCaptureOf(target, parameter);
+  if (capture === undefined || key === undefined || descriptor === undefined) {
     return undefined;
   }
   const names = framedKeyNames(key);
@@ -281,17 +302,17 @@ function definePropertyBodyWrite(
   }
   const values = framedDescriptorEntries(descriptor, ['value']) ?? [];
   const exactBody = names?.length === 1 && names[0] === BODY_KEY && values.length === 1;
-  return values.length === 0 ? undefined : { exactBody, node, values };
+  return values.length === 0 ? undefined : { capture, exactBody, node, values };
 }
 
 /** Checks whether any reachable deletion or non-global hand-off can remove `body` on `parameter`. */
-function hasReachableBodyDelete(parameter: ParameterDeclaration, context: CutContext): boolean {
-  const pending: Node[] = [parameter.getSourceFile()];
+function hasReachableBodyDelete(context: CutContext): boolean {
+  const pending: Node[] = [context.parameter.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) {
       continue;
     }
-    if (removesParameterBody(node, parameter) && activeAtRead(node, context)) {
+    if (removesParameterBody(node, context) && activeAtRead(node, context)) {
       return true;
     }
     node.forEachChild((child) => {
@@ -302,9 +323,9 @@ function hasReachableBodyDelete(parameter: ParameterDeclaration, context: CutCon
 }
 
 /** Whether `node` deletes `body` (or an unknown key) on `parameter` or hands `parameter` to unknown code. */
-function removesParameterBody(node: Node, parameter: ParameterDeclaration): boolean {
+function removesParameterBody(node: Node, context: CutContext): boolean {
   if (isCallExpression(node) || isNewExpression(node)) {
-    return callRemovesParameterBody(node, parameter);
+    return callRemovesParameterBody(node, context);
   }
   if (!isDeleteExpression(node)) {
     return false;
@@ -314,13 +335,13 @@ function removesParameterBody(node: Node, parameter: ParameterDeclaration): bool
     return false;
   }
   const names = framedMemberNames(target);
-  return holdsParameter(target.expression, parameter) && names?.includes(BODY_KEY) !== false;
+  return activeParameterTarget(target.expression, context) && names?.includes(BODY_KEY) !== false;
 }
 
 /** Checks `Reflect.deleteProperty(options, key)` and non-global calls receiving `options`. */
 function callRemovesParameterBody(
   node: CallExpression | NewExpression,
-  parameter: ParameterDeclaration,
+  context: CutContext,
 ): boolean {
   const callee = unwrapped(node.expression);
   const native = globalPathOf(callee)?.join('.');
@@ -329,7 +350,7 @@ function callRemovesParameterBody(
     const names = key === undefined ? undefined : framedKeyNames(key);
     return (
       target !== undefined &&
-      holdsParameter(target, parameter) &&
+      activeParameterTarget(target, context) &&
       names?.includes(BODY_KEY) !== false
     );
   }
@@ -342,37 +363,29 @@ function callRemovesParameterBody(
   if (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) {
     handed.push(callee.expression);
   }
-  return handed.some((each) => holdsParameter(each, parameter));
+  return handed.some((each) => activeParameterTarget(each, context));
 }
 
-/** Whether `node` evaluates directly to `parameter` or a whole `const` alias of `parameter`. */
-function holdsParameter(node: Expression, parameter: ParameterDeclaration): boolean {
-  let current: Expression | undefined = unwrapped(node);
-  const seen = new Set<Node>();
-  while (current !== undefined && isIdentifier(current) && !seen.has(current)) {
-    seen.add(current);
-    const declared = frameDeclarationOf(current);
-    if (declared === parameter) {
-      return true;
-    }
-    current = constantAliasValue(declared);
-  }
-  return false;
+/** Whether `node` captures `parameter` and is not a pre-replacement alias of an old parameter value. */
+function activeParameterTarget(node: Expression, context: CutContext): boolean {
+  const capture = parameterCaptureOf(node, context.parameter);
+  return capture !== undefined && activeCapture(capture, context);
 }
 
-/** Initializer unwrapped from a whole `const` variable declaration; undefined otherwise. */
-function constantAliasValue(declared: Node | undefined): Expression | undefined {
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    !isIdentifier(declared.name) ||
-    !isVariableDeclarationList(declared.parent) ||
-    !/^const\s/u.test(declared.parent.getText(declared.getSourceFile())) ||
-    declared.initializer === undefined
-  ) {
-    return undefined;
+/** Rejects aliases captured strictly before `soleFreshCut` when no loop repeats `soleFreshCut`. */
+function activeCapture(capture: Identifier, context: CutContext): boolean {
+  if (context.soleFreshCut === undefined) {
+    return true;
   }
-  return unwrapped(declared.initializer);
+  if (!supersededBefore(capture, context.soleFreshCut, context.name)) {
+    return true;
+  }
+  return repeatedFrameRead(
+    context.soleFreshCut,
+    capture,
+    context.parameter,
+    executionOwner(context.name),
+  );
 }
 
 /** Whether `change` reaches `point` and was not superseded before `cut` in the same owner. */
@@ -381,98 +394,4 @@ function activeAtRead(change: Node, context: CutContext): boolean {
     return false;
   }
   return context.cut === undefined || !supersededBefore(change, context.cut, context.name);
-}
-
-/** Whether a change may run before `point`: from another owner, earlier, or via an enclosing loop. */
-function reachesPoint(
-  change: Node,
-  name: Identifier,
-  parameter: ParameterDeclaration,
-  point: Node,
-): boolean {
-  if (!framedPossibleBranch(change)) {
-    return false;
-  }
-  const owner = executionOwner(point);
-  if (
-    executionOwner(change) !== owner ||
-    change.pos < point.end ||
-    destructuredFirst(change, point)
-  ) {
-    return true;
-  }
-  return repeatedFrameRead(change, name, parameter, owner);
-}
-
-/** Whether `change` ran in the same execution owner strictly before `cut`. */
-function supersededBefore(change: Node, cut: Node, anchor: Node): boolean {
-  return change.pos < cut.pos && executionOwner(change) === executionOwner(anchor);
-}
-
-/** Whether `change` is an earlier statement of an enclosing block in the same execution owner as `point`. */
-function definitelyBefore(change: Node, point: Node): boolean {
-  if (executionOwner(change) !== executionOwner(point)) {
-    return false;
-  }
-  const statement = change.parent;
-  if (!isExpressionStatement(statement)) {
-    return false;
-  }
-  const block = statement.parent;
-  if (!isBlock(block) && !isSourceFile(block)) {
-    return false;
-  }
-  for (let at: Node = point; !isSourceFile(at); at = at.parent) {
-    if (at.parent === block) {
-      return at.pos > statement.pos;
-    }
-  }
-  return false;
-}
-
-/** Latest plain statement assignment to `parameter` in an enclosing block before `name`. */
-function lastDefiniteParameterWrite(
-  name: Identifier,
-  parameter: ParameterDeclaration,
-  owner: Node,
-): BinaryExpression | undefined {
-  let latest: BinaryExpression | undefined;
-  for (let at: Node = name; at !== owner && !isSourceFile(at); at = at.parent) {
-    const parent = at.parent;
-    if (!isBlock(parent) && !isSourceFile(parent)) {
-      continue;
-    }
-    for (const statement of parent.statements) {
-      if (statement === at) {
-        break;
-      }
-      const write = directParameterWrite(statement, parameter, owner);
-      if (write !== undefined && (latest === undefined || write.pos > latest.pos)) {
-        latest = write;
-      }
-    }
-  }
-  return latest;
-}
-
-/** Plain `param = rhs` expression statement in the same execution owner. */
-function directParameterWrite(
-  statement: Node,
-  parameter: ParameterDeclaration,
-  owner: Node,
-): BinaryExpression | undefined {
-  if (!isExpressionStatement(statement)) {
-    return undefined;
-  }
-  const expression = unwrapped(statement.expression);
-  if (
-    isBinaryExpression(expression) &&
-    expression.operatorToken.kind === SyntaxKind.EqualsToken &&
-    isIdentifier(expression.left) &&
-    frameDeclarationOf(expression.left) === parameter &&
-    executionOwner(expression) === owner
-  ) {
-    return expression;
-  }
-  return undefined;
 }

@@ -1,12 +1,12 @@
 import {
+  type CallExpression,
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isComputedPropertyName,
-  isConditionalExpression,
   isIdentifier,
-  isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isObjectLiteralExpression,
   isParameterDeclaration,
@@ -20,6 +20,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
+  type ParameterDeclaration,
   type PropertyName,
   SyntaxKind,
   type VariableDeclaration,
@@ -32,39 +33,32 @@ import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
+import { framedAppliedArguments } from './framed-keys.ts';
 import {
   framedHeldVariable,
   framedMemberDeletes,
+  framedMemberWrites,
   type MemberDelete,
 } from './framed-member-writes.ts';
 import { framedObjectSources } from './framed-object-members.ts';
-import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { namesType } from './framed.ts';
-import { type BodyReading, parameterBodies, parameterValues } from './multipart-parameters.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { parameterBodies } from './multipart-parameters.ts';
+import {
+  type AnalysisState,
+  type BodyReading,
+  EMPTY_BODIES,
+  isFormData,
+  mergeSpread,
+  parameterValues,
+  selectedValues,
+  startAnalysis,
+  uniqueExpressions,
+} from './multipart-readings.ts';
 import { constantValue } from './numbers.ts';
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 
-interface AnalysisState {
-  readonly cuts: { count: number };
-  readonly formData: Map<Expression, boolean>;
-  readonly readings: Map<Expression, Map<Node, BodyReading>>;
-  readonly seen: ReadonlySet<Expression>;
-}
-
 const BODY_KEY = 'body';
-const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
-const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
-
-/** Fresh memoization tables and empty cycle trail for one multipart construction check. */
-function startAnalysis(): AnalysisState {
-  return {
-    cuts: { count: 0 },
-    formData: new Map(),
-    readings: new Map(),
-    seen: new Set(),
-  };
-}
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 export function multipartMaking(node: NewExpression, path: string | undefined): string | undefined {
@@ -132,7 +126,7 @@ function computeBodiesOf(value: Expression, point: Node, following: AnalysisStat
   if (alternatives !== undefined) {
     const readings = alternatives.map((each) => bodiesOf(each, point, following));
     return {
-      bodies: readings.flatMap((each) => each.bodies),
+      bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
       overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
     };
   }
@@ -140,7 +134,7 @@ function computeBodiesOf(value: Expression, point: Node, following: AnalysisStat
     isCallExpression(value) &&
     globalPathOf(unwrapped(value.expression))?.join('.') === 'Object.assign'
   ) {
-    return objectAssignBodies(value.arguments, point, following);
+    return objectAssignSourcesBodies(value, value.arguments, point, following);
   }
   return isObjectLiteralExpression(value) ? literalBodies(value, following) : EMPTY_BODIES;
 }
@@ -158,28 +152,99 @@ function literalBodies(value: ObjectLiteralExpression, following: AnalysisState)
   return current;
 }
 
-/** Surviving body candidates across positional sources passed to `Object.assign`. */
-function objectAssignBodies(
+/** Surviving body candidates across positional and spread sources passed to `Object.assign`. */
+function objectAssignSourcesBodies(
+  call: CallExpression,
   args: readonly Expression[],
   point: Node,
   following: AnalysisState,
 ): BodyReading {
   let current = EMPTY_BODIES;
   for (const argument of args) {
-    if (isSpreadElement(argument)) {
-      continue;
-    }
-    current = mergeSpread(current, bodiesOf(argument, point, following));
+    const reading = isSpreadElement(argument)
+      ? spreadArgumentBodies(call, argument.expression, point, following)
+      : bodiesOf(argument, point, following);
+    current = mergeSpread(current, reading);
   }
   return current;
 }
 
-/** Combines an earlier body reading with a spread source that may or may not define `body`. */
-function mergeSpread(previous: BodyReading, spread: BodyReading): BodyReading {
-  return {
-    bodies: spread.overwrites ? spread.bodies : [...previous.bodies, ...spread.bodies],
-    overwrites: previous.overwrites || spread.overwrites,
-  };
+/** Expands tuple, array, conditional, and mutable-array spread arguments in `Object.assign`. */
+function spreadArgumentBodies(
+  call: CallExpression,
+  expression: Expression,
+  point: Node,
+  state: AnalysisState,
+): BodyReading {
+  const value = unwrapped(expression);
+  if (state.seen.has(value)) {
+    state.cuts.count += 1;
+    return EMPTY_BODIES;
+  }
+  const next: AnalysisState = { ...state, seen: new Set([...state.seen, value]) };
+  const tuple = framedAppliedArguments(call, value);
+  if (tuple !== undefined) {
+    return objectAssignSourcesBodies(call, tuple, point, next);
+  }
+  if (isArrayLiteralExpression(value)) {
+    return objectAssignSourcesBodies(call, value.elements, point, next);
+  }
+  const alternatives = selectedValues(value);
+  if (alternatives !== undefined) {
+    const readings = alternatives.map((each) => spreadArgumentBodies(call, each, point, next));
+    return {
+      bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
+      overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
+    };
+  }
+  return isIdentifier(value) ? identifierSpreadBodies(call, value, point, next) : EMPTY_BODIES;
+}
+
+/** Conservative fallback candidates when an `Object.assign` spread reads a mutable array binding. */
+function identifierSpreadBodies(
+  call: CallExpression,
+  name: Identifier,
+  point: Node,
+  state: AnalysisState,
+): BodyReading {
+  const selected = frameBindingOf(name);
+  if (selected === undefined || selected.keys.length > 0) {
+    return EMPTY_BODIES;
+  }
+  const collected: Expression[] = [];
+  for (const candidate of spreadHolderArrays(name, selected.binding, point)) {
+    const array = unwrapped(candidate);
+    if (isArrayLiteralExpression(array)) {
+      collected.push(...objectAssignSourcesBodies(call, array.elements, point, state).bodies);
+    }
+  }
+  if (isVariableDeclaration(selected.binding)) {
+    const holder = framedHeldVariable(selected.binding);
+    for (const write of framedMemberWrites(name.getSourceFile())) {
+      if (write.holder === holder && write.path.length === 1) {
+        collected.push(...bodiesOf(write.value, point, state).bodies);
+      }
+    }
+  }
+  return { bodies: uniqueExpressions(collected), overwrites: false };
+}
+
+/** Array expressions assigned or defaulted on a variable or parameter spread source. */
+function spreadHolderArrays(
+  name: Identifier,
+  binding: VariableDeclaration | ParameterDeclaration,
+  point: Node,
+): readonly Expression[] {
+  if (isVariableDeclaration(binding)) {
+    const held = framedHeldValues(name, [], point);
+    const entries =
+      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...held.held];
+    return entries.filter((each) => each.keys.length === 0).map((each) => each.value);
+  }
+  const resolved = parameterValues(name, binding);
+  return resolved.replaced || binding.initializer === undefined
+    ? resolved.values
+    : [binding.initializer, ...resolved.values];
 }
 
 /** Possible request bodies carried by a variable or parameter options alias at `point`. */
@@ -192,7 +257,10 @@ function identifierBodies(name: Identifier, point: Node, state: AnalysisState): 
     return variableBodies(name, selected.binding, point, state);
   }
   return isParameterDeclaration(selected.binding)
-    ? parameterBodies(name, selected.binding, point, (each, at) => bodiesOf(each, at, state))
+    ? parameterBodies(name, selected.binding, point, {
+        readAssign: (call, sources, at) => objectAssignSourcesBodies(call, sources, at, state),
+        readOptions: (each, at) => bodiesOf(each, at, state),
+      })
     : EMPTY_BODIES;
 }
 
@@ -210,7 +278,9 @@ function variableBodies(
   }
   const entries =
     bodyHeld.initial === undefined ? bodyHeld.held : [bodyHeld.initial, ...bodyHeld.held];
-  const bodies = entries.flatMap((entry) => heldOptionBodies(entry, point, state));
+  const bodies = uniqueExpressions(
+    entries.flatMap((entry) => heldOptionBodies(entry, point, state)),
+  );
   const holder = framedHeldVariable(declaration);
   if (removesHolderBody(name, holder, point)) {
     return { bodies, overwrites: false };
@@ -299,7 +369,7 @@ function propertyBodies(
     return { bodies: held === undefined ? [] : [held], overwrites: true };
   }
   return key === undefined && held !== undefined && isFormData(held, { ...state, seen: new Set() })
-    ? { ...previous, bodies: [...previous.bodies, held] }
+    ? { ...previous, bodies: uniqueExpressions([...previous.bodies, held]) }
     : previous;
 }
 
@@ -311,28 +381,6 @@ function propertyValue(property: ObjectLiteralElementLike): Expression | undefin
   return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
     ? property.name
     : undefined;
-}
-
-/** The alternatives an expression can select as its value, without interpreting its condition. */
-function selectedValues(value: Expression): readonly Expression[] | undefined {
-  if (isConditionalExpression(value)) {
-    return [value.whenTrue, value.whenFalse];
-  }
-  if (isBinaryExpression(value)) {
-    if (value.operatorToken.kind === SyntaxKind.CommaToken) {
-      return [value.right];
-    }
-    if (
-      [
-        SyntaxKind.AmpersandAmpersandToken,
-        SyntaxKind.BarBarToken,
-        SyntaxKind.QuestionQuestionToken,
-      ].includes(value.operatorToken.kind)
-    ) {
-      return [value.left, value.right];
-    }
-  }
-  return undefined;
 }
 
 /** What an option's property name writes, including a key computed from constants. */
@@ -387,79 +435,4 @@ function singleIdentifierValue(name: Identifier): Expression | undefined {
   const entries = held.initial === undefined ? held.held : [held.initial, ...held.held];
   const only = entries.length === 1 ? entries[0] : undefined;
   return only !== undefined && only.keys.length === 0 ? only.value : undefined;
-}
-
-/** Whether a body is FormData the code constructs, assigns, or annotates, memoized across DAGs. */
-function isFormData(node: Expression, state: AnalysisState): boolean {
-  const value = unwrapped(node);
-  const cached = state.formData.get(value);
-  if (cached !== undefined) {
-    return cached;
-  }
-  if (state.seen.has(value)) {
-    state.cuts.count += 1;
-    return false;
-  }
-  const cutsBefore = state.cuts.count;
-  const following: AnalysisState = { ...state, seen: new Set([...state.seen, value]) };
-  const result = computeFormData(value, following);
-  if (state.cuts.count === cutsBefore) {
-    state.formData.set(value, result);
-  }
-  return result;
-}
-
-/** Evaluates whether one unwrapped body expression may hold `FormData` without consulting cache. */
-function computeFormData(value: Expression, following: AnalysisState): boolean {
-  if (isIdentifier(value)) {
-    return identifierFormData(value, following);
-  }
-  const alternatives = selectedValues(value);
-  if (alternatives !== undefined) {
-    return alternatives.some((each) => isFormData(each, following));
-  }
-  return (
-    isNewExpression(value) && globalPathOf(unwrapped(value.expression))?.join('.') === 'FormData'
-  );
-}
-
-/** Whether a variable or parameter read may hold a `FormData` instance at `name`. */
-function identifierFormData(name: Identifier, state: AnalysisState): boolean {
-  const selected = frameBindingOf(name);
-  if (selected === undefined) {
-    return false;
-  }
-  if (isVariableDeclaration(selected.binding)) {
-    const held = framedHeldValues(name, [], name);
-    if (held === undefined) {
-      return false;
-    }
-    const entries = held.initial === undefined ? held.held : [held.initial, ...held.held];
-    if (entries.length === 0) {
-      return selected.keys.length === 0 && namesType(selected.binding.type, FORM_DATA_NAMES);
-    }
-    return entries.some((entry) => heldFormData(entry, state));
-  }
-  if (!isParameterDeclaration(selected.binding)) {
-    return false;
-  }
-  const resolved =
-    selected.keys.length === 0
-      ? parameterValues(name, selected.binding)
-      : { replaced: false, values: [] };
-  if (resolved.replaced) {
-    return resolved.values.some((each) => isFormData(each, state));
-  }
-  const assigned = framedAssignedSources(name).some((each) => heldFormData(each, state));
-  const typed = selected.keys.length === 0 && namesType(selected.binding.type, FORM_DATA_NAMES);
-  return assigned || typed;
-}
-
-/** Whether a held value or destructured member path may evaluate to `FormData`. */
-function heldFormData(entry: Held, state: AnalysisState): boolean {
-  if (entry.keys.length === 0) {
-    return isFormData(entry.value, state);
-  }
-  const sources = framedObjectSources(entry.value, entry.keys) ?? [];
-  return sources.some((each) => each.keys.length === 0 && isFormData(each.value, state));
 }
