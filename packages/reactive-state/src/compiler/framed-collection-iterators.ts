@@ -288,6 +288,7 @@ function defaultIteratorValue(
       acquisition: at.node,
       next: read.capture,
       method: DEFAULT_ITERATOR,
+      written: input.value,
     })
   )
     return undefined;
