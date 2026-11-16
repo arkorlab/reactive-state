@@ -67,6 +67,76 @@ const CASES = [
     id: 'factory-pure-boolean-guard-and-const-alias-preserved',
     source: `function make(value: unknown) { const alias = value; const present = Boolean(alias); if (present) return new Error('one'); return new Error('two'); } function text(externalError: Error) { const local: Error = make([externalError]); return local.message; }`,
   },
+  {
+    framed: true,
+    id: 'factory-call-receiver-property-smuggles-error-words',
+    source: `function make(this: { input: unknown }) { return new Error(String(this.input)); } function text(externalError: Error) { const local: Error = make.call({ input: [externalError] }); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-call-direct-error-receiver-smuggles-words',
+    source: `function make(this: unknown) { return new Error(String(this)); } function text(other: Error) { const e: Error = make.call(other); return String(e); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-apply-receiver-property-smuggles-error-words',
+    source: `function make(this: { input: unknown }) { return new TypeError(String(this.input)); } function text(externalError: Error) { const local: Error = make.apply({ input: [externalError] }, []); return local.message; }`,
+  },
+  {
+    framed: true,
+    id: 'factory-bind-receiver-property-smuggles-error-words',
+    source: `function make(this: { input: unknown }) { return new RangeError(String(this.input)); } function text(externalError: Error) { const local: Error = make.bind({ input: [externalError] })(); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-reflect-apply-receiver-smuggles-error-words',
+    source: `function make(this: { input: unknown }) { return new Error(String(this.input)); } function text(externalError: Error) { const local: Error = Reflect.apply(make, { input: [externalError] }, []); return local.message; }`,
+  },
+  {
+    framed: true,
+    id: 'factory-nested-arrow-inherits-this-receiver',
+    source: `function make(this: { input: unknown }) { const read = () => String(this.input); return new Error(read()); } function text(externalError: Error) { const local: Error = make.call({ input: [externalError] }); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-arrow-default-parameter-reads-this-receiver',
+    source: `function make(this: { input: unknown }) { const read = (label = String(this.input)) => label; return new Error(read()); } function text(externalError: Error) { const local: Error = make.call({ input: [externalError] }); return local.message; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-factory-inherits-enclosing-this-receiver',
+    source: `function host(this: { input: unknown }) { const make = () => new Error(String(this.input)); const local: Error = make(); return String(local); } function text(externalError: Error) { return host.call({ input: [externalError] }); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-call-trailing-rest-argument-smuggles-error-words',
+    source: `function make(...values: unknown[]) { return new Error(String(values[1])); } function text(externalError: Error) { const local: Error = make.call(null, 'fixed', [externalError]); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'factory-bind-trailing-captured-rest-argument-smuggles-words',
+    source: `function make(...values: unknown[]) { return new Error(String(values[1])); } function text(externalError: Error) { const local: Error = make.bind(null, 'fixed', [externalError])(); return local.message; }`,
+  },
+  {
+    framed: true,
+    id: 'factory-call-extra-positional-arguments-object-smuggles-words',
+    source: `function make(_first: string) { return new Error(String(arguments[1])); } function text(externalError: Error) { const local: Error = make.call(null, 'fixed', [externalError]); return String(local); }`,
+  },
+  {
+    framed: false,
+    id: 'borrowed-rest-factory-with-all-quiet-primitives-preserved',
+    source: `function make(...values: string[]) { return new Error(values[1] ?? 'fixed'); } function text() { const local: Error = make.call(null, 'one', 'two'); return String(local); }`,
+  },
+  {
+    framed: false,
+    id: 'bound-factory-with-quiet-captured-and-call-args-preserved',
+    source: `function make(first: string, second: string) { return new Error(first + second); } function text() { const local: Error = make.bind(null, 'one')('two'); return local.message; }`,
+  },
+  {
+    framed: false,
+    id: 'factory-with-nested-function-binding-own-this-preserved',
+    source: `function make() { function inner(this: { tag: string }) { return this.tag; } return new Error(inner.call({ tag: 'fixed' })); } function text() { const local: Error = make(); return String(local); }`,
+  },
 ] as const;
 
 describe('written-error factory side effects, receivers, rest arguments, and arrow tags', () => {

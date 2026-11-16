@@ -8,11 +8,17 @@ import {
   isBigIntLiteral,
   isBinaryExpression,
   isCallExpression,
+  isClassStaticBlockDeclaration,
   isComputedPropertyName,
   isConditionalExpression,
+  isConstructorDeclaration,
+  isDecorator,
   isElementAccessExpression,
+  isFunctionDeclaration,
   isFunctionExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
+  isMethodDeclaration,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
@@ -21,7 +27,9 @@ import {
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
   isRegularExpressionLiteral,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadElement,
   isStringLiteral,
@@ -29,6 +37,7 @@ import {
   isTypeOfExpression,
   isVoidExpression,
   type NewExpression,
+  type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type PrefixUnaryExpression,
@@ -37,20 +46,32 @@ import {
   type VariableStatement,
 } from 'typescript/ast';
 
+import { type Answering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
+import { framedFactoryCall } from './framed-factory-calls.ts';
+import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedQuietData, framedQuietPrimitive } from './framed-native-evaluation.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { constantStatement } from './framed-written-error-parameters.ts';
 import { nonInterceptingWrappedTarget } from './framed-written-error-wrappers.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
+import { isTypeOnly } from './scope.ts';
 
 /**
- * Side-effect guards for declarations and control-flow prefixes inside local `Error` factories so
- * sibling statements cannot mutate local message holders unobserved by parameter reachability.
+ * Borrowed factory call normalization, `this`-receiver inspection, and side-effect guards for
+ * written `Error` factory proofs.
  */
 
 const ERRORS: ReadonlySet<string> = new Set([...STANDARD_ERRORS, 'AggregateError', 'DOMException']);
+
+const CALL_SLOTS = {
+  applyArguments: 2,
+  reflectArguments: 3,
+} as const;
+
+const FACTORY_THIS = new WeakMap<Answering, boolean>();
 
 const LITERAL_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.FalseKeyword,
@@ -66,6 +87,157 @@ const NON_COERCING_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ExclamationEqualsEqualsToken,
   SyntaxKind.QuestionQuestionToken,
 ]);
+
+export interface WrittenFactoryInvocation {
+  readonly extra: readonly Expression[];
+  readonly fn: Answering;
+  readonly given: readonly Expression[];
+  readonly receiver: Expression | undefined;
+}
+
+/** Resolves a local factory call while retaining its receiver and complete argument list. */
+export function framedWrittenFactoryCall(
+  call: CallExpression,
+  factory: (callee: Expression) => Answering | undefined,
+): WrittenFactoryInvocation | undefined {
+  const base = framedFactoryCall(call, factory, frameDeclarationOf);
+  if (base === undefined || base.given === null) return undefined;
+  const callee = unwrapped(call.expression);
+  if (isCallExpression(callee)) return fullBoundInvocation(call, callee, base.fn);
+  if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
+    return fullReflectInvocation(call, base.fn, base.given);
+  }
+  if (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) {
+    const method = frameMemberName(callee);
+    if ((method === 'call' || method === 'apply') && factory(callee.expression) !== undefined) {
+      return fullMethodInvocation(call, method, base.fn, base.given);
+    }
+  }
+  return { extra: [], fn: base.fn, given: call.arguments, receiver: undefined };
+}
+
+function fullBoundInvocation(
+  call: CallExpression,
+  bound: CallExpression,
+  fn: Answering,
+): WrittenFactoryInvocation | undefined {
+  const prefix = framedArgumentPrefix(bound, bound.arguments, Infinity);
+  if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
+  return {
+    extra: [],
+    fn,
+    given: [...prefix.values.slice(1), ...call.arguments],
+    receiver: prefix.values[0],
+  };
+}
+
+function fullReflectInvocation(
+  call: CallExpression,
+  fn: Answering,
+  given: readonly Expression[],
+): WrittenFactoryInvocation | undefined {
+  if (!sideEffectFreeExpression(call.expression)) return undefined;
+  const prefix = framedArgumentPrefix(call, call.arguments, Infinity);
+  if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
+  return {
+    extra: prefix.values.slice(CALL_SLOTS.reflectArguments),
+    fn,
+    given,
+    receiver: prefix.values[1],
+  };
+}
+
+function fullMethodInvocation(
+  call: CallExpression,
+  method: 'apply' | 'call',
+  fn: Answering,
+  given: readonly Expression[],
+): WrittenFactoryInvocation | undefined {
+  const prefix = framedArgumentPrefix(call, call.arguments, Infinity);
+  if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
+  if (method === 'call') {
+    return { extra: [], fn, given: prefix.values.slice(1), receiver: prefix.values[0] };
+  }
+  return {
+    extra: prefix.values.slice(CALL_SLOTS.applyArguments),
+    fn,
+    given,
+    receiver: prefix.values[0],
+  };
+}
+
+/** Whether `fn` reads `this` or `super` in its own or an enclosing lexical receiver scope. */
+export function factoryMentionsThis(fn: Answering): boolean {
+  const cached = FACTORY_THIS.get(fn);
+  if (cached !== undefined) return cached;
+  const result = computeFactoryMentionsThis(fn);
+  FACTORY_THIS.set(fn, result);
+  return result;
+}
+
+function computeFactoryMentionsThis(fn: Answering): boolean {
+  if (fn.body === undefined) return false;
+  const pending: Node[] = [...parametersOf(fn), fn.body];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    if (node !== fn && bindsOwnThis(node)) {
+      pushOuterThisHeader(node, pending);
+      continue;
+    }
+    if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) {
+      return true;
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+function bindsOwnThis(node: Node): boolean {
+  return (
+    isFunctionDeclaration(node) ||
+    isFunctionExpression(node) ||
+    isMethodDeclaration(node) ||
+    isGetAccessorDeclaration(node) ||
+    isSetAccessorDeclaration(node) ||
+    isConstructorDeclaration(node) ||
+    isPropertyDeclaration(node) ||
+    isClassStaticBlockDeclaration(node)
+  );
+}
+
+function pushOuterThisHeader(node: Node, pending: Node[]): void {
+  if (
+    (isMethodDeclaration(node) ||
+      isGetAccessorDeclaration(node) ||
+      isSetAccessorDeclaration(node) ||
+      isPropertyDeclaration(node)) &&
+    isComputedPropertyName(node.name)
+  ) {
+    pending.push(node.name.expression);
+  }
+  if (
+    isMethodDeclaration(node) ||
+    isGetAccessorDeclaration(node) ||
+    isSetAccessorDeclaration(node) ||
+    isConstructorDeclaration(node)
+  ) {
+    pushDecorators(node.modifiers, pending);
+    for (const parameter of node.parameters) pushDecorators(parameter.modifiers, pending);
+    return;
+  }
+  if (isPropertyDeclaration(node)) {
+    pushDecorators(node.modifiers, pending);
+  }
+}
+
+function pushDecorators(modifiers: readonly Node[] | undefined, pending: Node[]): void {
+  if (modifiers === undefined) return;
+  for (const modifier of modifiers) {
+    if (isDecorator(modifier)) pending.push(modifier.expression);
+  }
+}
 
 /** Requires a `const` statement to bind plain identifiers to side-effect-free initializers. */
 export function sideEffectFreeVariableStatement(statement: VariableStatement): boolean {

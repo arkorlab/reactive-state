@@ -32,11 +32,12 @@ import {
   framedSubclassConstructor,
   framedSubclassOwnWords,
 } from './framed-constructors.ts';
-import { framedFactoryCall } from './framed-factory-calls.ts';
 import { framedNativeErrorCreation } from './framed-receivers.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedValueShape } from './framed-values.ts';
 import {
+  factoryMentionsThis,
+  framedWrittenFactoryCall,
   sideEffectFreeExpression,
   sideEffectFreeVariableStatement,
 } from './framed-written-error-calls.ts';
@@ -263,18 +264,20 @@ function evaluateFactoryCall(
   state: ProofState,
   frame: FactoryFrame,
 ): boolean {
-  const invocation = framedFactoryCall(call, (callee) => localFactory(callee), frameDeclarationOf);
+  const invocation = framedWrittenFactoryCall(call, (callee) => localFactory(callee));
   if (invocation === undefined) return false;
-  const { fn, given } = invocation;
+  const { extra, fn, given, receiver } = invocation;
   if (
-    given === null ||
     fn.body === undefined ||
     answersLater(fn) ||
-    state.activeFactories.has(fn)
+    state.activeFactories.has(fn) ||
+    factoryMentionsThis(fn)
   ) {
     return false;
   }
-  if (given.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
+  const inputs = receiver === undefined ? [...given, ...extra] : [receiver, ...given, ...extra];
+  if (inputs.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
+  if (extra.some((arg) => !sideEffectFreeExpression(arg))) return false;
   const returns = completeFactoryReturns(fn);
   if (returns === undefined || returns.length === 0) return false;
   const unquietScopes = quietFactoryCall(fn, given)
