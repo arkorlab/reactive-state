@@ -501,16 +501,16 @@ function expandIdentifierStep(
     return [];
   }
   const resolved = callbacks.readParameter(id, selected.binding);
-  const fullKeys = [...selected.keys, ...keys];
   const fromSources = resolved.sources.map((each) => {
     return {
-      keys: [...each.keys, ...fullKeys],
+      keys: [...each.keys, ...keys],
       value: each.value,
     };
   });
   if (resolved.replaced && resolved.ambiguous !== true) {
     return fromSources;
   }
+  const fullKeys = [...selected.keys, ...keys];
   const paramDefault =
     selected.binding.initializer === undefined
       ? []

@@ -20,11 +20,13 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import { mapDescriptorBodyWrite, singleDescriptorBodyWrite } from './multipart-descriptors.ts';
 import {
+  bindingDefaultsOf,
   type BodyReading,
   definitelyBefore,
   parameterCaptureOf,
@@ -99,9 +101,9 @@ export function parameterBodies(
   }
   const sourceValues = resolved.sources.flatMap((each) => resolveHeldExpressions(each, point));
   const wholeValues =
-    resolved.replaced || parameter.initializer === undefined
+    resolved.replaced && resolved.ambiguous !== true
       ? sourceValues
-      : [parameter.initializer, ...sourceValues];
+      : [...initialParameterValues(name, parameter, point), ...sourceValues];
   const wholeReadings = wholeValues.map((each) => reader.readOptions(each, each));
   const memberBodies = writes.flatMap((each) => writeBodies(each, reader));
   const deleted = resolved.replaced && hasReachableBodyDelete(baseContext);
@@ -247,6 +249,21 @@ function freshBodyObject(node: Expression): boolean {
 }
 
 /** Collects reachable member writes to `body` on `parameter` (or whole `const` aliases) after `cut`. */
+/** Initial options expressions from a parameter's outer initializer and binding-pattern defaults. */
+function initialParameterValues(
+  name: Identifier,
+  parameter: ParameterDeclaration,
+  point: Node,
+): readonly Expression[] {
+  const keys = frameBindingOf(name)?.keys ?? [];
+  const outer =
+    parameter.initializer === undefined
+      ? []
+      : resolveHeldExpressions({ keys, value: parameter.initializer }, point);
+  const patternDefaults = keys.length === 0 ? [] : bindingDefaultsOf(name, parameter.name);
+  return [...outer, ...patternDefaults];
+}
+
 function collectParameterBodyWrites(context: CutContext): readonly ParameterBodyWrite[] {
   const found: ParameterBodyWrite[] = [];
   const pending: Node[] = [context.parameter.getSourceFile()];
@@ -254,7 +271,7 @@ function collectParameterBodyWrites(context: CutContext): readonly ParameterBody
     if (isTypeOnly(node)) {
       continue;
     }
-    const write = parameterBodyWriteAt(node, context.parameter);
+    const write = parameterBodyWriteAt(node, context.parameter, context.name.text);
     if (
       write !== undefined &&
       activeCapture(write.capture, context) &&
@@ -273,23 +290,25 @@ function collectParameterBodyWrites(context: CutContext): readonly ParameterBody
 function parameterBodyWriteAt(
   node: Node,
   parameter: ParameterDeclaration,
+  bindingName: string,
 ): ParameterBodyWrite | undefined {
   if (isBinaryExpression(node) && MEMBER_WRITE_OPERATORS.has(node.operatorToken.kind)) {
-    return binaryParameterBodyWrite(node, parameter);
+    return binaryParameterBodyWrite(node, parameter, bindingName);
   }
-  return isCallExpression(node) ? callParameterBodyWrite(node, parameter) : undefined;
+  return isCallExpression(node) ? callParameterBodyWrite(node, parameter, bindingName) : undefined;
 }
 
 /** Extracts `options.body = rhs`, `options[key] = rhs`, or logical member assignments on `parameter`. */
 function binaryParameterBodyWrite(
   node: BinaryExpression,
   parameter: ParameterDeclaration,
+  bindingName: string,
 ): ParameterBodyWrite | undefined {
   const target = unwrapped(node.left);
   if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) {
     return undefined;
   }
-  const capture = parameterCaptureOf(target.expression, parameter);
+  const capture = parameterCaptureOf(target.expression, parameter, bindingName);
   if (capture === undefined) {
     return undefined;
   }
@@ -315,21 +334,25 @@ function binaryParameterBodyWrite(
 function callParameterBodyWrite(
   node: CallExpression,
   parameter: ParameterDeclaration,
+  bindingName: string,
 ): ParameterBodyWrite | undefined {
   const path = globalPathOf(unwrapped(node.expression))?.join('.');
   if (path === OBJECT_ASSIGN) {
-    return objectAssignParameterWrite(node, parameter);
+    return objectAssignParameterWrite(node, parameter, bindingName);
   }
   if (path === DEFINE_PROPERTY || path === REFLECT_DEFINE_PROPERTY) {
-    return definePropertyBodyWrite(node, parameter, path === REFLECT_DEFINE_PROPERTY);
+    return definePropertyBodyWrite(node, parameter, path === REFLECT_DEFINE_PROPERTY, bindingName);
   }
-  return path === DEFINE_PROPERTIES ? definePropertiesBodyWrite(node, parameter) : undefined;
+  return path === DEFINE_PROPERTIES
+    ? definePropertiesBodyWrite(node, parameter, bindingName)
+    : undefined;
 }
 
 /** Extracts `Object.assign(options, ...sources)` while keeping remaining spread sources intact. */
 function objectAssignParameterWrite(
   node: CallExpression,
   parameter: ParameterDeclaration,
+  bindingName: string,
 ): ParameterBodyWrite | undefined {
   const [first, ...rest] = node.arguments;
   if (first === undefined) {
@@ -339,13 +362,15 @@ function objectAssignParameterWrite(
     const expanded = framedArgumentPrefix(node, [first], Infinity);
     const [target, ...leadingSources] = expanded.values;
     const capture =
-      target === undefined || expanded.unknown ? undefined : parameterCaptureOf(target, parameter);
+      target === undefined || expanded.unknown
+        ? undefined
+        : parameterCaptureOf(target, parameter, bindingName);
     const sources = [...leadingSources, ...rest];
     return capture !== undefined && sources.length > 0
       ? buildAssignParameterWrite(node, capture, sources)
       : undefined;
   }
-  const capture = parameterCaptureOf(first, parameter);
+  const capture = parameterCaptureOf(first, parameter, bindingName);
   return capture !== undefined && rest.length > 0
     ? buildAssignParameterWrite(node, capture, rest)
     : undefined;
@@ -374,13 +399,15 @@ function definePropertyBodyWrite(
   node: CallExpression,
   parameter: ParameterDeclaration,
   reflective: boolean,
+  bindingName: string,
 ): ParameterBodyWrite | undefined {
   const [target, key, descriptor] = framedArgumentPrefix(
     node,
     node.arguments,
     DEFINED.slots,
   ).values;
-  const capture = target === undefined ? undefined : parameterCaptureOf(target, parameter);
+  const capture =
+    target === undefined ? undefined : parameterCaptureOf(target, parameter, bindingName);
   if (capture === undefined) {
     return undefined;
   }
@@ -392,9 +419,11 @@ function definePropertyBodyWrite(
 function definePropertiesBodyWrite(
   node: CallExpression,
   parameter: ParameterDeclaration,
+  bindingName: string,
 ): ParameterBodyWrite | undefined {
   const [target, descriptors] = framedArgumentPrefix(node, node.arguments).values;
-  const capture = target === undefined ? undefined : parameterCaptureOf(target, parameter);
+  const capture =
+    target === undefined ? undefined : parameterCaptureOf(target, parameter, bindingName);
   if (capture === undefined) {
     return undefined;
   }
@@ -465,7 +494,7 @@ function callRemovesParameterBody(
 
 /** Whether `node` captures `parameter` and is not a pre-replacement alias of an old parameter value. */
 function activeParameterTarget(node: Expression, context: CutContext): boolean {
-  const capture = parameterCaptureOf(node, context.parameter);
+  const capture = parameterCaptureOf(node, context.parameter, context.name.text);
   return capture !== undefined && activeCapture(capture, context);
 }
 

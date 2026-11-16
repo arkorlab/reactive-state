@@ -170,6 +170,7 @@ export function parameterValues(
 export function parameterCaptureOf(
   node: Expression,
   parameter: ParameterDeclaration,
+  bindingName?: string,
 ): Identifier | undefined {
   let current: Expression | undefined = unwrapped(node);
   const seen = new Set<Node>();
@@ -177,7 +178,9 @@ export function parameterCaptureOf(
     seen.add(current);
     const declared = frameDeclarationOf(current);
     if (declared === parameter) {
-      return isIdentifier(parameter.name) ? current : undefined;
+      const matchesBinding =
+        bindingName === undefined ? isIdentifier(parameter.name) : current.text === bindingName;
+      return matchesBinding ? current : undefined;
     }
     current = constantAliasValue(declared);
   }
@@ -372,10 +375,7 @@ function parameterFormData(
   state: AnalysisState,
 ): boolean {
   const resolved = parameterValues(name, parameter);
-  const postCutFormData = resolved.sources.some((each) =>
-    heldFormData({ keys: [...each.keys, ...keys], value: each.value }, state),
-  );
-  if (postCutFormData) {
+  if (resolved.sources.some((each) => heldFormData(each, state))) {
     return true;
   }
   if (resolved.replaced && resolved.ambiguous !== true) {
@@ -385,9 +385,7 @@ function parameterFormData(
     parameter.initializer !== undefined &&
     heldFormData({ keys, value: parameter.initializer }, state);
   const patternDefault = keys.length > 0 && bindingDefaultFormData(name, parameter.name, state);
-  const assigned = framedAssignedSources(name).some((each) =>
-    heldFormData({ keys: [...each.keys, ...keys], value: each.value }, state),
-  );
+  const assigned = framedAssignedSources(name).some((each) => heldFormData(each, state));
   const typed =
     (keys.length === 0 && namesType(parameter.type, FORM_DATA_NAMES)) ||
     (keys.length > 0 &&
@@ -406,7 +404,7 @@ function bindingDefaultFormData(
 }
 
 /** Collects `BindingElement` default initializers for `name` within `root`. */
-function bindingDefaultsOf(name: Identifier, root: BindingName): readonly Expression[] {
+export function bindingDefaultsOf(name: Identifier, root: BindingName): readonly Expression[] {
   const found: Expression[] = [];
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
