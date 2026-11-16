@@ -2,19 +2,21 @@ import {
   type Expression,
   isArrowFunction,
   isClassExpression,
+  isExpression,
   isFunctionExpression,
   isIdentifier,
   isMethodDeclaration,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { objectWrites } from './function-entry-writes.ts';
+import { objectPostWrites } from './function-entry-writes.ts';
 import {
   type EntryKind,
   holderObject,
@@ -24,6 +26,7 @@ import {
   type ScanContext,
   withBranch,
 } from './function-property-resolution.ts';
+import { type AssignedCallable } from './function-spread-callables.ts';
 
 export {
   combineBranchKinds,
@@ -123,7 +126,7 @@ function scanObjectLiteral(object: ObjectLiteralExpression, context: ScanContext
       recordTableProperty(property, scan, local);
     }
   }
-  applyPostDeclarationWrites(object, scan);
+  applyPostDeclarationWrites(object, scan, local);
   if (local.hitCycle) {
     context.hitCycle = true;
   } else {
@@ -132,16 +135,74 @@ function scanObjectLiteral(object: ObjectLiteralExpression, context: ScanContext
   return scan;
 }
 
-/** Applies post-declaration mutations recorded on `object` onto `scan`. */
-function applyPostDeclarationWrites(object: ObjectLiteralExpression, scan: TableScan): void {
-  const writes = objectWrites(object);
-  if (writes.all) {
+/** Applies post-declaration mutations and visible assigned function values on `object` onto `scan`. */
+function applyPostDeclarationWrites(
+  object: ObjectLiteralExpression,
+  scan: TableScan,
+  context: ScanContext,
+): void {
+  const post = objectPostWrites(object);
+  if (post.writes.all) {
     scan.unverified = true;
     degradeExistingEntries(scan.entries, 'unknown');
+  } else {
+    for (const key of post.writes.keys) {
+      scan.entries.set(key, overwriteEntryKind(scan.entries.get(key), 'unknown'));
+    }
+  }
+  for (const write of post.memberValues) {
+    recordAssignedMemberValue(write, scan, context);
+  }
+  for (const source of post.assignSources) {
+    recordObjectAssignSource(source, scan, context);
+  }
+}
+
+/** Retains `'renamed'` evidence when a post-declaration member write installs a function value. */
+function recordAssignedMemberValue(
+  write: AssignedCallable,
+  scan: TableScan,
+  context: ScanContext,
+): void {
+  const kind = classifyAssignedNode(write.callable, context);
+  if (kind !== 'entry' && kind !== 'renamed') {
     return;
   }
-  for (const key of writes.keys) {
-    scan.entries.set(key, overwriteEntryKind(scan.entries.get(key), 'unknown'));
+  if (write.key !== undefined) {
+    scan.entries.set(write.key, 'renamed');
+    return;
+  }
+  scan.stickyRenamed = true;
+  degradeExistingEntries(scan.entries, 'renamed');
+}
+
+/** Classifies a direct or descriptor-installed member value node. */
+function classifyAssignedNode(node: Node, context: ScanContext): EntryKind {
+  if (isMethodDeclaration(node)) {
+    return 'renamed';
+  }
+  return isExpression(node)
+    ? withBranch(context, (branch) => branch.classifyExpression(node, branch))
+    : 'unknown';
+}
+
+/** Propagates function entries from an `Object.assign(target, source)` spread argument onto `scan`. */
+function recordObjectAssignSource(source: Expression, scan: TableScan, context: ScanContext): void {
+  const inner = withBranch(context, (branch) => {
+    const spread = holderObject(source, branch);
+    return spread === undefined ? undefined : scanResolvedObject(spread, branch);
+  });
+  if (inner === undefined) {
+    return;
+  }
+  for (const [key, kind] of inner.entries) {
+    if (kind === 'entry' || kind === 'renamed') {
+      scan.entries.set(key, 'renamed');
+    }
+  }
+  if (inner.stickyRenamed || inner.dynamicEntry) {
+    scan.stickyRenamed = true;
+    degradeExistingEntries(scan.entries, 'renamed');
   }
 }
 

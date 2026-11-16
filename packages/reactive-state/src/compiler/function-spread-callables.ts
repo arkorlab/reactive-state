@@ -42,9 +42,10 @@ import {
 } from './function-candidate-objects.ts';
 import {
   callableThisWrites,
-  EMPTY_WRITES,
-  type ObjectWrites,
+  type CallableWrites,
+  EMPTY_CALLABLE_WRITES,
   staticElementKey,
+  type ThisPropertyAssignment,
 } from './function-this-writes.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -93,28 +94,33 @@ const OBJECT_CALLABLES = new WeakMap<ObjectLiteralExpression, ObjectCallables>()
 export function callableWritesOnObject(
   object: ObjectLiteralExpression,
   index: FileCallableIndex,
-): ObjectWrites {
+): CallableWrites {
   const rootTraversal: CallableTraversal = { activeObjects: new Set(), hitCycle: false, index };
   const callables = objectCallables(object, rootTraversal);
   const candidates = collectAllCallables(callables);
   if (candidates.length === 0) {
-    return EMPTY_WRITES;
+    return EMPTY_CALLABLE_WRITES;
   }
   const resolveExpr = (value: Expression): readonly Node[] => {
     const traversal: CallableTraversal = { activeObjects: new Set(), hitCycle: false, index };
     return expressionCallables(value, { seen: new Set(), traversal });
   };
+  let all = false;
   const keys = new Set<string>();
+  const assignments: ThisPropertyAssignment[] = [];
   for (const callable of candidates) {
     const writes = callableThisWrites(callable, resolveExpr, new Set());
     if (writes.all) {
-      return { all: true, keys };
+      all = true;
     }
     for (const key of writes.keys) {
       keys.add(key);
     }
+    assignments.push(...writes.assignments);
   }
-  return keys.size === 0 ? EMPTY_WRITES : { all: false, keys };
+  return !all && keys.size === 0 && assignments.length === 0
+    ? EMPTY_CALLABLE_WRITES
+    : { all, assignments, keys };
 }
 
 /** Flattens named data callables, dynamic data callables, and own accessors of `callables`. */

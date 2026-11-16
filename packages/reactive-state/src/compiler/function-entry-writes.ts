@@ -59,13 +59,42 @@ interface RawFileMutations {
   readonly variableWrites: Map<Node, Expression[]>;
 }
 
+/** Combined post-declaration write flags together with visible member and `Object.assign` values. */
+export interface ObjectPostWrites {
+  readonly assignSources: readonly Expression[];
+  readonly memberValues: readonly AssignedCallable[];
+  readonly writes: ObjectWrites;
+}
+
 const DIRECT_WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
 const FILE_INDEX = new WeakMap<SourceFile, FileCallableIndex>();
+const POST_WRITES = new WeakMap<ObjectLiteralExpression, ObjectPostWrites>();
 const WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
 
 /** Static key of an element access expression, including string, template and numeric literals. */
 export function elementEntryKey(node: ElementAccessExpression): string | undefined {
   return staticElementKey(node);
+}
+
+/** Returns cached post-declaration writes, member assignments, and `Object.assign` sources for `object`. */
+export function objectPostWrites(object: ObjectLiteralExpression): ObjectPostWrites {
+  const cached = POST_WRITES.get(object);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const index = fileCallableIndex(object.getSourceFile());
+  const viaThis = callableWritesOnObject(object, index);
+  const writes = mergeObjectWrites(directObjectWrites(object), viaThis);
+  const directMembers = index.memberCallables.get(object) ?? [];
+  const memberValues: AssignedCallable[] = [
+    ...directMembers,
+    ...viaThis.assignments.map((each) => ({ callable: each.value, key: each.key })),
+  ];
+  const assignSources = index.assignedSpreads.get(object) ?? [];
+  const result: ObjectPostWrites = { assignSources, memberValues, writes };
+  POST_WRITES.set(object, result);
+  WRITES.set(object, writes);
+  return result;
 }
 
 /** Computes and caches post-declaration and `this`-receiver writes affecting `object`. */
