@@ -165,7 +165,7 @@ function collectSafeSlotReads(
   }
   const reads: Expression[] = [];
   for (const thisRef of receiverKeywordsOf(cls)) {
-    const step = classifySlotReceiverRef(wrappedExpression(thisRef), slotKey, writtenMembers);
+    const step = classifySlotReceiverRef(wrappedExpression(thisRef), cls, slotKey, writtenMembers);
     if (step === null) {
       return undefined;
     }
@@ -179,6 +179,7 @@ function collectSafeSlotReads(
 /** Returns a matching read expression, `undefined` for safe non-reads, or `null` on unsafe `this` use. */
 function classifySlotReceiverRef(
   ref: Expression,
+  cls: BaseClass,
   slotKey: string,
   writtenMembers: ReadonlySet<Node>,
 ): Expression | undefined | null {
@@ -204,7 +205,10 @@ function classifySlotReceiverRef(
   }
   const key = memberAccessKey(parent);
   if (writtenMembers.has(unwrapped(parent))) {
-    return key !== undefined && key !== PROTO_KEY && directAssignmentValue(outer) !== undefined
+    return key !== undefined &&
+      key !== PROTO_KEY &&
+      !hasInstanceAccessor(cls, key) &&
+      directAssignmentValue(outer) !== undefined
       ? undefined
       : null;
   }
@@ -297,7 +301,7 @@ function assignedReceiverSources(
 ): readonly MetadataSource[] | undefined {
   const found: MetadataSource[] = [];
   for (const thisRef of receiverKeywordsOf(cls)) {
-    const step = classifyReceiverWrite(wrappedExpression(thisRef), key, writtenMembers);
+    const step = classifyReceiverWrite(wrappedExpression(thisRef), cls, key, writtenMembers);
     if (step === null) {
       return undefined;
     }
@@ -311,6 +315,7 @@ function assignedReceiverSources(
 /** Returns assigned `rhs` for `this[key] = rhs`, `undefined` for safe uses, or `null` when unsafe. */
 function classifyReceiverWrite(
   ref: Expression,
+  cls: BaseClass,
   key: string,
   writtenMembers: ReadonlySet<Node>,
 ): Expression | undefined | null {
@@ -342,9 +347,23 @@ function classifyReceiverWrite(
     return null;
   }
   if (writtenKey !== key) {
-    return undefined;
+    return hasInstanceAccessor(cls, writtenKey) ? null : undefined;
   }
   return directAssignmentValue(outer) ?? null;
+}
+
+/** Whether `cls` declares a non-static getter or setter matching `key` or a dynamic name. */
+function hasInstanceAccessor(cls: BaseClass, key: string): boolean {
+  return cls.members.some((member) => {
+    if (
+      isStaticMember(member) ||
+      (!isGetAccessorDeclaration(member) && !isSetAccessorDeclaration(member))
+    ) {
+      return false;
+    }
+    const memberName = member.name === undefined ? undefined : classMemberKey(member.name);
+    return memberName === undefined || memberName === key;
+  });
 }
 
 /** RHS expression when `outer` is the direct left operand of `=`, `||=`, `&&=`, or `??=`. */
