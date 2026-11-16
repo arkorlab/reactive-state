@@ -63,6 +63,60 @@ const CASES = [
     source:
       'export function build({ body }: { body: FormData | string }) { return new Response(body); }',
   },
+  {
+    expected: MULTIPART_REASON,
+    id: 'self-referential-let-cursor-next-destructured-response',
+    source:
+      'export function build(head: { body: BodyInit; next?: any }) { let cursor = head; cursor = cursor.next!; const { body } = cursor; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'self-referential-parameter-inner-destructured-response',
+    source:
+      'export function build(opts: { body?: BodyInit; inner?: any }) { opts = opts.inner; const { body } = opts; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'self-referential-object-pattern-parameter-request',
+    source:
+      "export function build(a: any) { ({ body: a } = a); return new Request('https://example.com/', a); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'self-referential-array-pattern-parameter-response',
+    source:
+      'export function build(a: any) { [a] = a; const { body } = a; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'mutually-recursive-let-holders-destructured-response',
+    source:
+      'export function build(seed: any) { let a = seed; let b = seed; a = b.next; b = a.next; const { body } = a; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'deep-member-projection-exceeding-depth-cap-refused',
+    source:
+      'export function build(root: any) { const { n1 } = root; const { n2 } = n1; const { n3 } = n2; const { n4 } = n3; const { n5 } = n4; const { n6 } = n5; const { n7 } = n6; const { n8 } = n7; const { n9 } = n8; const { n10 } = n9; const { n11 } = n10; const { n12 } = n11; const { n13 } = n12; const { n14 } = n13; const { n15 } = n14; const { n16 } = n15; const { n17 } = n16; const { n18 } = n17; return new Response(n18); }',
+  },
+  {
+    expected: undefined,
+    id: 'self-referential-request-spread-overwritten-by-later-fixed-body-pin',
+    source:
+      "export function build(a: any) { ({ body: a } = a); return new Request('https://example.com/', { ...a, method: 'POST', body: 'fixed' }); }",
+  },
+  {
+    expected: undefined,
+    id: 'non-cyclic-diamond-member-projection-allowed-pin',
+    source:
+      "export function build(flag: boolean) { const leaf = { body: 'fixed' }; const left = { inner: leaf }; const right = { inner: leaf }; const chosen = flag ? left : right; const { inner } = chosen; const { body } = inner; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'same-pattern-sibling-default-projection-allowed-pin',
+    source:
+      "export function build(input: { a?: { body: string }; b?: { body: string } }) { const { a = { body: 'fixed' }, b = a } = input; const { body } = b; return new Response(body); }",
+  },
 ] as const;
 
 describe('multipart destructured parameter reassignments, expansion cycles, and descriptor cuts', () => {

@@ -14,7 +14,6 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
-  type ParameterDeclaration,
   type VariableDeclaration,
 } from 'typescript/ast';
 
@@ -43,6 +42,7 @@ import {
   singleDescriptorBodyWrite,
   variableMayHideBody,
 } from './multipart-descriptors.ts';
+import { peeledMemberHolder } from './multipart-held-paths.ts';
 import { parameterBodies, parameterMayHideBody } from './multipart-parameters.ts';
 import {
   type AnalysisState,
@@ -51,9 +51,9 @@ import {
   EMPTY_BODIES,
   isFormData,
   mergeSpread,
-  parameterValues,
-  resolveHeldExpressions,
+  resolveHeldReading,
   selectedValues,
+  spreadHolderArrays,
   startAnalysis,
   uniqueExpressions,
 } from './multipart-readings.ts';
@@ -62,26 +62,33 @@ import {
 
 const BODY_KEY = 'body';
 const DEFINED = { slots: 3 } as const;
+const MULTIPART_MESSAGE =
+  'makes a `Request` or `Response` of `FormData`, whose multipart boundary is random';
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 export function multipartMaking(node: NewExpression, path: string | undefined): string | undefined {
   const state = startAnalysis();
   const first = node.arguments?.[0];
-  const bodies =
-    path === 'Response' && first !== undefined ? [first] : requestBodies(node, path, state);
-  return bodies.some((body) => isFormData(body, { ...state, seen: new Set() }))
-    ? 'makes a `Request` or `Response` of `FormData`, whose multipart boundary is random'
+  if (path === 'Response') {
+    return first !== undefined && isFormData(first, { ...state, seen: new Set() })
+      ? MULTIPART_MESSAGE
+      : undefined;
+  }
+  const reading = requestReading(node, path, state);
+  return reading.ambiguous === true ||
+    reading.bodies.some((body) => isFormData(body, { ...state, seen: new Set() }))
+    ? MULTIPART_MESSAGE
     : undefined;
 }
 
 /** What a Request's options show of its body, after aliases, mutations and object spreads. */
-function requestBodies(
+function requestReading(
   node: NewExpression,
   path: string | undefined,
   state: AnalysisState,
-): readonly Expression[] {
+): BodyReading {
   const options = path === 'Request' ? node.arguments?.[1] : undefined;
-  return options === undefined ? [] : bodiesOf(options, node, state).bodies;
+  return options === undefined ? EMPTY_BODIES : bodiesOf(options, node, state);
 }
 
 /** The surviving body property of options the code writes, memoized across cycle-free subwalks. */
@@ -129,6 +136,7 @@ function computeBodiesOf(value: Expression, point: Node, following: AnalysisStat
   if (alternatives !== undefined) {
     const readings = alternatives.map((each) => bodiesOf(each, point, following));
     return {
+      ambiguous: readings.some((each) => each.ambiguous === true),
       bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
       overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
     };
@@ -149,7 +157,7 @@ function callExpressionBodies(
   if (path === 'Object.assign') {
     const merged = objectAssignSourcesBodies(call, call.arguments, point, following);
     return assignTargetMayHideBody(call, point, following)
-      ? { bodies: merged.bodies, overwrites: false }
+      ? { ambiguous: merged.ambiguous, bodies: merged.bodies, overwrites: false }
       : merged;
   }
   if (path === 'Object.defineProperty') {
@@ -184,19 +192,22 @@ function objectCreateBodies(
   following: AnalysisState,
 ): BodyReading {
   const [proto, descriptors] = framedArgumentPrefix(call, call.arguments).values;
-  const protoBodies = proto === undefined ? [] : bodiesOf(proto, point, following).bodies;
+  const protoReading = proto === undefined ? EMPTY_BODIES : bodiesOf(proto, point, following);
   const firstOnly =
     call.arguments.length < 2 &&
     (call.arguments[0] === undefined || !isSpreadElement(call.arguments[0]));
   if (firstOnly) {
-    return { bodies: protoBodies, overwrites: false };
+    return { ambiguous: protoReading.ambiguous, bodies: protoReading.bodies, overwrites: false };
   }
   const write = mapDescriptorBodyWrite(descriptors);
   if (write === undefined) {
-    return { bodies: protoBodies, overwrites: false };
+    return { ambiguous: protoReading.ambiguous, bodies: protoReading.bodies, overwrites: false };
   }
   return {
-    bodies: uniqueExpressions(write.exactBody ? write.values : [...protoBodies, ...write.values]),
+    ambiguous: !write.exactBody && Boolean(protoReading.ambiguous),
+    bodies: uniqueExpressions(
+      write.exactBody ? write.values : [...protoReading.bodies, ...write.values],
+    ),
     overwrites: write.enumerableBody,
   };
 }
@@ -292,6 +303,7 @@ function spreadArgumentBodies(
   if (alternatives !== undefined) {
     const readings = alternatives.map((each) => spreadArgumentBodies(call, each, point, next));
     return {
+      ambiguous: readings.some((each) => each.ambiguous === true),
       bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
       overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
     };
@@ -310,41 +322,35 @@ function identifierSpreadBodies(
   if (selected === undefined || selected.keys.length > 0) {
     return EMPTY_BODIES;
   }
-  const collected: Expression[] = [];
-  for (const candidate of spreadHolderArrays(name, selected.binding, point)) {
+  const holderArrays = spreadHolderArrays(name, selected.binding, point);
+  const arrayReadings = holderArrays.expressions.flatMap((candidate) => {
     const array = unwrapped(candidate);
-    if (isArrayLiteralExpression(array)) {
-      collected.push(...objectAssignSourcesBodies(call, array.elements, point, state).bodies);
-    }
-  }
-  if (isVariableDeclaration(selected.binding)) {
-    const holder = framedHeldVariable(selected.binding);
-    for (const write of framedMemberWrites(name.getSourceFile())) {
-      if (write.holder === holder && write.path.length === 1) {
-        collected.push(...bodiesOf(write.value, point, state).bodies);
-      }
-    }
-  }
-  return { bodies: uniqueExpressions(collected), overwrites: false };
+    return isArrayLiteralExpression(array)
+      ? [objectAssignSourcesBodies(call, array.elements, point, state)]
+      : [];
+  });
+  const memberReadings = isVariableDeclaration(selected.binding)
+    ? spreadMemberReadings(name, selected.binding, point, state)
+    : [];
+  const allReadings = [...arrayReadings, ...memberReadings];
+  return {
+    ambiguous: holderArrays.ambiguous || allReadings.some((each) => each.ambiguous === true),
+    bodies: uniqueExpressions(allReadings.flatMap((each) => each.bodies)),
+    overwrites: false,
+  };
 }
 
-/** Array expressions assigned or defaulted on a variable or parameter spread source. */
-function spreadHolderArrays(
+/** Member-write `BodyReading`s on a mutable array variable spread into `Object.assign`. */
+function spreadMemberReadings(
   name: Identifier,
-  binding: VariableDeclaration | ParameterDeclaration,
+  binding: VariableDeclaration,
   point: Node,
-): readonly Expression[] {
-  if (isVariableDeclaration(binding)) {
-    const held = framedHeldValues(name, [], point);
-    const entries =
-      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...held.held];
-    return entries.flatMap((each) => resolveHeldExpressions(each, point));
-  }
-  const resolved = parameterValues(name, binding);
-  const sourceValues = resolved.sources.flatMap((each) => resolveHeldExpressions(each, point));
-  return resolved.replaced || binding.initializer === undefined
-    ? sourceValues
-    : [binding.initializer, ...sourceValues];
+  state: AnalysisState,
+): readonly BodyReading[] {
+  const holder = framedHeldVariable(binding);
+  return framedMemberWrites(name.getSourceFile())
+    .filter((write) => write.holder === holder && write.path.length === 1)
+    .map((write) => bodiesOf(write.value, point, state));
 }
 
 /** Possible request bodies carried by a variable or parameter options alias at `point`. */
@@ -382,13 +388,15 @@ function variableBodies(
   const descriptorWrites = holderDescriptorBodyWrites(holder, (change) =>
     reachesHolderRead(change, holder, point),
   );
+  const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state));
+  const ambiguous = entryReadings.some((each) => each.ambiguous === true);
   const bodies = uniqueExpressions([
-    ...entries.flatMap((entry) => heldOptionBodies(entry, point, state)),
+    ...entryReadings.flatMap((each) => each.bodies),
     ...descriptorWrites.flatMap((each) => each.values),
   ]);
   const hidesBody = descriptorWrites.some((each) => each.mayHideBody);
-  if (hidesBody || removesHolderBody(name, holder, point)) {
-    return { bodies, overwrites: false };
+  if (ambiguous || hidesBody || removesHolderBody(name, holder, point)) {
+    return { ambiguous, bodies, overwrites: false };
   }
   const definiteEnumerable =
     bodyHeld.initial === undefined ||
@@ -408,26 +416,49 @@ function variableBodies(
   return { bodies, overwrites };
 }
 
-/** Body expressions selected by one held options path. */
-function heldOptionBodies(entry: Held, point: Node, state: AnalysisState): readonly Expression[] {
+/** Body reading selected by one held options path, preserving ambiguity across member cycles. */
+function heldOptionReading(entry: Held, point: Node, state: AnalysisState): BodyReading {
   if (entry.keys.length === 0) {
-    return [entry.value];
+    return { bodies: [entry.value], overwrites: false };
   }
   if (entry.keys.length === 1 && entry.keys[0] === BODY_KEY) {
-    return bodiesOf(entry.value, readingPoint(entry.value, point), state).bodies;
+    const peeled = peeledMemberHolder(entry.value);
+    return peeled === undefined
+      ? bodiesOf(entry.value, readingPoint(entry.value, point), state)
+      : projectedHolderReading(peeled, point, state);
   }
   if (entry.keys.at(-1) === BODY_KEY) {
-    const holders = resolveHeldExpressions(
+    const projected = projectedHolderReading(
       { keys: entry.keys.slice(0, -1), value: entry.value },
       point,
+      state,
     );
-    if (holders.length > 0) {
-      return uniqueExpressions(
-        holders.flatMap((each) => bodiesOf(each, readingPoint(each, point), state).bodies),
-      );
+    if (projected.ambiguous === true || projected.bodies.length > 0) {
+      return projected;
     }
   }
-  return resolveHeldExpressions(entry, point);
+  const fallback = resolveHeldReading(entry, point);
+  return {
+    ambiguous: fallback.ambiguous || fallback.typedFormData,
+    bodies: fallback.expressions,
+    overwrites: false,
+  };
+}
+
+/** Resolves holder expressions along `holderEntry` and combines their option `BodyReading`s. */
+function projectedHolderReading(holderEntry: Held, point: Node, state: AnalysisState): BodyReading {
+  const holders = resolveHeldReading(holderEntry, point);
+  const readings = holders.expressions.map((each) =>
+    bodiesOf(each, readingPoint(each, point), state),
+  );
+  return {
+    ambiguous:
+      holders.ambiguous ||
+      holders.typedFormData ||
+      readings.some((each) => each.ambiguous === true),
+    bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
+    overwrites: false,
+  };
 }
 
 /** Evaluation point where an option source's own fields are read rather than forwarded by reference. */

@@ -5,7 +5,6 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isComputedPropertyName,
-  isElementAccessExpression,
   isExpression,
   isForInStatement,
   isForOfStatement,
@@ -14,16 +13,13 @@ import {
   isNumericLiteral,
   isObjectLiteralExpression,
   isOmittedExpression,
-  isParameterDeclaration,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
-  isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
-  isVariableDeclaration,
   type Node,
   type ObjectLiteralExpression,
   type ParameterDeclaration,
@@ -35,43 +31,16 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { assignmentPatternDefault, iteratedFrameSources } from './framed-assignment-patterns.ts';
-import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
-import { framedHeldValues, type Held } from './framed-held-members.ts';
-import { framedObjectSources } from './framed-object-members.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
+import type { Held } from './framed-held-members.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
 
-/** Projected destructuring reassignments and held member-path unfolding for multipart checks. */
+/** Projected destructuring reassignments and dynamic pattern scans for multipart checks. */
 
 export interface PatternReassignmentScan {
   readonly ambiguous: boolean;
   readonly extraSources: readonly Held[];
-}
-
-export interface HeldResolution {
-  readonly expressions: readonly Expression[];
-  readonly typedFormData: boolean;
-}
-
-export interface ProjectionCallbacks {
-  readonly bindingDefaults: (
-    name: Identifier,
-    root: ParameterDeclaration['name'],
-  ) => readonly Expression[];
-  readonly readParameter: (
-    name: Identifier,
-    parameter: ParameterDeclaration,
-  ) => {
-    readonly ambiguous?: boolean;
-    readonly replaced: boolean;
-    readonly sources: readonly Held[];
-  };
-  readonly isTypedFormData: (
-    raw: Expression,
-    value: Expression,
-    keys: readonly string[],
-  ) => boolean;
-  readonly selectValues: (value: Expression) => readonly Expression[] | undefined;
 }
 
 interface TargetParameter {
@@ -409,133 +378,4 @@ function staticPropertyName(name: PropertyName): string | undefined {
       : undefined;
   }
   return undefined;
-}
-
-/** Unfolds a `Held` member path through aliases, literals, arrays, and parameter sources. */
-export function inspectHeldPath(
-  entry: Held,
-  point: Node,
-  callbacks: ProjectionCallbacks,
-): HeldResolution {
-  const expressions: Expression[] = [];
-  let typedFormData = false;
-  const seen = new Map<Expression, Set<string>>();
-  const pending: Held[] = [entry];
-  for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    const value = unwrapped(at.value);
-    const serialized = JSON.stringify(at.keys);
-    const visited = seen.get(value) ?? new Set<string>();
-    if (visited.has(serialized)) {
-      continue;
-    }
-    visited.add(serialized);
-    seen.set(value, visited);
-    if (at.keys.length === 0) {
-      expressions.push(at.value);
-      continue;
-    }
-    if (callbacks.isTypedFormData(at.value, value, at.keys)) {
-      typedFormData = true;
-    }
-    pending.push(...expandHeldStep(at, value, point, callbacks));
-  }
-  return { expressions, typedFormData };
-}
-
-/** Expands one non-empty `Held` member path step into successor `Held` candidates. */
-function expandHeldStep(
-  at: Held,
-  value: Expression,
-  point: Node,
-  callbacks: ProjectionCallbacks,
-): readonly Held[] {
-  const alternatives = callbacks.selectValues(value);
-  if (alternatives !== undefined) {
-    return alternatives.map((each) => ({ keys: at.keys, value: each }));
-  }
-  if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
-    const memberKey = frameMemberName(value);
-    return memberKey === undefined
-      ? []
-      : [{ keys: [memberKey, ...at.keys], value: value.expression }];
-  }
-  if (isArrayLiteralExpression(value)) {
-    const [firstKey, ...restKeys] = at.keys;
-    return firstKey === undefined ? [] : arrayPathEntries(value, firstKey, restKeys);
-  }
-  if (isIdentifier(value)) {
-    return expandIdentifierStep(value, at.keys, point, callbacks);
-  }
-  const objectSources = framedObjectSources(value, at.keys);
-  if (objectSources === undefined) {
-    return [];
-  }
-  return objectSources.filter(
-    (each) => unwrapped(each.value) !== value || each.keys.length !== at.keys.length,
-  );
-}
-
-/** Expands a variable or parameter identifier along `keys`. */
-function expandIdentifierStep(
-  id: Identifier,
-  keys: readonly string[],
-  point: Node,
-  callbacks: ProjectionCallbacks,
-): readonly Held[] {
-  const selected = frameBindingOf(id);
-  if (selected === undefined) {
-    return [];
-  }
-  const defaults =
-    selected.keys.length === 0
-      ? []
-      : callbacks.bindingDefaults(id, selected.binding.name).map((value) => ({ keys, value }));
-  if (isVariableDeclaration(selected.binding)) {
-    const held = framedHeldValues(id, keys, point);
-    if (held === undefined) {
-      return defaults;
-    }
-    return [...(held.initial === undefined ? [] : [held.initial]), ...held.held, ...defaults];
-  }
-  if (!isParameterDeclaration(selected.binding)) {
-    return [];
-  }
-  const resolved = callbacks.readParameter(id, selected.binding);
-  const fromSources = resolved.sources.map((each) => {
-    return {
-      keys: [...each.keys, ...keys],
-      value: each.value,
-    };
-  });
-  if (resolved.replaced && resolved.ambiguous !== true) {
-    return fromSources;
-  }
-  const fullKeys = [...selected.keys, ...keys];
-  const paramDefault =
-    selected.binding.initializer === undefined
-      ? []
-      : [{ keys: fullKeys, value: selected.binding.initializer }];
-  return [...fromSources, ...paramDefault, ...defaults];
-}
-
-/** Selects matching element candidates from an `ArrayLiteralExpression` for `firstKey`. */
-function arrayPathEntries(
-  array: ArrayLiteralExpression,
-  firstKey: string,
-  restKeys: readonly string[],
-): readonly Held[] {
-  const entries: Held[] = [];
-  let spreadSeen = false;
-  for (const [index, element] of array.elements.entries()) {
-    if (isOmittedExpression(element)) {
-      continue;
-    }
-    if (isSpreadElement(element)) {
-      spreadSeen = true;
-      entries.push({ keys: ['0', ...restKeys], value: element.expression });
-    } else if (spreadSeen || String(index) === firstKey) {
-      entries.push({ keys: restKeys, value: element });
-    }
-  }
-  return entries;
 }

@@ -33,7 +33,7 @@ import {
   type ParameterResolution,
   parameterValues,
   reachesPoint,
-  resolveHeldExpressions,
+  resolveHeldReading,
   supersededBefore,
   uniqueExpressions,
 } from './multipart-readings.ts';
@@ -99,18 +99,31 @@ export function parameterBodies(
   if (memberCut !== undefined) {
     return cutMemberReading(baseContext, memberCut, writes, reader);
   }
-  const sourceValues = resolved.sources.flatMap((each) => resolveHeldExpressions(each, point));
-  const wholeValues =
+  const sourceResolutions = resolved.sources.map((each) => resolveHeldReading(each, point));
+  const initial =
     resolved.replaced && resolved.ambiguous !== true
-      ? sourceValues
-      : [...initialParameterValues(name, parameter, point), ...sourceValues];
-  const wholeReadings = wholeValues.map((each) => reader.readOptions(each, each));
-  const memberBodies = writes.flatMap((each) => writeBodies(each, reader));
+      ? { ambiguous: false, expressions: [] as readonly Expression[] }
+      : initialParameterValues(name, parameter, point);
+  const wholeReadings = [
+    ...initial.expressions,
+    ...sourceResolutions.flatMap((each) => each.expressions),
+  ].map((each) => reader.readOptions(each, each));
+  const memberReadings = writes.map((each) => writeReading(each, reader));
   const deleted = resolved.replaced && hasReachableBodyDelete(baseContext);
   const hidden = writes.some((each) => each.mayHideBody);
+  const ambiguous =
+    initial.ambiguous ||
+    sourceResolutions.some((each) => each.ambiguous || each.typedFormData) ||
+    wholeReadings.some((each) => each.ambiguous === true) ||
+    memberReadings.some((each) => each.ambiguous === true);
   return {
-    bodies: uniqueExpressions([...wholeReadings.flatMap((each) => each.bodies), ...memberBodies]),
+    ambiguous,
+    bodies: uniqueExpressions([
+      ...wholeReadings.flatMap((each) => each.bodies),
+      ...memberReadings.flatMap((each) => each.bodies),
+    ]),
     overwrites:
+      !ambiguous &&
       resolved.replaced &&
       resolved.ambiguous !== true &&
       !deleted &&
@@ -168,18 +181,21 @@ function cutMemberReading(
     memberCut.descriptorWrite === true
       ? afterCut.some((each) => each.mayHideBody)
       : writes.some((each) => each.mayHideBody);
+  const afterReadings = afterCut.map((each) => writeReading(each, reader));
+  const ambiguous = afterReadings.some((each) => each.ambiguous === true);
   return {
-    bodies: uniqueExpressions(afterCut.flatMap((each) => writeBodies(each, reader))),
-    overwrites: !deleted && !hidden && definitelyEnumerableBody(memberCut, reader),
+    ambiguous,
+    bodies: uniqueExpressions(afterReadings.flatMap((each) => each.bodies)),
+    overwrites: !ambiguous && !deleted && !hidden && definitelyEnumerableBody(memberCut, reader),
   };
 }
 
-/** Body expressions contributed by one parameter member write or `Object.assign` call. */
-function writeBodies(write: ParameterBodyWrite, reader: OptionsReader): readonly Expression[] {
+/** Body reading contributed by one parameter member write or `Object.assign` call. */
+function writeReading(write: ParameterBodyWrite, reader: OptionsReader): BodyReading {
   if (write.assignCall !== undefined) {
-    return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node).bodies;
+    return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node);
   }
-  return write.values;
+  return { bodies: write.values, overwrites: false };
 }
 
 /** Single fresh replacement assignment when no later write can rebind `parameter`. */
@@ -254,14 +270,17 @@ function initialParameterValues(
   name: Identifier,
   parameter: ParameterDeclaration,
   point: Node,
-): readonly Expression[] {
+): { readonly ambiguous: boolean; readonly expressions: readonly Expression[] } {
   const keys = frameBindingOf(name)?.keys ?? [];
   const outer =
     parameter.initializer === undefined
-      ? []
-      : resolveHeldExpressions({ keys, value: parameter.initializer }, point);
+      ? { ambiguous: false, expressions: [] as readonly Expression[], typedFormData: false }
+      : resolveHeldReading({ keys, value: parameter.initializer }, point);
   const patternDefaults = keys.length === 0 ? [] : bindingDefaultsOf(name, parameter.name);
-  return [...outer, ...patternDefaults];
+  return {
+    ambiguous: outer.ambiguous || outer.typedFormData,
+    expressions: [...outer.expressions, ...patternDefaults],
+  };
 }
 
 function collectParameterBodyWrites(context: CutContext): readonly ParameterBodyWrite[] {

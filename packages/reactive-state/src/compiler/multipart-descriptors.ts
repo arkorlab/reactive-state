@@ -116,6 +116,7 @@ export function applyDescriptorWrite(
     return base;
   }
   return {
+    ambiguous: !write.exactBody && Boolean(base.ambiguous),
     bodies: uniqueExpressions(write.exactBody ? write.values : [...base.bodies, ...write.values]),
     overwrites: write.enumerableBody || (!write.mayHideBody && base.overwrites),
   };

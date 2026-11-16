@@ -33,14 +33,16 @@ import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from '
 import { namesType } from './framed.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
 import {
+  type HeldResolution,
   inspectHeldPath,
-  patternParameterReassignments,
   type ProjectionCallbacks,
-} from './multipart-projections.ts';
+} from './multipart-held-paths.ts';
+import { patternParameterReassignments } from './multipart-projections.ts';
 
 /** Shared multipart `BodyReading` combinators, parameter value cuts, and `FormData` checks. */
 
 export interface BodyReading {
+  readonly ambiguous?: boolean;
   readonly bodies: readonly Expression[];
   readonly overwrites: boolean;
 }
@@ -89,6 +91,9 @@ export function uniqueExpressions(items: readonly Expression[]): readonly Expres
 /** Combines an earlier body reading with a spread source that may or may not define `body`. */
 export function mergeSpread(previous: BodyReading, spread: BodyReading): BodyReading {
   return {
+    ambiguous: spread.overwrites
+      ? Boolean(spread.ambiguous)
+      : Boolean(previous.ambiguous) || Boolean(spread.ambiguous),
     bodies: uniqueExpressions(
       spread.overwrites ? spread.bodies : [...previous.bodies, ...spread.bodies],
     ),
@@ -118,9 +123,9 @@ export function selectedValues(value: Expression): readonly Expression[] | undef
   return undefined;
 }
 
-/** Unfolds concrete expressions reachable along a `Held` member path at `point`. */
-export function resolveHeldExpressions(entry: Held, point: Node): readonly Expression[] {
-  return inspectHeldPath(entry, point, PROJECTION_CALLBACKS).expressions;
+/** Unfolds concrete expressions and cycle/type flags along a `Held` member path at `point`. */
+export function resolveHeldReading(entry: Held, point: Node): HeldResolution {
+  return inspectHeldPath(entry, point, PROJECTION_CALLBACKS);
 }
 
 /** Values assigned to a parameter before `name`, noting whether a definite write replaced the initial binding. */
@@ -430,8 +435,12 @@ function heldFormData(entry: Held, state: AnalysisState): boolean {
   if (entry.keys.length === 0) {
     return isFormData(entry.value, state);
   }
-  const resolved = inspectHeldPath(entry, entry.value, PROJECTION_CALLBACKS);
-  return resolved.typedFormData || resolved.expressions.some((each) => isFormData(each, state));
+  const resolved = resolveHeldReading(entry, entry.value);
+  return (
+    resolved.ambiguous ||
+    resolved.typedFormData ||
+    resolved.expressions.some((each) => isFormData(each, state))
+  );
 }
 
 /** Whether assertions or binding types on `raw` / `value` name `FormData` at `keys`. */
@@ -449,4 +458,32 @@ function typedAtMemberPath(raw: Expression, value: Expression, keys: readonly st
     typed !== undefined &&
     namesLocalMemberType(typed.type, [...typed.keys, ...keys], FORM_DATA_NAMES)
   );
+}
+
+/** Array expressions assigned or defaulted on a variable or parameter spread source. */
+export function spreadHolderArrays(
+  name: Identifier,
+  binding: VariableDeclaration | ParameterDeclaration,
+  point: Node,
+): { readonly ambiguous: boolean; readonly expressions: readonly Expression[] } {
+  if (isVariableDeclaration(binding)) {
+    const held = framedHeldValues(name, [], point);
+    const entries =
+      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...held.held];
+    const readings = entries.map((each) => resolveHeldReading(each, point));
+    return {
+      ambiguous: readings.some((each) => each.ambiguous || each.typedFormData),
+      expressions: readings.flatMap((each) => each.expressions),
+    };
+  }
+  const resolved = parameterValues(name, binding);
+  const readings = resolved.sources.map((each) => resolveHeldReading(each, point));
+  const sourceValues = readings.flatMap((each) => each.expressions);
+  return {
+    ambiguous: readings.some((each) => each.ambiguous || each.typedFormData),
+    expressions:
+      resolved.replaced || binding.initializer === undefined
+        ? sourceValues
+        : [binding.initializer, ...sourceValues],
+  };
 }
