@@ -52,7 +52,7 @@ export function constantStatement(statement: VariableStatement): boolean {
 
 /** Whether every call argument and reachable parameter default of `fn` is a quiet primitive. */
 export function quietFactoryCall(fn: Answering, given: readonly Expression[]): boolean {
-  if (!given.every((arg) => !isSpreadElement(arg) && framedQuietPrimitive(arg))) return false;
+  if (given.some((arg) => isSpreadElement(arg) || !framedQuietPrimitive(arg))) return false;
   return parametersOf(fn).every((param, index) => quietFactoryParameter(param, given, index));
 }
 
@@ -192,25 +192,40 @@ function queueOnce(node: Node, context: ScopeParameterContext): void {
 }
 
 /** Resolves unchanged local function declarations and unnamed `const` function/arrow bindings. */
+const SINGLE_BODY_DECLARATIONS = new WeakMap<FunctionDeclaration, FunctionDeclaration | null>();
+const UNCHANGED_DECLARATIONS = new WeakMap<FunctionDeclaration, boolean>();
+const REASSIGNED_DECLARATIONS = new WeakMap<Node, ReadonlySet<Node>>();
+
+/** Resolves an overloaded or plain function declaration to its sole unmutated body declaration. */
+export function singleUnchangedFunctionBody(
+  declared: FunctionDeclaration,
+): FunctionDeclaration | undefined {
+  const cached = SINGLE_BODY_DECLARATIONS.get(declared);
+  if (cached !== undefined) return cached ?? undefined;
+  const family = overloadsOf(declared);
+  const bodies = family.filter(
+    (each): each is FunctionDeclaration => isFunctionDeclaration(each) && each.body !== undefined,
+  );
+  const only = bodies.length === 1 ? bodies[0] : undefined;
+  const reassigned =
+    only === undefined ? undefined : reassignedDeclarationsIn(only.getSourceFile());
+  const resolved =
+    only !== undefined && reassigned !== undefined && family.every((each) => !reassigned.has(each))
+      ? only
+      : null;
+  SINGLE_BODY_DECLARATIONS.set(declared, resolved);
+  return resolved ?? undefined;
+}
+
 function selectiveCallable(declared: FrameDeclaration): Answering | undefined {
   if (isFunctionDeclaration(declared)) {
-    const bodies = overloadsOf(declared).filter(
-      (each): each is FunctionDeclaration => isFunctionDeclaration(each) && each.body !== undefined,
-    );
-    const only = bodies.length === 1 ? bodies[0] : undefined;
-    return only !== undefined && unchangedFunctionDeclaration(only) ? only : undefined;
+    return singleUnchangedFunctionBody(declared);
   }
   if (!isVariableDeclaration(declared) || !isIdentifier(declared.name)) return undefined;
   if (declared.initializer === undefined) return undefined;
   const statement = declared.parent.parent;
   if (!isVariableStatement(statement) || !constantStatement(statement)) return undefined;
-  if (
-    reassignedDeclarationFamily(
-      declared.getSourceFile(),
-      declared.name.text,
-      new Set<Node>([declared]),
-    )
-  ) {
+  if (reassignedDeclarationsIn(declared.getSourceFile()).has(declared)) {
     return undefined;
   }
   const init = unwrapped(declared.initializer);
@@ -256,42 +271,39 @@ function ownsArgumentsBinding(identifier: Identifier, fn: Answering): boolean {
 
 /** Rejects duplicate function bodies in the same scope and lexical reassignments. */
 export function unchangedFunctionDeclaration(declared: FunctionDeclaration): boolean {
+  const cached = UNCHANGED_DECLARATIONS.get(declared);
+  if (cached !== undefined) return cached;
+  const result = computeUnchangedFunctionDeclaration(declared);
+  UNCHANGED_DECLARATIONS.set(declared, result);
+  return result;
+}
+
+function computeUnchangedFunctionDeclaration(declared: FunctionDeclaration): boolean {
   if (declared.body === undefined || declared.name === undefined) return false;
   const family = overloadsOf(declared);
   if (family.some((each) => each !== declared && each.body !== undefined)) {
     return false;
   }
-  return !reassignedDeclarationFamily(
-    declared.getSourceFile(),
-    declared.name.text,
-    new Set<Node>(family),
-  );
+  const reassigned = reassignedDeclarationsIn(declared.getSourceFile());
+  return family.every((each) => !reassigned.has(each));
 }
 
-/** Checks whether any identifier write in `sourceFile` reassigns a declaration in `family`. */
-function reassignedDeclarationFamily(
-  sourceFile: Node,
-  name: string,
-  family: ReadonlySet<Node>,
-): boolean {
+/** Indexes all declarations targeted by identifier writes across `sourceFile` once per file. */
+function reassignedDeclarationsIn(sourceFile: Node): ReadonlySet<Node> {
+  const cached = REASSIGNED_DECLARATIONS.get(sourceFile);
+  if (cached !== undefined) return cached;
+  const reassigned = new Set<Node>();
   const pending: Node[] = [sourceFile];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (isReassignedFamilyIdentifier(node, name, family)) return true;
+    if (isIdentifier(node) && reassignedTarget(node)) {
+      const resolved = frameDeclarationOf(node);
+      if (resolved !== undefined) reassigned.add(resolved);
+    }
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
-  return false;
-}
-
-/** Matches a write-target identifier that resolves to one of `family`'s declarations. */
-function isReassignedFamilyIdentifier(
-  node: Node,
-  name: string,
-  family: ReadonlySet<Node>,
-): boolean {
-  if (!isIdentifier(node) || node.text !== name || !reassignedTarget(node)) return false;
-  const resolved = frameDeclarationOf(node);
-  return resolved !== undefined && family.has(resolved);
+  REASSIGNED_DECLARATIONS.set(sourceFile, reassigned);
+  return reassigned;
 }

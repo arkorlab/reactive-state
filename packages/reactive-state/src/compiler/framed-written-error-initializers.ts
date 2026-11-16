@@ -40,7 +40,7 @@ import {
   constantStatement,
   quietFactoryCall,
   readsScopeParameter,
-  unchangedFunctionDeclaration,
+  singleUnchangedFunctionBody,
 } from './framed-written-error-parameters.ts';
 import { nonInterceptingWrappedTarget } from './framed-written-error-wrappers.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
@@ -290,7 +290,7 @@ function localFactory(callee: Expression): Answering | undefined {
     const declared = frameDeclarationOf(current);
     if (declared === undefined) return undefined;
     if (isFunctionDeclaration(declared)) {
-      return unchangedFunctionDeclaration(declared) ? declared : undefined;
+      return singleUnchangedFunctionBody(declared);
     }
     if (!isVariableDeclaration(declared) || declared.initializer === undefined) return undefined;
     const statement = declared.parent.parent;
