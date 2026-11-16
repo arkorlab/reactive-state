@@ -16,20 +16,22 @@ import {
   type Node,
   type ObjectLiteralExpression,
   type SourceFile,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { initializerOf } from './framed.ts';
+import { declaredBindingTarget } from './function-binding-types.ts';
+import {
+  candidateObjects,
+  literalElementKey,
+  staticArgumentKey,
+} from './function-candidate-objects.ts';
 import {
   type AssignedCallable,
   callableWritesOnObject,
-  candidateObjects,
   type FileCallableIndex,
-  literalElementKey,
-  staticArgumentKey,
 } from './function-spread-callables.ts';
 import {
   EMPTY_WRITES,
@@ -54,7 +56,7 @@ interface RawFileMutations {
     readonly key: string | undefined;
     readonly receiver: Expression;
   }[];
-  readonly variableWrites: Map<VariableDeclaration, Expression[]>;
+  readonly variableWrites: Map<Node, Expression[]>;
 }
 
 const DIRECT_WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
@@ -130,9 +132,10 @@ function collectRawMutation(node: Node, raw: RawFileMutations): void {
     if (isIdentifier(target)) {
       const declared = frameDeclarationOf(target);
       if (declared !== undefined && isVariableDeclaration(declared)) {
-        const list = raw.variableWrites.get(declared) ?? [];
+        const binding = declaredBindingTarget(target, declared);
+        const list = raw.variableWrites.get(binding) ?? [];
         list.push(rhs);
-        raw.variableWrites.set(declared, list);
+        raw.variableWrites.set(binding, list);
       }
       return;
     }
@@ -155,16 +158,13 @@ function collectCallMutation(call: CallExpression, raw: RawFileMutations): void 
     return;
   }
   if (path === 'Object.assign' && call.arguments.length > 1) {
-    const sources: Expression[] = [];
-    for (const arg of call.arguments.slice(1)) {
-      sources.push(unwrapped(arg));
-    }
+    const sources = call.arguments.slice(1).map((arg) => unwrapped(arg));
     raw.assignCalls.push({ sources, target: unwrapped(first) });
     return;
   }
   if (
-    (path === 'Object.defineProperty' || path === 'Reflect.defineProperty') &&
-    descArg !== undefined
+    descArg !== undefined &&
+    (path === 'Object.defineProperty' || path === 'Reflect.defineProperty')
   ) {
     const valueNode = descriptorValueNode(unwrapped(descArg));
     if (valueNode !== undefined) {
@@ -200,7 +200,8 @@ function descriptorValueNode(descriptor: Expression): Node | Expression | undefi
 function finalizeFileCallableIndex(raw: RawFileMutations): FileCallableIndex {
   const memberMap = new Map<ObjectLiteralExpression, AssignedCallable[]>();
   for (const write of raw.memberWrites) {
-    for (const obj of candidateObjects(write.receiver, raw.variableWrites, new Set())) {
+    const receivers = candidateObjects(write.receiver, raw.variableWrites, new Set());
+    for (const obj of receivers) {
       const list = memberMap.get(obj) ?? [];
       list.push({ callable: write.callable, key: write.key });
       memberMap.set(obj, list);
@@ -208,7 +209,8 @@ function finalizeFileCallableIndex(raw: RawFileMutations): FileCallableIndex {
   }
   const assignedSpreads = new Map<ObjectLiteralExpression, Expression[]>();
   for (const assign of raw.assignCalls) {
-    for (const obj of candidateObjects(assign.target, raw.variableWrites, new Set())) {
+    const targets = candidateObjects(assign.target, raw.variableWrites, new Set());
+    for (const obj of targets) {
       const list = assignedSpreads.get(obj) ?? [];
       list.push(...assign.sources);
       assignedSpreads.set(obj, list);
@@ -276,7 +278,8 @@ function writesUnknownDirectKey(
   object: ObjectLiteralExpression,
   keys: Set<string>,
 ): boolean {
-  for (const rawTarget of targetsOf(written)) {
+  const targets = targetsOf(written);
+  for (const rawTarget of targets) {
     const target = unwrapTarget(rawTarget);
     if (refersToLiteralNode(target, object)) {
       return true;

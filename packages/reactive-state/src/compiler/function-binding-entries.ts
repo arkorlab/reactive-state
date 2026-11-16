@@ -87,11 +87,12 @@ export function identifierEntryKind(node: Identifier, context: ScanContext): Ent
       ? 'unknown'
       : parameterEntryKind(node, declared, context);
   }
-  if (context.seen.has(declared)) {
+  const target = declaredBindingTarget(node, declared);
+  if (context.seen.has(target)) {
     context.hitCycle = true;
     return 'unknown';
   }
-  context.seen.add(declared);
+  context.seen.add(target);
   return isVariableDeclaration(declared) ? variableEntryKind(node, declared, context) : 'renamed';
 }
 
@@ -192,11 +193,12 @@ function parameterEntryKind(
   parameter: ParameterDeclaration,
   context: ScanContext,
 ): EntryKind {
-  if (context.seen.has(parameter)) {
+  const target = declaredBindingTarget(node, parameter);
+  if (context.seen.has(target)) {
     context.hitCycle = true;
     return 'unknown';
   }
-  context.seen.add(parameter);
+  context.seen.add(target);
   const { initializer } = parameter;
   if (isIdentifier(parameter.name)) {
     const callerKind: EntryKind = isFunctionType(parameter.type) ? 'renamed' : 'unknown';
@@ -426,7 +428,7 @@ function unverifiedArraySlotKind(
   return 'unknown';
 }
 
-/** Follows an identifier chain to an `ArrayLiteralExpression`, if any. */
+/** Follows an identifier or destructured `const` chain to an `ArrayLiteralExpression`, if any. */
 function resolveArrayLiteral(
   holder: Expression,
   context: ScanContext,
@@ -436,22 +438,65 @@ function resolveArrayLiteral(
     if (isArrayLiteralExpression(current)) {
       return current;
     }
-    const declared = isIdentifier(current) ? frameDeclarationOf(current) : undefined;
-    if (
-      declared === undefined ||
-      !isVariableDeclaration(declared) ||
-      !isIdentifier(declared.name) ||
-      declared.initializer === undefined
-    ) {
+    const next = nextArrayHolderExpression(current, context);
+    if (next === undefined) {
       return undefined;
     }
-    if (context.seen.has(declared)) {
-      context.hitCycle = true;
-      return undefined;
-    }
-    context.seen.add(declared);
-    current = unwrapped(declared.initializer);
+    current = next;
   }
+}
+
+/** Resolves one lexical step from `current` toward its underlying array initializer. */
+function nextArrayHolderExpression(
+  current: Expression,
+  context: ScanContext,
+): Expression | undefined {
+  if (!isIdentifier(current)) {
+    return undefined;
+  }
+  const declared = frameDeclarationOf(current);
+  if (
+    declared === undefined ||
+    !isVariableDeclaration(declared) ||
+    declared.initializer === undefined
+  ) {
+    return undefined;
+  }
+  const target = declaredBindingTarget(current, declared);
+  if (context.seen.has(target)) {
+    context.hitCycle = true;
+    return undefined;
+  }
+  context.seen.add(target);
+  if (isIdentifier(declared.name)) {
+    return unwrapped(declared.initializer);
+  }
+  return isConstDeclaration(declared)
+    ? resolveDestructuredExpression(current, declared, context)
+    : undefined;
+}
+
+/** Resolves the expression selected by a `const` destructuring binding `node` inside `declared`. */
+function resolveDestructuredExpression(
+  node: Identifier,
+  declared: VariableDeclaration,
+  context: ScanContext,
+): Expression | undefined {
+  if (declared.initializer === undefined) {
+    return undefined;
+  }
+  const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
+  if (bound === undefined) {
+    return undefined;
+  }
+  let selected: ResolvedProperty = { kind: 'expr', value: unwrapped(declared.initializer) };
+  for (const step of patternSteps(bound)) {
+    if (step.dotDotDotToken !== undefined || step.initializer !== undefined) {
+      return undefined;
+    }
+    selected = selectIntermediateSlot(selected, step, context);
+  }
+  return selected.kind === 'expr' ? selected.value : undefined;
 }
 
 /** Whether `node` stands directly as a destructuring initializer with no identifier alias to mutate it. */
