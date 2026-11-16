@@ -4,7 +4,6 @@ import {
   type FunctionDeclaration,
   type Identifier,
   isArrayLiteralExpression,
-  isArrowFunction,
   isAsExpression,
   isBinaryExpression,
   isClassStaticBlockDeclaration,
@@ -25,9 +24,11 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
   isSatisfiesExpression,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
+  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
@@ -43,7 +44,7 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import { type Answering, isAnswering, parametersOf } from './answers.ts';
+import { type Answering, isAnswering, overloadsOf, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
@@ -83,7 +84,7 @@ export function framedTemplateText(
   return (
     functions === undefined ||
     functions.length === 0 ||
-    !functions.every((fn) => ignoresErrorSlots(fn, slots))
+    functions.some((fn) => !ignoresErrorSlots(fn, slots))
   );
 }
 
@@ -138,16 +139,7 @@ function constantDeclaration(declared: VariableDeclaration): boolean {
 function unchangedFunction(declared: FunctionDeclaration): boolean {
   if (declared.body === undefined || declared.name === undefined) return false;
   const name = declared.name.text;
-  const siblings = 'statements' in declared.parent ? declared.parent.statements : undefined;
-  if (
-    siblings?.some(
-      (each) =>
-        each !== declared &&
-        isFunctionDeclaration(each) &&
-        each.body !== undefined &&
-        each.name?.text === name,
-    ) === true
-  ) {
+  if (overloadsOf(declared).some((each) => each !== declared && each.body !== undefined)) {
     return false;
   }
   const pending: Node[] = [declared.getSourceFile()];
@@ -170,8 +162,7 @@ function unchangedFunction(declared: FunctionDeclaration): boolean {
 
 /** Every error-carrying substitution slot must remain unread or strictly tested without escaping. */
 function ignoresErrorSlots(fn: Answering, slots: readonly number[]): boolean {
-  if (fn.body === undefined) return false;
-  if (!isArrowFunction(fn) && mentionsOwnArguments(fn)) return false;
+  if (fn.body === undefined || mentionsAccessibleArguments(fn)) return false;
   return slots.every((slot) => ignoresSlot(fn, slot));
 }
 
@@ -227,8 +218,8 @@ function nonCoercingTestUse(node: Identifier): boolean {
   );
 }
 
-/** Non-arrow functions expose unnamed arguments when `arguments` is read in the same binding scope. */
-function mentionsOwnArguments(fn: Answering): boolean {
+/** Own or inherited `arguments` reads (including aliases) can expose unnamed or outer error values. */
+function mentionsAccessibleArguments(fn: Answering): boolean {
   if (fn.body === undefined) return false;
   const pending: Node[] = [...parametersOf(fn), fn.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -237,7 +228,7 @@ function mentionsOwnArguments(fn: Answering): boolean {
       pushOuterScopeHeader(node, pending);
       continue;
     }
-    if (readsOwnArgumentsIdentifier(node)) return true;
+    if (readsAccessibleArguments(node)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -245,14 +236,63 @@ function mentionsOwnArguments(fn: Answering): boolean {
   return false;
 }
 
-/** Matches an unshadowed `arguments` value read within the current callable scope. */
-function readsOwnArgumentsIdentifier(node: Node): boolean {
-  return (
-    isIdentifier(node) &&
-    node.text === 'arguments' &&
-    readsBinding(node) &&
-    frameDeclarationOf(node) === undefined
-  );
+/** Matches direct or aliased `arguments` reads in the tag's own or inherited callable scope. */
+function readsAccessibleArguments(node: Node): boolean {
+  if (!isIdentifier(node) || !readsBinding(node)) return false;
+  const seen = new Set<Node>();
+  let current: Identifier = node;
+  while (!seen.has(current)) {
+    seen.add(current);
+    if (isUnshadowedArgumentsRead(current)) return true;
+    const declared = frameDeclarationOf(current);
+    if (
+      declared === undefined ||
+      !isVariableDeclaration(declared) ||
+      declared.initializer === undefined
+    ) {
+      return false;
+    }
+    const init = unwrapped(declared.initializer);
+    if (!isIdentifier(init)) return false;
+    current = init;
+  }
+  return false;
+}
+
+/** Checks whether `node` reads an implicit `arguments` binding not shadowed inside its owner. */
+function isUnshadowedArgumentsRead(node: Identifier): boolean {
+  if (node.text !== 'arguments' || !readsBinding(node)) return false;
+  const declared = frameDeclarationOf(node);
+  if (declared === undefined) return true;
+  const owner = enclosingArgumentsCallable(node);
+  return owner !== undefined && (declared.pos < owner.pos || declared.end > owner.end);
+}
+
+/** Finds the nearest enclosing non-arrow callable whose body or parameter list owns `node`. */
+function enclosingArgumentsCallable(node: Node): Node | undefined {
+  let within: Node = node;
+  let inDecorator = false;
+  for (let at: Node = node.parent; !isSourceFile(at); within = at, at = at.parent) {
+    if (isDecorator(within)) inDecorator = true;
+    const boundary = classifyArgumentsBoundary(at, within, inDecorator);
+    if (boundary === 'header') {
+      inDecorator = false;
+      continue;
+    }
+    if (boundary === 'blocked') return undefined;
+    if (boundary === 'owner') return at;
+  }
+  return undefined;
+}
+
+function classifyArgumentsBoundary(
+  at: Node,
+  within: Node,
+  inDecorator: boolean,
+): 'blocked' | 'header' | 'none' | 'owner' {
+  if (!bindsOwnArguments(at)) return 'none';
+  if (inDecorator || isComputedPropertyName(within)) return 'header';
+  return isClassStaticBlockDeclaration(at) || isPropertyDeclaration(at) ? 'blocked' : 'owner';
 }
 
 /** Computed member names and decorators evaluate in the enclosing callable's `arguments` scope. */
@@ -260,7 +300,8 @@ function pushOuterScopeHeader(node: Node, pending: Node[]): void {
   if (
     (isMethodDeclaration(node) ||
       isGetAccessorDeclaration(node) ||
-      isSetAccessorDeclaration(node)) &&
+      isSetAccessorDeclaration(node) ||
+      isPropertyDeclaration(node)) &&
     isComputedPropertyName(node.name)
   ) {
     pending.push(node.name.expression);
@@ -273,6 +314,10 @@ function pushOuterScopeHeader(node: Node, pending: Node[]): void {
   ) {
     pushDecorators(node.modifiers, pending);
     for (const parameter of node.parameters) pushDecorators(parameter.modifiers, pending);
+    return;
+  }
+  if (isPropertyDeclaration(node)) {
+    pushDecorators(node.modifiers, pending);
   }
 }
 
@@ -284,7 +329,7 @@ function pushDecorators(modifiers: readonly Node[] | undefined, pending: Node[])
   }
 }
 
-/** Nested non-arrow functions and class blocks bind their own `arguments` rather than `fn`'s. */
+/** Nested non-arrow functions and class initializers do not inherit `fn`'s `arguments`. */
 function bindsOwnArguments(node: Node): boolean {
   return (
     isFunctionDeclaration(node) ||
@@ -293,6 +338,7 @@ function bindsOwnArguments(node: Node): boolean {
     isGetAccessorDeclaration(node) ||
     isSetAccessorDeclaration(node) ||
     isConstructorDeclaration(node) ||
+    isPropertyDeclaration(node) ||
     isClassStaticBlockDeclaration(node)
   );
 }

@@ -137,6 +137,51 @@ const CASES = [
     id: 'factory-with-nested-function-binding-own-this-preserved',
     source: `function make() { function inner(this: { tag: string }) { return this.tag; } return new Error(inner.call({ tag: 'fixed' })); } function text() { const local: Error = make(); return String(local); }`,
   },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-inherited-enclosing-function-arguments',
+    source: `function run(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown) => String(arguments[0]); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'inline-arrow-tag-reads-inherited-arguments',
+    source: `function run(error: Error) { return ((_s: TemplateStringsArray, _v: unknown) => String(arguments[0]))\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'nested-arrow-inside-arrow-tag-reads-inherited-arguments',
+    source: `function run(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown) => (() => String(arguments[0]))(); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-default-parameter-reads-inherited-arguments',
+    source: `function run(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown, copy = String(arguments[0])) => copy; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'method-arrow-tag-reads-inherited-method-arguments',
+    source: `class Formatter { render(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown) => String(arguments[0]); return tag\`\${error}\`; } }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-computed-method-name-reads-inherited-arguments',
+    source: `function run(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown) => Object.keys({ [String(arguments[0])]() {} })[0] ?? ''; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-arguments-alias',
+    source: `function run(error: Error) { const args = arguments; const tag = (_s: TemplateStringsArray, _v: unknown) => String(args[0]); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-nested-method-reading-own-arguments-preserved',
+    source: `function run(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown) => ({ read(..._items: string[]) { return String(arguments[0]); } }).read('safe'); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-inside-error-function-ignoring-arguments-preserved',
+    source: `function run(error: Error) { const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`; }`,
+  },
 ] as const;
 
 describe('written-error factory side effects, receivers, rest arguments, and arrow tags', () => {
