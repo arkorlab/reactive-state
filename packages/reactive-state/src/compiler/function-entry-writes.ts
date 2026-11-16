@@ -2,102 +2,229 @@ import {
   type CallExpression,
   type ElementAccessExpression,
   type Expression,
-  type Identifier,
-  isAsExpression,
   isBinaryExpression,
-  isBindingElement,
-  isBlock,
   isCallExpression,
-  isClassDeclaration,
-  isClassExpression,
-  isClassStaticBlockDeclaration,
-  isConstructorDeclaration,
   isElementAccessExpression,
-  isEnumDeclaration,
-  isExportDeclaration,
-  isExportSpecifier,
-  isExpression,
-  isExpressionStatement,
-  isFunctionDeclaration,
-  isFunctionExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isImportDeclaration,
   isMethodDeclaration,
-  isNonNullExpression,
-  isNumericLiteral,
-  isObjectBindingPattern,
   isObjectLiteralExpression,
-  isParameterDeclaration,
-  isParenthesizedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
-  isPropertyDeclaration,
-  isSatisfiesExpression,
-  isSetAccessorDeclaration,
-  isSourceFile,
+  isShorthandPropertyAssignment,
   isSpreadAssignment,
-  isTypeAssertion,
-  isTypeOfExpression,
   isVariableDeclaration,
-  isVariableDeclarationList,
-  isVariableStatement,
-  isVoidExpression,
   type Node,
   type ObjectLiteralExpression,
-  SyntaxKind,
+  type SourceFile,
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import { literalName, unwrapped } from './bounded.ts';
-import { globalPathOf, isTakenApart, useOf } from './code-globals.ts';
+import { unwrapped } from './bounded.ts';
+import { globalPathOf, useOf } from './code-globals.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
 import { initializerOf } from './framed.ts';
+import {
+  type AssignedCallable,
+  callableWritesOnObject,
+  candidateObjects,
+  type FileCallableIndex,
+  literalElementKey,
+  staticArgumentKey,
+} from './function-spread-callables.ts';
+import {
+  EMPTY_WRITES,
+  isDeclaredIdentifier,
+  isSafeDirectUse,
+  isSafeLockCall,
+  isSkippedSyntax,
+  type ObjectWrites,
+  staticElementKey,
+  unwrapTarget,
+  VALUE_ASSIGNING,
+} from './function-this-writes.ts';
 import { targetsOf } from './kept.ts';
-import { isTypeOnly, readsBinding } from './scope.ts';
+import { readsBinding } from './scope.ts';
 import { writtenBy } from './written.ts';
 
-/** Recorded post-declaration mutations against an object literal's own entries. */
-interface ObjectWrites {
-  readonly all: boolean;
-  readonly keys: ReadonlySet<string>;
+/** Raw per-file assignment records collected in a single AST pass before resolving target objects. */
+interface RawFileMutations {
+  readonly assignCalls: { readonly sources: readonly Expression[]; readonly target: Expression }[];
+  readonly memberWrites: {
+    readonly callable: Node | Expression;
+    readonly key: string | undefined;
+    readonly receiver: Expression;
+  }[];
+  readonly variableWrites: Map<VariableDeclaration, Expression[]>;
 }
 
-const EMPTY_WRITES: ObjectWrites = { all: false, keys: new Set() };
+const DIRECT_WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
+const FILE_INDEX = new WeakMap<SourceFile, FileCallableIndex>();
 const WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
-
-/** Non-freezing extension locks that keep existing entries safe only when their return is discarded. */
-const DISCARDED_LOCKS: ReadonlySet<string> = new Set([
-  'Object.preventExtensions',
-  'Object.seal',
-  'Reflect.preventExtensions',
-]);
-
-/** Equality operators that inspect object identity without handing the reference onward. */
-const COMPARING: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.EqualsEqualsEqualsToken,
-  SyntaxKind.EqualsEqualsToken,
-  SyntaxKind.ExclamationEqualsEqualsToken,
-  SyntaxKind.ExclamationEqualsToken,
-]);
 
 /** Static key of an element access expression, including string, template and numeric literals. */
 export function elementEntryKey(node: ElementAccessExpression): string | undefined {
-  const name = literalName(node);
-  if (name !== undefined) {
-    return name;
-  }
-  const argument = unwrapped(node.argumentExpression);
-  return isNumericLiteral(argument) ? String(Number(argument.text)) : undefined;
+  return staticElementKey(node);
 }
 
-/** Computes and caches post-declaration writes affecting `object` across its source file. */
+/** Computes and caches post-declaration and `this`-receiver writes affecting `object`. */
 export function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
   const cached = WRITES.get(object);
   if (cached !== undefined) {
     return cached;
   }
+  const direct = directObjectWrites(object);
+  if (direct.all) {
+    WRITES.set(object, direct);
+    return direct;
+  }
+  const index = fileCallableIndex(object.getSourceFile());
+  const viaThis = callableWritesOnObject(object, index);
+  const combined = mergeObjectWrites(direct, viaThis);
+  WRITES.set(object, combined);
+  return combined;
+}
+
+/** Combines direct reference writes and callable `this` writes into a single `ObjectWrites`. */
+function mergeObjectWrites(left: ObjectWrites, right: ObjectWrites): ObjectWrites {
+  if (left.all || right.all) {
+    return { all: true, keys: EMPTY_WRITES.keys };
+  }
+  if (right.keys.size === 0) {
+    return left;
+  }
+  if (left.keys.size === 0) {
+    return right;
+  }
+  return { all: false, keys: new Set([...left.keys, ...right.keys]) };
+}
+
+/** Builds and caches the per-file assignment index for `file` in a single AST pass. */
+function fileCallableIndex(file: SourceFile): FileCallableIndex {
+  const cached = FILE_INDEX.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const raw: RawFileMutations = {
+    assignCalls: [],
+    memberWrites: [],
+    variableWrites: new Map(),
+  };
+  const visit = (node: Node): void => {
+    if (isSkippedSyntax(node)) {
+      return;
+    }
+    collectRawMutation(node, raw);
+    node.forEachChild(visit);
+  };
+  visit(file);
+  const built = finalizeFileCallableIndex(raw);
+  FILE_INDEX.set(file, built);
+  return built;
+}
+
+/** Records variable/member assignments, `Object.assign`, and `Object.defineProperty` on `raw`. */
+function collectRawMutation(node: Node, raw: RawFileMutations): void {
+  if (isBinaryExpression(node) && VALUE_ASSIGNING.has(node.operatorToken.kind)) {
+    const target = unwrapTarget(node.left);
+    const rhs = unwrapped(node.right);
+    if (isIdentifier(target)) {
+      const declared = frameDeclarationOf(target);
+      if (declared !== undefined && isVariableDeclaration(declared)) {
+        const list = raw.variableWrites.get(declared) ?? [];
+        list.push(rhs);
+        raw.variableWrites.set(declared, list);
+      }
+      return;
+    }
+    if (isPropertyAccessExpression(target) || isElementAccessExpression(target)) {
+      const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
+      raw.memberWrites.push({ callable: rhs, key, receiver: unwrapped(target.expression) });
+    }
+    return;
+  }
+  if (isCallExpression(node)) {
+    collectCallMutation(node, raw);
+  }
+}
+
+/** Records `Object.assign` spread sources and `Object.defineProperty` value descriptors. */
+function collectCallMutation(call: CallExpression, raw: RawFileMutations): void {
+  const path = globalPathOf(unwrapped(call.expression))?.join('.');
+  const [first, keyArg, descArg] = call.arguments;
+  if (first === undefined || isSpreadAssignment(first)) {
+    return;
+  }
+  if (path === 'Object.assign' && call.arguments.length > 1) {
+    const sources: Expression[] = [];
+    for (const arg of call.arguments.slice(1)) {
+      sources.push(unwrapped(arg));
+    }
+    raw.assignCalls.push({ sources, target: unwrapped(first) });
+    return;
+  }
+  if (
+    (path === 'Object.defineProperty' || path === 'Reflect.defineProperty') &&
+    descArg !== undefined
+  ) {
+    const valueNode = descriptorValueNode(unwrapped(descArg));
+    if (valueNode !== undefined) {
+      const key = keyArg === undefined ? undefined : staticArgumentKey(unwrapped(keyArg));
+      raw.memberWrites.push({ callable: valueNode, key, receiver: unwrapped(first) });
+    }
+  }
+}
+
+/** Extracts `value` from a property descriptor literal `{ value: fn }` or `{ value() {} }`. */
+function descriptorValueNode(descriptor: Expression): Node | Expression | undefined {
+  if (!isObjectLiteralExpression(descriptor)) {
+    return undefined;
+  }
+  for (let index = descriptor.properties.length - 1; index >= 0; index -= 1) {
+    const prop = descriptor.properties[index];
+    if (prop !== undefined && literalElementKey(prop) === 'value') {
+      if (isMethodDeclaration(prop)) {
+        return prop;
+      }
+      if (isPropertyAssignment(prop)) {
+        return unwrapped(prop.initializer);
+      }
+      if (isShorthandPropertyAssignment(prop) && isIdentifier(prop.name)) {
+        return prop.name;
+      }
+    }
+  }
+  return undefined;
+}
+
+/** Resolves raw receiver expressions against `raw.variableWrites` into per-object maps. */
+function finalizeFileCallableIndex(raw: RawFileMutations): FileCallableIndex {
+  const memberMap = new Map<ObjectLiteralExpression, AssignedCallable[]>();
+  for (const write of raw.memberWrites) {
+    for (const obj of candidateObjects(write.receiver, raw.variableWrites, new Set())) {
+      const list = memberMap.get(obj) ?? [];
+      list.push({ callable: write.callable, key: write.key });
+      memberMap.set(obj, list);
+    }
+  }
+  const assignedSpreads = new Map<ObjectLiteralExpression, Expression[]>();
+  for (const assign of raw.assignCalls) {
+    for (const obj of candidateObjects(assign.target, raw.variableWrites, new Set())) {
+      const list = assignedSpreads.get(obj) ?? [];
+      list.push(...assign.sources);
+      assignedSpreads.set(obj, list);
+    }
+  }
+  return { assignedSpreads, memberCallables: memberMap, variableWrites: raw.variableWrites };
+}
+
+/** Computes and caches direct writes and escapes through lexical references to `object`. */
+function directObjectWrites(object: ObjectLiteralExpression): ObjectWrites {
+  const cached = DIRECT_WRITES.get(object);
+  if (cached !== undefined) {
+    return cached;
+  }
   if (isInlineMemberReceiver(object)) {
-    WRITES.set(object, EMPTY_WRITES);
+    DIRECT_WRITES.set(object, EMPTY_WRITES);
     return EMPTY_WRITES;
   }
   const keys = new Set<string>();
@@ -106,7 +233,7 @@ export function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
     if (state.all || isSkippedSyntax(node)) {
       return;
     }
-    if (recordsAllWrites(node, object, keys)) {
+    if (recordsDirectAllWrites(node, object, keys)) {
       state.all = true;
       return;
     }
@@ -114,18 +241,8 @@ export function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
   };
   visit(object.getSourceFile());
   const result: ObjectWrites = { all: state.all, keys };
-  WRITES.set(object, result);
+  DIRECT_WRITES.set(object, result);
   return result;
-}
-
-/** Whether `node` is erased at compile time or belongs to a type-only import/export. */
-function isSkippedSyntax(node: Node): boolean {
-  return (
-    isTypeOnly(node) ||
-    isImportDeclaration(node) ||
-    (isExportDeclaration(node) && node.isTypeOnly) ||
-    (isExportSpecifier(node) && node.isTypeOnly)
-  );
 }
 
 /** Whether `object` stands directly as the receiver of an inline member access (`({ pick() {} }).pick`). */
@@ -137,34 +254,38 @@ function isInlineMemberReceiver(object: ObjectLiteralExpression): boolean {
   );
 }
 
-/** Records writes from `node` into `keys`, returning `true` when all keys of `object` become uncertain. */
-function recordsAllWrites(node: Node, object: ObjectLiteralExpression, keys: Set<string>): boolean {
+/** Records direct writes to `object` from `node`, returning `true` when all keys become uncertain. */
+function recordsDirectAllWrites(
+  node: Node,
+  object: ObjectLiteralExpression,
+  keys: Set<string>,
+): boolean {
   if (isCallExpression(node) && isSafeLockCall(node)) {
     return false;
   }
   const written = writtenBy(node);
-  if (written !== undefined && writesUnknownKey(written, object, keys)) {
+  if (written !== undefined && writesUnknownDirectKey(written, object, keys)) {
     return true;
   }
-  return isDirectObjectReference(node, object) && !isSafeDirectUse(node);
+  return isDirectLiteralReference(node, object) && !isSafeDirectUse(node);
 }
 
-/** Updates `keys` for every assignment or mutation target in `written`; answers `true` for whole/dynamic writes. */
-function writesUnknownKey(
+/** Updates `keys` for direct assignment/mutation targets on `object`; answers `true` for whole/dynamic writes. */
+function writesUnknownDirectKey(
   written: Node,
   object: ObjectLiteralExpression,
   keys: Set<string>,
 ): boolean {
   for (const rawTarget of targetsOf(written)) {
     const target = unwrapTarget(rawTarget);
-    if (refersToNode(target, object)) {
+    if (refersToLiteralNode(target, object)) {
       return true;
     }
     if (
       (isPropertyAccessExpression(target) || isElementAccessExpression(target)) &&
-      refersToObject(target.expression, object)
+      refersToLiteral(target.expression, object)
     ) {
-      const key = isPropertyAccessExpression(target) ? target.name.text : elementEntryKey(target);
+      const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
       if (key === undefined) {
         return true;
       }
@@ -174,128 +295,34 @@ function writesUnknownKey(
   return false;
 }
 
-/** Strips parentheses, casts and non-null assertions from a write target node. */
-function unwrapTarget(node: Node): Node {
-  let each = node;
-  while (
-    isParenthesizedExpression(each) ||
-    isAsExpression(each) ||
-    isSatisfiesExpression(each) ||
-    isNonNullExpression(each) ||
-    isTypeAssertion(each)
-  ) {
-    each = each.expression;
-  }
-  return each;
-}
-
-/** Whether `node` evaluates directly to `object` via literal, lexical alias, or enclosing `this`. */
-function isDirectObjectReference(node: Node, object: ObjectLiteralExpression): boolean {
+/** Whether `node` evaluates directly to `object` via the literal itself or a lexical `const` alias. */
+function isDirectLiteralReference(node: Node, object: ObjectLiteralExpression): boolean {
   if (node === object) {
     return true;
-  }
-  if (node.kind === SyntaxKind.ThisKeyword) {
-    return isExpression(node) && enclosingMethodObject(node) === object;
   }
   return (
     isIdentifier(node) &&
     !isDeclaredIdentifier(node) &&
     readsBinding(node) &&
-    refersToObject(node, object)
+    refersToLiteral(node, object)
   );
 }
 
-/** Whether `node` stands as the declared identifier of a variable, parameter, binding, function, class or enum. */
-function isDeclaredIdentifier(node: Identifier): boolean {
-  const { parent } = node;
-  return (
-    (isVariableDeclaration(parent) ||
-      isParameterDeclaration(parent) ||
-      isBindingElement(parent) ||
-      isFunctionDeclaration(parent) ||
-      isFunctionExpression(parent) ||
-      isClassDeclaration(parent) ||
-      isClassExpression(parent) ||
-      isEnumDeclaration(parent)) &&
-    parent.name === node
-  );
-}
-
-/** Whether `node` projects, spreads, inspects, locks, or tracks `object` without escaping it. */
-function isSafeDirectUse(node: Node): boolean {
-  const { at, parent } = useOf(node);
-  if (isProjectedOrSpreadUse(at, parent) || isPassiveInspectionUse(at, parent)) {
-    return true;
-  }
-  if (isVariableDeclaration(parent) && parent.initializer === at) {
-    return isObjectBindingPattern(parent.name) || isTrackedConstAlias(parent);
-  }
-  return (
-    isCallExpression(parent) &&
-    parent.arguments.length === 1 &&
-    parent.arguments[0] === at &&
-    isSafeLockCall(parent)
-  );
-}
-
-/** Whether `at` stands only as a member-access receiver or an object-literal spread source. */
-function isProjectedOrSpreadUse(at: Node, parent: Node): boolean {
-  if (isSpreadAssignment(parent)) {
-    return !isTakenApart(parent.parent);
-  }
-  return (
-    (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
-    parent.expression === at
-  );
-}
-
-/** Whether `at` is discarded or inspected without yielding an untracked reference to `object`. */
-function isPassiveInspectionUse(at: Node, parent: Node): boolean {
-  if (isExpressionStatement(parent) || isVoidExpression(parent) || isTypeOfExpression(parent)) {
-    return true;
-  }
-  if (!isBinaryExpression(parent)) {
-    return false;
-  }
-  const operator = parent.operatorToken.kind;
-  return COMPARING.has(operator) || (operator === SyntaxKind.InKeyword && parent.right === at);
-}
-
-/** Whether `declared` is an unexported block/module `const` identifier alias followed by `initializerOf`. */
-function isTrackedConstAlias(declared: VariableDeclaration): boolean {
-  if (!isIdentifier(declared.name) || !isVariableDeclarationList(declared.parent)) {
-    return false;
-  }
-  const statement = declared.parent.parent;
-  return (
-    isVariableStatement(statement) &&
-    (isBlock(statement.parent) || isSourceFile(statement.parent)) &&
-    /^const\s/u.test(declared.parent.getText(declared.getSourceFile())) &&
-    statement.modifiers?.some((modifier) => modifier.kind === SyntaxKind.ExportKeyword) !== true
-  );
-}
-
-/** Narrowing wrapper around `refersToObject` for arbitrary write target syntax nodes. */
-function refersToNode(node: Node, object: ObjectLiteralExpression): boolean {
+/** Narrowing wrapper around `refersToLiteral` for arbitrary write target syntax nodes. */
+function refersToLiteralNode(node: Node, object: ObjectLiteralExpression): boolean {
   if (node === object) {
     return true;
   }
-  if (node.kind === SyntaxKind.ThisKeyword) {
-    return enclosingMethodObject(node) === object;
-  }
-  return isIdentifier(node) && refersToObject(node, object);
+  return isIdentifier(node) && refersToLiteral(node, object);
 }
 
-/** Whether `node` resolves to `object` through lexical initializers or an enclosing object method's `this`. */
-function refersToObject(node: Expression, object: ObjectLiteralExpression): boolean {
+/** Whether `node` resolves to `object` through lexical `const` initializers. */
+function refersToLiteral(node: Expression, object: ObjectLiteralExpression): boolean {
   const seen = new Set<Expression>();
   let held = unwrapped(node);
   while (!seen.has(held)) {
     if (held === object) {
       return true;
-    }
-    if (held.kind === SyntaxKind.ThisKeyword) {
-      return enclosingMethodObject(held) === object;
     }
     seen.add(held);
     if (!isIdentifier(held)) {
@@ -308,58 +335,4 @@ function refersToObject(node: Expression, object: ObjectLiteralExpression): bool
     held = unwrapped(initializer);
   }
   return false;
-}
-
-/** Object literal owning the nearest non-arrow `this`-binding callable around `node`, if any. */
-function enclosingMethodObject(node: Node): ObjectLiteralExpression | undefined {
-  for (
-    let at: Node = node.parent, within: Node = node;
-    !isSourceFile(at);
-    within = at, at = at.parent
-  ) {
-    if (bindsOwnThis(at, within)) {
-      return callableOwnerObject(at);
-    }
-  }
-  return undefined;
-}
-
-/** Whether `at` introduces its own non-arrow `this` binding around child `within`. */
-function bindsOwnThis(at: Node, within: Node): boolean {
-  if (isFunctionDeclaration(at) || isFunctionExpression(at) || isClassStaticBlockDeclaration(at)) {
-    return true;
-  }
-  if (isPropertyDeclaration(at)) {
-    return isExpression(within) && within === at.initializer;
-  }
-  return (
-    (isMethodDeclaration(at) ||
-      isGetAccessorDeclaration(at) ||
-      isSetAccessorDeclaration(at) ||
-      isConstructorDeclaration(at)) &&
-    ((isBlock(within) && within === at.body) || isParameterDeclaration(within))
-  );
-}
-
-/** Object literal directly owning a method, accessor or function-expression property `callable`. */
-function callableOwnerObject(callable: Node): ObjectLiteralExpression | undefined {
-  const top = isFunctionExpression(callable) ? useOf(callable).at : callable;
-  const owner = isPropertyAssignment(top.parent) ? top.parent.parent : top.parent;
-  return isObjectLiteralExpression(owner) ? owner : undefined;
-}
-
-/** Whether `call` invokes `Object.freeze` or a discarded `seal`/`preventExtensions` on a single target. */
-function isSafeLockCall(call: CallExpression): boolean {
-  if (call.arguments.length !== 1) {
-    return false;
-  }
-  const path = globalPathOf(unwrapped(call.expression))?.join('.');
-  if (path === 'Object.freeze') {
-    return true;
-  }
-  if (path === undefined || !DISCARDED_LOCKS.has(path)) {
-    return false;
-  }
-  const { parent } = useOf(call);
-  return isExpressionStatement(parent) || isVoidExpression(parent);
 }
