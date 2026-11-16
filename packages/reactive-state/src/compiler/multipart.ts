@@ -56,6 +56,7 @@ import {
   spreadHolderArrays,
   startAnalysis,
   uniqueExpressions,
+  variablePatternReassignments,
 } from './multipart-readings.ts';
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
@@ -382,20 +383,30 @@ function variableBodies(
   if (whole === undefined || bodyHeld === undefined) {
     return EMPTY_BODIES;
   }
-  const entries =
-    bodyHeld.initial === undefined ? bodyHeld.held : [bodyHeld.initial, ...bodyHeld.held];
+  const patternScan = variablePatternReassignments(name, declaration, point);
+  const entries = [
+    ...(bodyHeld.initial === undefined ? [] : [bodyHeld.initial]),
+    ...bodyHeld.held,
+    ...patternScan.extraSources.map((each) => {
+      return {
+        keys: [...each.keys, BODY_KEY],
+        value: each.value,
+      };
+    }),
+  ];
   const holder = framedHeldVariable(declaration);
   const descriptorWrites = holderDescriptorBodyWrites(holder, (change) =>
     reachesHolderRead(change, holder, point),
   );
   const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state));
-  const ambiguous = entryReadings.some((each) => each.ambiguous === true);
+  const ambiguous =
+    patternScan.dynamicOpaque || entryReadings.some((each) => each.ambiguous === true);
   const bodies = uniqueExpressions([
     ...entryReadings.flatMap((each) => each.bodies),
     ...descriptorWrites.flatMap((each) => each.values),
   ]);
   const hidesBody = descriptorWrites.some((each) => each.mayHideBody);
-  if (ambiguous || hidesBody || removesHolderBody(name, holder, point)) {
+  if (ambiguous || hidesBody || patternScan.ambiguous || removesHolderBody(name, holder, point)) {
     return { ambiguous, bodies, overwrites: false };
   }
   const definiteEnumerable =

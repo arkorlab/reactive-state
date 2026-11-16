@@ -117,6 +117,84 @@ const CASES = [
     source:
       "export function build(input: { a?: { body: string }; b?: { body: string } }) { const { a = { body: 'fixed' }, b = a } = input; const { body } = b; return new Response(body); }",
   },
+  {
+    expected: MULTIPART_REASON,
+    id: 'computed-key-const-alias-form-data-after-parameter-cut',
+    source:
+      "export function build(body: BodyInit, key: string) { const replacement = { first: new FormData(), second: 'fixed' }; body = 'fixed'; ({ [key]: body } = replacement); return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'computed-key-let-reassigned-alias-form-data-after-parameter-cut',
+    source:
+      "export function build(body: BodyInit, key: string) { let replacement: Record<string, BodyInit> = { first: 'one' }; replacement = { first: 'one', second: new FormData() }; body = 'fixed'; ({ [key]: body } = replacement); return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'computed-key-member-mutated-alias-form-data-into-local-let',
+    source:
+      "export function build(key: string) { let body: BodyInit = 'fixed'; const replacement: Record<string, BodyInit> = { first: 'one' }; replacement.second = new FormData(); ({ [key]: body } = replacement); return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'computed-key-nested-projected-alias-form-data',
+    source:
+      "export function build(body: BodyInit, key: string) { const holder = { replacement: { first: 'fixed', second: new FormData() } }; body = 'fixed'; ({ replacement: { [key]: body } } = holder); return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'computed-key-spread-object-alias-form-data',
+    source:
+      "export function build(body: BodyInit, key: string) { const base = { first: new FormData() }; const replacement = { ...base, second: 'fixed' }; body = 'fixed'; ({ [key]: body } = replacement); return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'computed-key-opaque-parameter-source-after-plain-parameter-cut',
+    source:
+      "export function build(body: BodyInit, source: Record<string, BodyInit>, key: string) { body = 'fixed'; ({ [key]: body } = source); return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'array-spread-second-element-form-data-after-parameter-cut',
+    source:
+      "export function build(body: BodyInit) { const items = ['fixed', new FormData()]; const wrapped = [...items]; body = 'fixed'; [, body] = wrapped; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'array-spread-after-prefix-element-form-data',
+    source:
+      "export function build(body: BodyInit) { const items = ['fixed', new FormData()]; const wrapped = ['prefix', ...items]; body = 'fixed'; [, , body] = wrapped; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'array-spread-after-unknown-spread-second-element-form-data',
+    source:
+      "export function build(body: BodyInit, prefix: string[]) { const items = ['fixed', new FormData()]; const wrapped = [...prefix, ...items]; body = 'fixed'; [, body] = wrapped; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'computed-key-const-alias-strings-only-allowed-pin',
+    source:
+      "export function build(body: BodyInit, key: string) { const replacement = { first: 'one', second: 'two' }; body = 'fixed'; ({ [key]: body } = replacement); return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'array-spread-exact-second-element-skips-first-form-data-pin',
+    source:
+      "export function build(body: BodyInit) { const items = [new FormData(), 'fixed']; const wrapped = [...items]; body = 'fixed'; [, body] = wrapped; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'array-spread-after-requested-first-element-ignored-pin',
+    source:
+      "export function build(body: BodyInit) { const items = [new FormData()]; const wrapped = ['fixed', ...items]; body = 'fixed'; [body] = wrapped; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'array-spread-first-element-form-data-pin',
+    source:
+      "export function build(body: BodyInit) { const items = [new FormData(), 'fixed']; const wrapped = [...items]; body = 'fixed'; [body] = wrapped; return new Response(body); }",
+  },
 ] as const;
 
 describe('multipart destructured parameter reassignments, expansion cycles, and descriptor cuts', () => {

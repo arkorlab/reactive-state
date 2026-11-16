@@ -12,6 +12,7 @@ import {
   isVariableDeclaration,
   type Node,
   type ParameterDeclaration,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -23,6 +24,7 @@ import { framedObjectSources } from './framed-object-members.ts';
 
 export interface HeldResolution {
   readonly ambiguous: boolean;
+  readonly closed: boolean;
   readonly expressions: readonly Expression[];
   readonly typedFormData: boolean;
 }
@@ -42,8 +44,18 @@ export interface ProjectionCallbacks {
     parameter: ParameterDeclaration,
   ) => {
     readonly ambiguous?: boolean;
+    readonly dynamicOpaque?: boolean;
     readonly replaced: boolean;
     readonly sources: readonly Held[];
+  };
+  readonly readVariablePattern: (
+    name: Identifier,
+    declaration: VariableDeclaration,
+    point: Node,
+  ) => {
+    readonly ambiguous: boolean;
+    readonly dynamicOpaque: boolean;
+    readonly extraSources: readonly Held[];
   };
   readonly selectValues: (value: Expression) => readonly Expression[] | undefined;
 }
@@ -56,6 +68,7 @@ interface HeldWorkItem {
 
 interface ExpandedStep {
   readonly ambiguous: boolean;
+  readonly closed: boolean;
   readonly entries: readonly Held[];
 }
 
@@ -71,6 +84,7 @@ export function inspectHeldPath(
 ): HeldResolution {
   const expressions: Expression[] = [];
   let ambiguous = false;
+  let closed = true;
   let typedFormData = false;
   const seen = new Map<Expression, Set<string>>();
   const pending: HeldWorkItem[] = [
@@ -85,12 +99,15 @@ export function inspectHeldPath(
     if (step.ambiguous) {
       ambiguous = true;
     }
+    if (!step.closed) {
+      closed = false;
+    }
     if (step.typedFormData) {
       typedFormData = true;
     }
     pending.push(...step.next);
   }
-  return { ambiguous, expressions, typedFormData };
+  return { ambiguous, closed, expressions, typedFormData };
 }
 
 /** Evaluates one non-empty `HeldWorkItem` against depth, cycle, and visited-path guards. */
@@ -101,18 +118,19 @@ function evaluateWorkItem(
   callbacks: ProjectionCallbacks,
 ): {
   readonly ambiguous: boolean;
+  readonly closed: boolean;
   readonly next: readonly HeldWorkItem[];
   readonly typedFormData: boolean;
 } {
   if (at.held.keys.length > PROJECTION_LIMITS.maxDepth) {
-    return { ambiguous: true, next: [], typedFormData: false };
+    return { ambiguous: true, closed: false, next: [], typedFormData: false };
   }
   const value = unwrapped(at.held.value);
   if (repeatsOnActiveChain(at, value)) {
-    return { ambiguous: true, next: [], typedFormData: false };
+    return { ambiguous: true, closed: false, next: [], typedFormData: false };
   }
   if (markVisitedHeldPath(seen, value, at.held.keys)) {
-    return { ambiguous: false, next: [], typedFormData: false };
+    return { ambiguous: false, closed: true, next: [], typedFormData: false };
   }
   const typedFormData = callbacks.isTypedFormData(at.held.value, value, at.held.keys);
   const activeBindings = nextActiveBindings(at.activeBindings, value);
@@ -120,6 +138,7 @@ function evaluateWorkItem(
   const expanded = expandHeldStep(at.held, value, point, callbacks);
   return {
     ambiguous: expanded.ambiguous,
+    closed: expanded.closed,
     next: expanded.entries.map((held) => ({ activeBindings, activeExpressions, held })),
     typedFormData,
   };
@@ -182,6 +201,7 @@ function expandHeldStep(
   if (alternatives !== undefined) {
     return {
       ambiguous: false,
+      closed: true,
       entries: alternatives.map((each) => ({ keys: at.keys, value: each })),
     };
   }
@@ -189,6 +209,7 @@ function expandHeldStep(
     const memberKey = frameMemberName(value);
     return {
       ambiguous: false,
+      closed: memberKey !== undefined,
       entries:
         memberKey === undefined ? [] : [{ keys: [memberKey, ...at.keys], value: value.expression }],
     };
@@ -196,21 +217,23 @@ function expandHeldStep(
   if (isArrayLiteralExpression(value)) {
     const [firstKey, ...restKeys] = at.keys;
     return firstKey === undefined
-      ? { ambiguous: false, entries: [] }
-      : { ambiguous: false, entries: arrayPathEntries(value, firstKey, restKeys) };
+      ? { ambiguous: false, closed: true, entries: [] }
+      : arrayPathEntries(value, firstKey, restKeys);
   }
   if (isIdentifier(value)) {
-    return { ambiguous: false, entries: expandIdentifierStep(value, at.keys, point, callbacks) };
+    return expandIdentifierStep(value, at.keys, point, callbacks);
   }
   const objectSources = framedObjectSources(value, at.keys);
   if (objectSources === undefined) {
-    return { ambiguous: false, entries: [] };
+    return { ambiguous: false, closed: false, entries: [] };
   }
+  const entries = objectSources.filter(
+    (each) => unwrapped(each.value) !== value || each.keys.length !== at.keys.length,
+  );
   return {
     ambiguous: false,
-    entries: objectSources.filter(
-      (each) => unwrapped(each.value) !== value || each.keys.length !== at.keys.length,
-    ),
+    closed: entries.length === objectSources.length,
+    entries,
   };
 }
 
@@ -220,24 +243,20 @@ function expandIdentifierStep(
   keys: readonly string[],
   point: Node,
   callbacks: ProjectionCallbacks,
-): readonly Held[] {
+): ExpandedStep {
   const selected = frameBindingOf(id);
   if (selected === undefined) {
-    return [];
+    return { ambiguous: false, closed: false, entries: [] };
   }
   const defaults =
     selected.keys.length === 0
       ? []
       : callbacks.bindingDefaults(id, selected.binding.name).map((value) => ({ keys, value }));
   if (isVariableDeclaration(selected.binding)) {
-    const held = framedHeldValues(id, keys, point);
-    if (held === undefined) {
-      return defaults;
-    }
-    return [...(held.initial === undefined ? [] : [held.initial]), ...held.held, ...defaults];
+    return expandVariableIdentifier(id, selected.binding, { callbacks, defaults, keys, point });
   }
   if (!isParameterDeclaration(selected.binding)) {
-    return [];
+    return { ambiguous: false, closed: false, entries: [] };
   }
   const resolved = callbacks.readParameter(id, selected.binding);
   const fromSources = resolved.sources.map((each) => {
@@ -247,36 +266,127 @@ function expandIdentifierStep(
     };
   });
   if (resolved.replaced && resolved.ambiguous !== true) {
-    return fromSources;
+    return {
+      ambiguous: Boolean(resolved.dynamicOpaque),
+      closed: resolved.dynamicOpaque !== true,
+      entries: fromSources,
+    };
   }
   const fullKeys = [...selected.keys, ...keys];
   const paramDefault =
     selected.binding.initializer === undefined
       ? []
       : [{ keys: fullKeys, value: selected.binding.initializer }];
-  return [...fromSources, ...paramDefault, ...defaults];
+  return {
+    ambiguous: Boolean(resolved.dynamicOpaque),
+    closed: false,
+    entries: [...fromSources, ...paramDefault, ...defaults],
+  };
 }
 
-/** Selects matching element candidates from an `ArrayLiteralExpression` for `firstKey`. */
+/** Expands a `VariableDeclaration` identifier along `keys`, including pattern reassignments. */
+function expandVariableIdentifier(
+  id: Identifier,
+  declaration: VariableDeclaration,
+  context: {
+    readonly callbacks: ProjectionCallbacks;
+    readonly defaults: readonly Held[];
+    readonly keys: readonly string[];
+    readonly point: Node;
+  },
+): ExpandedStep {
+  const { callbacks, defaults, keys, point } = context;
+  const held = framedHeldValues(id, keys, point);
+  const patternScan = callbacks.readVariablePattern(id, declaration, point);
+  const patternEntries = patternScan.extraSources.map((each) => {
+    return {
+      keys: [...each.keys, ...keys],
+      value: each.value,
+    };
+  });
+  if (held === undefined) {
+    return {
+      ambiguous: patternScan.dynamicOpaque,
+      closed: false,
+      entries: [...patternEntries, ...defaults],
+    };
+  }
+  const baseEntries = [...(held.initial === undefined ? [] : [held.initial]), ...held.held];
+  return {
+    ambiguous: patternScan.dynamicOpaque,
+    closed: !patternScan.ambiguous && (baseEntries.length > 0 || patternEntries.length > 0),
+    entries: [...baseEntries, ...patternEntries, ...defaults],
+  };
+}
+
+/** Selects matching element and spread-offset candidates from an `ArrayLiteralExpression` for `firstKey`. */
 function arrayPathEntries(
   array: ArrayLiteralExpression,
   firstKey: string,
   restKeys: readonly string[],
-): readonly Held[] {
+): ExpandedStep {
+  if (!/^\d+$/u.test(firstKey)) {
+    return { ambiguous: false, closed: true, entries: [] };
+  }
+  const requestedIndex = Number(firstKey);
   const entries: Held[] = [];
+  let fixedBefore = 0;
   let spreadSeen = false;
-  for (const [index, element] of array.elements.entries()) {
+  for (const element of array.elements) {
     if (isOmittedExpression(element)) {
+      fixedBefore += 1;
       continue;
     }
-    if (isSpreadElement(element)) {
-      spreadSeen = true;
-      entries.push({ keys: ['0', ...restKeys], value: element.expression });
-    } else if (spreadSeen || String(index) === firstKey) {
-      entries.push({ keys: restKeys, value: element });
+    if (!isSpreadElement(element)) {
+      if (
+        (!spreadSeen && fixedBefore === requestedIndex) ||
+        (spreadSeen && requestedIndex >= fixedBefore)
+      ) {
+        entries.push({ keys: restKeys, value: element });
+      }
+      fixedBefore += 1;
+      continue;
     }
+    if (requestedIndex < fixedBefore) {
+      spreadSeen = true;
+      continue;
+    }
+    const spreadSlice = spreadOffsetEntries(
+      element.expression,
+      requestedIndex - fixedBefore,
+      spreadSeen,
+      restKeys,
+    );
+    entries.push(...spreadSlice.entries);
+    if (spreadSlice.ambiguous) {
+      return { ambiguous: true, closed: false, entries };
+    }
+    spreadSeen = true;
   }
-  return entries;
+  return { ambiguous: false, closed: true, entries };
+}
+
+/** Computes exact or bounded-range element offsets into a spread array expression. */
+function spreadOffsetEntries(
+  expression: Expression,
+  maxOffset: number,
+  priorSpreadSeen: boolean,
+  restKeys: readonly string[],
+): { readonly ambiguous: boolean; readonly entries: readonly Held[] } {
+  if (!priorSpreadSeen) {
+    return {
+      ambiguous: false,
+      entries: [{ keys: [String(maxOffset), ...restKeys], value: expression }],
+    };
+  }
+  if (maxOffset > PROJECTION_LIMITS.maxDepth) {
+    return { ambiguous: true, entries: [] };
+  }
+  const entries: Held[] = [];
+  for (let offset = 0; offset <= maxOffset; offset += 1) {
+    entries.push({ keys: [String(offset), ...restKeys], value: expression });
+  }
+  return { ambiguous: false, entries };
 }
 
 /** Peels a static property or element access chain on `node` into a `Held` holder path. */

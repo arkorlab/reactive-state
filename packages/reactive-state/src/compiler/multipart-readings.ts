@@ -37,7 +37,12 @@ import {
   inspectHeldPath,
   type ProjectionCallbacks,
 } from './multipart-held-paths.ts';
-import { patternParameterReassignments } from './multipart-projections.ts';
+import {
+  NO_PATTERN_REASSIGNMENT,
+  patternBindingReassignments,
+  type PatternReassignmentScan,
+  type PatternTargetDeclaration,
+} from './multipart-projections.ts';
 
 /** Shared multipart `BodyReading` combinators, parameter value cuts, and `FormData` checks. */
 
@@ -57,6 +62,7 @@ export interface AnalysisState {
 export interface ParameterResolution {
   readonly ambiguous?: boolean;
   readonly cut?: BinaryExpression | undefined;
+  readonly dynamicOpaque?: boolean;
   readonly replaced: boolean;
   readonly sources: readonly Held[];
   readonly values: readonly Expression[];
@@ -70,6 +76,7 @@ const PROJECTION_CALLBACKS: ProjectionCallbacks = {
   bindingDefaults: bindingDefaultsOf,
   isTypedFormData: typedAtMemberPath,
   readParameter: parameterValues,
+  readVariablePattern: variablePatternReassignments,
   selectValues: selectedValues,
 };
 
@@ -134,19 +141,25 @@ export function parameterValues(
   parameter: ParameterDeclaration,
 ): ParameterResolution {
   const owner = executionOwner(name);
-  const cut = lastDefiniteParameterWrite(name, parameter, owner);
+  const cut = lastDefiniteBindingWrite(name, name, parameter, owner);
   const sources = framedAssignedSources(name);
-  const patternScan = patternParameterReassignments(name, parameter, (change) => {
-    return (
-      reachesPoint(change, name, parameter, name) &&
-      (cut === undefined || (change !== cut && !supersededBefore(change, cut, name)))
-    );
-  });
+  const patternScan = patternBindingReassignments(
+    name,
+    parameter,
+    (change) => {
+      return (
+        reachesPoint(change, name, parameter, name) &&
+        (cut === undefined || (change !== cut && !supersededBefore(change, cut, name)))
+      );
+    },
+    PROJECTION_CALLBACKS,
+  );
   if (cut === undefined) {
     const allSources = [...sources, ...patternScan.extraSources];
     const assigned = allSources.filter((each) => each.keys.length === 0).map((each) => each.value);
     return {
       ambiguous: patternScan.ambiguous || allSources.length !== assigned.length,
+      dynamicOpaque: patternScan.dynamicOpaque,
       replaced: false,
       sources: allSources,
       values: assigned,
@@ -165,10 +178,39 @@ export function parameterValues(
   return {
     ambiguous: patternScan.ambiguous || laterSources.length !== later.length,
     cut,
+    dynamicOpaque: patternScan.dynamicOpaque,
     replaced: true,
     sources: [{ keys: [], value: cut.right }, ...laterSources],
     values: [cut.right, ...later],
   };
+}
+
+/** Scans dynamic/rest pattern reassignments reaching a mutable `VariableDeclaration` at `point`. */
+export function variablePatternReassignments(
+  name: Identifier,
+  declaration: VariableDeclaration,
+  point: Node,
+): PatternReassignmentScan {
+  if (
+    isIdentifier(declaration.name) &&
+    isVariableDeclarationList(declaration.parent) &&
+    /^const\s/u.test(declaration.parent.getText(declaration.getSourceFile()))
+  ) {
+    return NO_PATTERN_REASSIGNMENT;
+  }
+  const owner = executionOwner(point);
+  const cut = lastDefiniteBindingWrite(point, name, declaration, owner);
+  return patternBindingReassignments(
+    name,
+    declaration,
+    (change) => {
+      return (
+        reachesPoint(change, name, declaration, point) &&
+        (cut === undefined || (change !== cut && !supersededBefore(change, cut, point)))
+      );
+    },
+    PROJECTION_CALLBACKS,
+  );
 }
 
 /** Identifier site where `node` directly reads `parameter`, following whole `const` aliases. */
@@ -211,7 +253,7 @@ function constantAliasValue(declared: Node | undefined): Expression | undefined 
 export function reachesPoint(
   change: Node,
   name: Identifier,
-  parameter: ParameterDeclaration,
+  binding: PatternTargetDeclaration,
   point: Node,
 ): boolean {
   if (!framedPossibleBranch(change)) {
@@ -225,7 +267,7 @@ export function reachesPoint(
   ) {
     return true;
   }
-  return repeatedFrameRead(change, name, parameter, owner);
+  return repeatedFrameRead(change, name, binding, owner);
 }
 
 /** Whether `change` ran in the same execution owner strictly before `cut`. */
@@ -254,14 +296,15 @@ export function definitelyBefore(change: Node, point: Node): boolean {
   return false;
 }
 
-/** Latest plain statement assignment to `name` in an enclosing block before `name`. */
-function lastDefiniteParameterWrite(
+/** Latest plain statement assignment to `name` in an enclosing block before `anchor`. */
+function lastDefiniteBindingWrite(
+  anchor: Node,
   name: Identifier,
-  parameter: ParameterDeclaration,
+  binding: PatternTargetDeclaration,
   owner: Node,
 ): BinaryExpression | undefined {
   let latest: BinaryExpression | undefined;
-  for (let at: Node = name; at !== owner && !isSourceFile(at); at = at.parent) {
+  for (let at: Node = anchor; at !== owner && !isSourceFile(at); at = at.parent) {
     const parent = at.parent;
     if (!isBlock(parent) && !isSourceFile(parent)) {
       continue;
@@ -270,7 +313,7 @@ function lastDefiniteParameterWrite(
       if (statement === at) {
         break;
       }
-      const write = directParameterWrite(statement, name, parameter, owner);
+      const write = directBindingWrite(statement, name, binding, owner);
       if (write !== undefined && (latest === undefined || write.pos > latest.pos)) {
         latest = write;
       }
@@ -279,11 +322,11 @@ function lastDefiniteParameterWrite(
   return latest;
 }
 
-/** Plain `param = rhs` expression statement rebinding `name` in the same execution owner. */
-function directParameterWrite(
+/** Plain `target = rhs` expression statement rebinding `name` in the same execution owner. */
+function directBindingWrite(
   statement: Node,
   name: Identifier,
-  parameter: ParameterDeclaration,
+  binding: PatternTargetDeclaration,
   owner: Node,
 ): BinaryExpression | undefined {
   if (!isExpressionStatement(statement)) {
@@ -295,7 +338,7 @@ function directParameterWrite(
     expression.operatorToken.kind === SyntaxKind.EqualsToken &&
     isIdentifier(expression.left) &&
     expression.left.text === name.text &&
-    frameDeclarationOf(expression.left) === parameter &&
+    frameDeclarationOf(expression.left) === binding &&
     executionOwner(expression) === owner
   ) {
     return expression;
@@ -363,9 +406,17 @@ function variableFormData(
   if (held === undefined) {
     return false;
   }
+  const patternScan = variablePatternReassignments(name, declaration, name);
+  if (patternScan.dynamicOpaque) {
+    return true;
+  }
   const defaulted =
     held.initial !== undefined && bindingDefaultFormData(name, declaration.name, state);
-  const entries = held.initial === undefined ? held.held : [held.initial, ...held.held];
+  const entries = [
+    ...(held.initial === undefined ? [] : [held.initial]),
+    ...held.held,
+    ...patternScan.extraSources,
+  ];
   if (entries.length === 0) {
     return defaulted || (keys.length === 0 && namesType(declaration.type, FORM_DATA_NAMES));
   }
@@ -380,7 +431,10 @@ function parameterFormData(
   state: AnalysisState,
 ): boolean {
   const resolved = parameterValues(name, parameter);
-  if (resolved.sources.some((each) => heldFormData(each, state))) {
+  if (
+    resolved.dynamicOpaque === true ||
+    resolved.sources.some((each) => heldFormData(each, state))
+  ) {
     return true;
   }
   if (resolved.replaced && resolved.ambiguous !== true) {

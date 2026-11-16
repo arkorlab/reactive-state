@@ -4,13 +4,10 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
-  isComputedPropertyName,
   isExpression,
   isForInStatement,
   isForOfStatement,
   isIdentifier,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectLiteralExpression,
   isOmittedExpression,
   isPostfixUnaryExpression,
@@ -19,49 +16,68 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
   type Node,
   type ObjectLiteralExpression,
   type ParameterDeclaration,
   type PropertyAssignment,
-  type PropertyName,
   type SpreadAssignment,
   SyntaxKind,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { assignmentPatternDefault, iteratedFrameSources } from './framed-assignment-patterns.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import type { Held } from './framed-held-members.ts';
-import { constantValue } from './numbers.ts';
+import { resolveDynamicObjectSources, staticPropertyName } from './multipart-dynamic-sources.ts';
+import type { ProjectionCallbacks } from './multipart-held-paths.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Projected destructuring reassignments and dynamic pattern scans for multipart checks. */
 
+export type PatternTargetDeclaration = ParameterDeclaration | VariableDeclaration;
+
 export interface PatternReassignmentScan {
   readonly ambiguous: boolean;
+  readonly dynamicOpaque: boolean;
   readonly extraSources: readonly Held[];
 }
 
-interface TargetParameter {
+interface TargetBinding {
+  readonly callbacks: ProjectionCallbacks;
+  readonly declaration: PatternTargetDeclaration;
   readonly name: Identifier;
-  readonly parameter: ParameterDeclaration;
   readonly reaches: (change: Node) => boolean;
 }
 
 interface PatternStep {
+  readonly fromDynamic: boolean;
   readonly sources: readonly Held[];
   readonly target: Expression;
 }
 
 interface ScanAccumulator {
+  dynamicOpaque: boolean;
   readonly extraSources: Held[];
   matched: boolean;
   readonly pending: PatternStep[];
+  readonly writeNode: Node;
+}
+
+interface ObjectStepContext {
+  readonly excludedKeys: Set<string>;
+  readonly fromDynamic: boolean;
+  readonly sources: readonly Held[];
 }
 
 const BODY_KEY = 'body';
-const NO_REASSIGNMENT: PatternReassignmentScan = { ambiguous: false, extraSources: [] };
+export const NO_PATTERN_REASSIGNMENT: PatternReassignmentScan = {
+  ambiguous: false,
+  dynamicOpaque: false,
+  extraSources: [],
+};
+
+const ACTIVE_PATTERN_BINDINGS = new Set<Node>();
 
 const DIRECT_WRITES: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AmpersandAmpersandEqualsToken,
@@ -75,43 +91,56 @@ const UPDATE_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.PlusPlusToken,
 ]);
 
-/** Scans reachable pattern, loop, and update writes targeting `parameter` for ambiguity and rest/computed sources. */
-export function patternParameterReassignments(
+/** Scans reachable pattern, loop, and update writes targeting `declaration` for rest and dynamic sources. */
+export function patternBindingReassignments(
   name: Identifier,
-  parameter: ParameterDeclaration,
+  declaration: PatternTargetDeclaration,
   reaches: (change: Node) => boolean,
+  callbacks: ProjectionCallbacks,
 ): PatternReassignmentScan {
-  const target: TargetParameter = { name, parameter, reaches };
-  const extraSources: Held[] = [];
-  let ambiguous = false;
-  const pending: Node[] = [name.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) {
-      continue;
-    }
-    const site = scanReassignmentSite(node, target);
-    if (site.ambiguous) {
-      ambiguous = true;
-    }
-    extraSources.push(...site.extraSources);
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
+  if (ACTIVE_PATTERN_BINDINGS.has(declaration)) {
+    return { ambiguous: true, dynamicOpaque: true, extraSources: [] };
   }
-  return { ambiguous, extraSources };
+  ACTIVE_PATTERN_BINDINGS.add(declaration);
+  try {
+    const target: TargetBinding = { callbacks, declaration, name, reaches };
+    const extraSources: Held[] = [];
+    let ambiguous = false;
+    let dynamicOpaque = false;
+    const pending: Node[] = [name.getSourceFile()];
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      if (isTypeOnly(node)) {
+        continue;
+      }
+      const site = scanReassignmentSite(node, target);
+      if (site.ambiguous) {
+        ambiguous = true;
+      }
+      if (site.dynamicOpaque) {
+        dynamicOpaque = true;
+      }
+      extraSources.push(...site.extraSources);
+      node.forEachChild((child) => {
+        pending.push(child);
+      });
+    }
+    return { ambiguous, dynamicOpaque, extraSources };
+  } finally {
+    ACTIVE_PATTERN_BINDINGS.delete(declaration);
+  }
 }
 
 /** Evaluates one AST write site against `target` when it is not a plain identifier assignment. */
-function scanReassignmentSite(node: Node, target: TargetParameter): PatternReassignmentScan {
+function scanReassignmentSite(node: Node, target: TargetBinding): PatternReassignmentScan {
   if (
     isBinaryExpression(node) &&
     DIRECT_WRITES.has(node.operatorToken.kind) &&
     !assignmentPatternDefault(node)
   ) {
     if (isIdentifier(unwrapped(node.left)) || !target.reaches(node)) {
-      return NO_REASSIGNMENT;
+      return NO_PATTERN_REASSIGNMENT;
     }
-    return scanDestructuringTarget(node.left, [{ keys: [], value: node.right }], target);
+    return scanDestructuringTarget(node.left, [{ keys: [], value: node.right }], node, target);
   }
   if ((isForOfStatement(node) || isForInStatement(node)) && isExpression(node.initializer)) {
     return scanLoopWrite(node, node.initializer, target);
@@ -121,71 +150,103 @@ function scanReassignmentSite(node: Node, target: TargetParameter): PatternReass
     UPDATE_OPERATORS.has(node.operator) &&
     target.reaches(node)
   ) {
-    return { ambiguous: targetsParameter(node.operand, target), extraSources: [] };
+    const hit = targetsBinding(node.operand, target);
+    return { ambiguous: hit, dynamicOpaque: false, extraSources: [] };
   }
-  return NO_REASSIGNMENT;
+  return NO_PATTERN_REASSIGNMENT;
 }
 
 /** Evaluates `for-of` and `for-in` assignment targets against `target`. */
 function scanLoopWrite(
   loop: Node,
   initializer: Expression,
-  target: TargetParameter,
+  target: TargetBinding,
 ): PatternReassignmentScan {
   if (!target.reaches(loop)) {
-    return NO_REASSIGNMENT;
+    return NO_PATTERN_REASSIGNMENT;
   }
   if (isForOfStatement(loop) && !isIdentifier(unwrapped(initializer))) {
-    return scanDestructuringTarget(initializer, iteratedFrameSources(loop.expression), target);
+    return scanDestructuringTarget(
+      initializer,
+      iteratedFrameSources(loop.expression),
+      loop,
+      target,
+    );
   }
-  return { ambiguous: targetsParameter(initializer, target), extraSources: [] };
+  const hit = targetsBinding(initializer, target);
+  return { ambiguous: hit, dynamicOpaque: hit && isForOfStatement(loop), extraSources: [] };
 }
 
 /** Walks a destructuring LHS pattern to detect writes to `target` and collect rest/computed RHS sources. */
 function scanDestructuringTarget(
   rootTarget: Expression,
   rootSources: readonly Held[],
-  target: TargetParameter,
+  writeNode: Node,
+  target: TargetBinding,
 ): PatternReassignmentScan {
   const acc: ScanAccumulator = {
+    dynamicOpaque: false,
     extraSources: [],
     matched: false,
-    pending: [{ sources: rootSources, target: rootTarget }],
+    pending: [{ fromDynamic: false, sources: rootSources, target: rootTarget }],
+    writeNode,
   };
   for (let step = acc.pending.pop(); step !== undefined; step = acc.pending.pop()) {
     const current = unwrapped(step.target);
     if (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
       acc.pending.push({
+        fromDynamic: step.fromDynamic,
         sources: [...step.sources, { keys: [], value: current.right }],
         target: current.left,
       });
     } else if (isIdentifier(current)) {
-      if (matchesParameter(current, target)) {
+      if (matchesBinding(current, target)) {
         acc.matched = true;
+        if (step.fromDynamic) {
+          acc.extraSources.push(...step.sources);
+        }
       }
     } else if (isObjectLiteralExpression(current)) {
-      stepObjectTarget(current, step.sources, target, acc);
+      stepObjectTarget(current, step, target, acc);
     } else if (isArrayLiteralExpression(current)) {
-      stepArrayTarget(current, step.sources, target, acc);
+      stepArrayTarget(current, step, target, acc);
     }
   }
-  return { ambiguous: acc.matched, extraSources: acc.extraSources };
+  return {
+    ambiguous: acc.matched,
+    dynamicOpaque: acc.dynamicOpaque,
+    extraSources: acc.extraSources,
+  };
 }
 
 /** Steps object destructuring properties, recording rest copies unless `body` is statically excluded. */
 function stepObjectTarget(
   object: ObjectLiteralExpression,
-  sources: readonly Held[],
-  target: TargetParameter,
+  step: PatternStep,
+  target: TargetBinding,
   acc: ScanAccumulator,
 ): void {
   const excludedKeys = new Set<string>();
-  const context = { excludedKeys, sources };
+  const context: ObjectStepContext = {
+    excludedKeys,
+    fromDynamic: step.fromDynamic,
+    sources: step.sources,
+  };
   for (const property of object.properties) {
     if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
       excludedKeys.add(property.name.text);
-      if (matchesParameter(property.name, target)) {
+      if (matchesBinding(property.name, target)) {
         acc.matched = true;
+        if (step.fromDynamic) {
+          acc.extraSources.push(
+            ...step.sources.map((each) => {
+              return {
+                keys: [...each.keys, property.name.text],
+                value: each.value,
+              };
+            }),
+          );
+        }
       }
     } else if (isPropertyAssignment(property)) {
       stepObjectPropertyTarget(property, context, target, acc);
@@ -198,26 +259,26 @@ function stepObjectTarget(
 /** Handles an object rest assignment target (`...options`). */
 function stepObjectSpreadTarget(
   property: SpreadAssignment,
-  context: { readonly excludedKeys: ReadonlySet<string>; readonly sources: readonly Held[] },
-  target: TargetParameter,
+  context: ObjectStepContext,
+  target: TargetBinding,
   acc: ScanAccumulator,
 ): void {
   const restTarget = unwrapped(property.expression);
-  if (isIdentifier(restTarget) && matchesParameter(restTarget, target)) {
+  if (isIdentifier(restTarget) && matchesBinding(restTarget, target)) {
     acc.matched = true;
     if (!context.excludedKeys.has(BODY_KEY)) {
       acc.extraSources.push(...context.sources);
     }
     return;
   }
-  acc.pending.push({ sources: [], target: restTarget });
+  acc.pending.push({ fromDynamic: context.fromDynamic, sources: [], target: restTarget });
 }
 
 /** Handles one keyed or computed object destructuring property assignment. */
 function stepObjectPropertyTarget(
   property: PropertyAssignment,
-  context: { readonly excludedKeys: Set<string>; readonly sources: readonly Held[] },
-  target: TargetParameter,
+  context: ObjectStepContext,
+  target: TargetBinding,
   acc: ScanAccumulator,
 ): void {
   const subTarget = property.initializer;
@@ -225,28 +286,28 @@ function stepObjectPropertyTarget(
   if (key !== undefined) {
     context.excludedKeys.add(key);
     acc.pending.push({
+      fromDynamic: context.fromDynamic,
       sources: context.sources.map((each) => ({ keys: [...each.keys, key], value: each.value })),
       target: subTarget,
     });
     return;
   }
-  if (!targetsParameter(subTarget, target)) {
+  if (!targetsBinding(subTarget, target)) {
     return;
   }
   acc.matched = true;
-  const dynamicValues = dynamicObjectValues(context.sources);
-  const leaf = stripDefaultTarget(subTarget);
-  if (isIdentifier(leaf) && matchesParameter(leaf, target)) {
-    acc.extraSources.push(...dynamicValues);
+  const dynamic = resolveDynamicObjectSources(context.sources, acc.writeNode, target.callbacks);
+  if (dynamic.opaque) {
+    acc.dynamicOpaque = true;
   }
-  acc.pending.push({ sources: dynamicValues, target: subTarget });
+  acc.pending.push({ fromDynamic: true, sources: dynamic.values, target: subTarget });
 }
 
 /** Steps array destructuring elements and leading array rest targets. */
 function stepArrayTarget(
   array: ArrayLiteralExpression,
-  sources: readonly Held[],
-  target: TargetParameter,
+  step: PatternStep,
+  target: TargetBinding,
   acc: ScanAccumulator,
 ): void {
   for (const [index, element] of array.elements.entries()) {
@@ -255,17 +316,18 @@ function stepArrayTarget(
     }
     if (isSpreadElement(element)) {
       const restTarget = unwrapped(element.expression);
-      if (isIdentifier(restTarget) && matchesParameter(restTarget, target)) {
+      if (isIdentifier(restTarget) && matchesBinding(restTarget, target)) {
         acc.matched = true;
         if (index === 0) {
-          acc.extraSources.push(...sources);
+          acc.extraSources.push(...step.sources);
         }
       } else {
-        acc.pending.push({ sources: [], target: restTarget });
+        acc.pending.push({ fromDynamic: step.fromDynamic, sources: [], target: restTarget });
       }
     } else {
       acc.pending.push({
-        sources: sources.map((each) => {
+        fromDynamic: step.fromDynamic,
+        sources: step.sources.map((each) => {
           return {
             keys: [...each.keys, String(index)],
             value: each.value,
@@ -277,43 +339,12 @@ function stepArrayTarget(
   }
 }
 
-/** Own property value expressions on literal object sources when a computed destructuring key is dynamic. */
-function dynamicObjectValues(sources: readonly Held[]): readonly Held[] {
-  const values: Held[] = [];
-  for (const source of sources) {
-    if (source.keys.length > 0) {
-      continue;
-    }
-    const object = unwrapped(source.value);
-    if (!isObjectLiteralExpression(object)) {
-      continue;
-    }
-    for (const property of object.properties) {
-      if (isPropertyAssignment(property) && staticPropertyName(property.name) !== '__proto__') {
-        values.push({ keys: [], value: property.initializer });
-      } else if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
-        values.push({ keys: [], value: property.name });
-      }
-    }
-  }
-  return values;
-}
-
-/** Unwraps `target = defaultValue` wrappers inside an assignment pattern. */
-function stripDefaultTarget(node: Expression): Expression {
-  let current = unwrapped(node);
-  while (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
-    current = unwrapped(current.left);
-  }
-  return current;
-}
-
-/** Whether any assignment target identifier inside `pattern` resolves to `target.parameter`. */
-function targetsParameter(pattern: Expression, target: TargetParameter): boolean {
+/** Whether any assignment target identifier inside `pattern` resolves to `target.declaration`. */
+function targetsBinding(pattern: Expression, target: TargetBinding): boolean {
   const pending: Expression[] = [pattern];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     const current = unwrapped(at);
-    if (isIdentifier(current) && matchesParameter(current, target)) {
+    if (isIdentifier(current) && matchesBinding(current, target)) {
       return true;
     }
     pending.push(...patternChildTargets(current));
@@ -358,24 +389,7 @@ function objectPatternChildTargets(object: ObjectLiteralExpression): readonly Ex
   return children;
 }
 
-/** Checks whether `id` references `target.parameter`. */
-function matchesParameter(id: Identifier, target: TargetParameter): boolean {
-  return id.text === target.name.text && frameDeclarationOf(id) === target.parameter;
-}
-
-/** Resolves a static property key name on an object assignment pattern property. */
-function staticPropertyName(name: PropertyName): string | undefined {
-  if (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name)) {
-    return name.text;
-  }
-  if (isNumericLiteral(name)) {
-    return String(Number(name.text));
-  }
-  if (isComputedPropertyName(name)) {
-    const constant = constantValue(name.expression);
-    return typeof constant === 'string' || typeof constant === 'number'
-      ? String(constant)
-      : undefined;
-  }
-  return undefined;
+/** Checks whether `id` references `target.declaration`. */
+function matchesBinding(id: Identifier, target: TargetBinding): boolean {
+  return id.text === target.name.text && frameDeclarationOf(id) === target.declaration;
 }
