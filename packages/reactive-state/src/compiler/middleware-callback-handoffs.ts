@@ -57,25 +57,41 @@ export function middlewareCallbackHandoff(
   const given = framedArgumentPrefix(call, call.arguments, 2);
   const unknown = given.unknown || given.alternatives !== undefined;
   const reduced = name === 'reduce' || name === 'reduceRight';
-  const initial = unknown || given.values.length >= 2;
-  if (receiver !== undefined && noCallback(receiver, name, initial)) return undefined;
+  const maybeInitial = unknown || given.values.length >= 2;
+  if (receiver !== undefined && noCallback(receiver, name, maybeInitial)) return undefined;
+  const definiteInitial = hasDefiniteInitial(unknown, given.values.length);
   return {
     receiver: method.expression,
     callback: given.values[0],
     unknown,
-    slots: callbackSlots(name, reduced, initial),
+    slots: callbackSlots(name, reduced, definiteInitial),
     arraySlot: reduced ? REDUCED_ARRAY : 2,
-    primitiveItems:
-      receiver?.elements.every(
-        (element) => isOmittedExpression(element) || framedQuietPrimitive(element),
-      ) ?? false,
+    primitiveItems: primitiveElements(receiver),
   };
 }
 
+/** Only a resolved second argument guarantees an initial value that displaces receiver slot zero. */
+function hasDefiniteInitial(unknown: boolean, count: number): boolean {
+  return !unknown && count >= 2;
+}
+
+/** Omitted holes and quiet scalar literals carry no mutable element identity into callback slots. */
+function primitiveElements(receiver: ArrayLiteralExpression | undefined): boolean {
+  return (
+    receiver?.elements.every(
+      (element) => isOmittedExpression(element) || framedQuietPrimitive(element),
+    ) ?? false
+  );
+}
+
 /** Reduction supplies accumulator and item separately; an explicit initial value is not a receiver item. */
-function callbackSlots(name: string, reduced: boolean, initial: boolean): readonly number[] {
+function callbackSlots(
+  name: string,
+  reduced: boolean,
+  definiteInitial: boolean,
+): readonly number[] {
   if (name === 'toSorted') return [0, 1];
-  if (reduced) return [1, REDUCED_ARRAY, ...(initial ? [] : [0])];
+  if (reduced) return [1, REDUCED_ARRAY, ...(definiteInitial ? [] : [0])];
   return [0, 2];
 }
 
