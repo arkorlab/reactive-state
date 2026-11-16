@@ -44,6 +44,52 @@ function buildCyclicOriginChain(): string {
   return statements.join(' ');
 }
 
+const SINGLE_CHECK_CHAINS = [
+  {
+    id: 'linear-25-alias-chain-error-at-origin',
+    body: buildLinearChain('{ x: error as never }', 'URLSearchParams'),
+    converts: true,
+  },
+  {
+    id: 'linear-25-alias-chain-plain-data',
+    body: buildLinearChain("{ x: 'ok' as never }", 'URLSearchParams'),
+    converts: false,
+  },
+  {
+    id: 'headers-25-alias-chain-error-at-origin',
+    body: buildLinearChain('{ x: error as never }', 'Headers'),
+    converts: true,
+  },
+  {
+    id: 'diamond-25-alias-chain-error-at-origin',
+    body: buildDiamondChain('{ x: error as never }'),
+    converts: true,
+  },
+] as const;
+
+const CYCLE_AND_PIN_CHAINS = [
+  {
+    id: 'chain-25-into-cycle-error-at-origin',
+    body: buildCyclicOriginChain(),
+    converts: true,
+  },
+  {
+    id: 'branch-into-cycle-members-preserves-both-fields-pin',
+    body: "let a: Record<string, string> = { w: error as never }; let b: Record<string, string> = { x: 'ok' }; if (flag) a = b; if (flag) b = a; let c: Record<string, string> = {}; c = flag ? a : b; return new URLSearchParams(c);",
+    converts: true,
+  },
+  {
+    id: 'short-chain-captured-mutation-preserved-pin',
+    body: "let a0 = { x: 'ok' as never }; let a1 = { x: 'ok' as never }; a1 = a0; let a2 = { x: 'ok' as never }; a2 = a1; let a3 = { x: 'ok' as never }; a3 = a2; a0.x = error as never; a0 = { x: 'fixed' as never }; return new URLSearchParams(a3);",
+    converts: true,
+  },
+  {
+    id: 'short-chain-overwritten-at-tail-drops-error-pin',
+    body: "let a0 = { x: error as never }; let a1 = { x: 'ok' as never }; a1 = a0; let a2 = { x: 'ok' as never }; a2 = a1; let a3 = { x: 'ok' as never }; a3 = a2; a3 = { x: 'fixed' as never }; return new URLSearchParams(a3);",
+    converts: false,
+  },
+] as const;
+
 describe('replacement record alias chains', () => {
   let api: API;
 
@@ -56,62 +102,19 @@ describe('replacement record alias chains', () => {
     api[Symbol.dispose]();
   });
 
-  it('linear-25-alias-chain-error-at-origin', () => {
-    const result = measureChain(api, buildLinearChain('{ x: error as never }', 'URLSearchParams'));
-    expect(result.converts).toBe(true);
+  it.each(SINGLE_CHECK_CHAINS)('$id', ({ body, converts }) => {
+    const result = measureChain(api, body);
+
+    expect(result.converts).toBe(converts);
     expect(result.checks).toBe(1);
     expect(result.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
   });
 
-  it('linear-25-alias-chain-plain-data', () => {
-    const result = measureChain(api, buildLinearChain("{ x: 'ok' as never }", 'URLSearchParams'));
-    expect(result.converts).toBe(false);
-    expect(result.checks).toBe(1);
+  it.each(CYCLE_AND_PIN_CHAINS)('$id', ({ body, converts }) => {
+    const result = measureChain(api, body);
+
+    expect(result.converts).toBe(converts);
     expect(result.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
-  });
-
-  it('headers-25-alias-chain-error-at-origin', () => {
-    const result = measureChain(api, buildLinearChain('{ x: error as never }', 'Headers'));
-    expect(result.converts).toBe(true);
-    expect(result.checks).toBe(1);
-    expect(result.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
-  });
-
-  it('diamond-25-alias-chain-error-at-origin', () => {
-    const result = measureChain(api, buildDiamondChain('{ x: error as never }'));
-    expect(result.converts).toBe(true);
-    expect(result.checks).toBe(1);
-    expect(result.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
-  });
-
-  it('chain-25-into-cycle-error-at-origin', () => {
-    const result = measureChain(api, buildCyclicOriginChain());
-    expect(result.converts).toBe(true);
-    expect(result.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
-  });
-
-  it('branch-into-cycle-members-preserves-both-fields-pin', () => {
-    const result = measureChain(
-      api,
-      "let a: Record<string, string> = { w: error as never }; let b: Record<string, string> = { x: 'ok' }; if (flag) a = b; if (flag) b = a; let c: Record<string, string> = {}; c = flag ? a : b; return new URLSearchParams(c);",
-    );
-    expect(result.converts).toBe(true);
-  });
-
-  it('short-chain-captured-mutation-preserved-pin', () => {
-    const result = measureChain(
-      api,
-      "let a0 = { x: 'ok' as never }; let a1 = { x: 'ok' as never }; a1 = a0; let a2 = { x: 'ok' as never }; a2 = a1; let a3 = { x: 'ok' as never }; a3 = a2; a0.x = error as never; a0 = { x: 'fixed' as never }; return new URLSearchParams(a3);",
-    );
-    expect(result.converts).toBe(true);
-  });
-
-  it('short-chain-overwritten-at-tail-drops-error-pin', () => {
-    const result = measureChain(
-      api,
-      "let a0 = { x: error as never }; let a1 = { x: 'ok' as never }; a1 = a0; let a2 = { x: 'ok' as never }; a2 = a1; let a3 = { x: 'ok' as never }; a3 = a2; a3 = { x: 'fixed' as never }; return new URLSearchParams(a3);",
-    );
-    expect(result.converts).toBe(false);
   });
 });
 

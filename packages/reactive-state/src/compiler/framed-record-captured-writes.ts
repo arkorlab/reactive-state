@@ -271,11 +271,12 @@ function plainAssignSource(argument: Expression): boolean {
   const literal = unwrapped(argument);
   return (
     isObjectLiteralExpression(literal) &&
-    literal.properties.every(
-      (property) =>
+    literal.properties.every((property) => {
+      return (
         (isPropertyAssignment(property) || isShorthandPropertyAssignment(property)) &&
-        writtenArrayKey(property.name) !== undefined,
-    )
+        writtenArrayKey(property.name) !== undefined
+      );
+    })
   );
 }
 
