@@ -38,13 +38,25 @@ import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts'
 import { isSkippedSyntax, unwrapTarget, VALUE_ASSIGNING } from './function-this-writes.ts';
 import { bindingIdentifiers } from './scope.ts';
 
-/** Candidate value or container projection assigned to a mutable variable binding. */
-export type AssignedBindingSource =
-  | { readonly holder: Expression; readonly index: number; readonly kind: 'element' }
-  | { readonly holder: Expression; readonly key: string; readonly kind: 'member' }
-  | { readonly kind: 'expr'; readonly value: Expression };
+/** Single container projection step inside a destructuring assignment pattern. */
+export type AssignmentStep =
+  | { readonly index: number; readonly kind: 'element' }
+  | { readonly kind: 'dynamic-element'; readonly startIndex: number }
+  | { readonly kind: 'dynamic-member' }
+  | { readonly key: string; readonly kind: 'member' };
+
+/** Candidate root expression and selection path assigned to a mutable binding. */
+export interface AssignedBindingSource {
+  readonly root: Expression;
+  readonly steps: readonly AssignmentStep[];
+}
 
 type ReassignmentMap = Map<Node, AssignedBindingSource[]>;
+
+interface AssignmentScanState {
+  readonly handledDefaults: Set<Node>;
+  readonly map: ReassignmentMap;
+}
 
 /** The types a binding is said to be a function of by their names: `Function`, and its kin. */
 const FUNCTION_TYPES: ReadonlySet<string> = new Set([
@@ -141,13 +153,22 @@ export function bindingReassignments(
     return cached;
   }
   const map: ReassignmentMap = new Map();
+  const handledDefaults = new Set<Node>();
+  const state: AssignmentScanState = { handledDefaults, map };
   const visit = (node: Node): void => {
     if (isSkippedSyntax(node)) {
       return;
     }
-    if (isBinaryExpression(node) && VALUE_ASSIGNING.has(node.operatorToken.kind)) {
-      const rhs: AssignedBindingSource = { kind: 'expr', value: unwrapped(node.right) };
-      recordAssignedTarget(unwrapTarget(node.left), rhs, map);
+    if (
+      isBinaryExpression(node) &&
+      VALUE_ASSIGNING.has(node.operatorToken.kind) &&
+      !handledDefaults.has(node)
+    ) {
+      recordAssignedTarget(
+        unwrapTarget(node.left),
+        { root: unwrapped(node.right), steps: [] },
+        state,
+      );
     }
     node.forEachChild(visit);
   };
@@ -156,86 +177,133 @@ export function bindingReassignments(
   return map;
 }
 
-/** Records direct, object-destructured, or array-destructured assignment targets into `map`. */
+/** Records direct, object-destructured, or array-destructured assignment targets into `state.map`. */
 function recordAssignedTarget(
   target: Node,
   source: AssignedBindingSource,
-  map: ReassignmentMap,
+  state: AssignmentScanState,
 ): void {
   if (isIdentifier(target)) {
     const declared = frameDeclarationOf(target);
-    if (declared !== undefined && isVariableDeclaration(declared)) {
-      appendSource(map, declaredBindingTarget(target, declared), source);
+    if (
+      declared !== undefined &&
+      (isVariableDeclaration(declared) || isParameterDeclaration(declared))
+    ) {
+      appendSource(state.map, declaredBindingTarget(target, declared), source);
     }
     return;
   }
-  if (source.kind !== 'expr') {
-    return;
-  }
   if (isObjectLiteralExpression(target)) {
-    recordObjectAssignmentPattern(target, source.value, map);
+    recordObjectAssignmentPattern(target, source, state);
     return;
   }
-  if (
-    isArrayLiteralExpression(target) &&
-    target.elements.every((element) => !isSpreadElement(element))
-  ) {
-    recordArrayAssignmentPattern(target, source.value, map);
+  if (isArrayLiteralExpression(target)) {
+    recordArrayAssignmentPattern(target, source, 0, state);
   }
 }
 
-/** Records property selections and assignment defaults on `({ pick = fn } = holder)`. */
+/** Records property selections and assignment defaults on `({ nested: { pick = fn } } = holder)`. */
 function recordObjectAssignmentPattern(
-  pattern: Expression & { readonly properties: readonly Node[] },
-  holder: Expression,
-  map: ReassignmentMap,
+  pattern: Expression,
+  source: AssignedBindingSource,
+  state: AssignmentScanState,
 ): void {
   if (!isObjectLiteralExpression(pattern)) {
     return;
   }
   for (const prop of pattern.properties) {
     if (isShorthandPropertyAssignment(prop) && isIdentifier(prop.name)) {
-      recordAssignedTarget(prop.name, { holder, key: prop.name.text, kind: 'member' }, map);
+      const nextStep: AssignmentStep = { key: prop.name.text, kind: 'member' };
+      recordAssignedTarget(
+        prop.name,
+        { root: source.root, steps: [...source.steps, nextStep] },
+        state,
+      );
       if (prop.objectAssignmentInitializer !== undefined) {
         const fallback = unwrapped(prop.objectAssignmentInitializer);
-        recordAssignedTarget(prop.name, { kind: 'expr', value: fallback }, map);
+        recordAssignedTarget(prop.name, { root: fallback, steps: [] }, state);
       }
     } else if (isPropertyAssignment(prop)) {
+      const inner = unwrapDefaultedTarget(prop.initializer, state);
       const key = propertyNameText(prop.name);
-      const inner = unwrapDefaultedTarget(prop.initializer, map);
-      if (key !== undefined) {
-        recordAssignedTarget(inner, { holder, key, kind: 'member' }, map);
-      }
+      const nextStep: AssignmentStep =
+        key === undefined ? { kind: 'dynamic-member' } : { key, kind: 'member' };
+      recordAssignedTarget(inner, { root: source.root, steps: [...source.steps, nextStep] }, state);
     }
   }
 }
 
-/** Records indexed selections and assignment defaults on `([pick = fn] = items)`. */
+/** Records indexed selections, rest patterns, and assignment defaults on `([pick = fn] = items)`. */
 function recordArrayAssignmentPattern(
   pattern: Expression,
-  holder: Expression,
-  map: ReassignmentMap,
+  source: AssignedBindingSource,
+  offset: number,
+  state: AssignmentScanState,
 ): void {
   if (!isArrayLiteralExpression(pattern)) {
     return;
   }
   for (const [index, element] of pattern.elements.entries()) {
-    if (!isOmittedExpression(element)) {
-      const inner = unwrapDefaultedTarget(element, map);
-      recordAssignedTarget(inner, { holder, index, kind: 'element' }, map);
+    const slot = offset + index;
+    if (isSpreadElement(element)) {
+      const restInner = unwrapDefaultedTarget(element.expression, state);
+      recordArrayRestTarget(restInner, source, slot, state);
+    } else if (!isOmittedExpression(element)) {
+      const inner = unwrapDefaultedTarget(element, state);
+      const nextStep: AssignmentStep = { index: slot, kind: 'element' };
+      recordAssignedTarget(inner, { root: source.root, steps: [...source.steps, nextStep] }, state);
+    }
+  }
+}
+
+/** Records nested array or object patterns bound inside an array rest target (`[a, ...[pick]]`). */
+function recordArrayRestTarget(
+  inner: Node,
+  source: AssignedBindingSource,
+  slot: number,
+  state: AssignmentScanState,
+): void {
+  if (isArrayLiteralExpression(inner)) {
+    recordArrayAssignmentPattern(inner, source, slot, state);
+    return;
+  }
+  if (!isObjectLiteralExpression(inner)) {
+    return;
+  }
+  for (const prop of inner.properties) {
+    if (isPropertyAssignment(prop)) {
+      const subTarget = unwrapDefaultedTarget(prop.initializer, state);
+      const key = propertyNameText(prop.name);
+      const nextStep: AssignmentStep =
+        key !== undefined && /^\d+$/u.test(key)
+          ? { index: slot + Number(key), kind: 'element' }
+          : { kind: 'dynamic-element', startIndex: slot };
+      recordAssignedTarget(
+        subTarget,
+        { root: source.root, steps: [...source.steps, nextStep] },
+        state,
+      );
+    } else if (
+      isShorthandPropertyAssignment(prop) &&
+      isIdentifier(prop.name) &&
+      prop.objectAssignmentInitializer !== undefined
+    ) {
+      const fallback = unwrapped(prop.objectAssignmentInitializer);
+      recordAssignedTarget(prop.name, { root: fallback, steps: [] }, state);
     }
   }
 }
 
 /** Records `= fallback` inside a destructuring assignment target and returns the inner target. */
-function unwrapDefaultedTarget(node: Expression, map: ReassignmentMap): Node {
-  const target = unwrapTarget(node);
-  if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken) {
-    const inner = unwrapTarget(target.left);
-    recordAssignedTarget(inner, { kind: 'expr', value: unwrapped(target.right) }, map);
-    return inner;
+function unwrapDefaultedTarget(node: Expression, state: AssignmentScanState): Node {
+  let current = unwrapTarget(node);
+  while (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
+    state.handledDefaults.add(current);
+    const inner = unwrapTarget(current.left);
+    recordAssignedTarget(inner, { root: unwrapped(current.right), steps: [] }, state);
+    current = inner;
   }
-  return target;
+  return current;
 }
 
 /** Appends `source` to `map.get(binding)`. */

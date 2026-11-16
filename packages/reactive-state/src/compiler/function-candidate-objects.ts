@@ -55,6 +55,22 @@ export const LOGICAL_FORWARDING: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionToken,
 ]);
 
+/** Runs `run` with a branch-local clone of `state.seen`, propagating `hitCycle` back to `state`. */
+function withCandidateBranch<T>(
+  state: CandidateCycleState,
+  run: (branch: CandidateCycleState) => T,
+): T {
+  const branch: CandidateCycleState = {
+    hitCycle: false,
+    seen: new Set(state.seen),
+  };
+  const result = run(branch);
+  if (branch.hitCycle) {
+    state.hitCycle = true;
+  }
+  return result;
+}
+
 /** Collects enclosing `BindingElement`s from outermost pattern to innermost binding `bound`. */
 export function bindingElementSteps(bound: Identifier): readonly BindingElement[] {
   const steps: BindingElement[] = [];
@@ -119,14 +135,22 @@ function candidateObjectsWithCycle(
   }
   if (isConditionalExpression(node)) {
     return [
-      ...candidateObjectsWithCycle(unwrapped(node.whenTrue), variableWrites, state),
-      ...candidateObjectsWithCycle(unwrapped(node.whenFalse), variableWrites, state),
+      ...withCandidateBranch(state, (branch) =>
+        candidateObjectsWithCycle(unwrapped(node.whenTrue), variableWrites, branch),
+      ),
+      ...withCandidateBranch(state, (branch) =>
+        candidateObjectsWithCycle(unwrapped(node.whenFalse), variableWrites, branch),
+      ),
     ];
   }
   if (isBinaryExpression(node) && LOGICAL_FORWARDING.has(node.operatorToken.kind)) {
     return [
-      ...candidateObjectsWithCycle(unwrapped(node.left), variableWrites, state),
-      ...candidateObjectsWithCycle(unwrapped(node.right), variableWrites, state),
+      ...withCandidateBranch(state, (branch) =>
+        candidateObjectsWithCycle(unwrapped(node.left), variableWrites, branch),
+      ),
+      ...withCandidateBranch(state, (branch) =>
+        candidateObjectsWithCycle(unwrapped(node.right), variableWrites, branch),
+      ),
     ];
   }
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
@@ -153,14 +177,20 @@ function identifierCandidateObjects(
     return [];
   }
   state.seen.add(target);
-  const objects = isIdentifier(declared.name)
-    ? simpleDeclarationObjects(declared, variableWrites, state)
-    : [...patternDeclarationObjects(node, declared, variableWrites, state)];
+  const objects = withCandidateBranch(state, (branch) => {
+    return isIdentifier(declared.name)
+      ? simpleDeclarationObjects(declared, variableWrites, branch)
+      : [...patternDeclarationObjects(node, declared, variableWrites, branch)];
+  });
   if (!isConstVariable(declared)) {
     const writes = variableWrites.get(target);
     if (writes !== undefined) {
       for (const assigned of writes) {
-        objects.push(...candidateObjectsWithCycle(assigned, variableWrites, state));
+        objects.push(
+          ...withCandidateBranch(state, (branch) =>
+            candidateObjectsWithCycle(assigned, variableWrites, branch),
+          ),
+        );
       }
     }
   }
@@ -197,7 +227,9 @@ function patternDeclarationObjects(
     }
     expressions = advancePatternExpressions(expressions, step, variableWrites, state);
   }
-  return expressions.flatMap((expr) => candidateObjectsWithCycle(expr, variableWrites, state));
+  return expressions.flatMap((expr) =>
+    withCandidateBranch(state, (branch) => candidateObjectsWithCycle(expr, variableWrites, branch)),
+  );
 }
 
 /** Projects candidate container `expressions` across a single destructuring `step` and its default. */
@@ -211,13 +243,18 @@ function advancePatternExpressions(
   if (isObjectBindingPattern(step.parent)) {
     const key = bindingStepKey(step);
     for (const expr of expressions) {
-      const holders = candidateObjectsWithCycle(expr, variableWrites, state);
-      next.push(...memberValueExpressions(holders, key, variableWrites, state));
+      const members = withCandidateBranch(state, (branch) => {
+        const holders = candidateObjectsWithCycle(expr, variableWrites, branch);
+        return memberValueExpressions(holders, key, variableWrites, branch);
+      });
+      next.push(...members);
     }
   } else if (isArrayBindingPattern(step.parent)) {
     const index = step.parent.elements.indexOf(step);
     for (const expr of expressions) {
-      const element = selectArrayElementExpression(expr, index, state);
+      const element = withCandidateBranch(state, (branch) =>
+        selectArrayElementExpression(expr, index, branch),
+      );
       if (element !== undefined) {
         next.push(element);
       }
@@ -246,9 +283,11 @@ function selectMemberObjectsWithCycle(
   variableWrites: VariableWriteMap,
   state: CandidateCycleState,
 ): readonly ObjectLiteralExpression[] {
-  return memberValueExpressions(holders, key, variableWrites, state).flatMap((value) =>
-    candidateObjectsWithCycle(value, variableWrites, state),
-  );
+  return memberValueExpressions(holders, key, variableWrites, state).flatMap((value) => {
+    return withCandidateBranch(state, (branch) =>
+      candidateObjectsWithCycle(value, variableWrites, branch),
+    );
+  });
 }
 
 /** Collects value expressions contributed by `key` across `holders` and their spread sources. */
@@ -263,17 +302,11 @@ function memberValueExpressions(
     if (state.seen.has(holder)) {
       state.hitCycle = true;
     } else {
-      const branch: CandidateCycleState = {
-        hitCycle: false,
-        seen: new Set([...state.seen, holder]),
-      };
-      const memberValues = collectObjectMemberValues(holder, key, variableWrites, branch);
-      if (branch.hitCycle) {
-        state.hitCycle = true;
-      }
-      for (const item of memberValues) {
-        values.push(item);
-      }
+      const memberValues = withCandidateBranch(state, (branch) => {
+        branch.seen.add(holder);
+        return collectObjectMemberValues(holder, key, variableWrites, branch);
+      });
+      values.push(...memberValues);
     }
   }
   return values;
@@ -289,12 +322,15 @@ function collectObjectMemberValues(
   const found: Expression[] = [];
   for (const prop of holder.properties) {
     if (isSpreadAssignment(prop)) {
-      const spreadHolders = candidateObjectsWithCycle(
-        unwrapped(prop.expression),
-        variableWrites,
-        state,
-      );
-      found.push(...memberValueExpressions(spreadHolders, key, variableWrites, state));
+      const spreadValues = withCandidateBranch(state, (branch) => {
+        const spreadHolders = candidateObjectsWithCycle(
+          unwrapped(prop.expression),
+          variableWrites,
+          branch,
+        );
+        return memberValueExpressions(spreadHolders, key, variableWrites, branch);
+      });
+      found.push(...spreadValues);
     } else {
       const propKey = literalElementKey(prop);
       const value = propertyAssignmentExpression(prop);
@@ -307,7 +343,9 @@ function collectObjectMemberValues(
 }
 
 /** Extracts the value expression of a `PropertyAssignment` or `ShorthandPropertyAssignment`. */
-function propertyAssignmentExpression(property: ObjectLiteralElementLike): Expression | undefined {
+export function propertyAssignmentExpression(
+  property: ObjectLiteralElementLike,
+): Expression | undefined {
   if (isPropertyAssignment(property)) {
     return unwrapped(property.initializer);
   }
@@ -364,7 +402,7 @@ function resolveSimpleArrayLiteral(
 }
 
 /** Static object key selected by `step`. */
-function bindingStepKey(step: BindingElement): string | undefined {
+export function bindingStepKey(step: BindingElement): string | undefined {
   if (step.propertyName !== undefined) {
     return keyOfPropertyName(step.propertyName);
   }

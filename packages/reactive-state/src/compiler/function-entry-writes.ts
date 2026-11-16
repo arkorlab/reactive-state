@@ -36,6 +36,7 @@ import {
 import {
   EMPTY_WRITES,
   isDeclaredIdentifier,
+  isDirectValueAssignment,
   isSafeDirectUse,
   isSafeLockCall,
   isSkippedSyntax,
@@ -64,6 +65,11 @@ export interface ObjectPostWrites {
   readonly assignSources: readonly Expression[];
   readonly memberValues: readonly AssignedCallable[];
   readonly writes: ObjectWrites;
+}
+
+interface DirectWriteBuckets {
+  readonly keys: Set<string>;
+  readonly untrackedKeys: Set<string>;
 }
 
 const DIRECT_WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
@@ -118,7 +124,7 @@ export function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
 /** Combines direct reference writes and callable `this` writes into a single `ObjectWrites`. */
 function mergeObjectWrites(left: ObjectWrites, right: ObjectWrites): ObjectWrites {
   if (left.all || right.all) {
-    return { all: true, keys: EMPTY_WRITES.keys };
+    return { all: true, keys: EMPTY_WRITES.keys, untrackedKeys: EMPTY_WRITES.untrackedKeys };
   }
   if (right.keys.size === 0) {
     return left;
@@ -126,7 +132,11 @@ function mergeObjectWrites(left: ObjectWrites, right: ObjectWrites): ObjectWrite
   if (left.keys.size === 0) {
     return right;
   }
-  return { all: false, keys: new Set([...left.keys, ...right.keys]) };
+  return {
+    all: false,
+    keys: new Set([...left.keys, ...right.keys]),
+    untrackedKeys: new Set([...left.untrackedKeys, ...right.untrackedKeys]),
+  };
 }
 
 /** Builds and caches the per-file assignment index for `file` in a single AST pass. */
@@ -258,20 +268,24 @@ function directObjectWrites(object: ObjectLiteralExpression): ObjectWrites {
     DIRECT_WRITES.set(object, EMPTY_WRITES);
     return EMPTY_WRITES;
   }
-  const keys = new Set<string>();
+  const buckets: DirectWriteBuckets = { keys: new Set(), untrackedKeys: new Set() };
   const state = { all: false };
   const visit = (node: Node): void => {
     if (state.all || isSkippedSyntax(node)) {
       return;
     }
-    if (recordsDirectAllWrites(node, object, keys)) {
+    if (recordsDirectAllWrites(node, object, buckets)) {
       state.all = true;
       return;
     }
     node.forEachChild(visit);
   };
   visit(object.getSourceFile());
-  const result: ObjectWrites = { all: state.all, keys };
+  const result: ObjectWrites = {
+    all: state.all,
+    keys: buckets.keys,
+    untrackedKeys: buckets.untrackedKeys,
+  };
   DIRECT_WRITES.set(object, result);
   return result;
 }
@@ -289,23 +303,24 @@ function isInlineMemberReceiver(object: ObjectLiteralExpression): boolean {
 function recordsDirectAllWrites(
   node: Node,
   object: ObjectLiteralExpression,
-  keys: Set<string>,
+  buckets: DirectWriteBuckets,
 ): boolean {
   if (isCallExpression(node) && isSafeLockCall(node)) {
     return false;
   }
   const written = writtenBy(node);
-  if (written !== undefined && writesUnknownDirectKey(written, object, keys)) {
+  if (written !== undefined && writesUnknownDirectKey(node, written, object, buckets)) {
     return true;
   }
   return isDirectLiteralReference(node, object) && !isSafeDirectUse(node);
 }
 
-/** Updates `keys` for direct assignment/mutation targets on `object`; answers `true` for whole/dynamic writes. */
+/** Updates `buckets` for direct assignment/mutation targets on `object`; answers `true` for whole/dynamic writes. */
 function writesUnknownDirectKey(
+  writer: Node,
   written: Node,
   object: ObjectLiteralExpression,
-  keys: Set<string>,
+  buckets: DirectWriteBuckets,
 ): boolean {
   const targets = targetsOf(written);
   for (const rawTarget of targets) {
@@ -314,14 +329,18 @@ function writesUnknownDirectKey(
       return true;
     }
     if (
-      (isPropertyAccessExpression(target) || isElementAccessExpression(target)) &&
-      refersToLiteral(target.expression, object)
+      !(isPropertyAccessExpression(target) || isElementAccessExpression(target)) ||
+      !refersToLiteral(target.expression, object)
     ) {
-      const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
-      if (key === undefined) {
-        return true;
-      }
-      keys.add(key);
+      continue;
+    }
+    const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
+    if (key === undefined) {
+      return true;
+    }
+    buckets.keys.add(key);
+    if (!isDirectValueAssignment(writer, target)) {
+      buckets.untrackedKeys.add(key);
     }
   }
   return false;

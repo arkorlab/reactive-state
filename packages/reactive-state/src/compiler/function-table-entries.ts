@@ -18,7 +18,9 @@ import {
 import { unwrapped } from './bounded.ts';
 import { objectPostWrites } from './function-entry-writes.ts';
 import {
+  combineBranchKinds,
   type EntryKind,
+  type FunctionKind,
   holderObject,
   isPrototypeProperty,
   propertyKey,
@@ -26,7 +28,6 @@ import {
   type ScanContext,
   withBranch,
 } from './function-property-resolution.ts';
-import { type AssignedCallable } from './function-spread-callables.ts';
 
 export {
   combineBranchKinds,
@@ -35,6 +36,7 @@ export {
   holderObject,
   isConstDeclaration,
   keyOf,
+  propertyKey,
   type ResolvedObject,
   type ResolvedProperty,
   resolvePropertyValue,
@@ -46,8 +48,15 @@ export {
 interface TableScan {
   dynamicEntry: boolean;
   readonly entries: Map<string, EntryKind>;
+  readonly optionalKeys: Set<string>;
   stickyRenamed: boolean;
   unverified: boolean;
+}
+
+interface PostWriteState {
+  readonly allWrites: boolean;
+  readonly entries: Map<string, EntryKind>;
+  readonly scan: TableScan;
 }
 
 const NON_FUNCTION: EntryKind = 'non-function';
@@ -63,6 +72,30 @@ export function hasScanKind(entries: ReadonlyMap<string, EntryKind>, target: Ent
   return false;
 }
 
+/** Classifies a dynamic lookup across all entries of a written object literal. */
+export function dynamicObjectEntryKind(holder: Expression, context: ScanContext): EntryKind {
+  const resolved = holderObject(holder, context);
+  if (resolved === undefined) {
+    return 'unknown';
+  }
+  return tableFunctionKind(resolved, context) ?? 'unknown';
+}
+
+/** Classifies a dynamic lookup across all entries of `resolved`. */
+function tableFunctionKind(
+  resolved: ResolvedObject,
+  context: ScanContext,
+): FunctionKind | undefined {
+  const scan = scanResolvedObject(resolved, context);
+  if (scan.stickyRenamed || hasScanKind(scan.entries, 'renamed')) {
+    return 'renamed';
+  }
+  if (scan.dynamicEntry || hasScanKind(scan.entries, 'entry')) {
+    return scan.unverified || hasScanKind(scan.entries, 'unknown') ? 'renamed' : 'entry';
+  }
+  return undefined;
+}
+
 /** Returns the table scan for `resolved`, degrading entries when `resolved` came through a `let`. */
 export function scanResolvedObject(resolved: ResolvedObject, context: ScanContext): TableScan {
   const base = scanObjectLiteral(resolved.object, context);
@@ -74,6 +107,7 @@ export function scanResolvedObject(resolved: ResolvedObject, context: ScanContex
   return {
     dynamicEntry: base.dynamicEntry,
     entries,
+    optionalKeys: new Set(base.optionalKeys),
     stickyRenamed: base.stickyRenamed,
     unverified: true,
   };
@@ -106,11 +140,18 @@ function scanObjectLiteral(object: ObjectLiteralExpression, context: ScanContext
   }
   if (context.seen.has(object)) {
     context.hitCycle = true;
-    return { dynamicEntry: false, entries: new Map(), stickyRenamed: false, unverified: true };
+    return {
+      dynamicEntry: false,
+      entries: new Map(),
+      optionalKeys: new Set(),
+      stickyRenamed: false,
+      unverified: true,
+    };
   }
   const scan: TableScan = {
     dynamicEntry: false,
     entries: new Map(),
+    optionalKeys: new Set(),
     stickyRenamed: false,
     unverified: false,
   };
@@ -142,38 +183,64 @@ function applyPostDeclarationWrites(
   context: ScanContext,
 ): void {
   const post = objectPostWrites(object);
+  const state: PostWriteState = { allWrites: post.writes.all, entries: new Map(), scan };
+  let dynamicFunctionWrite = false;
   if (post.writes.all) {
     scan.unverified = true;
     degradeExistingEntries(scan.entries, 'unknown');
   } else {
-    for (const key of post.writes.keys) {
-      scan.entries.set(key, overwriteEntryKind(scan.entries.get(key), 'unknown'));
+    for (const key of post.writes.untrackedKeys) {
+      joinPostKeyKind(key, 'unknown', state);
     }
   }
   for (const write of post.memberValues) {
-    recordAssignedMemberValue(write, scan, context);
+    const each = classifyAssignedNode(write.callable, context);
+    if (write.key === undefined) {
+      if (each === 'entry' || each === 'renamed') {
+        dynamicFunctionWrite = true;
+      }
+    } else {
+      joinPostKeyKind(write.key, each, state);
+    }
+  }
+  flushPostKeyKinds(state.entries, scan);
+  if (dynamicFunctionWrite) {
+    scan.stickyRenamed = true;
+    degradeExistingEntries(scan.entries, 'renamed');
   }
   for (const source of post.assignSources) {
     recordObjectAssignSource(source, scan, context);
   }
 }
 
-/** Retains `'renamed'` evidence when a post-declaration member write installs a function value. */
-function recordAssignedMemberValue(
-  write: AssignedCallable,
-  scan: TableScan,
-  context: ScanContext,
-): void {
-  const kind = classifyAssignedNode(write.callable, context);
-  if (kind !== 'entry' && kind !== 'renamed') {
-    return;
+/** Joins one post-declaration `added` classification onto `key`'s accumulated entry state. */
+function joinPostKeyKind(key: string, added: EntryKind, state: PostWriteState): void {
+  const current = state.entries.get(key) ?? initialPostKeyKind(key, state.allWrites, state.scan);
+  state.entries.set(key, combineBranchKinds(current, added));
+}
+
+/** Computes the pre-write baseline classification for `key` before joining post-declaration writes. */
+function initialPostKeyKind(key: string, allWrites: boolean, scan: TableScan): EntryKind {
+  const base = scan.entries.get(key) ?? omittedKeyKind(key, scan);
+  return allWrites ? combineBranchKinds(base, 'unknown') : base;
+}
+
+/** Pre-write classification of an omitted literal key `key` on `scan`. */
+function omittedKeyKind(key: string, scan: TableScan): EntryKind {
+  if (scan.stickyRenamed) {
+    return 'renamed';
   }
-  if (write.key !== undefined) {
-    scan.entries.set(write.key, 'renamed');
-    return;
+  return scan.unverified || scan.dynamicEntry || Object.hasOwn(Object.prototype, key)
+    ? 'unknown'
+    : NON_FUNCTION;
+}
+
+/** Commits accumulated post-declaration key classifications onto `scan`. */
+function flushPostKeyKinds(postState: ReadonlyMap<string, EntryKind>, scan: TableScan): void {
+  for (const [key, combined] of postState) {
+    scan.optionalKeys.add(key);
+    scan.entries.set(key, combined === NON_FUNCTION ? 'unknown' : combined);
   }
-  scan.stickyRenamed = true;
-  degradeExistingEntries(scan.entries, 'renamed');
 }
 
 /** Classifies a direct or descriptor-installed member value node. */
@@ -221,6 +288,7 @@ function recordTableProperty(
   }
   const each = withBranch(context, (branch) => propertyEntryKind(property, key, branch));
   if (key !== undefined) {
+    scan.optionalKeys.delete(key);
     scan.entries.set(key, overwriteEntryKind(scan.entries.get(key), each));
     return;
   }
@@ -262,8 +330,27 @@ function mergeSpreadTable(source: Expression, scan: TableScan, context: ScanCont
     return;
   }
   for (const [key, kind] of inner.entries) {
-    scan.entries.set(key, overwriteEntryKind(scan.entries.get(key), kind));
+    mergeVerifiedSpreadEntry(key, kind, inner.optionalKeys.has(key), scan);
   }
+}
+
+/** Merges one static key `key` from a verified spread source onto `scan`. */
+function mergeVerifiedSpreadEntry(
+  key: string,
+  kind: EntryKind,
+  optionalOnSpread: boolean,
+  scan: TableScan,
+): void {
+  const prev = scan.entries.get(key);
+  if (optionalOnSpread) {
+    if (prev === undefined) {
+      scan.optionalKeys.add(key);
+    }
+    scan.entries.set(key, combineBranchKinds(prev ?? NON_FUNCTION, kind));
+    return;
+  }
+  scan.optionalKeys.delete(key);
+  scan.entries.set(key, overwriteEntryKind(prev, kind));
 }
 
 /** Propagates dynamic and unverified flags from spread `inner` onto `scan`. */

@@ -1,19 +1,13 @@
 import {
-  type ArrayLiteralExpression,
   type BindingElement,
   type BindingName,
   type Expression,
   type Identifier,
   isArrayBindingPattern,
-  isArrayLiteralExpression,
-  isBindingElement,
   isDecorator,
-  isExpression,
   isIdentifier,
   isObjectBindingPattern,
-  isOmittedExpression,
   isParameterDeclaration,
-  isSpreadElement,
   isVariableDeclaration,
   isVoidExpression,
   type Node,
@@ -22,59 +16,37 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, useOf } from './code-globals.ts';
+import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import {
-  type AssignedBindingSource,
-  bindingReassignments,
   declaredBindingTarget,
   isFunctionType,
   isPatternStepFunctionType,
 } from './function-binding-types.ts';
+import { bindingElementSteps } from './function-candidate-objects.ts';
+import {
+  arraySlotEntryKind,
+  reassignedBindingEntryKind,
+  selectInlineArrayElement,
+} from './function-reassigned-bindings.ts';
 import {
   combineBranchKinds,
+  dynamicObjectEntryKind,
   type EntryKind,
-  type FunctionKind,
-  hasScanKind,
-  holderObject,
   isConstDeclaration,
   keyOf,
   memberEntryKind,
-  type ResolvedObject,
   type ResolvedProperty,
   resolvePropertyValue,
   type ScanContext,
-  scanResolvedObject,
   withBranch,
 } from './function-table-entries.ts';
 import { bindingIdentifiers } from './scope.ts';
 
+export { dynamicObjectEntryKind } from './function-table-entries.ts';
+
 const MISSING_CLEAN = 'missing-clean';
 const NON_FUNCTION: EntryKind = 'non-function';
-
-/** Classifies a dynamic lookup across all entries of a written object literal. */
-export function dynamicObjectEntryKind(holder: Expression, context: ScanContext): EntryKind {
-  const resolved = holderObject(holder, context);
-  if (resolved === undefined) {
-    return 'unknown';
-  }
-  return tableFunctionKind(resolved, context) ?? 'unknown';
-}
-
-/** Classifies a dynamic lookup across all entries of `resolved`. */
-function tableFunctionKind(
-  resolved: ResolvedObject,
-  context: ScanContext,
-): FunctionKind | undefined {
-  const scan = scanResolvedObject(resolved, context);
-  if (scan.stickyRenamed || hasScanKind(scan.entries, 'renamed')) {
-    return 'renamed';
-  }
-  if (scan.dynamicEntry || hasScanKind(scan.entries, 'entry')) {
-    return scan.unverified || hasScanKind(scan.entries, 'unknown') ? 'renamed' : 'entry';
-  }
-  return undefined;
-}
 
 /** Resolves an identifier through declarations, destructuring patterns, and function parameters. */
 export function identifierEntryKind(node: Identifier, context: ScanContext): EntryKind {
@@ -128,7 +100,7 @@ function variableEntryKind(
       ? { kind: 'unknown' }
       : { kind: 'expr', value: unwrapped(declared.initializer) };
   const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
-  const steps = bound === undefined ? [] : patternSteps(bound);
+  const steps = bound === undefined ? [] : bindingElementSteps(bound);
   const resolved =
     bound === undefined ? 'unknown' : evaluateBindingSteps(source, steps, 0, context);
   if (constant) {
@@ -164,29 +136,6 @@ function simpleVariableEntryKind(
   return reassignedBindingEntryKind(declared.name, context);
 }
 
-/** Checks post-declaration reassignments of `binding` for any function value. */
-function reassignedBindingEntryKind(binding: Node, context: ScanContext): EntryKind {
-  const sources = bindingReassignments(binding.getSourceFile()).get(binding) ?? [];
-  for (const source of sources) {
-    const each = withBranch(context, (branch) => assignedSourceEntryKind(source, branch));
-    if (each === 'entry' || each === 'renamed') {
-      return 'renamed';
-    }
-  }
-  return 'unknown';
-}
-
-/** Classifies a single reassignment source assigned to a mutable binding. */
-function assignedSourceEntryKind(source: AssignedBindingSource, context: ScanContext): EntryKind {
-  if (source.kind === 'expr') {
-    return context.classifyExpression(source.value, context);
-  }
-  if (source.kind === 'member') {
-    return memberEntryKind(source.holder, source.key, context);
-  }
-  return arraySlotEntryKind(source.holder, source.index, context);
-}
-
 /** Classifies simple or destructured parameter bindings, combining caller input with defaults. */
 function parameterEntryKind(
   node: Identifier,
@@ -199,24 +148,46 @@ function parameterEntryKind(
     return 'unknown';
   }
   context.seen.add(target);
+  const fromDeclaration = isIdentifier(parameter.name)
+    ? simpleParameterEntryKind(parameter, context)
+    : destructuredParameterEntryKind(node, parameter, context);
+  return fromDeclaration === 'renamed' ? 'renamed' : reassignedBindingEntryKind(target, context);
+}
+
+/** Classifies a simple identifier parameter binding from its annotation and default initializer. */
+function simpleParameterEntryKind(
+  parameter: ParameterDeclaration,
+  context: ScanContext,
+): EntryKind {
+  const callerKind: EntryKind = isFunctionType(parameter.type) ? 'renamed' : 'unknown';
   const { initializer } = parameter;
-  if (isIdentifier(parameter.name)) {
-    const callerKind: EntryKind = isFunctionType(parameter.type) ? 'renamed' : 'unknown';
-    if (initializer === undefined) {
-      return callerKind;
-    }
-    const defaultKind = withBranch(context, (branch) =>
-      branch.classifyExpression(unwrapped(initializer), branch),
-    );
-    return degradeMutableKind(combineBranchKinds(callerKind, defaultKind));
+  if (initializer === undefined) {
+    return callerKind;
+  }
+  const defaultKind = withBranch(context, (branch) =>
+    branch.classifyExpression(unwrapped(initializer), branch),
+  );
+  return degradeMutableKind(combineBranchKinds(callerKind, defaultKind));
+}
+
+/** Classifies a destructured parameter binding from caller input, annotations, and defaults. */
+function destructuredParameterEntryKind(
+  node: Identifier,
+  parameter: ParameterDeclaration,
+  context: ScanContext,
+): EntryKind {
+  const bound = bindingIdentifiers(parameter.name).find((each) => each.text === node.text);
+  const steps = bound === undefined ? [] : bindingElementSteps(bound);
+  if (isPatternStepFunctionType(parameter.type, steps, 0)) {
+    return 'renamed';
   }
   const callerKind = withBranch(context, (branch) =>
     patternEntryKind(node.text, parameter.name, { kind: 'unknown' }, branch),
   );
-  if (initializer === undefined) {
+  if (parameter.initializer === undefined) {
     return degradeMutableKind(callerKind);
   }
-  const defaultSource: ResolvedProperty = { kind: 'expr', value: unwrapped(initializer) };
+  const defaultSource: ResolvedProperty = { kind: 'expr', value: unwrapped(parameter.initializer) };
   const defaultKind = withBranch(context, (branch) =>
     patternEntryKind(node.text, parameter.name, defaultSource, branch),
   );
@@ -238,22 +209,7 @@ function patternEntryKind(
   const bound = bindingIdentifiers(pattern).find((each) => each.text === targetName);
   return bound === undefined
     ? 'unknown'
-    : evaluateBindingSteps(source, patternSteps(bound), 0, context);
-}
-
-/** Collects enclosing `BindingElement`s from outermost pattern to innermost binding `bound`. */
-export function patternSteps(bound: Identifier): readonly BindingElement[] {
-  const steps: BindingElement[] = [];
-  for (
-    let at: Node = bound.parent;
-    !isVariableDeclaration(at) && !isParameterDeclaration(at);
-    at = at.parent
-  ) {
-    if (isBindingElement(at)) {
-      steps.unshift(at);
-    }
-  }
-  return steps;
+    : evaluateBindingSteps(source, bindingElementSteps(bound), 0, context);
 }
 
 /** Steps through destructuring elements, combining source slots with pattern defaults at each level. */
@@ -368,146 +324,6 @@ function selectIntermediateSlot(
   return isArrayBindingPattern(step.parent)
     ? selectInlineArrayElement(source.value, step.parent.elements.indexOf(step))
     : { kind: 'unknown' };
-}
-
-/** Selects element `index` of an inline destructured array literal without prior spread elements. */
-function selectInlineArrayElement(holder: Expression, index: number): ResolvedProperty {
-  if (
-    index < 0 ||
-    !isArrayLiteralExpression(holder) ||
-    !isInlinePatternSource(holder) ||
-    holder.elements.slice(0, index + 1).some((each) => isSpreadElement(each))
-  ) {
-    return { kind: 'unknown' };
-  }
-  const element = holder.elements[index];
-  if (element === undefined || isOmittedExpression(element)) {
-    return { kind: MISSING_CLEAN };
-  }
-  return { kind: 'expr', value: unwrapped(element) };
-}
-
-/** Classifies element `index` of an inline or variable-bound array literal in array destructuring. */
-function arraySlotEntryKind(holder: Expression, index: number, context: ScanContext): EntryKind {
-  const inline = selectInlineArrayElement(holder, index);
-  if (inline.kind === MISSING_CLEAN) {
-    return NON_FUNCTION;
-  }
-  if (inline.kind === 'expr') {
-    return context.classifyExpression(inline.value, context);
-  }
-  return unverifiedArraySlotKind(holder, index, context);
-}
-
-/** Detects functions inside non-inline array literals without proving mutating slots non-callable. */
-function unverifiedArraySlotKind(
-  holder: Expression,
-  index: number,
-  context: ScanContext,
-): EntryKind {
-  const array = resolveArrayLiteral(holder, context);
-  if (array === undefined || index < 0) {
-    return 'unknown';
-  }
-  if (array.elements.slice(0, index + 1).every((each) => !isSpreadElement(each))) {
-    const element = array.elements[index];
-    return element === undefined || isOmittedExpression(element)
-      ? 'unknown'
-      : degradeMutableKind(context.classifyExpression(unwrapped(element), context));
-  }
-  for (const element of array.elements) {
-    if (!isOmittedExpression(element) && !isSpreadElement(element)) {
-      const each = withBranch(context, (branch) =>
-        branch.classifyExpression(unwrapped(element), branch),
-      );
-      if (each === 'entry' || each === 'renamed') {
-        return 'renamed';
-      }
-    }
-  }
-  return 'unknown';
-}
-
-/** Follows an identifier or destructured `const` chain to an `ArrayLiteralExpression`, if any. */
-function resolveArrayLiteral(
-  holder: Expression,
-  context: ScanContext,
-): ArrayLiteralExpression | undefined {
-  let current: Expression = holder;
-  for (;;) {
-    if (isArrayLiteralExpression(current)) {
-      return current;
-    }
-    const next = nextArrayHolderExpression(current, context);
-    if (next === undefined) {
-      return undefined;
-    }
-    current = next;
-  }
-}
-
-/** Resolves one lexical step from `current` toward its underlying array initializer. */
-function nextArrayHolderExpression(
-  current: Expression,
-  context: ScanContext,
-): Expression | undefined {
-  if (!isIdentifier(current)) {
-    return undefined;
-  }
-  const declared = frameDeclarationOf(current);
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    declared.initializer === undefined
-  ) {
-    return undefined;
-  }
-  const target = declaredBindingTarget(current, declared);
-  if (context.seen.has(target)) {
-    context.hitCycle = true;
-    return undefined;
-  }
-  context.seen.add(target);
-  if (isIdentifier(declared.name)) {
-    return unwrapped(declared.initializer);
-  }
-  return isConstDeclaration(declared)
-    ? resolveDestructuredExpression(current, declared, context)
-    : undefined;
-}
-
-/** Resolves the expression selected by a `const` destructuring binding `node` inside `declared`. */
-function resolveDestructuredExpression(
-  node: Identifier,
-  declared: VariableDeclaration,
-  context: ScanContext,
-): Expression | undefined {
-  if (declared.initializer === undefined) {
-    return undefined;
-  }
-  const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
-  if (bound === undefined) {
-    return undefined;
-  }
-  let selected: ResolvedProperty = { kind: 'expr', value: unwrapped(declared.initializer) };
-  for (const step of patternSteps(bound)) {
-    if (step.dotDotDotToken !== undefined || step.initializer !== undefined) {
-      return undefined;
-    }
-    selected = selectIntermediateSlot(selected, step, context);
-  }
-  return selected.kind === 'expr' ? selected.value : undefined;
-}
-
-/** Whether `node` stands directly as a destructuring initializer with no identifier alias to mutate it. */
-function isInlinePatternSource(node: ArrayLiteralExpression): boolean {
-  const { at, parent } = useOf(node);
-  return (
-    isExpression(at) &&
-    (isVariableDeclaration(parent) || isBindingElement(parent)) &&
-    parent.initializer === at &&
-    !isIdentifier(parent.name)
-  );
 }
 
 /** Static object key selected by `step` (`{ pick }`, `{ pick: p }`, `{ ['pick']: p }`, `{ [0]: p }`). */

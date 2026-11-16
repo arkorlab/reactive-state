@@ -57,6 +57,7 @@ import { writtenBy } from './written.ts';
 export interface ObjectWrites {
   readonly all: boolean;
   readonly keys: ReadonlySet<string>;
+  readonly untrackedKeys: ReadonlySet<string>;
 }
 
 /** Property assignment `this.prop = value` or `this[key] = value` inside a callable body. */
@@ -70,12 +71,27 @@ export interface CallableWrites extends ObjectWrites {
   readonly assignments: readonly ThisPropertyAssignment[];
 }
 
-export const EMPTY_WRITES: ObjectWrites = { all: false, keys: new Set() };
+interface MutableCallableWrites {
+  readonly assignments: ThisPropertyAssignment[];
+  readonly keys: Set<string>;
+  readonly untrackedKeys: Set<string>;
+}
+
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
+
+export const EMPTY_WRITES: ObjectWrites = {
+  all: false,
+  keys: EMPTY_KEYS,
+  untrackedKeys: EMPTY_KEYS,
+};
+
 export const EMPTY_CALLABLE_WRITES: CallableWrites = {
   all: false,
   assignments: [],
-  keys: EMPTY_WRITES.keys,
+  keys: EMPTY_KEYS,
+  untrackedKeys: EMPTY_KEYS,
 };
+
 const RAW_CALLABLE_WRITES = new WeakMap<Node, CallableWrites>();
 
 /** Non-freezing extension locks that keep existing entries safe only when their return is discarded. */
@@ -109,6 +125,15 @@ export function staticElementKey(node: ElementAccessExpression): string | undefi
   }
   const argument = unwrapped(node.argumentExpression);
   return isNumericLiteral(argument) ? String(Number(argument.text)) : undefined;
+}
+
+/** Whether `written` directly assigns a value expression onto `target`. */
+export function isDirectValueAssignment(written: Node, target: Node): boolean {
+  return (
+    isBinaryExpression(written) &&
+    VALUE_ASSIGNING.has(written.operatorToken.kind) &&
+    unwrapTarget(written.left) === target
+  );
 }
 
 /** Whether `node` is erased at compile time or belongs to a type-only import/export. */
@@ -163,7 +188,7 @@ export function isSafeDirectUse(node: Node): boolean {
   }
   if ((isVariableDeclaration(parent) || isBindingElement(parent)) && parent.initializer === at) {
     return (
-      isObjectBindingPattern(parent.name) ||
+      (parent.name !== undefined && isObjectBindingPattern(parent.name)) ||
       (isVariableDeclaration(parent) && isTrackedConstAlias(parent))
     );
   }
@@ -207,6 +232,7 @@ export function callableThisWrites(
   }
   let { all } = raw;
   const keys = new Set(raw.keys);
+  const untrackedKeys = new Set(raw.untrackedKeys);
   const assignments: ThisPropertyAssignment[] = [...raw.assignments];
   for (const item of raw.assignments) {
     const resolved = resolveCallables(item.value);
@@ -218,10 +244,13 @@ export function callableThisWrites(
       for (const key of nested.keys) {
         keys.add(key);
       }
+      for (const key of nested.untrackedKeys) {
+        untrackedKeys.add(key);
+      }
       assignments.push(...nested.assignments);
     }
   }
-  return { all, assignments, keys };
+  return { all, assignments, keys, untrackedKeys };
 }
 
 /** Computes and caches direct `this`-receiver writes and property assignments inside `callable`. */
@@ -230,20 +259,28 @@ function rawCallableWrites(callable: Node): CallableWrites {
   if (cached !== undefined) {
     return cached;
   }
-  const keys = new Set<string>();
-  const assignments: ThisPropertyAssignment[] = [];
+  const buckets: MutableCallableWrites = {
+    assignments: [],
+    keys: new Set(),
+    untrackedKeys: new Set(),
+  };
   const state = { all: false };
   const visit = (node: Node): void => {
     if (isSkippedSyntax(node)) {
       return;
     }
-    if (recordsCallableThisWrites(node, callable, keys, assignments)) {
+    if (recordsCallableThisWrites(node, callable, buckets)) {
       state.all = true;
     }
     node.forEachChild(visit);
   };
   visitCallableScope(callable, visit);
-  const result: CallableWrites = { all: state.all, assignments, keys };
+  const result: CallableWrites = {
+    all: state.all,
+    assignments: buckets.assignments,
+    keys: buckets.keys,
+    untrackedKeys: buckets.untrackedKeys,
+  };
   RAW_CALLABLE_WRITES.set(callable, result);
   return result;
 }
@@ -271,8 +308,7 @@ function visitCallableScope(callable: Node, visit: (node: Node) => void): void {
 function recordsCallableThisWrites(
   node: Node,
   callable: Node,
-  keys: Set<string>,
-  assignments: ThisPropertyAssignment[],
+  buckets: MutableCallableWrites,
 ): boolean {
   if (isCallExpression(node) && isSafeLockCall(node)) {
     return false;
@@ -284,18 +320,23 @@ function recordsCallableThisWrites(
       refersToCallableThis(target.expression, callable)
     ) {
       const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
-      assignments.push({ key, value: unwrapped(node.right) });
+      buckets.assignments.push({ key, value: unwrapped(node.right) });
     }
   }
   const written = writtenBy(node);
-  if (written !== undefined && writesUnknownThisKey(written, callable, keys)) {
+  if (written !== undefined && writesUnknownThisKey(node, written, callable, buckets)) {
     return true;
   }
   return isDirectCallableThisReference(node, callable) && !isSafeDirectUse(node);
 }
 
-/** Updates `keys` for `written` targets on `callable`'s `this`; answers `true` for whole/dynamic writes. */
-function writesUnknownThisKey(written: Node, callable: Node, keys: Set<string>): boolean {
+/** Updates `buckets` for `written` targets on `callable`'s `this`; answers `true` for whole/dynamic writes. */
+function writesUnknownThisKey(
+  writer: Node,
+  written: Node,
+  callable: Node,
+  buckets: MutableCallableWrites,
+): boolean {
   const targets = targetsOf(written);
   for (const rawTarget of targets) {
     const target = unwrapTarget(rawTarget);
@@ -303,14 +344,18 @@ function writesUnknownThisKey(written: Node, callable: Node, keys: Set<string>):
       return true;
     }
     if (
-      (isPropertyAccessExpression(target) || isElementAccessExpression(target)) &&
-      refersToCallableThis(target.expression, callable)
+      !(isPropertyAccessExpression(target) || isElementAccessExpression(target)) ||
+      !refersToCallableThis(target.expression, callable)
     ) {
-      const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
-      if (key === undefined) {
-        return true;
-      }
-      keys.add(key);
+      continue;
+    }
+    const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
+    if (key === undefined) {
+      return true;
+    }
+    buckets.keys.add(key);
+    if (!isDirectValueAssignment(writer, target)) {
+      buckets.untrackedKeys.add(key);
     }
   }
   return false;

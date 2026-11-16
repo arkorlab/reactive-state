@@ -7,6 +7,7 @@ import {
   isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
+  isExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -107,6 +108,7 @@ export function callableWritesOnObject(
   };
   let all = false;
   const keys = new Set<string>();
+  const untrackedKeys = new Set<string>();
   const assignments: ThisPropertyAssignment[] = [];
   for (const callable of candidates) {
     const writes = callableThisWrites(callable, resolveExpr, new Set());
@@ -116,11 +118,14 @@ export function callableWritesOnObject(
     for (const key of writes.keys) {
       keys.add(key);
     }
+    for (const key of writes.untrackedKeys) {
+      untrackedKeys.add(key);
+    }
     assignments.push(...writes.assignments);
   }
   return !all && keys.size === 0 && assignments.length === 0
     ? EMPTY_CALLABLE_WRITES
-    : { all, assignments, keys };
+    : { all, assignments, keys, untrackedKeys };
 }
 
 /** Flattens named data callables, dynamic data callables, and own accessors of `callables`. */
@@ -310,9 +315,12 @@ function recordAssignedItem(
   traversal: CallableTraversal,
   state: { readonly dynamic: Set<Node>; readonly named: Map<string, Set<Node>> },
 ): void {
-  const resolved = isMethodDeclaration(item.callable)
-    ? [item.callable]
-    : expressionCallables(item.callable, { seen: new Set(), traversal });
+  let resolved: readonly Node[] = [];
+  if (isMethodDeclaration(item.callable)) {
+    resolved = [item.callable];
+  } else if (isExpression(item.callable)) {
+    resolved = expressionCallables(item.callable, { seen: new Set(), traversal });
+  }
   if (item.key === undefined) {
     for (const callable of resolved) {
       state.dynamic.add(callable);
@@ -347,15 +355,19 @@ function expressionCallables(value: Expression, context: CallableLookupContext):
     return [];
   }
   if (isConditionalExpression(value)) {
+    const left = { seen: new Set(context.seen), traversal: context.traversal };
+    const right = { seen: new Set(context.seen), traversal: context.traversal };
     return [
-      ...expressionCallables(unwrapped(value.whenTrue), context),
-      ...expressionCallables(unwrapped(value.whenFalse), context),
+      ...expressionCallables(unwrapped(value.whenTrue), left),
+      ...expressionCallables(unwrapped(value.whenFalse), right),
     ];
   }
   if (isBinaryExpression(value) && LOGICAL_FORWARDING.has(value.operatorToken.kind)) {
+    const left = { seen: new Set(context.seen), traversal: context.traversal };
+    const right = { seen: new Set(context.seen), traversal: context.traversal };
     return [
-      ...expressionCallables(unwrapped(value.left), context),
-      ...expressionCallables(unwrapped(value.right), context),
+      ...expressionCallables(unwrapped(value.left), left),
+      ...expressionCallables(unwrapped(value.right), right),
     ];
   }
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
@@ -424,14 +436,16 @@ function identifierCallables(node: Identifier, context: CallableLookupContext): 
   if (!isVariableDeclaration(declared)) {
     return [];
   }
+  const initBranch = { seen: new Set(context.seen), traversal: context.traversal };
   const results = isIdentifier(declared.name)
-    ? simpleVariableCallables(declared, context)
-    : [...destructuredCallables(node, declared, context)];
+    ? simpleVariableCallables(declared, initBranch)
+    : [...destructuredCallables(node, declared, initBranch)];
   if (!isConstVariable(declared)) {
     const writes = context.traversal.index.variableWrites.get(target);
     if (writes !== undefined) {
       for (const assigned of writes) {
-        results.push(...expressionCallables(assigned, context));
+        const writeBranch = { seen: new Set(context.seen), traversal: context.traversal };
+        results.push(...expressionCallables(assigned, writeBranch));
       }
     }
   }
