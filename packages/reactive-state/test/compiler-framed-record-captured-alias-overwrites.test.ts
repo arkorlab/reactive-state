@@ -1,9 +1,10 @@
 import { isIdentifier, isNewExpression, type Node } from 'typescript/ast';
+import type { API } from 'typescript/sync';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { unwrapped } from '../src/compiler/bounded.ts';
 import { framedSearchParamsText } from '../src/compiler/framed-search-params-text.ts';
-import { type API, openTypeScript, parseModule } from '../src/compiler/typescript.ts';
+import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
  * Definite post-capture field writes on an unreassigned captured record alias replace earlier
