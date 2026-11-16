@@ -1,29 +1,39 @@
 import {
   type BindingElement,
+  type Block,
   type CallExpression,
   type ElementAccessExpression,
   type Expression,
+  type GetAccessorDeclaration,
   type Identifier,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isComputedPropertyName,
   isDeleteExpression,
   isElementAccessExpression,
+  isFunctionLikeDeclaration,
+  isGetAccessorDeclaration,
   isIdentifier,
+  isMethodDeclaration,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isReturnStatement,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isTaggedTemplateExpression,
   isTemplateExpression,
   isVariableDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type ParameterDeclaration,
   type PropertyAccessExpression,
+  type PropertyAssignment,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -40,6 +50,7 @@ import { dateText, localNamed } from './local-reads.ts';
 import { renderDateText } from './render-date-text.ts';
 import { renderIntlInput } from './render-intl-inputs.ts';
 import { reflectedRead } from './render-intl-reflections.ts';
+import { pushBoundTagPaths, tagPathKey, type TagPath } from './render-raw-tag-calls.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** What a read takes a method of, where the code shows it: the value, and the keys selected within it. */
@@ -54,10 +65,7 @@ interface Taken {
   readonly receiver: Receiver | undefined;
 }
 
-interface TagPath {
-  readonly node: Expression;
-  readonly suffix: readonly (string | undefined)[];
-}
+type ObjectStep = 'keep' | 'masked' | 'stop';
 
 /** Locale-sensitive native render reads, with source-proven own functions and local date data retained. */
 const LOCALE_MEMBERS: ReadonlySet<string> = new Set([
@@ -101,7 +109,7 @@ function localDateText(node: Node): string | undefined {
   return text;
 }
 
-/** Constant, multi-branch, reflected and destructured tag paths that can reach native String.raw. */
+/** Constant, multi-branch, reflected, bound and destructured tag paths that can reach native String.raw. */
 function maySelectNativeRaw(tag: Expression): boolean {
   const pending: TagPath[] = [{ node: tag, suffix: [] }];
   const seen = new Set<string>();
@@ -110,11 +118,12 @@ function maySelectNativeRaw(tag: Expression): boolean {
     steps += 1;
     if (steps > TAG_SEARCH.limit) return true;
     const value = unwrapped(current.node);
-    const key = `${value.pos}:${value.end}:${current.suffix.map((part) => part ?? '*').join('.')}`;
+    const key = tagPathKey(value, current.suffix);
     if (seen.has(key)) continue;
     seen.add(key);
     if (matchesDirectRawTag(value, current.suffix)) return true;
-    if (globalPathOf(value) === undefined) expandTagPath(value, current.suffix, pending);
+    if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, pending))
+      return true;
   }
   return false;
 }
@@ -147,8 +156,24 @@ function isPossibleGlobalHolder(name: string | undefined): boolean {
   return name === undefined || GLOBAL_OBJECTS.has(name);
 }
 
-/** Expands one non-global tag expression into the receiver or binding sources it may read. */
+/** Expands one non-global tag expression into the receiver, bound or binding sources it may read. */
 function expandTagPath(
+  value: Expression,
+  suffix: readonly (string | undefined)[],
+  pending: TagPath[],
+): boolean {
+  if (
+    isCallExpression(value) &&
+    suffix.length === 0 &&
+    pushBoundTagPaths(value, expandNonBoundTagPath, pending)
+  ) {
+    return true;
+  }
+  expandNonBoundTagPath(value, suffix, pending);
+  return false;
+}
+
+function expandNonBoundTagPath(
   value: Expression,
   suffix: readonly (string | undefined)[],
   pending: TagPath[],
@@ -157,10 +182,7 @@ function expandTagPath(
     pushMemberTagPaths(value.expression, framedMemberNames(value), suffix, pending);
     return;
   }
-  if (isCallExpression(value)) {
-    pushReflectedTagPaths(value, suffix, pending);
-    return;
-  }
+  if (isCallExpression(value)) pushReflectedTagPaths(value, suffix, pending);
   const sources = framedSourceValues(value);
   if (sources !== undefined) {
     for (const source of sources) pending.push({ node: source, suffix });
@@ -197,32 +219,127 @@ function pushMemberTagPaths(
   for (const name of names) pending.push({ node: receiver, suffix: [name, ...suffix] });
 }
 
+/** Right-to-left own-property scan so unconditional later entries override earlier entries and spreads. */
 function pushObjectTagPaths(
   literal: ObjectLiteralExpression,
   suffix: readonly (string | undefined)[],
   pending: TagPath[],
 ): void {
+  let setterMasked = false;
+  let prototype: Expression | undefined;
+  for (const property of literal.properties.toReversed()) {
+    if (isPropertyAssignment(property) && isPrototypeProperty(property)) {
+      prototype ??= property.initializer;
+      continue;
+    }
+    const outcome = stepObjectTagProperty(property, suffix, setterMasked, pending);
+    if (outcome === 'stop') return;
+    if (outcome === 'masked') setterMasked = true;
+  }
+  if (!setterMasked && prototype !== undefined) {
+    pending.push({ node: prototype, suffix: prototypeSuffix(suffix) });
+  }
+}
+
+function prototypeSuffix(suffix: readonly (string | undefined)[]): readonly (string | undefined)[] {
+  return suffix[0] === '__proto__' ? suffix.slice(1) : suffix;
+}
+
+function isPrototypeProperty(property: PropertyAssignment): boolean {
+  return (
+    !isComputedPropertyName(property.name) && assignedNames(property.name)?.[0] === '__proto__'
+  );
+}
+
+function stepObjectTagProperty(
+  property: ObjectLiteralElementLike,
+  suffix: readonly (string | undefined)[],
+  setterMasked: boolean,
+  pending: TagPath[],
+): ObjectStep {
+  const [head] = suffix;
+  if (isSpreadAssignment(property)) {
+    if (!setterMasked) pending.push({ node: property.expression, suffix });
+    return 'keep';
+  }
+  if (isGetAccessorDeclaration(property)) return stepGetterProperty(property, suffix, pending);
+  if (isSetAccessorDeclaration(property)) {
+    return exactObjectKey(assignedNames(property.name), head) ? 'masked' : 'keep';
+  }
+  return stepDataProperty(property, suffix, setterMasked, pending);
+}
+
+function stepGetterProperty(
+  getter: GetAccessorDeclaration,
+  suffix: readonly (string | undefined)[],
+  pending: TagPath[],
+): ObjectStep {
   const [head, ...rest] = suffix;
-  for (const property of literal.properties) {
-    if (isSpreadAssignment(property)) {
-      pending.push({ node: property.expression, suffix });
-    } else if (
-      isPropertyAssignment(property) &&
-      matchesObjectKey(assignedNames(property.name), head)
-    ) {
-      pending.push({ node: property.initializer, suffix: rest });
-    } else if (
-      isShorthandPropertyAssignment(property) &&
-      isIdentifier(property.name) &&
-      (head === undefined || head === property.name.text)
-    ) {
-      pending.push({ node: property.name, suffix: rest });
+  const names = assignedNames(getter.name);
+  if (matchesObjectKey(names, head) && getter.body !== undefined) {
+    for (const expression of returnedExpressions(getter.body)) {
+      pending.push({ node: expression, suffix: rest });
     }
   }
+  return exactObjectKey(names, head) ? 'stop' : 'keep';
+}
+
+function returnedExpressions(body: Block): readonly Expression[] {
+  const expressions: Expression[] = [];
+  const pending: Node[] = [...body.statements];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isFunctionLikeDeclaration(node)) continue;
+    if (isReturnStatement(node)) {
+      if (node.expression !== undefined) expressions.push(node.expression);
+      continue;
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return expressions;
+}
+
+function stepDataProperty(
+  property: ObjectLiteralElementLike,
+  suffix: readonly (string | undefined)[],
+  setterMasked: boolean,
+  pending: TagPath[],
+): ObjectStep {
+  const [head, ...rest] = suffix;
+  if (isShorthandPropertyAssignment(property)) {
+    return stepShorthandProperty(property.name, suffix, setterMasked, pending);
+  }
+  if (isMethodDeclaration(property)) {
+    return exactObjectKey(assignedNames(property.name), head) ? 'stop' : 'keep';
+  }
+  if (!isPropertyAssignment(property)) return 'keep';
+  const names = assignedNames(property.name);
+  if (!setterMasked && matchesObjectKey(names, head)) {
+    pending.push({ node: property.initializer, suffix: rest });
+  }
+  return exactObjectKey(names, head) ? 'stop' : 'keep';
+}
+
+function stepShorthandProperty(
+  name: Identifier,
+  suffix: readonly (string | undefined)[],
+  setterMasked: boolean,
+  pending: TagPath[],
+): ObjectStep {
+  const [head, ...rest] = suffix;
+  if (!setterMasked && (head === undefined || head === name.text)) {
+    pending.push({ node: name, suffix: rest });
+  }
+  return head === name.text ? 'stop' : 'keep';
 }
 
 function matchesObjectKey(names: readonly string[] | undefined, head: string | undefined): boolean {
   return head === undefined || names === undefined || names.includes(head);
+}
+
+function exactObjectKey(names: readonly string[] | undefined, head: string | undefined): boolean {
+  return head !== undefined && names?.length === 1 && names[0] === head;
 }
 
 function pushIdentifierTagPaths(
