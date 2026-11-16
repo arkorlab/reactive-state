@@ -6,6 +6,7 @@ import {
   type Expression,
   type GetAccessorDeclaration,
   type Identifier,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
@@ -16,6 +17,7 @@ import {
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
+  isNewExpression,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isParameterDeclaration,
@@ -51,6 +53,11 @@ import { renderDateText } from './render-date-text.ts';
 import { renderIntlInput } from './render-intl-inputs.ts';
 import { reflectedRead } from './render-intl-reflections.ts';
 import { pushBoundTagPaths, tagPathKey, type TagPath } from './render-raw-tag-calls.ts';
+import {
+  pushArrayCallTagPaths,
+  pushArrayIdentifierTagPaths,
+  pushArrayLiteralTagPaths,
+} from './render-raw-tag-paths.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** What a read takes a method of, where the code shows it: the value, and the keys selected within it. */
@@ -122,7 +129,7 @@ function maySelectNativeRaw(tag: Expression): boolean {
     if (seen.has(key)) continue;
     seen.add(key);
     if (matchesDirectRawTag(value, current.suffix)) return true;
-    if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, pending))
+    if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, tag, pending))
       return true;
   }
   return false;
@@ -156,43 +163,66 @@ function isPossibleGlobalHolder(name: string | undefined): boolean {
   return name === undefined || GLOBAL_OBJECTS.has(name);
 }
 
-/** Expands one non-global tag expression into the receiver, bound or binding sources it may read. */
+/** Expands one non-global tag expression into the receiver, bound, array or binding sources it may read. */
 function expandTagPath(
   value: Expression,
   suffix: readonly (string | undefined)[],
+  rootRead: Expression,
   pending: TagPath[],
 ): boolean {
   if (
     isCallExpression(value) &&
     suffix.length === 0 &&
-    pushBoundTagPaths(value, expandNonBoundTagPath, pending)
+    pushBoundTagPaths(
+      value,
+      (inner, innerSuffix, nextPending) =>
+        expandNonBoundTagPath(inner, innerSuffix, rootRead, nextPending),
+      pending,
+    )
   ) {
     return true;
   }
-  expandNonBoundTagPath(value, suffix, pending);
-  return false;
+  return expandNonBoundTagPath(value, suffix, rootRead, pending);
 }
 
 function expandNonBoundTagPath(
   value: Expression,
   suffix: readonly (string | undefined)[],
+  rootRead: Expression,
   pending: TagPath[],
-): void {
+): boolean {
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     pushMemberTagPaths(value.expression, framedMemberNames(value), suffix, pending);
-    return;
+    return false;
   }
-  if (isCallExpression(value)) pushReflectedTagPaths(value, suffix, pending);
+  if (isCallExpression(value)) {
+    pushReflectedTagPaths(value, suffix, pending);
+    if (pushArrayCallTagPaths(value, suffix, pending)) return true;
+  }
   const sources = framedSourceValues(value);
   if (sources !== undefined) {
     for (const source of sources) pending.push({ node: source, suffix });
-    return;
+    return false;
+  }
+  if (isArrayLiteralExpression(value) && suffix.length > 0) {
+    pushArrayLiteralTagPaths(value, suffix, pending);
+    return false;
   }
   if (isObjectLiteralExpression(value) && suffix.length > 0) {
     pushObjectTagPaths(value, suffix, pending);
-    return;
+    return false;
   }
-  if (isIdentifier(value)) pushIdentifierTagPaths(value, suffix, pending);
+  if (
+    isNewExpression(value) &&
+    suffix.length > 0 &&
+    suffix[0] === undefined &&
+    globalPathOf(unwrapped(value.expression))?.join('.') === 'Set' &&
+    value.arguments?.[0] !== undefined
+  ) {
+    pending.push({ node: value.arguments[0], suffix });
+    return false;
+  }
+  return isIdentifier(value) && pushIdentifierTagPaths(value, suffix, rootRead, pending);
 }
 
 function pushReflectedTagPaths(
@@ -308,7 +338,9 @@ function stepDataProperty(
 ): ObjectStep {
   const [head, ...rest] = suffix;
   if (isShorthandPropertyAssignment(property)) {
-    return stepShorthandProperty(property.name, suffix, setterMasked, pending);
+    return isIdentifier(property.name)
+      ? stepShorthandProperty(property.name, suffix, setterMasked, pending)
+      : 'keep';
   }
   if (isMethodDeclaration(property)) {
     return exactObjectKey(assignedNames(property.name), head) ? 'stop' : 'keep';
@@ -345,26 +377,29 @@ function exactObjectKey(names: readonly string[] | undefined, head: string | und
 function pushIdentifierTagPaths(
   name: Identifier,
   suffix: readonly (string | undefined)[],
+  rootRead: Expression,
   pending: TagPath[],
-): void {
+): boolean {
   for (const source of framedAssignedSources(name)) {
     pending.push({ node: source.value, suffix: [...source.keys, ...suffix] });
   }
+  if (pushArrayIdentifierTagPaths(name, suffix, rootRead, pending)) return true;
   const declared = frameDeclarationOf(name);
   if (
     declared === undefined ||
     (!isVariableDeclaration(declared) && !isParameterDeclaration(declared))
   )
-    return;
+    return false;
   const bound = bindingElementOf(declared, name.text);
   if (bound?.initializer !== undefined) pending.push({ node: bound.initializer, suffix });
   const selected = frameBindingOf(name);
   if (selected !== undefined) {
     if (selected.binding.initializer !== undefined)
       pending.push({ node: selected.binding.initializer, suffix: [...selected.keys, ...suffix] });
-    return;
+    return false;
   }
   if (bound !== undefined) pushComputedBindingTagPaths(bound, suffix, pending);
+  return false;
 }
 
 function bindingElementOf(

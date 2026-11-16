@@ -1,20 +1,29 @@
 import {
+  type ArrayLiteralExpression,
   type BinaryExpression,
   type CallExpression,
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
   isIdentifier,
   isNewExpression,
+  isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
+  isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
   type Node,
+  type ObjectLiteralExpression,
   SyntaxKind,
   type TemplateExpression,
 } from 'typescript/ast';
@@ -32,7 +41,7 @@ import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
-import { LOCAL_TIME } from './local-date-inputs.ts';
+import { assignedNames, LOCAL_TIME } from './local-date-inputs.ts';
 import { localDateProjection } from './local-date-projections.ts';
 import { constantValue } from './numbers.ts';
 
@@ -43,6 +52,7 @@ const RAW_TAGS: ReadonlySet<string> = new Set(['String.raw']);
 const RAW_DATE_FIELDS: ReadonlySet<string> = new Set(['Date', 'String', 'String.raw']);
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
 const DATE_RANGE = { maximum: 8_640_000_000_000_000 } as const;
+const ARRAY_INDEX = { limit: 4_294_967_295 } as const;
 
 /** A source-known Date converted to text still reads its native local time zone. */
 export function renderDateText(node: Node): string | undefined {
@@ -145,7 +155,7 @@ function isNativeRawPath(parts: readonly string[]): boolean {
   return parts.length - index === 2 && parts[index] === 'String' && parts[index + 1] === 'raw';
 }
 
-/** One constant member access or transparent target step while walking toward native String.raw. */
+/** One constant member access, unexposed literal selection or const alias step toward String.raw. */
 function advanceRawTarget(
   value: Expression,
   consumer: Expression,
@@ -159,28 +169,103 @@ function advanceRawTarget(
     tail.unshift(name);
     return value.expression;
   }
+  if (tail.length > 0 && isArrayLiteralExpression(value)) return advanceArrayRawTarget(value, tail);
+  if (tail.length > 0 && isObjectLiteralExpression(value))
+    return advanceObjectRawTarget(value, tail);
   return nextRawTarget(value);
 }
 
-/** Quiet comma prefixes and whole const initializers preserve a single native target identity. */
+function advanceArrayRawTarget(
+  array: ArrayLiteralExpression,
+  tail: string[],
+): Expression | undefined {
+  const [head] = tail;
+  const index = head === undefined ? undefined : canonicalArrayIndex(head);
+  if (index === undefined || index >= array.elements.length) return undefined;
+  for (let slot = 0; slot < index; slot += 1) {
+    const before = array.elements[slot];
+    if (before !== undefined && isSpreadElement(before)) return undefined;
+  }
+  const element = array.elements[index];
+  if (element === undefined || isOmittedExpression(element) || isSpreadElement(element))
+    return undefined;
+  tail.shift();
+  return element;
+}
+
+function advanceObjectRawTarget(
+  object: ObjectLiteralExpression,
+  tail: string[],
+): Expression | undefined {
+  const [head] = tail;
+  if (head === undefined || head === '__proto__') return undefined;
+  for (const property of object.properties.toReversed()) {
+    const step = matchObjectRawProperty(property, head);
+    if (step === undefined) continue;
+    if (step.matched === undefined) return undefined;
+    tail.shift();
+    return step.matched;
+  }
+  return undefined;
+}
+
+function matchObjectRawProperty(
+  property: ObjectLiteralExpression['properties'][number],
+  head: string,
+): { readonly matched: Expression | undefined } | undefined {
+  if (isSpreadAssignment(property)) return { matched: undefined };
+  if (isShorthandPropertyAssignment(property)) {
+    if (!isIdentifier(property.name)) return { matched: undefined };
+    return property.name.text === head ? { matched: property.name } : undefined;
+  }
+  if (!isPropertyAssignment(property)) return { matched: undefined };
+  const names = assignedNames(property.name);
+  if (names === undefined) return { matched: undefined };
+  if (!names.includes(head)) return undefined;
+  return { matched: names.length === 1 ? property.initializer : undefined };
+}
+
+function canonicalArrayIndex(key: string): number | undefined {
+  const index = Number(key);
+  return Number.isSafeInteger(index) &&
+    index >= 0 &&
+    index < ARRAY_INDEX.limit &&
+    String(index) === key
+    ? index
+    : undefined;
+}
+
+/** Quiet comma prefixes and unexposed const initializers preserve a single native target identity. */
 function nextRawTarget(value: Expression): Expression | undefined {
   if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken)
     return framedQuietPrimitive(value.left) ? value.right : undefined;
   return isIdentifier(value) ? wholeConstInitializer(value) : undefined;
 }
 
-/** A whole const variable declaration's initializer, without following pattern projections. */
+/** Whole const aliases, requiring literal containers to remain unexposed before element selection. */
 function wholeConstInitializer(name: Identifier): Expression | undefined {
   const selected = frameBindingOf(name);
   if (selected === undefined || selected.keys.length > 0) return undefined;
   const { binding } = selected;
-  if (!isVariableDeclaration(binding) || !isVariableDeclarationList(binding.parent))
+  if (
+    !isVariableDeclaration(binding) ||
+    !isVariableDeclarationList(binding.parent) ||
+    binding.initializer === undefined
+  )
     return undefined;
   const statement = binding.parent.parent;
-  return isVariableStatement(statement) &&
-    /^const\b/u.test(binding.parent.getText(binding.getSourceFile()))
-    ? binding.initializer
-    : undefined;
+  if (
+    !isVariableStatement(statement) ||
+    !/^const\b/u.test(binding.parent.getText(binding.getSourceFile()))
+  )
+    return undefined;
+  const initial = unwrapped(binding.initializer);
+  if (
+    (isArrayLiteralExpression(initial) || isObjectLiteralExpression(initial)) &&
+    framedQuietSource(name) === undefined
+  )
+    return undefined;
+  return binding.initializer;
 }
 
 /** An invalid Date has fixed text; only a known valid instant adds a local-time conversion input. */

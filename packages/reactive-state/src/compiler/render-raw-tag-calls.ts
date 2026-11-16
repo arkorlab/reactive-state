@@ -38,7 +38,7 @@ export type ExpandTagPath = (
   value: Expression,
   suffix: readonly (string | undefined)[],
   pending: TagPath[],
-) => void;
+) => boolean;
 
 type WrapperMethod = 'apply' | 'bind' | 'call';
 
@@ -85,7 +85,7 @@ export function pushBoundTagPaths(
 }
 
 export function tagPathKey(value: Expression, suffix: readonly (string | undefined)[]): string {
-  return `${value.pos}:${value.end}:${suffix.map((part) => part ?? '*').join('.')}`;
+  return `${String(value.pos)}:${String(value.end)}:${suffix.map((part = '*') => part).join('.')}`;
 }
 
 function boundLeafTarget(item: TagCallable): Expression | undefined {
@@ -138,11 +138,20 @@ function invokeCallable(
   args: readonly Expression[],
   context: CallContext,
 ): readonly TagCallable[] {
-  if (!takeCallStep(context) || fn.kind === 'target') return [];
-  if (fn.kind === 'bound')
-    return invokeCallable(fn.target, fn.self, [...fn.given, ...args], context);
-  if (fn.kind === 'reflect-apply') return invokeReflectApply(args, context);
-  return self === undefined ? [] : invokeMethodCallable(fn.method, self, args, context);
+  let currentFn = fn;
+  let currentSelf = self;
+  let currentArgs = args;
+  while (currentFn.kind === 'bound') {
+    if (!takeCallStep(context)) return [];
+    currentArgs = [...currentFn.given, ...currentArgs];
+    currentSelf = currentFn.self;
+    currentFn = currentFn.target;
+  }
+  if (!takeCallStep(context) || currentFn.kind === 'target') return [];
+  if (currentFn.kind === 'reflect-apply') return invokeReflectApply(currentArgs, context);
+  return currentSelf === undefined
+    ? []
+    : invokeMethodCallable(currentFn.method, currentSelf, currentArgs, context);
 }
 
 function invokeMethodCallable(
@@ -170,12 +179,14 @@ function bindCallable(
   if (first === undefined || isSpreadElement(first)) {
     return [{ given: [], kind: 'bound', self: undefined, target: self }];
   }
-  return wrapperCallablesOf(first, context).map((boundSelf) => ({
-    given: rest,
-    kind: 'bound',
-    self: boundSelf,
-    target: self,
-  }));
+  return wrapperCallablesOf(first, context).map((boundSelf) => {
+    return {
+      given: rest,
+      kind: 'bound',
+      self: boundSelf,
+      target: self,
+    };
+  });
 }
 
 function invokeReflectApply(
@@ -244,7 +255,10 @@ function wrapperCallablesOf(expression: Expression, context: CallContext): reado
       continue;
     }
     results.push(...localWrapperCallables(value, current.suffix, context));
-    context.expand(value, current.suffix, pending);
+    if (context.expand(value, current.suffix, pending)) {
+      context.exhausted = true;
+      return results;
+    }
   }
   return results;
 }
@@ -264,7 +278,7 @@ function globalWrapperCallables(parts: readonly (string | undefined)[]): readonl
   ) {
     results.push({ kind: 'reflect-apply' });
   }
-  if (trimmed.length === 2 && root !== undefined && PLAIN_GLOBAL_NAMESPACES.has(root)) {
+  if (root !== undefined && trimmed.length === 2 && PLAIN_GLOBAL_NAMESPACES.has(root)) {
     return results;
   }
   for (const method of matchingWrapperMethods(last)) {
