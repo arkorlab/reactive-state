@@ -6,29 +6,19 @@ import {
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
-  isClassStaticBlockDeclaration,
-  isComputedPropertyName,
   isConditionalExpression,
-  isConstructorDeclaration,
-  isDecorator,
   isForInStatement,
   isForOfStatement,
   isFunctionDeclaration,
-  isFunctionExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isMethodDeclaration,
   isNonNullExpression,
   isObjectLiteralExpression,
   isParenthesizedExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAssignment,
-  isPropertyDeclaration,
   isSatisfiesExpression,
-  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
-  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
@@ -36,17 +26,16 @@ import {
   isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
-  isVariableDeclarationList,
   isVoidExpression,
   type Node,
   type ParameterDeclaration,
   SyntaxKind,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering, overloadsOf, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
+import { constantDeclaration, mentionsAccessibleArguments } from './framed-template-arguments.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 import { useOf } from './uses.ts';
 
@@ -124,15 +113,6 @@ function namedTagFunctions(name: Identifier, seen: Set<Node>): readonly Answerin
     return undefined;
   }
   return resolvedTagFunctions(declared.initializer, seen);
-}
-
-/** Whole `const` bindings keep their initializer value throughout their scope. */
-function constantDeclaration(declared: VariableDeclaration): boolean {
-  return (
-    isIdentifier(declared.name) &&
-    isVariableDeclarationList(declared.parent) &&
-    /^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
-  );
 }
 
 /** Named function declarations keep their body when neither redeclared nor reassigned. */
@@ -215,131 +195,6 @@ function nonCoercingTestUse(node: Identifier): boolean {
     isVoidExpression(parent) ||
     (isPrefixUnaryExpression(parent) && parent.operator === SyntaxKind.ExclamationToken) ||
     (isBinaryExpression(parent) && STRICT_EQUALITY.has(parent.operatorToken.kind))
-  );
-}
-
-/** Own or inherited `arguments` reads (including aliases) can expose unnamed or outer error values. */
-function mentionsAccessibleArguments(fn: Answering): boolean {
-  if (fn.body === undefined) return false;
-  const pending: Node[] = [...parametersOf(fn), fn.body];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (node !== fn && bindsOwnArguments(node)) {
-      pushOuterScopeHeader(node, pending);
-      continue;
-    }
-    if (readsAccessibleArguments(node)) return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
-}
-
-/** Matches direct or aliased `arguments` reads in the tag's own or inherited callable scope. */
-function readsAccessibleArguments(node: Node): boolean {
-  if (!isIdentifier(node) || !readsBinding(node)) return false;
-  const seen = new Set<Node>();
-  let current: Identifier = node;
-  while (!seen.has(current)) {
-    seen.add(current);
-    if (isUnshadowedArgumentsRead(current)) return true;
-    const declared = frameDeclarationOf(current);
-    if (
-      declared === undefined ||
-      !isVariableDeclaration(declared) ||
-      declared.initializer === undefined
-    ) {
-      return false;
-    }
-    const init = unwrapped(declared.initializer);
-    if (!isIdentifier(init)) return false;
-    current = init;
-  }
-  return false;
-}
-
-/** Checks whether `node` reads an implicit `arguments` binding not shadowed inside its owner. */
-function isUnshadowedArgumentsRead(node: Identifier): boolean {
-  if (node.text !== 'arguments' || !readsBinding(node)) return false;
-  const declared = frameDeclarationOf(node);
-  if (declared === undefined) return true;
-  const owner = enclosingArgumentsCallable(node);
-  return owner !== undefined && (declared.pos < owner.pos || declared.end > owner.end);
-}
-
-/** Finds the nearest enclosing non-arrow callable whose body or parameter list owns `node`. */
-function enclosingArgumentsCallable(node: Node): Node | undefined {
-  let within: Node = node;
-  let inDecorator = false;
-  for (let at: Node = node.parent; !isSourceFile(at); within = at, at = at.parent) {
-    if (isDecorator(within)) inDecorator = true;
-    const boundary = classifyArgumentsBoundary(at, within, inDecorator);
-    if (boundary === 'header') {
-      inDecorator = false;
-      continue;
-    }
-    if (boundary === 'blocked') return undefined;
-    if (boundary === 'owner') return at;
-  }
-  return undefined;
-}
-
-function classifyArgumentsBoundary(
-  at: Node,
-  within: Node,
-  inDecorator: boolean,
-): 'blocked' | 'header' | 'none' | 'owner' {
-  if (!bindsOwnArguments(at)) return 'none';
-  if (inDecorator || isComputedPropertyName(within)) return 'header';
-  return isClassStaticBlockDeclaration(at) || isPropertyDeclaration(at) ? 'blocked' : 'owner';
-}
-
-/** Computed member names and decorators evaluate in the enclosing callable's `arguments` scope. */
-function pushOuterScopeHeader(node: Node, pending: Node[]): void {
-  if (
-    (isMethodDeclaration(node) ||
-      isGetAccessorDeclaration(node) ||
-      isSetAccessorDeclaration(node) ||
-      isPropertyDeclaration(node)) &&
-    isComputedPropertyName(node.name)
-  ) {
-    pending.push(node.name.expression);
-  }
-  if (
-    isMethodDeclaration(node) ||
-    isGetAccessorDeclaration(node) ||
-    isSetAccessorDeclaration(node) ||
-    isConstructorDeclaration(node)
-  ) {
-    pushDecorators(node.modifiers, pending);
-    for (const parameter of node.parameters) pushDecorators(parameter.modifiers, pending);
-    return;
-  }
-  if (isPropertyDeclaration(node)) {
-    pushDecorators(node.modifiers, pending);
-  }
-}
-
-/** Queues decorator expressions from a modifier list for outer-scope traversal. */
-function pushDecorators(modifiers: readonly Node[] | undefined, pending: Node[]): void {
-  if (modifiers === undefined) return;
-  for (const modifier of modifiers) {
-    if (isDecorator(modifier)) pending.push(modifier.expression);
-  }
-}
-
-/** Nested non-arrow functions and class initializers do not inherit `fn`'s `arguments`. */
-function bindsOwnArguments(node: Node): boolean {
-  return (
-    isFunctionDeclaration(node) ||
-    isFunctionExpression(node) ||
-    isMethodDeclaration(node) ||
-    isGetAccessorDeclaration(node) ||
-    isSetAccessorDeclaration(node) ||
-    isConstructorDeclaration(node) ||
-    isPropertyDeclaration(node) ||
-    isClassStaticBlockDeclaration(node)
   );
 }
 

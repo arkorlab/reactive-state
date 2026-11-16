@@ -208,6 +208,61 @@ const CASES = [
     source: `function run(error: Error) { const args = arguments; const tag = (_s: TemplateStringsArray, _v: unknown) => String(args[0]); return tag\`\${error}\`; }`,
   },
   {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-indexed-arguments-binding',
+    source: `function run(error: Error) { const first = arguments[0]; const tag = (_s: TemplateStringsArray, _v: unknown) => String(first); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-array-destructured-arguments',
+    source: `function run(error: Error) { const [first] = Array.from(arguments); const tag = (_s: TemplateStringsArray, _v: unknown) => String(first); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-object-destructured-arguments',
+    source: `function run(error: Error) { const { 0: first } = Object.assign({}, arguments); const tag = (_s: TemplateStringsArray, _v: unknown) => String(first); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-spread-arguments-array',
+    source: `function run(error: Error) { const rest = [...arguments]; const tag = (_s: TemplateStringsArray, _v: unknown) => String(rest[0]); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-array-from-arguments',
+    source: `function run(error: Error) { const copy = Array.from(arguments); const tag = (_s: TemplateStringsArray, _v: unknown) => String(copy[0]); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-reassigned-let-arguments-slot',
+    source: `function run(error: Error) { let picked = 'fixed'; picked = String(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => picked; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-enclosing-for-of-arguments-item',
+    source: `function run(error: Error) { const seen: unknown[] = []; for (const item of arguments) seen.push(item); const tag = (_s: TemplateStringsArray, _v: unknown) => String(seen[0]); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-nested-method-reads-enclosing-arguments-binding',
+    source: `function run(error: Error) { const first = arguments[0]; const tag = (_s: TemplateStringsArray, _v: unknown) => ({ read() { return String(first); } }).read(); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-mutated-through-enclosing-alias',
+    source: `function run(error: Error) { const box = { text: 'fixed' }; const alias = box; alias.text = String(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-filled-by-array-from-arguments-mapper',
+    source: `function run(error: Error) { let saved = 'fixed'; Array.from(arguments, (item) => { saved = String(item); return 0; }); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-ignoring-unrelated-enclosing-arguments-binding-preserved',
+    source: `function run(error: Error) { const _unused = arguments[0]; const safe = 'fixed'; const tag = (strings: TemplateStringsArray, _v: unknown) => safe + (strings[0] ?? ''); return tag\`\${error}\`; }`,
+  },
+  {
     framed: false,
     id: 'arrow-tag-with-nested-method-reading-own-arguments-preserved',
     source: `function run(error: Error) { const tag = (_s: TemplateStringsArray, _v: unknown) => ({ read(..._items: string[]) { return String(arguments[0]); } }).read('safe'); return tag\`\${error}\`; }`,
