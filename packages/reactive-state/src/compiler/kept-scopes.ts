@@ -45,9 +45,34 @@ import { writtenArgumentBy, writtenCallValues } from './written.ts';
 
 export type WrittenBy = (node: Node) => Node | undefined;
 
-export interface HolderEdge {
-  readonly holders: readonly Declared[];
-  readonly sources: readonly Expression[];
+type ReverseHolders = ReadonlyMap<Declared, ReadonlySet<Declared>>;
+
+export interface HolderGraph {
+  readonly aliases: ReverseHolders;
+  readonly memberHolders: ReverseHolders;
+  readonly reverseHolders: ReverseHolders;
+  readonly writes: ReadonlyMap<Declared, readonly Expression[]>;
+}
+
+export interface WatchState {
+  readonly aliasWalked: Set<Declared>;
+  readonly watched: Set<Declared>;
+}
+
+interface MutableHolderGraph {
+  readonly aliases: Map<Declared, Set<Declared>>;
+  readonly fn: Node;
+  readonly memberHolders: Map<Declared, Set<Declared>>;
+  readonly reverseHolders: Map<Declared, Set<Declared>>;
+  readonly writes: Map<Declared, Expression[]>;
+  readonly writtenBy: WrittenBy;
+}
+
+interface WorklistQueues {
+  readonly aliasStack: Declared[];
+  readonly queueAlias: (declared: Declared) => void;
+  readonly queueWatched: (declared: Declared) => void;
+  readonly worklist: Declared[];
 }
 
 const FREE_READS = new WeakMap<Node, ReadonlySet<Identifier>>();
@@ -262,80 +287,124 @@ export function rootOf(node: Node): Identifier | undefined {
   return isIdentifier(each) && readsBinding(each) ? each : undefined;
 }
 
-/** Declarations of root bindings mutated by `node` across primary and argument write slots. */
-export function writtenDeclarations(node: Node, writtenBy: WrittenBy): readonly Declared[] {
-  const written = writtenBy(node);
-  const changed =
-    written === undefined ? writtenArgumentBy(node) : [written, ...writtenArgumentBy(node)];
-  const found: Declared[] = [];
-  for (const target of changed.flatMap((each) => targetsOf(each))) {
-    const root = rootOf(target);
-    const owner = root === undefined ? undefined : declarationOf(root);
-    if (owner !== undefined) {
-      found.push(owner);
-    }
-  }
-  return found;
-}
-
-/** Local container and alias declarations in `edges` that transitively carry `initial`. */
-export function watchedDeclarations(
+/**
+ * Propagates `initial` across `graph` with a worklist, adding newly reached holder declarations to
+ * `state.watched` and returning them.
+ */
+export function extendWatchedDeclarations(
   initial: Declared,
-  edges: readonly HolderEdge[],
-): ReadonlySet<Declared> {
-  const watched = new Set<Declared>([initial]);
-  let changed = true;
-  while (changed) {
-    changed = false;
-    for (const edge of edges) {
-      if (extendWatchedHolders(edge, watched)) {
-        changed = true;
-      }
+  graph: HolderGraph,
+  state: WatchState,
+): readonly Declared[] {
+  if (state.watched.has(initial)) {
+    return [];
+  }
+  const added: Declared[] = [];
+  const worklist: Declared[] = [];
+  const aliasStack: Declared[] = [];
+  const queueWatched = (declared: Declared): void => {
+    if (!state.watched.has(declared)) {
+      state.watched.add(declared);
+      added.push(declared);
+      worklist.push(declared);
+    }
+  };
+  const queueAlias = (declared: Declared): void => {
+    queueWatched(declared);
+    if (!state.aliasWalked.has(declared)) {
+      state.aliasWalked.add(declared);
+      aliasStack.push(declared);
+    }
+  };
+  queueWatched(initial);
+  drainHolderWorklists(graph, { aliasStack, queueAlias, queueWatched, worklist });
+  return added;
+}
+
+/** Drains watched-holder and member-mutated alias worklists until no new declarations are reached. */
+function drainHolderWorklists(graph: HolderGraph, queues: WorklistQueues): void {
+  const { aliasStack, queueAlias, queueWatched, worklist } = queues;
+  while (worklist.length > 0 || aliasStack.length > 0) {
+    for (let alias = aliasStack.pop(); alias !== undefined; alias = aliasStack.pop()) {
+      queueEdges(graph.aliases, alias, queueAlias);
+    }
+    const current = worklist.pop();
+    if (current === undefined) {
+      continue;
+    }
+    queueEdges(graph.reverseHolders, current, queueWatched);
+    queueEdges(graph.memberHolders, current, queueAlias);
+  }
+}
+
+/** Enqueues every adjacent declaration recorded under `key` in `edges`, if any. */
+function queueEdges(
+  edges: ReverseHolders,
+  key: Declared,
+  enqueue: (declared: Declared) => void,
+): void {
+  const targets = edges.get(key);
+  if (targets === undefined) {
+    return;
+  }
+  for (const target of targets) {
+    enqueue(target);
+  }
+}
+
+/** Builds reverse holder dependencies and direct write expressions across `fn` in a single pass. */
+export function holderGraphIn(fn: Node, writtenBy: WrittenBy): HolderGraph {
+  const graph: MutableHolderGraph = {
+    aliases: new Map(),
+    fn,
+    memberHolders: new Map(),
+    reverseHolders: new Map(),
+    writes: new Map(),
+    writtenBy,
+  };
+  const visit = (node: Node): void => {
+    recordNodeHolders(node, graph);
+    node.forEachChild(visit);
+  };
+  visit(fn);
+  return graph;
+}
+
+/** Records alias, reverse-holder, and write-value edges contributed by `node` within `graph.fn`. */
+function recordNodeHolders(node: Node, graph: MutableHolderGraph): void {
+  if (isVariableDeclaration(node) && isWithin(node, graph.fn) && node.initializer !== undefined) {
+    linkDirectAlias(node, node.initializer, graph);
+    linkReverseEdges([node], [node.initializer], graph.reverseHolders);
+    return;
+  }
+  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
+    const holder = localIdentifierOwner(node.left, graph.fn);
+    if (holder !== undefined) {
+      linkDirectAlias(holder, node.right, graph);
     }
   }
-  return watched;
+  if (!isBinaryExpression(node) && !isCallExpression(node)) {
+    return;
+  }
+  const direct = localWrittenDeclarations(node, graph.fn, graph.writtenBy);
+  if (direct.length === 0) {
+    return;
+  }
+  const sources = isBinaryExpression(node) ? [node.right] : writtenCallValues(node);
+  recordDirectWrites(direct, sources, graph.writes);
+  const rebindsOnly =
+    isBinaryExpression(node) &&
+    targetsOf(node.left).every((target) => localIdentifierOwner(target, graph.fn) !== undefined);
+  linkReverseEdges(direct, sources, rebindsOnly ? graph.reverseHolders : graph.memberHolders);
 }
 
-/** Collects local variable initializers and write sites that store values into local holders. */
-export function holderEdgesIn(fn: Node, writtenBy: WrittenBy): readonly HolderEdge[] {
-  const aliases = directAliasesIn(fn);
-  const edges: HolderEdge[] = [];
-  const visit = (node: Node): void => {
-    const edge = holderEdgeOf(node, fn, writtenBy, aliases);
-    if (edge !== undefined) {
-      edges.push(edge);
-    }
-    node.forEachChild(visit);
-  };
-  visit(fn);
-  return edges;
-}
-
-/** Direct local identifier-to-identifier alias links (`const alias = args`, `alias = args`). */
-function directAliasesIn(fn: Node): ReadonlyMap<Declared, ReadonlySet<Declared>> {
-  const links = new Map<Declared, Set<Declared>>();
-  const link = (holder: Declared, source: Expression): void => {
-    const origin = localIdentifierOwner(unwrapped(source), fn);
-    if (origin === undefined) {
-      return;
-    }
-    const set = links.get(holder) ?? new Set<Declared>();
-    set.add(origin);
-    links.set(holder, set);
-  };
-  const visit = (node: Node): void => {
-    if (isVariableDeclaration(node) && isWithin(node, fn) && node.initializer !== undefined) {
-      link(node, node.initializer);
-    } else if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
-      const holder = localIdentifierOwner(node.left, fn);
-      if (holder !== undefined) {
-        link(holder, node.right);
-      }
-    }
-    node.forEachChild(visit);
-  };
-  visit(fn);
-  return links;
+/** Records a direct local identifier-to-identifier alias edge (`const alias = args`, `alias = args`). */
+function linkDirectAlias(holder: Declared, source: Expression, graph: MutableHolderGraph): void {
+  const origin = localIdentifierOwner(unwrapped(source), graph.fn);
+  if (origin === undefined || origin === holder) {
+    return;
+  }
+  addReverseEdge(graph.aliases, holder, origin);
 }
 
 /** Resolves a direct identifier node (past type wrappers) to a declaration within `fn`. */
@@ -346,80 +415,91 @@ function localIdentifierOwner(node: Node, fn: Node): Declared | undefined {
   return owner !== undefined && isWithin(owner, fn) ? owner : undefined;
 }
 
-/** The local holder declaration(s) and source expressions written by `node`, if any. */
-function holderEdgeOf(
-  node: Node,
-  fn: Node,
-  writtenBy: WrittenBy,
-  aliases: ReadonlyMap<Declared, ReadonlySet<Declared>>,
-): HolderEdge | undefined {
-  if (isVariableDeclaration(node) && isWithin(node, fn) && node.initializer !== undefined) {
-    return { holders: [node], sources: [node.initializer] };
-  }
-  if (!isBinaryExpression(node) && !isCallExpression(node)) {
-    return undefined;
-  }
-  const direct = writtenDeclarations(node, writtenBy).filter((owner) => isWithin(owner, fn));
-  if (direct.length === 0) {
-    return undefined;
-  }
-  const rebindsOnly = isBinaryExpression(node) && localIdentifierOwner(node.left, fn) !== undefined;
-  const holders = rebindsOnly ? direct : expandAliasedHolders(direct, aliases);
-  const sources = isBinaryExpression(node) ? [node.right] : writtenCallValues(node);
-  return { holders, sources };
-}
-
-/** Expands member-mutated holders through direct local identifier alias chains. */
-function expandAliasedHolders(
-  initial: readonly Declared[],
-  aliases: ReadonlyMap<Declared, ReadonlySet<Declared>>,
-): readonly Declared[] {
-  const seen = new Set<Declared>(initial);
-  const stack = [...initial];
-  for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
-    for (const target of aliases.get(current) ?? []) {
-      if (!seen.has(target)) {
-        seen.add(target);
-        stack.push(target);
-      }
+/** Deduplicated declarations within `fn` mutated by `node` across primary and argument slots. */
+function localWrittenDeclarations(node: Node, fn: Node, writtenBy: WrittenBy): readonly Declared[] {
+  const written = writtenBy(node);
+  const changed =
+    written === undefined ? writtenArgumentBy(node) : [written, ...writtenArgumentBy(node)];
+  const seen = new Set<Declared>();
+  const targets = changed.flatMap((each) => targetsOf(each));
+  for (const target of targets) {
+    const root = rootOf(target);
+    const owner = root === undefined ? undefined : declarationOf(root);
+    if (owner !== undefined && isWithin(owner, fn)) {
+      seen.add(owner);
     }
   }
   return [...seen];
 }
 
-/** Adds `edge.holders` to `watched` when any of `edge.sources` carries a watched declaration. */
-function extendWatchedHolders(edge: HolderEdge, watched: Set<Declared>): boolean {
-  const carries = edge.sources.some((source) =>
-    valueCarrierIdentifiers(source).some((id) => {
-      const owner = declarationOf(id);
-      return owner !== undefined && watched.has(owner);
-    }),
-  );
-  if (!carries) {
-    return false;
+/** Appends `sources` to each mutated declaration's write-expression list. */
+function recordDirectWrites(
+  owners: readonly Declared[],
+  sources: readonly Expression[],
+  writes: Map<Declared, Expression[]>,
+): void {
+  if (sources.length === 0) {
+    return;
   }
-  const before = watched.size;
-  for (const holder of edge.holders) {
-    watched.add(holder);
+  for (const owner of owners) {
+    const existing = writes.get(owner);
+    if (existing === undefined) {
+      writes.set(owner, [...sources]);
+    } else {
+      existing.push(...sources);
+    }
   }
-  return watched.size > before;
 }
 
-/** Binding identifiers carried directly or inside literal/branch containers of `expression`. */
-function valueCarrierIdentifiers(expression: Expression): readonly Identifier[] {
-  const found: Identifier[] = [];
-  const stack: Expression[] = [expression];
+/** Resolves carrier declarations in `sources` once and links each carried declaration to `holders`. */
+function linkReverseEdges(
+  holders: readonly Declared[],
+  sources: readonly Expression[],
+  edges: Map<Declared, Set<Declared>>,
+): void {
+  if (holders.length === 0 || sources.length === 0) {
+    return;
+  }
+  const carriedOwners = carriedDeclarations(sources);
+  for (const carried of carriedOwners) {
+    for (const holder of holders) {
+      if (holder !== carried) {
+        addReverseEdge(edges, carried, holder);
+      }
+    }
+  }
+}
+
+/** Inserts `target` into the adjacency set for `key` in `edges`. */
+function addReverseEdge(
+  edges: Map<Declared, Set<Declared>>,
+  key: Declared,
+  target: Declared,
+): void {
+  const existing = edges.get(key);
+  if (existing === undefined) {
+    edges.set(key, new Set([target]));
+  } else {
+    existing.add(target);
+  }
+}
+
+/** Declarations of bindings carried directly or inside literal/branch containers of `sources`. */
+function carriedDeclarations(sources: readonly Expression[]): ReadonlySet<Declared> {
+  const owners = new Set<Declared>();
+  const stack: Expression[] = [...sources];
   for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
     const value = unwrapped(current);
     if (isIdentifier(value)) {
-      if (readsBinding(value)) {
-        found.push(value);
+      const owner = readsBinding(value) ? declarationOf(value) : undefined;
+      if (owner !== undefined) {
+        owners.add(owner);
       }
       continue;
     }
     pushCarrierChildren(value, stack);
   }
-  return found;
+  return owners;
 }
 
 /** Pushes direct container or branch child expressions onto `stack` without entering code bodies. */

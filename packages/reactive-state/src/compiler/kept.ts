@@ -8,7 +8,6 @@ import {
   isArrowFunction,
   isBinaryExpression,
   isBlock,
-  isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isConditionalExpression,
@@ -38,19 +37,18 @@ import { isIterator } from './iterators.ts';
 import { keptAliasOf } from './kept-aliases.ts';
 import {
   declares,
-  type HolderEdge,
-  holderEdgesIn,
+  extendWatchedDeclarations,
+  type HolderGraph,
+  holderGraphIn,
   isCalledAsLoads,
   isCalledInPlace,
   isCodeAt,
   isFunctionCode,
   isWithin,
-  watchedDeclarations,
+  type WatchState,
   type WrittenBy,
-  writtenDeclarations,
 } from './kept-scopes.ts';
 import { readsBinding } from './scope.ts';
-import { writtenCallValues } from './written.ts';
 
 export { rootOf, targetsOf } from './kept-scopes.ts';
 
@@ -71,11 +69,11 @@ const EITHER: ReadonlySet<SyntaxKind> = new Set([
 
 /** What `handedOut` finds within a function: the functions what it answers holds, the names followed. */
 interface Handing {
-  readonly edges: readonly HolderEdge[];
   readonly fn: Node;
-  readonly handed: Set<Node>;
   readonly followed: Set<Node>;
-  readonly writtenBy: WrittenBy;
+  readonly graph: HolderGraph;
+  readonly handed: Set<Node>;
+  readonly watchState: WatchState;
 }
 
 /** Whether `node` runs each time a function the module declares is called, not once as it loads. */
@@ -152,8 +150,14 @@ function keepsCall({
  * its own they read by name, in turn.
  */
 function handedOut(fn: Node, writtenBy: WrittenBy): ReadonlySet<Node> {
-  const edges = holderEdgesIn(fn, writtenBy);
-  const handing: Handing = { edges, fn, followed: new Set(), handed: new Set(), writtenBy };
+  const graph = holderGraphIn(fn, writtenBy);
+  const handing: Handing = {
+    fn,
+    followed: new Set(),
+    graph,
+    handed: new Set(),
+    watchState: { aliasWalked: new Set(), watched: new Set() },
+  };
   for (const answer of answersOf(fn)) {
     hold(answer, handing);
   }
@@ -321,25 +325,14 @@ function holdDeclared(name: Identifier, handing: Handing): void {
  * what it hands a method or a global's function that changes it, `handlers.push(() => ++n)`.
  */
 function holdWritten(declared: Declared, handing: Handing): void {
-  const watched = watchedDeclarations(declared, handing.edges);
-  const visit = (node: Node): void => {
-    if (writtenDeclarations(node, handing.writtenBy).some((owner) => watched.has(owner))) {
-      holdWriteValues(node, handing);
+  const newlyWatched = extendWatchedDeclarations(declared, handing.graph, handing.watchState);
+  for (const owner of newlyWatched) {
+    const values = handing.graph.writes.get(owner);
+    if (values === undefined) {
+      continue;
     }
-    node.forEachChild(visit);
-  };
-  visit(handing.fn);
-}
-
-/** Retains functions supplied on the right-hand side or call arguments of a write node. */
-function holdWriteValues(node: Node, handing: Handing): void {
-  if (isBinaryExpression(node)) {
-    hold(node.right, handing);
-    return;
-  }
-  if (isCallExpression(node)) {
-    for (const each of writtenCallValues(node)) {
-      hold(each, handing);
+    for (const value of values) {
+      hold(value, handing);
     }
   }
 }
