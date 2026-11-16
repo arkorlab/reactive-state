@@ -44,6 +44,7 @@ import { framedQuietTextPrefix } from './framed-text-prefix.ts';
 import { assignedNames, LOCAL_TIME } from './local-date-inputs.ts';
 import { localDateProjection } from './local-date-projections.ts';
 import { constantValue } from './numbers.ts';
+import { wrappedRawTagFields } from './render-date-raw-wrappers.ts';
 
 /** Native text conversions retain stored Date identities at the original rendered conversion. */
 
@@ -107,14 +108,29 @@ function quietRawTemplate(node: TemplateExpression): boolean {
   );
 }
 
-/** Prefix fields read by a coowned native String.raw tag on `node`, when `node` is its template. */
+/** Prefix fields read by a coowned or quiet-wrapper native String.raw tag on `node`. */
 function taggedRawFields(node: Node): ReadonlySet<Expression> | undefined {
-  return isTemplateExpression(node) &&
-    isTaggedTemplateExpression(node.parent) &&
-    node.parent.template === node &&
-    framedOriginCoowned(node.parent.tag, node)
-    ? nativeRawFields(node.parent.tag, node)
-    : undefined;
+  if (
+    !isTemplateExpression(node) ||
+    !isTaggedTemplateExpression(node.parent) ||
+    node.parent.template !== node
+  ) {
+    return undefined;
+  }
+  if (framedOriginCoowned(node.parent.tag, node)) {
+    const direct = nativeRawFields(node.parent.tag, node);
+    if (direct !== undefined) return direct;
+  }
+  const datedIndices = new Set<number>();
+  for (const [index, span] of node.templateSpans.entries()) {
+    if (projectedDate(span.expression)) datedIndices.add(index);
+  }
+  return wrappedRawTagFields(node.parent.tag, node, {
+    datedIndices,
+    rawFieldsOf: nativeRawFields,
+    seenWrappers: new Set(),
+    spanCount: node.templateSpans.length,
+  });
 }
 
 /** Quiet holder creation and unchanged local bindings cannot replace the selected conversion hook. */

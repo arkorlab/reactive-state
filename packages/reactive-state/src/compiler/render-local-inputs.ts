@@ -7,12 +7,15 @@ import {
   type GetAccessorDeclaration,
   type Identifier,
   isArrayLiteralExpression,
+  isArrowFunction,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
   isComputedPropertyName,
   isDeleteExpression,
   isElementAccessExpression,
+  isFunctionDeclaration,
+  isFunctionExpression,
   isFunctionLikeDeclaration,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -30,6 +33,7 @@ import {
   isTaggedTemplateExpression,
   isTemplateExpression,
   isVariableDeclaration,
+  type MethodDeclaration,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -58,6 +62,11 @@ import {
   pushArrayIdentifierTagPaths,
   pushArrayLiteralTagPaths,
 } from './render-raw-tag-paths.ts';
+import {
+  datedTemplateSpanIndices,
+  type RawWrapperSearch,
+  wrapperForwardsRawDate,
+} from './render-raw-tag-wrappers.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** What a read takes a method of, where the code shows it: the value, and the keys selected within it. */
@@ -102,6 +111,12 @@ export function renderLocalInput(node: Node): string | undefined {
   return patternLocaleMember(node) ?? renderDateText(node) ?? localDateText(node);
 }
 
+interface TagExpandSink {
+  readonly rootRead: Expression;
+  readonly pending: TagPath[];
+  readonly methods: MethodDeclaration[];
+}
+
 /** Tagged templates pass Date substitutions raw unless a tag path can select native String.raw. */
 function localDateText(node: Node): string | undefined {
   const text = dateText(node);
@@ -110,15 +125,21 @@ function localDateText(node: Node): string | undefined {
     isTemplateExpression(node) &&
     isTaggedTemplateExpression(node.parent) &&
     node.parent.template === node &&
-    !maySelectNativeRaw(node.parent.tag)
+    !maySelectNativeRaw(node.parent.tag, {
+      datedIndices: datedTemplateSpanIndices(node),
+      seenWrappers: new Set(),
+      spanCount: node.templateSpans.length,
+    })
   )
     return undefined;
   return text;
 }
 
-/** Constant, multi-branch, reflected, bound and destructured tag paths that can reach native String.raw. */
-function maySelectNativeRaw(tag: Expression): boolean {
+/** Constant, multi-branch, reflected, bound, array and wrapper tag paths reaching native String.raw. */
+function maySelectNativeRaw(tag: Expression, search: RawWrapperSearch): boolean {
   const pending: TagPath[] = [{ node: tag, suffix: [] }];
+  const methods: MethodDeclaration[] = [];
+  const sink: TagExpandSink = { methods, pending, rootRead: tag };
   const seen = new Set<string>();
   let steps = 0;
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
@@ -129,10 +150,34 @@ function maySelectNativeRaw(tag: Expression): boolean {
     if (seen.has(key)) continue;
     seen.add(key);
     if (matchesDirectRawTag(value, current.suffix)) return true;
-    if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, tag, pending))
+    if (current.suffix.length === 0 && matchesRawWrapperTag(value, search)) return true;
+    if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, sink))
+      return true;
+    if (drainWrapperMethods(methods, search)) return true;
+  }
+  return false;
+}
+
+function drainWrapperMethods(methods: MethodDeclaration[], search: RawWrapperSearch): boolean {
+  for (let method = methods.pop(); method !== undefined; method = methods.pop()) {
+    if (wrapperForwardsRawDate(method, { ...search, maySelectTag: maySelectNativeRaw }))
       return true;
   }
   return false;
+}
+
+function matchesRawWrapperTag(value: Expression, search: RawWrapperSearch): boolean {
+  const query = { ...search, maySelectTag: maySelectNativeRaw };
+  if (isArrowFunction(value) || isFunctionExpression(value)) {
+    return wrapperForwardsRawDate(value, query);
+  }
+  if (!isIdentifier(value)) return false;
+  const declared = frameDeclarationOf(value);
+  return (
+    declared !== undefined &&
+    isFunctionDeclaration(declared) &&
+    wrapperForwardsRawDate(declared, query)
+  );
 }
 
 /** Direct native String.raw references and global holders followed by remaining member segments. */
@@ -167,8 +212,7 @@ function isPossibleGlobalHolder(name: string | undefined): boolean {
 function expandTagPath(
   value: Expression,
   suffix: readonly (string | undefined)[],
-  rootRead: Expression,
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): boolean {
   if (
     isCallExpression(value) &&
@@ -176,21 +220,21 @@ function expandTagPath(
     pushBoundTagPaths(
       value,
       (inner, innerSuffix, nextPending) =>
-        expandNonBoundTagPath(inner, innerSuffix, rootRead, nextPending),
-      pending,
+        expandNonBoundTagPath(inner, innerSuffix, { ...sink, pending: nextPending }),
+      sink.pending,
     )
   ) {
     return true;
   }
-  return expandNonBoundTagPath(value, suffix, rootRead, pending);
+  return expandNonBoundTagPath(value, suffix, sink);
 }
 
 function expandNonBoundTagPath(
   value: Expression,
   suffix: readonly (string | undefined)[],
-  rootRead: Expression,
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): boolean {
+  const { pending, rootRead } = sink;
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     pushMemberTagPaths(value.expression, framedMemberNames(value), suffix, pending);
     return false;
@@ -209,7 +253,7 @@ function expandNonBoundTagPath(
     return false;
   }
   if (isObjectLiteralExpression(value) && suffix.length > 0) {
-    pushObjectTagPaths(value, suffix, pending);
+    pushObjectTagPaths(value, suffix, sink);
     return false;
   }
   if (
@@ -253,7 +297,7 @@ function pushMemberTagPaths(
 function pushObjectTagPaths(
   literal: ObjectLiteralExpression,
   suffix: readonly (string | undefined)[],
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): void {
   let setterMasked = false;
   let prototype: Expression | undefined;
@@ -262,12 +306,12 @@ function pushObjectTagPaths(
       prototype ??= property.initializer;
       continue;
     }
-    const outcome = stepObjectTagProperty(property, suffix, setterMasked, pending);
+    const outcome = stepObjectTagProperty(property, suffix, setterMasked, sink);
     if (outcome === 'stop') return;
     if (outcome === 'masked') setterMasked = true;
   }
   if (!setterMasked && prototype !== undefined) {
-    pending.push({ node: prototype, suffix: prototypeSuffix(suffix) });
+    sink.pending.push({ node: prototype, suffix: prototypeSuffix(suffix) });
   }
 }
 
@@ -285,18 +329,18 @@ function stepObjectTagProperty(
   property: ObjectLiteralElementLike,
   suffix: readonly (string | undefined)[],
   setterMasked: boolean,
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): ObjectStep {
   const [head] = suffix;
   if (isSpreadAssignment(property)) {
-    if (!setterMasked) pending.push({ node: property.expression, suffix });
+    if (!setterMasked) sink.pending.push({ node: property.expression, suffix });
     return 'keep';
   }
-  if (isGetAccessorDeclaration(property)) return stepGetterProperty(property, suffix, pending);
+  if (isGetAccessorDeclaration(property)) return stepGetterProperty(property, suffix, sink.pending);
   if (isSetAccessorDeclaration(property)) {
     return exactObjectKey(assignedNames(property.name), head) ? 'masked' : 'keep';
   }
-  return stepDataProperty(property, suffix, setterMasked, pending);
+  return stepDataProperty(property, suffix, setterMasked, sink);
 }
 
 function stepGetterProperty(
@@ -334,21 +378,25 @@ function stepDataProperty(
   property: ObjectLiteralElementLike,
   suffix: readonly (string | undefined)[],
   setterMasked: boolean,
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): ObjectStep {
   const [head, ...rest] = suffix;
   if (isShorthandPropertyAssignment(property)) {
     return isIdentifier(property.name)
-      ? stepShorthandProperty(property.name, suffix, setterMasked, pending)
+      ? stepShorthandProperty(property.name, suffix, setterMasked, sink.pending)
       : 'keep';
   }
   if (isMethodDeclaration(property)) {
-    return exactObjectKey(assignedNames(property.name), head) ? 'stop' : 'keep';
+    const names = assignedNames(property.name);
+    if (!setterMasked && rest.length === 0 && matchesObjectKey(names, head)) {
+      sink.methods.push(property);
+    }
+    return exactObjectKey(names, head) ? 'stop' : 'keep';
   }
   if (!isPropertyAssignment(property)) return 'keep';
   const names = assignedNames(property.name);
   if (!setterMasked && matchesObjectKey(names, head)) {
-    pending.push({ node: property.initializer, suffix: rest });
+    sink.pending.push({ node: property.initializer, suffix: rest });
   }
   return exactObjectKey(names, head) ? 'stop' : 'keep';
 }
