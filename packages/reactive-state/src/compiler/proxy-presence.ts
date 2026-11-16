@@ -28,7 +28,7 @@ import {
 
 import { type Answering, parametersOf } from './answers.ts';
 import { globalOf, unwrapped } from './bounded.ts';
-import { rootOf, targetsOf } from './kept.ts';
+import { targetsOf } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
 import { constantValue } from './numbers.ts';
 import { parameterValue } from './parameter-values.ts';
@@ -36,7 +36,6 @@ import {
   type Context,
   type Frame,
   type Origin,
-  passesArrayBinding,
   type PresenceCache,
   type PresenceMode,
   sourcePath,
@@ -92,20 +91,14 @@ export function parameterFrame(
   return undefined;
 }
 
-/** A possibly reassigned or mutated rest parameter no longer preserves its incoming tuple arity. */
-export function bindingChanged(fn: Answering, declared: Identifier, members = false): boolean {
+/** Whether `fn` directly reassigns `declared` anywhere in its body. */
+export function bindingChanged(fn: Answering, declared: Identifier): boolean {
   const isRead = readsOf(declared, fn);
   const visit = (node: Node): boolean => {
-    if (members && passesArrayBinding(node, isRead)) {
-      return true;
-    }
-    const target = !members && isCallExpression(node) ? undefined : writtenBy(node);
+    const target = isCallExpression(node) ? undefined : writtenBy(node);
     if (
       target !== undefined &&
-      targetsOf(target).some((each) => {
-        const name = members ? rootOf(each) : each;
-        return name !== undefined && isIdentifier(name) && isRead(name);
-      })
+      targetsOf(target).some((each) => isIdentifier(each) && isRead(each))
     ) {
       return true;
     }

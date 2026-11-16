@@ -11,6 +11,7 @@ import {
   isIdentifier,
   isNewExpression,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
   type Node,
@@ -20,10 +21,15 @@ import {
 import { answersLater, isAnswering, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { metadataCallee } from './input-callees.ts';
-import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
+import { mutatedArrayOrigins } from './proxy-array-writes.ts';
 import {
   arrayChangedBefore,
   arrayIndex,
+  holdsArrayLiteral,
+  spreadElementOrigins,
+} from './proxy-arrays.ts';
+import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
+import {
   type Context,
   createPresenceCache,
   heldConstant,
@@ -34,7 +40,6 @@ import {
   type ProxyReading,
   sourcePath,
   sourceValue,
-  spreadElementOrigins,
   writtenBefore,
 } from './proxy-values.ts';
 
@@ -108,7 +113,7 @@ function markVisited(
 
 /** Encodes the member projection and spread state carried by `origin` unambiguously. */
 function originStateKey(origin: Origin): string {
-  const path = origin.keys.map((key) => `${key.length}:${key}`).join(',');
+  const path = origin.keys.map((key) => (key === null ? '*' : `${key.length}:${key}`)).join(',');
   if (origin.spread !== true) {
     return path;
   }
@@ -133,7 +138,7 @@ function isProxy(at: Origin): boolean {
     (isNewExpression(value) && path === 'Proxy' && keys.length === 0) ||
     (isCallExpression(value) &&
       path === 'Proxy.revocable' &&
-      (keys.length === 0 || (keys.length === 1 && keys[0] === 'proxy')))
+      (keys.length === 0 || (keys.length === 1 && (keys[0] === 'proxy' || keys[0] === null))))
   );
 }
 
@@ -146,8 +151,8 @@ function originsOf(at: Origin): readonly Origin[] {
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     const key = isPropertyAccessExpression(value)
       ? value.name.text
-      : originKey(value.argumentExpression, at.context);
-    return key === undefined ? [] : [{ ...at, keys: [key, ...keys], value: value.expression }];
+      : (originKey(value.argumentExpression, at.context) ?? null);
+    return [{ ...at, keys: [key, ...keys], value: value.expression }];
   }
   if (isConditionalExpression(value)) {
     const condition = sourceValue(value.condition, at.context);
@@ -181,7 +186,6 @@ function containerOrigins(at: Origin): readonly Origin[] {
 
 /** Projects indexed elements or non-excluded object-spread entries from an array literal. */
 function arrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origin[] {
-  const [key, ...rest] = at.keys;
   const expanded = argumentOrigins(
     value.elements.map((each) => ({
       ...at,
@@ -192,14 +196,18 @@ function arrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origi
     })),
   );
   if (expanded === undefined) {
-    return [];
+    return unexpandedArrayOrigins(value, at);
   }
-  if (key === undefined) {
+  if (at.keys.length === 0) {
     return spreadElementOrigins(expanded, at);
+  }
+  const [key, ...rest] = at.keys;
+  if (key === undefined || key === null) {
+    return projectAllElements(expanded, rest, at);
   }
   const index = arrayIndex(key);
   const selected = index === undefined ? undefined : expanded[index];
-  return selected === undefined
+  return selected === undefined || isOmittedExpression(selected.value)
     ? []
     : [
         {
@@ -209,6 +217,45 @@ function arrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origi
           spread: at.spread,
         },
       ];
+}
+
+/** Retains element and spread origins when an array literal contains an unexpanded spread. */
+function unexpandedArrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origin[] {
+  const candidates: Origin[] = value.elements.flatMap((each) => {
+    if (isOmittedExpression(each)) {
+      return [];
+    }
+    return isSpreadElement(each)
+      ? [{ ...at, excluded: undefined, keys: [null], spread: undefined, value: each.expression }]
+      : [{ ...at, excluded: undefined, keys: [], spread: undefined, value: each }];
+  });
+  if (at.keys.length === 0) {
+    return candidates;
+  }
+  const [key, ...rest] = at.keys;
+  return key === null || (key !== undefined && arrayIndex(key) !== undefined)
+    ? projectAllElements(candidates, rest, at)
+    : [];
+}
+
+/** Projects every non-hole candidate element through `rest` with `at`'s outer spread state. */
+function projectAllElements(
+  elements: readonly Origin[],
+  rest: readonly (string | null)[],
+  at: Origin,
+): readonly Origin[] {
+  return elements.flatMap((each) =>
+    isOmittedExpression(each.value)
+      ? []
+      : [
+          {
+            ...each,
+            excluded: at.excluded,
+            keys: [...each.keys, ...rest],
+            spread: at.spread,
+          },
+        ],
+  );
 }
 
 /** A parameter's actual argument or a lexical constant, with the argument's original scope. */
@@ -225,8 +272,8 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
   if (isObjectLiteralExpression(target) && writtenBefore(name, at.context)) {
     return [];
   }
-  if (isArrayLiteralExpression(target) && arrayChangedBefore(name, at.context)) {
-    return at.keys.length === 0 ? [{ ...at, excluded: undefined, value: held }] : [];
+  if (holdsArrayLiteral(held) && arrayChangedBefore(name, at.context)) {
+    return mutatedArrayOrigins(name, held, at);
   }
   return [{ ...at, value: held }];
 }

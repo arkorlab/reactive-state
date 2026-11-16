@@ -2,13 +2,11 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isCallExpression,
   isComputedPropertyName,
   isElementAccessExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
-  isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
@@ -20,8 +18,6 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
-  isTaggedTemplateExpression,
-  isVariableDeclaration,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -34,9 +30,7 @@ import { globalOf, unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { metadataInitializer } from './input-callees.ts';
 import { rootOf, targetsOf } from './kept.ts';
-import { readsOf } from './local-module-reads.ts';
 import type { Resolve } from './numbers.ts';
-import { freeReads } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Source-written values that can carry a Proxy to a measured call result or container entry. */
@@ -54,6 +48,9 @@ export interface Frame {
 
 /** Query kind for memoized parameter and argument definedness checks. */
 export type PresenceMode = 'defined' | 'non-nullish' | 'undefined';
+
+/** Static member key or `null` when an element access uses an unknown dynamic key. */
+export type OriginKey = string | null;
 
 /** Per-walk memoization and Tarjan cycle tracking for argument presence queries. */
 export interface PresenceCache {
@@ -84,16 +81,30 @@ export function createPresenceCache(): PresenceCache {
 /** Candidate expression state, optional member projection path, and active spread context. */
 export interface Origin {
   readonly value: Expression;
-  readonly keys: readonly string[];
+  readonly keys: readonly OriginKey[];
   readonly context: Context;
   readonly seen: ReadonlySet<Expression>;
   readonly spread?: boolean | undefined;
   readonly excluded?: ReadonlySet<string> | undefined;
 }
 
+/** Memoized local `const` initializer lookups (`null` when not a local `const` read). */
+const METADATA_INITIALIZER = new WeakMap<Identifier, Expression | null>();
+
+/** Memoized wrapper around `metadataInitializer` to avoid repeated scope scans on the same node. */
+export function cachedMetadataInitializer(name: Identifier): Expression | undefined {
+  const cached = METADATA_INITIALIZER.get(name);
+  if (cached !== undefined) {
+    return cached ?? undefined;
+  }
+  const resolved = metadataInitializer(name);
+  METADATA_INITIALIZER.set(name, resolved ?? null);
+  return resolved;
+}
+
 /** A lexical constant's initializer, or a source module's imported constant. */
 export function heldConstant(name: Identifier, context: ProxyReading): Expression | undefined {
-  return metadataInitializer(name) ?? context.follow?.(name);
+  return cachedMetadataInitializer(name) ?? context.follow?.(name);
 }
 
 /** Ordinary property names are literal, and computed names follow primitive constant keys. */
@@ -195,64 +206,6 @@ export function writtenBefore(name: Identifier, reading: ProxyReading): boolean 
   return visit(name.getSourceFile());
 }
 
-/** Parses a canonical non-negative integer property key (`'0'`, `'1'`, ...) into an index. */
-export function arrayIndex(key: string): number | undefined {
-  const index = Number(key);
-  return Number.isInteger(index) && index >= 0 && String(index) === key ? index : undefined;
-}
-
-/** Filters array or rest elements by `at.excluded` when spread into an object literal. */
-export function spreadElementOrigins(elements: readonly Origin[], at: Origin): readonly Origin[] {
-  return elements.flatMap((each, index) =>
-    at.spread === true && at.excluded?.has(String(index))
-      ? []
-      : [
-          {
-            ...each,
-            excluded: undefined,
-            keys: each.keys,
-            spread: undefined,
-          },
-        ],
-  );
-}
-
-/** Whether an array constant was mutated or handed to a call before `name` reads it. */
-export function arrayChangedBefore(name: Identifier, reading: ProxyReading): boolean {
-  if (writtenBefore(name, reading)) {
-    return true;
-  }
-  const declared = metadataInitializer(name)?.parent;
-  if (declared === undefined || !isVariableDeclaration(declared) || !isIdentifier(declared.name)) {
-    return false;
-  }
-  const sourceFile = name.getSourceFile();
-  const isRead = readsOf(declared.name, sourceFile);
-  const visit = (node: Node): boolean => {
-    if (node.pos >= name.pos || node.end <= declared.end) {
-      return false;
-    }
-    if (passesArrayBinding(node, isRead)) {
-      return true;
-    }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return visit(sourceFile);
-}
-
-/** Checks whether `node` passes a binding matched by `isRead` as a non-spread call argument. */
-export function passesArrayBinding(node: Node, isRead: (name: Identifier) => boolean): boolean {
-  let given: readonly Expression[] = [];
-  if (isCallExpression(node) || isNewExpression(node)) {
-    given = node.arguments ?? [];
-  } else if (isTaggedTemplateExpression(node)) {
-    given = [node.template];
-  }
-  return given.some(
-    (each) => !isSpreadElement(each) && [...freeReads(each)].some((name) => isRead(name)),
-  );
-}
-
 /** Guaranteed own enumerable numeric keys copied when spreading a fresh inline array literal. */
 function inlineArraySpreadKeys(node: Expression): ReadonlySet<string> | undefined {
   const current = unwrapped(node);
@@ -348,11 +301,56 @@ function spreadEntryKeys(
 
 /** Own data entries are measured; an accessor is executed when selected or copied by spread. */
 export function objectOrigins(object: ObjectLiteralExpression, at: Origin): readonly Origin[] {
-  const [key, ...rest] = at.keys;
-  if (key === undefined) {
+  if (at.keys.length === 0) {
     return dataOrigins(object, at);
   }
+  const [key, ...rest] = at.keys;
+  if (key === undefined || key === null) {
+    return anyPropertyOrigins(object, { ...at, keys: rest });
+  }
   return selectedPropertyOrigins(object, key, { ...at, keys: rest });
+}
+
+/** Candidate origins when reading an unknown dynamic key across spreads, getters, and fields. */
+function anyPropertyOrigins(
+  object: ObjectLiteralExpression,
+  restOrigin: Origin,
+): readonly Origin[] {
+  const found: Origin[] = [];
+  const seen = new Set<string>();
+  const setters = new Set<string>();
+  for (const property of object.properties.toReversed()) {
+    if (isSpreadAssignment(property)) {
+      found.push({
+        ...restOrigin,
+        excluded: undefined,
+        keys: [null, ...restOrigin.keys],
+        spread: undefined,
+        value: property.expression,
+      });
+      for (const guaranteed of guaranteedSpreadKeys(property.expression, restOrigin.context)) {
+        seen.add(guaranteed);
+      }
+      continue;
+    }
+    const key = propertyKey(property.name, restOrigin.context);
+    if (key === undefined) {
+      found.push(...unkeyedEntryOrigins(property, restOrigin, true));
+      continue;
+    }
+    if (seen.has(key)) {
+      continue;
+    }
+    if (isSetAccessorDeclaration(property)) {
+      setters.add(key);
+      continue;
+    }
+    seen.add(key);
+    if (!setters.has(key) || isGetAccessorDeclaration(property)) {
+      found.push(...unkeyedEntryOrigins(property, restOrigin, true));
+    }
+  }
+  return found;
 }
 
 /** Candidate origins for a specific selected `key` across spreads, computed keys, and own fields. */
