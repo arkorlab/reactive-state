@@ -103,28 +103,28 @@ function transparentEndings(
   let transparent = true;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
-      transparent &&= transparentEndings(property.expression, new Set(seen), before);
+      transparent &&= transparentEndings(property.expression, new Set(seen), property);
       continue;
     }
-    const key = optionKey(property.name, before);
+    const key = optionKey(property.name);
     if (key === undefined) {
       transparent = false;
     } else if (key === 'endings') {
-      transparent = transparentProperty(property, before);
+      transparent = transparentProperty(property);
     }
   }
   return transparent;
 }
 
 /** Whether an `endings` property writes transparent line endings, rather than computing them. */
-function transparentProperty(property: ObjectLiteralElementLike, before: Node): boolean {
+function transparentProperty(property: ObjectLiteralElementLike): boolean {
   if (isPropertyAssignment(property)) {
-    return transparentEnding(property.initializer, before);
+    return transparentEnding(property.initializer);
   }
   return (
     isShorthandPropertyAssignment(property) &&
     isIdentifier(property.name) &&
-    transparentEnding(property.name, before)
+    transparentEnding(property.name)
   );
 }
 
@@ -143,12 +143,12 @@ function optionsOf(node: Expression, seen: Set<Expression>, before: Node): Expre
 }
 
 /** The name an option is written by, computed from constants too. */
-function optionKey(name: PropertyName, before: Node): string | undefined {
+function optionKey(name: PropertyName): string | undefined {
   if (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name)) {
     return name.text;
   }
   const key = isComputedPropertyName(name)
-    ? constantValue(name.expression, (value) => platformInitializer(value, before))
+    ? constantValue(name.expression, (value) => platformInitializer(value, value))
     : undefined;
   return typeof key === 'string' ? key : undefined;
 }
@@ -159,12 +159,12 @@ function isUndefined(node: Expression): boolean {
 }
 
 /** Whether an `endings` entry is transparent or takes the transparent default. */
-function transparentEnding(node: Expression, before: Node): boolean {
+function transparentEnding(node: Expression): boolean {
   const value = unwrapped(node);
   return (
     isVoidExpression(value) ||
     isUndefined(value) ||
-    constantValue(value, (name) => platformInitializer(name, before, transparentWrite)) ===
+    constantValue(value, (name) => platformInitializer(name, name, transparentWrite)) ===
       'transparent'
   );
 }

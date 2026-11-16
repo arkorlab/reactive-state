@@ -12,20 +12,26 @@ import {
   isConditionalExpression,
   isElementAccessExpression,
   isFunctionExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isRegularExpressionLiteral,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
   isVariableDeclaration,
   type NewExpression,
   type Node,
+  type ObjectLiteralElementLike,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -33,6 +39,7 @@ import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
 import { initializerOf } from './framed.ts';
 import { constantValue } from './numbers.ts';
+import { platformInitializer } from './platform-inputs.ts';
 
 /**
  * What of a shared module's code reads the time through what the platform makes (`settled.ts`): a
@@ -70,9 +77,16 @@ function isClass(node: Expression, name: string): boolean {
  * or variables around it are declared of, of no spread, whose last `lastModified` is shown defined.
  */
 function isDated(made: NewExpression): boolean {
+  if (made.arguments?.some((each) => isSpreadElement(each)) === true) {
+    return false;
+  }
   const options = made.arguments?.[2];
-  const value = options === undefined ? undefined : declaredValue(options);
-  if (value === undefined || !isObjectLiteralExpression(value)) {
+  const value = options === undefined ? undefined : declaredValue(options, made);
+  if (
+    value === undefined ||
+    !isObjectLiteralExpression(value) ||
+    value.properties.some((each) => readsOptionsCode(each))
+  ) {
     return false;
   }
   let dated = false;
@@ -84,34 +98,56 @@ function isDated(made: NewExpression): boolean {
     if (key === undefined) {
       dated = false;
     } else if (key === 'lastModified') {
-      dated =
-        (isPropertyAssignment(property) && definedValue(property.initializer)) ||
-        (isShorthandPropertyAssignment(property) &&
-          isIdentifier(property.name) &&
-          definedValue(property.name));
+      dated = propertyDated(property);
     }
   }
   return dated;
 }
 
+/** Accessors or a custom prototype whose option reads may alter `lastModified`. */
+function readsOptionsCode(property: ObjectLiteralElementLike): boolean {
+  return (
+    isGetAccessorDeclaration(property) ||
+    isSetAccessorDeclaration(property) ||
+    (isPropertyAssignment(property) && keyOf(property.name) === '__proto__')
+  );
+}
+
+/** Whether a `lastModified` property writes a timestamp shown defined where the entry runs. */
+function propertyDated(property: ObjectLiteralElementLike): boolean {
+  if (isPropertyAssignment(property)) {
+    return definedValue(property.initializer);
+  }
+  return (
+    isShorthandPropertyAssignment(property) &&
+    isIdentifier(property.name) &&
+    definedValue(property.name)
+  );
+}
+
 /** The name of an entry the code writes: of a name, or text; none of another. */
 function keyOf(name: Node): string | undefined {
-  if (isIdentifier(name) || isStringLiteral(name)) {
+  if (
+    isIdentifier(name) ||
+    isStringLiteral(name) ||
+    isNoSubstitutionTemplateLiteral(name) ||
+    isNumericLiteral(name)
+  ) {
     return name.text;
   }
   const key = isComputedPropertyName(name)
-    ? constantValue(name.expression, initializerOf)
+    ? constantValue(name.expression, (value) => platformInitializer(value, value))
     : undefined;
-  return typeof key === 'string' ? key : undefined;
+  return key === undefined ? undefined : String(key);
 }
 
-/** What a variable around a value is declared of, in turn, without following an alias twice. */
-function declaredValue(node: Expression): Expression {
+/** What an unchanged variable is declared of at `before` (or at each read site), without looping. */
+function declaredValue(node: Expression, before?: Node): Expression {
   let value = unwrapped(node);
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
-    const declared = initializerOf(value);
+    const declared = platformInitializer(value, before ?? value);
     if (declared === undefined) {
       break;
     }
@@ -120,31 +156,41 @@ function declaredValue(node: Expression): Expression {
   return value;
 }
 
-/** Whether a timestamp expression is shown defined, so a File cannot default it to the current time. */
-function definedValue(node: Expression, seen = new Set<Expression>()): boolean {
+/**
+ * Whether a timestamp expression is shown defined — and non-null where `nullable` is false — so a
+ * File cannot default `lastModified` to the current time across `??` fallbacks.
+ */
+function definedValue(node: Expression, seen = new Set<Expression>(), nullable = true): boolean {
   const value = declaredValue(node);
   if (seen.has(value)) {
     return false;
   }
   const following = new Set([...seen, value]);
-  if (constantValue(value, initializerOf) !== undefined) {
+  if (constantValue(value, (name) => platformInitializer(name, name)) !== undefined) {
     return true;
   }
   if (isConditionalExpression(value)) {
-    return definedValue(value.whenTrue, following) && definedValue(value.whenFalse, following);
+    return (
+      definedValue(value.whenTrue, following, nullable) &&
+      definedValue(value.whenFalse, following, nullable)
+    );
   }
   if (isBinaryExpression(value)) {
-    return definedBinary(value, following);
+    return definedBinary(value, following, nullable);
   }
   if (isCallExpression(value)) {
     return ['Boolean', 'Number', 'String'].includes(
       globalPathOf(unwrapped(value.expression))?.join('.') ?? '',
     );
   }
+  return definedLiteral(value, nullable);
+}
+
+/** Literals and constructions that always supply a value, excluding `null` when `!nullable`. */
+function definedLiteral(value: Expression, nullable: boolean): boolean {
   return (
-    [SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword, SyntaxKind.TrueKeyword].includes(
-      value.kind,
-    ) ||
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    [SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword].includes(value.kind) ||
     isBigIntLiteral(value) ||
     isArrayLiteralExpression(value) ||
     isObjectLiteralExpression(value) ||
@@ -158,14 +204,16 @@ function definedValue(node: Expression, seen = new Set<Expression>()): boolean {
 }
 
 /** Whether an expression selecting a value has no branch that may answer undefined. */
-function definedBinary(value: Expression, seen: Set<Expression>): boolean {
+function definedBinary(value: Expression, seen: Set<Expression>, nullable: boolean): boolean {
   if (!isBinaryExpression(value)) {
     return false;
   }
   if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
-    return definedValue(value.left, seen) || definedValue(value.right, seen);
+    return definedValue(value.left, seen, false) || definedValue(value.right, seen, nullable);
   }
-  return value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen);
+  return (
+    value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen, nullable)
+  );
 }
 
 /**

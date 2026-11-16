@@ -1,75 +1,49 @@
 import {
+  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
-  isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isSetAccessorDeclaration,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
-  isTaggedTemplateExpression,
   type Node,
-  type ObjectLiteralExpression,
-  type ObjectLiteralElementLike,
-  type ParameterDeclaration,
-  type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, answersLater, isAnswering, parametersOf, returnedBy } from './answers.ts';
-import { globalOf, unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
-import { metadataCallee, metadataInitializer } from './input-callees.ts';
-import { rootOf, targetsOf } from './kept.ts';
-import { readsOf } from './local-module-reads.ts';
-import type { Resolve } from './numbers.ts';
-import { parameterValue } from './parameter-values.ts';
-import { freeReads } from './scope.ts';
-import { interveningEvaluation } from './written-evaluation.ts';
-import { writtenBy } from './written.ts';
+import { answersLater, isAnswering, returnedBy } from './answers.ts';
+import { unwrapped } from './bounded.ts';
+import { metadataCallee } from './input-callees.ts';
+import { mutatedArrayOrigins } from './proxy-array-writes.ts';
+import {
+  arrayChangedBefore,
+  arrayIndex,
+  holdsArrayLiteral,
+  spreadElementOrigins,
+} from './proxy-arrays.ts';
+import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
+import {
+  type Context,
+  createPresenceCache,
+  heldConstant,
+  literalTruth,
+  objectOrigins,
+  type Origin,
+  originKey,
+  type ProxyReading,
+  sourcePath,
+  sourceValue,
+  writtenBefore,
+} from './proxy-values.ts';
 
-/** Source-written values that can carry a Proxy to a measured call result or container entry. */
-export interface ProxyReading {
-  readonly follow?: Resolve;
-  readonly functionOf?: (callee: Expression) => Answering | undefined;
-}
-
-interface Frame {
-  readonly fn: Answering;
-  readonly given: readonly Origin[] | undefined;
-}
-
-interface ParameterFrame {
-  readonly frame: Frame;
-  readonly index: number;
-  readonly parameter: ParameterDeclaration;
-}
-
-interface Context extends ProxyReading {
-  readonly calls: ReadonlySet<Node>;
-  readonly frames: readonly Frame[];
-}
-
-interface Origin {
-  readonly value: Expression;
-  readonly keys: readonly string[];
-  readonly context: Context;
-  readonly seen: ReadonlySet<Expression>;
-}
+export type { ProxyReading } from './proxy-values.ts';
 
 /** Native calls whose result cannot retain the identity of an object they consume. */
 const SCALARS: ReadonlySet<string> = new Set(['Boolean', 'JSON.stringify', 'Number', 'String']);
@@ -79,11 +53,21 @@ export function proxyOrigin(
   values: readonly Expression[],
   reading: ProxyReading = {},
 ): Node | undefined {
-  const context: Context = { ...reading, calls: new Set(), frames: [] };
-  const pending: Origin[] = values.map((value) => ({ context, keys: [], seen: new Set(), value }));
+  const context: Context = {
+    ...reading,
+    calls: new Set(),
+    frames: [],
+    presence: createPresenceCache(),
+    spreadKeys: new Map(),
+  };
+  const visited = new WeakMap<Context, Map<Expression, Set<string>>>();
+  const pending: Origin[] = [
+    ...values.map((value) => ({ context, keys: [], seen: new Set<Expression>(), value })),
+    ...callableReturnOrigins(context),
+  ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const value = unwrapped(next.value);
-    if (next.seen.has(value)) {
+    if (next.seen.has(value) || markVisited(visited, next.context, value, originStateKey(next))) {
       continue;
     }
     const at = { ...next, seen: new Set([...next.seen, value]), value };
@@ -93,6 +77,54 @@ export function proxyOrigin(
     pending.push(...originsOf(at));
   }
   return undefined;
+}
+
+/** Seeds return expressions of exported callables inside each callable's own parameter frame. */
+function callableReturnOrigins(base: Context): readonly Origin[] {
+  return (base.callables ?? []).flatMap((fn) => {
+    const context: Context = { ...base, frames: [{ fn, given: undefined }] };
+    return returnedBy(fn).map((value) => ({ context, keys: [], seen: new Set(), value }));
+  });
+}
+
+/** Records `(context, value, state)` and reports whether that analysis state was already explored. */
+function markVisited(
+  visited: WeakMap<Context, Map<Expression, Set<string>>>,
+  context: Context,
+  value: Expression,
+  state: string,
+): boolean {
+  let byExpression = visited.get(context);
+  if (byExpression === undefined) {
+    byExpression = new Map();
+    visited.set(context, byExpression);
+  }
+  let states = byExpression.get(value);
+  if (states === undefined) {
+    states = new Set();
+    byExpression.set(value, states);
+  }
+  if (states.has(state)) {
+    return true;
+  }
+  states.add(state);
+  return false;
+}
+
+/** Encodes the member projection and spread state carried by `origin` unambiguously. */
+function originStateKey(origin: Origin): string {
+  const path = origin.keys.map((key) => (key === null ? '*' : `${key.length}:${key}`)).join(',');
+  if (origin.spread !== true) {
+    return path;
+  }
+  const skipped =
+    origin.excluded === undefined
+      ? ''
+      : [...origin.excluded]
+          .toSorted()
+          .map((key) => `${key.length}:${key}`)
+          .join(',');
+  return `${path}|spread|${skipped}`;
 }
 
 /** Whether the value itself, or the known proxy member of a revocable pair, is a Proxy. */
@@ -106,7 +138,7 @@ function isProxy(at: Origin): boolean {
     (isNewExpression(value) && path === 'Proxy' && keys.length === 0) ||
     (isCallExpression(value) &&
       path === 'Proxy.revocable' &&
-      (keys.length === 0 || (keys.length === 1 && keys[0] === 'proxy')))
+      (keys.length === 0 || (keys.length === 1 && (keys[0] === 'proxy' || keys[0] === null))))
   );
 }
 
@@ -119,8 +151,8 @@ function originsOf(at: Origin): readonly Origin[] {
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     const key = isPropertyAccessExpression(value)
       ? value.name.text
-      : originKey(value.argumentExpression, at.context);
-    return key === undefined ? [] : [{ ...at, keys: [key, ...keys], value: value.expression }];
+      : (originKey(value.argumentExpression, at.context) ?? null);
+    return [{ ...at, keys: [key, ...keys], value: value.expression }];
   }
   if (isConditionalExpression(value)) {
     const condition = sourceValue(value.condition, at.context);
@@ -142,128 +174,108 @@ function originsOf(at: Origin): readonly Origin[] {
 
 /** Containers and source calls retain the origins of values they actually return or store. */
 function containerOrigins(at: Origin): readonly Origin[] {
-  const { keys, value } = at;
+  const { value } = at;
   if (isCallExpression(value)) {
     return callOrigins(value, at);
   }
   if (isObjectLiteralExpression(value)) {
     return objectOrigins(value, at);
   }
-  if (isArrayLiteralExpression(value)) {
-    const [key, ...rest] = keys;
-    const expanded = argumentOrigins(
-      value.elements.map((each) => ({ ...at, keys: [], value: each })),
-    );
-    if (expanded === undefined) {
+  return isArrayLiteralExpression(value) ? arrayOrigins(value, at) : [];
+}
+
+/** Projects indexed elements or non-excluded object-spread entries from an array literal. */
+function arrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origin[] {
+  const expanded = argumentOrigins(
+    value.elements.map((each) => ({
+      ...at,
+      excluded: undefined,
+      keys: [],
+      spread: undefined,
+      value: each,
+    })),
+  );
+  if (expanded === undefined) {
+    return unexpandedArrayOrigins(value, at);
+  }
+  if (at.keys.length === 0) {
+    return spreadElementOrigins(expanded, at);
+  }
+  const [key, ...rest] = at.keys;
+  if (key === undefined || key === null) {
+    return projectAllElements(expanded, rest, at);
+  }
+  const index = arrayIndex(key);
+  const selected = index === undefined ? undefined : expanded[index];
+  return selected === undefined || isOmittedExpression(selected.value)
+    ? []
+    : [
+        {
+          ...selected,
+          excluded: at.excluded,
+          keys: [...selected.keys, ...rest],
+          spread: at.spread,
+        },
+      ];
+}
+
+/** Retains element and spread origins when an array literal contains an unexpanded spread. */
+function unexpandedArrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origin[] {
+  const candidates: Origin[] = value.elements.flatMap((each) => {
+    if (isOmittedExpression(each)) {
       return [];
     }
-    const elements = key === undefined ? expanded : [expanded[Number(key)]];
-    return elements.flatMap((each) =>
-      each === undefined ? [] : [{ ...each, keys: [...each.keys, ...rest] }],
-    );
+    return isSpreadElement(each)
+      ? [{ ...at, excluded: undefined, keys: [null], spread: undefined, value: each.expression }]
+      : [{ ...at, excluded: undefined, keys: [], spread: undefined, value: each }];
+  });
+  if (at.keys.length === 0) {
+    return candidates;
   }
-  return [];
+  const [key, ...rest] = at.keys;
+  return key === null || (key !== undefined && arrayIndex(key) !== undefined)
+    ? projectAllElements(candidates, rest, at)
+    : [];
+}
+
+/** Projects every non-hole candidate element through `rest` with `at`'s outer spread state. */
+function projectAllElements(
+  elements: readonly Origin[],
+  rest: readonly (string | null)[],
+  at: Origin,
+): readonly Origin[] {
+  return elements.flatMap((each) =>
+    isOmittedExpression(each.value)
+      ? []
+      : [
+          {
+            ...each,
+            excluded: at.excluded,
+            keys: [...each.keys, ...rest],
+            spread: at.spread,
+          },
+        ],
+  );
 }
 
 /** A parameter's actual argument or a lexical constant, with the argument's original scope. */
 function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
-  const binding = parameterFrame(name, at);
+  const binding = parameterFrame(name, at.context.frames);
   if (binding !== undefined) {
-    const { frame, index, parameter } = binding;
-    if (!isIdentifier(parameter.name)) {
-      return [];
-    }
-    const replaced = parameterValue(frame.fn, parameter.name, name);
-    if (replaced !== undefined) {
-      return [{ ...at, value: replaced.value }];
-    }
-    const rest = parameter.dotDotDotToken !== undefined;
-    if (frame.given === undefined || bindingChanged(frame.fn, parameter.name, rest)) {
-      return [];
-    }
-    if (rest) {
-      return restOrigins(frame.given.slice(index), at.keys);
-    }
-    const given = frame.given[index];
-    if (given !== undefined) {
-      return [{ ...given, keys: [...given.keys, ...at.keys] }];
-    }
-    return parameter.initializer === undefined ? [] : [{ ...at, value: parameter.initializer }];
+    return parameterOrigins(name, binding, at);
   }
   const held = heldConstant(name, at.context);
-  if (
-    held === undefined ||
-    (isObjectLiteralExpression(unwrapped(held)) && writtenBefore(name, at.context))
-  ) {
+  if (held === undefined) {
     return [];
   }
+  const target = unwrapped(held);
+  if (isObjectLiteralExpression(target) && writtenBefore(name, at.context)) {
+    return [];
+  }
+  if (holdsArrayLiteral(held) && arrayChangedBefore(name, at.context)) {
+    return mutatedArrayOrigins(name, held, at);
+  }
   return [{ ...at, value: held }];
-}
-
-/** The nearest active source invocation whose lexical formal this identifier reads. */
-function parameterFrame(name: Identifier, at: Origin): ParameterFrame | undefined {
-  for (const frame of at.context.frames.toReversed()) {
-    const parameters = parametersOf(frame.fn);
-    const index = parameters.findIndex(
-      (parameter) => isIdentifier(parameter.name) && readsOf(parameter.name, frame.fn)(name),
-    );
-    const parameter = parameters[index];
-    if (parameter !== undefined) {
-      return { frame, index, parameter };
-    }
-  }
-  return undefined;
-}
-
-/** A rest array is fresh; only its indexed elements retain actual argument identities. */
-function restOrigins(given: readonly Origin[], keys: readonly string[]): readonly Origin[] {
-  const [key, ...rest] = keys;
-  if (key === undefined) {
-    return given;
-  }
-  const index = Number(key);
-  const selected = String(index) === key && index >= 0 ? given[index] : undefined;
-  return selected === undefined ? [] : [{ ...selected, keys: [...selected.keys, ...rest] }];
-}
-
-/** A possibly reassigned parameter no longer proves that its original argument is returned. */
-function bindingChanged(fn: Answering, declared: Identifier, members = false): boolean {
-  const isRead = readsOf(declared, fn);
-  const visit = (node: Node): boolean => {
-    if (members && handedParameter(node, isRead)) {
-      return true;
-    }
-    const target = !members && isCallExpression(node) ? undefined : writtenBy(node);
-    if (
-      target !== undefined &&
-      targetsOf(target).some((each) => {
-        const name = members ? rootOf(each) : each;
-        return name !== undefined && isIdentifier(name) && isRead(name);
-      })
-    ) {
-      return true;
-    }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return fn.body !== undefined && visit(fn.body);
-}
-
-/** A handed rest array can have its entries replaced before its selected value is returned. */
-function handedParameter(node: Node, isRead: (name: Identifier) => boolean): boolean {
-  let given: readonly Expression[] = [];
-  if (isCallExpression(node) || isNewExpression(node)) {
-    given = node.arguments ?? [];
-  } else if (isTaggedTemplateExpression(node)) {
-    given = [node.template];
-  }
-  return given.some(
-    (each) => !isSpreadElement(each) && [...freeReads(each)].some((name) => isRead(name)),
-  );
-}
-
-/** A lexical constant's initializer, or a source module's imported constant. */
-function heldConstant(name: Identifier, context: ProxyReading): Expression | undefined {
-  return metadataInitializer(name) ?? context.follow?.(name);
 }
 
 /** A source call's returned expressions, binding ordinary parameters to their actual arguments. */
@@ -279,7 +291,15 @@ function callOrigins(call: CallExpression, at: Origin): readonly Origin[] {
   if (target === undefined || !isAnswering(target) || answersLater(target)) {
     return [];
   }
-  const given = argumentOrigins(call.arguments.map((value) => ({ ...at, keys: [], value })));
+  const given = argumentOrigins(
+    call.arguments.map((value) => ({
+      ...at,
+      excluded: undefined,
+      keys: [],
+      spread: undefined,
+      value,
+    })),
+  );
   const context: Context = {
     ...at.context,
     calls: new Set([...at.context.calls, call]),
@@ -334,113 +354,6 @@ function spreadOrigins(origin: Origin): readonly Origin[] | undefined {
   }
 }
 
-/** A rest array's entries, or an explicitly unknown binding after a prior write/evaluation. */
-function spreadBinding(
-  name: Identifier,
-  at: Origin,
-): { readonly values?: readonly Origin[] | undefined } | undefined {
-  if (writtenBefore(name, at.context)) {
-    return {};
-  }
-  const held = sourceValue(name, at.context);
-  if (isArrayLiteralExpression(held) && interveningEvaluation(held, name)) {
-    return {};
-  }
-  const binding = parameterFrame(name, at);
-  if (binding?.parameter.dotDotDotToken === undefined || at.keys.length > 0) {
-    return undefined;
-  }
-  const { frame, index, parameter } = binding;
-  return isIdentifier(parameter.name) && !bindingChanged(frame.fn, parameter.name, true)
-    ? { values: frame.given?.slice(index) }
-    : {};
-}
-
-/** Own data entries are measured; an accessor is executed only when its member is selected. */
-function objectOrigins(object: ObjectLiteralExpression, at: Origin): readonly Origin[] {
-  const [key, ...rest] = at.keys;
-  if (key === undefined) {
-    return dataOrigins(object, at);
-  }
-  let setter = false;
-  for (const property of object.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      return [];
-    }
-    const named = propertyKey(property.name, at.context);
-    if (named === undefined) {
-      return [];
-    }
-    if (named !== key) {
-      continue;
-    }
-    if (isSetAccessorDeclaration(property)) {
-      setter = true;
-      continue;
-    }
-    if (isGetAccessorDeclaration(property)) {
-      return returnedBy(property).map((value) => ({ ...at, keys: rest, value }));
-    }
-    return setter ? [] : dataProperty(property, { ...at, keys: rest });
-  }
-  return [];
-}
-
-/** Only surviving data entries are traversed; accessors are not invoked by measurement. */
-function dataOrigins(object: ObjectLiteralExpression, at: Origin): readonly Origin[] {
-  const found: Origin[] = [];
-  const seen = new Set<string>();
-  for (const property of object.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      break;
-    }
-    const key = propertyKey(property.name, at.context);
-    if (key === undefined) {
-      break;
-    }
-    if (!seen.has(key)) {
-      found.push(...dataProperty(property, at));
-      seen.add(key);
-    }
-  }
-  return found;
-}
-
-/** A data entry's value, rather than a deferred accessor or method body. */
-function dataProperty(property: ObjectLiteralElementLike, at: Origin): readonly Origin[] {
-  if (isPropertyAssignment(property)) {
-    return [{ ...at, value: property.initializer }];
-  }
-  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
-    ? [{ ...at, value: property.name }]
-    : [];
-}
-
-/** Ordinary property names are literal, and computed names follow primitive constant keys. */
-function propertyKey(name: PropertyName, reading: ProxyReading): string | undefined {
-  if (isIdentifier(name)) {
-    return name.text;
-  }
-  return isComputedPropertyName(name) ? originKey(name.expression, reading) : literalKey(name);
-}
-
-/** A key whose source is a literal, without application conversion or evaluation. */
-function originKey(value: Expression, reading: ProxyReading): string | undefined {
-  return literalKey(sourceValue(value, reading));
-}
-
-/** A written boolean or nullish condition, without executing application code. */
-function literalTruth(value: Expression): boolean | undefined {
-  if (value.kind === SyntaxKind.TrueKeyword) {
-    return true;
-  }
-  return value.kind === SyntaxKind.FalseKeyword ||
-    value.kind === SyntaxKind.NullKeyword ||
-    globalOf(value) === 'undefined'
-    ? false
-    : undefined;
-}
-
 /** A logical operator's possible result values, respecting known skipped operands. */
 function logicalOrigins(
   left: Expression,
@@ -464,78 +377,4 @@ function logicalOrigins(
     return [{ ...at, value: choosesRight ? right : left }];
   }
   return [left, right].map((each) => ({ ...at, value: each }));
-}
-
-/** A lexical constant followed without executing application code or constructing compiler modules. */
-function sourceValue(node: Expression, reading: ProxyReading): Expression {
-  let value = unwrapped(node);
-  const seen = new Set<Expression>();
-  while (isIdentifier(value) && !seen.has(value)) {
-    seen.add(value);
-    const held = heldConstant(value, reading);
-    if (held === undefined) {
-      break;
-    }
-    value = unwrapped(held);
-  }
-  return value;
-}
-
-/** A global callee reached through lexical aliases and source-written member keys. */
-function sourcePath(node: Expression, reading: ProxyReading): string | undefined {
-  const keys: string[] = [];
-  const seen = new Set<Expression>();
-  let value = sourceValue(node, reading);
-  while (!seen.has(value)) {
-    seen.add(value);
-    const path = globalPathOf(value);
-    if (path !== undefined) {
-      return [...path, ...keys].join('.');
-    }
-    if (isPropertyAccessExpression(value)) {
-      keys.unshift(value.name.text);
-    } else if (isElementAccessExpression(value)) {
-      const key = originKey(value.argumentExpression, reading);
-      if (key === undefined) {
-        return undefined;
-      }
-      keys.unshift(key);
-    } else {
-      return undefined;
-    }
-    value = sourceValue(value.expression, reading);
-  }
-  return undefined;
-}
-
-/** A key represented by source text or a number alone. */
-function literalKey(node: Node): string | undefined {
-  return isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node) || isNumericLiteral(node)
-    ? node.text
-    : undefined;
-}
-
-/** A prior explicit write prevents projecting a captured literal's original data entries. */
-function writtenBefore(name: Identifier, reading: ProxyReading): boolean {
-  const declared = metadataInitializer(name)?.parent;
-  if (declared === undefined) {
-    return false;
-  }
-  const visit = (node: Node): boolean => {
-    if (node.pos >= name.pos || node.end <= declared.end) {
-      return false;
-    }
-    const target = writtenBy(node);
-    if (
-      target !== undefined &&
-      targetsOf(target).some((each) => {
-        const root = rootOf(each);
-        return root !== undefined && sourceValue(root, reading) === sourceValue(name, reading);
-      })
-    ) {
-      return true;
-    }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return visit(name.getSourceFile());
 }
