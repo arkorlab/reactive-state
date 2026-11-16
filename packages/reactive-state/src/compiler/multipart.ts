@@ -33,9 +33,9 @@ import {
   type MemberDelete,
 } from './framed-member-writes.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { resolveVariableDescriptorWrites } from './multipart-descriptor-cuts.ts';
 import {
   applyDescriptorWrite,
-  holderDescriptorBodyWrites,
   mapDescriptorBodyWrite,
   optionPropertyKey,
   optionPropertyValue,
@@ -395,23 +395,32 @@ function variableBodies(
     }),
   ];
   const holder = framedHeldVariable(declaration);
-  const descriptorWrites = holderDescriptorBodyWrites(holder, (change) =>
-    reachesHolderRead(change, holder, point),
-  );
+  const filteredDescriptors = resolveVariableDescriptorWrites({
+    ambiguousPattern: patternScan.ambiguous,
+    declaration,
+    holder,
+    overwritesAssign: (call, sources) =>
+      objectAssignSourcesBodies(call, sources, call, state).overwrites,
+    point,
+    reaches: (change) => reachesHolderRead(change, holder, point),
+    whole,
+  });
   const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state));
   const ambiguous =
     patternScan.dynamicOpaque || entryReadings.some((each) => each.ambiguous === true);
   const bodies = uniqueExpressions([
     ...entryReadings.flatMap((each) => each.bodies),
-    ...descriptorWrites.flatMap((each) => each.values),
+    ...filteredDescriptors.activeValues.flatMap((each) => each.values),
   ]);
-  const hidesBody = descriptorWrites.some((each) => each.mayHideBody);
+  const hidesBody = filteredDescriptors.activeMetadata.some((each) => each.mayHideBody);
   if (ambiguous || hidesBody || patternScan.ambiguous || removesHolderBody(name, holder, point)) {
     return { ambiguous, bodies, overwrites: false };
   }
   const definiteEnumerable =
     bodyHeld.initial === undefined ||
-    descriptorWrites.some((each) => each.enumerableBody && definitelyBefore(each.node, point));
+    filteredDescriptors.activeMetadata.some(
+      (each) => each.enumerableBody && definitelyBefore(each.node, point),
+    );
   if (definiteEnumerable && whole.initial !== undefined && whole.held.length === 0) {
     return { bodies, overwrites: true };
   }

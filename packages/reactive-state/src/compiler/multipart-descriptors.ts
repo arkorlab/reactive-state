@@ -39,10 +39,12 @@ import { isTypeOnly } from './scope.ts';
 /** Property-descriptor body extraction, enumerability proofs, and option literal key helpers. */
 
 export interface BodyDescriptorWrite {
+  readonly configurableBody: boolean;
   readonly enumerableBody: boolean;
   readonly exactBody: boolean;
   readonly mayHideBody: boolean;
   readonly values: readonly Expression[];
+  readonly writableBody: boolean;
 }
 
 export interface RecordedDescriptorBodyWrite extends BodyDescriptorWrite {
@@ -67,24 +69,40 @@ export function singleDescriptorBodyWrite(
   reflective: boolean,
 ): BodyDescriptorWrite | undefined {
   if (key === undefined) {
-    return { enumerableBody: false, exactBody: false, mayHideBody: true, values: [] };
+    return {
+      configurableBody: false,
+      enumerableBody: false,
+      exactBody: false,
+      mayHideBody: true,
+      values: [],
+      writableBody: false,
+    };
   }
   const names = framedKeyNames(key);
   if (names !== undefined && !names.includes(BODY_KEY)) {
     return undefined;
   }
   if (descriptor === undefined) {
-    return { enumerableBody: false, exactBody: false, mayHideBody: true, values: [] };
+    return {
+      configurableBody: false,
+      enumerableBody: false,
+      exactBody: false,
+      mayHideBody: true,
+      values: [],
+      writableBody: false,
+    };
   }
   const slot = descriptorSlotWrite(descriptor, reflective);
   if (names?.length === 1 && names[0] === BODY_KEY) {
     return slot;
   }
   return {
+    configurableBody: false,
     enumerableBody: false,
     exactBody: false,
     mayHideBody: true,
     values: slot.values,
+    writableBody: false,
   };
 }
 
@@ -93,17 +111,26 @@ export function mapDescriptorBodyWrite(
   descriptors: Expression | undefined,
 ): BodyDescriptorWrite | undefined {
   if (descriptors === undefined) {
-    return { enumerableBody: false, exactBody: false, mayHideBody: true, values: [] };
+    return {
+      configurableBody: false,
+      enumerableBody: false,
+      exactBody: false,
+      mayHideBody: true,
+      values: [],
+      writableBody: false,
+    };
   }
   const map = unwrapped(descriptors);
   if (isObjectLiteralExpression(map)) {
     return literalMapDescriptorWrite(map);
   }
   return {
+    configurableBody: false,
     enumerableBody: false,
     exactBody: false,
     mayHideBody: true,
     values: nestedDescriptorValues(map, [BODY_KEY, 'value'], new Set()),
+    writableBody: false,
   };
 }
 
@@ -200,7 +227,7 @@ export function optionPropertyKey(name: PropertyName): string | undefined {
 }
 
 /** Whether a held entry points directly to a plain object literal without a `body` accessor. */
-function plainBodyLiteralEntry(entry: {
+export function plainBodyLiteralEntry(entry: {
   readonly keys: readonly string[];
   readonly value: Expression;
 }): boolean {
@@ -216,28 +243,36 @@ function descriptorSlotWrite(descriptor: Expression, reflective: boolean): BodyD
   const values = descriptorValueCandidates(descriptor, new Set());
   const exactValue = exactDataDescriptorValue(descriptor);
   const exactBody = !reflective && exactValue !== undefined;
-  const enumerableBody = exactBody && enumerableTrueDescriptor(descriptor);
+  const configurableBody = exactBody && descriptorBooleanTrue(descriptor, 'configurable');
+  const enumerableBody = exactBody && descriptorBooleanTrue(descriptor, 'enumerable');
+  const writableBody = exactBody && descriptorBooleanTrue(descriptor, 'writable');
   return {
+    configurableBody,
     enumerableBody,
     exactBody,
     mayHideBody: !enumerableBody,
     values: exactValue === undefined ? values : [exactValue],
+    writableBody,
   };
 }
 
 /** Walks a literal property-descriptor map (`{ body: { value, enumerable } }`) in property order. */
 function literalMapDescriptorWrite(map: ObjectLiteralExpression): BodyDescriptorWrite | undefined {
   let affected = false;
+  let configurableBody = false;
   let exactBody = false;
   let enumerableBody = false;
   let mayHideBody = false;
+  let writableBody = false;
   let values: Expression[] = [];
   for (const property of map.properties) {
     if (isSpreadAssignment(property)) {
       affected = true;
+      configurableBody = false;
       exactBody = false;
       enumerableBody = false;
       mayHideBody = true;
+      writableBody = false;
       values.push(...nestedDescriptorValues(property.expression, [BODY_KEY, 'value'], new Set()));
       continue;
     }
@@ -250,20 +285,31 @@ function literalMapDescriptorWrite(map: ObjectLiteralExpression): BodyDescriptor
     if (entry !== undefined && names?.length === 1 && names[0] === BODY_KEY) {
       const slot = descriptorSlotWrite(entry, false);
       values = [...slot.values];
+      configurableBody = slot.configurableBody;
       exactBody = slot.exactBody;
       enumerableBody = slot.enumerableBody;
       mayHideBody = slot.mayHideBody;
+      writableBody = slot.writableBody;
       continue;
     }
+    configurableBody = false;
     exactBody = false;
     enumerableBody = false;
     mayHideBody = true;
+    writableBody = false;
     if (entry !== undefined) {
       values.push(...descriptorValueCandidates(entry, new Set()));
     }
   }
   return affected
-    ? { enumerableBody, exactBody, mayHideBody, values: uniqueExpressions(values) }
+    ? {
+        configurableBody,
+        enumerableBody,
+        exactBody,
+        mayHideBody,
+        values: uniqueExpressions(values),
+        writableBody,
+      }
     : undefined;
 }
 
@@ -321,10 +367,10 @@ function exactDataDescriptorValue(descriptor: Expression): Expression | undefine
   return entries?.length === 1 ? entries[0] : undefined;
 }
 
-/** Whether a closed descriptor literal proves `enumerable: true`. */
-function enumerableTrueDescriptor(descriptor: Expression): boolean {
-  const enumerable = framedDescriptorEntries(descriptor, ['enumerable']);
-  const only = enumerable?.length === 1 ? enumerable[0] : undefined;
+/** Whether a closed descriptor literal proves `field: true`. */
+function descriptorBooleanTrue(descriptor: Expression, field: string): boolean {
+  const entries = framedDescriptorEntries(descriptor, [field]);
+  const only = entries?.length === 1 ? entries[0] : undefined;
   return only !== undefined && unwrapped(only).kind === SyntaxKind.TrueKeyword;
 }
 

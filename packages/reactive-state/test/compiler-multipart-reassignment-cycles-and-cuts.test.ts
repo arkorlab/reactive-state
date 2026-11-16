@@ -195,6 +195,60 @@ const CASES = [
     source:
       "export function build(body: BodyInit) { const items = [new FormData(), 'fixed']; const wrapped = [...items]; body = 'fixed'; [body] = wrapped; return new Response(body); }",
   },
+  {
+    expected: undefined,
+    id: 'writable-define-property-form-data-superseded-by-direct-body-write',
+    source:
+      "export function build() { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData(), writable: true }); opts.body = 'fixed'; return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: undefined,
+    id: 'writable-define-properties-form-data-superseded-by-direct-body-write',
+    source:
+      "export function build() { const opts: RequestInit = { method: 'POST' }; Object.defineProperties(opts, { body: { value: new FormData(), writable: true } }); opts.body = 'fixed'; return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: undefined,
+    id: 'writable-define-property-form-data-superseded-by-object-assign',
+    source:
+      "export function build() { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData(), writable: true }); Object.assign(opts, { body: 'fixed' }); return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: undefined,
+    id: 'configurable-define-property-form-data-superseded-by-redefinition',
+    source:
+      "export function build() { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData(), configurable: true }); Object.defineProperty(opts, 'body', { value: 'fixed' }); return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: undefined,
+    id: 'let-define-property-form-data-superseded-by-whole-variable-rebind',
+    source:
+      "export function build() { let opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData() }); opts = { method: 'POST', body: 'fixed' }; return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'parameter-non-writable-define-property-not-cut-by-direct-body-write',
+    source:
+      "export function build(opts: RequestInit) { opts = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData() }); opts.body = 'fixed'; return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'non-writable-define-property-on-const-not-cut-by-direct-body-write-pin',
+    source:
+      "export function build() { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData() }); opts.body = 'fixed'; return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'writable-non-enumerable-define-property-cut-still-withholds-spread-overwrite-pin',
+    source:
+      "export function build() { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: 'initial', writable: true }); opts.body = 'fixed'; return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...opts }); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'writable-define-property-conditional-body-write-retains-form-data-pin',
+    source:
+      "export function build(flag: boolean) { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData(), writable: true }); if (flag) { opts.body = 'fixed'; } return new Request('https://example.com/', opts); }",
+  },
 ] as const;
 
 describe('multipart destructured parameter reassignments, expansion cycles, and descriptor cuts', () => {

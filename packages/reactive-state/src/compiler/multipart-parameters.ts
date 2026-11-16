@@ -24,6 +24,7 @@ import { frameBindingOf } from './framed-bindings.ts';
 import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
+import { canCutPriorDescriptors } from './multipart-descriptor-cuts.ts';
 import { mapDescriptorBodyWrite, singleDescriptorBodyWrite } from './multipart-descriptors.ts';
 import {
   bindingDefaultsOf,
@@ -54,12 +55,14 @@ interface ParameterBodyWrite {
   readonly assignCall?: CallExpression;
   readonly assignSources?: readonly Expression[];
   readonly capture: Identifier;
+  readonly configurableBody?: boolean;
   readonly descriptorWrite?: boolean;
   readonly enumerableBody: boolean;
   readonly exactBody: boolean;
   readonly mayHideBody: boolean;
   readonly node: Node;
   readonly values: readonly Expression[];
+  readonly writableBody?: boolean;
 }
 
 interface CutContext {
@@ -218,12 +221,14 @@ function definiteBodyMemberCut(
   if (freshCut === undefined) {
     return undefined;
   }
+  const owner = executionOwner(context.point);
   let latest: ParameterBodyWrite | undefined;
   for (const write of writes) {
     if (
       capturesSameFreshCut(write.capture, freshCut, context.parameter) &&
       definitelyOverwritesBody(write, reader) &&
       definitelyBefore(write.node, context.point) &&
+      canCutPriorDescriptors(write, writes, owner) &&
       (latest === undefined || write.node.pos > latest.node.pos)
     ) {
       latest = write;
