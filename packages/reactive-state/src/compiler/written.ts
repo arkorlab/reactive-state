@@ -30,8 +30,9 @@ import {
   globalCallOf,
   memberNameOf,
   reflectSetReceivers,
-  transferredBy,
+  slotArguments,
 } from './written-arguments.ts';
+import { transferredBy } from './written-transfers.ts';
 
 /**
  * What of a shared module's code writes into what it is given, where it writes it (`settled.ts`):
@@ -258,7 +259,7 @@ export function writtenArgumentBy(node: Node): readonly Node[] {
   }
   const globalCall = globalCallOf(node);
   if (globalCall?.path === 'structuredClone') {
-    return transferredBy(argumentAt(globalCall.given, 1));
+    return transferredBy(globalCall.given);
   }
   if (globalCall?.path === 'Reflect.set') {
     return reflectSetReceivers(globalCall.given);
@@ -267,8 +268,9 @@ export function writtenArgumentBy(node: Node): readonly Node[] {
   if ((invoked?.method ?? methodOf(node)) !== 'dispatchEvent') {
     return [];
   }
-  const argument = argumentAt(invoked?.given ?? asCallArguments(node.arguments), 0);
-  return argument === undefined ? [] : [argument];
+  return slotArguments(invoked?.given ?? asCallArguments(node.arguments), 0).map(
+    (each) => each.expression,
+  );
 }
 
 /**

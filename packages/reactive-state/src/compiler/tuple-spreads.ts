@@ -31,19 +31,23 @@ export function unmutatedTuple(expression: Expression): ArrayLiteralExpression |
   if (isArrayLiteralExpression(value)) {
     return value;
   }
+  const initial = spreadOnlyInitializer(value);
+  return initial !== undefined && isArrayLiteralExpression(initial) ? initial : undefined;
+}
+
+/** Initializer of a whole-identifier `const` declaration read exclusively as a spread operand. */
+export function spreadOnlyInitializer(expression: Expression): Expression | undefined {
+  const value = unwrapped(expression);
   const declared = isIdentifier(value) ? constVariableDeclaration(value) : undefined;
-  if (
-    declared === undefined ||
-    declared.initializer === undefined ||
-    !isIdentifier(declared.name)
-  ) {
-    return undefined;
-  }
-  const initial = unwrapped(declared.initializer);
-  return isArrayLiteralExpression(initial) &&
+  return declared?.initializer !== undefined &&
     !nonSpreadDeclarationsIn(declared.getSourceFile()).has(declared)
-    ? initial
+    ? unwrapped(declared.initializer)
     : undefined;
+}
+
+/** Initializer of a whole-identifier `const` declaration, or none when mutable or destructured. */
+export function constInitializerOf(name: Identifier): Expression | undefined {
+  return constVariableDeclaration(name)?.initializer;
 }
 
 /** Follows whole-identifier `const` initializers without crossing `let`, `var` or patterns. */
@@ -52,11 +56,11 @@ export function constFollowedValue(node: Expression): Expression {
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
-    const declared = constVariableDeclaration(value);
-    if (declared?.initializer === undefined) {
+    const initial = constInitializerOf(value);
+    if (initial === undefined) {
       break;
     }
-    value = unwrapped(declared.initializer);
+    value = unwrapped(initial);
   }
   return value;
 }
