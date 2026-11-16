@@ -39,6 +39,12 @@ import { declaredBindingTarget } from './function-binding-types.ts';
 import { staticElementKey } from './function-this-writes.ts';
 import { bindingIdentifiers } from './scope.ts';
 
+/** Mutable cycle marker threaded through candidate-object lookups when caching subtrees. */
+export interface CandidateCycleState {
+  hitCycle: boolean;
+  readonly seen: Set<Node>;
+}
+
 /** Per-binding index of post-declaration expression writes (`x = rhs`). */
 export type VariableWriteMap = ReadonlyMap<Node, readonly Expression[]>;
 
@@ -96,53 +102,65 @@ export function candidateObjects(
   node: Expression,
   variableWrites: VariableWriteMap,
   seen: Set<Node>,
+  cycle?: CandidateCycleState,
+): readonly ObjectLiteralExpression[] {
+  const state: CandidateCycleState = cycle ?? { hitCycle: false, seen };
+  return candidateObjectsWithCycle(node, variableWrites, state);
+}
+
+/** Cycle-tracking worker resolving `ObjectLiteralExpression`s reachable from `node`. */
+function candidateObjectsWithCycle(
+  node: Expression,
+  variableWrites: VariableWriteMap,
+  state: CandidateCycleState,
 ): readonly ObjectLiteralExpression[] {
   if (isObjectLiteralExpression(node)) {
     return [node];
   }
   if (isConditionalExpression(node)) {
     return [
-      ...candidateObjects(unwrapped(node.whenTrue), variableWrites, seen),
-      ...candidateObjects(unwrapped(node.whenFalse), variableWrites, seen),
+      ...candidateObjectsWithCycle(unwrapped(node.whenTrue), variableWrites, state),
+      ...candidateObjectsWithCycle(unwrapped(node.whenFalse), variableWrites, state),
     ];
   }
   if (isBinaryExpression(node) && LOGICAL_FORWARDING.has(node.operatorToken.kind)) {
     return [
-      ...candidateObjects(unwrapped(node.left), variableWrites, seen),
-      ...candidateObjects(unwrapped(node.right), variableWrites, seen),
+      ...candidateObjectsWithCycle(unwrapped(node.left), variableWrites, state),
+      ...candidateObjectsWithCycle(unwrapped(node.right), variableWrites, state),
     ];
   }
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
     const key = isPropertyAccessExpression(node) ? node.name.text : staticElementKey(node);
-    const holders = candidateObjects(unwrapped(node.expression), variableWrites, seen);
-    return selectMemberObjects(holders, key, variableWrites, seen);
+    const holders = candidateObjectsWithCycle(unwrapped(node.expression), variableWrites, state);
+    return selectMemberObjectsWithCycle(holders, key, variableWrites, state);
   }
-  return isIdentifier(node) ? identifierCandidateObjects(node, variableWrites, seen) : [];
+  return isIdentifier(node) ? identifierCandidateObjects(node, variableWrites, state) : [];
 }
 
 /** Resolves candidate object literals bound to `node` via simple or destructured declarations. */
 function identifierCandidateObjects(
   node: Identifier,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): readonly ObjectLiteralExpression[] {
   const declared = frameDeclarationOf(node);
   if (declared === undefined || !isVariableDeclaration(declared)) {
     return [];
   }
   const target = declaredBindingTarget(node, declared);
-  if (seen.has(target)) {
+  if (state.seen.has(target)) {
+    state.hitCycle = true;
     return [];
   }
-  seen.add(target);
+  state.seen.add(target);
   const objects = isIdentifier(declared.name)
-    ? simpleDeclarationObjects(declared, variableWrites, seen)
-    : [...patternDeclarationObjects(node, declared, variableWrites, seen)];
+    ? simpleDeclarationObjects(declared, variableWrites, state)
+    : [...patternDeclarationObjects(node, declared, variableWrites, state)];
   if (!isConstVariable(declared)) {
     const writes = variableWrites.get(target);
     if (writes !== undefined) {
       for (const assigned of writes) {
-        objects.push(...candidateObjects(assigned, variableWrites, seen));
+        objects.push(...candidateObjectsWithCycle(assigned, variableWrites, state));
       }
     }
   }
@@ -153,11 +171,11 @@ function identifierCandidateObjects(
 function simpleDeclarationObjects(
   declared: VariableDeclaration,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): ObjectLiteralExpression[] {
   return declared.initializer === undefined
     ? []
-    : [...candidateObjects(unwrapped(declared.initializer), variableWrites, seen)];
+    : [...candidateObjectsWithCycle(unwrapped(declared.initializer), variableWrites, state)];
 }
 
 /** Steps through destructuring elements on `declared` to resolve inner object literals for `node`. */
@@ -165,7 +183,7 @@ function patternDeclarationObjects(
   node: Identifier,
   declared: VariableDeclaration,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): readonly ObjectLiteralExpression[] {
   const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
   if (bound === undefined) {
@@ -177,9 +195,9 @@ function patternDeclarationObjects(
     if (step.dotDotDotToken !== undefined) {
       return [];
     }
-    expressions = advancePatternExpressions(expressions, step, variableWrites, seen);
+    expressions = advancePatternExpressions(expressions, step, variableWrites, state);
   }
-  return expressions.flatMap((expr) => candidateObjects(expr, variableWrites, seen));
+  return expressions.flatMap((expr) => candidateObjectsWithCycle(expr, variableWrites, state));
 }
 
 /** Projects candidate container `expressions` across a single destructuring `step` and its default. */
@@ -187,19 +205,19 @@ function advancePatternExpressions(
   expressions: readonly Expression[],
   step: BindingElement,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): Expression[] {
   const next: Expression[] = [];
   if (isObjectBindingPattern(step.parent)) {
     const key = bindingStepKey(step);
     for (const expr of expressions) {
-      const holders = candidateObjects(expr, variableWrites, seen);
-      next.push(...memberValueExpressions(holders, key, variableWrites, seen));
+      const holders = candidateObjectsWithCycle(expr, variableWrites, state);
+      next.push(...memberValueExpressions(holders, key, variableWrites, state));
     }
   } else if (isArrayBindingPattern(step.parent)) {
     const index = step.parent.elements.indexOf(step);
     for (const expr of expressions) {
-      const element = selectArrayElementExpression(expr, index, seen);
+      const element = selectArrayElementExpression(expr, index, state);
       if (element !== undefined) {
         next.push(element);
       }
@@ -218,8 +236,18 @@ export function selectMemberObjects(
   variableWrites: VariableWriteMap,
   seen: Set<Node>,
 ): readonly ObjectLiteralExpression[] {
-  return memberValueExpressions(holders, key, variableWrites, seen).flatMap((value) =>
-    candidateObjects(value, variableWrites, seen),
+  return selectMemberObjectsWithCycle(holders, key, variableWrites, { hitCycle: false, seen });
+}
+
+/** Cycle-aware worker selecting member object literals on `holders`. */
+function selectMemberObjectsWithCycle(
+  holders: readonly ObjectLiteralExpression[],
+  key: string | undefined,
+  variableWrites: VariableWriteMap,
+  state: CandidateCycleState,
+): readonly ObjectLiteralExpression[] {
+  return memberValueExpressions(holders, key, variableWrites, state).flatMap((value) =>
+    candidateObjectsWithCycle(value, variableWrites, state),
   );
 }
 
@@ -228,13 +256,21 @@ function memberValueExpressions(
   holders: readonly ObjectLiteralExpression[],
   key: string | undefined,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): readonly Expression[] {
   const values: Expression[] = [];
   for (const holder of holders) {
-    if (!seen.has(holder)) {
-      const branchSeen = new Set([...seen, holder]);
-      const memberValues = collectObjectMemberValues(holder, key, variableWrites, branchSeen);
+    if (state.seen.has(holder)) {
+      state.hitCycle = true;
+    } else {
+      const branch: CandidateCycleState = {
+        hitCycle: false,
+        seen: new Set([...state.seen, holder]),
+      };
+      const memberValues = collectObjectMemberValues(holder, key, variableWrites, branch);
+      if (branch.hitCycle) {
+        state.hitCycle = true;
+      }
       for (const item of memberValues) {
         values.push(item);
       }
@@ -248,13 +284,17 @@ function collectObjectMemberValues(
   holder: ObjectLiteralExpression,
   key: string | undefined,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): readonly Expression[] {
   const found: Expression[] = [];
   for (const prop of holder.properties) {
     if (isSpreadAssignment(prop)) {
-      const spreadHolders = candidateObjects(unwrapped(prop.expression), variableWrites, seen);
-      found.push(...memberValueExpressions(spreadHolders, key, variableWrites, seen));
+      const spreadHolders = candidateObjectsWithCycle(
+        unwrapped(prop.expression),
+        variableWrites,
+        state,
+      );
+      found.push(...memberValueExpressions(spreadHolders, key, variableWrites, state));
     } else {
       const propKey = literalElementKey(prop);
       const value = propertyAssignmentExpression(prop);
@@ -280,9 +320,9 @@ function propertyAssignmentExpression(property: ObjectLiteralElementLike): Expre
 function selectArrayElementExpression(
   holder: Expression,
   index: number,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): Expression | undefined {
-  const array = resolveSimpleArrayLiteral(holder, seen);
+  const array = resolveSimpleArrayLiteral(holder, state);
   if (
     array === undefined ||
     index < 0 ||
@@ -297,7 +337,7 @@ function selectArrayElementExpression(
 /** Follows simple `const` identifier initializers to an `ArrayLiteralExpression`. */
 function resolveSimpleArrayLiteral(
   holder: Expression,
-  seen: Set<Node>,
+  state: CandidateCycleState,
 ): ArrayLiteralExpression | undefined {
   let current: Expression = holder;
   for (;;) {
@@ -310,12 +350,15 @@ function resolveSimpleArrayLiteral(
       !isVariableDeclaration(declared) ||
       !isIdentifier(declared.name) ||
       !isConstVariable(declared) ||
-      declared.initializer === undefined ||
-      seen.has(declared.name)
+      declared.initializer === undefined
     ) {
       return undefined;
     }
-    seen.add(declared.name);
+    if (state.seen.has(declared.name)) {
+      state.hitCycle = true;
+      return undefined;
+    }
+    state.seen.add(declared.name);
     current = unwrapped(declared.initializer);
   }
 }
