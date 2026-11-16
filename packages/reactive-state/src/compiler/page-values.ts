@@ -1,10 +1,11 @@
 import {
   type Expression,
   type Identifier,
+  isArrayBindingPattern,
   isAsExpression,
   isBinaryExpression,
-  isClassDeclaration,
   isBindingElement,
+  isClassDeclaration,
   isConditionalExpression,
   isElementAccessExpression,
   isEnumDeclaration,
@@ -19,6 +20,7 @@ import {
   isNonNullExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
@@ -464,10 +466,20 @@ export function collectForwardedAliases(
     return into;
   }
   const visit = (each: Node): void => {
-    if (isBindingElement(each) && isIdentifier(each.name) && each.initializer !== undefined) {
+    if (isObjectBindingPattern(each) || isArrayBindingPattern(each)) {
+      for (const element of each.elements) {
+        visit(element);
+      }
+      return;
+    }
+    if (!isBindingElement(each) || each.name === undefined) {
+      return;
+    }
+    if (!isIdentifier(each.name)) {
+      visit(each.name);
+    } else if (each.initializer !== undefined) {
       recordForwarded(each.name.text, each.initializer, paramHolders, into);
     }
-    each.forEachChild(visit);
   };
   visit(name);
   return into;

@@ -26,6 +26,8 @@ import {
 import { unshadowedReads } from './code-globals.ts';
 import {
   bindStatement,
+  type BoundCheck,
+  checkBoundDeclarations,
   givenTo,
   holdsSearchParams,
   parameterSources,
@@ -384,16 +386,18 @@ function renderedBy(
     taintedParams: new Set(),
     unawaitedProps: new Set(),
   };
+  const checks: BoundCheck[] = [];
   const before = statements.slice(0, -1);
   for (const statement of before) {
     const rendering = sitesIn(statement, context.tags);
     const renders = rendering.roots.length > 0 || rendering.inners.length > 0;
-    if (renders || !bindStatement(statement, reading, context.sourceFile, jsx)) {
+    if (renders || !bindStatement(statement, reading, context.sourceFile, checks)) {
       return undefined;
     }
   }
   scanAwaits(returned.expression, reading);
   if (
+    !checkBoundDeclarations(checks, reading, jsx) ||
     !checkExpressionUses(returned.expression, reading, jsx) ||
     sites.refused ||
     !isPlaced(returned.expression, sites, context.tags)

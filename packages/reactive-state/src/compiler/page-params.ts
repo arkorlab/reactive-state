@@ -199,7 +199,6 @@ export interface AllowedUses {
   readonly allowedDynamicPropRead?: Node | undefined;
   readonly allowedParamsAwait?: Node | undefined;
   readonly allowedParamsSource?: Node | undefined;
-  readonly boundName?: string | undefined;
   readonly forwarded?: ReadonlySet<Identifier> | undefined;
 }
 
@@ -404,10 +403,15 @@ function isSafeUnawaitedPropNode(node: Node, free: ReadonlySet<Identifier>): boo
   );
 }
 
+/** Whether `at` (`useOf(node).at`) names the same expression as `allowed` past wrappers. */
+function isAllowedAt(at: Node, allowed: Node | undefined): boolean {
+  return allowed !== undefined && at === useOf(allowed).at;
+}
+
 /** Checks an `await params` expression (`const { … } = await params` or `(await params).slug`). */
 function checkAwaitedParamsUse(awaitedNode: Node, context: UseContext): void {
   const { at, parent } = useOf(awaitedNode);
-  if (at === context.allowed.allowedParamsAwait) return;
+  if (isAllowedAt(at, context.allowed.allowedParamsAwait)) return;
   if (
     (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
     parent.expression !== at
@@ -436,7 +440,7 @@ function isInnerParamsAttribute(sourceNode: Node, innerSites: ReadonlySet<Node>)
 function checkParamsSourceNode(sourceNode: Node, context: UseContext): void {
   const { at, parent } = useOf(sourceNode);
   if (
-    at === context.allowed.allowedParamsSource ||
+    isAllowedAt(at, context.allowed.allowedParamsSource) ||
     isInnerParamsAttribute(sourceNode, context.jsx.innerSites)
   ) {
     return;
@@ -451,13 +455,10 @@ function checkParamsSourceNode(sourceNode: Node, context: UseContext): void {
 /** Checks a dynamic bracket read `props[key]` that neither awaits nor hands off the Promise. */
 function checkDynamicWholePropsRead(accessNode: Node, context: UseContext): boolean {
   if (!isElementAccessExpression(accessNode)) return false;
-  if (accessNode !== context.allowed.allowedDynamicPropRead) {
-    return isSafeUnawaitedPropNode(accessNode, context.jsx.free);
-  }
-  if (context.allowed.boundName !== undefined) {
-    context.state.unawaitedProps.add(context.allowed.boundName);
-  }
-  return true;
+  return (
+    isAllowedAt(useOf(accessNode).at, context.allowed.allowedDynamicPropRead) ||
+    isSafeUnawaitedPropNode(accessNode, context.jsx.free)
+  );
 }
 
 /** Checks one read of whole `props`; returns `false` when an opaque or dynamic read could hide `searchParams`. */
