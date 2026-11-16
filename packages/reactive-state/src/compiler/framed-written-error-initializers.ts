@@ -37,6 +37,10 @@ import { framedNativeErrorCreation } from './framed-receivers.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedValueShape } from './framed-values.ts';
 import {
+  sideEffectFreeExpression,
+  sideEffectFreeVariableStatement,
+} from './framed-written-error-calls.ts';
+import {
   constantStatement,
   quietFactoryCall,
   readsScopeParameter,
@@ -135,7 +139,8 @@ function assignedId(node: Node, ids: Map<Node, number>): number {
 /** Evaluates branches, unmutated lexical bindings, local constructions, and local factories. */
 function computeWrittenError(node: Expression, state: ProofState, frame: FactoryFrame): boolean {
   const { value } = framedValueShape(node);
-  const branches = reachableValueBranches(value);
+  const inFactory = frame.returnScope !== undefined || frame.unquietScopes.length > 0;
+  const branches = reachableValueBranches(value, inFactory);
   if (branches !== undefined) {
     return (
       branches.length > 0 && branches.every((each) => evaluateWrittenError(each, state, frame))
@@ -165,23 +170,32 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
 }
 
 /** Conditional, comma, and logical expressions yield their reachable value branches. */
-function reachableValueBranches(value: Expression): readonly Expression[] | undefined {
+function reachableValueBranches(
+  value: Expression,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
   if (isConditionalExpression(value)) {
+    if (inFactory && !sideEffectFreeExpression(value.condition)) return undefined;
     const branch = framedCondition(value.condition);
     if (branch === undefined) return [value.whenTrue, value.whenFalse];
-    return branch ? [value.whenTrue] : [value.whenFalse];
+    return [branch ? value.whenTrue : value.whenFalse];
   }
-  return isBinaryExpression(value) ? binaryValueBranches(value) : undefined;
+  return isBinaryExpression(value) ? binaryValueBranches(value, inFactory) : undefined;
 }
 
 /** Comma and short-circuiting binary operators retain every runtime-reachable operand. */
-function binaryValueBranches(node: BinaryExpression): readonly Expression[] | undefined {
+function binaryValueBranches(
+  node: BinaryExpression,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
   const kind = node.operatorToken.kind;
-  if (kind === SyntaxKind.CommaToken) return [node.right];
+  if (kind === SyntaxKind.CommaToken) {
+    return !inFactory || sideEffectFreeExpression(node.left) ? [node.right] : undefined;
+  }
   if (kind === SyntaxKind.BarBarToken) {
     const branch = framedCondition(node.left);
     if (branch === undefined) return [node.left, node.right];
-    return branch ? [node.left] : [node.right];
+    return [branch ? node.left : node.right];
   }
   if (kind === SyntaxKind.AmpersandAmpersandToken) {
     const branch = framedCondition(node.left);
@@ -207,7 +221,7 @@ function nullishBranches(left: Expression, right: Expression): readonly Expressi
     inner.kind === SyntaxKind.TrueKeyword ||
     inner.kind === SyntaxKind.FalseKeyword ||
     isNewExpression(inner) ||
-    constantValue(inner, () => undefined) !== undefined
+    constantValue(inner) !== undefined
   ) {
     return [left];
   }
@@ -221,11 +235,12 @@ function directLocalErrorConstruction(value: Expression): boolean {
   return (
     targets !== undefined &&
     targets.length > 0 &&
-    targets.every(
-      (target) =>
+    targets.every((target) => {
+      return (
         framedNativeConstructor(target, ERRORS) ||
-        (framedSubclassConstructor(target, ERRORS) && framedSubclassOwnWords(target, ERRORS)),
-    )
+        (framedSubclassConstructor(target, ERRORS) && framedSubclassOwnWords(target, ERRORS))
+      );
+    })
   );
 }
 
@@ -252,9 +267,9 @@ function evaluateFactoryCall(
   if (invocation === undefined) return false;
   const { fn, given } = invocation;
   if (
-    answersLater(fn) ||
-    fn.body === undefined ||
     given === null ||
+    fn.body === undefined ||
+    answersLater(fn) ||
     state.activeFactories.has(fn)
   ) {
     return false;
@@ -305,7 +320,7 @@ function completeFactoryReturns(fn: Answering): readonly Expression[] | undefine
   if (fn.body === undefined) return undefined;
   if (!isBlock(fn.body)) return [fn.body];
   const flow = blockFlow(fn.body.statements);
-  return flow !== undefined && !flow.mayFallThrough ? flow.returns : undefined;
+  return flow === undefined || flow.mayFallThrough ? undefined : flow.returns;
 }
 
 /** Evaluates sequential statements in a block until every remaining path has returned. */
@@ -336,7 +351,9 @@ function statementFlow(statement: Statement): StatementFlow | undefined {
 function ifStatementFlow(
   statement: Statement & { readonly expression: Expression },
 ): StatementFlow | undefined {
-  if (!isIfStatement(statement)) return undefined;
+  if (!isIfStatement(statement) || !sideEffectFreeExpression(statement.expression)) {
+    return undefined;
+  }
   const condition = framedCondition(statement.expression);
   if (condition === true) return statementFlow(statement.thenStatement);
   if (condition === false) {
@@ -363,6 +380,6 @@ function transparentDeclaration(statement: Statement): boolean {
     isFunctionDeclaration(statement) ||
     isTypeAliasDeclaration(statement) ||
     isInterfaceDeclaration(statement) ||
-    (isVariableStatement(statement) && constantStatement(statement))
+    (isVariableStatement(statement) && sideEffectFreeVariableStatement(statement))
   );
 }
