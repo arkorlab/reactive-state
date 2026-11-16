@@ -257,6 +257,105 @@ const HANDOFF_CASES: readonly {
   },
 ];
 
+const RELATIVE_WRAPPER_CASES = [
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'slice-out-of-bounds-index-write-grows-wrapper-negative-at',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy[2] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'slice-out-of-bounds-index-write-shifts-negative-at-minus-two',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy[2] = { a: 3 }; return /*read*/ copy.at(-2); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'slice-single-item-grown-wrapper-brings-negative-at-in-bounds',
+    source:
+      'function read() { const items = [{ a: 1 }]; const copy = items.slice(); copy[1] = { a: 2 }; return /*read*/ copy.at(-2); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'slice-length-truncation-retains-whole-origin-negative-at',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy.length = 1; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'slice-dynamic-index-write-retains-whole-origin-negative-at',
+    source:
+      'function read(index: number) { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy[index] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'toreversed-out-of-bounds-write-invalidates-negative-slot',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.toReversed(); copy[2] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:', 'inserted:'], single: false },
+    id: 'tospliced-out-of-bounds-write-invalidates-negative-slot',
+    source:
+      'function read(inserted: { a: number }) { const items = [{ a: 1 }]; const copy = items.toSpliced(1, 0, inserted); copy[2] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:'], single: false },
+    id: 'map-out-of-bounds-write-invalidates-negative-slot',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.map((item) => item); copy[0] = { a: 9 }; copy[2] = { a: 3 }; return /*read*/ copy.at(-2); }',
+  },
+  {
+    expected: { origins: ['items:', 'fresh:'], single: false },
+    id: 'with-out-of-bounds-write-invalidates-negative-slot',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }, { a: 2 }]; const copy = items.with(0, fresh); copy[0] = { a: 9 }; copy[2] = { a: 3 }; return /*read*/ copy.at(-2); }',
+  },
+  {
+    expected: { origins: ['first:', 'second:'], single: false },
+    id: 'concat-out-of-bounds-write-invalidates-negative-slot',
+    source:
+      'function read() { const first = [{ a: 1 }]; const second = [{ a: 2 }]; const copy = first.concat(second); copy[2] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['{ a: 1 }:@first', '{ a: 2 }:@second'], single: false },
+    id: 'flat-out-of-bounds-write-invalidates-negative-suffix-slot',
+    source:
+      'function read() { const first = [{ a: 1 }]; const second = [{ a: 2 }]; const items = [first, second]; const copy = items.flat(); copy[2] = { a: 3 }; return /*read*/ copy.at(-2); }',
+  },
+  {
+    expected: { origins: ['items:1'], single: true },
+    id: 'slice-in-bounds-unrelated-index-write-keeps-negative-slot-pin',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy[0] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'slice-in-bounds-target-index-overwrite-clears-origin-pin',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy[1] = { a: 3 }; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:0'], single: true },
+    id: 'slice-out-of-bounds-write-keeps-nonnegative-at-slot-pin',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); copy[2] = { a: 3 }; return /*read*/ copy.at(0); }',
+  },
+  {
+    expected: { origins: ['items:1'], single: true },
+    id: 'slice-out-of-bounds-delete-keeps-negative-slot-pin',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); delete copy[2]; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:1'], single: true },
+    id: 'slice-captured-before-later-out-of-bounds-write-pin',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); const picked = copy.at(-1); copy[2] = { a: 3 }; return /*read*/ picked; }',
+  },
+] as const;
+
 /** Follows lexical initializers to a written receiver literal while leaving parameters unresolved. */
 function selectedLiteral(expression: Expression): Expression | undefined {
   let current = unwrapped(expression);
@@ -354,5 +453,9 @@ describe('middleware selector stability, opaque payloads, and own replacements',
 
   it.each(HANDOFF_CASES)('$id', ({ expected, source }) => {
     expect(handoffIn(source)).toStrictEqual(expected);
+  });
+
+  it.each(RELATIVE_WRAPPER_CASES)('$id', ({ expected, source }) => {
+    expect(resolvedIn(source)).toStrictEqual(expected);
   });
 });

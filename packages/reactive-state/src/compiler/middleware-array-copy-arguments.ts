@@ -35,7 +35,8 @@ export interface MiddlewareCopyOrigin {
   readonly of: Expression;
   readonly keys: readonly string[];
   readonly tail: readonly string[];
-  readonly slot?: string;
+  readonly slot?: string | undefined;
+  readonly wrapperLength?: number | undefined;
   readonly references: readonly Identifier[];
 }
 
@@ -107,7 +108,7 @@ export function middlewareInsertedOrigins(
   input: {
     readonly call: CallExpression;
     readonly given: readonly Expression[] | undefined;
-    readonly applied?: Expression;
+    readonly applied?: Expression | undefined;
     readonly tail: readonly string[];
   },
   mode: 'splice' | 'with',
@@ -242,7 +243,7 @@ function appendPositionalOrigins(
 ): void {
   for (const value of values) {
     const matches = options.mode === 'splice' ? state.position >= 2 : state.position === 1;
-    if (state.afterSpread || matches) origins.push(middlewareElementOrigin(value, options.tail));
+    if (matches || state.afterSpread) origins.push(middlewareElementOrigin(value, options.tail));
     state.position += 1;
   }
 }
@@ -252,11 +253,11 @@ function candidateOrigins(
   candidates: readonly MiddlewareSpreadCandidate[],
   tail: readonly string[],
 ): readonly MiddlewareCopyOrigin[] {
-  return candidates.map((candidate) =>
-    candidate.element
+  return candidates.map((candidate) => {
+    return candidate.element
       ? middlewareElementOrigin(candidate.value, tail)
-      : middlewareWholeOrigin(candidate.value, tail),
-  );
+      : middlewareWholeOrigin(candidate.value, tail);
+  });
 }
 
 /** Literal spread arrays contribute each non-hole element and queue nested spreads in source order. */

@@ -37,6 +37,7 @@ import {
   middlewareDefaultArrayMutation,
   quietDefinitionPrefix,
 } from './middleware-array-conversions.ts';
+import { middlewareWrapperTail } from './middleware-array-copy-arguments.ts';
 import { middlewareCopyOrigins } from './middleware-array-copy-origins.ts';
 import {
   middlewarePossibleSelectorCollection,
@@ -47,6 +48,7 @@ import {
   middlewareArraySplice,
   middlewareCopySlotIndex,
   middlewareSliceProjection,
+  type SliceProjection,
 } from './middleware-array-splices.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
@@ -60,13 +62,6 @@ interface SelectionCall {
   readonly given: readonly Expression[] | undefined;
   readonly applied?: Expression | undefined;
   readonly borrowed: boolean;
-}
-
-interface SliceProjection {
-  readonly of: Expression;
-  readonly keys: readonly string[];
-  readonly tail: readonly string[];
-  readonly slot?: string;
 }
 
 interface SliceSource {
@@ -142,6 +137,7 @@ export function middlewareArrayCopiedOrigins(
   call: CallExpression,
   keys: readonly string[],
   relative: boolean,
+  stableLength?: (length: number) => boolean,
 ): ReturnType<typeof middlewareArraySplice> {
   const selected = nativeSelectionCall(call);
   if (
@@ -159,10 +155,10 @@ export function middlewareArrayCopiedOrigins(
     return [];
   return selected.method === 'toSpliced'
     ? middlewareArraySplice(
-        { call, keys, ...selected, length: source.elements.length, relative },
+        { call, keys, ...selected, length: source.elements.length, relative, stableLength },
         { start: sliceBound, count: nativeIndex },
       )
-    : middlewareCopyOrigins(call, keys, selected, relative);
+    : middlewareCopyOrigins(call, keys, { ...selected, stableLength }, relative);
 }
 
 /** A selected shallow-copy payload retains its original collection, never the fresh wrapper. */
@@ -170,13 +166,14 @@ export function middlewareArraySlice(
   call: CallExpression,
   keys: readonly string[],
   relative = false,
+  stableLength?: (length: number) => boolean,
 ): SliceProjection | undefined {
   const index = middlewareCopySlotIndex(keys[0], relative);
   if (index === undefined) return undefined;
   const original = sliceSource(call);
   if (original === undefined) return undefined;
   return middlewareSliceProjection(
-    { call, keys, ...original.selected, source: original.source, index, relative },
+    { call, keys, ...original.selected, source: original.source, index, relative, stableLength },
     { start: sliceBound, count: nativeIndex },
   );
 }
@@ -193,7 +190,7 @@ export function middlewareCopyAt(
     prefix === undefined ||
     prefix.unknown ||
     prefix.alternatives !== undefined ||
-    prefix.values.some((value) => !framedQuietPrimitive(value))
+    [...prefix.values, ...middlewareWrapperTail(call)].some((value) => !framedQuietPrimitive(value))
   )
     return undefined;
   const index = nativeIndex(prefix.values[0]);
