@@ -29,9 +29,35 @@ import { bindingIdentifiers } from './scope.ts';
 
 /** Bounded unwrapping of `.bind`, `.call`, `.apply` and `Reflect.apply` tag expressions. */
 
+export interface TagParameterValue {
+  readonly kind: 'values';
+  readonly values: readonly Expression[];
+  readonly rest?: boolean | undefined;
+  readonly callerEnv: TagParameterEnv | undefined;
+}
+
+export type TagParameterEntry = TagParameterValue | { readonly kind: 'opaque' };
+
+export interface TagParameterEnv {
+  readonly id: number;
+  readonly entries: ReadonlyMap<ParameterDeclaration, TagParameterEntry>;
+}
+
 export interface TagPath {
   readonly node: Expression;
   readonly suffix: readonly (string | undefined)[];
+  readonly env?: TagParameterEnv | undefined;
+}
+
+export interface BoundCallTarget {
+  readonly node: Expression;
+  readonly given: readonly Expression[] | null;
+}
+
+export interface BoundCallResolution {
+  readonly exhausted: boolean;
+  readonly handled: boolean;
+  readonly targets: readonly BoundCallTarget[];
 }
 
 export type ExpandTagPath = (
@@ -47,6 +73,7 @@ interface CallContext {
   readonly expand: ExpandTagPath;
   steps: number;
   exhausted: boolean;
+  nonBoundCall: boolean;
 }
 
 type TagCallable =
@@ -57,7 +84,7 @@ type TagCallable =
       readonly kind: 'bound';
       readonly target: TagCallable;
       readonly self: TagCallable | undefined;
-      readonly given: readonly Expression[];
+      readonly given: readonly Expression[] | null;
     };
 
 const WRAPPER_METHODS: readonly WrapperMethod[] = ['apply', 'bind', 'call'];
@@ -70,29 +97,59 @@ const PLAIN_GLOBAL_NAMESPACES: ReadonlySet<string> = new Set([
 ]);
 const CALL_SEARCH = { limit: 64 } as const;
 
+/** Resolves bound function targets and bound argument prefixes produced by `call`. */
+export function boundCallTargets(call: CallExpression, expand: ExpandTagPath): BoundCallResolution {
+  const context: CallContext = {
+    call,
+    exhausted: false,
+    expand,
+    nonBoundCall: false,
+    steps: 0,
+  };
+  const targets: BoundCallTarget[] = [];
+  for (const item of evaluateTagCall(call, context)) {
+    const target = boundLeafTarget(item);
+    if (target !== undefined) targets.push(target);
+  }
+  return {
+    exhausted: context.exhausted,
+    handled: targets.length > 0 && !context.nonBoundCall,
+    targets,
+  };
+}
+
 /** Pushes underlying target expressions for bound functions produced by `call`. */
 export function pushBoundTagPaths(
   call: CallExpression,
   expand: ExpandTagPath,
   pending: TagPath[],
-): boolean {
-  const context: CallContext = { call, exhausted: false, expand, steps: 0 };
-  for (const item of evaluateTagCall(call, context)) {
-    const target = boundLeafTarget(item);
-    if (target !== undefined) pending.push({ node: target, suffix: [] });
+  env?: TagParameterEnv,
+): { readonly exhausted: boolean; readonly handled: boolean } {
+  const resolved = boundCallTargets(call, expand);
+  for (const target of resolved.targets) {
+    pending.push({ env, node: target.node, suffix: [] });
   }
-  return context.exhausted;
+  return { exhausted: resolved.exhausted, handled: resolved.handled };
 }
 
-export function tagPathKey(value: Expression, suffix: readonly (string | undefined)[]): string {
-  return `${String(value.pos)}:${String(value.end)}:${suffix.map((part = '*') => part).join('.')}`;
+export function tagPathKey(
+  value: Expression,
+  suffix: readonly (string | undefined)[],
+  env?: TagParameterEnv,
+): string {
+  const scope = env === undefined ? '' : `@${String(env.id)}`;
+  return `${String(value.pos)}:${String(value.end)}:${suffix.map((part = '*') => part).join('.')}${scope}`;
 }
 
-function boundLeafTarget(item: TagCallable): Expression | undefined {
+function boundLeafTarget(item: TagCallable): BoundCallTarget | undefined {
   if (item.kind !== 'bound') return undefined;
-  let current: TagCallable = item.target;
-  while (current.kind === 'bound') current = current.target;
-  return current.kind === 'target' ? current.node : undefined;
+  let current: TagCallable = item;
+  let given: readonly Expression[] | null = [];
+  while (current.kind === 'bound') {
+    given = given === null || current.given === null ? null : [...current.given, ...given];
+    current = current.target;
+  }
+  return current.kind === 'target' ? { given, node: current.node } : undefined;
 }
 
 function takeCallStep(context: CallContext): boolean {
@@ -109,7 +166,7 @@ function evaluateTagCall(call: CallExpression, context: CallContext): readonly T
   if (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) {
     return evaluateMemberTagCall(callee, args, context);
   }
-  return wrapperCallablesOf(callee, context).flatMap((fn) =>
+  return wrapperCallablesOf(callee, context, true).flatMap((fn) =>
     invokeCallable(fn, undefined, args, context),
   );
 }
@@ -121,9 +178,9 @@ function evaluateMemberTagCall(
 ): readonly TagCallable[] {
   const results: TagCallable[] = [];
   let receivers: readonly TagCallable[] | undefined;
-  for (const fn of wrapperCallablesOf(callee, context)) {
+  for (const fn of wrapperCallablesOf(callee, context, true)) {
     if (fn.kind === 'method') {
-      receivers ??= wrapperCallablesOf(callee.expression, context);
+      receivers ??= wrapperCallablesOf(callee.expression, context, fn.method !== 'bind');
       for (const self of receivers) results.push(...invokeCallable(fn, self, args, context));
       continue;
     }
@@ -135,7 +192,7 @@ function evaluateMemberTagCall(
 function invokeCallable(
   fn: TagCallable,
   self: TagCallable | undefined,
-  args: readonly Expression[],
+  args: readonly Expression[] | null,
   context: CallContext,
 ): readonly TagCallable[] {
   let currentFn = fn;
@@ -143,7 +200,10 @@ function invokeCallable(
   let currentArgs = args;
   while (currentFn.kind === 'bound') {
     if (!takeCallStep(context)) return [];
-    currentArgs = [...currentFn.given, ...currentArgs];
+    currentArgs =
+      currentArgs === null || currentFn.given === null
+        ? null
+        : [...currentFn.given, ...currentArgs];
     currentSelf = currentFn.self;
     currentFn = currentFn.target;
   }
@@ -157,13 +217,16 @@ function invokeCallable(
 function invokeMethodCallable(
   method: WrapperMethod,
   self: TagCallable,
-  args: readonly Expression[],
+  args: readonly Expression[] | null,
   context: CallContext,
 ): readonly TagCallable[] {
+  if (args === null) {
+    return method === 'bind' ? [{ given: null, kind: 'bound', self: undefined, target: self }] : [];
+  }
   const [first, ...rest] = args;
   if (method === 'bind') return bindCallable(self, first, rest, context);
   if (first !== undefined && isSpreadElement(first)) return [];
-  const receivers = first === undefined ? [undefined] : wrapperCallablesOf(first, context);
+  const receivers = first === undefined ? [undefined] : wrapperCallablesOf(first, context, false);
   if (method === 'call') {
     return receivers.flatMap((each) => invokeCallable(self, each, rest, context));
   }
@@ -177,11 +240,13 @@ function bindCallable(
   context: CallContext,
 ): readonly TagCallable[] {
   if (first === undefined || isSpreadElement(first)) {
-    return [{ given: [], kind: 'bound', self: undefined, target: self }];
+    const given = first === undefined ? [] : null;
+    return [{ given, kind: 'bound', self: undefined, target: self }];
   }
-  return wrapperCallablesOf(first, context).map((boundSelf) => {
+  const given = rest.some((arg) => isSpreadElement(arg)) ? null : rest;
+  return wrapperCallablesOf(first, context, false).map((boundSelf) => {
     return {
-      given: rest,
+      given,
       kind: 'bound',
       self: boundSelf,
       target: self,
@@ -190,14 +255,16 @@ function bindCallable(
 }
 
 function invokeReflectApply(
-  args: readonly Expression[],
+  args: readonly Expression[] | null,
   context: CallContext,
 ): readonly TagCallable[] {
+  if (args === null) return [];
   const [target, thisArg, list] = args;
   if (target === undefined || isSpreadElement(target)) return [];
   if (thisArg !== undefined && isSpreadElement(thisArg)) return [];
-  const targets = wrapperCallablesOf(target, context);
-  const receivers = thisArg === undefined ? [undefined] : wrapperCallablesOf(thisArg, context);
+  const targets = wrapperCallablesOf(target, context, true);
+  const receivers =
+    thisArg === undefined ? [undefined] : wrapperCallablesOf(thisArg, context, false);
   return invokeAppliedTargets(targets, receivers, list, context);
 }
 
@@ -226,7 +293,7 @@ function bindOpaqueApplied(
   if (!hasBind) return [];
   return receivers
     .filter((self): self is TagCallable => self !== undefined)
-    .map((self) => ({ given: [], kind: 'bound', self: undefined, target: self }));
+    .map((self) => ({ given: null, kind: 'bound', self: undefined, target: self }));
 }
 
 function appliedElements(
@@ -239,28 +306,57 @@ function appliedElements(
   return listed === undefined ? undefined : writtenArguments(call, listed);
 }
 
-function wrapperCallablesOf(expression: Expression, context: CallContext): readonly TagCallable[] {
+function wrapperCallablesOf(
+  expression: Expression,
+  context: CallContext,
+  trackNonBound: boolean,
+): readonly TagCallable[] {
   const results: TagCallable[] = [{ kind: 'target', node: unwrapped(expression) }];
   const pending: TagPath[] = [{ node: expression, suffix: [] }];
   const seen = new Set<string>();
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    if (!takeCallStep(context)) return results;
+    if (!takeCallStep(context)) break;
     const value = unwrapped(current.node);
     const key = tagPathKey(value, current.suffix);
     if (seen.has(key)) continue;
     seen.add(key);
-    const direct = globalPathOf(value);
-    if (direct !== undefined) {
-      results.push(...globalWrapperCallables([...direct, ...current.suffix]));
-      continue;
-    }
-    results.push(...localWrapperCallables(value, current.suffix, context));
-    if (context.expand(value, current.suffix, pending)) {
-      context.exhausted = true;
-      return results;
+    if (
+      stepWrapperCallablePath(value, current.suffix, context, { pending, results, trackNonBound })
+    ) {
+      break;
     }
   }
   return results;
+}
+
+function stepWrapperCallablePath(
+  value: Expression,
+  suffix: readonly (string | undefined)[],
+  context: CallContext,
+  state: {
+    readonly pending: TagPath[];
+    readonly results: TagCallable[];
+    readonly trackNonBound: boolean;
+  },
+): boolean {
+  const direct = globalPathOf(value);
+  if (direct !== undefined) {
+    const globals = globalWrapperCallables([...direct, ...suffix]);
+    if (state.trackNonBound && globals.length === 0) context.nonBoundCall = true;
+    state.results.push(...globals);
+    return false;
+  }
+  const locals = localWrapperCallables(value, suffix, context);
+  state.results.push(...locals);
+  const before = state.pending.length;
+  if (context.expand(value, suffix, state.pending)) {
+    context.exhausted = true;
+    return true;
+  }
+  if (state.trackNonBound && locals.length === 0 && state.pending.length === before) {
+    context.nonBoundCall = true;
+  }
+  return false;
 }
 
 function globalWrapperCallables(parts: readonly (string | undefined)[]): readonly TagCallable[] {
@@ -345,12 +441,12 @@ function identifierHasSources(
   return bound !== undefined && computedBindingContainer(bound)?.binding.initializer !== undefined;
 }
 
-function matchingWrapperMethods(name: string | undefined): readonly WrapperMethod[] {
-  if (name === undefined) return WRAPPER_METHODS;
-  const exact = exactWrapperMethod(name);
+function matchingWrapperMethods(last: string | undefined): readonly WrapperMethod[] {
+  if (last === undefined) return WRAPPER_METHODS;
+  const exact = exactWrapperMethod(last);
   return exact === undefined ? [] : [exact];
 }
 
 function exactWrapperMethod(name: string | undefined): WrapperMethod | undefined {
-  return WRAPPER_METHODS.find((method) => method === name);
+  return WRAPPER_METHODS.find((candidate) => candidate === name);
 }

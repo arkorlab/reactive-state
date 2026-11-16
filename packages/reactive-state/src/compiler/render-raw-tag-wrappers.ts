@@ -33,6 +33,7 @@ import { frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { framedCondition } from './framed-sources.ts';
 import { assignedNames } from './local-date-inputs.ts';
 import { isDateValue } from './local-reads.ts';
+import type { TagParameterEnv } from './render-raw-tag-calls.ts';
 import { canonicalArrayTagIndex } from './render-raw-tag-paths.ts';
 import {
   collectWrapperBindings,
@@ -47,6 +48,7 @@ export interface RawWrapperSearch {
   readonly datedIndices: ReadonlySet<number>;
   readonly spanCount: number;
   readonly seenWrappers: ReadonlySet<Node>;
+  readonly env?: TagParameterEnv | undefined;
 }
 
 export type MaySelectRawTag = (tag: Expression, search: RawWrapperSearch) => boolean;
@@ -115,6 +117,7 @@ function nodeForwardsRawDate(
       innerDated.size > 0 &&
       query.maySelectTag(node.tag, {
         datedIndices: innerDated,
+        env: query.env,
         seenWrappers: nextSeen,
         spanCount: node.template.templateSpans.length,
       })
@@ -156,6 +159,7 @@ function appliedCallForwardsRawDate(
   if (isWholeArgumentsReference(list, bindings)) {
     return query.maySelectTag(target, {
       datedIndices: query.datedIndices,
+      env: query.env,
       seenWrappers: nextSeen,
       spanCount: query.spanCount,
     });
@@ -183,6 +187,7 @@ function directCallForwardsRawDate(
       isIdentifierForParam(unwrapped(first.expression), bindings.wholeRestParam) &&
       query.maySelectTag(target, {
         datedIndices: query.datedIndices,
+        env: query.env,
         seenWrappers: nextSeen,
         spanCount: query.spanCount,
       })
@@ -195,6 +200,7 @@ function directCallForwardsRawDate(
     forwarded.forwardedSlots.size > 0 &&
     query.maySelectTag(target, {
       datedIndices: forwarded.forwardedSlots,
+      env: query.env,
       seenWrappers: nextSeen,
       spanCount: forwarded.effectiveSpanCount,
     })
