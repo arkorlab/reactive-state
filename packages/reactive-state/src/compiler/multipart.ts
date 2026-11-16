@@ -3,26 +3,18 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isBinaryExpression,
   isCallExpression,
-  isComputedPropertyName,
   isIdentifier,
-  isNoSubstitutionTemplateLiteral,
   isObjectLiteralExpression,
   isParameterDeclaration,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
   isVariableDeclaration,
   type NewExpression,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type ParameterDeclaration,
-  type PropertyName,
-  SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
@@ -33,7 +25,8 @@ import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
-import { framedAppliedArguments } from './framed-keys.ts';
+import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
+import { framedLiteralAccessor } from './framed-member-accessors.ts';
 import {
   framedHeldVariable,
   framedMemberDeletes,
@@ -42,10 +35,20 @@ import {
 } from './framed-member-writes.ts';
 import { framedObjectSources } from './framed-object-members.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { parameterBodies } from './multipart-parameters.ts';
+import {
+  applyDescriptorWrite,
+  holderDescriptorBodyWrites,
+  mapDescriptorBodyWrite,
+  optionPropertyKey,
+  optionPropertyValue,
+  singleDescriptorBodyWrite,
+  variableMayHideBody,
+} from './multipart-descriptors.ts';
+import { parameterBodies, parameterMayHideBody } from './multipart-parameters.ts';
 import {
   type AnalysisState,
   type BodyReading,
+  definitelyBefore,
   EMPTY_BODIES,
   isFormData,
   mergeSpread,
@@ -54,11 +57,11 @@ import {
   startAnalysis,
   uniqueExpressions,
 } from './multipart-readings.ts';
-import { constantValue } from './numbers.ts';
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 
 const BODY_KEY = 'body';
+const DEFINED = { slots: 3 } as const;
 
 /** What constructing a Request or Response draws at random for a FormData multipart boundary. */
 export function multipartMaking(node: NewExpression, path: string | undefined): string | undefined {
@@ -117,7 +120,7 @@ function rememberReading(
   byPoint.set(point, reading);
 }
 
-/** Evaluates `BodyReading` for one unwrapped options expression without consulting the cache. */
+/** Computes a single `BodyReading` without consulting the memoization table. */
 function computeBodiesOf(value: Expression, point: Node, following: AnalysisState): BodyReading {
   if (isIdentifier(value)) {
     return identifierBodies(value, point, following);
@@ -130,13 +133,109 @@ function computeBodiesOf(value: Expression, point: Node, following: AnalysisStat
       overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
     };
   }
-  if (
-    isCallExpression(value) &&
-    globalPathOf(unwrapped(value.expression))?.join('.') === 'Object.assign'
-  ) {
-    return objectAssignSourcesBodies(value, value.arguments, point, following);
+  if (isCallExpression(value)) {
+    return callExpressionBodies(value, point, following);
   }
   return isObjectLiteralExpression(value) ? literalBodies(value, following) : EMPTY_BODIES;
+}
+
+/** Evaluates `Object.assign`, `Object.defineProperty`, `Object.defineProperties`, and `Object.create` options. */
+function callExpressionBodies(
+  call: CallExpression,
+  point: Node,
+  following: AnalysisState,
+): BodyReading {
+  const path = globalPathOf(unwrapped(call.expression))?.join('.');
+  if (path === 'Object.assign') {
+    const merged = objectAssignSourcesBodies(call, call.arguments, point, following);
+    return assignTargetMayHideBody(call, point, following)
+      ? { bodies: merged.bodies, overwrites: false }
+      : merged;
+  }
+  if (path === 'Object.defineProperty') {
+    const [target, key, descriptor] = framedArgumentPrefix(
+      call,
+      call.arguments,
+      DEFINED.slots,
+    ).values;
+    return target === undefined
+      ? EMPTY_BODIES
+      : applyDescriptorWrite(
+          bodiesOf(target, point, following),
+          singleDescriptorBodyWrite(key, descriptor, false),
+        );
+  }
+  if (path === 'Object.defineProperties') {
+    const [target, descriptors] = framedArgumentPrefix(call, call.arguments).values;
+    return target === undefined
+      ? EMPTY_BODIES
+      : applyDescriptorWrite(
+          bodiesOf(target, point, following),
+          mapDescriptorBodyWrite(descriptors),
+        );
+  }
+  return path === 'Object.create' ? objectCreateBodies(call, point, following) : EMPTY_BODIES;
+}
+
+/** Evaluates `Object.create(proto, descriptors?)`, keeping prototype `body` reads non-enumerable. */
+function objectCreateBodies(
+  call: CallExpression,
+  point: Node,
+  following: AnalysisState,
+): BodyReading {
+  const [proto, descriptors] = framedArgumentPrefix(call, call.arguments).values;
+  const protoBodies = proto === undefined ? [] : bodiesOf(proto, point, following).bodies;
+  const firstOnly =
+    call.arguments.length < 2 &&
+    (call.arguments[0] === undefined || !isSpreadElement(call.arguments[0]));
+  if (firstOnly) {
+    return { bodies: protoBodies, overwrites: false };
+  }
+  const write = mapDescriptorBodyWrite(descriptors);
+  if (write === undefined) {
+    return { bodies: protoBodies, overwrites: false };
+  }
+  return {
+    bodies: uniqueExpressions(write.exactBody ? write.values : [...protoBodies, ...write.values]),
+    overwrites: write.enumerableBody,
+  };
+}
+
+/** Whether `Object.assign`'s target argument may already carry a non-enumerable `body` property. */
+function assignTargetMayHideBody(call: CallExpression, point: Node, state: AnalysisState): boolean {
+  const first = call.arguments[0];
+  if (first === undefined) {
+    return false;
+  }
+  const prefix = isSpreadElement(first)
+    ? framedArgumentPrefix(call, [first], 1)
+    : { unknown: false, values: [first] };
+  const target = prefix.unknown ? undefined : prefix.values[0];
+  if (target === undefined) {
+    return true;
+  }
+  const value = unwrapped(target);
+  if (isObjectLiteralExpression(value) && !framedLiteralAccessor(value, BODY_KEY)) {
+    return false;
+  }
+  if (bodiesOf(value, point, state).overwrites) {
+    return false;
+  }
+  return !isIdentifier(value) || identifierMayHideBody(value, point);
+}
+
+/** Whether an identifier target of `Object.assign` may hold or acquire a non-enumerable `body`. */
+function identifierMayHideBody(name: Identifier, point: Node): boolean {
+  const selected = frameBindingOf(name);
+  if (selected === undefined || selected.keys.length > 0) {
+    return true;
+  }
+  if (isParameterDeclaration(selected.binding)) {
+    return parameterMayHideBody(name, selected.binding, point);
+  }
+  return variableMayHideBody(name, selected.binding, (change, holder) =>
+    reachesHolderRead(change, holder, point),
+  );
 }
 
 /** Surviving body candidates across the properties and spreads of a written options literal. */
@@ -278,24 +377,33 @@ function variableBodies(
   }
   const entries =
     bodyHeld.initial === undefined ? bodyHeld.held : [bodyHeld.initial, ...bodyHeld.held];
-  const bodies = uniqueExpressions(
-    entries.flatMap((entry) => heldOptionBodies(entry, point, state)),
-  );
   const holder = framedHeldVariable(declaration);
-  if (removesHolderBody(name, holder, point)) {
+  const descriptorWrites = holderDescriptorBodyWrites(holder, (change) =>
+    reachesHolderRead(change, holder, point),
+  );
+  const bodies = uniqueExpressions([
+    ...entries.flatMap((entry) => heldOptionBodies(entry, point, state)),
+    ...descriptorWrites.flatMap((each) => each.values),
+  ]);
+  const hidesBody = descriptorWrites.some((each) => each.mayHideBody);
+  if (hidesBody || removesHolderBody(name, holder, point)) {
     return { bodies, overwrites: false };
   }
-  if (whole.initial !== undefined && whole.held.length === 0 && bodyHeld.initial === undefined) {
+  const definiteEnumerable =
+    bodyHeld.initial === undefined ||
+    descriptorWrites.some((each) => each.enumerableBody && definitelyBefore(each.node, point));
+  if (definiteEnumerable && whole.initial !== undefined && whole.held.length === 0) {
     return { bodies, overwrites: true };
   }
   const wholeEntries = whole.initial === undefined ? whole.held : [whole.initial, ...whole.held];
   const overwrites =
     wholeEntries.length > 0 &&
-    wholeEntries.every(
-      (each) =>
+    wholeEntries.every((each) => {
+      return (
         each.keys.length === 0 &&
-        bodiesOf(each.value, readingPoint(each.value, point), state).overwrites,
-    );
+        bodiesOf(each.value, readingPoint(each.value, point), state).overwrites
+      );
+    });
   return { bodies, overwrites };
 }
 
@@ -320,12 +428,13 @@ function readingPoint(expression: Expression, point: Node): Node {
 
 /** Whether any reachable deletion or whole-object hand-off on `holder` may remove its `body` field. */
 function removesHolderBody(name: Identifier, holder: VariableDeclaration, point: Node): boolean {
-  return framedMemberDeletes(name.getSourceFile()).some(
-    (each) =>
+  return framedMemberDeletes(name.getSourceFile()).some((each) => {
+    return (
       each.holder === holder &&
       removesBodyField(each) &&
-      reachesHolderRead(each.node, holder, point),
-  );
+      reachesHolderRead(each.node, holder, point)
+    );
+  });
 }
 
 /** Whether a recorded deletion or hand-off targets `body`, an unknown key, or the root holder itself. */
@@ -363,76 +472,12 @@ function propertyBodies(
   if (isSpreadAssignment(property)) {
     return previous;
   }
-  const key = optionKey(property.name);
-  const held = propertyValue(property);
+  const key = optionPropertyKey(property.name);
+  const held = optionPropertyValue(property);
   if (key === BODY_KEY) {
     return { bodies: held === undefined ? [] : [held], overwrites: true };
   }
   return key === undefined && held !== undefined && isFormData(held, { ...state, seen: new Set() })
     ? { ...previous, bodies: uniqueExpressions([...previous.bodies, held]) }
     : previous;
-}
-
-/** The value an ordinary option property writes, rather than what an accessor may compute. */
-function propertyValue(property: ObjectLiteralElementLike): Expression | undefined {
-  if (isPropertyAssignment(property)) {
-    return property.initializer;
-  }
-  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
-    ? property.name
-    : undefined;
-}
-
-/** What an option's property name writes, including a key computed from constants. */
-function optionKey(name: PropertyName): string | undefined {
-  if (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name)) {
-    return name.text;
-  }
-  return isComputedPropertyName(name) ? constantKey(name.expression, new Set()) : undefined;
-}
-
-/** The text of a constant key, including additions of text through single-valued bindings. */
-function constantKey(node: Expression, seen: ReadonlySet<Expression>): string | undefined {
-  const constant = constantValue(node, singleIdentifierValue);
-  if (constant !== undefined) {
-    return String(constant);
-  }
-  const value = singleExpressionOf(node, seen);
-  if (
-    seen.has(value) ||
-    !isBinaryExpression(value) ||
-    value.operatorToken.kind !== SyntaxKind.PlusToken
-  ) {
-    return undefined;
-  }
-  const following = new Set([...seen, value]);
-  const left = constantKey(value.left, following);
-  const right = constantKey(value.right, following);
-  return left === undefined || right === undefined ? undefined : left + right;
-}
-
-/** Follows single-valued identifier bindings without treating multi-branch writes as constants. */
-function singleExpressionOf(node: Expression, seen: ReadonlySet<Expression>): Expression {
-  let value = unwrapped(node);
-  const local = new Set(seen);
-  while (isIdentifier(value) && !local.has(value)) {
-    const single = singleIdentifierValue(value);
-    if (single === undefined) {
-      break;
-    }
-    local.add(value);
-    value = unwrapped(single);
-  }
-  return value;
-}
-
-/** The unique expression a variable holds at `name`, or undefined when multiple values reach it. */
-function singleIdentifierValue(name: Identifier): Expression | undefined {
-  const held = framedHeldValues(name, [], name);
-  if (held === undefined) {
-    return undefined;
-  }
-  const entries = held.initial === undefined ? held.held : [held.initial, ...held.held];
-  const only = entries.length === 1 ? entries[0] : undefined;
-  return only !== undefined && only.keys.length === 0 ? only.value : undefined;
 }

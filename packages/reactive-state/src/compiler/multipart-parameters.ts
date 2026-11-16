@@ -20,10 +20,10 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
 import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
+import { mapDescriptorBodyWrite, singleDescriptorBodyWrite } from './multipart-descriptors.ts';
 import {
   type BodyReading,
   definitelyBefore,
@@ -51,7 +51,10 @@ interface ParameterBodyWrite {
   readonly assignCall?: CallExpression;
   readonly assignSources?: readonly Expression[];
   readonly capture: Identifier;
+  readonly descriptorWrite?: boolean;
+  readonly enumerableBody: boolean;
   readonly exactBody: boolean;
+  readonly mayHideBody: boolean;
   readonly node: Node;
   readonly values: readonly Expression[];
 }
@@ -65,9 +68,11 @@ interface CutContext {
 }
 
 const BODY_KEY = 'body';
+const DEFINE_PROPERTIES = 'Object.defineProperties';
 const DEFINE_PROPERTY = 'Object.defineProperty';
 const DELETE_PROPERTY = 'Reflect.deleteProperty';
 const OBJECT_ASSIGN = 'Object.assign';
+const REFLECT_DEFINE_PROPERTY = 'Reflect.defineProperty';
 const DEFINED = { slots: 3 } as const;
 
 const MEMBER_WRITE_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
@@ -85,24 +90,11 @@ export function parameterBodies(
   reader: OptionsReader,
 ): BodyReading {
   const resolved = parameterValues(name, parameter);
-  const baseContext: CutContext = {
-    cut: resolved.cut,
-    name,
-    parameter,
-    point,
-    soleFreshCut: soleFreshReplacement(resolved),
-  };
+  const baseContext = buildCutContext(name, parameter, point, resolved);
   const writes = collectParameterBodyWrites(baseContext);
   const memberCut = definiteBodyMemberCut(baseContext, writes, reader);
   if (memberCut !== undefined) {
-    const afterCut = writes.filter(
-      (each) => each === memberCut || !supersededBefore(each.node, memberCut.node, point),
-    );
-    const deleted = hasReachableBodyDelete({ ...baseContext, cut: memberCut.node });
-    return {
-      bodies: uniqueExpressions(afterCut.flatMap((each) => writeBodies(each, reader))),
-      overwrites: !deleted,
-    };
+    return cutMemberReading(baseContext, memberCut, writes, reader);
   }
   const wholeValues =
     resolved.replaced || parameter.initializer === undefined
@@ -111,13 +103,70 @@ export function parameterBodies(
   const wholeReadings = wholeValues.map((each) => reader.readOptions(each, each));
   const memberBodies = writes.flatMap((each) => writeBodies(each, reader));
   const deleted = resolved.replaced && hasReachableBodyDelete(baseContext);
+  const hidden = writes.some((each) => each.mayHideBody);
   return {
     bodies: uniqueExpressions([...wholeReadings.flatMap((each) => each.bodies), ...memberBodies]),
     overwrites:
       resolved.replaced &&
+      resolved.ambiguous !== true &&
       !deleted &&
+      !hidden &&
       wholeReadings.length > 0 &&
       wholeReadings.every((each) => each.overwrites),
+  };
+}
+
+/** Whether a parameter target of `Object.assign` may already hold a non-enumerable `body`. */
+export function parameterMayHideBody(
+  name: Identifier,
+  parameter: ParameterDeclaration,
+  point: Node,
+): boolean {
+  const resolved = parameterValues(name, parameter);
+  if (!resolved.replaced || resolved.ambiguous === true) {
+    return true;
+  }
+  if (resolved.values.some((each) => !freshBodyObject(each))) {
+    return true;
+  }
+  const context = buildCutContext(name, parameter, point, resolved);
+  return collectParameterBodyWrites(context).some((each) => each.mayHideBody);
+}
+
+/** Builds the cut-tracking context for one parameter read site. */
+function buildCutContext(
+  name: Identifier,
+  parameter: ParameterDeclaration,
+  point: Node,
+  resolved: ParameterResolution,
+): CutContext {
+  return {
+    cut: resolved.cut,
+    name,
+    parameter,
+    point,
+    soleFreshCut: soleFreshReplacement(resolved),
+  };
+}
+
+/** Surviving bodies and spread-overwrite proof after a definite `body` member cut. */
+function cutMemberReading(
+  baseContext: CutContext,
+  memberCut: ParameterBodyWrite,
+  writes: readonly ParameterBodyWrite[],
+  reader: OptionsReader,
+): BodyReading {
+  const afterCut = writes.filter(
+    (each) => each === memberCut || !supersededBefore(each.node, memberCut.node, baseContext.point),
+  );
+  const deleted = hasReachableBodyDelete({ ...baseContext, cut: memberCut.node });
+  const hidden =
+    memberCut.descriptorWrite === true
+      ? afterCut.some((each) => each.mayHideBody)
+      : writes.some((each) => each.mayHideBody);
+  return {
+    bodies: uniqueExpressions(afterCut.flatMap((each) => writeBodies(each, reader))),
+    overwrites: !deleted && !hidden && definitelyEnumerableBody(memberCut, reader),
   };
 }
 
@@ -173,12 +222,20 @@ function capturesSameFreshCut(
   return atCapture.cut === cut && atCapture.ambiguous !== true && atCapture.values.length === 1;
 }
 
-/** Whether a member write unconditionally replaces the `body` property when executed. */
+/** Whether a member write unconditionally replaces the `body` property when read directly. */
 function definitelyOverwritesBody(write: ParameterBodyWrite, reader: OptionsReader): boolean {
   if (write.assignCall !== undefined) {
     return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node).overwrites;
   }
   return write.exactBody;
+}
+
+/** Whether a member write establishes an enumerable `body` when no prior descriptor hid it. */
+function definitelyEnumerableBody(write: ParameterBodyWrite, reader: OptionsReader): boolean {
+  if (write.assignCall !== undefined) {
+    return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node).overwrites;
+  }
+  return write.enumerableBody;
 }
 
 /** Whether `node` is a fresh object literal without an accessor intercepting `body`. */
@@ -242,10 +299,17 @@ function binaryParameterBodyWrite(
     node.operatorToken.kind === SyntaxKind.EqualsToken &&
     names?.length === 1 &&
     names[0] === BODY_KEY;
-  return { capture, exactBody, node, values: [node.right] };
+  return {
+    capture,
+    enumerableBody: exactBody,
+    exactBody,
+    mayHideBody: false,
+    node,
+    values: [node.right],
+  };
 }
 
-/** Extracts `Object.assign(options, ...)` and `Object.defineProperty(options, 'body', ...)` writes. */
+/** Extracts `Object.assign`, `Object.defineProperty`, `Reflect.defineProperty`, and `Object.defineProperties` writes. */
 function callParameterBodyWrite(
   node: CallExpression,
   parameter: ParameterDeclaration,
@@ -254,7 +318,10 @@ function callParameterBodyWrite(
   if (path === OBJECT_ASSIGN) {
     return objectAssignParameterWrite(node, parameter);
   }
-  return path === DEFINE_PROPERTY ? definePropertyBodyWrite(node, parameter) : undefined;
+  if (path === DEFINE_PROPERTY || path === REFLECT_DEFINE_PROPERTY) {
+    return definePropertyBodyWrite(node, parameter, path === REFLECT_DEFINE_PROPERTY);
+  }
+  return path === DEFINE_PROPERTIES ? definePropertiesBodyWrite(node, parameter) : undefined;
 }
 
 /** Extracts `Object.assign(options, ...sources)` while keeping remaining spread sources intact. */
@@ -266,26 +333,45 @@ function objectAssignParameterWrite(
   if (first === undefined) {
     return undefined;
   }
-  if (!isSpreadElement(first)) {
-    const capture = parameterCaptureOf(first, parameter);
-    return capture !== undefined && rest.length > 0
-      ? { assignCall: node, assignSources: rest, capture, exactBody: false, node, values: [] }
+  if (isSpreadElement(first)) {
+    const expanded = framedArgumentPrefix(node, [first], Infinity);
+    const [target, ...leadingSources] = expanded.values;
+    const capture =
+      target === undefined || expanded.unknown ? undefined : parameterCaptureOf(target, parameter);
+    const sources = [...leadingSources, ...rest];
+    return capture !== undefined && sources.length > 0
+      ? buildAssignParameterWrite(node, capture, sources)
       : undefined;
   }
-  const expanded = framedArgumentPrefix(node, [first], Infinity);
-  const [target, ...leadingSources] = expanded.values;
-  const capture =
-    !expanded.unknown && target !== undefined ? parameterCaptureOf(target, parameter) : undefined;
-  const sources = [...leadingSources, ...rest];
-  return capture !== undefined && sources.length > 0
-    ? { assignCall: node, assignSources: sources, capture, exactBody: false, node, values: [] }
+  const capture = parameterCaptureOf(first, parameter);
+  return capture !== undefined && rest.length > 0
+    ? buildAssignParameterWrite(node, capture, rest)
     : undefined;
 }
 
-/** Extracts `Object.defineProperty(options, key, { value })` when `key` may name `body`. */
+/** Constructs a `ParameterBodyWrite` record for `Object.assign` sources. */
+function buildAssignParameterWrite(
+  node: CallExpression,
+  capture: Identifier,
+  sources: readonly Expression[],
+): ParameterBodyWrite {
+  return {
+    assignCall: node,
+    assignSources: sources,
+    capture,
+    enumerableBody: false,
+    exactBody: false,
+    mayHideBody: false,
+    node,
+    values: [],
+  };
+}
+
+/** Extracts `Object.defineProperty` / `Reflect.defineProperty` writes when `key` may name `body`. */
 function definePropertyBodyWrite(
   node: CallExpression,
   parameter: ParameterDeclaration,
+  reflective: boolean,
 ): ParameterBodyWrite | undefined {
   const [target, key, descriptor] = framedArgumentPrefix(
     node,
@@ -293,16 +379,25 @@ function definePropertyBodyWrite(
     DEFINED.slots,
   ).values;
   const capture = target === undefined ? undefined : parameterCaptureOf(target, parameter);
-  if (capture === undefined || key === undefined || descriptor === undefined) {
+  if (capture === undefined) {
     return undefined;
   }
-  const names = framedKeyNames(key);
-  if (names !== undefined && !names.includes(BODY_KEY)) {
+  const write = singleDescriptorBodyWrite(key, descriptor, reflective);
+  return write === undefined ? undefined : { ...write, capture, descriptorWrite: true, node };
+}
+
+/** Extracts `Object.defineProperties(options, descriptors)` writes when `descriptors` may touch `body`. */
+function definePropertiesBodyWrite(
+  node: CallExpression,
+  parameter: ParameterDeclaration,
+): ParameterBodyWrite | undefined {
+  const [target, descriptors] = framedArgumentPrefix(node, node.arguments).values;
+  const capture = target === undefined ? undefined : parameterCaptureOf(target, parameter);
+  if (capture === undefined) {
     return undefined;
   }
-  const values = framedDescriptorEntries(descriptor, ['value']) ?? [];
-  const exactBody = names?.length === 1 && names[0] === BODY_KEY && values.length === 1;
-  return values.length === 0 ? undefined : { capture, exactBody, node, values };
+  const write = mapDescriptorBodyWrite(descriptors);
+  return write === undefined ? undefined : { ...write, capture, descriptorWrite: true, node };
 }
 
 /** Checks whether any reachable deletion or non-global hand-off can remove `body` on `parameter`. */
