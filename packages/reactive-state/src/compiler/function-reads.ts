@@ -1,40 +1,50 @@
 import {
   type ElementAccessExpression,
   type Expression,
-  type Identifier,
+  isArrayLiteralExpression,
   isArrowFunction,
+  isBigIntLiteral,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
   isClassExpression,
-  isConstructorTypeNode,
+  isConditionalExpression,
+  isDeleteExpression,
   isElementAccessExpression,
   isFunctionExpression,
-  isFunctionTypeNode,
   isIdentifier,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectBindingPattern,
+  isObjectLiteralExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isRegularExpressionLiteral,
+  isStringLiteral,
   isTemplateExpression,
+  isTypeOfExpression,
   isVariableDeclaration,
+  isVoidExpression,
   type Node,
   SyntaxKind,
-  type TypeNode,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
-import { declarationOf, namesType, parameterOf, takenApartOf } from './framed.ts';
+import {
+  dynamicObjectEntryKind,
+  identifierEntryKind,
+  isGuaranteedUndefined,
+} from './function-binding-entries.ts';
 import { elementEntryKey } from './function-entry-writes.ts';
 import {
+  combineBranchKinds,
+  type EntryKind,
   type FunctionKind,
-  hasScanKind,
-  holderObject,
-  isConstDeclaration,
-  isConstInitializer,
-  type ResolvedObject,
+  memberEntryKind,
   type ScanContext,
-  scanResolvedObject,
+  withBranch,
 } from './function-table-entries.ts';
 
 /**
@@ -45,13 +55,6 @@ import {
 
 /** The members of a function each side's bundle writes otherwise: its source, its name. */
 const BUNDLED: ReadonlySet<string> = new Set(['name', 'toString']);
-
-/** The types a parameter is said to be a function of by their names: `Function`, and its kin. */
-const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  'CallableFunction',
-  'Function',
-  'NewableFunction',
-]);
 
 /** The operators that make text of a function beside them: `+`, `+=`. */
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
@@ -121,128 +124,82 @@ function textOf(node: Node): Expression | undefined {
 
 /** Classifies `node` as an object-entry-named function, a minifiable function, or neither. */
 function functionKind(node: Expression, seen: Set<Node>): FunctionKind | undefined {
-  return functionKindInContext(node, {
-    classifyFunction: functionKindInContext,
+  const kind = expressionEntryKind(node, {
+    classifyExpression: expressionEntryKind,
     hitCycle: false,
     seen,
   });
+  return kind === 'entry' || kind === 'renamed' ? kind : undefined;
 }
 
-/** Cycle-aware worker classifying `node` as `'entry'`, `'renamed'`, or non-function/unknown. */
-function functionKindInContext(node: Expression, context: ScanContext): FunctionKind | undefined {
+/** Cycle-aware worker classifying `node` as `'entry'`, `'renamed'`, `'non-function'`, or `'unknown'`. */
+function expressionEntryKind(node: Expression, context: ScanContext): EntryKind {
   if (isArrowFunction(node) || isFunctionExpression(node) || isClassExpression(node)) {
     return 'renamed';
   }
+  if (isNonFunctionSyntax(node)) {
+    return 'non-function';
+  }
+  if (isConditionalExpression(node)) {
+    const left = withBranch(context, (branch) =>
+      expressionEntryKind(unwrapped(node.whenTrue), branch),
+    );
+    const right = withBranch(context, (branch) =>
+      expressionEntryKind(unwrapped(node.whenFalse), branch),
+    );
+    return combineBranchKinds(left, right);
+  }
   if (isPropertyAccessExpression(node)) {
-    return entryFunctionKind(unwrapped(node.expression), node.name.text, context);
+    return memberEntryKind(unwrapped(node.expression), node.name.text, context);
   }
   if (isElementAccessExpression(node)) {
     return elementEntryKind(node, context);
   }
-  return isIdentifier(node) ? identifierKind(node, context) : undefined;
-}
-
-/** Resolves an identifier through declarations, destructured object entries, and function parameters. */
-function identifierKind(node: Identifier, context: ScanContext): FunctionKind | undefined {
-  const declared = declarationOf(node);
-  if (declared === undefined) {
-    return undeclaredKind(node, context);
-  }
-  if (context.seen.has(declared)) {
-    context.hitCycle = true;
-    return undefined;
-  }
-  context.seen.add(declared);
-  return isVariableDeclaration(declared) ? variableKind(declared, context) : 'renamed';
-}
-
-/** Resolves destructured object bindings (`const { pick } = helpers`) or typed function parameters. */
-function undeclaredKind(node: Identifier, context: ScanContext): FunctionKind | undefined {
-  const taken = takenApartOf(node);
-  if (taken === undefined) {
-    return isFunctionType(parameterOf(node)?.type) ? 'renamed' : undefined;
-  }
-  if (context.seen.has(taken.of)) {
-    context.hitCycle = true;
-    return isFunctionType(parameterOf(node)?.type) ? 'renamed' : undefined;
-  }
-  context.seen.add(taken.of);
-  const kind = entryFunctionKind(unwrapped(taken.of), taken.key, context);
-  return kind === 'entry' && !isConstInitializer(taken.of) ? 'renamed' : kind;
-}
-
-/** Preserves `'entry'` across `const` aliases while degrading mutable `let` bindings to `'renamed'`. */
-function variableKind(
-  declared: VariableDeclaration,
-  context: ScanContext,
-): FunctionKind | undefined {
-  const fromInit =
-    declared.initializer === undefined
-      ? undefined
-      : functionKindInContext(unwrapped(declared.initializer), context);
-  if (fromInit !== undefined) {
-    return isConstDeclaration(declared) ? fromInit : 'renamed';
-  }
-  return isFunctionType(declared.type) ? 'renamed' : undefined;
+  return isIdentifier(node) ? identifierEntryKind(node, context) : 'unknown';
 }
 
 /** Classifies a bracket entry read on a written object literal, with static or dynamic key. */
-function elementEntryKind(
-  node: ElementAccessExpression,
-  context: ScanContext,
-): FunctionKind | undefined {
+function elementEntryKind(node: ElementAccessExpression, context: ScanContext): EntryKind {
   const holder = unwrapped(node.expression);
   const key = elementEntryKey(node);
-  if (key !== undefined) {
-    return entryFunctionKind(holder, key, context);
-  }
-  const resolved = holderObject(holder, context);
-  return resolved === undefined ? undefined : tableFunctionKind(resolved, context);
+  return key === undefined
+    ? dynamicObjectEntryKind(holder, context)
+    : memberEntryKind(holder, key, context);
 }
 
-/** Classifies static entry `name` of `holder` when `holder` resolves to a written object literal. */
-function entryFunctionKind(
-  holder: Expression,
-  name: string,
-  context: ScanContext,
-): FunctionKind | undefined {
-  const resolved = holderObject(holder, context);
-  if (resolved === undefined) {
-    return undefined;
-  }
-  const scan = scanResolvedObject(resolved, context);
-  const entry = scan.entries.get(name);
-  if (entry === 'entry' || entry === 'renamed') {
-    return entry;
-  }
-  if (entry === 'non-function') {
-    return undefined;
-  }
-  return scan.stickyRenamed ? 'renamed' : undefined;
-}
-
-/** Classifies a dynamic lookup across all entries of a written object literal. */
-function tableFunctionKind(
-  resolved: ResolvedObject,
-  context: ScanContext,
-): FunctionKind | undefined {
-  const scan = scanResolvedObject(resolved, context);
-  if (scan.stickyRenamed || hasScanKind(scan.entries, 'renamed')) {
-    return 'renamed';
-  }
-  if (scan.dynamicEntry || hasScanKind(scan.entries, 'entry')) {
-    return scan.unverified || hasScanKind(scan.entries, 'unknown') ? 'renamed' : 'entry';
-  }
-  return undefined;
-}
-
-/**
- * Whether `type`, written, says a function: a function's type, `() => string`, a class's,
- * `new () => object`, or `Function`'s and its kin's (`FUNCTION_TYPES`), in a union too.
- */
-function isFunctionType(type: TypeNode | undefined): boolean {
+/** Whether `node` is a container literal, primitive/regex literal, primitive unary operator, or `undefined`. */
+function isNonFunctionSyntax(node: Expression): boolean {
   return (
-    type !== undefined &&
-    (isFunctionTypeNode(type) || isConstructorTypeNode(type) || namesType(type, FUNCTION_TYPES))
+    isObjectLiteralExpression(node) ||
+    isArrayLiteralExpression(node) ||
+    isPrimitiveOrRegexLiteral(node) ||
+    isPrimitiveOperatorExpression(node) ||
+    isGuaranteedUndefined(node)
+  );
+}
+
+/** Whether `node` is a primitive, template, or regular-expression literal. */
+function isPrimitiveOrRegexLiteral(node: Expression): boolean {
+  return (
+    isStringLiteral(node) ||
+    isNoSubstitutionTemplateLiteral(node) ||
+    isTemplateExpression(node) ||
+    isNumericLiteral(node) ||
+    isBigIntLiteral(node) ||
+    isRegularExpressionLiteral(node) ||
+    node.kind === SyntaxKind.TrueKeyword ||
+    node.kind === SyntaxKind.FalseKeyword ||
+    node.kind === SyntaxKind.NullKeyword
+  );
+}
+
+/** Whether `node` applies a unary operator whose runtime result is always a primitive. */
+function isPrimitiveOperatorExpression(node: Expression): boolean {
+  return (
+    isVoidExpression(node) ||
+    isTypeOfExpression(node) ||
+    isDeleteExpression(node) ||
+    isPrefixUnaryExpression(node) ||
+    isPostfixUnaryExpression(node)
   );
 }

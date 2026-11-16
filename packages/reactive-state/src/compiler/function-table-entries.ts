@@ -1,32 +1,20 @@
 import {
   type Expression,
-  type Identifier,
-  isArrayLiteralExpression,
   isArrowFunction,
-  isBigIntLiteral,
   isClassExpression,
   isComputedPropertyName,
-  isConditionalExpression,
-  isDeleteExpression,
-  isElementAccessExpression,
   isFunctionExpression,
   isIdentifier,
   isMethodDeclaration,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
-  isPropertyAccessExpression,
   isPropertyAssignment,
-  isRegularExpressionLiteral,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isStringLiteral,
-  isTemplateExpression,
-  isTypeOfExpression,
   isVariableDeclaration,
-  isVoidExpression,
+  isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -37,21 +25,26 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
-import { declarationOf, takenApartOf } from './framed.ts';
-import { elementEntryKey, objectWrites } from './function-entry-writes.ts';
+import { declarationOf } from './framed.ts';
+import { objectWrites } from './function-entry-writes.ts';
 
 /** Whether a function's runtime `.name` comes from an unminified entry key or a minifiable binding. */
 export type FunctionKind = 'entry' | 'renamed';
 
-/** Classification of a present object property or spread entry. */
-type EntryKind = FunctionKind | 'non-function' | 'unknown';
+/** Classification of a present object property, spread entry, or binding arm. */
+export type EntryKind = FunctionKind | 'non-function' | 'unknown';
 
 /** Resolved object literal together with whether its binding chain is immutable (`const`). */
 export interface ResolvedObject {
   readonly constant: boolean;
   readonly object: ObjectLiteralExpression;
 }
+
+/** Selected property expression or clean missing-key marker on a resolved object literal. */
+export type ResolvedProperty =
+  | { readonly kind: 'expr'; readonly value: Expression }
+  | { readonly kind: 'missing-clean' }
+  | { readonly kind: 'unknown' };
 
 /** Surviving static-key classifications and spread/dynamic uncertainty across a table scan. */
 interface TableScan {
@@ -63,7 +56,7 @@ interface TableScan {
 
 /** Cycle-tracking context threaded through object and identifier resolution. */
 export interface ScanContext {
-  readonly classifyFunction: (node: Expression, context: ScanContext) => FunctionKind | undefined;
+  readonly classifyExpression: (node: Expression, context: ScanContext) => EntryKind;
   hitCycle: boolean;
   readonly seen: Set<Node>;
 }
@@ -71,9 +64,9 @@ export interface ScanContext {
 const RAW_SCANS = new WeakMap<ObjectLiteralExpression, TableScan>();
 
 /** Runs `run` with an isolated copy of `context.seen`, propagating `hitCycle` back to `context`. */
-function withBranch<T>(context: ScanContext, run: (branch: ScanContext) => T): T {
+export function withBranch<T>(context: ScanContext, run: (branch: ScanContext) => T): T {
   const branch: ScanContext = {
-    classifyFunction: context.classifyFunction,
+    classifyExpression: context.classifyExpression,
     hitCycle: false,
     seen: new Set(context.seen),
   };
@@ -82,6 +75,20 @@ function withBranch<T>(context: ScanContext, run: (branch: ScanContext) => T): T
     context.hitCycle = true;
   }
   return result;
+}
+
+/** Joins two candidate runtime branch classifications (`'non-function'` bottom, `'renamed'` top). */
+export function combineBranchKinds(left: EntryKind, right: EntryKind): EntryKind {
+  if (left === 'renamed' || right === 'renamed') {
+    return 'renamed';
+  }
+  if (left === 'non-function') {
+    return right;
+  }
+  if (right === 'non-function') {
+    return left;
+  }
+  return left === right ? left : 'renamed';
 }
 
 /** Whether any surviving static key in `entries` has classification `target`. */
@@ -136,12 +143,99 @@ export function holderObject(holder: Expression, context: ScanContext): Resolved
 
 /** Whether `declared` belongs to a `const` declaration list. */
 export function isConstDeclaration(declared: VariableDeclaration): boolean {
-  return /^const\s/u.test(declared.parent.getText(declared.getSourceFile()));
+  return (
+    isVariableDeclarationList(declared.parent) &&
+    /^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
+  );
 }
 
-/** Whether `initializer` is the RHS of a `const` variable declaration. */
-export function isConstInitializer(initializer: Expression): boolean {
-  return isVariableDeclaration(initializer.parent) && isConstDeclaration(initializer.parent);
+/** Classifies static member `name` on `holder`, treating omitted clean own keys as `undefined`. */
+export function memberEntryKind(holder: Expression, name: string, context: ScanContext): EntryKind {
+  const resolved = holderObject(holder, context);
+  if (resolved === undefined) {
+    return 'unknown';
+  }
+  const scan = scanResolvedObject(resolved, context);
+  const entry = scan.entries.get(name);
+  if (entry !== undefined) {
+    return entry;
+  }
+  if (scan.stickyRenamed) {
+    return 'renamed';
+  }
+  return !scan.unverified && !scan.dynamicEntry && !(name in Object.prototype)
+    ? 'non-function'
+    : 'unknown';
+}
+
+/** Resolves the last static property initializer for `key` on an unchanged `const` object literal. */
+export function resolvePropertyValue(
+  holder: Expression,
+  key: string,
+  context: ScanContext,
+): ResolvedProperty {
+  const resolved = holderObject(holder, context);
+  if (resolved === undefined || !resolved.constant) {
+    return { kind: 'unknown' };
+  }
+  if (context.seen.has(resolved.object)) {
+    context.hitCycle = true;
+    return { kind: 'unknown' };
+  }
+  const writes = objectWrites(resolved.object);
+  if (writes.all || writes.keys.has(key)) {
+    return { kind: 'unknown' };
+  }
+  return withBranch(context, (branch) => {
+    branch.seen.add(resolved.object);
+    return findLastPropertyValue(resolved.object, key, branch);
+  });
+}
+
+/** Walks `object.properties` right-to-left to locate the surviving value expression of `key`. */
+function findLastPropertyValue(
+  object: ObjectLiteralExpression,
+  key: string,
+  context: ScanContext,
+): ResolvedProperty {
+  for (let index = object.properties.length - 1; index >= 0; index -= 1) {
+    const property = object.properties[index];
+    if (property === undefined) {
+      continue;
+    }
+    if (isSpreadAssignment(property)) {
+      const inner = resolvePropertyValue(unwrapped(property.expression), key, context);
+      if (inner.kind !== 'missing-clean') {
+        return inner;
+      }
+      continue;
+    }
+    const propKey = propertyKey(property);
+    if (isPrototypeProperty(property, propKey)) {
+      if (unwrapped(property.initializer).kind !== SyntaxKind.NullKeyword) {
+        return { kind: 'unknown' };
+      }
+      continue;
+    }
+    if (propKey === undefined) {
+      return { kind: 'unknown' };
+    }
+    if (propKey === key) {
+      return directPropertyValue(property);
+    }
+  }
+  return key in Object.prototype ? { kind: 'unknown' } : { kind: 'missing-clean' };
+}
+
+/** Extracts the value expression of a matching static property or shorthand assignment. */
+function directPropertyValue(property: ObjectLiteralElementLike): ResolvedProperty {
+  if (isPropertyAssignment(property)) {
+    return { kind: 'expr', value: unwrapped(property.initializer) };
+  }
+  if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
+    return { kind: 'expr', value: property.name };
+  }
+  return { kind: 'unknown' };
 }
 
 /** Scans and caches all properties, spreads, and post-declaration writes of `object`. */
@@ -161,7 +255,7 @@ function scanObjectLiteral(object: ObjectLiteralExpression, context: ScanContext
     unverified: false,
   };
   const local: ScanContext = {
-    classifyFunction: context.classifyFunction,
+    classifyExpression: context.classifyExpression,
     hitCycle: false,
     seen: new Set(context.seen),
   };
@@ -316,133 +410,12 @@ function propertyEntryKind(
     if (key !== undefined && key !== '__proto__' && isAnonymousDefinition(value)) {
       return 'entry';
     }
-    return expressionEntryKind(value, context);
+    return context.classifyExpression(value, context);
   }
   if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
-    return expressionEntryKind(property.name, context);
+    return context.classifyExpression(property.name, context);
   }
   return 'unknown';
-}
-
-/** Classifies an arbitrary property value expression into `EntryKind`. */
-function expressionEntryKind(value: Expression, context: ScanContext): EntryKind {
-  const fn = withBranch(context, (branch) => branch.classifyFunction(value, branch));
-  if (fn !== undefined) {
-    return fn;
-  }
-  return withBranch(context, (branch) => isProvenNonFunction(value, branch))
-    ? 'non-function'
-    : 'unknown';
-}
-
-/** Whether `node` is guaranteed at runtime not to evaluate to a callable function or class. */
-function isProvenNonFunction(node: Expression, context: ScanContext): boolean {
-  if (isNonFunctionSyntax(node)) {
-    return true;
-  }
-  if (isConditionalExpression(node)) {
-    return (
-      withBranch(context, (branch) => isProvenNonFunction(unwrapped(node.whenTrue), branch)) &&
-      withBranch(context, (branch) => isProvenNonFunction(unwrapped(node.whenFalse), branch))
-    );
-  }
-  if (isPropertyAccessExpression(node)) {
-    return (
-      resolvedEntryKind(unwrapped(node.expression), node.name.text, context) === 'non-function'
-    );
-  }
-  if (isElementAccessExpression(node)) {
-    const key = elementEntryKey(node);
-    return (
-      key !== undefined &&
-      resolvedEntryKind(unwrapped(node.expression), key, context) === 'non-function'
-    );
-  }
-  return isIdentifier(node) && isNonFunctionIdentifier(node, context);
-}
-
-/** Resolves a `const` variable or destructured entry binding to check whether it is non-callable. */
-function isNonFunctionIdentifier(node: Identifier, context: ScanContext): boolean {
-  const declared = declarationOf(node);
-  if (declared !== undefined) {
-    return isNonFunctionVariable(declared, context);
-  }
-  const taken = takenApartOf(node);
-  if (taken === undefined || !isConstInitializer(taken.of)) {
-    return false;
-  }
-  if (context.seen.has(taken.of)) {
-    context.hitCycle = true;
-    return false;
-  }
-  context.seen.add(taken.of);
-  return resolvedEntryKind(unwrapped(taken.of), taken.key, context) === 'non-function';
-}
-
-/** Whether `declared` is an uncycled `const` binding initialized to a proven non-function. */
-function isNonFunctionVariable(declared: Node, context: ScanContext): boolean {
-  if (
-    !isVariableDeclaration(declared) ||
-    !isConstDeclaration(declared) ||
-    declared.initializer === undefined
-  ) {
-    return false;
-  }
-  if (context.seen.has(declared)) {
-    context.hitCycle = true;
-    return false;
-  }
-  context.seen.add(declared);
-  return isProvenNonFunction(unwrapped(declared.initializer), context);
-}
-
-/** Looks up the surviving `EntryKind` of static key `name` on `holder` when it is an object literal. */
-function resolvedEntryKind(
-  holder: Expression,
-  name: string,
-  context: ScanContext,
-): EntryKind | undefined {
-  const resolved = holderObject(holder, context);
-  return resolved === undefined
-    ? undefined
-    : scanResolvedObject(resolved, context).entries.get(name);
-}
-
-/** Whether `node` is a container literal, primitive/regex literal, primitive unary operator, or `undefined`. */
-function isNonFunctionSyntax(node: Expression): boolean {
-  return (
-    isObjectLiteralExpression(node) ||
-    isArrayLiteralExpression(node) ||
-    isPrimitiveOrRegexLiteral(node) ||
-    isPrimitiveOperatorExpression(node) ||
-    globalPathOf(node)?.join('.') === 'undefined'
-  );
-}
-
-/** Whether `node` is a primitive, template, or regular-expression literal. */
-function isPrimitiveOrRegexLiteral(node: Expression): boolean {
-  return (
-    isStringLiteral(node) ||
-    isNoSubstitutionTemplateLiteral(node) ||
-    isTemplateExpression(node) ||
-    isNumericLiteral(node) ||
-    isBigIntLiteral(node) ||
-    isRegularExpressionLiteral(node) ||
-    node.kind === SyntaxKind.TrueKeyword ||
-    node.kind === SyntaxKind.FalseKeyword ||
-    node.kind === SyntaxKind.NullKeyword
-  );
-}
-
-/** Whether `node` applies a unary operator whose runtime result is always a primitive. */
-function isPrimitiveOperatorExpression(node: Expression): boolean {
-  return (
-    isVoidExpression(node) ||
-    isTypeOfExpression(node) ||
-    isDeleteExpression(node) ||
-    isPrefixUnaryExpression(node) ||
-    isPostfixUnaryExpression(node)
-  );
 }
 
 /** Whether `property` is a non-computed `__proto__: ...` prototype setter. */
@@ -475,7 +448,7 @@ function propertyKey(property: ObjectLiteralElementLike): string | undefined {
 }
 
 /** The name of an entry the code writes: of a name, text, or a number; none of another. */
-function keyOf(name: PropertyName): string | undefined {
+export function keyOf(name: PropertyName): string | undefined {
   if (isComputedPropertyName(name)) {
     const value = unwrapped(name.expression);
     if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) {
