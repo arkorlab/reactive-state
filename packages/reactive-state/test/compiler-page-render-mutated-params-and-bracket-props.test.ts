@@ -399,6 +399,27 @@ const CASES: readonly Case[] = [
     ],
   },
   {
+    expected: {
+      blocking: false,
+      given: [],
+      props: { slug: 'slug' },
+      searched: false,
+      specifier: ROOT,
+    },
+    id: 'parenthesized-inner-params-attribute-handoff',
+    lines: [
+      "import { Suspense } from 'react';",
+      `import Root from '${ROOT}';`,
+      'async function Inner({ params }: { params: Promise<{ slug: string[] }> }) {',
+      '  const { slug } = await params;',
+      '  return <Root slug={slug} />;',
+      '}',
+      'export default function Page({ params }: { params: Promise<{ slug: string[] }> }) {',
+      '  return <Suspense fallback={null}><Inner params={(params) as Promise<{ slug: string[] }>} /></Suspense>;',
+      '}',
+    ],
+  },
+  {
     expected: undefined,
     id: 'wrapped-await-params-extra-handoff-pin',
     lines: [

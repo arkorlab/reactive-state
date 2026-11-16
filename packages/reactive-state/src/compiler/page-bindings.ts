@@ -36,7 +36,6 @@ import {
   type JsxSites,
   type ParamState,
 } from './page-params.ts';
-import { unwrapped } from './page-shape.ts';
 import {
   collectForwardedAliases,
   type Held,
@@ -423,11 +422,13 @@ export function holdsSearchParams(sources: ReadonlyMap<string, Held>): boolean {
 /** What an attribute hands a function of the page's: its value, or what it spreads. */
 function handed(attribute: JsxAttributeLike): Expression | undefined {
   if (isJsxSpreadAttribute(attribute)) {
-    return unwrapped(attribute.expression);
+    return uncast(attribute.expression);
   }
   const { initializer } = attribute;
-  return initializer !== undefined && isJsxExpression(initializer)
-    ? initializer.expression
+  return initializer !== undefined &&
+    isJsxExpression(initializer) &&
+    initializer.expression !== undefined
+    ? uncast(initializer.expression)
     : undefined;
 }
 

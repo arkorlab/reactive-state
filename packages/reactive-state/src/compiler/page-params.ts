@@ -41,7 +41,6 @@ import {
 } from 'typescript/ast';
 
 import { globalOf } from './bounded.ts';
-import { unwrapped } from './page-shape.ts';
 import { literalKey, memberAccess, type Scope, type Source, uncast } from './page-values.ts';
 import { freeReads } from './scope.ts';
 import { isTakenApart, useOf } from './uses.ts';
@@ -265,7 +264,7 @@ function isSafeMemberOnParam(access: Node): boolean {
   if (isWrittenTarget(access)) return false;
   const { at, parent } = useOf(access);
   if (isTaggedTemplateExpression(parent) && parent.tag === at) return false;
-  if (!isCallExpression(parent) || parent.expression !== at) return true;
+  if (!isCallExpression(parent) || !Object.is(parent.expression, at)) return true;
   const method = staticMemberOf(access);
   if (method === undefined) return false;
   if (READONLY_PARAM_METHODS.has(method)) return true;
@@ -371,7 +370,7 @@ function isSafeParamNode(node: Node, jsx: JsxSites): boolean {
   }
   return (
     isCallExpression(parent) &&
-    parent.expression !== at &&
+    !Object.is(parent.expression, at) &&
     parent.arguments.some((argument) => Object.is(argument, at)) &&
     isSafeGlobalCallee(parent.expression, jsx.free)
   );
@@ -414,7 +413,7 @@ function checkAwaitedParamsUse(awaitedNode: Node, context: UseContext): void {
   if (isAllowedAt(at, context.allowed.allowedParamsAwait)) return;
   if (
     (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
-    parent.expression !== at
+    !Object.is(parent.expression, at)
   ) {
     context.state.taintedAll = true;
     return;
@@ -429,10 +428,17 @@ function checkAwaitedParamsUse(awaitedNode: Node, context: UseContext): void {
 }
 
 /** Whether `sourceNode` is `<Inner params={params} />` on an inner helper element. */
-function isInnerParamsAttribute(sourceNode: Node, innerSites: ReadonlySet<Node>): boolean {
-  if (!isIdentifier(sourceNode) || !isJsxExpression(sourceNode.parent)) return false;
-  if (!isJsxAttribute(sourceNode.parent.parent)) return false;
-  const element = elementOfAttribute(sourceNode.parent.parent);
+function isInnerParamsAttribute(
+  sourceNode: Node,
+  at: Node,
+  parent: Node,
+  innerSites: ReadonlySet<Node>,
+): boolean {
+  if (!isIdentifier(sourceNode) || !isJsxExpression(parent) || !Object.is(parent.expression, at)) {
+    return false;
+  }
+  if (!isJsxAttribute(parent.parent)) return false;
+  const element = elementOfAttribute(parent.parent);
   return element !== undefined && innerSites.has(element);
 }
 
@@ -441,7 +447,7 @@ function checkParamsSourceNode(sourceNode: Node, context: UseContext): void {
   const { at, parent } = useOf(sourceNode);
   if (
     isAllowedAt(at, context.allowed.allowedParamsSource) ||
-    isInnerParamsAttribute(sourceNode, context.jsx.innerSites)
+    isInnerParamsAttribute(sourceNode, at, parent, context.jsx.innerSites)
   ) {
     return;
   }
@@ -468,13 +474,13 @@ function checkWholePropsRead(
   context: UseContext,
 ): boolean {
   const { at, parent } = useOf(identifier);
-  if (isJsxSpreadAttribute(parent) && unwrapped(parent.expression) === identifier) {
+  if (isJsxSpreadAttribute(parent) && uncast(parent.expression) === identifier) {
     const element = elementOfAttribute(parent);
     return element !== undefined && context.jsx.innerSites.has(element);
   }
   if (
     (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
-    parent.expression !== at ||
+    !Object.is(parent.expression, at) ||
     isWrittenTarget(parent)
   ) {
     return false;
