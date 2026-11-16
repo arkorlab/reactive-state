@@ -8,9 +8,10 @@ import { describe, expect, it } from 'vitest';
  * grows by a key at each turn: the member path a `super` argument selects is followed through each
  * default the construction leaves taken, and a default that is entered again on the way is a circle.
  * Where it runs the program throws a ReferenceError (a parameter read before it is initialized), so
- * it is a mistake the compile meets before the program runs. Such a program is read as one the
- * compile cannot follow: every argument of the construction stays possible, which the rows show as
- * the argument `error` that no `super` argument names. A circle that adds no key to the path
+ * it is a mistake the compile meets before the program runs, and no constructor is written so.
+ * Such a program is refused outright, whatever the construction supplies and whatever the defaults
+ * hold: what reaches the message is not followed, so an `Error` may be among it, at any depth,
+ * through an argument or through a default. A circle that adds no key to the path
  * (`a = b, b = a`), one among defaults the construction replaces (which drop the path), and one
  * through the elements of a rest parameter (which may or may not be taken) meet a state they have
  * scanned and end of themselves, as they did; defaults that name one another without a circle are
@@ -24,12 +25,18 @@ const MESSAGES = fileURLToPath(
   new URL('../src/compiler/framed-subclass-messages.ts', import.meta.url),
 );
 const TYPESCRIPT = fileURLToPath(new URL('../src/compiler/typescript.ts', import.meta.url));
+const REFUSALS = fileURLToPath(
+  new URL('../src/compiler/framed-error-messages.ts', import.meta.url),
+);
+const BOUNDED = fileURLToPath(new URL('../src/compiler/bounded.ts', import.meta.url));
 const SECONDS = 5000;
 const ROW_SECONDS = 20_000;
 
 const SCRIPT = [
   "import { isIdentifier, isNewExpression } from 'typescript/ast';",
   `const { framedSubclassMessages } = await import(${JSON.stringify(MESSAGES)});`,
+  `const { framedErrorMessage } = await import(${JSON.stringify(REFUSALS)});`,
+  `const { unwrapped } = await import(${JSON.stringify(BOUNDED)});`,
   `const { openTypeScript, parseModule } = await import(${JSON.stringify(TYPESCRIPT)});`,
   'const api = openTypeScript();',
   "const parsed = parseModule(api, 'cycle.ts', process.argv[1]);",
@@ -39,17 +46,35 @@ const SCRIPT = [
   '  node.forEachChild(visit);',
   '};',
   'visit(parsed.sourceFile);',
-  "const values = framedSubclassMessages(made, new Set(['Error']));",
-  'const answers = (values ?? []).map((each) => [',
+  "const names = new Set(['Error']);",
+  'const answers = (framedSubclassMessages(made, names) ?? []).map((each) => [',
   '  each.value.getText(parsed.sourceFile),',
   "  [...each.keys, ...(each.any === true ? ['*'] : [])].join('.'),",
   ']);',
-  'console.log(JSON.stringify(answers));',
+  "const isError = (value, keys = []) => keys.length === 0 && isIdentifier(unwrapped(value)) && unwrapped(value).text === 'error';",
+  'const refused = framedErrorMessage(made, names, isError, () => false);',
+  'console.log(JSON.stringify({ answers, refused }));',
   'process.exit(0);',
 ].join('\n');
 
+/** What a child process answers of the first `new`: what is forwarded, and whether it is refused. */
+function ran(source: string): {
+  readonly answers: readonly (readonly [string, string])[];
+  readonly refused: boolean;
+  readonly signal: string | null;
+} {
+  const out = spawnSync(
+    process.execPath,
+    ['--input-type=module', '--eval', SCRIPT, `declare const error: Error; ${source}`],
+    { cwd: PACKAGE, encoding: 'utf8', killSignal: 'SIGKILL', timeout: SECONDS },
+  );
+  const text = out.stdout.trim();
+  const parsed = text === '' ? { answers: [], refused: false } : JSON.parse(text);
+  return { ...(parsed as { answers: []; refused: boolean }), signal: out.signal };
+}
+
 interface Case {
-  /** Whether the `error` the construction gives no parameter that `super` reads stays possible. */
+  /** Whether the construction is refused: it holds an `Error` that no `super` argument names. */
   readonly closed: boolean;
   readonly id: string;
   readonly source: string;
@@ -116,18 +141,53 @@ describe('constructor defaults that read one another in a circle', () => {
   it.each(CASES)(
     '$id',
     ({ closed, source }) => {
-      const ran = spawnSync(
-        process.execPath,
-        ['--input-type=module', '--eval', SCRIPT, `declare const error: Error; ${source}`],
-        { cwd: PACKAGE, encoding: 'utf8', killSignal: 'SIGKILL', timeout: SECONDS },
-      );
-      const answers: readonly (readonly [string, string])[] =
-        ran.stdout.trim() === '' ? [] : (JSON.parse(ran.stdout) as []);
+      const { answers, refused, signal } = ran(source);
 
       expect({
-        forwarded: answers.some(([written, path]) => written === 'error' && path === ''),
-        signal: ran.signal,
+        forwarded: closed
+          ? refused
+          : answers.some(([written, path]) => written === 'error' && path === ''),
+        signal,
       }).toStrictEqual({ forwarded: closed, signal: null });
+    },
+    ROW_SECONDS,
+  );
+});
+
+/**
+ * A circle is refused outright: an `Error` held by a wrapper at any depth, or by a default alone,
+ * is refused with the rest, and so is the same wrapper of a text, as no constructor is written so.
+ */
+const NESTED = [
+  {
+    id: 'an-error-held-two-members-deep',
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored?: unknown) { super(a); } } new Failure(undefined, undefined, { inner: { deeper: error } });',
+  },
+  {
+    id: 'an-error-held-in-an-array-in-a-member',
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored?: unknown) { super(a); } } new Failure(undefined, undefined, { list: [error] });',
+  },
+  {
+    id: 'an-error-held-by-a-default-alone',
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored: unknown = { inner: { deeper: error } }) { super(a); } } new Failure();',
+  },
+  {
+    id: 'a-text-held-two-members-deep',
+    source:
+      'class Failure extends Error { constructor(a: any = b.x, b: any = a.y, ignored?: unknown) { super(a); } } new Failure(undefined, undefined, { inner: { deeper: "fixed" } });',
+  },
+] as const;
+
+describe('constructor defaults that read one another in a circle, given a wrapper', () => {
+  it.each(NESTED)(
+    '$id',
+    ({ source }) => {
+      const { refused, signal } = ran(source);
+
+      expect({ refused, signal }).toStrictEqual({ refused: true, signal: null });
     },
     ROW_SECONDS,
   );

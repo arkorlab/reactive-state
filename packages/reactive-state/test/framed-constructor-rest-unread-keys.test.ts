@@ -18,13 +18,18 @@ import { framedSlotValues } from '../src/compiler/framed-constructor-parameters.
  * A read of a rest parameter's element along a path whose key the compile cannot read, as
  * `args[0].message[key]` or `args[index].message`, may read any member after the keys it reads:
  * the value the construction supplies there is kept with any member possible, as a read of any
- * other parameter keeps it. The rows marked a pin answer the same before the change as after it.
+ * other parameter keeps it. The object the unread key is read of is kept whole as well, up to the
+ * keys read, as it may be an `Error` the path does not read into, so that row lists it before the
+ * path. The rows marked a pin answer the same before the change as after it.
  */
 
 const CASES = [
   {
     read: '(args[0] as { message: Record<string, unknown> }).message[key]',
-    values: [{ any: true, keys: ['message'] }],
+    values: [
+      { any: false, keys: ['message'] },
+      { any: true, keys: ['message'] },
+    ],
     what: 'an unread key after an element',
   },
   {

@@ -2,11 +2,15 @@ import {
   type CallExpression,
   type ConstructorDeclaration,
   type Expression,
+  isArrayBindingPattern,
+  isBindingElement,
   isCallExpression,
   isConstructorDeclaration,
   isElementAccessExpression,
   isExpressionStatement,
   isNewExpression,
+  isObjectBindingPattern,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isSpreadElement,
   type NewExpression,
@@ -31,6 +35,9 @@ import { framedQuietSource } from './framed-native-evaluation.ts';
 
 const ALL_ARGUMENTS = { limit: Infinity } as const;
 
+/** What `superSlots` answers where a constructor's `super` argument is a value that is refused. */
+const REFUSED: Slots = [];
+
 /**
  * The values a construction of a local subclass whose constructors only call `super` passes on to
  * its native base's message (AggregateError's second slot; DOMException's message and name): an
@@ -54,11 +61,40 @@ export function framedSubclassMessages(
     const call = superCall(constructor);
     if (call === undefined) return [];
     for (const argument of call.arguments) written.push({ value: argument, keys: [] });
+    written.push(...initializersOf(constructor));
     slots = slots === undefined ? undefined : superSlots(constructor, call, slots);
+    if (slots === REFUSED) return [{ keys: [], refused: true, value: construction.target }];
   }
-  if (slots === undefined) return [...construction.whole, ...written];
+  if (slots === undefined) return unfollowed([...construction.whole, ...written]);
   const known = slots;
   return messageSlots(chain.base).flatMap((index) => known[index] ?? []);
+}
+
+/**
+ * The defaults the constructors of a chain write, of a parameter and of a name a pattern binds: a
+ * construction that is not followed may reach the message through them, as it may through what it
+ * supplies.
+ */
+function initializersOf(constructor: ConstructorDeclaration): readonly ForwardedValue[] {
+  const found: ForwardedValue[] = [];
+  const pending: Node[] = [...constructor.parameters];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isParameterDeclaration(node) || isBindingElement(node)) {
+      if (node.initializer !== undefined) found.push({ keys: [], value: node.initializer });
+      if (node.name !== undefined) pending.push(node.name);
+    } else if (isObjectBindingPattern(node) || isArrayBindingPattern(node)) {
+      pending.push(...node.elements);
+    }
+  }
+  return found;
+}
+
+/**
+ * Values the compile could not follow into the constructors: each stands for any member of it, at
+ * any depth, as an `Error` a wrapper holds may reach the message through them.
+ */
+function unfollowed(values: readonly ForwardedValue[]): readonly ForwardedValue[] {
+  return values.map((each) => ({ ...each, unfollowed: true }));
 }
 
 /** A `new` or `Reflect.construct` target and its argument positions, where they are known. */
@@ -161,6 +197,7 @@ function superSlots(
     if (!isSpreadElement(argument)) {
       const values = framedSlotValues(argument, parameters, slots);
       if (values === undefined) return undefined;
+      if (values.some((each) => each.refused === true)) return REFUSED;
       result.push(values);
       continue;
     }
