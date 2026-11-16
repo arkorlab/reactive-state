@@ -4,6 +4,7 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
+  isAsExpression,
   isBigIntLiteral,
   isBinaryExpression,
   isCallExpression,
@@ -14,12 +15,16 @@ import {
   isFunctionExpression,
   isIdentifier,
   isNewExpression,
+  isNonNullExpression,
   isObjectLiteralExpression,
+  isParenthesizedExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isRegularExpressionLiteral,
+  isSatisfiesExpression,
   isTemplateExpression,
   isTypeOfExpression,
+  isVariableDeclarationList,
   isVoidExpression,
   type Node,
   type ParameterDeclaration,
@@ -32,6 +37,7 @@ import { targetsOf } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
 import { constantValue } from './numbers.ts';
 import { parameterValue } from './parameter-values.ts';
+import { bindsHoistedName } from './proxy-parameter-writes.ts';
 import {
   type Context,
   type Frame,
@@ -41,7 +47,7 @@ import {
   sourcePath,
   sourceValue,
 } from './proxy-values.ts';
-import { hoistedIn } from './scope.ts';
+import { bindingIdentifiers, hoistedIn, isBlockScoped, isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Bound parameter metadata for a reference inside an active call frame. */
@@ -64,6 +70,15 @@ interface PresenceOutcome {
   readonly value: Expression;
 }
 
+/** Memoized `readsOf(declared, fn)` predicates keyed by parameter declaration identifier. */
+const PARAMETER_READS = new WeakMap<Identifier, (node: Node) => node is Identifier>();
+
+/** Memoized parameter-reassignment flags keyed by parameter declaration identifier. */
+const PARAMETER_REASSIGNED = new WeakMap<Identifier, boolean>();
+
+/** Memoized identifier names directly targeted by bindings or `var` declarations in a subtree. */
+const ANY_TARGET_NAMES = new WeakMap<Node, ReadonlySet<string>>();
+
 /** Built-in calls whose completion value is never `undefined`. */
 const DEFINED_CALLS: ReadonlySet<string> = new Set([
   'Boolean',
@@ -81,7 +96,10 @@ export function parameterFrame(
   for (const frame of frames.toReversed()) {
     const parameters = parametersOf(frame.fn);
     const index = parameters.findIndex(
-      (parameter) => isIdentifier(parameter.name) && readsOf(parameter.name, frame.fn)(name),
+      (parameter) =>
+        isIdentifier(parameter.name) &&
+        parameter.name.text === name.text &&
+        cachedParameterReads(parameter.name, frame.fn)(name),
     );
     const parameter = parameters[index];
     if (parameter !== undefined) {
@@ -91,14 +109,30 @@ export function parameterFrame(
   return undefined;
 }
 
+/** Returns a memoized `readsOf(declared, fn)` predicate for parameter `declared`. */
+function cachedParameterReads(
+  declared: Identifier,
+  fn: Answering,
+): (node: Node) => node is Identifier {
+  let predicate = PARAMETER_READS.get(declared);
+  if (predicate === undefined) {
+    predicate = readsOf(declared, fn);
+    PARAMETER_READS.set(declared, predicate);
+  }
+  return predicate;
+}
+
 /** Whether `fn` directly reassigns `declared` anywhere in its body. */
 export function bindingChanged(fn: Answering, declared: Identifier): boolean {
-  const isRead = readsOf(declared, fn);
+  const isRead = cachedParameterReads(declared, fn);
   const visit = (node: Node): boolean => {
     const target = isCallExpression(node) ? undefined : writtenBy(node);
     if (
       target !== undefined &&
-      targetsOf(target).some((each) => isIdentifier(each) && isRead(each))
+      targetsOf(target).some((each) => {
+        const leaf = unwrappedNode(each);
+        return isIdentifier(leaf) && isRead(leaf);
+      })
     ) {
       return true;
     }
@@ -148,7 +182,8 @@ function parameterUndefined(name: Identifier, context: Context): boolean {
   }
   const { frame, index, parameter } = binding;
   const scoped = frameContextOf(context, frame);
-  const replaced = parameterValue(frame.fn, parameter.name, name);
+  const reassigned = parameterReassigned(frame.fn, parameter.name);
+  const replaced = reassigned ? parameterValue(frame.fn, parameter.name, name) : undefined;
   if (replaced !== undefined) {
     return guaranteedUndefined({
       context: scoped,
@@ -157,11 +192,7 @@ function parameterUndefined(name: Identifier, context: Context): boolean {
       value: replaced.value,
     });
   }
-  if (
-    parameter.dotDotDotToken !== undefined ||
-    parameterReassigned(frame.fn, parameter.name) ||
-    frame.given === undefined
-  ) {
+  if (parameter.dotDotDotToken !== undefined || reassigned || frame.given === undefined) {
     return false;
   }
   const given = frame.given[index];
@@ -216,11 +247,12 @@ function parameterDefined(name: Identifier, context: Context, nullable: boolean)
   }
   const { frame, parameter } = binding;
   const scoped = frameContextOf(context, frame);
-  const replaced = parameterValue(frame.fn, parameter.name, name);
+  const reassigned = parameterReassigned(frame.fn, parameter.name);
+  const replaced = reassigned ? parameterValue(frame.fn, parameter.name, name) : undefined;
   if (replaced !== undefined) {
     return guaranteedDefined(replaced.value, scoped, nullable);
   }
-  if (parameterReassigned(frame.fn, parameter.name)) {
+  if (reassigned) {
     return false;
   }
   if (parameter.dotDotDotToken !== undefined) {
@@ -255,19 +287,92 @@ function incomingParameterDefined(
 }
 
 /** Whether `fn` writes to `declared` or declares an initialized or loop-head `var` of its name. */
-function parameterReassigned(fn: Answering, declared: Identifier): boolean {
-  if (bindingChanged(fn, declared)) {
-    return true;
+export function parameterReassigned(fn: Answering, declared: Identifier): boolean {
+  const cached = PARAMETER_REASSIGNED.get(declared);
+  if (cached !== undefined) {
+    return cached;
   }
-  const declarations = fn.body === undefined ? [] : hoistedIn([fn.body]);
-  return declarations.some(
-    (each) =>
-      isIdentifier(each.name) &&
-      each.name.text === declared.text &&
-      (each.initializer !== undefined ||
-        isForInStatement(each.parent.parent) ||
-        isForOfStatement(each.parent.parent)),
-  );
+  if (fn.body === undefined || !anyTargetNamesIn(fn.body).has(declared.text)) {
+    PARAMETER_REASSIGNED.set(declared, false);
+    return false;
+  }
+  const result =
+    bindingChanged(fn, declared) ||
+    hoistedIn([fn.body]).some(
+      (each) =>
+        bindsHoistedName(each.name, declared.text) &&
+        (each.initializer !== undefined ||
+          isForInStatement(each.parent.parent) ||
+          isForOfStatement(each.parent.parent)),
+    );
+  PARAMETER_REASSIGNED.set(declared, result);
+  return result;
+}
+
+/** Collects and memoizes all identifier texts written or `var`-declared anywhere inside `node`. */
+function anyTargetNamesIn(node: Node): ReadonlySet<string> {
+  const cached = ANY_TARGET_NAMES.get(node);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (isTypeOnly(node)) {
+    const empty = new Set<string>();
+    ANY_TARGET_NAMES.set(node, empty);
+    return empty;
+  }
+  const names = new Set<string>();
+  addDirectTargetNames(node, names);
+  node.forEachChild((child) => {
+    for (const text of anyTargetNamesIn(child)) {
+      names.add(text);
+    }
+  });
+  ANY_TARGET_NAMES.set(node, names);
+  return names;
+}
+
+/** Adds identifier names targeted directly at `node` by non-call writes or `var` declarations. */
+function addDirectTargetNames(node: Node, out: Set<string>): void {
+  if (isVariableDeclarationList(node) && !isBlockScoped(node)) {
+    for (const declaration of node.declarations) {
+      for (const ident of bindingIdentifiers(declaration.name)) {
+        out.add(ident.text);
+      }
+    }
+    return;
+  }
+  const target = isCallExpression(node) ? undefined : writtenBy(node);
+  if (target === undefined) {
+    return;
+  }
+  if (isVariableDeclarationList(target)) {
+    for (const declaration of target.declarations) {
+      for (const ident of bindingIdentifiers(declaration.name)) {
+        out.add(ident.text);
+      }
+    }
+    return;
+  }
+  for (const each of targetsOf(target)) {
+    const leaf = unwrappedNode(each);
+    if (isIdentifier(leaf)) {
+      out.add(leaf.text);
+    }
+  }
+}
+
+/** Unwraps parenthesized and type-assertion wrappers around an arbitrary AST `Node`. */
+function unwrappedNode(node: Node): Node {
+  let current = node;
+  while (
+    isParenthesizedExpression(current) ||
+    isAsExpression(current) ||
+    isSatisfiesExpression(current) ||
+    isNonNullExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
 }
 
 /** Trims `context.frames` to `frame` and its enclosing callers when evaluating `frame`'s code. */

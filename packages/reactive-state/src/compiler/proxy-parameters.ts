@@ -1,17 +1,10 @@
 import {
-  type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isBinaryExpression,
   isIdentifier,
-  type Node,
   type ParameterDeclaration,
-  SyntaxKind,
 } from 'typescript/ast';
 
-import type { Answering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
-import { readsOf } from './local-module-reads.ts';
 import { parameterValue } from './parameter-values.ts';
 import { mutatedRestOrigins } from './proxy-array-writes.ts';
 import {
@@ -20,20 +13,17 @@ import {
   restArrayChangedBefore,
   spreadElementOrigins,
 } from './proxy-arrays.ts';
-import { argumentPresence, parameterFrame, type ParameterFrame } from './proxy-presence.ts';
+import { assignedParameterOrigins, definitelyReassignedBefore } from './proxy-parameter-writes.ts';
+import {
+  argumentPresence,
+  parameterFrame,
+  type ParameterFrame,
+  parameterReassigned,
+} from './proxy-presence.ts';
 import { type Frame, type Origin, sourceValue, writtenBefore } from './proxy-values.ts';
-import { hoistedIn } from './scope.ts';
 import { interveningEvaluation } from './written-evaluation.ts';
 
 export { type ParameterFrame, parameterFrame } from './proxy-presence.ts';
-
-/** Assignment operators whose right-hand expression can become the target binding's value. */
-const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 /** Resolves a parameter read through replacements, reassignments, arguments, and defaults. */
 export function parameterOrigins(
@@ -45,18 +35,19 @@ export function parameterOrigins(
   if (!isIdentifier(parameter.name)) {
     return [];
   }
-  const replaced = parameterValue(frame.fn, parameter.name, name);
+  const replaced = parameterReassigned(frame.fn, parameter.name)
+    ? parameterValue(frame.fn, parameter.name, name)
+    : undefined;
   if (replaced !== undefined) {
     return [{ ...at, value: replaced.value }];
   }
   if (parameter.dotDotDotToken !== undefined) {
     return restParameterOrigins(name, binding, parameter.name, at);
   }
-  const assigned = assignedParameterValues(frame.fn, parameter.name).map((value) => ({
-    ...at,
-    value,
-  }));
-  return [...assigned, ...incomingParameterOrigins(frame, index, parameter, at)];
+  const assigned = assignedParameterOrigins(frame.fn, parameter.name, at);
+  return definitelyReassignedBefore(frame.fn, parameter.name, name, at.context)
+    ? assigned
+    : [...assigned, ...incomingParameterOrigins(frame, index, parameter, at)];
 }
 
 /** Incoming argument and `undefined`-fallback origins before any body assignment runs. */
@@ -93,7 +84,13 @@ function restParameterOrigins(
   at: Origin,
 ): readonly Origin[] {
   const { frame, index } = binding;
-  const assigned = assignedParameterValues(frame.fn, declared).map((value) => ({ ...at, value }));
+  const assigned = assignedParameterOrigins(frame.fn, declared, at);
+  if (definitelyReassignedBefore(frame.fn, declared, name, at.context)) {
+    return [
+      ...assigned,
+      ...mutatedRestOrigins({ declared, fn: frame.fn, given: undefined, name }, at),
+    ];
+  }
   const given = frame.given?.slice(index);
   if (given === undefined || restArrayChangedBefore(frame.fn, declared, name, at.context)) {
     return [...assigned, ...mutatedRestOrigins({ declared, fn: frame.fn, given, name }, at)];
@@ -127,36 +124,6 @@ function restOrigins(given: readonly Origin[], at: Origin): readonly Origin[] {
           spread: at.spread,
         },
       ];
-}
-
-/** Collects unshadowed assignments and hoisted `var` initializers targeting `declared`. */
-function assignedParameterValues(fn: Answering, declared: Identifier): readonly Expression[] {
-  if (fn.body === undefined) {
-    return [];
-  }
-  const isRead = readsOf(declared, fn);
-  const found: Expression[] = [];
-  for (const declaration of hoistedIn([fn.body])) {
-    if (
-      isIdentifier(declaration.name) &&
-      declaration.name.text === declared.text &&
-      declaration.initializer !== undefined
-    ) {
-      found.push(declaration.initializer);
-    }
-  }
-  const visit = (node: Node): void => {
-    if (
-      isBinaryExpression(node) &&
-      VALUE_ASSIGNMENTS.has(node.operatorToken.kind) &&
-      isRead(unwrapped(node.left))
-    ) {
-      found.push(node.right);
-    }
-    node.forEachChild(visit);
-  };
-  visit(fn.body);
-  return found;
 }
 
 /** A rest array's entries, or an explicitly unknown binding after a prior write/evaluation. */
