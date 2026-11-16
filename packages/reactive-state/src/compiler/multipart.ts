@@ -33,7 +33,6 @@ import {
   framedMemberWrites,
   type MemberDelete,
 } from './framed-member-writes.ts';
-import { framedObjectSources } from './framed-object-members.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import {
   applyDescriptorWrite,
@@ -53,6 +52,7 @@ import {
   isFormData,
   mergeSpread,
   parameterValues,
+  resolveHeldExpressions,
   selectedValues,
   startAnalysis,
   uniqueExpressions,
@@ -338,12 +338,13 @@ function spreadHolderArrays(
     const held = framedHeldValues(name, [], point);
     const entries =
       held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...held.held];
-    return entries.filter((each) => each.keys.length === 0).map((each) => each.value);
+    return entries.flatMap((each) => resolveHeldExpressions(each, point));
   }
   const resolved = parameterValues(name, binding);
+  const sourceValues = resolved.sources.flatMap((each) => resolveHeldExpressions(each, point));
   return resolved.replaced || binding.initializer === undefined
-    ? resolved.values
-    : [binding.initializer, ...resolved.values];
+    ? sourceValues
+    : [binding.initializer, ...sourceValues];
 }
 
 /** Possible request bodies carried by a variable or parameter options alias at `point`. */
@@ -415,9 +416,18 @@ function heldOptionBodies(entry: Held, point: Node, state: AnalysisState): reado
   if (entry.keys.length === 1 && entry.keys[0] === BODY_KEY) {
     return bodiesOf(entry.value, readingPoint(entry.value, point), state).bodies;
   }
-  return (framedObjectSources(entry.value, entry.keys) ?? [])
-    .filter((each) => each.keys.length === 0)
-    .map((each) => each.value);
+  if (entry.keys.at(-1) === BODY_KEY) {
+    const holders = resolveHeldExpressions(
+      { keys: entry.keys.slice(0, -1), value: entry.value },
+      point,
+    );
+    if (holders.length > 0) {
+      return uniqueExpressions(
+        holders.flatMap((each) => bodiesOf(each, readingPoint(each, point), state).bodies),
+      );
+    }
+  }
+  return resolveHeldExpressions(entry, point);
 }
 
 /** Evaluation point where an option source's own fields are read rather than forwarded by reference. */

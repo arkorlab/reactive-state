@@ -31,6 +31,7 @@ import {
   type ParameterResolution,
   parameterValues,
   reachesPoint,
+  resolveHeldExpressions,
   supersededBefore,
   uniqueExpressions,
 } from './multipart-readings.ts';
@@ -96,10 +97,11 @@ export function parameterBodies(
   if (memberCut !== undefined) {
     return cutMemberReading(baseContext, memberCut, writes, reader);
   }
+  const sourceValues = resolved.sources.flatMap((each) => resolveHeldExpressions(each, point));
   const wholeValues =
     resolved.replaced || parameter.initializer === undefined
-      ? resolved.values
-      : [parameter.initializer, ...resolved.values];
+      ? sourceValues
+      : [parameter.initializer, ...sourceValues];
   const wholeReadings = wholeValues.map((each) => reader.readOptions(each, each));
   const memberBodies = writes.flatMap((each) => writeBodies(each, reader));
   const deleted = resolved.replaced && hasReachableBodyDelete(baseContext);

@@ -26,11 +26,17 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf, frameTypeOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
-import { framedObjectSources } from './framed-object-members.ts';
+import { framedValueShape } from './framed-values.ts';
 import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { namesType } from './framed.ts';
+import { namesLocalMemberType } from './local-type-reading.ts';
+import {
+  inspectHeldPath,
+  patternParameterReassignments,
+  type ProjectionCallbacks,
+} from './multipart-projections.ts';
 
 /** Shared multipart `BodyReading` combinators, parameter value cuts, and `FormData` checks. */
 
@@ -50,12 +56,20 @@ export interface ParameterResolution {
   readonly ambiguous?: boolean;
   readonly cut?: BinaryExpression | undefined;
   readonly replaced: boolean;
+  readonly sources: readonly Held[];
   readonly values: readonly Expression[];
 }
 
 export const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
 
 const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
+
+const PROJECTION_CALLBACKS: ProjectionCallbacks = {
+  bindingDefaults: bindingDefaultsOf,
+  isTypedFormData: typedAtMemberPath,
+  readParameter: parameterValues,
+  selectValues: selectedValues,
+};
 
 /** Fresh memoization tables and empty cycle trail for one multipart construction check. */
 export function startAnalysis(): AnalysisState {
@@ -75,9 +89,9 @@ export function uniqueExpressions(items: readonly Expression[]): readonly Expres
 /** Combines an earlier body reading with a spread source that may or may not define `body`. */
 export function mergeSpread(previous: BodyReading, spread: BodyReading): BodyReading {
   return {
-    bodies: spread.overwrites
-      ? uniqueExpressions(spread.bodies)
-      : uniqueExpressions([...previous.bodies, ...spread.bodies]),
+    bodies: uniqueExpressions(
+      spread.overwrites ? spread.bodies : [...previous.bodies, ...spread.bodies],
+    ),
     overwrites: previous.overwrites || spread.overwrites,
   };
 }
@@ -104,6 +118,11 @@ export function selectedValues(value: Expression): readonly Expression[] | undef
   return undefined;
 }
 
+/** Unfolds concrete expressions reachable along a `Held` member path at `point`. */
+export function resolveHeldExpressions(entry: Held, point: Node): readonly Expression[] {
+  return inspectHeldPath(entry, point, PROJECTION_CALLBACKS).expressions;
+}
+
 /** Values assigned to a parameter before `name`, noting whether a definite write replaced the initial binding. */
 export function parameterValues(
   name: Identifier,
@@ -112,20 +131,37 @@ export function parameterValues(
   const owner = executionOwner(name);
   const cut = lastDefiniteParameterWrite(name, parameter, owner);
   const sources = framedAssignedSources(name);
-  const assigned = sources.filter((each) => each.keys.length === 0).map((each) => each.value);
+  const patternScan = patternParameterReassignments(name, parameter, (change) => {
+    return (
+      reachesPoint(change, name, parameter, name) &&
+      (cut === undefined || (change !== cut && !supersededBefore(change, cut, name)))
+    );
+  });
   if (cut === undefined) {
-    return { ambiguous: sources.length !== assigned.length, replaced: false, values: assigned };
+    const allSources = [...sources, ...patternScan.extraSources];
+    const assigned = allSources.filter((each) => each.keys.length === 0).map((each) => each.value);
+    return {
+      ambiguous: patternScan.ambiguous || allSources.length !== assigned.length,
+      replaced: false,
+      sources: allSources,
+      values: assigned,
+    };
   }
-  const laterSources = sources.filter(
-    (each) =>
-      each.value !== cut.right &&
-      (each.value.pos > cut.pos || executionOwner(each.value) !== owner),
-  );
+  const laterSources = [
+    ...sources.filter((each) => {
+      return (
+        each.value !== cut.right &&
+        (each.value.pos > cut.pos || executionOwner(each.value) !== owner)
+      );
+    }),
+    ...patternScan.extraSources,
+  ];
   const later = laterSources.filter((each) => each.keys.length === 0).map((each) => each.value);
   return {
-    ambiguous: laterSources.length !== later.length,
+    ambiguous: patternScan.ambiguous || laterSources.length !== later.length,
     cut,
     replaced: true,
+    sources: [{ keys: [], value: cut.right }, ...laterSources],
     values: [cut.right, ...later],
   };
 }
@@ -302,9 +338,10 @@ function identifierFormData(name: Identifier, state: AnalysisState): boolean {
   if (isVariableDeclaration(selected.binding)) {
     return variableFormData(name, selected.binding, selected.keys, state);
   }
-  return isParameterDeclaration(selected.binding)
-    ? parameterFormData(name, selected.binding, selected.keys, state)
-    : false;
+  return (
+    isParameterDeclaration(selected.binding) &&
+    parameterFormData(name, selected.binding, selected.keys, state)
+  );
 }
 
 /** Whether a held, destructured, or defaulted variable read may hold `FormData`. */
@@ -327,7 +364,7 @@ function variableFormData(
   return defaulted || entries.some((entry) => heldFormData(entry, state));
 }
 
-/** Whether a parameter read (including parameter or pattern defaults) may hold `FormData`. */
+/** Whether a parameter read (including projected reassignments or defaults) may hold `FormData`. */
 function parameterFormData(
   name: Identifier,
   parameter: ParameterDeclaration,
@@ -335,15 +372,27 @@ function parameterFormData(
   state: AnalysisState,
 ): boolean {
   const resolved = parameterValues(name, parameter);
-  if (resolved.replaced) {
-    return resolved.values.some((each) => isFormData(each, state));
+  const postCutFormData = resolved.sources.some((each) =>
+    heldFormData({ keys: [...each.keys, ...keys], value: each.value }, state),
+  );
+  if (postCutFormData) {
+    return true;
+  }
+  if (resolved.replaced && resolved.ambiguous !== true) {
+    return false;
   }
   const paramDefault =
     parameter.initializer !== undefined &&
     heldFormData({ keys, value: parameter.initializer }, state);
   const patternDefault = keys.length > 0 && bindingDefaultFormData(name, parameter.name, state);
-  const assigned = framedAssignedSources(name).some((each) => heldFormData(each, state));
-  const typed = keys.length === 0 && namesType(parameter.type, FORM_DATA_NAMES);
+  const assigned = framedAssignedSources(name).some((each) =>
+    heldFormData({ keys: [...each.keys, ...keys], value: each.value }, state),
+  );
+  const typed =
+    (keys.length === 0 && namesType(parameter.type, FORM_DATA_NAMES)) ||
+    (keys.length > 0 &&
+      parameter.type !== undefined &&
+      namesLocalMemberType(parameter.type, keys, FORM_DATA_NAMES));
   return paramDefault || patternDefault || assigned || typed;
 }
 
@@ -353,16 +402,21 @@ function bindingDefaultFormData(
   root: BindingName,
   state: AnalysisState,
 ): boolean {
+  return bindingDefaultsOf(name, root).some((each) => isFormData(each, state));
+}
+
+/** Collects `BindingElement` default initializers for `name` within `root`. */
+function bindingDefaultsOf(name: Identifier, root: BindingName): readonly Expression[] {
+  const found: Expression[] = [];
   const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
       isBindingElement(node) &&
       isIdentifier(node.name) &&
       node.name.text === name.text &&
-      node.initializer !== undefined &&
-      isFormData(node.initializer, state)
+      node.initializer !== undefined
     ) {
-      return true;
+      found.push(node.initializer);
     }
     if (isObjectBindingPattern(node) || isArrayBindingPattern(node) || isBindingElement(node)) {
       node.forEachChild((child) => {
@@ -370,7 +424,7 @@ function bindingDefaultFormData(
       });
     }
   }
-  return false;
+  return found;
 }
 
 /** Whether a held value or destructured member path may evaluate to `FormData`. */
@@ -378,6 +432,23 @@ function heldFormData(entry: Held, state: AnalysisState): boolean {
   if (entry.keys.length === 0) {
     return isFormData(entry.value, state);
   }
-  const sources = framedObjectSources(entry.value, entry.keys) ?? [];
-  return sources.some((each) => each.keys.length === 0 && isFormData(each.value, state));
+  const resolved = inspectHeldPath(entry, entry.value, PROJECTION_CALLBACKS);
+  return resolved.typedFormData || resolved.expressions.some((each) => isFormData(each, state));
+}
+
+/** Whether assertions or binding types on `raw` / `value` name `FormData` at `keys`. */
+function typedAtMemberPath(raw: Expression, value: Expression, keys: readonly string[]): boolean {
+  const { assertions } = framedValueShape(raw);
+  if (
+    assertions.some((each) =>
+      namesLocalMemberType(each.type, [...each.keys, ...keys], FORM_DATA_NAMES),
+    )
+  ) {
+    return true;
+  }
+  const typed = frameTypeOf(value);
+  return (
+    typed !== undefined &&
+    namesLocalMemberType(typed.type, [...typed.keys, ...keys], FORM_DATA_NAMES)
+  );
 }
