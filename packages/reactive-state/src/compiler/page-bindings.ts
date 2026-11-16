@@ -3,11 +3,11 @@ import {
   type BindingName,
   type Expression,
   type FunctionDeclaration,
-  isAsExpression,
   isAwaitExpression,
   isBindingElement,
   isComputedPropertyName,
   isDecorator,
+  isElementAccessExpression,
   isFunctionLikeDeclaration,
   isGetAccessorDeclaration,
   isIdentifier,
@@ -16,14 +16,10 @@ import {
   isJsxExpression,
   isJsxSpreadAttribute,
   isMethodDeclaration,
-  isNonNullExpression,
   isObjectBindingPattern,
-  isParenthesizedExpression,
   isPropertyAccessExpression,
   isPropertyDeclaration,
-  isSatisfiesExpression,
   isSetAccessorDeclaration,
-  isTypeAssertion,
   isVariableStatement,
   type JsxAttributeLike,
   type JsxElement,
@@ -34,14 +30,18 @@ import {
   type Statement,
 } from 'typescript/ast';
 
+import { checkExpressionUses, type JsxSites, type ParamState } from './page-params.ts';
 import { unwrapped } from './page-shape.ts';
 import {
+  collectForwardedAliases,
   type Held,
+  memberAccess,
   namesRead,
   OTHER,
   type Scope,
   SEARCH,
   type Source,
+  uncast,
   valueOf,
 } from './page-values.ts';
 import { bindingIdentifiers, isTypeOnly } from './scope.ts';
@@ -52,50 +52,41 @@ import { isConstant } from './statements.ts';
  * and records every `await` it runs before returning its JSX (`page-render.ts`).
  */
 
-/** What a function of the page reads its props in, and what it awaits of them. */
-export interface Reading {
-  readonly scope: Scope;
+/** What a function of the page reads its props in, and what it awaits or taints of them. */
+export interface Reading extends ParamState {
   awaits: boolean;
-  searched: boolean;
   readonly destructured: string[];
 }
 
-/** `expression` without the parentheses, type assertions or `!` around it. */
-function uncast(expression: Expression): Expression {
-  let inner = expression;
-  while (
-    isParenthesizedExpression(inner) ||
-    isAsExpression(inner) ||
-    isSatisfiesExpression(inner) ||
-    isNonNullExpression(inner) ||
-    isTypeAssertion(inner)
-  ) {
-    inner = inner.expression;
-  }
-  return inner;
-}
-
 /**
- * The prop of the page's that `props.params`, `props.searchParams` reads of props whole: the one
- * handed under that name (`Held.handed`) — the page's own of the page's — none of another name.
+ * The prop of the page's that `props.params`, `props['searchParams']` reads of props whole: the one
+ * handed under that name (`Held.handed`) — none where the receiver is not props whole or the key is dynamic.
  */
 function propertySource(target: Expression, scope: Scope): Source | undefined {
-  if (!isPropertyAccessExpression(target)) {
+  const access = memberAccess(target);
+  if (access === undefined) {
     return undefined;
   }
-  const holder = uncast(target.expression);
-  if (!isIdentifier(holder)) {
-    return undefined;
-  }
-  const whole = scope.locals.get(holder.text);
-  const property = target.name.text;
-  const read = property === 'params' || property === 'searchParams';
-  return read && whole?.kind === 'source' && whole.source === 'props'
-    ? whole.handed?.get(property)
+  const whole = scope.locals.get(access.holder.text);
+  return whole?.kind === 'source' && whole.source === 'props'
+    ? whole.handed?.get(access.property)
     : undefined;
 }
 
-/** The prop of the page's an expression awaits: `await params`, `await props.searchParams`. */
+/** The prop of the page's an expression directly names without awaiting: `params`, `props['searchParams']`. */
+function directSource(expression: Expression, scope: Scope): Source | undefined {
+  const target = uncast(expression);
+  if (isIdentifier(target)) {
+    const held = scope.locals.get(target.text);
+    return held?.kind === 'source' && held.source !== 'props' ? held.source : undefined;
+  }
+  const optional =
+    (isPropertyAccessExpression(target) || isElementAccessExpression(target)) &&
+    target.questionDotToken !== undefined;
+  return optional ? undefined : propertySource(target, scope);
+}
+
+/** The prop of the page's an expression awaits: `await params`, `await props['searchParams']`. */
 function awaitedSource(expression: Expression, scope: Scope): Source | undefined {
   const value = uncast(expression);
   if (!isAwaitExpression(value)) {
@@ -270,10 +261,25 @@ function bindSearch(name: Node, scope: Scope): boolean {
   return true;
 }
 
+/** Binds `const { … } = await params`, recording each destructured route parameter and holder. */
+function bindParams(name: Node, reading: Reading): boolean {
+  const params = isObjectBindingPattern(name) ? paramsOf(name) : undefined;
+  if (params === undefined || params.size === 0) {
+    return false;
+  }
+  for (const [local, param] of params) {
+    reading.scope.locals.set(local, { kind: 'param', param });
+    reading.paramHolders.set(local, new Set([param]));
+    reading.destructured.push(param);
+  }
+  return true;
+}
+
 /** Holds what one declaration of a `const` declares; whether it is of a shape read. */
 function bindDeclaration(
   declaration: { readonly name: Node; readonly initializer?: Expression | undefined },
   reading: Reading,
+  jsx: JsxSites,
 ): boolean {
   const { initializer, name } = declaration;
   if (initializer === undefined) {
@@ -281,18 +287,27 @@ function bindDeclaration(
   }
   scanAwaits(name, reading);
   scanAwaits(initializer, reading);
-  const { locals } = reading.scope;
   const source = awaitedSource(initializer, reading.scope);
+  const direct =
+    source === undefined && isIdentifier(name)
+      ? directSource(initializer, reading.scope)
+      : undefined;
+  const forwarded = collectForwardedAliases(name, initializer, source, reading.paramHolders);
+  const okInitializer = checkExpressionUses(initializer, reading, jsx, {
+    allowedDynamicPropRead: isIdentifier(name) ? uncast(initializer) : undefined,
+    allowedParamsAwait: source === 'params' ? uncast(initializer) : undefined,
+    allowedParamsSource: direct === 'params' ? uncast(initializer) : undefined,
+    boundName: isIdentifier(name) ? name.text : undefined,
+    forwarded: forwarded.leaves,
+  });
+  for (const [alias, params] of forwarded.bindings) {
+    reading.paramHolders.set(alias, params);
+  }
+  if (!okInitializer || !checkExpressionUses(name, reading, jsx, { forwarded: forwarded.leaves })) {
+    return false;
+  }
   if (source === 'params') {
-    const params = isObjectBindingPattern(name) ? paramsOf(name) : undefined;
-    if (params === undefined || params.size === 0) {
-      return false;
-    }
-    for (const [local, param] of params) {
-      locals.set(local, { kind: 'param', param });
-      reading.destructured.push(param);
-    }
-    return true;
+    return bindParams(name, reading);
   }
   if (source === 'searchParams') {
     return bindSearch(name, reading.scope);
@@ -300,7 +315,14 @@ function bindDeclaration(
   if (!isIdentifier(name)) {
     return false;
   }
-  locals.set(name.text, valueOf(initializer, reading.scope));
+  if (direct !== undefined) {
+    reading.scope.locals.set(name.text, { kind: 'source', source: direct });
+    if (direct === 'searchParams') {
+      reading.searched = true;
+    }
+    return true;
+  }
+  reading.scope.locals.set(name.text, valueOf(initializer, reading.scope));
   return true;
 }
 
@@ -309,12 +331,13 @@ export function bindStatement(
   statement: Statement,
   reading: Reading,
   sourceFile: SourceFile,
+  jsx: JsxSites,
 ): boolean {
   return (
     isVariableStatement(statement) &&
     isConstant(statement, sourceFile) &&
     statement.declarationList.declarations.every((declaration) =>
-      bindDeclaration(declaration, reading),
+      bindDeclaration(declaration, reading, jsx),
     )
   );
 }

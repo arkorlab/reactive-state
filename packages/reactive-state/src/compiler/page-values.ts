@@ -1,9 +1,12 @@
 import {
   type Expression,
   type Identifier,
+  isAsExpression,
   isBinaryExpression,
   isClassDeclaration,
+  isBindingElement,
   isConditionalExpression,
+  isElementAccessExpression,
   isEnumDeclaration,
   isFunctionDeclaration,
   isIdentifier,
@@ -13,10 +16,17 @@ import {
   isJsxExpression,
   isJsxSpreadAttribute,
   isNamespaceImport,
+  isNonNullExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectLiteralExpression,
+  isParenthesizedExpression,
+  isPropertyAccessExpression,
   isPropertyAssignment,
+  isSatisfiesExpression,
   isShorthandPropertyAssignment,
   isStringLiteral,
+  isTypeAssertion,
   isVariableStatement,
   type JsxAttributeLike,
   type JsxElement,
@@ -31,6 +41,7 @@ import { isLiteral, unwrapped } from './page-shape.ts';
 import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
 import { byCodeUnits } from './splice.ts';
 import { isConstant } from './statements.ts';
+import { useOf } from './uses.ts';
 
 /**
  * What the values a page hands its root are, read off the page's syntax: a param of the route as
@@ -71,6 +82,45 @@ export interface Scope {
   readonly module: ReadonlyMap<string, 'constant' | 'module'>;
   /** Every name the function declares, at any depth: one it does not hold at its top level is none to read. */
   readonly declared: ReadonlySet<string>;
+}
+
+/** `expression` without the parentheses, type assertions or `!` around it. */
+export function uncast(expression: Expression): Expression {
+  let inner = expression;
+  while (
+    isParenthesizedExpression(inner) ||
+    isAsExpression(inner) ||
+    isSatisfiesExpression(inner) ||
+    isNonNullExpression(inner) ||
+    isTypeAssertion(inner)
+  ) {
+    inner = inner.expression;
+  }
+  return inner;
+}
+
+/** The property name a literal bracket key names: `'searchParams'`, `` `params` ``, `0`. */
+export function literalKey(expression: Expression): string | undefined {
+  const inner = uncast(expression);
+  return isStringLiteral(inner) || isNoSubstitutionTemplateLiteral(inner) || isNumericLiteral(inner)
+    ? inner.text
+    : undefined;
+}
+
+/** What a dot or literal-bracket expression reads on an identifier: `props.params`, `props['params']`. */
+export function memberAccess(
+  target: Node,
+): { readonly holder: Identifier; readonly property: string } | undefined {
+  if (isPropertyAccessExpression(target) && isIdentifier(target.name)) {
+    const holder = uncast(target.expression);
+    return isIdentifier(holder) ? { holder, property: target.name.text } : undefined;
+  }
+  if (isElementAccessExpression(target)) {
+    const holder = uncast(target.expression);
+    const property = literalKey(target.argumentExpression);
+    return property !== undefined && isIdentifier(holder) ? { holder, property } : undefined;
+  }
+  return undefined;
 }
 
 /** The names an import declares. */
@@ -148,6 +198,20 @@ export function namesRead(node: Node): readonly Identifier[] {
   return read;
 }
 
+/** Whether a read of whole `props` reads its `searchParams` member by a static name. */
+function readsWholeSearch(
+  identifier: Identifier,
+  handed: ReadonlyMap<string, Source> | undefined,
+): boolean {
+  const { at, parent } = useOf(identifier);
+  const access =
+    (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
+    parent.expression === at
+      ? memberAccess(parent)
+      : undefined;
+  return access !== undefined && handed?.get(access.property) === 'searchParams';
+}
+
 /** What a name `identifier` reads holds: the search params', something else; none for the file's and the language's. */
 function readOf(identifier: Identifier, scope: Scope): 'other' | 'search' | undefined {
   const held = scope.locals.get(identifier.text);
@@ -159,6 +223,9 @@ function readOf(identifier: Identifier, scope: Scope): 'other' | 'search' | unde
   }
   if (held.kind === 'search' || (held.kind === 'source' && held.source === 'searchParams')) {
     return 'search';
+  }
+  if (held.kind === 'source' && held.source === 'props') {
+    return readsWholeSearch(identifier, held.handed) ? 'search' : 'other';
   }
   return held.kind === 'constant' ? undefined : 'other';
 }
@@ -190,7 +257,7 @@ export interface ElementProps {
 }
 
 /** The objects a conditional spread of props is one of: `cond ? { a } : {}`, `cond && { a }`. */
-function spreadObjects(expression: Expression): readonly Expression[] {
+export function spreadObjects(expression: Expression): readonly Expression[] {
   const objects: Expression[] = [];
   const pending = [expression];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
@@ -319,4 +386,105 @@ export function propsOfAll(each: readonly ElementProps[]): {
     }
   }
   return { given: [...given].toSorted(byCodeUnits), props: Object.fromEntries(mapped) };
+}
+
+const FORWARDING_BINARY: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/** Collects the object literals spread onto any root JSX element (`<Root {...{ slug }} />`). */
+export function rootSpreadObjectsOf(
+  roots: readonly (JsxElement | JsxSelfClosingElement)[],
+): ReadonlySet<Node> {
+  const objects = new Set<Node>();
+  for (const element of roots) {
+    const attributes = isJsxElement(element)
+      ? element.openingElement.attributes
+      : element.attributes;
+    for (const attribute of attributes.properties) {
+      if (!isJsxSpreadAttribute(attribute)) continue;
+      for (const object of spreadObjects(attribute.expression)) {
+        if (isObjectLiteralExpression(object)) {
+          objects.add(object);
+        }
+      }
+    }
+  }
+  return objects;
+}
+
+/** Leaf param-holder identifiers that `expression` may forward directly as its value (`slug`, `c ? slug : x`). */
+function recordForwarded(
+  target: string,
+  expression: Expression,
+  paramHolders: ReadonlyMap<string, ReadonlySet<string>>,
+  into: { readonly bindings: Map<string, ReadonlySet<string>>; readonly leaves: Set<Identifier> },
+): void {
+  const params = new Set<string>();
+  const pending: Expression[] = [expression];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const inner = uncast(each);
+    if (isConditionalExpression(inner)) {
+      pending.push(inner.whenTrue, inner.whenFalse);
+    } else if (isBinaryExpression(inner) && FORWARDING_BINARY.has(inner.operatorToken.kind)) {
+      pending.push(inner.left, inner.right);
+    } else if (isIdentifier(inner)) {
+      const held = into.bindings.get(inner.text) ?? paramHolders.get(inner.text);
+      if (held !== undefined) {
+        into.leaves.add(inner);
+        for (const param of held) {
+          params.add(param);
+        }
+      }
+    }
+  }
+  if (params.size > 0) {
+    into.bindings.set(target, params);
+  }
+}
+
+/** Collects param aliases forwarded by `const x = …` or `const { q = … } = await searchParams`. */
+export function collectForwardedAliases(
+  name: Node,
+  initializer: Expression,
+  awaited: Source | undefined,
+  paramHolders: ReadonlyMap<string, ReadonlySet<string>>,
+): {
+  readonly bindings: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly leaves: ReadonlySet<Identifier>;
+} {
+  const into = { bindings: new Map<string, ReadonlySet<string>>(), leaves: new Set<Identifier>() };
+  if (awaited === undefined && isIdentifier(name)) {
+    recordForwarded(name.text, initializer, paramHolders, into);
+    return into;
+  }
+  if (awaited !== 'searchParams') {
+    return into;
+  }
+  const visit = (each: Node): void => {
+    if (isBindingElement(each) && isIdentifier(each.name) && each.initializer !== undefined) {
+      recordForwarded(each.name.text, each.initializer, paramHolders, into);
+    }
+    each.forEachChild(visit);
+  };
+  visit(name);
+  return into;
+}
+
+/** Replaces any local `{ kind: 'param' }` binding whose route param was tainted with `OTHER`. */
+export function applyParamTaints(
+  locals: Map<string, Held>,
+  taintedParams: ReadonlySet<string>,
+  taintedAll: boolean,
+): void {
+  if (!taintedAll && taintedParams.size === 0) {
+    return;
+  }
+  for (const [local, held] of locals) {
+    if (held.kind === 'param' && (taintedAll || taintedParams.has(held.param))) {
+      locals.set(local, OTHER);
+    }
+  }
 }
