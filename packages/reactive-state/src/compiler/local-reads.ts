@@ -3,6 +3,7 @@ import {
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isComputedPropertyName,
   isElementAccessExpression,
   isIdentifier,
   isNewExpression,
@@ -11,6 +12,8 @@ import {
   isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
   isStringLiteral,
   isTemplateExpression,
   isVariableDeclaration,
@@ -19,8 +22,8 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, patternKey } from './code-globals.ts';
-import { framedMemberNames } from './framed-keys.ts';
+import { globalPathOf, isTakenApart, patternKey } from './code-globals.ts';
+import { framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { declarationOf, namesType, parameterOf } from './framed.ts';
 
 /**
@@ -95,17 +98,51 @@ function readNames(node: Node): readonly string[] {
   if (framed !== undefined) {
     return framed;
   }
-  const single =
-    (isElementAccessExpression(node) ? staticText(node.argumentExpression) : undefined) ??
-    patternKey(node);
+  const computed = computedReadKey(node);
+  if (computed !== undefined) {
+    const resolved = framedKeyNames(computed);
+    if (resolved !== undefined) {
+      return resolved;
+    }
+    const folded = staticText(computed);
+    if (folded !== undefined) {
+      return [folded];
+    }
+  }
+  const single = patternKey(node);
   return single === undefined ? [] : [single];
 }
 
-/** The literal text `node` writes of strings, templates, and string additions alone; none otherwise. */
+/** Key expression of a bracket read or a computed object binding or assignment-pattern entry. */
+function computedReadKey(node: Node): Expression | undefined {
+  if (isElementAccessExpression(node)) {
+    return node.argumentExpression;
+  }
+  if (
+    isBindingElement(node) &&
+    node.dotDotDotToken === undefined &&
+    isObjectBindingPattern(node.parent) &&
+    node.propertyName !== undefined &&
+    isComputedPropertyName(node.propertyName)
+  ) {
+    return node.propertyName.expression;
+  }
+  return isPropertyAssignment(node) &&
+    isTakenApart(node.parent) &&
+    isComputedPropertyName(node.name)
+    ? node.name.expression
+    : undefined;
+}
+
+/** The literal text `node` writes of strings, templates, constants, and string additions alone. */
 function staticText(node: Expression): string | undefined {
   const value = unwrapped(node);
   if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) {
     return value.text;
+  }
+  if (isIdentifier(value)) {
+    const names = framedKeyNames(value);
+    return names?.length === 1 ? names[0] : undefined;
   }
   if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.PlusToken) {
     const left = staticText(value.left);
@@ -179,7 +216,10 @@ function toStringReceiver(node: Node): Expression | undefined {
       ? holder.initializer
       : undefined;
   }
-  if (!isObjectLiteralExpression(node.parent)) {
+  if (
+    (!isPropertyAssignment(node) && !isShorthandPropertyAssignment(node)) ||
+    !isObjectLiteralExpression(node.parent)
+  ) {
     return undefined;
   }
   const assignment = node.parent.parent;
