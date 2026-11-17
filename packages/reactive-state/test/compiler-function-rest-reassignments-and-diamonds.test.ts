@@ -1,5 +1,7 @@
 import {
+  isBindingElement,
   isIdentifier,
+  isObjectBindingPattern,
   isVariableDeclaration,
   type Node,
   type VariableDeclaration,
@@ -48,6 +50,21 @@ function buildRestCopyDiamond(): string {
     lines.push(`const m${String(i)} = flag ? m${String(i - 1)} : m${String(i - 1)};`);
   }
   return lines.join(' ');
+}
+
+function buildBranchingRestExclusionChain(levels: number, headEntries: string): string {
+  const keys = Array.from({ length: levels }, (_, index) => `k${String(index + 1)}: 0`).join(', ');
+  const steps: string[] = [`const { ...m0 } = { ${headEntries}, ${keys} };`];
+  for (let index = 1; index <= levels; index += 1) {
+    const key = `k${String(index)}`;
+    const prev = `m${String(index - 1)}`;
+    const rest = `r${String(index)}`;
+    const next = `m${String(index)}`;
+    steps.push(
+      `const { ${key}: _omit${String(index)}, ...${rest} } = ${prev}; const ${next} = flag ? ${prev} : ${rest};`,
+    );
+  }
+  return steps.join(' ');
 }
 
 const CASES = [
@@ -269,6 +286,72 @@ const CASES = [
     reason: undefined,
     source: `function named() {} export function run(flag: boolean) { const { swap: _s, ...m0 } = { swap() { (this as { pick?: () => void }).pick = named; }, keep() {} }; ${buildRestCopyDiamond()} const helpers = { ...m24, pick() {} }; return helpers.pick.name; }`,
   },
+  {
+    id: 'branching-rest-exclusion-chain-20-levels-overflow-conservatively-refuses-method-name',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: NAME_REASON,
+    source: `export function run(flag: boolean) { ${buildBranchingRestExclusionChain(20, 'pick() {}')} const helpers = { ...m20 }; return helpers.pick.name; }`,
+  },
+  {
+    id: 'branching-rest-exclusion-chain-20-levels-overflow-conservatively-refuses-method-source',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: SOURCE_REASON,
+    source: `export function run(flag: boolean) { ${buildBranchingRestExclusionChain(20, 'pick() {}')} const helpers = { ...m20 }; return String(helpers.pick); }`,
+  },
+  {
+    id: 'branching-rest-exclusion-chain-20-levels-overflow-retains-spread-this-writer',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: NAME_REASON,
+    source: `function named() {} export function run(flag: boolean) { ${buildBranchingRestExclusionChain(20, 'swap() { (this as { pick?: () => void }).pick = named; }')} const helpers = { ...m20, pick() {} }; (helpers as { swap?: () => void }).swap?.(); return helpers.pick.name; }`,
+  },
+  {
+    id: 'branching-rest-exclusion-chain-within-budget-preserves-entry-method-name',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: undefined,
+    source: `export function run(flag: boolean) { ${buildBranchingRestExclusionChain(3, 'pick() {}')} const helpers = { ...m3 }; return helpers.pick.name; }`,
+  },
+  {
+    id: 'branching-rest-exclusion-chain-within-budget-refuses-method-source-read',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: SOURCE_REASON,
+    source: `export function run(flag: boolean) { ${buildBranchingRestExclusionChain(3, 'pick() {}')} const helpers = { ...m3 }; return String(helpers.pick); }`,
+  },
+  {
+    id: 'branching-rest-exclusion-chain-within-budget-refuses-renamed-function-name',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: NAME_REASON,
+    source: `function named() {} export function run(flag: boolean) { ${buildBranchingRestExclusionChain(3, 'pick: named')} const helpers = { ...m3 }; return helpers.pick.name; }`,
+  },
+  {
+    id: 'branching-rest-exclusion-chain-within-budget-exact-excluded-renamed-key-accepted',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: undefined,
+    source:
+      "function named() {} export function run(flag: boolean, key: string) { const { ...m0 } = { pick: named, k1: 0, keep: 'ok' }; const { k1: _k1, ...r1 } = m0; const m1 = flag ? m0 : r1; const { pick: _p, ...m2 } = m1; const helpers = { ...m2, safe() {} }; return (helpers as Record<string, () => void>)[key]!.name; }",
+  },
+  {
+    id: 'branching-rest-exclusion-chain-within-budget-exact-excluded-this-writer-accepted',
+    maxElapsedMs: 50,
+    maxInitReads: 8,
+    reason: undefined,
+    source:
+      'function named() {} export function run(flag: boolean) { const { ...m0 } = { swap() { (this as { pick?: () => void }).pick = named; }, k1: 0, k2: 0 }; const { k1: _k1, ...r1 } = m0; const m1 = flag ? m0 : r1; const { swap: _s, ...m2 } = m1; const helpers = { ...m2, pick() {} }; return helpers.pick.name; }',
+  },
+  {
+    id: 'mutated-const-rest-copy-spread-into-destination-refuses-overwritten-entry-name',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: NAME_REASON,
+    source:
+      'function named() {} export function run() { const { ...m0 } = { pick() {} }; (m0 as { pick: () => void }).pick = named; const helpers = { ...m0 }; return helpers.pick.name; }',
+  },
 ] as const;
 
 /** Finds `const m0 = ...` inside `root` when measuring diamond scaling. */
@@ -278,7 +361,19 @@ function findRootDeclaration(root: Node): VariableDeclaration | undefined {
     if (found !== undefined) {
       return;
     }
-    if (isVariableDeclaration(node) && isIdentifier(node.name) && node.name.text === 'm0') {
+    if (
+      isVariableDeclaration(node) &&
+      ((isIdentifier(node.name) && node.name.text === 'm0') ||
+        (isObjectBindingPattern(node.name) &&
+          node.name.elements.some((el) => {
+            return (
+              isBindingElement(el) &&
+              el.name !== undefined &&
+              isIdentifier(el.name) &&
+              el.name.text === 'm0'
+            );
+          })))
+    ) {
       found = node;
       return;
     }
@@ -288,8 +383,9 @@ function findRootDeclaration(root: Node): VariableDeclaration | undefined {
   return found;
 }
 
-/** Runs `functionRead` over `root` while counting `m0.initializer` reads (capped at `READ_CUTOFF`). */
+/** Runs `functionRead` over `root` while timing execution and counting `m0.initializer` reads. */
 function evaluateModule(root: Node): {
+  readonly elapsedMs: number;
   readonly found: string | undefined;
   readonly initReads: number;
 } {
@@ -318,8 +414,14 @@ function evaluateModule(root: Node): {
       node.forEachChild(visit);
     }
   };
+  const startMs = performance.now();
   visit(root);
-  return { found, initReads };
+  const elapsedMs = performance.now() - startMs;
+  return { elapsedMs, found, initReads };
+}
+
+function rowBudgetMs(row: (typeof CASES)[number]): number {
+  return 'maxElapsedMs' in row ? row.maxElapsedMs : 500;
 }
 
 describe('array and object rest reassignments and memoized conditional alias diamonds', () => {
@@ -333,11 +435,12 @@ describe('array and object rest reassignments and memoized conditional alias dia
     api[Symbol.dispose]();
   });
 
-  it.each(CASES)('$id', ({ maxInitReads, reason, source }) => {
-    using parsed = parseModule(api, 'function-rest-and-diamonds.ts', source);
-    const { found, initReads } = evaluateModule(parsed.sourceFile);
+  it.each(CASES)('$id', (row) => {
+    using parsed = parseModule(api, 'function-rest-and-diamonds.ts', row.source);
+    const { elapsedMs, found, initReads } = evaluateModule(parsed.sourceFile);
 
-    expect(found).toBe(reason);
-    expect(initReads).toBeLessThanOrEqual(maxInitReads);
+    expect(found).toBe(row.reason);
+    expect(initReads).toBeLessThanOrEqual(row.maxInitReads);
+    expect(elapsedMs).toBeLessThan(rowBudgetMs(row));
   });
 });

@@ -28,6 +28,11 @@ import {
   type ScanContext,
   withBranch,
 } from './function-property-resolution.ts';
+import {
+  buildRestCopyTableScan,
+  type RestTableCallbacks,
+  type RestTableScan,
+} from './function-rest-table-scans.ts';
 
 export {
   combineBranchKinds,
@@ -45,13 +50,7 @@ export {
 } from './function-property-resolution.ts';
 
 /** Surviving static-key classifications and spread/dynamic uncertainty across a table scan. */
-interface TableScan {
-  dynamicEntry: boolean;
-  readonly entries: Map<string, EntryKind>;
-  readonly optionalKeys: Set<string>;
-  stickyRenamed: boolean;
-  unverified: boolean;
-}
+type TableScan = RestTableScan;
 
 interface PostWriteState {
   readonly allWrites: boolean;
@@ -72,21 +71,17 @@ export function hasScanKind(entries: ReadonlyMap<string, EntryKind>, target: Ent
   return false;
 }
 
-/** Classifies a dynamic lookup across all entries of a written object literal. */
+/** Classifies a dynamic lookup across all entries of a written object literal or rest copy. */
 export function dynamicObjectEntryKind(holder: Expression, context: ScanContext): EntryKind {
-  const resolved = holderObject(holder, context);
-  if (resolved === undefined) {
+  const scan = scanObjectOrRestHolder(holder, context);
+  if (scan === undefined) {
     return 'unknown';
   }
-  return tableFunctionKind(resolved, context) ?? 'unknown';
+  return tableFunctionKind(scan) ?? 'unknown';
 }
 
-/** Classifies a dynamic lookup across all entries of `resolved`. */
-function tableFunctionKind(
-  resolved: ResolvedObject,
-  context: ScanContext,
-): FunctionKind | undefined {
-  const scan = scanResolvedObject(resolved, context);
+/** Classifies a dynamic lookup across all entries of `scan`. */
+function tableFunctionKind(scan: TableScan): FunctionKind | undefined {
   if (scan.stickyRenamed || hasScanKind(scan.entries, 'renamed')) {
     return 'renamed';
   }
@@ -115,11 +110,10 @@ export function scanResolvedObject(resolved: ResolvedObject, context: ScanContex
 
 /** Classifies static member `name` on `holder`, treating omitted clean own keys as `undefined`. */
 export function memberEntryKind(holder: Expression, name: string, context: ScanContext): EntryKind {
-  const resolved = holderObject(holder, context);
-  if (resolved === undefined) {
+  const scan = scanObjectOrRestHolder(holder, context);
+  if (scan === undefined) {
     return 'unknown';
   }
-  const scan = scanResolvedObject(resolved, context);
   const entry = scan.entries.get(name);
   if (entry !== undefined) {
     return entry;
@@ -262,10 +256,7 @@ function recordObjectAssignSource(source: Expression, scan: TableScan, context: 
     scan.stickyRenamed = true;
     degradeExistingEntries(scan.entries, 'renamed');
   }
-  const inner = withBranch(context, (branch) => {
-    const spread = holderObject(source, branch);
-    return spread === undefined ? undefined : scanResolvedObject(spread, branch);
-  });
+  const inner = withBranch(context, (branch) => scanObjectOrRestHolder(source, branch));
   if (inner === undefined) {
     return;
   }
@@ -326,10 +317,7 @@ function mergeSpreadTable(source: Expression, scan: TableScan, context: ScanCont
     context,
     (branch) => branch.mutableSpreadReachesFunction?.(source, branch) === true,
   );
-  const inner = withBranch(context, (branch) => {
-    const spread = holderObject(source, branch);
-    return spread === undefined ? undefined : scanResolvedObject(spread, branch);
-  });
+  const inner = withBranch(context, (branch) => scanObjectOrRestHolder(source, branch));
   if (inner === undefined) {
     scan.unverified = true;
     degradeExistingEntries(scan.entries, reachesMutable ? 'renamed' : 'unknown');
@@ -446,4 +434,22 @@ function isAnonymousDefinition(node: Expression): boolean {
     return true;
   }
   return (isFunctionExpression(node) || isClassExpression(node)) && node.name === undefined;
+}
+
+const REST_TABLE_CALLBACKS: RestTableCallbacks = {
+  classifyAssignedNode,
+  degradeExistingEntries,
+  hasScanKind,
+  omittedKeyKind,
+  scanObjectLiteral,
+  scanObjectOrRestHolder,
+};
+
+/** Resolves `holder` as either a direct/projected object literal or a bounded object-rest copy table. */
+function scanObjectOrRestHolder(holder: Expression, context: ScanContext): TableScan | undefined {
+  const resolved = withBranch(context, (branch) => holderObject(holder, branch));
+  if (resolved !== undefined) {
+    return scanResolvedObject(resolved, context);
+  }
+  return buildRestCopyTableScan(holder, context, REST_TABLE_CALLBACKS);
 }

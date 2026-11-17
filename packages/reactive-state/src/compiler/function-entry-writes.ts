@@ -27,6 +27,7 @@ import {
   candidateObjects,
   literalElementKey,
   staticArgumentKey,
+  type VariableWriteMap,
 } from './function-candidate-objects.ts';
 import {
   type AssignedCallable,
@@ -80,6 +81,11 @@ const WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
 /** Static key of an element access expression, including string, template and numeric literals. */
 export function elementEntryKey(node: ElementAccessExpression): string | undefined {
   return staticElementKey(node);
+}
+
+/** Returns cached post-declaration variable assignment expressions indexed across `file`. */
+export function fileVariableWrites(file: SourceFile): VariableWriteMap {
+  return fileCallableIndex(file).variableWrites;
 }
 
 /** Returns cached post-declaration writes, member assignments, and `Object.assign` sources for `object`. */

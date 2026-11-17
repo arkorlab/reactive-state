@@ -44,7 +44,7 @@ import {
   selectMemberObjects,
   type VariableWriteMap,
 } from './function-candidate-objects.ts';
-import { type ObjectRestCopy, objectRestCopies } from './function-object-rest-copies.ts';
+import { type ObjectRestCopy, resolveObjectRestCopies } from './function-object-rest-copies.ts';
 import { staticElementKey } from './function-this-writes.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -63,6 +63,7 @@ export interface FileCallableIndex {
 
 /** Surviving data callables and own accessors that can run with `this` bound to an object literal. */
 export interface ObjectCallables {
+  readonly allWritesUncertain?: boolean | undefined;
   readonly dynamic: ReadonlySet<Node>;
   readonly named: ReadonlyMap<string, ReadonlySet<Node>>;
   readonly ownAccessors: ReadonlySet<Node>;
@@ -77,6 +78,7 @@ export interface CallableTraversal {
   ) => ObjectCallables;
   hitCycle: boolean;
   readonly index: FileCallableIndex;
+  truncatedRestObjects?: boolean | undefined;
 }
 
 /** Shared lookup context while resolving callables across expressions and patterns. */
@@ -124,6 +126,9 @@ function memoizedCallableLookup(
   if (childTraversal.hitCycle) {
     context.traversal.hitCycle = true;
   }
+  if (childTraversal.truncatedRestObjects === true) {
+    context.traversal.truncatedRestObjects = true;
+  }
   if (branch.hitCycle || childTraversal.hitCycle) {
     context.hitCycle = true;
   } else {
@@ -168,11 +173,14 @@ export function traversalObjectRestCopies(
   traversal: CallableTraversal,
 ): readonly ObjectRestCopy[] {
   const cycle: CandidateCycleState = { hitCycle: false, seen: new Set() };
-  const copies = objectRestCopies(source, traversal.index.variableWrites, cycle);
+  const resolved = resolveObjectRestCopies(source, traversal.index.variableWrites, cycle);
   if (cycle.hitCycle) {
     traversal.hitCycle = true;
   }
-  return copies;
+  if (resolved.truncatedObjects) {
+    traversal.truncatedRestObjects = true;
+  }
+  return resolved.copies;
 }
 
 /** Resolves distinct non-arrow callables reachable from `value` across aliases, branches, and reads. */

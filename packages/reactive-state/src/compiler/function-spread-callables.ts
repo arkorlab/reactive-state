@@ -56,8 +56,10 @@ export function callableWritesOnObject(
     index,
   };
   const callables = objectCallables(object, rootTraversal);
+  const uncertain =
+    callables.allWritesUncertain === true || rootTraversal.truncatedRestObjects === true;
   const candidates = collectAllCallables(callables);
-  if (candidates.length === 0) {
+  if (!uncertain && candidates.length === 0) {
     return EMPTY_CALLABLE_WRITES;
   }
   const resolveExpr = (value: Expression): readonly Node[] => {
@@ -69,7 +71,7 @@ export function callableWritesOnObject(
     };
     return expressionCallables(value, { hitCycle: false, seen: new Set(), traversal });
   };
-  let all = false;
+  let all = uncertain;
   const keys = new Set<string>();
   const untrackedKeys = new Set<string>();
   const assignments: ThisPropertyAssignment[] = [];
@@ -132,7 +134,12 @@ function objectCallables(
     recordPropertyCallables(property, local, { dynamic, named, ownAccessors });
   }
   applyAssignedCallables(object, local, { dynamic, named });
-  const result: ObjectCallables = { dynamic, named, ownAccessors };
+  const result: ObjectCallables = {
+    allWritesUncertain: local.truncatedRestObjects === true,
+    dynamic,
+    named,
+    ownAccessors,
+  };
   if (local.hitCycle) {
     traversal.hitCycle = true;
   } else {
@@ -208,10 +215,15 @@ function mergeSpreadCallables(
   state: { readonly dynamic: Set<Node>; readonly named: Map<string, Set<Node>> },
 ): void {
   for (const spreadObj of traversalCandidateObjects(source, traversal)) {
-    copyObjectCallables(objectCallables(spreadObj, traversal), undefined, state);
+    copyObjectCallables(objectCallables(spreadObj, traversal), undefined, traversal, state);
   }
   for (const copy of traversalObjectRestCopies(source, traversal)) {
-    copyObjectCallables(objectCallables(copy.object, traversal), copy.excludedKeys, state);
+    copyObjectCallables(
+      objectCallables(copy.object, traversal),
+      copy.excludedKeys,
+      traversal,
+      state,
+    );
   }
 }
 
@@ -219,8 +231,12 @@ function mergeSpreadCallables(
 function copyObjectCallables(
   inner: ObjectCallables,
   excludedKeys: ReadonlySet<string> | undefined,
+  traversal: CallableTraversal,
   state: { readonly dynamic: Set<Node>; readonly named: Map<string, Set<Node>> },
 ): void {
+  if (inner.allWritesUncertain === true) {
+    traversal.truncatedRestObjects = true;
+  }
   for (const callable of inner.dynamic) {
     state.dynamic.add(callable);
   }
@@ -240,6 +256,9 @@ function mergePrototypeCallables(
   const protoObjects = traversalCandidateObjects(proto, traversal);
   for (const protoObj of protoObjects) {
     const inner = objectCallables(protoObj, traversal);
+    if (inner.allWritesUncertain === true) {
+      traversal.truncatedRestObjects = true;
+    }
     for (const callable of inner.dynamic) {
       dynamic.add(callable);
     }
