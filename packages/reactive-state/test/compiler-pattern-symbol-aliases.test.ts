@@ -162,6 +162,51 @@ const CASES = [
     symbolName: undefined,
     writtenRoot: 'pattern',
   },
+  {
+    id: 'destructured-sibling-plain-overwrite-preserves-symbol-replace',
+    source: [
+      'const pattern = /a/y;',
+      'export function check(text: string) {',
+      "  let { first, second }: { first: string; second: symbol } = { first: 'plain', second: Symbol.search };",
+      '  second = Symbol.replace;',
+      "  first = 'plain';",
+      '  void first;',
+      '  return (pattern as unknown as Record<symbol, (input: string) => unknown>)[second](text);',
+      '}',
+    ].join('\n'),
+    symbolName: 'Symbol.replace',
+    writtenRoot: 'pattern',
+  },
+  {
+    id: 'array-destructured-sibling-plain-overwrite-preserves-symbol-match',
+    source: [
+      'const pattern = /a/y;',
+      'export function check(text: string) {',
+      '  let [first, second]: [number, symbol] = [0, Symbol.search];',
+      '  second = Symbol.match;',
+      '  first = 1;',
+      '  void first;',
+      '  return (pattern as unknown as Record<symbol, (input: string) => unknown>)[second](text);',
+      '}',
+    ].join('\n'),
+    symbolName: 'Symbol.match',
+    writtenRoot: 'pattern',
+  },
+  {
+    id: 'destructured-same-binding-plain-overwrite-clears-symbol-replace-pin',
+    source: [
+      'const pattern = { plain(text: string) { return text; } };',
+      'export function check(text: string) {',
+      "  let { first, second }: { first: string; second: symbol | 'plain' } = { first: 'init', second: Symbol.search };",
+      '  void first;',
+      '  second = Symbol.replace;',
+      "  second = 'plain';",
+      '  return (pattern as unknown as Record<PropertyKey, (input: string) => unknown>)[second](text);',
+      '}',
+    ].join('\n'),
+    symbolName: undefined,
+    writtenRoot: undefined,
+  },
 ];
 
 /** The final call expression in `file` (inside `check`). */

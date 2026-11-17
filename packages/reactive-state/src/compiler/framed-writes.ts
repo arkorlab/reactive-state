@@ -61,7 +61,7 @@ import {
   assignmentPatternSources,
   iteratedAssignmentSources,
 } from './framed-assignment-patterns.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { type FrameDeclaration, frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { isNamedFunction, madeWithin, runsItself } from './framed-recursion.ts';
@@ -82,7 +82,7 @@ export function framedAssignedSources(name: Identifier): readonly AssignedFrameS
   if (sites.length === 0) return [];
   const values: AssignedFrameSource[] = [];
   const owner = executionOwner(name);
-  const cutoff = dataOverwrite(name, owner, sites);
+  const cutoff = dataOverwrite(name, owner, declared, sites);
   for (const node of sites) {
     if (!overwrittenSource(node, cutoff, owner) && framedPossibleBranch(node))
       values.push(...assignedAt(node, name, declared, { owner, cutoff }));
@@ -498,17 +498,18 @@ function executionOwner(node: Node): Node {
 function dataOverwrite(
   name: Identifier,
   owner: Node,
+  declared: FrameDeclaration,
   sites: readonly AssignmentSite[],
 ): Node | undefined {
   for (let at: Node = name; at !== owner; at = at.parent)
     if (loopBody(at) !== undefined) return undefined;
   let at: Node = name;
   while (!isBlock(at.parent) && !isSourceFile(at.parent)) at = at.parent;
-  const container = at.parent;
+  const query = { beforePos: at.pos, container: at.parent, declared, name, owner };
   let last: Node | undefined;
   let lastPos = -1;
   for (const site of sites) {
-    const statementPos = directBlockOverwritePos(site, container, at.pos, owner);
+    const statementPos = directBlockOverwritePos(site, query);
     if (
       statementPos !== undefined &&
       statementPos > lastPos &&
@@ -522,24 +523,31 @@ function dataOverwrite(
   return last;
 }
 
-/** Position of an earlier plain `id = rhs` statement in `container` owned by `owner`, if any. */
+/** Position of an earlier plain `id = rhs` statement for `query.name` in `query.container`, if any. */
 function directBlockOverwritePos(
   site: AssignmentSite,
-  container: Node,
-  beforePos: number,
-  owner: Node,
+  query: {
+    readonly beforePos: number;
+    readonly container: Node;
+    readonly declared: FrameDeclaration;
+    readonly name: Identifier;
+    readonly owner: Node;
+  },
 ): number | undefined {
+  if (!isBinaryExpression(site) || site.operatorToken.kind !== SyntaxKind.EqualsToken)
+    return undefined;
+  const left = unwrapped(site.left);
   if (
-    !isBinaryExpression(site) ||
-    site.operatorToken.kind !== SyntaxKind.EqualsToken ||
-    !isIdentifier(site.left) ||
-    executionOwner(site) !== owner
+    !isIdentifier(left) ||
+    left.text !== query.name.text ||
+    frameDeclarationOf(left) !== query.declared ||
+    executionOwner(site) !== query.owner
   )
     return undefined;
   let current: Node = site;
-  while (current.parent !== container && !isSourceFile(current)) current = current.parent;
-  return current.parent === container &&
-    current.pos < beforePos &&
+  while (current.parent !== query.container && !isSourceFile(current)) current = current.parent;
+  return current.parent === query.container &&
+    current.pos < query.beforePos &&
     isExpressionStatement(current) &&
     unwrapped(current.expression) === site
     ? current.pos
