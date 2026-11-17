@@ -18,6 +18,7 @@ import { framedNativeConstructor } from './framed-sources.ts';
 
 /** What a native form makes its answer of: the operands, and whether later ones replace earlier. */
 export interface RecordForm {
+  readonly node: Expression;
   readonly operands: readonly Expression[];
   readonly ordered: boolean;
 }
@@ -60,15 +61,16 @@ export function framedRecordForm(node: Expression): RecordForm | undefined {
   const value = unwrapped(node);
   if (isNewExpression(value)) {
     return framedNativeConstructor(value.expression, FIRST)
-      ? { operands: given(value.arguments?.slice(0, 1) ?? []), ordered: false }
+      ? { node: value, operands: given(value.arguments?.slice(0, 1) ?? []), ordered: false }
       : undefined;
   }
   if (!isCallExpression(value)) return undefined;
   const callee = unwrapped(value.expression);
   if (framedNativeConstructor(callee, ASSIGN))
-    return { operands: given(value.arguments), ordered: true };
+    return { node: value, operands: given(value.arguments), ordered: true };
   if (framedNativeConstructor(callee, FIRST))
     return {
+      node: value,
       operands: [...given(value.arguments.slice(0, 1)), ...answered(value.arguments[1])],
       ordered: false,
     };
@@ -77,10 +79,10 @@ export function framedRecordForm(node: Expression): RecordForm | undefined {
   if (method === undefined) return undefined;
   const receiver = unwrapped(callee.expression);
   if (method === 'concat')
-    return { operands: [receiver, ...given(value.arguments)], ordered: false };
-  if (COPYING.has(method)) return { operands: [receiver], ordered: false };
+    return { node: value, operands: [receiver, ...given(value.arguments)], ordered: false };
+  if (COPYING.has(method)) return { node: value, operands: [receiver], ordered: false };
   if (MAPPING.has(method))
-    return { operands: [receiver, ...answered(value.arguments[0])], ordered: false };
+    return { node: value, operands: [receiver, ...answered(value.arguments[0])], ordered: false };
   return undefined;
 }
 

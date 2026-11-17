@@ -341,6 +341,55 @@ const LISTS = [
   },
 ] as const;
 
+/**
+ * What `Object.assign` copies is what its source holds where the call runs: a write to the source
+ * afterwards leaves the copy as it was, and one before it is in the copy. A source that is read as
+ * it is at the construction instead keeps everything it held, so that an overwrite after the copy
+ * removes nothing from it.
+ */
+const COPIED = [
+  {
+    id: 'assign-copies-before-the-source-is-overwritten',
+    body: `const base: ${RECORD} = Object.assign({}, { x: error as never }); const copy: ${RECORD} = Object.assign({}, base); base.x = 'fixed'; return new URLSearchParams(copy);`,
+    converts: true,
+  },
+  {
+    id: 'assign-copies-a-literal-before-it-is-overwritten',
+    body: `const base: ${RECORD} = { x: error as never }; const copy: ${RECORD} = Object.assign({}, base); base.x = 'fixed'; return new URLSearchParams(copy);`,
+    converts: true,
+  },
+  {
+    id: 'assign-copies-before-an-overwrite-on-one-branch',
+    body: `const base: ${RECORD} = { x: error as never }; const copy: ${RECORD} = Object.assign({}, base); if (flag) { base.x = 'fixed'; } return new URLSearchParams(copy);`,
+    converts: true,
+  },
+  {
+    id: 'assign-copies-before-an-overwrite-in-a-loop',
+    body: `const base: ${RECORD} = { x: error as never }; const copy: ${RECORD} = Object.assign({}, base); for (const name of ['x']) { base[name] = 'fixed'; } return new URLSearchParams(copy);`,
+    converts: true,
+  },
+  {
+    id: 'assign-copies-before-an-assign-overwrites-the-source',
+    body: `const base: ${RECORD} = { x: error as never }; const copy: ${RECORD} = Object.assign({}, base); Object.assign(base, { x: 'fixed' }); return new URLSearchParams(copy);`,
+    converts: true,
+  },
+  {
+    id: 'spread-copies-before-the-source-is-overwritten',
+    body: `const base: ${RECORD} = { x: error as never }; const copy: ${RECORD} = { ...base }; base.x = 'fixed'; return new URLSearchParams(copy);`,
+    converts: true,
+  },
+  {
+    id: 'assign-copies-a-literal-after-it-is-overwritten',
+    body: `const base: ${RECORD} = { x: error as never }; base.x = 'fixed'; const copy: ${RECORD} = Object.assign({}, base); return new URLSearchParams(copy);`,
+    converts: false,
+  },
+  {
+    id: 'assign-copies-a-literal-after-an-assign-overwrites-it',
+    body: `const base: ${RECORD} = { x: error as never }; Object.assign(base, { x: 'fixed' }); const copy: ${RECORD} = Object.assign({}, base); return new URLSearchParams(copy);`,
+    converts: false,
+  },
+] as const;
+
 /** Two names a pattern takes apart are two values, each read on its own. */
 const PATTERNS = [
   {
@@ -545,6 +594,7 @@ const CASES = [
   ...BRANCHES,
   ...OVERRIDES,
   ...LISTS,
+  ...COPIED,
   ...PATTERNS,
   ...WRITTEN,
   ...TEXTS,
