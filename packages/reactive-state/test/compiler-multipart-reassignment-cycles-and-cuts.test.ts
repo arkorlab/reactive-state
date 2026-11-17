@@ -8,6 +8,18 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 const MULTIPART_REASON =
   'makes a `Request` or `Response` of `FormData`, whose multipart boundary is random';
 
+const DIAMOND_LEVELS = 30;
+
+/** Builds 30 conditional descriptor alias declarations `d1`..`d30` starting from `seed`. */
+function descriptorAliasDiamond(seed: string): string {
+  const lines = [`const d0 = ${seed};`];
+  for (let index = 1; index <= DIAMOND_LEVELS; index += 1) {
+    const previous = `d${String(index - 1)}`;
+    lines.push(`const d${String(index)} = flag ? ${previous} : ${previous};`);
+  }
+  return lines.join(' ');
+}
+
 const CASES = [
   {
     expected: MULTIPART_REASON,
@@ -248,6 +260,22 @@ const CASES = [
     id: 'writable-define-property-conditional-body-write-retains-form-data-pin',
     source:
       "export function build(flag: boolean) { const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData(), writable: true }); if (flag) { opts.body = 'fixed'; } return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: undefined,
+    id: 'descriptor-conditional-alias-diamond-30-levels-fixed-pin',
+    source: `export function build(flag: boolean) { const opts: RequestInit = { method: 'POST' }; ${descriptorAliasDiamond("{ value: 'fixed' }")} Object.defineProperty(opts, 'body', d30); return new Request('https://example.com/', opts); }`,
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'descriptor-conditional-alias-diamond-30-levels-form-data',
+    source: `export function build(flag: boolean) { const opts: RequestInit = { method: 'POST' }; ${descriptorAliasDiamond('{ value: new FormData() }')} Object.defineProperty(opts, 'body', d30); return new Request('https://example.com/', opts); }`,
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'descriptor-cyclic-var-conditional-aliases-retain-form-data',
+    source:
+      "export function build(flag: boolean) { const opts: RequestInit = { method: 'POST' }; var d1: PropertyDescriptor = flag ? d2 : { value: new FormData() }; var d2: PropertyDescriptor = flag ? d1 : { value: 'fixed' }; Object.defineProperty(opts, 'body', d1); return new Request('https://example.com/', opts); }",
   },
 ] as const;
 

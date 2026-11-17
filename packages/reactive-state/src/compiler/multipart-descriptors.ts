@@ -400,42 +400,81 @@ function descriptorValueCandidates(
   return nestedDescriptorValues(descriptor, ['value'], seen);
 }
 
+const NESTED_DESCRIPTOR_PROJECTIONS = new WeakMap<SourceFile, Map<string, readonly Expression[]>>();
+
+function descriptorProjectionCache(file: SourceFile): Map<string, readonly Expression[]> {
+  let cache = NESTED_DESCRIPTOR_PROJECTIONS.get(file);
+  if (cache === undefined) {
+    cache = new Map();
+    NESTED_DESCRIPTOR_PROJECTIONS.set(file, cache);
+  }
+  return cache;
+}
+
 /** Follows identifiers, branches, and literal member paths to extract nested descriptor values. */
 function nestedDescriptorValues(
   node: Expression,
   keys: readonly string[],
-  seen: Set<Expression>,
+  seen: ReadonlySet<Expression>,
 ): readonly Expression[] {
+  return resolveNestedDescriptorValues(
+    node,
+    keys,
+    seen,
+    descriptorProjectionCache(node.getSourceFile()),
+  ).values;
+}
+
+function resolveNestedDescriptorValues(
+  node: Expression,
+  keys: readonly string[],
+  seen: ReadonlySet<Expression>,
+  memo: Map<string, readonly Expression[]>,
+): { readonly cycled: boolean; readonly values: readonly Expression[] } {
   const value = unwrapped(node);
   if (keys.length === 0) {
-    return [value];
+    return { cycled: false, values: [value] };
   }
   if (seen.has(value)) {
-    return [];
+    return { cycled: true, values: [] };
+  }
+  const cacheKey = `${value.pos}:${value.end}:${keys.length}:${keys.join('\0')}`;
+  const cached = memo.get(cacheKey);
+  if (cached !== undefined) {
+    return { cycled: false, values: cached };
   }
   const nextSeen = new Set([...seen, value]);
+  const entries = nestedProjectionEntries(value, keys);
+  let cycled = false;
+  const collected: Expression[] = [];
+  for (const entry of entries) {
+    const sub = resolveNestedDescriptorValues(entry.value, entry.keys, nextSeen, memo);
+    if (sub.cycled) cycled = true;
+    collected.push(...sub.values);
+  }
+  const values = uniqueExpressions(collected);
+  if (!cycled) {
+    memo.set(cacheKey, values);
+  }
+  return { cycled, values };
+}
+
+function nestedProjectionEntries(
+  value: Expression,
+  keys: readonly string[],
+): readonly { readonly keys: readonly string[]; readonly value: Expression }[] {
   const alternatives = selectedValues(value);
   if (alternatives !== undefined) {
-    return uniqueExpressions(
-      alternatives.flatMap((each) => nestedDescriptorValues(each, keys, nextSeen)),
-    );
+    return alternatives.map((each) => ({ keys, value: each }));
   }
   if (isIdentifier(value)) {
     const held = framedHeldValues(value, keys, value);
-    const entries =
-      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...held.held];
-    return uniqueExpressions(
-      entries.flatMap((entry) => nestedDescriptorValues(entry.value, entry.keys, nextSeen)),
-    );
+    if (held === undefined) return [];
+    return held.initial === undefined ? held.held : [held.initial, ...held.held];
   }
-  const sources = framedObjectSources(value, keys) ?? [];
-  return uniqueExpressions(
-    sources.flatMap((each) => {
-      return each.value === value && each.keys.length === keys.length
-        ? []
-        : nestedDescriptorValues(each.value, each.keys, nextSeen);
-    }),
-  );
+  const sources = framedObjectSources(value, keys);
+  if (sources === undefined) return [];
+  return sources.filter((each) => each.value !== value || each.keys.length !== keys.length);
 }
 
 /** Written key names of an object literal element, or undefined when computed dynamically. */
