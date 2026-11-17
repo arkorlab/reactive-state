@@ -270,10 +270,12 @@ function sideEffectFreeDeclaration(declaration: VariableDeclaration): boolean {
 /** Rejects calls, assignments, destructuring hooks, spreads, and coercing operators. */
 export function sideEffectFreeExpression(root: Expression, exempt?: Expression): boolean {
   const target = exempt === undefined ? undefined : unwrapped(exempt);
+  const visited = new Set<Expression>();
   const pending: Expression[] = [root];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     const expr = unwrapped(current);
-    if (expr === target || isPureLeafExpression(expr)) continue;
+    if (Object.is(expr, target) || visited.has(expr) || isPureLeafExpression(expr)) continue;
+    visited.add(expr);
     if (!queueCompositeOperands(expr, pending)) return false;
   }
   return true;
@@ -401,8 +403,11 @@ function queueInvocationParts(
   wrapped: Expression,
   pending: Expression[],
 ): boolean {
-  if (!queuePlainArguments(expr.arguments ?? [], pending)) return false;
-  pending.push(expr.expression, wrapped);
+  const args = expr.arguments ?? [];
+  if (!queuePlainArguments(args, pending)) return false;
+  pending.push(expr.expression);
+  const inner = unwrapped(wrapped);
+  if (args.every((arg) => !Object.is(unwrapped(arg), inner))) pending.push(wrapped);
   return true;
 }
 

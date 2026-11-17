@@ -272,6 +272,16 @@ const CASES = [
     id: 'arrow-tag-inside-error-function-ignoring-arguments-preserved',
     source: `function run(error: Error) { const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`; }`,
   },
+  {
+    framed: false,
+    id: 'deeply-nested-object-wrappers-in-factory-const-linear-purity-preserved',
+    source: `function make(_value: unknown) { const box = { text: 'fixed' }; const _wrapped = ${'Object('.repeat(28)}box${')'.repeat(28)}; return new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
+  {
+    framed: true,
+    id: 'deeply-nested-object-wrappers-hiding-mutation-in-factory-const-flagged',
+    source: `function make(value: unknown) { const box = { text: 'fixed' }; const _wrapped = ${'Object('.repeat(28)}Object.assign(box, { text: String(value) })${')'.repeat(28)}; return new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
+  },
 ] as const;
 
 describe('written-error factory side effects, receivers, rest arguments, and arrow tags', () => {
