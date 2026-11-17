@@ -1,29 +1,24 @@
 import {
   type ArrayBindingPattern,
+  type BindingElement,
+  type BindingName,
   type Expression,
   type Identifier,
   isArrayBindingPattern,
   isArrayLiteralExpression,
   isIdentifier,
-  isMethodDeclaration,
-  isObjectLiteralExpression,
   isOmittedExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
-  isSpreadElement,
-  type ObjectLiteralExpression,
+  type ObjectBindingPattern,
 } from 'typescript/ast';
 
 import { parameterValue } from './parameter-values.ts';
 import { mutatedRestOrigins } from './proxy-array-writes.ts';
+import { arrayChangedBefore, arrayIndex, restArrayChangedBefore } from './proxy-arrays.ts';
 import {
-  arrayChangedBefore,
-  arrayIndex,
-  restArrayChangedBefore,
-  spreadElementOrigins,
-} from './proxy-arrays.ts';
-import { bindsHoistedName, destructuredBindingOrigins } from './proxy-parameter-patterns.ts';
+  bindingPropertyKey,
+  bindsHoistedName,
+  destructuredBindingOrigins,
+} from './proxy-parameter-patterns.ts';
 import { assignedParameterOrigins, definitelyReassignedBefore } from './proxy-parameter-writes.ts';
 import {
   argumentPresence,
@@ -32,29 +27,23 @@ import {
   type ParameterFrame,
   parameterReassigned,
 } from './proxy-presence.ts';
-import {
-  type Context,
-  type Frame,
-  heldConstant,
-  type Origin,
-  peeled,
-  propertyKey,
-  sourceValue,
-  writtenBefore,
-} from './proxy-values.ts';
+import { type PresenceStatus, projectedOriginPresence, restOrigins } from './proxy-rest-slices.ts';
+import { type Frame, type Origin, sourceValue, writtenBefore } from './proxy-values.ts';
 import { interveningEvaluation } from './written-evaluation.ts';
 
 export { type ParameterFrame, parameterFrame } from './proxy-presence.ts';
 
-interface ProjectedStep {
-  readonly next?: Expression | undefined;
-  readonly status?: 'defined' | 'possible' | 'undefined' | undefined;
+interface RestPatternRead {
+  readonly at: Origin;
+  readonly defaultAt: Origin;
+  readonly openTail: boolean;
+  readonly targetText: string;
 }
 
-/** Own property names on `Object.prototype` that are inherited by plain `{}` literals. */
-const OBJECT_PROTOTYPE_KEYS: ReadonlySet<string> = new Set(
-  Object.getOwnPropertyNames(Object.prototype),
-);
+/** Checks definedness of a projected destructuring `source` using `argumentPresence` at leaves. */
+function checkProjectedPresence(source: Origin): PresenceStatus {
+  return projectedOriginPresence(source, argumentPresence);
+}
 
 /** Resolves a parameter read through replacements, reassignments, arguments, and defaults. */
 export function parameterOrigins(
@@ -134,7 +123,7 @@ function destructuredParameterOrigins(
   const sources = outerDestructuredSources(binding, defaultAt);
   return sources.flatMap((source) => {
     return destructuredBindingOrigins({
-      checkPresence: projectedOriginPresence,
+      checkPresence: checkProjectedPresence,
       defaultAt,
       pattern: parameter.name,
       readAt: at,
@@ -190,191 +179,246 @@ function destructuredRestOrigins(
   defaultAt: Origin,
 ): readonly Origin[] {
   const { declared, frame, index, parameter } = binding;
-  if (
-    frame.given !== undefined &&
-    frame.openTail !== true &&
-    isArrayBindingPattern(parameter.name)
-  ) {
-    return exactArrayRestPatternOrigins(parameter.name, frame.given.slice(index), declared.text, {
+  if (frame.given !== undefined) {
+    return restPatternOrigins(parameter.name, frame.given.slice(index), {
       at,
       defaultAt,
+      openTail: frame.openTail === true,
+      targetText: declared.text,
     });
   }
-  const fromDefaults = destructuredBindingOrigins({
+  return destructuredBindingOrigins({
     defaultAt,
     pattern: parameter.name,
     readAt: at,
     source: undefined,
     targetText: declared.text,
   });
-  const fromGiven = (frame.given?.slice(index) ?? []).map((each) => {
-    return {
-      ...each,
-      excluded: at.excluded,
-      keys: [...each.keys, ...at.keys],
-      spread: at.spread,
-    };
-  });
-  return [...fromDefaults, ...fromGiven];
 }
 
-/** Projects an exact closed rest slice onto an `ArrayBindingPattern` rest parameter. */
-function exactArrayRestPatternOrigins(
+/** Recursively projects a rest slice `givenSlice` onto an array, object, or leaf rest `pattern`. */
+function restPatternOrigins(
+  pattern: BindingName,
+  givenSlice: readonly Origin[],
+  origins: RestPatternRead,
+): readonly Origin[] {
+  if (isIdentifier(pattern)) {
+    if (pattern.text !== origins.targetText) {
+      return [];
+    }
+    return origins.openTail
+      ? openTailRestOrigins(givenSlice, origins.at)
+      : restOrigins(givenSlice, origins.at);
+  }
+  return isArrayBindingPattern(pattern)
+    ? arrayRestPatternOrigins(pattern, givenSlice, origins)
+    : objectRestPatternOrigins(pattern, givenSlice, origins);
+}
+
+/** Projects known prefix elements of an open-tail rest slice conservatively across `at`. */
+function openTailRestOrigins(given: readonly Origin[], at: Origin): readonly Origin[] {
+  if (at.keys.length === 0) {
+    return given.map((each) => ({ ...each, excluded: undefined, spread: undefined }));
+  }
+  const [firstKey, ...rest] = at.keys;
+  if (firstKey === null || (firstKey !== undefined && arrayIndex(firstKey) !== undefined)) {
+    return given.map((each) => {
+      return {
+        ...each,
+        excluded: at.excluded,
+        keys: [...each.keys, ...rest],
+        spread: at.spread,
+      };
+    });
+  }
+  return [];
+}
+
+/** Projects a rest slice onto an `ArrayBindingPattern`, recursing into nested `...` patterns. */
+function arrayRestPatternOrigins(
   pattern: ArrayBindingPattern,
   givenSlice: readonly Origin[],
-  targetText: string,
-  origins: { readonly at: Origin; readonly defaultAt: Origin },
+  origins: RestPatternRead,
 ): readonly Origin[] {
   const found: Origin[] = [];
   for (const [slot, element] of pattern.elements.entries()) {
     if (
       isOmittedExpression(element) ||
       element.name === undefined ||
-      !bindsHoistedName(element.name, targetText)
+      !bindsHoistedName(element.name, origins.targetText)
     ) {
       continue;
     }
     if (element.dotDotDotToken !== undefined) {
-      found.push(...restOrigins(givenSlice.slice(slot), origins.at));
+      found.push(...restPatternOrigins(element.name, givenSlice.slice(slot), origins));
       continue;
     }
-    const slotOrigin = givenSlice[slot];
-    if (slotOrigin !== undefined) {
-      const cleanSlot: Origin = {
-        ...slotOrigin,
-        excluded: undefined,
-        keys: [...slotOrigin.keys],
-        spread: undefined,
-      };
-      found.push(
-        ...destructuredBindingOrigins({
-          checkPresence: projectedOriginPresence,
-          defaultAt: origins.defaultAt,
-          pattern: element.name,
-          readAt: origins.at,
-          source: cleanSlot,
-          targetText,
-        }),
-      );
+    found.push(...restSlotElementOrigins(element, givenSlice[slot], origins));
+  }
+  return found;
+}
+
+/** Projects a rest slice onto an `ObjectBindingPattern` (`...{ 0: a, ...rest }`). */
+function objectRestPatternOrigins(
+  pattern: ObjectBindingPattern,
+  givenSlice: readonly Origin[],
+  origins: RestPatternRead,
+): readonly Origin[] {
+  const found: Origin[] = [];
+  const omittedKeys = new Set<string>();
+  for (const element of pattern.elements) {
+    if (element.dotDotDotToken !== undefined) {
+      if (bindsHoistedName(element.name, origins.targetText)) {
+        found.push(...objectRestSliceOrigins(givenSlice, origins, omittedKeys));
+      }
+      continue;
     }
-    if (
-      element.initializer !== undefined &&
-      (slotOrigin === undefined || argumentPresence(slotOrigin) !== 'defined')
-    ) {
-      const fallback: Origin = {
-        ...origins.defaultAt,
-        excluded: undefined,
-        keys: [],
-        spread: undefined,
-        value: element.initializer,
-      };
-      found.push(
-        ...destructuredBindingOrigins({
-          checkPresence: projectedOriginPresence,
-          defaultAt: origins.defaultAt,
-          pattern: element.name,
-          readAt: origins.at,
-          source: fallback,
-          targetText,
-        }),
-      );
+    const key = bindingPropertyKey(element, origins.at.context);
+    if (bindsHoistedName(element.name, origins.targetText)) {
+      found.push(...objectRestElementOrigins(element, key, givenSlice, origins));
+    }
+    if (key !== null) {
+      omittedKeys.add(key);
     }
   }
   return found;
 }
 
-/** Classifies whether a projected destructuring `source` is defined, `undefined`, or either. */
-function projectedOriginPresence(source: Origin): 'defined' | 'possible' | 'undefined' {
-  if (source.keys.length === 0) {
-    return argumentPresence(source);
+/** Projects one indexed slot and optional default initializer of a rest destructuring element. */
+function restSlotElementOrigins(
+  element: BindingElement,
+  slotOrigin: Origin | undefined,
+  origins: RestPatternRead,
+): readonly Origin[] {
+  const { name } = element;
+  if (name === undefined) {
+    return [];
   }
-  let current: Expression = source.value;
-  for (const key of source.keys) {
-    if (key === null) {
-      return 'possible';
-    }
-    const resolved = unwrapUnmutatedLiteral(current, source.context);
-    if (resolved === undefined) {
-      return 'possible';
-    }
-    const stepped = stepProjectedLiteral(resolved, key, source.context);
-    if (stepped.status !== undefined) {
-      return stepped.status;
-    }
-    if (stepped.next === undefined) {
-      return 'possible';
-    }
-    current = stepped.next;
+  const fromSlot = slotOrigin === undefined ? [] : projectRestSlot(name, slotOrigin, origins);
+  if (element.initializer === undefined) {
+    return fromSlot;
   }
-  return argumentPresence({ ...source, keys: [], value: current });
+  if (slotOrigin !== undefined && argumentPresence(slotOrigin) === 'defined') {
+    return fromSlot;
+  }
+  const fromDefault = projectRestDefault(name, element.initializer, origins);
+  const skipSlot = slotOrigin !== undefined && argumentPresence(slotOrigin) === 'undefined';
+  return skipSlot ? fromDefault : [...fromSlot, ...fromDefault];
 }
 
-/** Unwraps `expr` to an unmutated array or object literal when statically fixed. */
-function unwrapUnmutatedLiteral(expr: Expression, context: Context): Expression | undefined {
-  let current = peeled(expr);
-  const seen = new Set<Expression>();
-  while (isIdentifier(current) && !seen.has(current)) {
-    seen.add(current);
-    const held = heldConstant(current, context);
-    if (
-      held === undefined ||
-      writtenBefore(current, context) ||
-      arrayChangedBefore(current, context)
-    ) {
-      return undefined;
-    }
-    current = peeled(held);
+/** Projects one `ObjectBindingPattern` property against `givenSlice` at `key`. */
+function objectRestElementOrigins(
+  element: BindingElement,
+  key: string | null,
+  givenSlice: readonly Origin[],
+  origins: RestPatternRead,
+): readonly Origin[] {
+  const { name } = element;
+  if (name === undefined) {
+    return [];
   }
-  return isObjectLiteralExpression(current) || isArrayLiteralExpression(current)
-    ? current
-    : undefined;
+  if (key === null) {
+    const fromSlots = givenSlice.flatMap((slot) => projectRestSlot(name, slot, origins));
+    const fromDefault =
+      element.initializer === undefined
+        ? []
+        : projectRestDefault(name, element.initializer, origins);
+    return [...fromSlots, ...fromDefault];
+  }
+  const index = arrayIndex(key);
+  if (index !== undefined) {
+    return restSlotElementOrigins(element, givenSlice[index], origins);
+  }
+  if (key === 'length' || element.initializer === undefined) {
+    return [];
+  }
+  return projectRestDefault(name, element.initializer, origins);
 }
 
-/** Steps one static `key` into an unmutated object or array literal for definedness checks. */
-function stepProjectedLiteral(literal: Expression, key: string, context: Context): ProjectedStep {
-  if (isArrayLiteralExpression(literal)) {
-    const index = arrayIndex(key);
-    if (index === undefined || literal.elements.some((each) => isSpreadElement(each))) {
-      return { status: 'possible' };
-    }
-    const element = literal.elements[index];
-    return element === undefined || isOmittedExpression(element)
-      ? { status: 'undefined' }
-      : { next: element };
-  }
-  return isObjectLiteralExpression(literal)
-    ? stepProjectedObject(literal, key, context)
-    : { status: 'possible' };
+/** Projects a single `slotOrigin` through `pattern` for `origins.targetText`. */
+function projectRestSlot(
+  pattern: BindingName,
+  slotOrigin: Origin,
+  origins: RestPatternRead,
+): readonly Origin[] {
+  const cleanSlot: Origin = {
+    ...slotOrigin,
+    excluded: undefined,
+    keys: [...slotOrigin.keys],
+    spread: undefined,
+  };
+  return destructuredBindingOrigins({
+    checkPresence: checkProjectedPresence,
+    defaultAt: origins.defaultAt,
+    pattern,
+    readAt: origins.at,
+    source: cleanSlot,
+    targetText: origins.targetText,
+  });
 }
 
-/** Steps one static `key` into an unmutated `ObjectLiteralExpression` for definedness checks. */
-function stepProjectedObject(
-  object: ObjectLiteralExpression,
-  key: string,
-  context: Context,
-): ProjectedStep {
-  for (const property of object.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      return { status: 'possible' };
-    }
-    const named = propertyKey(property.name, context);
-    if (named === undefined) {
-      return { status: 'possible' };
-    }
-    if (named !== key) {
-      continue;
-    }
-    if (isPropertyAssignment(property)) {
-      return { next: property.initializer };
-    }
-    if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
-      return { next: property.name };
-    }
-    return { status: isMethodDeclaration(property) ? 'defined' : 'possible' };
+/** Projects a rest binding element's `initializer` default expression through `pattern`. */
+function projectRestDefault(
+  pattern: BindingName,
+  initializer: Expression,
+  origins: RestPatternRead,
+): readonly Origin[] {
+  const fallback: Origin = {
+    ...origins.defaultAt,
+    excluded: undefined,
+    keys: [],
+    spread: undefined,
+    value: initializer,
+  };
+  return destructuredBindingOrigins({
+    checkPresence: checkProjectedPresence,
+    defaultAt: origins.defaultAt,
+    pattern,
+    readAt: origins.at,
+    source: fallback,
+    targetText: origins.targetText,
+  });
+}
+
+/** Projects `{ ...rest }` on a rest-parameter slice `givenSlice`, excluding `omittedKeys`. */
+function objectRestSliceOrigins(
+  givenSlice: readonly Origin[],
+  origins: RestPatternRead,
+  omittedKeys: ReadonlySet<string>,
+): readonly Origin[] {
+  const { at } = origins;
+  if (at.keys.length === 0) {
+    return givenSlice.flatMap((each, idx) => {
+      const skipped =
+        omittedKeys.has(String(idx)) ||
+        (at.spread === true && at.excluded?.has(String(idx)) === true) ||
+        isOmittedExpression(each.value);
+      return skipped ? [] : [{ ...each, excluded: undefined, keys: each.keys, spread: undefined }];
+    });
   }
-  return key === '__proto__' || OBJECT_PROTOTYPE_KEYS.has(key)
-    ? { status: 'possible' }
-    : { status: 'undefined' };
+  const [firstKey, ...rest] = at.keys;
+  if (firstKey !== undefined && firstKey !== null && omittedKeys.has(firstKey)) {
+    return [];
+  }
+  if (firstKey === undefined || firstKey === null) {
+    return givenSlice.flatMap((each, idx) => {
+      return omittedKeys.has(String(idx))
+        ? []
+        : [{ ...each, excluded: at.excluded, keys: [...each.keys, ...rest], spread: at.spread }];
+    });
+  }
+  const index = arrayIndex(firstKey);
+  const selected = index === undefined ? undefined : givenSlice[index];
+  return selected === undefined
+    ? []
+    : [
+        {
+          ...selected,
+          excluded: at.excluded,
+          keys: [...selected.keys, ...rest],
+          spread: at.spread,
+        },
+      ];
 }
 
 /** Resolves a rest parameter read, preserving index exclusions only when the rest array is intact. */
@@ -397,36 +441,6 @@ function restParameterOrigins(
     return mutatedRestOrigins({ declared, fn: frame.fn, given, name }, at);
   }
   return restOrigins(given, at);
-}
-
-/** A rest array is fresh; only its indexed elements retain actual argument identities. */
-function restOrigins(given: readonly Origin[], at: Origin): readonly Origin[] {
-  if (at.keys.length === 0) {
-    return spreadElementOrigins(given, at);
-  }
-  const [key, ...rest] = at.keys;
-  if (key === undefined || key === null) {
-    return given.map((each) => {
-      return {
-        ...each,
-        excluded: at.excluded,
-        keys: [...each.keys, ...rest],
-        spread: at.spread,
-      };
-    });
-  }
-  const index = arrayIndex(key);
-  const selected = index === undefined ? undefined : given[index];
-  return selected === undefined
-    ? []
-    : [
-        {
-          ...selected,
-          excluded: at.excluded,
-          keys: [...selected.keys, ...rest],
-          spread: at.spread,
-        },
-      ];
 }
 
 /** A rest array's entries, or an explicitly unknown binding after a prior write/evaluation. */

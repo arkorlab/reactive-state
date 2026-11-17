@@ -290,6 +290,112 @@ const CASES = [
     id: 'exported-let-destructured-revocable-revoke-member-pin',
     source: 'export let revoke: unknown; const rev = Proxy.revocable({}, {}); ({ revoke } = rev);',
   },
+  {
+    expected: keptRefusal('store'),
+    id: 'nested-factory-readonly-branch-before-mutating-branch',
+    source:
+      'function make(flag: boolean) { if (flag) return { bump() { return 0; } }; return { n: 0, bump() { return ++this.n; } }; } const store = { counter: make(false) }; export function next() { return store.counter.bump(); }',
+  },
+  {
+    expected: keptRefusal('store'),
+    id: 'nested-factory-mutating-branch-before-readonly-branch',
+    source:
+      'function make(flag: boolean) { if (flag) return { n: 0, bump() { return ++this.n; } }; return { bump() { return 0; } }; } const store = { counter: make(true) }; export function next() { return store.counter.bump(); }',
+  },
+  {
+    expected: keptRefusal('counter'),
+    id: 'direct-factory-readonly-branch-before-mutating-branch',
+    source:
+      'function make(flag: boolean) { if (flag) return { bump() { return 0; } }; return { n: 0, bump() { return ++this.n; } }; } const counter = make(false); export function next() { return counter.bump(); }',
+  },
+  {
+    expected: undefined,
+    id: 'nested-factory-all-readonly-branches-pin',
+    source:
+      'function make(flag: boolean) { if (flag) return { bump() { return 0; } }; return { n: 1, bump() { return this.n; } }; } const store = { counter: make(false) }; export function next() { return store.counter.bump(); }',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-nested-array-rest-pattern-catches-proxy',
+    source: 'export let result: unknown; [...[result]] = [new Proxy({}, {})];',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-offset-nested-array-rest-pattern-catches-proxy',
+    source:
+      "export let result: unknown; let a: unknown; [a, ...[result]] = ['ok', new Proxy({}, {})];",
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-offset-nested-object-in-rest-pattern-catches-proxy',
+    source:
+      "export let result: unknown; let a: unknown; [a, ...{ 0: result }] = ['ok', new Proxy({}, {})];",
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-doubly-nested-rest-pattern-catches-proxy',
+    source:
+      "export let result: unknown; let a: unknown; let b: unknown; [a, ...[b, ...[result]]] = ['x', 'y', new Proxy({}, {})];",
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-nested-object-rest-in-array-rest-catches-proxy',
+    source:
+      "export let rest: Record<string, unknown> = {}; let a: unknown; let b: unknown; [a, ...{ 0: b, ...rest }] = ['x', 'y', new Proxy({}, {})];",
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-nested-object-rest-in-array-rest-ignores-stripped-prefix-proxies-pin',
+    source:
+      "export let rest: Record<string, unknown> = {}; let a: unknown; let b: unknown; [a, ...{ 0: b, ...rest }] = [new Proxy({}, {}), new Proxy({}, {}), 'safe'];",
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-nested-array-rest-pattern-ignores-unselected-tail-proxy-pin',
+    source: "export let result: unknown; [...[result]] = ['ok', new Proxy({}, {})];",
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-offset-nested-array-rest-pattern-ignores-prefix-proxy-pin',
+    source:
+      "export let result: unknown; let a: unknown; [a, ...[result]] = [new Proxy({}, {}), 'ok'];",
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'destructured-parameter-nested-rest-pattern-catches-proxy',
+    source:
+      'function pick([first, ...[{ inner }]]: [{ inner?: unknown }, { inner: unknown }]) { void first; return inner; } export const result = pick([{}, { inner: new Proxy({}, {}) }]);',
+  },
+  {
+    expected: undefined,
+    id: 'destructured-parameter-nested-rest-pattern-ignores-unselected-tail-proxy-pin',
+    source:
+      "function pick([...[first]]: unknown[]) { return first; } export const result = pick(['ok', new Proxy({}, {})]);",
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'rest-parameter-nested-pattern-catches-selected-proxy',
+    source:
+      'function pick(...[first, ...[{ inner }]]: [{ inner?: unknown }, { inner: unknown }]) { void first; return inner; } const box = { inner: new Proxy({}, {}) }; export const result = pick({}, box);',
+  },
+  {
+    expected: undefined,
+    id: 'rest-parameter-nested-pattern-ignores-unselected-argument-proxy-pin',
+    source:
+      "function pick(...[...[first]]: unknown[]) { return first; } export const result = pick('ok', new Proxy({}, {}));",
+  },
+  {
+    expected: undefined,
+    id: 'rest-parameter-object-pattern-ignores-unselected-argument-proxy-pin',
+    source:
+      "function pick(...{ 0: first }: unknown[]) { return first; } export const result = pick('ok', new Proxy({}, {}));",
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'helper-mutation-through-nested-rest-parameter-catches-proxy',
+    source:
+      'function put([, ...[target]]: Record<string, unknown>[]) { target.x = new Proxy({}, {}); } export function read() { const a: Record<string, unknown> = {}; const b: Record<string, unknown> = {}; put([a, b]); return b.x; }',
+  },
 ] as const;
 
 describe('kept mutations across helper calls, cast targets, nested receivers, and exported Proxy writes', () => {

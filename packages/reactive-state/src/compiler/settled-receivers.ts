@@ -157,15 +157,7 @@ export function methodsAtExpressionPath(
   start: Expression,
   steps: readonly (string | null)[],
 ): readonly ReadonlyMap<string, Node>[] {
-  const leaves = projectExpressionPath(start, steps);
-  const result: ReadonlyMap<string, Node>[] = [];
-  for (const leaf of leaves) {
-    const map = leafMethodsOf(leaf);
-    if (map.size > 0) {
-      result.push(map);
-    }
-  }
-  return result;
+  return projectExpressionPath(start, steps).flatMap((leaf) => leafMethodMaps(leaf));
 }
 
 /** Projects `start` along `steps` across literals, class instances, factories, and aliases. */
@@ -351,9 +343,9 @@ function expandInstanceStep(
   }
 }
 
-/** Extracts callable methods on `leaf`, expanding local factory calls without revisiting cycles. */
-function leafMethodsOf(leaf: Expression): ReadonlyMap<string, Node> {
-  const merged = new Map<string, Node>();
+/** Extracts per-branch method tables on `leaf`, expanding local factory calls without revisiting cycles. */
+function leafMethodMaps(leaf: Expression): readonly ReadonlyMap<string, Node>[] {
+  const maps: ReadonlyMap<string, Node>[] = [];
   const seenFactories = new Set<Node>();
   const pending: Expression[] = [leaf];
   for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
@@ -361,11 +353,12 @@ function leafMethodsOf(leaf: Expression): ReadonlyMap<string, Node> {
       enqueueFactoryAnswers(item, seenFactories, pending);
       continue;
     }
-    for (const [name, method] of directLeafMethods(item)) {
-      merged.set(name, method);
+    const methods = directLeafMethods(item);
+    if (methods.size > 0) {
+      maps.push(methods);
     }
   }
-  return merged;
+  return maps;
 }
 
 /** Extracts direct methods on an identifier, object literal, or local class construction. */

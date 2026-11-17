@@ -7,6 +7,7 @@ import {
   type Identifier,
   isArrayBindingPattern,
   isArrayLiteralExpression,
+  isBindingElement,
   isIdentifier,
   isOmittedExpression,
   isSpreadElement,
@@ -17,6 +18,7 @@ import { type Answering, isAnswering, parametersOf } from './answers.ts';
 import { metadataCallee } from './input-callees.ts';
 import {
   arrayChangedBefore,
+  arrayIndex,
   type ArrayScope,
   collectAliasIdentifiers,
   restArrayChangedBefore,
@@ -177,6 +179,14 @@ function resolveHelperSpread(expr: Expression, baseOrigin: Origin): readonly Ori
   return tupleLiteralOrigins(held, baseOrigin);
 }
 
+interface HelperParameterState {
+  readonly aliasSeeds: Identifier[];
+  readonly context: Context;
+  readonly expanded: ExpandedHelperArgs;
+  readonly matchesTarget: (candidate: Expression) => boolean;
+  readonly restSeeds: Identifier[];
+}
+
 /** Identifies formal parameter identifiers of `callee` that can receive `matchesTarget`. */
 function matchCalleeParameters(
   callee: Answering,
@@ -186,33 +196,105 @@ function matchCalleeParameters(
 ): { readonly aliasSeeds: readonly Identifier[]; readonly restSeeds: readonly Identifier[] } {
   const aliasSeeds: Identifier[] = [];
   const restSeeds: Identifier[] = [];
+  const state: HelperParameterState = { aliasSeeds, context, expanded, matchesTarget, restSeeds };
   for (const [index, parameter] of parametersOf(callee).entries()) {
     if (parameter.dotDotDotToken !== undefined) {
-      const receivesTarget =
-        expanded.given.slice(index).some((arg) => matchesTarget(arg.value)) ||
-        expanded.tailArgs.some((arg) => argumentReachesTarget(arg, [], matchesTarget, context));
-      if (receivesTarget && isIdentifier(parameter.name)) {
-        restSeeds.push(parameter.name);
-      }
+      matchRestParameter(parameter, index, state);
       continue;
     }
-    matchSingleParameter(parameter, index, expanded, { aliasSeeds, context, matchesTarget });
+    matchSingleParameter(parameter, index, state);
   }
   return { aliasSeeds, restSeeds };
 }
 
-/** Matches an ordinary or destructured parameter at `index` against `expanded` arguments. */
+/** Matches an identifier or destructured `...rest` parameter at `index` against `state.expanded`. */
+function matchRestParameter(
+  parameter: ParameterDeclaration,
+  index: number,
+  state: HelperParameterState,
+): void {
+  const { context, expanded, matchesTarget, restSeeds } = state;
+  if (isIdentifier(parameter.name)) {
+    const receivesTarget =
+      expanded.given.slice(index).some((arg) => matchesTarget(arg.value)) ||
+      expanded.tailArgs.some((arg) => argumentReachesTarget(arg, [], matchesTarget, context));
+    if (receivesTarget) {
+      restSeeds.push(parameter.name);
+    }
+    return;
+  }
+  for (const declared of bindingIdentifiers(parameter.name)) {
+    const path = bindingPathToIdentifier(parameter.name, declared, context);
+    if (path !== undefined) {
+      recordRestBindingSeed(declared, index, path, state);
+    }
+  }
+}
+
+/** Classifies one destructured binding inside a rest parameter into `restSeeds` or `aliasSeeds`. */
+function recordRestBindingSeed(
+  declared: Identifier,
+  restStart: number,
+  path: readonly OriginKey[],
+  state: HelperParameterState,
+): void {
+  const [firstKey, ...rest] = path;
+  if (isLeafArrayRestIdentifier(declared)) {
+    const anyReach = restCandidateExpressions(restStart, null, state.expanded).some((arg) =>
+      argumentReachesTarget(arg, [], state.matchesTarget, state.context),
+    );
+    if (anyReach) {
+      state.restSeeds.push(declared);
+    }
+    return;
+  }
+  const offset = firstKey === undefined || firstKey === null ? null : arrayIndex(firstKey);
+  if (firstKey !== null && offset === undefined) {
+    return;
+  }
+  const hits = restCandidateExpressions(restStart, offset ?? null, state.expanded).some((arg) =>
+    argumentReachesTarget(arg, rest, state.matchesTarget, state.context),
+  );
+  if (hits) {
+    state.aliasSeeds.push(declared);
+  }
+}
+
+/** Candidate caller expressions supplying `offset` (`null` for any slot) of a rest parameter. */
+function restCandidateExpressions(
+  restStart: number,
+  offset: number | null,
+  expanded: ExpandedHelperArgs,
+): readonly Expression[] {
+  if (offset === null) {
+    return [...expanded.given.slice(restStart).map((each) => each.value), ...expanded.tailArgs];
+  }
+  const slot = restStart + offset;
+  const known = slot < expanded.given.length ? expanded.given[slot] : undefined;
+  if (known !== undefined) {
+    return [known.value];
+  }
+  return expanded.openTail ? expanded.tailArgs : [];
+}
+
+/** Whether `declared` is the direct identifier of an array rest element (`[...declared]`). */
+function isLeafArrayRestIdentifier(declared: Identifier): boolean {
+  const parent = declared.parent;
+  return (
+    isBindingElement(parent) &&
+    parent.dotDotDotToken !== undefined &&
+    parent.name === declared &&
+    isArrayBindingPattern(parent.parent)
+  );
+}
+
+/** Matches an ordinary or destructured parameter at `index` against `state.expanded` arguments. */
 function matchSingleParameter(
   parameter: ParameterDeclaration,
   index: number,
-  expanded: ExpandedHelperArgs,
-  state: {
-    readonly aliasSeeds: Identifier[];
-    readonly context: Context;
-    readonly matchesTarget: (candidate: Expression) => boolean;
-  },
+  state: HelperParameterState,
 ): void {
-  const args = candidateParameterExpressions(parameter, index, expanded);
+  const args = candidateParameterExpressions(parameter, index, state.expanded);
   if (isIdentifier(parameter.name)) {
     if (args.some((arg) => argumentReachesTarget(arg, [], state.matchesTarget, state.context))) {
       state.aliasSeeds.push(parameter.name);
@@ -225,7 +307,11 @@ function matchSingleParameter(
       path !== undefined &&
       args.some((arg) => argumentReachesTarget(arg, path, state.matchesTarget, state.context))
     ) {
-      state.aliasSeeds.push(declared);
+      if (isLeafArrayRestIdentifier(declared)) {
+        state.restSeeds.push(declared);
+      } else {
+        state.aliasSeeds.push(declared);
+      }
     }
   }
 }
@@ -294,11 +380,28 @@ function arrayBindingPath(
     }
     const sub = bindingPathToIdentifier(element.name, target, context);
     if (sub !== undefined) {
-      const head = element.dotDotDotToken === undefined ? String(index) : null;
-      return [head, ...sub];
+      return element.dotDotDotToken === undefined
+        ? [String(index), ...sub]
+        : sliceRestSubpath(index, sub);
     }
   }
   return undefined;
+}
+
+/** Shifts `sub` inside an array rest element `...subPattern` starting at `restStart`. */
+function sliceRestSubpath(
+  restStart: number,
+  sub: readonly OriginKey[],
+): readonly OriginKey[] | undefined {
+  if (sub.length === 0) {
+    return [null];
+  }
+  const [firstKey, ...rest] = sub;
+  if (firstKey === undefined || firstKey === null) {
+    return [null, ...rest];
+  }
+  const offset = arrayIndex(firstKey);
+  return offset === undefined ? undefined : [String(restStart + offset), ...rest];
 }
 
 /** Finds the property key path inside an `ObjectBindingPattern` leading to `target`. */
