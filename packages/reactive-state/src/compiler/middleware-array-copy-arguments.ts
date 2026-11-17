@@ -36,6 +36,7 @@ export interface MiddlewareCopyOrigin {
   readonly keys: readonly string[];
   readonly tail: readonly string[];
   readonly slot?: string | undefined;
+  readonly whole?: boolean | undefined;
   readonly wrapperLength?: number | undefined;
   readonly references: readonly Identifier[];
 }
@@ -168,7 +169,7 @@ export function middlewareWholeOrigin(
   tail: readonly string[],
 ): MiddlewareCopyOrigin {
   const of = unwrapped(expression);
-  return { of, keys: [], tail, references: middlewareLiteralOwners(of) };
+  return { of, keys: [], tail, whole: true, references: middlewareLiteralOwners(of) };
 }
 
 /** Original literal descendants retain their lexical collection owner, stopping at call or callable boundaries. */

@@ -277,6 +277,48 @@ const DESTRUCTURING_SELECTOR_CASES = [
     source:
       'function read(seed: { next?: unknown; at?: unknown }) { let node = seed; node = node.next as typeof node; const items = [{ a: 1 }]; node.at = () => ({ a: 2 }); return /*read*/ items.at(0); }',
   },
+  {
+    expected: { origins: ['rows:'], single: true },
+    id: 'nested-tosorted-two-rows-at-zero-retains-whole-outer-array',
+    source:
+      'function read() { const rows = [[{ a: 1 }, { a: 2 }], [{ a: 3 }, { a: 4 }]]; const copy = rows.toSorted(); return /*read*/ copy[0]!.at(0); }',
+  },
+  {
+    expected: { origins: ['rows:'], single: true },
+    id: 'nested-tosorted-single-row-at-one-retains-whole-outer-array',
+    source:
+      'function read() { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.toSorted(); return /*read*/ copy[0]!.at(1); }',
+  },
+  {
+    expected: { origins: ['rows:'], single: true },
+    id: 'nested-dynamic-slice-bounds-at-one-retains-whole-outer-array',
+    source:
+      'function read(start: number) { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.slice(start); return /*read*/ copy[0]!.at(1); }',
+  },
+  {
+    expected: { origins: ['rows:'], single: false },
+    id: 'nested-iterator-next-value-at-one-retains-whole-outer-array',
+    source:
+      'function read() { const rows = [[{ a: 1 }, { a: 2 }]]; const iter = rows.values(); return /*read*/ iter.next().value!.at(1); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'nested-tosorted-candidate-inner-array-at-override-rejected',
+    source:
+      'function read(fresh: { a: number }) { const rows = [[{ a: 1 }], [{ a: 2 }]]; rows[1]!.at = () => fresh; const copy = rows.toSorted(); return /*read*/ copy[0]!.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'deep-17-let-alias-own-at-override-rejected',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }]; const holder = { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { next: { items } } } } } } } } } } } } } } } } } }; let alias = holder; alias.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next.next.items.at = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: ['[{ a: 3 }, { a: 4 }]:1'], single: false },
+    id: 'nested-with-replacement-unmutated-normalizes-negative-at-pin',
+    source:
+      'function read() { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.with(0, [{ a: 3 }, { a: 4 }]); return /*read*/ copy[0]!.at(-1); }',
+  },
 ] as const;
 
 interface HandoffSummary {

@@ -103,12 +103,14 @@ function projectedViewOrigins(
     view.end !== undefined
   )
     return [];
+  const whole = view.element !== true && (view.index === undefined || view.index < 0);
   return [
     {
       of: view.value,
       keys: originKeys(view, tail),
       tail,
       slot,
+      whole,
       wrapperLength,
       references: middlewareLiteralOwners(view.value),
     },

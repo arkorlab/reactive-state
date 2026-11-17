@@ -63,6 +63,7 @@ export interface SliceProjection {
   readonly keys: readonly string[];
   readonly tail: readonly string[];
   readonly slot?: string | undefined;
+  readonly whole?: boolean | undefined;
   readonly wrapperLength?: number | undefined;
 }
 
@@ -196,7 +197,7 @@ function wholeSliceOrigin(
   index: number,
   tail: readonly string[],
 ): SliceProjection {
-  const base = { of: receiver, keys: [], tail };
+  const base: SliceProjection = { of: receiver, keys: [], tail, whole: true };
   return index < 0 ? base : { ...base, slot: String(index) };
 }
 
@@ -234,7 +235,7 @@ function reorderedSliceOrigin(
   if (method === 'toSorted') {
     return source.elements.every((element) => knownScalarElement(element))
       ? undefined
-      : { of: receiver, keys: [], tail, slot: String(offset), wrapperLength };
+      : { of: receiver, keys: [], tail, slot: String(offset), whole: true, wrapperLength };
   }
   const position = length - 1 - offset;
   const element = source.elements[position];

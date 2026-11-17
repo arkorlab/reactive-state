@@ -5,6 +5,7 @@ import {
   isArrayLiteralExpression,
   isCallExpression,
   isElementAccessExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
 } from 'typescript/ast';
@@ -36,6 +37,8 @@ export interface EnumeratedSelection {
   readonly keys: readonly string[];
   readonly of: Expression;
   readonly quiet: boolean;
+  readonly tail?: readonly string[] | undefined;
+  readonly whole?: boolean | undefined;
 }
 
 export interface NestedCopyAtHandlers {
@@ -55,6 +58,12 @@ interface UnwrappedNestedAt {
   readonly receiver: Expression;
 }
 
+interface WholeOriginTarget {
+  readonly keys: readonly string[];
+  readonly of: Expression;
+  readonly tail?: readonly string[] | undefined;
+}
+
 /** Projects `copy[i].at(k)` onto the inner literal array or invalidates stale negative offsets on mutation. */
 export function nestedCopiedAtEnumeration(
   expression: Expression,
@@ -64,11 +73,16 @@ export function nestedCopiedAtEnumeration(
   if (parsed === undefined) return undefined;
   const inner = handlers.resolveEnumeration(parsed.receiver);
   if (inner === undefined) return undefined;
+  if (inner.whole === true) {
+    return replacedWholeAt(parsed, inner, handlers.resolveEnumeration)
+      ? undefined
+      : { keys: inner.keys, of: inner.of, quiet: false, whole: true };
+  }
   const innerArray = literalArrayAtKeys(inner.of, inner.keys, handlers.resolveEnumeration);
   if (innerArray === undefined) return undefined;
   if (replacedInnerAt(parsed, innerArray, handlers.resolveEnumeration)) return undefined;
   if (!stableInnerArray(parsed, handlers)) {
-    return { keys: inner.keys, of: inner.of, quiet: false };
+    return { keys: inner.keys, of: inner.of, quiet: false, whole: true };
   }
   const position = parsed.index < 0 ? innerArray.elements.length + parsed.index : parsed.index;
   if (position < 0 || position >= innerArray.elements.length) return undefined;
@@ -90,28 +104,41 @@ export function nestedCopiedAtOrigins(
   if (origins.length === 0) return [];
   const projected: CopiedCollectionOrigin[] = [];
   for (const origin of origins) {
-    const innerArray = literalArrayAtKeys(origin.of, origin.keys, handlers.resolveEnumeration);
-    if (
-      innerArray !== undefined &&
-      replacedInnerAt(parsed, innerArray, handlers.resolveEnumeration)
-    ) {
-      continue;
-    }
-    if (innerArray === undefined || !stableInnerArray(parsed, handlers)) {
-      projected.push(origin);
-      continue;
-    }
-    const position = parsed.index < 0 ? innerArray.elements.length + parsed.index : parsed.index;
-    if (position >= 0 && position < innerArray.elements.length) {
-      const step = String(position);
-      projected.push({
-        ...origin,
-        keys: [...origin.keys, step, ...parsed.afterKeys],
-        tail: [...origin.tail, step, ...parsed.afterKeys],
-      });
-    }
+    const next = projectNestedOrigin(parsed, origin, handlers);
+    if (next !== undefined) projected.push(next);
   }
   return projected;
+}
+
+/** Projects or conservatively retains one `CopiedCollectionOrigin` across an inner `.at(...)` read. */
+function projectNestedOrigin(
+  parsed: UnwrappedNestedAt,
+  origin: CopiedCollectionOrigin,
+  handlers: NestedCopyAtHandlers,
+): CopiedCollectionOrigin | undefined {
+  if (origin.whole === true) {
+    return replacedWholeAt(parsed, origin, handlers.resolveEnumeration)
+      ? undefined
+      : { ...origin, whole: true };
+  }
+  const innerArray = literalArrayAtKeys(origin.of, origin.keys, handlers.resolveEnumeration);
+  if (
+    innerArray !== undefined &&
+    replacedInnerAt(parsed, innerArray, handlers.resolveEnumeration)
+  ) {
+    return undefined;
+  }
+  if (innerArray === undefined || !stableInnerArray(parsed, handlers)) {
+    return { ...origin, whole: true };
+  }
+  const position = parsed.index < 0 ? innerArray.elements.length + parsed.index : parsed.index;
+  if (position < 0 || position >= innerArray.elements.length) return undefined;
+  const step = String(position);
+  return {
+    ...origin,
+    keys: [...origin.keys, step, ...parsed.afterKeys],
+    tail: [...origin.tail, step, ...parsed.afterKeys],
+  };
 }
 
 /** Peels quiet trailing member accesses off an outer native `.at(index)` call. */
@@ -161,7 +188,7 @@ function literalArrayAtKeys(
   return current;
 }
 
-/** Resolves direct or shallow-copied literal containers for receiver alias matching. */
+/** Resolves direct or exact shallow-copied literal containers for receiver alias matching. */
 function resolveSource(
   expression: Expression,
   resolveEnumeration: (target: Expression) => EnumeratedSelection | undefined,
@@ -169,7 +196,7 @@ function resolveSource(
   const direct = middlewareArraySource(expression);
   if (direct !== undefined) return direct;
   const enumerated = resolveEnumeration(expression);
-  if (enumerated === undefined) return undefined;
+  if (enumerated === undefined || enumerated.whole === true) return undefined;
   let current = middlewareArraySource(enumerated.of);
   for (const key of enumerated.keys) {
     if (current === undefined) return undefined;
@@ -194,6 +221,36 @@ function replacedInnerAt(
     middlewareReplacedReceiverSelector(parsed.call, parsed.receiver, 'at', context) ||
     middlewareReplacedReceiverSelector(parsed.call, innerArray, 'at', context)
   );
+}
+
+/** Rejects non-borrowed `.at` calls on whole-collection fallbacks when any candidate element overrides `.at`. */
+function replacedWholeAt(
+  parsed: UnwrappedNestedAt,
+  target: WholeOriginTarget,
+  resolveEnumeration: (value: Expression) => EnumeratedSelection | undefined,
+): boolean {
+  if (parsed.borrowed) return false;
+  const context = {
+    memberOf: middlewareLiteralMember,
+    sourceOf: (value: Expression) => resolveSource(value, resolveEnumeration),
+  };
+  if (middlewareReplacedReceiverSelector(parsed.call, parsed.receiver, 'at', context)) return true;
+  if (target.tail === undefined) return false;
+  const outerArray = literalArrayAtKeys(target.of, target.keys, resolveEnumeration);
+  if (outerArray === undefined) return false;
+  for (const element of outerArray.elements) {
+    if (isOmittedExpression(element) || isSpreadElement(element)) continue;
+    const candidate =
+      literalArrayAtKeys(element, target.tail, resolveEnumeration) ??
+      (target.tail.length === 0 ? element : undefined);
+    if (
+      candidate !== undefined &&
+      middlewareReplacedReceiverSelector(parsed.call, candidate, 'at', context)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Verifies neither the copied slot expression nor the shared inner literal array can change length. */

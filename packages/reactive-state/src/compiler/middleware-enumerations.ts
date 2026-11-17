@@ -62,6 +62,7 @@ interface Entry {
 
 interface Projection {
   readonly slot?: string | undefined;
+  readonly whole?: boolean | undefined;
   readonly wrapperLength?: number | undefined;
   readonly of: Expression;
   readonly keys: readonly string[];
@@ -76,10 +77,14 @@ interface CopyReading {
 }
 
 /** A fixed native values slot or entries payload retains its source collection, never its wrapper. */
-export function middlewareEnumeration(
-  expression: Expression,
-):
-  | { readonly of: Expression; readonly keys: readonly string[]; readonly quiet: boolean }
+export function middlewareEnumeration(expression: Expression):
+  | {
+      readonly of: Expression;
+      readonly keys: readonly string[];
+      readonly quiet: boolean;
+      readonly tail?: readonly string[] | undefined;
+      readonly whole?: boolean | undefined;
+    }
   | undefined {
   const reading = copiedReading(expression);
   if (reading === undefined) {
@@ -95,9 +100,11 @@ export function middlewareEnumeration(
   const projected = relative
     ? middlewareArraySlice(value, keys, true, stableLength)
     : (enumerationProjection(value, keys) ?? middlewareArraySlice(value, keys));
-  return projected === undefined || !projectionUnchanged(captures, projected, relative)
-    ? undefined
-    : { of: projected.of, keys: projected.keys, quiet: false };
+  if (projected === undefined || !projectionUnchanged(captures, projected, relative)) {
+    return undefined;
+  }
+  const base = { of: projected.of, keys: projected.keys, quiet: false };
+  return projected.whole === true ? { ...base, tail: projected.tail, whole: true } : base;
 }
 
 /** Every retained native-copy origin passes the same original wrapper capture and write boundary. */
@@ -475,11 +482,12 @@ function projectNestedCopyCall(
   keys: readonly string[],
 ): { readonly keys: readonly string[]; readonly of: Expression } | undefined {
   const direct = enumerationProjection(call, keys) ?? middlewareArraySlice(call, keys);
-  if (direct !== undefined) return { keys: direct.keys, of: direct.of };
-  const iterator = middlewareArrayIteratorOrigin(call, keys);
-  if (iterator !== undefined) return { keys: iterator.keys, of: iterator.of };
-  const copied = middlewareArrayCopiedOrigins(call, keys);
-  return copied.length === 1 && copied[0] !== undefined
-    ? { keys: copied[0].keys, of: copied[0].of }
-    : undefined;
+  if (direct !== undefined) {
+    return direct.whole === true ? undefined : { keys: direct.keys, of: direct.of };
+  }
+  const copied = middlewareArrayCopiedOrigins(call, keys, false);
+  const single = copied.length === 1 ? copied[0] : undefined;
+  return single === undefined || single.whole === true
+    ? undefined
+    : { keys: single.keys, of: single.of };
 }
