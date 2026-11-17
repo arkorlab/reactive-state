@@ -51,7 +51,7 @@ const CASES = [
   },
   {
     id: 'destructured-bind-call-String-raw',
-    source: `export function Widget(){const {bind}=Function.prototype;const raw=bind.call(String.raw,null);const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    source: `export function Widget(){const {bind:bindFn}=Function.prototype;const raw=bindFn.call(String.raw,null);const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
     local: DATE_TEXT,
   },
   {
