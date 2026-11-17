@@ -161,6 +161,135 @@ const CASES = [
     id: 'exported-let-reassigned-plain-values-pin',
     source: 'export let result: Record<string, number> = { a: 1 }; result = { a: 2 };',
   },
+  {
+    expected: keptRefusal('store'),
+    id: 'recursive-factory-nested-kept-method-writes-this',
+    source:
+      'function make(n: number): { count: number; bump(): number } { if (n === 0) { return { count: 0, bump() { return ++this.count; } }; } return make(n - 1); } const store = { counter: make(2) }; export function next() { return store.counter.bump(); }',
+  },
+  {
+    expected: keptRefusal('counter'),
+    id: 'mutually-recursive-factory-kept-method-writes-this',
+    source:
+      'function makeA(n: number): { count: number; bump(): number } { return n <= 0 ? { count: 0, bump() { return ++this.count; } } : makeB(n - 1); } function makeB(n: number): { count: number; bump(): number } { return makeA(n - 1); } const counter = makeA(2); export function next() { return counter.bump(); }',
+  },
+  {
+    expected: undefined,
+    id: 'recursive-factory-readonly-method-terminates-pin',
+    source:
+      'function make(n: number): { read(): number } { if (n === 0) { return { read() { return 1; } }; } return make(n - 1); } const store = { reader: make(2) }; export function next() { return store.reader.read(); }',
+  },
+  {
+    expected: keptRefusal('store'),
+    id: 'nested-kept-array-after-empty-spread-method-writes-this',
+    source:
+      'const empty: { n: number; bump(): number }[] = []; const store = { counters: [...empty, { n: 0, bump() { return ++this.n; } }] }; export function next() { return store.counters[0]!.bump(); }',
+  },
+  {
+    expected: keptRefusal('state'),
+    id: 'helper-function-dot-call-mutates-kept-object',
+    source:
+      'const state = { n: 0 }; function bump(x: { n: number }) { x.n++; } export function next() { bump.call(null, state); return state.n; }',
+  },
+  {
+    expected: keptRefusal('state'),
+    id: 'helper-function-dot-apply-mutates-kept-object',
+    source:
+      'const state = { n: 0 }; function bump(x: { n: number }) { x.n += 1; } export function next() { bump.apply(null, [state]); return state.n; }',
+  },
+  {
+    expected: keptRefusal('state'),
+    id: 'reflect-apply-helper-mutates-kept-object',
+    source:
+      'const state = { n: 0 }; function bump(x: { n: number }) { x.n = 1; } export function next() { Reflect.apply(bump, null, [state]); return state.n; }',
+  },
+  {
+    expected: keptRefusal('state'),
+    id: 'helper-dot-apply-dynamic-array-mutates-kept-object',
+    source:
+      'const state = { n: 0 }; function bump(x: { n: number }) { x.n++; } export function next(flag: boolean) { const args = flag ? [state] : [{ n: 0 }]; bump.apply(null, args); return state.n; }',
+  },
+  {
+    expected: keptRefusal('state'),
+    id: 'outer-helper-forwards-via-dot-call-to-mutating-inner',
+    source:
+      'const state = { n: 0 }; function inner(x: { n: number }) { x.n++; } function outer(y: { n: number }) { inner.call(null, y); } export function next() { outer(state); return state.n; }',
+  },
+  {
+    expected: keptRefusal('state'),
+    id: 'borrowed-function-dot-call-mutates-kept-this-receiver',
+    source:
+      'const state = { n: 0 }; function bump(this: { n: number }) { this.n++; } export function next() { bump.call(state); return state.n; }',
+  },
+  {
+    expected: undefined,
+    id: 'borrowed-readonly-helper-dot-call-and-apply-pin',
+    source:
+      'const state = { n: 4 }; function read(a: number, x: { n: number }) { return a + x.n; } export function next() { return read.call(null, 1, state) + read.apply(null, [2, state]) + Reflect.apply(read, null, [3, state]); }',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-for-of-loop-assigned-proxy',
+    source: 'export let result: unknown; for (result of [new Proxy({}, {})]) { void result; }',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-for-of-destructured-loop-assigned-proxy',
+    source:
+      'export let result: unknown; for ({ a: result } of [{ a: new Proxy({}, {}) }]) { void result; }',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-for-of-destructured-default-proxy',
+    source:
+      'export let result: unknown; for ({ a: result = new Proxy({}, {}) } of [{} as { a?: unknown }]) { void result; }',
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-destructured-assignment-ignores-unexported-sibling-proxy-pin',
+    source:
+      'export let count = 0; const source = { count: 1, internal: new Proxy({}, {}) }; ({ count } = source);',
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-array-destructured-assignment-ignores-unexported-element-proxy-pin',
+    source:
+      'export let count = 0; const source: [unknown, number] = [new Proxy({}, {}), 1]; [, count] = source;',
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-for-of-destructured-ignores-unexported-sibling-proxy-pin',
+    source:
+      'export let count = 0; for ({ count } of [{ count: 1, internal: new Proxy({}, {}) }]) { void count; }',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-destructured-assignment-catches-getter-returning-proxy',
+    source:
+      'export let count: unknown = 0; const source = { get count() { return new Proxy({}, {}); }, internal: 1 }; ({ count } = source);',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-object-rest-assignment-catches-remaining-proxy',
+    source:
+      'export let rest: Record<string, unknown> = {}; let count = 0; const source = { count: 1, internal: new Proxy({}, {}) }; ({ count, ...rest } = source);',
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-object-rest-assignment-excludes-stripped-proxy-pin',
+    source:
+      'export let rest: Record<string, unknown> = {}; let internal: unknown; const source = { count: 1, internal: new Proxy({}, {}) }; ({ internal, ...rest } = source);',
+  },
+  {
+    expected: PROXY_REFUSAL,
+    id: 'exported-let-destructured-revocable-proxy-member',
+    source: 'export let proxy: unknown; const rev = Proxy.revocable({}, {}); ({ proxy } = rev);',
+  },
+  {
+    expected: undefined,
+    id: 'exported-let-destructured-revocable-revoke-member-pin',
+    source: 'export let revoke: unknown; const rev = Proxy.revocable({}, {}); ({ revoke } = rev);',
+  },
 ] as const;
 
 describe('kept mutations across helper calls, cast targets, nested receivers, and exported Proxy writes', () => {

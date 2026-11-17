@@ -12,7 +12,6 @@ import {
   isClassExpression,
   isComputedPropertyName,
   isConditionalExpression,
-  isConstructorDeclaration,
   isElementAccessExpression,
   isExpressionWithTypeArguments,
   isFunctionDeclaration,
@@ -23,6 +22,7 @@ import {
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
@@ -120,10 +120,11 @@ export function nestedKeptMethodWrite(node: Node): Identifier | undefined {
   if (resolved === undefined || !isKept(resolved.root, writtenBy)) {
     return undefined;
   }
-  if (resolved.steps.length === 0) {
-    return writesThis(methodsOf(resolved.root), method, writtenBy, { call: node, seen: new Set() })
-      ? resolved.root
-      : undefined;
+  if (
+    resolved.steps.length === 0 &&
+    writesThis(methodsOf(resolved.root), method, writtenBy, { call: node, seen: new Set() })
+  ) {
+    return resolved.root;
   }
   const maps = methodsAtExpressionPath(resolved.root, resolved.steps);
   return maps.some((methods) =>
@@ -302,22 +303,24 @@ function expandArrayStep(
   pending: { readonly expr: Expression; readonly path: readonly (string | null)[] }[],
 ): void {
   const indexTarget = head === null || !/^\d+$/u.test(head) ? undefined : Number(head);
+  let fixedBefore = 0;
   let spreadSeen = false;
-  for (const [index, el] of array.elements.entries()) {
+  for (const el of array.elements) {
     if (isSpreadElement(el)) {
       spreadSeen = true;
-      if (indexTarget === undefined || index <= indexTarget) {
+      if (indexTarget === undefined || fixedBefore <= indexTarget) {
         pending.push({ expr: el.expression, path: [null, ...rest] });
       }
       continue;
     }
     const matches =
       indexTarget === undefined ||
-      (!spreadSeen && index === indexTarget) ||
-      (spreadSeen && index <= indexTarget);
-    if (matches) {
+      (!spreadSeen && fixedBefore === indexTarget) ||
+      (spreadSeen && fixedBefore <= indexTarget);
+    if (matches && !isOmittedExpression(el)) {
       pending.push({ expr: el, path: rest });
     }
+    fixedBefore += 1;
   }
 }
 
@@ -348,8 +351,25 @@ function expandInstanceStep(
   }
 }
 
-/** Extracts callable methods on a resolved leaf expression. */
+/** Extracts callable methods on `leaf`, expanding local factory calls without revisiting cycles. */
 function leafMethodsOf(leaf: Expression): ReadonlyMap<string, Node> {
+  const merged = new Map<string, Node>();
+  const seenFactories = new Set<Node>();
+  const pending: Expression[] = [leaf];
+  for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+    if (isCallExpression(item)) {
+      enqueueFactoryAnswers(item, seenFactories, pending);
+      continue;
+    }
+    for (const [name, method] of directLeafMethods(item)) {
+      merged.set(name, method);
+    }
+  }
+  return merged;
+}
+
+/** Extracts direct methods on an identifier, object literal, or local class construction. */
+function directLeafMethods(leaf: Expression): ReadonlyMap<string, Node> {
   if (isIdentifier(leaf)) {
     return methodsOf(leaf);
   }
@@ -359,9 +379,6 @@ function leafMethodsOf(leaf: Expression): ReadonlyMap<string, Node> {
   if (isNewExpression(leaf)) {
     const cls = resolveLocalClass(leaf.expression);
     return cls === undefined ? new Map() : inlineClassMethods(cls);
-  }
-  if (isCallExpression(leaf)) {
-    return inlineFactoryMethods(leaf);
   }
   return new Map();
 }
@@ -419,20 +436,20 @@ function recordClassInstanceMethod(member: Node, methods: Map<string, Node>): vo
   }
 }
 
-/** Collects methods from objects or instances returned by a local factory `call`. */
-function inlineFactoryMethods(call: CallExpression): ReadonlyMap<string, Node> {
+/** Enqueues resolved return expressions of a local factory `call` at most once per function. */
+function enqueueFactoryAnswers(
+  call: CallExpression,
+  seenFactories: Set<Node>,
+  pending: Expression[],
+): void {
   const fn = localFunctionOf(call.expression);
-  if (fn === undefined) {
-    return new Map();
+  if (fn === undefined || seenFactories.has(fn)) {
+    return;
   }
-  const merged = new Map<string, Node>();
+  seenFactories.add(fn);
   for (const answer of answersOf(fn)) {
-    const methods = leafMethodsOf(peelIdentityWrapper(answer));
-    for (const [name, method] of methods) {
-      merged.set(name, method);
-    }
+    pending.push(...projectExpressionPath(answer, []));
   }
-  return merged;
 }
 
 /** Resolves a local `ClassDeclaration` or `ClassExpression` referenced by `expr`. */
@@ -531,11 +548,4 @@ function propertyKeyOf(name: PropertyName | undefined): string | undefined {
 function staticElementKey(expr: Expression): string | undefined {
   const value = constantValue(expr, (id) => platformInitializer(id, id));
   return value === undefined ? undefined : String(value);
-}
-
-/** Finds a constructor with an implementation body on `declared`, if any. */
-export function declaredConstructorOf(declared: ClassLikeDeclaration): Node | undefined {
-  return declared.members.find(
-    (member) => isConstructorDeclaration(member) && member.body !== undefined,
-  );
 }

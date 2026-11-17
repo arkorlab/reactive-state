@@ -307,8 +307,13 @@ function arrayPatternTargetOrigins(
       continue;
     }
     if (isSpreadElement(element)) {
-      if (matchesLeaf(peeled(element.expression))) {
+      const restTarget = peeled(element.expression);
+      if (matchesLeaf(restTarget)) {
         found.push(...restSliceOrigins(source, readAt));
+      } else {
+        const nextRest =
+          source === undefined ? undefined : { ...source, keys: [...source.keys, null] };
+        found.push(...patternTargetOrigins(restTarget, nextRest, readAt, matchesLeaf));
       }
       continue;
     }

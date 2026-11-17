@@ -1,31 +1,37 @@
 import {
+  type BinaryExpression,
   type BindingName,
   type CallExpression,
   type Expression,
+  type ForOfStatement,
   type Identifier,
   isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isElementAccessExpression,
   isExportAssignment,
   isExportDeclaration,
+  isExpression,
+  isForOfStatement,
   isFunctionDeclaration,
   isIdentifier,
   isNamedExports,
+  isNewExpression,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
+  isVariableDeclarationList,
   isVariableStatement,
   type Node,
   type SourceFile,
   type Statement,
   SyntaxKind,
+  type VariableDeclaration,
+  type VariableDeclarationList,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, isAnswering } from './answers.ts';
@@ -34,7 +40,14 @@ import { metadataCallee } from './input-callees.ts';
 import { readsOf } from './local-module-reads.ts';
 import { bindsTarget, peelPlatform, platformPathsOf } from './platform-uses.ts';
 import { proxyOrigin } from './proxy-origins.ts';
-import { bindingIdentifiers, isTypeOnly } from './scope.ts';
+import { patternTargetOrigins } from './proxy-parameter-patterns.ts';
+import {
+  type Context,
+  createPresenceCache,
+  type Origin,
+  type ProjectedSeed,
+} from './proxy-values.ts';
+import { bindingIdentifiers, isBlockScoped, isTypeOnly, withinFunction } from './scope.ts';
 
 /** Assignment operators whose right-hand operand can flow into the target binding. */
 const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
@@ -50,21 +63,22 @@ const ARRAY_ELEMENT_MUTATORS: ReadonlySet<string> = new Set(['fill', 'push', 'un
 /** Starting index of inserted element arguments in `splice(start, deleteCount, ...items)` and `Reflect.set`. */
 const VALUE_ARG_INDEX = 2;
 
-/** Exported data expressions, synchronous callables, and exported binding identifiers. */
+/** Exported data expressions, projected seeds, synchronous callables, and exported binding identifiers. */
 interface ExportRoots {
   readonly bindings: Set<Identifier>;
   readonly callables: Answering[];
+  readonly seeds: ProjectedSeed[];
   readonly values: Expression[];
 }
 
 /** A Proxy exported directly, assigned to an exported binding, or returned by a shared callable. */
 export function sharedProxyOrigin(sourceFile: SourceFile): Node | undefined {
-  const roots: ExportRoots = { bindings: new Set(), callables: [], values: [] };
+  const roots: ExportRoots = { bindings: new Set(), callables: [], seeds: [], values: [] };
   for (const statement of sourceFile.statements) {
     statementOrigins(statement, roots);
   }
   collectExportedBindingWrites(sourceFile, roots);
-  return proxyOrigin(roots.values, { callables: roots.callables });
+  return proxyOrigin(roots.values, { callables: roots.callables, seeds: roots.seeds });
 }
 
 /** Collects value roots and declared binding identifiers from one top-level export statement. */
@@ -95,10 +109,7 @@ function statementOrigins(statement: Statement, roots: ExportRoots): void {
 }
 
 /** Records initializer, pattern defaults, and binding identifiers for an exported variable declaration. */
-function recordVariableExport(
-  decl: Node & { readonly initializer?: Expression | undefined; readonly name: BindingName },
-  roots: ExportRoots,
-): void {
+function recordVariableExport(decl: VariableDeclaration, roots: ExportRoots): void {
   if (decl.initializer !== undefined) {
     exportedOrigins(decl.initializer, roots);
   }
@@ -171,13 +182,19 @@ function recordLocalIdentifierExport(id: Identifier, roots: ExportRoots): void {
   }
 }
 
-/** Scans `sourceFile` for assignments and mutating calls targeting any exported binding. */
+/** Scans `sourceFile` for assignments, `for..of` loops, and mutating calls targeting exported bindings. */
 function collectExportedBindingWrites(sourceFile: SourceFile, roots: ExportRoots): void {
   if (roots.bindings.size === 0) {
     return;
   }
   const readers = [...roots.bindings].map((id) => readsOf(id, sourceFile));
   const isExported = (node: Node): node is Identifier => readers.some((fn) => fn(node));
+  const patternContext: Context = {
+    calls: new Set(),
+    frames: [],
+    presence: createPresenceCache(),
+    spreadKeys: new Map(),
+  };
   const visit = (node: Node): void => {
     if (isTypeOnly(node)) {
       return;
@@ -187,8 +204,9 @@ function collectExportedBindingWrites(sourceFile: SourceFile, roots: ExportRoots
       VALUE_ASSIGNMENTS.has(node.operatorToken.kind) &&
       bindsTarget(node.left, isExported, true)
     ) {
-      exportedOrigins(node.right, roots);
-      collectAssignmentTargetDefaults(node.left, isExported, roots);
+      collectAssignmentExports(node, patternContext, isExported, roots);
+    } else if (isForOfStatement(node)) {
+      collectForOfExports(node, patternContext, isExported, roots);
     } else if (isCallExpression(node)) {
       collectMutatingCallExports(node, isExported, roots);
     }
@@ -197,46 +215,130 @@ function collectExportedBindingWrites(sourceFile: SourceFile, roots: ExportRoots
   sourceFile.forEachChild(visit);
 }
 
-/** Collects default values inside destructuring assignment targets (`({ x = proxy } = {})`). */
-function collectAssignmentTargetDefaults(
-  target: Expression,
-  isExported: (node: Node) => node is Identifier,
+/** Collects direct or destructuring assignment values written to exported bindings or members. */
+function collectAssignmentExports(
+  node: BinaryExpression,
+  context: Context,
+  isExported: (candidate: Node) => candidate is Identifier,
   roots: ExportRoots,
 ): void {
-  const clean = peelPlatform(target);
-  if (isBinaryExpression(clean) && clean.operatorToken.kind === SyntaxKind.EqualsToken) {
-    if (bindsTarget(clean.left, isExported, true)) {
-      exportedOrigins(clean.right, roots);
+  const left = peelPlatform(node.left);
+  if (
+    node.operatorToken.kind !== SyntaxKind.EqualsToken ||
+    (!isObjectLiteralExpression(left) && !isArrayLiteralExpression(left))
+  ) {
+    exportedOrigins(node.right, roots);
+    return;
+  }
+  const source: Origin = { context, keys: [], seen: new Set(), value: node.right };
+  collectProjectedTargetExports(left, source, isExported, roots);
+}
+
+/** Collects element projections from `for..of` loop targets assigning into exported bindings. */
+function collectForOfExports(
+  node: ForOfStatement,
+  context: Context,
+  isExported: (candidate: Node) => candidate is Identifier,
+  roots: ExportRoots,
+): void {
+  const { initializer } = node;
+  if (isVariableDeclarationList(initializer)) {
+    if (!isBlockScoped(initializer) && !withinFunction(node, node.getSourceFile())) {
+      collectHoistedForOfVarExports(initializer, node.expression, roots);
     }
-    collectAssignmentTargetDefaults(clean.left, isExported, roots);
-  } else if (isObjectLiteralExpression(clean)) {
-    collectObjectPatternDefaults(clean.properties, isExported, roots);
-  } else if (isArrayLiteralExpression(clean)) {
-    for (const el of clean.elements) {
-      collectAssignmentTargetDefaults(isSpreadElement(el) ? el.expression : el, isExported, roots);
+    return;
+  }
+  if (!isExpression(initializer) || !bindsTarget(initializer, isExported, true)) {
+    return;
+  }
+  const source: Origin = {
+    context,
+    keys: [null],
+    seen: new Set(),
+    value: unwrapIterableSource(node.expression),
+  };
+  collectProjectedTargetExports(initializer, source, isExported, roots);
+}
+
+/** Records module-scope `for (var exported of iterable)` redeclarations of exported `var` bindings. */
+function collectHoistedForOfVarExports(
+  list: VariableDeclarationList,
+  iterable: Expression,
+  roots: ExportRoots,
+): void {
+  const exportedNames = new Set([...roots.bindings].map((id) => id.text));
+  for (const decl of list.declarations) {
+    collectPatternDefaults(decl.name, roots);
+    if (bindingIdentifiers(decl.name).some((id) => exportedNames.has(id.text))) {
+      roots.seeds.push({
+        keys: [null],
+        topLevelBinding: true,
+        value: unwrapIterableSource(iterable),
+      });
     }
   }
 }
 
-/** Walks properties of an object assignment pattern to collect default initializers. */
-function collectObjectPatternDefaults(
-  properties: readonly Node[],
-  isExported: (node: Node) => node is Identifier,
+/** Unwraps `new Set(items)` and `Array.from(items)` so `for..of` element projection sees `items`. */
+function unwrapIterableSource(iterable: Expression): Expression {
+  const clean = peelPlatform(iterable);
+  if (isNewExpression(clean) && platformPathsOf(clean.expression).includes('Set')) {
+    const first = clean.arguments?.[0];
+    return first === undefined || isSpreadElement(first) ? clean : first;
+  }
+  if (isCallExpression(clean) && platformPathsOf(clean.expression).includes('Array.from')) {
+    const first = clean.arguments[0];
+    return first === undefined || isSpreadElement(first) ? clean : first;
+  }
+  return clean;
+}
+
+/** Projects `target` against `source` for both exported bindings and exported member targets. */
+function collectProjectedTargetExports(
+  target: Expression,
+  source: Origin,
+  isExported: (candidate: Node) => candidate is Identifier,
   roots: ExportRoots,
 ): void {
-  for (const prop of properties) {
-    if (
-      isShorthandPropertyAssignment(prop) &&
-      prop.objectAssignmentInitializer !== undefined &&
-      isExported(prop.name)
-    ) {
-      exportedOrigins(prop.objectAssignmentInitializer, roots);
-    } else if (isPropertyAssignment(prop)) {
-      collectAssignmentTargetDefaults(prop.initializer, isExported, roots);
-    } else if (isSpreadAssignment(prop)) {
-      collectAssignmentTargetDefaults(prop.expression, isExported, roots);
-    }
+  const readAt: Origin = { context: source.context, keys: [], seen: new Set(), value: target };
+  const bindingHits = patternTargetOrigins(
+    target,
+    source,
+    readAt,
+    (leaf) => isIdentifier(leaf) && isExported(leaf),
+  );
+  for (const hit of bindingHits) {
+    recordProjectedHit(hit, true, roots);
   }
+  const memberHits = patternTargetOrigins(target, source, readAt, (leaf) => {
+    return (
+      (isPropertyAccessExpression(leaf) || isElementAccessExpression(leaf)) &&
+      bindsTarget(leaf, isExported, true)
+    );
+  });
+  for (const hit of memberHits) {
+    recordProjectedHit(hit, false, roots);
+  }
+}
+
+/** Pushes an unprojected binding write to `exportedOrigins`, or stores a projected `ProjectedSeed`. */
+function recordProjectedHit(hit: Origin, topLevelBinding: boolean, roots: ExportRoots): void {
+  if (
+    topLevelBinding &&
+    hit.keys.length === 0 &&
+    hit.spread !== true &&
+    hit.excluded === undefined
+  ) {
+    exportedOrigins(hit.value, roots);
+    return;
+  }
+  roots.seeds.push({
+    excluded: hit.excluded,
+    keys: hit.keys,
+    spread: hit.spread,
+    topLevelBinding,
+    value: hit.value,
+  });
 }
 
 /** Collects Proxy values written into exported containers via `Object.assign`, `Reflect.set`, or array mutators. */

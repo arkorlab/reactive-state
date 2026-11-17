@@ -67,6 +67,17 @@ export function proxyOrigin(
   const visited = new WeakMap<Context, Map<Expression, Set<string>>>();
   const pending: Origin[] = [
     ...values.map((value) => ({ context, keys: [], seen: new Set<Expression>(), value })),
+    ...(reading.seeds ?? []).map((seed) => {
+      return {
+        context,
+        excluded: seed.excluded,
+        keys: seed.keys,
+        seen: new Set<Expression>(),
+        spread: seed.spread,
+        topLevelBinding: seed.topLevelBinding,
+        value: seed.value,
+      };
+    }),
     ...callableReturnOrigins(context),
   ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
@@ -118,8 +129,9 @@ function markVisited(
 /** Encodes the member projection and spread state carried by `origin` unambiguously. */
 function originStateKey(origin: Origin): string {
   const path = origin.keys.map((key) => (key === null ? '*' : `${key.length}:${key}`)).join(',');
+  const top = origin.topLevelBinding === true ? '|top' : '';
   if (origin.spread !== true && (origin.excluded === undefined || origin.excluded.size === 0)) {
-    return path;
+    return `${path}${top}`;
   }
   const skipped =
     origin.excluded === undefined
@@ -129,7 +141,7 @@ function originStateKey(origin: Origin): string {
           .map((key) => `${key.length}:${key}`)
           .join(',');
   const mode = origin.spread === true ? 'spread' : 'plain';
-  return `${path}|${mode}|${skipped}`;
+  return `${path}|${mode}|${skipped}${top}`;
 }
 
 /** Whether the value itself, or the known proxy member of a revocable pair, is a Proxy. */
@@ -147,8 +159,32 @@ function isProxy(at: Origin): boolean {
   );
 }
 
+/** Returns return-expression origins when a top-level binding seed points to a local sync callable. */
+function topLevelCallableOrigins(at: Origin): readonly Origin[] | undefined {
+  if (at.topLevelBinding !== true || at.keys.length > 0 || at.spread === true) {
+    return undefined;
+  }
+  const callable = metadataCallee(at.value);
+  if (callable === undefined || !isAnswering(callable) || answersLater(callable)) {
+    return undefined;
+  }
+  const fnContext: Context = { ...at.context, frames: [{ fn: callable, given: undefined }] };
+  return returnedBy(callable).map((ret) => {
+    return {
+      context: fnContext,
+      keys: [],
+      seen: new Set(),
+      value: ret,
+    };
+  });
+}
+
 /** The values an expression can return, without executing its source or deferred bodies. */
 function originsOf(at: Origin): readonly Origin[] {
+  const topCallable = topLevelCallableOrigins(at);
+  if (topCallable !== undefined) {
+    return topCallable;
+  }
   const { keys, value } = at;
   if (isIdentifier(value)) {
     return namedOrigins(value, at);
@@ -169,7 +205,10 @@ function originsOf(at: Origin): readonly Origin[] {
     return values.map((each) => ({ ...at, value: each }));
   }
   if (isBinaryExpression(value)) {
-    if (value.operatorToken.kind === SyntaxKind.CommaToken) {
+    if (
+      value.operatorToken.kind === SyntaxKind.CommaToken ||
+      value.operatorToken.kind === SyntaxKind.EqualsToken
+    ) {
       return [{ ...at, value: value.right }];
     }
     return logicalOrigins(value.left, value.right, value.operatorToken.kind, at);
@@ -223,8 +262,26 @@ function unexpandedArrayOrigins(value: ArrayLiteralExpression, at: Origin): read
       return [];
     }
     return isSpreadElement(each)
-      ? [{ ...at, excluded: undefined, keys: [null], spread: undefined, value: each.expression }]
-      : [{ ...at, excluded: undefined, keys: [], spread: undefined, value: each }];
+      ? [
+          {
+            ...at,
+            excluded: undefined,
+            keys: [null],
+            spread: undefined,
+            topLevelBinding: undefined,
+            value: each.expression,
+          },
+        ]
+      : [
+          {
+            ...at,
+            excluded: undefined,
+            keys: [],
+            spread: undefined,
+            topLevelBinding: undefined,
+            value: each,
+          },
+        ];
   });
   if (at.keys.length === 0) {
     return candidates;
@@ -382,5 +439,12 @@ function logicalOrigins(
 
 /** Wraps an array element or call argument expression into a fresh top-level `Origin` slot. */
 function asSlotOrigin(value: Expression, at: Origin): Origin {
-  return { ...at, excluded: undefined, keys: [], spread: undefined, value };
+  return {
+    ...at,
+    excluded: undefined,
+    keys: [],
+    spread: undefined,
+    topLevelBinding: undefined,
+    value,
+  };
 }

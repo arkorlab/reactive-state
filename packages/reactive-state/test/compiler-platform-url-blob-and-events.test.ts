@@ -184,6 +184,83 @@ const CASES = [
     source:
       'class Event { timeStamp = 0; } export function make() { const items = [new Event()]; return items[0].timeStamp; }',
   },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-self-reassigning-linked-projection-bounded',
+    source:
+      'export function last(first: { next?: unknown; timeStamp: number }) { let current: any = first; while (current.next) { current = current.next; } return current.timeStamp; }',
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-self-reassigning-element-projection-bounded',
+    source:
+      "export function walk(root: Record<string, any>) { let node = root; while (node['child']) { node = node['child']; } return node.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-after-empty-prefix-spread-in-array',
+    source:
+      "export function make(prefix: Event[]) { const events = [...prefix, new Event('x')]; return events[0]!.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-after-empty-literal-spread-in-array',
+    source:
+      "export function make() { const empty: Event[] = []; const events = [...empty, new Event('x')]; return events[0]!.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-after-prefix-spread-in-helper-call',
+    source:
+      "function read(first: { timeStamp: number }) { return first.timeStamp; } export function make(prefix: { timeStamp: number }[]) { return (read as (...args: unknown[]) => number)(...prefix, new Event('x')); }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-from-nullish-assigned-local-variable',
+    source:
+      "export function make() { let event: Event | undefined; event ??= new Event('x'); return event.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-from-logical-or-assigned-local-variable',
+    source:
+      "export function make(seed?: Event) { let event: Event | undefined = seed; event ||= new Event('x'); return event.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-from-logical-and-assigned-local-variable',
+    source:
+      "export function make() { let event: Event | { timeStamp: number } = { timeStamp: 0 }; event &&= new Event('x'); return event.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-from-nullish-assigned-object-member',
+    source:
+      "export function make() { const box: { event?: Event } = {}; box.event ??= new Event('x'); return box.event.timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-from-inline-nullish-assignment',
+    source: "export function make(event?: Event) { return (event ??= new Event('x')).timeStamp; }",
+  },
+  {
+    expected: EVENT_TIMESTAMP_REFUSAL,
+    id: 'event-timestamp-read-via-nullish-member-assignment',
+    source:
+      "export function make() { const ev: { timeStamp?: number } = new Event('x'); ev.timeStamp ??= 0; return 1; }",
+  },
+  {
+    expected: undefined,
+    id: 'plain-timestamp-fixed-element-before-event-spread-pin',
+    source:
+      "export function make() { const events = [{ timeStamp: 0 }, ...[new Event('x')]]; return events[0]!.timeStamp; }",
+  },
+  {
+    expected: undefined,
+    id: 'plain-timestamp-cyclic-alias-without-projection-pin',
+    source:
+      'export function make(flag: boolean) { let a = { timeStamp: 1 }; let b = { timeStamp: 2 }; if (flag) { a = b; b = a; } return a.timeStamp; }',
+  },
 ] as const;
 
 describe('platform constructor aliases, base-independent URLs, Blob options, and Event timestamps', () => {

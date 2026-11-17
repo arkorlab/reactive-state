@@ -39,6 +39,14 @@ import { platformInitializer } from './platform-inputs.ts';
 import { bindsTarget, peelPlatform, platformPathsOf, sourceFunction } from './platform-uses.ts';
 import { isTypeOnly } from './scope.ts';
 
+/** Assignment operators whose right-hand expression can populate the target binding or member. */
+const VALUE_ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 /** Array mutators whose arguments become elements of the receiver array. */
 const ELEMENT_PUSH_METHODS: ReadonlySet<string> = new Set(['fill', 'push', 'unshift']);
 
@@ -338,8 +346,9 @@ function pushCallArgumentForParameter(
   pending: EventQuery[],
 ): void {
   const { keys, paramIndex, parameter } = spec;
+  let fixedBefore = 0;
   let seenSpread = false;
-  for (const [index, arg] of call.arguments.entries()) {
+  for (const arg of call.arguments) {
     if (isSpreadElement(arg)) {
       seenSpread = true;
       const spreadKeys =
@@ -347,13 +356,17 @@ function pushCallArgumentForParameter(
       pending.push({ expr: arg.expression, keys: spreadKeys });
       continue;
     }
-    if (parameter.dotDotDotToken !== undefined && index >= paramIndex) {
-      if (keys.length > 0) {
+    if (parameter.dotDotDotToken !== undefined) {
+      if ((seenSpread || fixedBefore >= paramIndex) && keys.length > 0) {
         pending.push({ expr: arg, keys: keys.slice(1) });
       }
-    } else if ((!seenSpread && index === paramIndex) || (seenSpread && index <= paramIndex)) {
+    } else if (
+      (!seenSpread && fixedBefore === paramIndex) ||
+      (seenSpread && fixedBefore <= paramIndex)
+    ) {
       pending.push({ expr: arg, keys });
     }
+    fixedBefore += 1;
   }
 }
 
@@ -369,7 +382,7 @@ function pushIdentifierWriteSites(
     if (isTypeOnly(node)) {
       return;
     }
-    if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
+    if (isBinaryExpression(node) && VALUE_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind)) {
       inspectAssignmentToBinding(node.left, node.right, ctx);
     } else if (isCallExpression(node) && keys.length > 0) {
       inspectMutatingCallOnBinding(node, ctx);

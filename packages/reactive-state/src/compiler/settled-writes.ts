@@ -1,43 +1,43 @@
 import {
   type CallExpression,
-  type ConstructorDeclaration,
   type Expression,
   type Identifier,
   isBigIntLiteral,
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
-  isConstructorDeclaration,
   isElementAccessExpression,
   isIdentifier,
   isNewExpression,
   isPropertyAccessExpression,
-  isSpreadElement,
   isTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVoidExpression,
-  type NewExpression,
   type Node,
   type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, overloadsOf } from './answers.ts';
 import { declarationOf } from './framed.ts';
 import { writesThis } from './held-methods.ts';
 import { isKept, runsPerCall } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
 import { constantValue } from './numbers.ts';
-import { bindsTarget, peelPlatform, sourceFunction, wrappedBy } from './platform-uses.ts';
+import { bindsTarget, peelPlatform, wrappedBy } from './platform-uses.ts';
 import { bindingIdentifiers, isTypeOnly } from './scope.ts';
 import {
-  declaredConstructorOf,
+  type CallArgumentSlot,
+  calleeMutatesThis,
+  type LocalInvocable,
+  type ResolvedInvocation,
+  resolveInvocation,
+} from './settled-calls.ts';
+import {
   keptRootOf,
   keptTargetsOf,
   methodsAtExpressionPath,
   receiverMemberPath,
-  resolveLocalClass,
 } from './settled-receivers.ts';
 import { methodOf, writtenArgumentBy, writtenBy } from './written.ts';
 
@@ -47,9 +47,6 @@ const VALUE_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BarBarToken,
   SyntaxKind.QuestionQuestionToken,
 ]);
-
-/** Callable or constructor declaration carrying parameters and an executable body. */
-type LocalInvocable = Answering | ConstructorDeclaration;
 
 /** Context carried while checking whether a parameter is mutated inside `callee`. */
 interface ParameterMutationCheck {
@@ -64,52 +61,57 @@ export function keptCallParameterWrite(node: Node): Identifier | undefined {
   if ((!isCallExpression(node) && !isNewExpression(node)) || !runsPerCall(node)) {
     return undefined;
   }
-  const args = node.arguments;
-  if (args === undefined || args.length === 0) {
+  const resolved = resolveInvocation(node);
+  if (resolved === undefined) {
     return undefined;
   }
-  const callees = invocablesOf(node);
-  if (callees.length === 0) {
-    return undefined;
-  }
-  for (const [argIndex, rawArg] of args.entries()) {
-    const candidates = keptArgumentCandidates(rawArg);
-    if (candidates.length === 0) {
-      continue;
+  if (resolved.thisArg !== undefined) {
+    const receiverHit = keptReceiverMutation(resolved.thisArg, resolved.callees);
+    if (receiverHit !== undefined) {
+      return receiverHit;
     }
-    const mutated = candidates.find((candidate) => {
-      return callees.some((callee) => {
-        return matchingParameters(callee, args, argIndex).some((param) =>
-          parameterMutatedIn(callee, param, candidate.expr, new Set()),
-        );
-      });
-    });
+  }
+  for (const [argIndex, slot] of resolved.args.entries()) {
+    const mutated = keptSlotMutation(slot, argIndex, resolved);
     if (mutated !== undefined) {
-      return mutated.root;
+      return mutated;
     }
   }
   return undefined;
 }
 
-/** Resolves local source functions or class constructors invoked by `call`. */
-function invocablesOf(call: CallExpression | NewExpression): readonly LocalInvocable[] {
-  if (isNewExpression(call)) {
-    const cls = resolveLocalClass(call.expression);
-    const ctor = cls === undefined ? undefined : declaredConstructorOf(cls);
-    return ctor !== undefined && isConstructorDeclaration(ctor) ? [ctor] : [];
-  }
-  const fn = sourceFunction(call.expression);
-  if (fn === undefined) {
-    return [];
-  }
-  return overloadsOf(fn).filter((each) => each.body !== undefined);
+/** Reports a kept receiver identifier when `thisArg` is mutated via `this` inside `callees`. */
+function keptReceiverMutation(
+  thisArg: Expression,
+  callees: readonly LocalInvocable[],
+): Identifier | undefined {
+  const candidates = keptArgumentCandidates(thisArg);
+  return candidates.length > 0 && callees.some((callee) => calleeMutatesThis(callee))
+    ? candidates[0]?.root
+    : undefined;
+}
+
+/** Reports a kept argument identifier when `slot` at `argIndex` is mutated by `resolved.callees`. */
+function keptSlotMutation(
+  slot: CallArgumentSlot,
+  argIndex: number,
+  resolved: ResolvedInvocation,
+): Identifier | undefined {
+  const candidates = keptArgumentCandidates(slot.expr);
+  const mutated = candidates.find((candidate) => {
+    return resolved.callees.some((callee) => {
+      return matchingParameters(callee, resolved.args, argIndex).some((param) =>
+        parameterMutatedIn(callee, param, candidate.expr, new Set()),
+      );
+    });
+  });
+  return mutated?.root;
 }
 
 /** Extracts kept non-primitive root candidates from an argument expression. */
 function keptArgumentCandidates(
-  rawArg: Expression,
+  expr: Expression,
 ): readonly { readonly expr: Expression; readonly root: Identifier }[] {
-  const expr = isSpreadElement(rawArg) ? rawArg.expression : rawArg;
   const found: { readonly expr: Expression; readonly root: Identifier }[] = [];
   const pending: Expression[] = [expr];
   const seen = new Set<Expression>();
@@ -179,23 +181,25 @@ function isImmutablePrimitiveBinding(expr: Expression, root: Identifier): boolea
   );
 }
 
-/** Maps an argument at `argIndex` to formal parameters on `callee`, accounting for spreads. */
+/** Maps a normalized argument slot at `argIndex` to formal parameters on `callee`. */
 function matchingParameters(
   callee: LocalInvocable,
-  args: readonly Expression[],
+  args: readonly CallArgumentSlot[],
   argIndex: number,
 ): readonly ParameterDeclaration[] {
   const params = callee.parameters;
-  const rawArg = args[argIndex];
-  const hasPriorSpread = args.slice(0, argIndex).some((each) => isSpreadElement(each));
-  if (rawArg !== undefined && isSpreadElement(rawArg)) {
-    return params.slice(hasPriorSpread ? 0 : argIndex);
+  const slot = args[argIndex];
+  const prefix = args.slice(0, argIndex);
+  const hasPriorSpread = prefix.some((each) => each.spread);
+  const fixedBefore = prefix.filter((each) => !each.spread).length;
+  if (slot?.spread === true) {
+    return params.slice(fixedBefore);
   }
   return params.filter((param, paramIndex) => {
     if (param.dotDotDotToken !== undefined) {
-      return hasPriorSpread || argIndex >= paramIndex;
+      return hasPriorSpread || fixedBefore >= paramIndex;
     }
-    return hasPriorSpread ? paramIndex >= 0 : paramIndex === argIndex;
+    return hasPriorSpread ? paramIndex >= fixedBefore : paramIndex === fixedBefore;
   });
 }
 
@@ -397,21 +401,26 @@ function callMutatesTracked(node: Node, check: ParameterMutationCheck): boolean 
   if (isCallExpression(node) && trackedReceiverWritesThis(node, check)) {
     return true;
   }
-  const args = node.arguments;
-  if (args === undefined || args.length === 0) {
+  const resolved = resolveInvocation(node);
+  if (resolved === undefined) {
     return false;
   }
-  const innerCallees = invocablesOf(node);
-  if (innerCallees.length === 0) {
-    return false;
+  if (
+    resolved.thisArg !== undefined &&
+    referencesTracked(resolved.thisArg, check.isTracked) &&
+    resolved.callees.some((callee) => calleeMutatesThis(callee))
+  ) {
+    return true;
   }
-  return args.some((rawArg, argIndex) => {
-    const expr = isSpreadElement(rawArg) ? rawArg.expression : rawArg;
-    if (!referencesTracked(expr, check.isTracked) && !bindsTarget(expr, check.isTracked, true)) {
+  return resolved.args.some((slot, argIndex) => {
+    if (
+      !referencesTracked(slot.expr, check.isTracked) &&
+      !bindsTarget(slot.expr, check.isTracked, true)
+    ) {
       return false;
     }
-    return innerCallees.some((inner) => {
-      return matchingParameters(inner, args, argIndex).some((innerParam) =>
+    return resolved.callees.some((inner) => {
+      return matchingParameters(inner, resolved.args, argIndex).some((innerParam) =>
         parameterMutatedIn(inner, innerParam, check.argExpr, check.seenParams),
       );
     });

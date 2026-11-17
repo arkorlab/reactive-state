@@ -34,11 +34,21 @@ import { rootOf, targetsOf } from './kept.ts';
 import type { Resolve } from './numbers.ts';
 import { writtenBy } from './written.ts';
 
+/** Projected expression root seeded from an exported destructuring or loop assignment. */
+export interface ProjectedSeed {
+  readonly excluded?: ReadonlySet<string> | undefined;
+  readonly keys: readonly OriginKey[];
+  readonly spread?: boolean | undefined;
+  readonly topLevelBinding?: boolean | undefined;
+  readonly value: Expression;
+}
+
 /** Source-written values that can carry a Proxy to a measured call result or container entry. */
 export interface ProxyReading {
   readonly callables?: readonly Answering[];
   readonly follow?: Resolve;
   readonly functionOf?: (callee: Expression) => Answering | undefined;
+  readonly seeds?: readonly ProjectedSeed[];
 }
 
 /** Active source invocation frame mapping parameters to caller argument origins. */
@@ -88,6 +98,7 @@ export interface Origin {
   readonly seen: ReadonlySet<Expression>;
   readonly spread?: boolean | undefined;
   readonly excluded?: ReadonlySet<string> | undefined;
+  readonly topLevelBinding?: boolean | undefined;
 }
 
 /** Peels parentheses, `as`, `<T>`, `satisfies`, and `!` wrappers from an expression. */
@@ -454,10 +465,21 @@ function dataOrigins(object: ObjectLiteralExpression, at: Origin): readonly Orig
   const found: Origin[] = [];
   const seen = new Set<string>(at.excluded);
   const setters = new Set<string>();
-  const entryAt: Origin = { ...at, excluded: undefined, spread: undefined };
+  const entryAt: Origin = {
+    ...at,
+    excluded: undefined,
+    spread: undefined,
+    topLevelBinding: undefined,
+  };
   for (const property of object.properties.toReversed()) {
     if (isSpreadAssignment(property)) {
-      found.push({ ...at, excluded: new Set(seen), spread: true, value: property.expression });
+      found.push({
+        ...at,
+        excluded: new Set(seen),
+        spread: true,
+        topLevelBinding: undefined,
+        value: property.expression,
+      });
       for (const guaranteed of guaranteedSpreadKeys(property.expression, at.context)) {
         seen.add(guaranteed);
       }

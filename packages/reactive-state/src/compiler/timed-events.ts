@@ -16,6 +16,7 @@ import {
   isNumericLiteral,
   isObjectBindingPattern,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
@@ -32,7 +33,7 @@ import { returnedBy } from './answers.ts';
 import { isTakenApart, patternKey } from './code-globals.ts';
 import { constantValue } from './numbers.ts';
 import { platformInitializer } from './platform-inputs.ts';
-import { peelPlatform, platformPathsOf, sourceFunction } from './platform-uses.ts';
+import { peelPlatform, platformPathsOf, sourceFunction, wrappedBy } from './platform-uses.ts';
 import {
   type EventQuery,
   expandIdentifierQuery,
@@ -43,10 +44,19 @@ import {
 /** Platform constructors whose instances expose a creation-time `timeStamp`. */
 const EVENT_CLASSES: ReadonlySet<string> = new Set(['CustomEvent', 'Event']);
 
-/** Binary operators that forward one of their operands' values. */
+/** Bounds on member-key depth and worklist steps so cyclic projections cannot fail to terminate. */
+const EVENT_QUERY_LIMITS = {
+  maxDepth: 24,
+  maxSteps: 512,
+} as const;
+
+/** Binary operators (including logical assignments) that forward one of their operands' values. */
 const VALUE_BRANCH_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
   SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarEqualsToken,
   SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
   SyntaxKind.QuestionQuestionToken,
 ]);
 
@@ -103,7 +113,7 @@ function timestampQueries(node: Node): readonly EventQuery[] {
 /** Whether `node` stands directly on the left-hand side of a plain `=` assignment. */
 function isAssignmentTarget(node: Expression): boolean {
   let current: Node = node;
-  while (peelPlatform(current as Expression) !== current) {
+  while (wrappedBy(current.parent)) {
     current = current.parent;
   }
   const parent = current.parent;
@@ -146,17 +156,25 @@ function assignmentPatternQueries(
   }
 }
 
-/** Walks an explicit worklist to test whether any query can evaluate to an `Event` instance. */
+/** Walks a bounded worklist to test whether any query may evaluate to an `Event` instance. */
 function mayReachEvent(initial: readonly EventQuery[]): boolean {
   const pending = [...initial];
   const seen = new Set<string>();
+  let steps = 0;
   for (let query = pending.pop(); query !== undefined; query = pending.pop()) {
+    if (query.keys.length > EVENT_QUERY_LIMITS.maxDepth) {
+      return true;
+    }
     const value = peelPlatform(query.expr);
     const key = `${value.pos}:${value.end}:${query.keys.map((step) => step ?? '*').join('/')}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
+    steps += 1;
+    if (steps > EVENT_QUERY_LIMITS.maxSteps) {
+      return true;
+    }
     if (query.keys.length === 0 && isEventConstruction(value)) {
       return true;
     }
@@ -228,22 +246,24 @@ function expandArrayLiteralQuery(
   const [head, ...rest] = keys;
   const targetIndex =
     head === undefined || head === null || !/^\d+$/u.test(head) ? undefined : Number(head);
+  let fixedBefore = 0;
   let spreadSeen = false;
-  for (const [index, element] of array.elements.entries()) {
+  for (const element of array.elements) {
     if (isSpreadElement(element)) {
       spreadSeen = true;
-      if (targetIndex === undefined || index <= targetIndex) {
+      if (targetIndex === undefined || fixedBefore <= targetIndex) {
         pending.push({ expr: element.expression, keys: [null, ...rest] });
       }
       continue;
     }
     const matches =
       targetIndex === undefined ||
-      (!spreadSeen && index === targetIndex) ||
-      (spreadSeen && index <= targetIndex);
-    if (matches) {
+      (!spreadSeen && fixedBefore === targetIndex) ||
+      (spreadSeen && fixedBefore <= targetIndex);
+    if (matches && !isOmittedExpression(element)) {
       pending.push({ expr: element, keys: rest });
     }
+    fixedBefore += 1;
   }
 }
 
