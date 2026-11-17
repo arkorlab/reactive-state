@@ -13,6 +13,8 @@ import {
   isFunctionExpression,
   isIdentifier,
   isObjectLiteralExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isSourceFile,
@@ -33,9 +35,9 @@ import { globalPath } from './global-answers.ts';
 import { followedOf, type JsonReading } from './json-reading.ts';
 import { readsOf } from './local-module-reads.ts';
 import { aliasedDeclaration, followedAlias, readsUntouchedMember } from './local-reading.ts';
+import { assignedBinary, updatedAt } from './local-write-arithmetic.ts';
 import {
   ASSIGNING,
-  COMPUTING,
   handedTo,
   isConstList,
   isPatternTarget,
@@ -45,9 +47,9 @@ import {
   receiverOf,
   type Target,
   unreplacedAt,
+  UPDATING,
 } from './local-write-paths.ts';
 import {
-  assigned,
   assignedFrom,
   CHANGED,
   deletedAt,
@@ -214,7 +216,7 @@ export function writesOf(declared: Identifier, held: Expression | undefined, wal
   return { changes, values };
 }
 
-/** Direct syntax-level write (`[target.x] = …`, `delete target.x`, `target.x = …`) if `top` is one. */
+/** Direct syntax-level write (`[target.x] = …`, `delete target.x`, `target.x++`, `target.x = …`). */
 function directWriteAt(top: Expression, target: Target): Writes | undefined {
   if (isPatternTarget(top)) {
     return target.keys.length > 0 ? CHANGED : NONE;
@@ -223,10 +225,15 @@ function directWriteAt(top: Expression, target: Target): Writes | undefined {
   if (isDeleteExpression(parent) && parent.expression === top) {
     return deletedAt(target);
   }
+  if (
+    (isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) &&
+    parent.operand === top &&
+    UPDATING.has(parent.operator)
+  ) {
+    return updatedAt(parent.operator, top, target);
+  }
   if (isBinaryExpression(parent) && parent.left === top) {
-    const operator = parent.operatorToken.kind;
-    const isAssigning = ASSIGNING.has(operator) || COMPUTING.has(operator);
-    return isAssigning ? assigned(operator, parent.right, target) : NONE;
+    return assignedBinary(parent.operatorToken.kind, top, parent.right, target);
   }
   return undefined;
 }

@@ -9,16 +9,14 @@ import {
   isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPath } from './global-answers.ts';
-import { COMPUTING, isIndex, isShrunkAt, type Target, unreplacedAt } from './local-write-paths.ts';
-import { constantNumber } from './numbers.ts';
+import { isIndex, isShrunkAt, type Target, unreplacedAt } from './local-write-paths.ts';
 
 /**
- * Target slot classification, deletions, `Object.assign` sources, and assignments on local
+ * Target slot classification, deletions, `Object.assign` sources, and direct assignments on local
  * constants (`local-writes.ts`).
  */
 
@@ -38,7 +36,8 @@ export interface Writes {
 export const CHANGED: Writes = { changes: true, values: [] };
 export const NONE: Writes = { changes: false, values: [] };
 
-/** Array methods whose return value is another `Array` instance. */
+export type SlotKind = 'changed' | 'element' | 'entry';
+
 const ARRAY_ANSWER_METHODS: ReadonlySet<string> = new Set([
   'concat',
   'copyWithin',
@@ -55,12 +54,6 @@ const ARRAY_ANSWER_METHODS: ReadonlySet<string> = new Set([
   'toSorted',
   'toSpliced',
   'with',
-]);
-
-/** The operators of `COMPUTING` that make no finite number of a zero on their right: `ratio /= 0`. */
-const BY_ZERO: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.PercentEqualsToken,
-  SyntaxKind.SlashEqualsToken,
 ]);
 
 /** Whether `key` parses as a number or `NaN` that is not a valid array index (`-1`, `1.5`, `-0`, `4294967295`). */
@@ -116,8 +109,6 @@ function isArrayExpression(node: Expression): boolean {
   return isPropertyAccessExpression(callee) && ARRAY_ANSWER_METHODS.has(callee.name.text);
 }
 
-type SlotKind = 'changed' | 'element' | 'entry';
-
 /** Checks whether writing `last` on `array` stays within its dense prefix without holes. */
 function arraySlotKind(array: ArrayLiteralExpression, last: string, target: Target): SlotKind {
   if (!isIndex(last) || array.elements.some((each) => isOmittedExpression(each))) {
@@ -151,10 +142,18 @@ export function slotEntryKind(
   return 'entry';
 }
 
-/**
- * `delete target.prop`: safe only when the container at `keys.slice(0, -1)` is an unreplaced
- * plain object literal; deleting from an array or unproven container may leave a sparse hole.
- */
+/** Validates the target key and container, returning the slot classification. */
+export function checkedSlotOf(target: Target): SlotKind {
+  const { keys } = target;
+  const last = keys.at(-1);
+  if (last === undefined || last === 'length' || keys.includes('__proto__')) {
+    return 'changed';
+  }
+  const container = unreplacedAt(target, keys.slice(0, -1));
+  return slotEntryKind(container, last, target);
+}
+
+/** `delete target.prop`: safe only when the container at `keys.slice(0, -1)` is a plain object literal. */
 export function deletedAt(target: Target): Writes {
   if (target.keys.length === 0) {
     return NONE;
@@ -182,30 +181,14 @@ export function assignedFrom(sources: readonly Expression[], target: Target): Wr
   };
 }
 
-/**
- * What an assignment of `operator` writes of `value` into the member `target.keys` reads of a
- * constant: refuses `.length`, `__proto__`, dynamic keys, non-index array properties, and indexed
- * writes that may leave sparse array holes.
- */
-export function assigned(operator: SyntaxKind, value: Expression, target: Target): Writes {
-  const { keys } = target;
-  const last = keys.at(-1);
-  if (keys.length === 0) {
+/** Direct (`=` / `&&=` / `||=` / `??=`) assignment onto `target`. */
+export function assignedValue(value: Expression, target: Target): Writes {
+  if (target.keys.length === 0) {
     return NONE;
   }
-  if (last === undefined || last === 'length' || keys.includes('__proto__')) {
-    return CHANGED;
-  }
-  const container = unreplacedAt(target, keys.slice(0, -1));
-  const slot = slotEntryKind(container, last, target);
+  const slot = checkedSlotOf(target);
   if (slot === 'changed') {
     return CHANGED;
-  }
-  if (COMPUTING.has(operator)) {
-    const byZero = BY_ZERO.has(operator) && constantNumber(value, target.resolve) === 0;
-    return byZero
-      ? CHANGED
-      : { changes: false, values: [{ entry: false, inside: target.inside, value }] };
   }
   return {
     changes: false,

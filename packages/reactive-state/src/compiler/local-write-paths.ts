@@ -98,7 +98,7 @@ export const COMPUTING: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.SlashEqualsToken,
 ]);
 
-const UPDATING: ReadonlySet<SyntaxKind> = new Set([
+export const UPDATING: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.MinusMinusToken,
   SyntaxKind.PlusPlusToken,
 ]);
@@ -109,7 +109,7 @@ export function isConstList(list: Node): boolean {
 }
 
 /** Whether `declared` is bound by a `const` variable declaration. */
-function isConstIdentifier(declared: Identifier): boolean {
+export function isConstIdentifier(declared: Identifier): boolean {
   const { parent } = declared;
   return isVariableDeclaration(parent) && parent.name === declared && isConstList(parent.parent);
 }
@@ -352,7 +352,7 @@ export function handsToMutator(
   return isCallExpression(call) && target.callsLocal?.(callee) === true;
 }
 
-interface AliasFrame {
+export interface AliasFrame {
   readonly holder: Identifier;
   readonly suffix: readonly (string | undefined)[];
 }
@@ -363,7 +363,10 @@ interface AliasTransition {
 }
 
 /** Next `const` alias frame if `top` binds a plain `const` identifier, or `'escaped'` if non-const aliased. */
-function aliasStep(top: Expression, suffix: readonly (string | undefined)[]): AliasTransition {
+export function aliasStep(
+  top: Expression,
+  suffix: readonly (string | undefined)[],
+): AliasTransition {
   const { parent } = top;
   if (isVariableDeclaration(parent) && parent.initializer === top) {
     if (!isConstList(parent.parent) || !isIdentifier(parent.name)) {
@@ -407,7 +410,7 @@ function checkPrefixRead(
 }
 
 /** Walks `target.declared` and its `const` aliases, stopping when `checkRead` reports a hazard. */
-function anyAliasRead(
+export function anyAliasRead(
   target: Target,
   containerKeys: readonly (string | undefined)[],
   checkRead: (
