@@ -26,7 +26,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
+import { framedDescriptorChoices, framedDescriptorEntries } from './framed-descriptor-entries.ts';
 import { framedHeldValues } from './framed-held-members.ts';
 import { framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
@@ -357,20 +357,25 @@ function variableHolderOf(target: Expression): VariableDeclaration | undefined {
     : undefined;
 }
 
-/** Single data `value` expression of a closed descriptor literal with no `get`/`set` fields. */
+/** Single data `value` expression of a closed descriptor literal with a definite `'value'` key. */
 function exactDataDescriptorValue(descriptor: Expression): Expression | undefined {
   const literal = unwrapped(descriptor);
   if (!isObjectLiteralExpression(literal) || hasAccessorDescriptorKey(literal)) {
     return undefined;
   }
-  const entries = framedDescriptorEntries(literal, ['value']);
-  return entries?.length === 1 ? entries[0] : undefined;
+  const choice = framedDescriptorChoices(literal, 'value');
+  return choice !== undefined && !choice.absent && choice.values.length === 1
+    ? choice.values[0]
+    : undefined;
 }
 
-/** Whether a closed descriptor literal proves `field: true`. */
+/** Whether a closed descriptor literal proves a definitely present `field: true` entry. */
 function descriptorBooleanTrue(descriptor: Expression, field: string): boolean {
-  const entries = framedDescriptorEntries(descriptor, [field]);
-  const only = entries?.length === 1 ? entries[0] : undefined;
+  const choice = framedDescriptorChoices(descriptor, field);
+  const only =
+    choice !== undefined && !choice.absent && choice.values.length === 1
+      ? choice.values[0]
+      : undefined;
   return only !== undefined && unwrapped(only).kind === SyntaxKind.TrueKeyword;
 }
 

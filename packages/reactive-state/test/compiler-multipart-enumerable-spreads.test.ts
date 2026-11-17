@@ -104,6 +104,26 @@ const CASES = [
     expected: undefined,
     id: 'parameter-ordinary-member-assignment-spread-overwrites',
   },
+  {
+    body: "return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...Object.defineProperty({}, 'body', { value: 'fixed', [flag ? 'enumerable' : 'writable']: true }) });",
+    expected: MULTIPART_REASON,
+    id: 'computed-flag-possibly-non-enumerable-spread-retains-earlier-form-data',
+  },
+  {
+    body: "const local: RequestInit = {}; Object.defineProperty(local, 'body', { value: 'fixed', [flag ? 'enumerable' : 'configurable']: true }); return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...local });",
+    expected: MULTIPART_REASON,
+    id: 'const-holder-computed-possibly-non-enumerable-spread-retains-form-data',
+  },
+  {
+    body: "const opts: RequestInit = { method: 'POST' }; Object.defineProperty(opts, 'body', { value: new FormData(), [flag ? 'writable' : 'enumerable']: true }); opts.body = 'fixed'; return new Request('https://example.com/', opts);",
+    expected: MULTIPART_REASON,
+    id: 'computed-possibly-non-writable-define-property-not-cut-by-body-write',
+  },
+  {
+    body: "const opts: RequestInit = { method: 'POST', body: new FormData() }; Object.defineProperty(opts, 'body', { [flag ? 'value' : 'writable']: 'fixed', enumerable: true }); return new Request('https://example.com/', opts);",
+    expected: MULTIPART_REASON,
+    id: 'computed-possibly-absent-value-define-property-retains-prior-form-data',
+  },
 ] as const;
 
 describe('multipart enumerability checks across spreads, Object.assign, and descriptor mutators', () => {
@@ -122,7 +142,7 @@ describe('multipart enumerability checks across spreads, Object.assign, and desc
     using parsed = parseModule(
       api,
       'multipart-enumerable-spreads.ts',
-      `export function build(options: RequestInit): Request { ${body} }\n`,
+      `export function build(options: RequestInit, flag: boolean): Request { void flag; ${body} }\n`,
     );
     let target: NewExpression | undefined;
     const pending: Node[] = [parsed.sourceFile];

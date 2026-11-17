@@ -34,17 +34,14 @@ export interface ProjectionCallbacks {
     name: Identifier,
     root: ParameterDeclaration['name'],
   ) => readonly Expression[];
-  readonly isTypedFormData: (
-    raw: Expression,
-    value: Expression,
-    keys: readonly string[],
-  ) => boolean;
+  readonly isAssertedFormData: (raw: Expression, keys: readonly string[]) => boolean;
+  readonly isBindingTypedFormData: (id: Identifier, keys: readonly string[]) => boolean;
   readonly readParameter: (
     name: Identifier,
     parameter: ParameterDeclaration,
   ) => {
-    readonly ambiguous?: boolean;
-    readonly dynamicOpaque?: boolean;
+    readonly ambiguous?: boolean | undefined;
+    readonly dynamicOpaque?: boolean | undefined;
     readonly replaced: boolean;
     readonly sources: readonly Held[];
   };
@@ -63,13 +60,20 @@ export interface ProjectionCallbacks {
 interface HeldWorkItem {
   readonly activeBindings: ReadonlyMap<Node, ReadonlySet<string>>;
   readonly activeExpressions: ReadonlySet<Expression>;
+  readonly enclosingBindingTyped: boolean;
+  readonly held: Held;
+}
+
+interface ChildCandidate {
+  readonly enclosingBindingTyped?: boolean | undefined;
   readonly held: Held;
 }
 
 interface ExpandedStep {
   readonly ambiguous: boolean;
+  readonly bindingTypedFormData: boolean;
+  readonly children: readonly ChildCandidate[];
   readonly closed: boolean;
-  readonly entries: readonly Held[];
 }
 
 const PROJECTION_LIMITS = {
@@ -88,7 +92,12 @@ export function inspectHeldPath(
   let typedFormData = false;
   const seen = new Map<Expression, Set<string>>();
   const pending: HeldWorkItem[] = [
-    { activeBindings: new Map(), activeExpressions: new Set(), held: entry },
+    {
+      activeBindings: new Map(),
+      activeExpressions: new Set(),
+      enclosingBindingTyped: false,
+      held: entry,
+    },
   ];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (at.held.keys.length === 0) {
@@ -129,18 +138,26 @@ function evaluateWorkItem(
   if (repeatsOnActiveChain(at, value)) {
     return { ambiguous: true, closed: false, next: [], typedFormData: false };
   }
-  if (markVisitedHeldPath(seen, value, at.held.keys)) {
+  if (markVisitedHeldPath(seen, value, at.held.keys, at.enclosingBindingTyped)) {
     return { ambiguous: false, closed: true, next: [], typedFormData: false };
   }
-  const typedFormData = callbacks.isTypedFormData(at.held.value, value, at.held.keys);
+  const assertedFormData = callbacks.isAssertedFormData(at.held.value, at.held.keys);
   const activeBindings = nextActiveBindings(at.activeBindings, value);
   const activeExpressions = new Set([...at.activeExpressions, value]);
-  const expanded = expandHeldStep(at.held, value, point, callbacks);
+  const expanded = expandHeldStep(at, value, point, callbacks);
+  const unclosedEnclosingTyped = !expanded.closed && at.enclosingBindingTyped;
   return {
     ambiguous: expanded.ambiguous,
     closed: expanded.closed,
-    next: expanded.entries.map((held) => ({ activeBindings, activeExpressions, held })),
-    typedFormData,
+    next: expanded.children.map((child) => {
+      return {
+        activeBindings,
+        activeExpressions,
+        enclosingBindingTyped: child.enclosingBindingTyped ?? at.enclosingBindingTyped,
+        held: child.held,
+      };
+    }),
+    typedFormData: assertedFormData || expanded.bindingTypedFormData || unclosedEnclosingTyped,
   };
 }
 
@@ -158,13 +175,14 @@ function repeatsOnActiveChain(at: HeldWorkItem, value: Expression): boolean {
   );
 }
 
-/** Records `(value, keys)` in `seen`, returning `true` when this exact pair was already expanded. */
+/** Records `(value, keys, enclosingTyped)` in `seen`, returning `true` when already expanded. */
 function markVisitedHeldPath(
   seen: Map<Expression, Set<string>>,
   value: Expression,
   keys: readonly string[],
+  enclosingBindingTyped: boolean,
 ): boolean {
-  const serialized = JSON.stringify(keys);
+  const serialized = `${enclosingBindingTyped ? '1' : '0'}:${JSON.stringify(keys)}`;
   const visited = seen.get(value) ?? new Set<string>();
   if (visited.has(serialized)) {
     return true;
@@ -190,54 +208,65 @@ function nextActiveBindings(
   return new Map([...activeBindings, [selected.binding, names]]);
 }
 
+/** Wraps plain `Held` entries into `ChildCandidate` items preserving enclosing type state. */
+function plainChildren(entries: readonly Held[]): readonly ChildCandidate[] {
+  return entries.map((held) => ({ held }));
+}
+
 /** Expands one non-empty `Held` member path step into successor `Held` candidates. */
 function expandHeldStep(
-  at: Held,
+  at: HeldWorkItem,
   value: Expression,
   point: Node,
   callbacks: ProjectionCallbacks,
 ): ExpandedStep {
+  const keys = at.held.keys;
   const alternatives = callbacks.selectValues(value);
   if (alternatives !== undefined) {
     return {
       ambiguous: false,
+      bindingTypedFormData: false,
+      children: plainChildren(alternatives.map((each) => ({ keys, value: each }))),
       closed: true,
-      entries: alternatives.map((each) => ({ keys: at.keys, value: each })),
     };
   }
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     const memberKey = frameMemberName(value);
     return {
       ambiguous: false,
+      bindingTypedFormData: false,
+      children:
+        memberKey === undefined
+          ? []
+          : plainChildren([{ keys: [memberKey, ...keys], value: value.expression }]),
       closed: memberKey !== undefined,
-      entries:
-        memberKey === undefined ? [] : [{ keys: [memberKey, ...at.keys], value: value.expression }],
     };
   }
   if (isArrayLiteralExpression(value)) {
-    const [firstKey, ...restKeys] = at.keys;
+    const [firstKey, ...restKeys] = keys;
     return firstKey === undefined
-      ? { ambiguous: false, closed: true, entries: [] }
+      ? { ambiguous: false, bindingTypedFormData: false, children: [], closed: true }
       : arrayPathEntries(value, firstKey, restKeys);
   }
   if (isIdentifier(value)) {
-    return expandIdentifierStep(value, at.keys, point, callbacks);
+    return expandIdentifierStep(value, keys, point, callbacks);
   }
-  const objectSources = framedObjectSources(value, at.keys);
+  const objectSources = framedObjectSources(value, keys);
   if (objectSources === undefined) {
-    return { ambiguous: false, closed: false, entries: [] };
+    return { ambiguous: false, bindingTypedFormData: false, children: [], closed: false };
   }
   const entries = objectSources.filter(
-    (each) => unwrapped(each.value) !== value || each.keys.length !== at.keys.length,
+    (each) => unwrapped(each.value) !== value || each.keys.length !== keys.length,
   );
   return {
     ambiguous: false,
+    bindingTypedFormData: false,
+    children: plainChildren(entries),
     closed: entries.length === objectSources.length,
-    entries,
   };
 }
 
-/** Expands a variable or parameter identifier along `keys`. */
+/** Expands a variable or parameter identifier along `keys`, guarding replaced binding types. */
 function expandIdentifierStep(
   id: Identifier,
   keys: readonly string[],
@@ -246,7 +275,7 @@ function expandIdentifierStep(
 ): ExpandedStep {
   const selected = frameBindingOf(id);
   if (selected === undefined) {
-    return { ambiguous: false, closed: false, entries: [] };
+    return { ambiguous: false, bindingTypedFormData: false, children: [], closed: false };
   }
   const defaults =
     selected.keys.length === 0
@@ -256,35 +285,43 @@ function expandIdentifierStep(
     return expandVariableIdentifier(id, selected.binding, { callbacks, defaults, keys, point });
   }
   if (!isParameterDeclaration(selected.binding)) {
-    return { ambiguous: false, closed: false, entries: [] };
+    return { ambiguous: false, bindingTypedFormData: false, children: [], closed: false };
   }
   const resolved = callbacks.readParameter(id, selected.binding);
   const fromSources = resolved.sources.map((each) => {
     return {
-      keys: [...each.keys, ...keys],
-      value: each.value,
+      enclosingBindingTyped: false,
+      held: { keys: [...each.keys, ...keys], value: each.value },
     };
   });
   if (resolved.replaced && resolved.ambiguous !== true) {
     return {
       ambiguous: Boolean(resolved.dynamicOpaque),
+      bindingTypedFormData: false,
+      children: fromSources,
       closed: resolved.dynamicOpaque !== true,
-      entries: fromSources,
     };
   }
   const fullKeys = [...selected.keys, ...keys];
   const paramDefault =
     selected.binding.initializer === undefined
       ? []
-      : [{ keys: fullKeys, value: selected.binding.initializer }];
+      : [
+          {
+            enclosingBindingTyped: false,
+            held: { keys: fullKeys, value: selected.binding.initializer },
+          },
+        ];
+  const defaultChildren = defaults.map((held) => ({ enclosingBindingTyped: false, held }));
   return {
     ambiguous: Boolean(resolved.dynamicOpaque),
+    bindingTypedFormData: callbacks.isBindingTypedFormData(id, keys),
+    children: [...fromSources, ...paramDefault, ...defaultChildren],
     closed: false,
-    entries: [...fromSources, ...paramDefault, ...defaults],
   };
 }
 
-/** Expands a `VariableDeclaration` identifier along `keys`, including pattern reassignments. */
+/** Expands a `VariableDeclaration` identifier along `keys`, preserving binding type only while live. */
 function expandVariableIdentifier(
   id: Identifier,
   declaration: VariableDeclaration,
@@ -298,24 +335,43 @@ function expandVariableIdentifier(
   const { callbacks, defaults, keys, point } = context;
   const held = framedHeldValues(id, keys, point);
   const patternScan = callbacks.readVariablePattern(id, declaration, point);
-  const patternEntries = patternScan.extraSources.map((each) => {
+  const declaredTyped = callbacks.isBindingTypedFormData(id, keys);
+  const patternChildren = patternScan.extraSources.map((each) => {
     return {
-      keys: [...each.keys, ...keys],
-      value: each.value,
+      enclosingBindingTyped: false,
+      held: { keys: [...each.keys, ...keys], value: each.value },
     };
   });
+  const defaultChildren = defaults.map((entry) => ({ enclosingBindingTyped: false, held: entry }));
   if (held === undefined) {
     return {
       ambiguous: patternScan.dynamicOpaque,
+      bindingTypedFormData: declaredTyped,
+      children: [...patternChildren, ...defaultChildren],
       closed: false,
-      entries: [...patternEntries, ...defaults],
     };
   }
-  const baseEntries = [...(held.initial === undefined ? [] : [held.initial]), ...held.held];
+  const initialChildren =
+    held.initial === undefined
+      ? []
+      : [{ enclosingBindingTyped: declaredTyped, held: held.initial }];
+  const heldChildren = held.held.map((entry) => {
+    return {
+      enclosingBindingTyped: declaredTyped,
+      held: entry,
+    };
+  });
+  const hasSources =
+    initialChildren.length > 0 || heldChildren.length > 0 || patternChildren.length > 0;
+  const closed = !patternScan.ambiguous && hasSources;
+  const initialSurvives =
+    held.initial !== undefined ||
+    (declaration.initializer === undefined && heldChildren.length === 0);
   return {
     ambiguous: patternScan.dynamicOpaque,
-    closed: !patternScan.ambiguous && (baseEntries.length > 0 || patternEntries.length > 0),
-    entries: [...baseEntries, ...patternEntries, ...defaults],
+    bindingTypedFormData: !closed && initialSurvives && declaredTyped,
+    children: [...initialChildren, ...heldChildren, ...patternChildren, ...defaultChildren],
+    closed,
   };
 }
 
@@ -326,7 +382,7 @@ function arrayPathEntries(
   restKeys: readonly string[],
 ): ExpandedStep {
   if (!/^\d+$/u.test(firstKey)) {
-    return { ambiguous: false, closed: true, entries: [] };
+    return { ambiguous: false, bindingTypedFormData: false, children: [], closed: true };
   }
   const requestedIndex = Number(firstKey);
   const entries: Held[] = [];
@@ -359,11 +415,21 @@ function arrayPathEntries(
     );
     entries.push(...spreadSlice.entries);
     if (spreadSlice.ambiguous) {
-      return { ambiguous: true, closed: false, entries };
+      return {
+        ambiguous: true,
+        bindingTypedFormData: false,
+        children: plainChildren(entries),
+        closed: false,
+      };
     }
     spreadSeen = true;
   }
-  return { ambiguous: false, closed: true, entries };
+  return {
+    ambiguous: false,
+    bindingTypedFormData: false,
+    children: plainChildren(entries),
+    closed: true,
+  };
 }
 
 /** Computes exact or bounded-range element offsets into a spread array expression. */

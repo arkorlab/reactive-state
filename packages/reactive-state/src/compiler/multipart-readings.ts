@@ -26,7 +26,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { frameBindingOf, frameDeclarationOf, frameTypeOf } from './framed-bindings.ts';
+import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
 import { framedValueShape } from './framed-values.ts';
 import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
@@ -47,7 +47,7 @@ import {
 /** Shared multipart `BodyReading` combinators, parameter value cuts, and `FormData` checks. */
 
 export interface BodyReading {
-  readonly ambiguous?: boolean;
+  readonly ambiguous?: boolean | undefined;
   readonly bodies: readonly Expression[];
   readonly overwrites: boolean;
 }
@@ -60,9 +60,9 @@ export interface AnalysisState {
 }
 
 export interface ParameterResolution {
-  readonly ambiguous?: boolean;
+  readonly ambiguous?: boolean | undefined;
   readonly cut?: BinaryExpression | undefined;
-  readonly dynamicOpaque?: boolean;
+  readonly dynamicOpaque?: boolean | undefined;
   readonly replaced: boolean;
   readonly sources: readonly Held[];
   readonly values: readonly Expression[];
@@ -74,7 +74,8 @@ const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
 
 const PROJECTION_CALLBACKS: ProjectionCallbacks = {
   bindingDefaults: bindingDefaultsOf,
-  isTypedFormData: typedAtMemberPath,
+  isAssertedFormData: assertedAtMemberPath,
+  isBindingTypedFormData: bindingTypedAtMemberPath,
   readParameter: parameterValues,
   readVariablePattern: variablePatternReassignments,
   selectValues: selectedValues,
@@ -469,6 +470,7 @@ export function bindingDefaultsOf(name: Identifier, root: BindingName): readonly
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (
       isBindingElement(node) &&
+      node.name !== undefined &&
       isIdentifier(node.name) &&
       node.name.text === name.text &&
       node.initializer !== undefined
@@ -497,20 +499,20 @@ function heldFormData(entry: Held, state: AnalysisState): boolean {
   );
 }
 
-/** Whether assertions or binding types on `raw` / `value` name `FormData` at `keys`. */
-function typedAtMemberPath(raw: Expression, value: Expression, keys: readonly string[]): boolean {
+/** Whether explicit type assertions on `raw` name `FormData` at `keys`. */
+function assertedAtMemberPath(raw: Expression, keys: readonly string[]): boolean {
   const { assertions } = framedValueShape(raw);
-  if (
-    assertions.some((each) =>
-      namesLocalMemberType(each.type, [...each.keys, ...keys], FORM_DATA_NAMES),
-    )
-  ) {
-    return true;
-  }
-  const typed = frameTypeOf(value);
+  return assertions.some((each) =>
+    namesLocalMemberType(each.type, [...each.keys, ...keys], FORM_DATA_NAMES),
+  );
+}
+
+/** Whether `id`'s declared binding type annotation names `FormData` at `keys`. */
+function bindingTypedAtMemberPath(id: Identifier, keys: readonly string[]): boolean {
+  const selected = frameBindingOf(id);
   return (
-    typed !== undefined &&
-    namesLocalMemberType(typed.type, [...typed.keys, ...keys], FORM_DATA_NAMES)
+    selected?.binding.type !== undefined &&
+    namesLocalMemberType(selected.binding.type, [...selected.keys, ...keys], FORM_DATA_NAMES)
   );
 }
 

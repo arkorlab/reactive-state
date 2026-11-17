@@ -384,16 +384,6 @@ function variableBodies(
     return EMPTY_BODIES;
   }
   const patternScan = variablePatternReassignments(name, declaration, point);
-  const entries = [
-    ...(bodyHeld.initial === undefined ? [] : [bodyHeld.initial]),
-    ...bodyHeld.held,
-    ...patternScan.extraSources.map((each) => {
-      return {
-        keys: [...each.keys, BODY_KEY],
-        value: each.value,
-      };
-    }),
-  ];
   const holder = framedHeldVariable(declaration);
   const filteredDescriptors = resolveVariableDescriptorWrites({
     ambiguousPattern: patternScan.ambiguous,
@@ -405,6 +395,17 @@ function variableBodies(
     reaches: (change) => reachesHolderRead(change, holder, point),
     whole,
   });
+  const entries = [
+    ...(bodyHeld.initial === undefined ? [] : [bodyHeld.initial]),
+    ...bodyHeld.held,
+    ...filteredDescriptors.extraHeld,
+    ...patternScan.extraSources.map((each) => {
+      return {
+        keys: [...each.keys, BODY_KEY],
+        value: each.value,
+      };
+    }),
+  ];
   const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state));
   const ambiguous =
     patternScan.dynamicOpaque || entryReadings.some((each) => each.ambiguous === true);

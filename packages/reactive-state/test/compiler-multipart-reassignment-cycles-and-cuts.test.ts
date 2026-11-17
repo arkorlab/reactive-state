@@ -277,6 +277,48 @@ const CASES = [
     source:
       "export function build(flag: boolean) { const opts: RequestInit = { method: 'POST' }; var d1: PropertyDescriptor = flag ? d2 : { value: new FormData() }; var d2: PropertyDescriptor = flag ? d1 : { value: 'fixed' }; Object.defineProperty(opts, 'body', d1); return new Request('https://example.com/', opts); }",
   },
+  {
+    expected: undefined,
+    id: 'typed-box-parameter-definitely-replaced-with-string-literal-destructured',
+    source:
+      "export function build(box: { body: FormData | string }) { box = { body: 'fixed' }; const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'typed-nested-box-parameter-definitely-replaced-with-string-literal-destructured',
+    source:
+      "export function build(box: { inner: { body: FormData | string } }) { box = { inner: { body: 'fixed' } }; const { body } = box.inner; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'typed-box-let-variable-definitely-replaced-with-string-literal-destructured',
+    source:
+      "export function build() { let box: { body: FormData | string } = { body: new FormData() }; box = { body: 'fixed' }; const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'typed-box-parameter-replaced-by-plain-string-typed-parameter',
+    source:
+      'export function build(box: { body: FormData | string }, plain: { body: string }) { box = plain; const { body } = box; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-box-parameter-unreplaced-destructured-retains-type-fallback',
+    source:
+      'export function build(box: { body: FormData | string }) { const { body } = box; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-box-parameter-conditionally-replaced-destructured-retains-type-fallback',
+    source:
+      "export function build(box: { body: FormData | string }, flag: boolean) { if (flag) { box = { body: 'fixed' }; } const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-box-const-initialized-from-opaque-call-destructured-retains-type-fallback',
+    source:
+      'declare function getBox(): { body: FormData | string }; export function build() { const box: { body: FormData | string } = getBox(); const { body } = box; return new Response(body); }',
+  },
 ] as const;
 
 describe('multipart destructured parameter reassignments, expansion cycles, and descriptor cuts', () => {
