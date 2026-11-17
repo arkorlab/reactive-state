@@ -51,10 +51,10 @@ function identityWrappedArgument(value: Expression): Expression | undefined {
   if (!isCallExpression(value) && !isNewExpression(value)) return undefined;
   const path = globalPathOf(unwrapped(value.expression))?.join('.');
   if (path === undefined || !IDENTITY_WRAPPERS.has(path)) return undefined;
-  if (isNewExpression(value) && path !== 'Object') return undefined;
+  if (path !== 'Object' && isNewExpression(value)) return undefined;
   const args = value.arguments;
   const first = args?.length === 1 ? args[0] : undefined;
-  return first !== undefined && !isSpreadElement(first) ? first : undefined;
+  return first === undefined || isSpreadElement(first) ? undefined : first;
 }
 
 /** Borrowed and reflected native `Object` invocations return their first object operand unchanged. */
@@ -105,12 +105,12 @@ function twoPlainArguments(
 ): { readonly handler: Expression; readonly target: Expression } | undefined {
   if (args.length !== 2) return undefined;
   const [target, handler] = args;
-  return target !== undefined &&
-    handler !== undefined &&
-    !isSpreadElement(target) &&
-    !isSpreadElement(handler)
-    ? { handler, target }
-    : undefined;
+  return target === undefined ||
+    handler === undefined ||
+    isSpreadElement(target) ||
+    isSpreadElement(handler)
+    ? undefined
+    : { handler, target };
 }
 
 /** Rejects spreads, `__proto__`, accessors, and any `get` trap other than nullish or `Reflect.get`. */

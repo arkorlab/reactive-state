@@ -55,7 +55,7 @@ function isCaughtBinding(name: Identifier): boolean {
   for (let at: Node = name.parent; !isSourceFile(at); at = at.parent) {
     if (!isCatchClause(at) || at.variableDeclaration === undefined) continue;
     const caught = bindingIdentifiers(at.variableDeclaration.name);
-    if (!caught.some((each) => each.text === name.text)) continue;
+    if (caught.every((each) => each.text !== name.text)) continue;
     let reads = CAUGHT_READS.get(at.block);
     if (reads === undefined) {
       reads = new Set(freeReads(at.block));

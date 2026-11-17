@@ -56,33 +56,22 @@ const INTRINSIC_STRING_TYPES: ReadonlySet<string> = new Set([
   'Uppercase',
 ]);
 
-const NON_STRING_BUILTINS: ReadonlySet<string> = new Set([
-  ...STANDARD_ERRORS,
-  ...'AbortController AbortSignal Array ArrayBuffer AsyncGenerator AsyncIterable AsyncIterableIterator AsyncIterator'.split(
-    ' ',
-  ),
-  ...'BigInt BigInt64Array BigUint64Array Blob Boolean BroadcastChannel ConcatArray ConstructorParameters CustomEvent'.split(
-    ' ',
-  ),
-  ...'DataView Date Event EventTarget File FinalizationRegistry Float16Array Float32Array Float64Array FormData Function'.split(
-    ' ',
-  ),
-  ...'Generator Headers IArguments InstanceType Int8Array Int16Array Int32Array Iterable IterableIterator Iterator Map'.split(
-    ' ',
-  ),
-  ...'MessageChannel MessageEvent MessagePort Number Object Omit Parameters Pick Promise PromiseLike PropertyKey'.split(
-    ' ',
-  ),
-  ...'ReadableStream ReadonlyArray ReadonlyMap ReadonlySet Record RegExp RegExpExecArray RegExpMatchArray Request'.split(
-    ' ',
-  ),
-  ...'RequestInit Response ResponseInit Set SharedArrayBuffer String Symbol TemplateStringsArray TextDecoder TextEncoder'.split(
-    ' ',
-  ),
-  ...'ThisType TransformStream Uint8Array Uint8ClampedArray Uint16Array Uint32Array URL URLSearchParams WeakMap WeakRef WeakSet WritableStream'.split(
-    ' ',
-  ),
-]);
+const BUILTIN_NON_STRING_NAMES = [
+  'AbortController AbortSignal Array ArrayBuffer AsyncGenerator AsyncIterable AsyncIterableIterator AsyncIterator',
+  'BigInt BigInt64Array BigUint64Array Blob Boolean BroadcastChannel ConcatArray ConstructorParameters CustomEvent',
+  'DataView Date Event EventTarget File FinalizationRegistry Float16Array Float32Array Float64Array FormData Function',
+  'Generator Headers IArguments InstanceType Int8Array Int16Array Int32Array Iterable IterableIterator Iterator Map',
+  'MessageChannel MessageEvent MessagePort Number Object Omit Parameters Pick Promise PromiseLike PropertyKey',
+  'ReadableStream ReadonlyArray ReadonlyMap ReadonlySet Record RegExp RegExpExecArray RegExpMatchArray Request',
+  'RequestInit Response ResponseInit Set SharedArrayBuffer String Symbol TemplateStringsArray TextDecoder TextEncoder',
+  'ThisType TransformStream Uint8Array Uint8ClampedArray Uint16Array Uint32Array URL URLSearchParams WeakMap WeakRef WeakSet WritableStream',
+].join(' ');
+
+const NON_STRING_BUILTINS: ReadonlySet<string> = (() => {
+  const names = new Set<string>(STANDARD_ERRORS);
+  for (const entry of BUILTIN_NON_STRING_NAMES.split(' ')) names.add(entry);
+  return names;
+})();
 
 const OTHER_PRIMITIVE_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BigIntKeyword,
@@ -92,10 +81,12 @@ const OTHER_PRIMITIVE_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
 
 type LeafKind = 'never' | 'non-primitive' | 'nullish' | 'opaque' | 'other-primitive' | 'string';
 
+const NON_PRIMITIVE_LEAF: LeafKind = 'non-primitive';
+const OTHER_PRIMITIVE_LEAF: LeafKind = 'other-primitive';
 const NULLISH_COMPATIBLE: ReadonlySet<LeafKind> = new Set(['nullish', 'opaque']);
 const PRIMITIVE_OR_OPAQUE_LEAVES: ReadonlySet<LeafKind> = new Set([
   'opaque',
-  'other-primitive',
+  OTHER_PRIMITIVE_LEAF,
   'string',
 ]);
 
@@ -315,14 +306,14 @@ function intersectTwoLeaves(left: LeafKind, right: LeafKind): LeafKind {
     return NULLISH_COMPATIBLE.has(left) && NULLISH_COMPATIBLE.has(right) ? 'nullish' : 'never';
   }
   if (
-    (left === 'string' && right === 'other-primitive') ||
-    (left === 'other-primitive' && right === 'string')
+    (left === 'string' && right === OTHER_PRIMITIVE_LEAF) ||
+    (left === OTHER_PRIMITIVE_LEAF && right === 'string')
   ) {
     return 'never';
   }
   if (left === 'string' || right === 'string') return 'string';
-  if (left === 'other-primitive' || right === 'other-primitive') return 'other-primitive';
-  return left === 'opaque' || right === 'opaque' ? 'opaque' : 'non-primitive';
+  if (left === OTHER_PRIMITIVE_LEAF || right === OTHER_PRIMITIVE_LEAF) return OTHER_PRIMITIVE_LEAF;
+  return left === 'opaque' || right === 'opaque' ? 'opaque' : NON_PRIMITIVE_LEAF;
 }
 
 /** Resolves `typeof x` queries through local declarations while keeping imported values opaque. */
@@ -334,7 +325,7 @@ function queryLeafStep(at: TypeReading, operands: Operands): StepResult {
   }
   const root = leftmostIdentifier(at.type.exprName);
   const imported = frameDeclarationOf(root) === undefined && localTypeBinding(root) === null;
-  return { kind: 'step', leaves: [imported ? 'opaque' : 'non-primitive'], next: [] };
+  return { kind: 'step', leaves: [imported ? 'opaque' : NON_PRIMITIVE_LEAF], next: [] };
 }
 
 /** Extracts the root identifier of an entity name. */
@@ -389,10 +380,10 @@ function referenceLeafStep(
     const actual = at.bindings.get(binding) ?? constraintReading(binding, at);
     if (actual !== undefined) return { kind: 'step', leaves: [], next: [actual] };
     return binding.constraint === undefined
-      ? { kind: 'step', leaves: ['non-primitive'], next: [] }
+      ? { kind: 'step', leaves: [NON_PRIMITIVE_LEAF], next: [] }
       : { kind: 'unresolved' };
   }
-  return { kind: 'step', leaves: ['non-primitive'], next: [] };
+  return { kind: 'step', leaves: [NON_PRIMITIVE_LEAF], next: [] };
 }
 
 /** Classifies unshadowed global built-ins and treats unknown external references as opaque. */
@@ -408,7 +399,7 @@ function unboundReferenceStep(
     const utility = utilityReferenceStep(builtin, reference.typeArguments, at, operands);
     if (utility !== undefined) return utility;
     if (NON_STRING_BUILTINS.has(builtin)) {
-      return { kind: 'step', leaves: ['non-primitive'], next: [] };
+      return { kind: 'step', leaves: [NON_PRIMITIVE_LEAF], next: [] };
     }
   }
   return { kind: 'step', leaves: ['opaque'], next: [] };
@@ -451,7 +442,7 @@ function classifyLeafNode(node: TypeNode): LeafKind {
   if (node.kind === SyntaxKind.NeverKeyword) return 'never';
   if (nullishTypeNode(node)) return 'nullish';
   if (stringTypeNode(node)) return 'string';
-  return otherPrimitiveNode(node) ? 'other-primitive' : 'non-primitive';
+  return otherPrimitiveNode(node) ? OTHER_PRIMITIVE_LEAF : NON_PRIMITIVE_LEAF;
 }
 
 /** `null` and `undefined` keywords or literal `null` type nodes. */

@@ -61,18 +61,20 @@ interface PatternFields {
 export function framedRegExpPattern(
   call: CallExpression | NewExpression,
   args: readonly Expression[],
-  mode: boolean | { readonly constructed: boolean; readonly newTarget?: Expression | null },
+  mode:
+    | boolean
+    | { readonly constructed: boolean; readonly constructorTarget?: Expression | null | undefined },
   error: (value: Expression) => boolean,
 ): boolean {
   const constructed = typeof mode === 'boolean' ? mode : mode.constructed;
-  const newTarget = typeof mode === 'boolean' ? undefined : mode.newTarget;
+  const constructorTarget = typeof mode === 'boolean' ? undefined : mode.constructorTarget;
   const prefix = framedArgumentPrefix(call, args, 2);
   const pattern = prefix.values[0];
   if (
     pattern === undefined ||
     prefix.unknown ||
     prefix.alternatives !== undefined ||
-    !knownNewTarget(call, newTarget) ||
+    !knownConstructorTarget(call, constructorTarget) ||
     !quietValues(call.arguments ?? []) ||
     !quietPrefix(call)
   )
@@ -161,12 +163,12 @@ function convertedError(
 }
 
 /** A custom Reflect.construct new target can run an application-owned prototype getter. */
-function knownNewTarget(
+function knownConstructorTarget(
   call: CallExpression | NewExpression,
-  newTarget?: Expression | null,
+  constructorTarget?: Expression | null,
 ): boolean {
-  if (newTarget === null) return false;
-  if (newTarget !== undefined) return framedNativeConstructor(newTarget, PATTERN);
+  if (constructorTarget === null) return false;
+  if (constructorTarget !== undefined) return framedNativeConstructor(constructorTarget, PATTERN);
   if (!isCallExpression(call) || globalPathOf(call.expression)?.join('.') !== 'Reflect.construct')
     return true;
   const prefix = framedArgumentPrefix(call, call.arguments, Infinity);

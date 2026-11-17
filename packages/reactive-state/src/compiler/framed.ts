@@ -316,7 +316,7 @@ function typedOrNamedError(
   shape: ReturnType<typeof framedValueShape>,
   made: boolean,
   seen: Set<Node>,
-  at: Required<Pick<ErrorAt, 'keys'>> & Pick<ErrorAt, 'point'>,
+  at: { readonly keys: readonly string[]; readonly point?: Node | undefined },
 ): boolean {
   const { assertions, value } = shape;
   const { keys, point } = at;
