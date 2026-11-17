@@ -282,6 +282,76 @@ const CASES = [
     id: 'deeply-nested-object-wrappers-hiding-mutation-in-factory-const-flagged',
     source: `function make(value: unknown) { const box = { text: 'fixed' }; const _wrapped = ${'Object('.repeat(28)}Object.assign(box, { text: String(value) })${')'.repeat(28)}; return new Error(box.text); } function text(externalError: Error) { const local: Error = make([externalError]); return String(local); }`,
   },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-filled-by-spread-tuple-array-from-arguments',
+    source: `function run(error: Error) { let saved = 'fixed'; Array.from(...([arguments, (item: unknown) => { saved = String(item); return 0; }] as const)); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'function-tag-reads-holder-filled-by-closed-const-tuple-spread-arguments',
+    source: `function run(error: Error) { let saved = 'fixed'; const pair = [arguments, (item: unknown) => { saved = String(item); return 0; }] as const; Array.from(...pair); function tag(_s: TemplateStringsArray, _v: unknown) { return saved; } return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-mutated-by-spread-object-assign-arguments',
+    source: `function run(error: Error) { const box = { text: 'fixed' }; Object.assign(...([box, { text: String(arguments[0]) }] as const)); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-unresolved-spread-alongside-enclosing-arguments',
+    source: `function run(error: Error, mappers: readonly [(item: unknown) => number]) { let saved = 'fixed'; Array.from(arguments, ...mappers); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-unresolved-spread-carrying-tainted-arguments-tuple',
+    source: `function run(error: Error) { let saved = 'fixed'; const makeArgs = () => [arguments, (item: unknown) => { saved = String(item); return 0; }] as const; Array.from(...makeArgs()); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-mutated-via-array-literal-receiver-root',
+    source: `function run(error: Error) { const box = { text: 'fixed' }; [box][0].text = String(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-mutated-via-object-literal-receiver-root',
+    source: `function run(error: Error) { const box = { text: 'fixed' }; ({ holder: box }).holder.text = String(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-mutated-via-conditional-and-nullish-receiver-root',
+    source: `function run(cond: boolean, error: Error) { const box = { text: 'fixed' }; const alt = { text: 'alt' }; ((cond ? box : alt) ?? box).text = String(arguments[1]); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-unresolvable-call-receiver-member-write-with-arguments',
+    source: `function run(error: Error) { const box = { text: 'fixed' }; const pick = () => box; pick().text = String(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-unresolvable-receiver-write-with-tainted-arguments-alias',
+    source: `function run(error: Error) { const box = { text: 'fixed' }; const first = arguments[0]; const pick = () => box; pick().text = String(first); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-reads-untainted-binding-beside-resolved-spread-arguments-mapper-preserved',
+    source: `function run(error: Error) { let _unused = 'fixed'; Array.from(...([arguments, (item: unknown) => { _unused = String(item); return 0; }] as const)); const safe = 'fixed'; const tag = (strings: TemplateStringsArray, _v: unknown) => safe + (strings[0] ?? ''); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-untainted-unresolved-spread-beside-unused-arguments-preserved',
+    source: `function run(error: Error, numbers: readonly number[]) { const _unused = arguments[0]; const _max = Math.max(...numbers); const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-reads-holder-with-untainted-array-literal-receiver-write-preserved',
+    source: `function run(error: Error) { const _unused = arguments[0]; const box = { text: 'fixed' }; [box][0].text = 'updated'; const tag = (strings: TemplateStringsArray, _v: unknown) => box.text + (strings[0] ?? ''); return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-untainted-unresolvable-receiver-write-beside-unused-arguments-preserved',
+    source: `function run(error: Error) { const _unused = arguments[0]; const box = { text: 'fixed' }; const pick = () => box; pick().text = 'updated'; const tag = (strings: TemplateStringsArray, _v: unknown) => box.text + (strings[0] ?? ''); return tag\`\${error}\`; }`,
+  },
 ] as const;
 
 describe('written-error factory side effects, receivers, rest arguments, and arrow tags', () => {
