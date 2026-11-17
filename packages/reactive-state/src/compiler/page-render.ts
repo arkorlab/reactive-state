@@ -26,12 +26,15 @@ import {
 import { unshadowedReads } from './code-globals.ts';
 import {
   bindStatement,
+  type BoundCheck,
+  checkBoundDeclarations,
   givenTo,
   holdsSearchParams,
   parameterSources,
   type Reading,
   scanAwaits,
 } from './page-bindings.ts';
+import { checkExpressionUses, type JsxSites } from './page-params.ts';
 import {
   isBlank,
   isPageFunction,
@@ -42,11 +45,13 @@ import {
   unwrapped,
 } from './page-shape.ts';
 import {
+  applyParamTaints,
   elementProps,
   type ElementProps,
   type Held,
   moduleNamesOf,
   propsOfAll,
+  rootSpreadObjectsOf,
   type Scope,
   type Source,
 } from './page-values.ts';
@@ -146,7 +151,7 @@ function isEmpty(element: JsxElement | JsxSelfClosingElement): boolean {
 }
 
 /** Whether `element` is an intrinsic browser element (`<main>`, `<svg:g>`), not a component value. */
-function isIntrinsicElement(element: JsxElement): boolean {
+function isIntrinsicElement(element: JsxElement | JsxSelfClosingElement): boolean {
   const tag = tagOf(element);
   return isJsxNamespacedName(tag) || (isIdentifier(tag) && /^[a-z]/u.test(tag.text));
 }
@@ -344,6 +349,19 @@ interface RenderContext {
   readonly module: Scope['module'];
 }
 
+/** Builds the JSX classification sets for a function's `return` expression (`sites`). */
+function jsxSitesOf(sites: Sites, tags: Tags): JsxSites {
+  const rootElements = sites.roots.map((site) => site.element);
+  return {
+    free: tags.free,
+    innerSites: new Set(sites.inners.map((site) => site.element)),
+    isSafeAttrElement: (element) => isIntrinsicElement(element) || isSuspenseElement(element, tags),
+    isTransparent: (element) => isTransparentElement(element, tags),
+    rootSites: new Set(rootElements),
+    rootSpreadObjects: rootSpreadObjectsOf(rootElements),
+  };
+}
+
 /** What `fn`, a function of the page given `sources`, renders; none where it is written otherwise. */
 function renderedBy(
   fn: FunctionDeclaration,
@@ -355,26 +373,38 @@ function renderedBy(
   if (returned === undefined || !isReturnStatement(returned) || returned.expression === undefined) {
     return undefined;
   }
+  const sites = sitesIn(returned.expression, context.tags);
+  const jsx = jsxSitesOf(sites, context.tags);
   const locals = new Map(sources);
   const reading: Reading = {
     awaits: false,
     destructured: [],
+    paramHolders: new Map(),
     scope: { declared: declaredWithin(fn), locals, module: context.module },
     searched: holdsSearchParams(sources),
+    taintedAll: false,
+    taintedParams: new Set(),
+    unawaitedProps: new Set(),
   };
+  const checks: BoundCheck[] = [];
   const before = statements.slice(0, -1);
   for (const statement of before) {
     const rendering = sitesIn(statement, context.tags);
     const renders = rendering.roots.length > 0 || rendering.inners.length > 0;
-    if (renders || !bindStatement(statement, reading, context.sourceFile)) {
+    if (renders || !bindStatement(statement, reading, context.sourceFile, checks)) {
       return undefined;
     }
   }
   scanAwaits(returned.expression, reading);
-  const sites = sitesIn(returned.expression, context.tags);
-  return sites.refused || !isPlaced(returned.expression, sites, context.tags)
-    ? undefined
-    : { reading, sites };
+  if (
+    !checkBoundDeclarations(checks, reading, jsx) ||
+    !checkExpressionUses(returned.expression, reading, jsx) ||
+    sites.refused ||
+    !isPlaced(returned.expression, sites, context.tags)
+  ) {
+    return undefined;
+  }
+  return { reading, sites };
 }
 
 /** The page's own props: `params` and `searchParams`, as Next.js gives a page them. */
@@ -403,6 +433,13 @@ function specifiersOf(
 
 /** The page's root and its props, of what the page and the functions it renders render. */
 function renderOf(renders: readonly Render[], names: PageNames): PageRender | undefined {
+  const taintedAll = renders.some(({ rendered }) => rendered.reading.taintedAll);
+  const taintedParams = new Set(
+    renders.flatMap(({ rendered }) => [...rendered.reading.taintedParams]),
+  );
+  for (const { rendered } of renders) {
+    applyParamTaints(rendered.reading.scope.locals, taintedParams, taintedAll);
+  }
   const roots = renders.flatMap(({ rendered }) =>
     rendered.sites.roots.map((site) => ({ scope: rendered.reading.scope, site })),
   );
