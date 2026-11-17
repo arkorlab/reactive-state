@@ -1,44 +1,44 @@
 import {
-  type ArrayLiteralExpression,
-  type BindingElement,
-  type ElementAccessExpression,
   type Expression,
-  type Identifier,
-  isArrayBindingPattern,
-  isArrayLiteralExpression,
   isBinaryExpression,
-  isBindingElement,
   isConditionalExpression,
-  isElementAccessExpression,
   isExpression,
   isIdentifier,
-  isObjectBindingPattern,
-  isOmittedExpression,
-  isPropertyAccessExpression,
+  isMethodDeclaration,
+  isParameterDeclaration,
   isSpreadAssignment,
-  isSpreadElement,
   isVariableDeclaration,
   type Node,
   type ObjectLiteralExpression,
-  type PropertyAccessExpression,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { useOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
+import {
+  arrayElementStepReaches,
+  arrayRangeStepReaches,
+  classifyUnverifiedArraySlot,
+  getReachMemo,
+  identifierInitializerStepReaches,
+  resolveArrayLiteral,
+  selectInlineArrayElement,
+  serializeAssignmentSteps,
+  setReachMemo,
+} from './function-array-holders.ts';
 import {
   type AssignmentStep,
   bindingReassignments,
   declaredBindingTarget,
-} from './function-binding-types.ts';
-import {
-  bindingElementSteps,
-  bindingStepKey,
-  LOGICAL_FORWARDING,
-  propertyAssignmentExpression,
-} from './function-candidate-objects.ts';
-import { elementEntryKey, objectPostWrites } from './function-entry-writes.ts';
+  normalizeAssignmentSteps,
+  STEP_ARRAY_REST,
+  STEP_DYNAMIC_MEMBER,
+  STEP_ELEMENT,
+  STEP_MEMBER,
+  STEP_OBJECT_REST,
+} from './function-assignment-patterns.ts';
+import { holderDeclaresArrayElementFunction } from './function-binding-types.ts';
+import { LOGICAL_FORWARDING, propertyAssignmentExpression } from './function-candidate-objects.ts';
+import { objectPostWrites } from './function-entry-writes.ts';
 import {
   dynamicObjectEntryKind,
   type EntryKind,
@@ -46,14 +46,18 @@ import {
   isConstDeclaration,
   memberEntryKind,
   propertyKey,
-  type ResolvedProperty,
   resolvePropertyValue,
   type ScanContext,
   withBranch,
 } from './function-table-entries.ts';
-import { bindingIdentifiers } from './scope.ts';
 
-const DYNAMIC_MEMBER = 'dynamic-member' as const;
+export { selectInlineArrayElement } from './function-array-holders.ts';
+
+interface ObjectKeyFilter {
+  readonly excludedKeys?: ReadonlySet<string> | undefined;
+  readonly key: string | undefined;
+}
+
 const MISSING_CLEAN = 'missing-clean';
 const NON_FUNCTION: EntryKind = 'non-function';
 
@@ -71,7 +75,57 @@ export function reassignedBindingEntryKind(binding: Node, context: ScanContext):
   return 'unknown';
 }
 
-/** Classifies element `index` on an inline or constant-bound array literal. */
+/** Classifies static member `name` on `holder`, consulting mutable holder reassignments on `unknown`. */
+export function containerMemberEntryKind(
+  holder: Expression,
+  name: string,
+  context: ScanContext,
+): EntryKind {
+  const base = withBranch(context, (branch) => memberEntryKind(holder, name, branch));
+  if (base !== 'unknown') {
+    return base;
+  }
+  const hit = withBranch(context, (branch) => {
+    return mutableHolderReassignmentReachesFunction(
+      holder,
+      [{ key: name, kind: STEP_MEMBER }],
+      branch,
+    );
+  });
+  return hit ? 'renamed' : 'unknown';
+}
+
+/** Classifies dynamic bracket access on `holder` across objects, arrays, and mutable reassignments. */
+export function containerDynamicEntryKind(holder: Expression, context: ScanContext): EntryKind {
+  const base = withBranch(context, (branch) => dynamicObjectEntryKind(holder, branch));
+  if (base !== 'unknown') {
+    return base;
+  }
+  if (holderDeclaresArrayElementFunction(holder)) {
+    return 'renamed';
+  }
+  const viaArray = withBranch(context, (branch) =>
+    arrayRangeReachesFunction(holder, 0, [], branch),
+  );
+  if (viaArray) {
+    return 'renamed';
+  }
+  const viaMutable = withBranch(context, (branch) => {
+    return mutableHolderReassignmentReachesFunction(
+      holder,
+      [{ kind: STEP_DYNAMIC_MEMBER }],
+      branch,
+    );
+  });
+  return viaMutable ? 'renamed' : 'unknown';
+}
+
+/** Whether spreading a mutable holder `source` can introduce functions from its reassignments. */
+export function mutableSpreadReachesFunction(source: Expression, context: ScanContext): boolean {
+  return mutableHolderReassignmentReachesFunction(source, [{ kind: STEP_DYNAMIC_MEMBER }], context);
+}
+
+/** Classifies element `index` on an inline, constant, annotated, or reassigned array holder. */
 export function arraySlotEntryKind(
   holder: Expression,
   index: number,
@@ -84,33 +138,58 @@ export function arraySlotEntryKind(
   if (inline.kind === 'expr') {
     return context.classifyExpression(inline.value, context);
   }
-  return unverifiedArraySlotKind(holder, index, context);
+  const unverified = withBranch(context, (branch) => {
+    return classifyUnverifiedArraySlot(holder, index, branch, (array, inner) =>
+      arrayRangeReachesFunction(array, 0, [], inner),
+    );
+  });
+  if (unverified !== 'unknown') {
+    return unverified;
+  }
+  if (holderDeclaresArrayElementFunction(holder, index)) {
+    return 'renamed';
+  }
+  const viaMutable = withBranch(context, (branch) => {
+    return mutableHolderReassignmentReachesFunction(
+      holder,
+      [{ index, kind: STEP_ELEMENT }],
+      branch,
+    );
+  });
+  return viaMutable ? 'renamed' : 'unknown';
 }
 
-/** Selects element `index` of an inline destructured array literal without prior spread elements. */
-export function selectInlineArrayElement(holder: Expression, index: number): ResolvedProperty {
-  if (
-    index < 0 ||
-    !isArrayLiteralExpression(holder) ||
-    !isInlinePatternSource(holder) ||
-    holder.elements.slice(0, index + 1).some((each) => isSpreadElement(each))
-  ) {
-    return { kind: 'unknown' };
-  }
-  const element = holder.elements[index];
-  if (element === undefined || isOmittedExpression(element)) {
-    return { kind: MISSING_CLEAN };
-  }
-  return { kind: 'expr', value: unwrapped(element) };
-}
-
-/** Whether `kind` represents a function classification (`'entry'` or `'renamed'`). */
+/** Whether `kind` represents a function classification (`entry` or `renamed`). */
 function isFunctionEntryKind(kind: EntryKind): boolean {
   return kind === 'entry' || kind === 'renamed';
 }
 
-/** Walks `steps` from `current` to test whether any candidate runtime path yields a function. */
+/** Walks `rawSteps` from `current` with cycle-free memoization to test for reachable functions. */
 function reachesAssignedFunction(
+  current: Expression,
+  rawSteps: readonly AssignmentStep[],
+  context: ScanContext,
+): boolean {
+  const steps = normalizeAssignmentSteps(rawSteps);
+  if (steps === undefined) {
+    return false;
+  }
+  const stepKey = serializeAssignmentSteps(steps);
+  const cached = getReachMemo(current, stepKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  return withBranch(context, (branch) => {
+    const found = computeReachesAssignedFunction(current, steps, branch);
+    if (!branch.hitCycle) {
+      setReachMemo(current, stepKey, found);
+    }
+    return found;
+  });
+}
+
+/** Uncached worker walking normalized `steps` from `current`. */
+function computeReachesAssignedFunction(
   current: Expression,
   steps: readonly AssignmentStep[],
   context: ScanContext,
@@ -139,61 +218,110 @@ function reachesAssignedFunction(
   if (step === undefined) {
     return isFunctionEntryKind(context.classifyExpression(current, context));
   }
-  const viaContainer =
-    tailSteps.length === 0
-      ? leafAssignedStepReachesFunction(current, step, context)
-      : intermediateAssignedStepReachesFunction(current, step, tailSteps, context);
-  return viaContainer || mutableHolderReassignmentReachesFunction(current, steps, context);
+  const viaContainer = withBranch(context, (branch) => {
+    return tailSteps.length === 0
+      ? leafAssignedStepReachesFunction(current, step, branch)
+      : intermediateAssignedStepReachesFunction(current, step, tailSteps, branch);
+  });
+  return (
+    viaContainer ||
+    withBranch(context, (branch) =>
+      identifierInitializerStepReaches(current, steps, branch, reachesAssignedFunction),
+    ) ||
+    withBranch(context, (branch) =>
+      mutableHolderReassignmentReachesFunction(current, steps, branch),
+    )
+  );
 }
 
-/** Evaluates the final assignment `step` against `current`. */
+/** Evaluates a terminal normalized assignment `step` on `current`. */
 function leafAssignedStepReachesFunction(
   current: Expression,
   step: AssignmentStep,
   context: ScanContext,
 ): boolean {
-  if (step.kind === 'member') {
+  if (step.kind === STEP_ARRAY_REST || step.kind === STEP_OBJECT_REST) {
+    return false;
+  }
+  if (step.kind === STEP_MEMBER) {
     return isFunctionEntryKind(memberEntryKind(current, step.key, context));
   }
-  if (step.kind === DYNAMIC_MEMBER) {
-    return isFunctionEntryKind(dynamicObjectEntryKind(current, context));
+  if (step.kind === STEP_DYNAMIC_MEMBER) {
+    return (
+      isFunctionEntryKind(dynamicObjectEntryKind(current, context)) ||
+      arrayRangeReachesFunction(current, 0, [], context)
+    );
   }
-  if (step.kind === 'element') {
+  if (step.kind === STEP_ELEMENT) {
     return isFunctionEntryKind(arraySlotEntryKind(current, step.index, context));
   }
   return arrayRangeReachesFunction(current, step.startIndex, [], context);
 }
 
-/** Advances an intermediate assignment `step` across object or array containers. */
+/** Advances an intermediate normalized assignment `step` across object or array containers. */
 function intermediateAssignedStepReachesFunction(
   current: Expression,
   step: AssignmentStep,
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
-  if (step.kind === 'member' || step.kind === DYNAMIC_MEMBER) {
+  if (step.kind === STEP_OBJECT_REST) {
+    return objectRestDynamicReachesFunction(
+      current,
+      step.excludedKeys,
+      tailSteps.slice(1),
+      context,
+    );
+  }
+  if (step.kind === STEP_ARRAY_REST) {
+    return false;
+  }
+  if (step.kind === STEP_MEMBER || step.kind === STEP_DYNAMIC_MEMBER) {
     return objectStepReachesFunction(
       current,
-      step.kind === 'member' ? step.key : undefined,
+      { key: step.kind === STEP_MEMBER ? step.key : undefined },
       tailSteps,
       context,
     );
   }
-  if (step.kind === 'element') {
+  if (step.kind === STEP_ELEMENT) {
     return arrayElementStepReachesFunction(current, step.index, tailSteps, context);
   }
   return arrayRangeReachesFunction(current, step.startIndex, tailSteps, context);
 }
 
-/** Advances an intermediate object property `key` (or any key when `undefined`) on `current`. */
+/** Evaluates a dynamic key lookup on an object rest copy excluding `excludedKeys`. */
+function objectRestDynamicReachesFunction(
+  current: Expression,
+  excludedKeys: ReadonlySet<string>,
+  afterDynamicSteps: readonly AssignmentStep[],
+  context: ScanContext,
+): boolean {
+  const array = withBranch(context, (branch) => resolveArrayLiteral(current, branch));
+  if (array !== undefined) {
+    let skip = 0;
+    while (excludedKeys.has(String(skip))) {
+      skip += 1;
+    }
+    return arrayRangeReachesFunction(current, skip, afterDynamicSteps, context);
+  }
+  return objectStepReachesFunction(
+    current,
+    { excludedKeys, key: undefined },
+    afterDynamicSteps,
+    context,
+  );
+}
+
+/** Advances an object property filter (`filter.key` or non-excluded keys) on `current`. */
 function objectStepReachesFunction(
   current: Expression,
-  key: string | undefined,
+  filter: ObjectKeyFilter,
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
-  if (key !== undefined) {
-    const fast = resolvePropertyValue(current, key, context);
+  if (filter.key !== undefined) {
+    const fast = resolvePropertyValue(current, filter.key, context);
     if (fast.kind === MISSING_CLEAN) {
       return false;
     }
@@ -211,41 +339,47 @@ function objectStepReachesFunction(
   }
   return withBranch(context, (branch) => {
     branch.seen.add(resolved.object);
-    return objectCandidatesReachFunction(resolved.object, key, tailSteps, branch);
+    return objectCandidatesReachFunction(resolved.object, filter, tailSteps, branch);
   });
 }
 
 /** Checks matching literal properties, spreads, and post-writes of `object` for `tailSteps`. */
 function objectCandidatesReachFunction(
   object: ObjectLiteralExpression,
-  key: string | undefined,
+  filter: ObjectKeyFilter,
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
   for (const prop of object.properties) {
-    if (objectPropertyReachesFunction(prop, key, tailSteps, context)) {
+    if (objectPropertyReachesFunction(prop, filter, tailSteps, context)) {
       return true;
     }
   }
-  return objectPostWritesReachFunction(object, key, tailSteps, context);
+  return objectPostWritesReachFunction(object, filter, tailSteps, context);
 }
 
-/** Tests whether a single object literal property or spread `prop` reaches a function along `tailSteps`. */
+/** Tests whether a single object literal property or spread `prop` reaches a function. */
 function objectPropertyReachesFunction(
   prop: ObjectLiteralExpression['properties'][number],
-  key: string | undefined,
+  filter: ObjectKeyFilter,
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
   if (isSpreadAssignment(prop)) {
-    const nextSteps = prependMemberStep(key, tailSteps);
+    const nextSteps = prependFilterSteps(filter, tailSteps);
     return withBranch(context, (branch) =>
       reachesAssignedFunction(unwrapped(prop.expression), nextSteps, branch),
     );
   }
   const propKey = propertyKey(prop);
+  if (isExcludedOrMismatchedKey(propKey, filter)) {
+    return false;
+  }
+  if (isMethodDeclaration(prop)) {
+    return tailSteps.length === 0;
+  }
   const value = propertyAssignmentExpression(prop);
-  if (value === undefined || (key !== undefined && propKey !== undefined && propKey !== key)) {
+  if (value === undefined) {
     return false;
   }
   return withBranch(context, (branch) => reachesAssignedFunction(value, tailSteps, branch));
@@ -254,35 +388,64 @@ function objectPropertyReachesFunction(
 /** Checks post-declaration member writes and `Object.assign` sources on `object` for `tailSteps`. */
 function objectPostWritesReachFunction(
   object: ObjectLiteralExpression,
-  key: string | undefined,
+  filter: ObjectKeyFilter,
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
   const post = objectPostWrites(object);
   for (const write of post.memberValues) {
     const { callable } = write;
-    if (
-      isExpression(callable) &&
-      (key === undefined || write.key === undefined || write.key === key)
-    ) {
-      const hit = withBranch(context, (branch) =>
-        reachesAssignedFunction(callable, tailSteps, branch),
-      );
-      if (hit) {
+    if (!isExcludedOrMismatchedKey(write.key, filter)) {
+      if (isMethodDeclaration(callable) && tailSteps.length === 0) {
+        return true;
+      }
+      if (
+        isExpression(callable) &&
+        withBranch(context, (branch) => reachesAssignedFunction(callable, tailSteps, branch))
+      ) {
         return true;
       }
     }
   }
-  const retrySteps = prependMemberStep(key, tailSteps);
+  const retrySteps = prependFilterSteps(filter, tailSteps);
   for (const source of post.assignSources) {
-    const hit = withBranch(context, (branch) =>
-      reachesAssignedFunction(source, retrySteps, branch),
-    );
-    if (hit) {
+    if (withBranch(context, (branch) => reachesAssignedFunction(source, retrySteps, branch))) {
       return true;
     }
   }
   return false;
+}
+
+/** Whether `candidateKey` is ruled out by `filter.key` or `filter.excludedKeys`. */
+function isExcludedOrMismatchedKey(
+  candidateKey: string | undefined,
+  filter: ObjectKeyFilter,
+): boolean {
+  if (candidateKey === undefined) {
+    return false;
+  }
+  if (filter.key !== undefined) {
+    return candidateKey !== filter.key;
+  }
+  return filter.excludedKeys?.has(candidateKey) === true;
+}
+
+/** Prepends `filter` as selection step(s) onto `tailSteps` for spread/`Object.assign` forwarding. */
+function prependFilterSteps(
+  filter: ObjectKeyFilter,
+  tailSteps: readonly AssignmentStep[],
+): readonly AssignmentStep[] {
+  if (filter.key !== undefined) {
+    return [{ key: filter.key, kind: STEP_MEMBER }, ...tailSteps];
+  }
+  if (filter.excludedKeys !== undefined && filter.excludedKeys.size > 0) {
+    return [
+      { excludedKeys: filter.excludedKeys, kind: STEP_OBJECT_REST },
+      { kind: STEP_DYNAMIC_MEMBER },
+      ...tailSteps,
+    ];
+  }
+  return [{ kind: STEP_DYNAMIC_MEMBER }, ...tailSteps];
 }
 
 /** Advances an intermediate array slot `slotIndex` on `current`. */
@@ -292,19 +455,11 @@ function arrayElementStepReachesFunction(
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
-  const array = withBranch(context, (branch) => resolveArrayLiteral(current, branch));
-  if (array === undefined || slotIndex < 0) {
-    return false;
-  }
-  if (array.elements.slice(0, slotIndex + 1).every((each) => !isSpreadElement(each))) {
-    const element = array.elements[slotIndex];
-    return (
-      element !== undefined &&
-      !isOmittedExpression(element) &&
-      reachesAssignedFunction(unwrapped(element), tailSteps, context)
-    );
-  }
-  return arrayRangeReachesFunction(current, 0, tailSteps, context);
+  return arrayElementStepReaches(current, slotIndex, {
+    context,
+    reaches: reachesAssignedFunction,
+    tailSteps,
+  });
 }
 
 /** Checks elements of `current` from `startIndex` (or `0` when spreads precede) against `tailSteps`. */
@@ -314,36 +469,10 @@ function arrayRangeReachesFunction(
   tailSteps: readonly AssignmentStep[],
   context: ScanContext,
 ): boolean {
-  const array = withBranch(context, (branch) => resolveArrayLiteral(current, branch));
-  if (array === undefined) {
-    return false;
-  }
-  if (context.seen.has(array)) {
-    context.hitCycle = true;
-    return false;
-  }
-  const offset = array.elements.slice(0, startIndex).every((each) => !isSpreadElement(each))
-    ? startIndex
-    : 0;
-  return withBranch(context, (branch) => {
-    branch.seen.add(array);
-    for (const element of array.elements.slice(offset)) {
-      if (isSpreadElement(element)) {
-        const spreadSteps: readonly AssignmentStep[] = [
-          { kind: 'dynamic-element', startIndex: 0 },
-          ...tailSteps,
-        ];
-        if (reachesAssignedFunction(unwrapped(element.expression), spreadSteps, branch)) {
-          return true;
-        }
-      } else if (
-        !isOmittedExpression(element) &&
-        reachesAssignedFunction(unwrapped(element), tailSteps, branch)
-      ) {
-        return true;
-      }
-    }
-    return false;
+  return arrayRangeStepReaches(current, startIndex, {
+    context,
+    reaches: reachesAssignedFunction,
+    tailSteps,
   });
 }
 
@@ -357,187 +486,37 @@ function mutableHolderReassignmentReachesFunction(
     return false;
   }
   const declared = frameDeclarationOf(current);
-  if (declared === undefined || !isVariableDeclaration(declared) || isConstDeclaration(declared)) {
-    return false;
-  }
-  const target = declaredBindingTarget(current, declared);
-  if (context.seen.has(target)) {
-    context.hitCycle = true;
-    return false;
-  }
-  const sources = bindingReassignments(current.getSourceFile()).get(target) ?? [];
-  for (const source of sources) {
-    const composed: readonly AssignmentStep[] = [...source.steps, ...remainingSteps];
-    const hit = withBranch(context, (branch) => {
-      branch.seen.add(target);
-      return reachesAssignedFunction(source.root, composed, branch);
-    });
-    if (hit) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** Detects functions inside non-inline array literals without proving mutating slots non-callable. */
-function unverifiedArraySlotKind(
-  holder: Expression,
-  index: number,
-  context: ScanContext,
-): EntryKind {
-  const array = resolveArrayLiteral(holder, context);
-  if (array === undefined || index < 0) {
-    return 'unknown';
-  }
-  if (array.elements.slice(0, index + 1).every((each) => !isSpreadElement(each))) {
-    const element = array.elements[index];
-    if (element === undefined || isOmittedExpression(element)) {
-      return 'unknown';
-    }
-    const kind = context.classifyExpression(unwrapped(element), context);
-    return isFunctionEntryKind(kind) ? 'renamed' : 'unknown';
-  }
-  for (const element of array.elements) {
-    if (!isOmittedExpression(element) && !isSpreadElement(element)) {
-      const each = withBranch(context, (branch) =>
-        branch.classifyExpression(unwrapped(element), branch),
-      );
-      if (isFunctionEntryKind(each)) {
-        return 'renamed';
-      }
-    }
-  }
-  return 'unknown';
-}
-
-/** Follows an identifier, member projection, or destructured `const` chain to an `ArrayLiteralExpression`. */
-function resolveArrayLiteral(
-  holder: Expression,
-  context: ScanContext,
-): ArrayLiteralExpression | undefined {
-  let current: Expression = holder;
-  for (;;) {
-    if (isArrayLiteralExpression(current)) {
-      return current;
-    }
-    const next = nextArrayHolderExpression(current, context);
-    if (next === undefined) {
-      return undefined;
-    }
-    current = next;
-  }
-}
-
-/** Resolves one lexical or projected step from `current` toward its underlying array initializer. */
-function nextArrayHolderExpression(
-  current: Expression,
-  context: ScanContext,
-): Expression | undefined {
-  if (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
-    return projectedArrayHolderExpression(current, context);
-  }
-  if (!isIdentifier(current)) {
-    return undefined;
-  }
-  const declared = frameDeclarationOf(current);
   if (
     declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    declared.initializer === undefined
+    (isVariableDeclaration(declared) && isConstDeclaration(declared)) ||
+    (!isVariableDeclaration(declared) && !isParameterDeclaration(declared))
   ) {
-    return undefined;
+    return false;
   }
   const target = declaredBindingTarget(current, declared);
+  const stepKey = serializeAssignmentSteps(remainingSteps);
+  const cached = getReachMemo(target, stepKey);
+  if (cached !== undefined) {
+    return cached;
+  }
   if (context.seen.has(target)) {
     context.hitCycle = true;
-    return undefined;
+    return false;
   }
-  context.seen.add(target);
-  if (isIdentifier(declared.name)) {
-    return unwrapped(declared.initializer);
-  }
-  return isConstDeclaration(declared)
-    ? resolveDestructuredArrayExpression(current, declared, context)
-    : undefined;
-}
-
-/** Resolves a static member projection (`outer.items` or `outer['items']`) toward an array literal. */
-function projectedArrayHolderExpression(
-  current: ElementAccessExpression | PropertyAccessExpression,
-  context: ScanContext,
-): Expression | undefined {
-  if (context.seen.has(current)) {
-    context.hitCycle = true;
-    return undefined;
-  }
-  const key = isPropertyAccessExpression(current) ? current.name.text : elementEntryKey(current);
-  if (key === undefined) {
-    return undefined;
-  }
-  context.seen.add(current);
-  const selected = resolvePropertyValue(unwrapped(current.expression), key, context);
-  return selected.kind === 'expr' ? selected.value : undefined;
-}
-
-/** Resolves the expression selected by a `const` destructuring binding `node` inside `declared`. */
-function resolveDestructuredArrayExpression(
-  node: Identifier,
-  declared: VariableDeclaration,
-  context: ScanContext,
-): Expression | undefined {
-  if (declared.initializer === undefined) {
-    return undefined;
-  }
-  const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
-  if (bound === undefined) {
-    return undefined;
-  }
-  let selected: ResolvedProperty = { kind: 'expr', value: unwrapped(declared.initializer) };
-  for (const step of bindingElementSteps(bound)) {
-    if (step.dotDotDotToken !== undefined || step.initializer !== undefined) {
-      return undefined;
+  return withBranch(context, (branch) => {
+    branch.seen.add(target);
+    const sources = bindingReassignments(current.getSourceFile()).get(target) ?? [];
+    let found = false;
+    for (const source of sources) {
+      const composed: readonly AssignmentStep[] = [...source.steps, ...remainingSteps];
+      if (withBranch(branch, (inner) => reachesAssignedFunction(source.root, composed, inner))) {
+        found = true;
+        break;
+      }
     }
-    selected = selectDestructuredStep(selected, step, context);
-  }
-  return selected.kind === 'expr' ? selected.value : undefined;
-}
-
-/** Prepends a static or dynamic member selection step onto `tailSteps`. */
-function prependMemberStep(
-  key: string | undefined,
-  tailSteps: readonly AssignmentStep[],
-): readonly AssignmentStep[] {
-  return [key === undefined ? { kind: DYNAMIC_MEMBER } : { key, kind: 'member' }, ...tailSteps];
-}
-
-/** Advances one default-free destructuring `step` while resolving a `const` array holder. */
-function selectDestructuredStep(
-  source: ResolvedProperty,
-  step: BindingElement,
-  context: ScanContext,
-): ResolvedProperty {
-  if (source.kind !== 'expr') {
-    return { kind: 'unknown' };
-  }
-  if (isObjectBindingPattern(step.parent)) {
-    const key = bindingStepKey(step);
-    return key === undefined
-      ? { kind: 'unknown' }
-      : resolvePropertyValue(source.value, key, context);
-  }
-  return isArrayBindingPattern(step.parent)
-    ? selectInlineArrayElement(source.value, step.parent.elements.indexOf(step))
-    : { kind: 'unknown' };
-}
-
-/** Whether `node` stands directly as a destructuring initializer with no identifier alias to mutate it. */
-function isInlinePatternSource(node: ArrayLiteralExpression): boolean {
-  const { at, parent } = useOf(node);
-  return (
-    isExpression(at) &&
-    (isVariableDeclaration(parent) || isBindingElement(parent)) &&
-    parent.initializer === at &&
-    parent.name !== undefined &&
-    !isIdentifier(parent.name)
-  );
+    if (!branch.hitCycle) {
+      setReachMemo(target, stepKey, found);
+    }
+    return found;
+  });
 }

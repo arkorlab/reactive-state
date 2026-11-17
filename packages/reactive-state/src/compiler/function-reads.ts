@@ -33,16 +33,18 @@ import {
 import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
 import {
-  dynamicObjectEntryKind,
+  arraySlotEntryKind,
+  containerDynamicEntryKind,
+  containerMemberEntryKind,
   identifierEntryKind,
   isGuaranteedUndefined,
+  mutableSpreadReachesFunction,
 } from './function-binding-entries.ts';
 import { elementEntryKey } from './function-entry-writes.ts';
 import {
   combineBranchKinds,
   type EntryKind,
   type FunctionKind,
-  memberEntryKind,
   type ScanContext,
   withBranch,
 } from './function-table-entries.ts';
@@ -58,6 +60,8 @@ const BUNDLED: ReadonlySet<string> = new Set(['name', 'toString']);
 
 /** The operators that make text of a function beside them: `+`, `+=`. */
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
+
+const EXPRESSION_ENTRY_KINDS = new WeakMap<Expression, EntryKind>();
 
 /**
  * What of `node` reads what each side's bundle writes otherwise of a function the code shows it
@@ -127,6 +131,7 @@ function functionKind(node: Expression, seen: Set<Node>): FunctionKind | undefin
   const kind = expressionEntryKind(node, {
     classifyExpression: expressionEntryKind,
     hitCycle: false,
+    mutableSpreadReachesFunction,
     seen,
   });
   return kind === 'entry' || kind === 'renamed' ? kind : undefined;
@@ -140,6 +145,24 @@ function expressionEntryKind(node: Expression, context: ScanContext): EntryKind 
   if (isNonFunctionSyntax(node)) {
     return 'non-function';
   }
+  if (isIdentifier(node)) {
+    return identifierEntryKind(node, context);
+  }
+  const cached = EXPRESSION_ENTRY_KINDS.get(node);
+  if (cached !== undefined) {
+    return cached;
+  }
+  return withBranch(context, (branch) => {
+    const kind = computeComplexExpressionEntryKind(node, branch);
+    if (!branch.hitCycle) {
+      EXPRESSION_ENTRY_KINDS.set(node, kind);
+    }
+    return kind;
+  });
+}
+
+/** Classifies conditional and member/element access expressions inside `context`. */
+function computeComplexExpressionEntryKind(node: Expression, context: ScanContext): EntryKind {
   if (isConditionalExpression(node)) {
     const left = withBranch(context, (branch) =>
       expressionEntryKind(unwrapped(node.whenTrue), branch),
@@ -150,21 +173,26 @@ function expressionEntryKind(node: Expression, context: ScanContext): EntryKind 
     return combineBranchKinds(left, right);
   }
   if (isPropertyAccessExpression(node)) {
-    return memberEntryKind(unwrapped(node.expression), node.name.text, context);
+    return containerMemberEntryKind(unwrapped(node.expression), node.name.text, context);
   }
   if (isElementAccessExpression(node)) {
     return elementEntryKind(node, context);
   }
-  return isIdentifier(node) ? identifierEntryKind(node, context) : 'unknown';
+  return 'unknown';
 }
 
-/** Classifies a bracket entry read on a written object literal, with static or dynamic key. */
+/** Classifies a bracket entry read on an object or array holder, with static or dynamic key. */
 function elementEntryKind(node: ElementAccessExpression, context: ScanContext): EntryKind {
   const holder = unwrapped(node.expression);
   const key = elementEntryKey(node);
-  return key === undefined
-    ? dynamicObjectEntryKind(holder, context)
-    : memberEntryKind(holder, key, context);
+  if (key === undefined) {
+    return containerDynamicEntryKind(holder, context);
+  }
+  const fromMember = containerMemberEntryKind(holder, key, context);
+  if (fromMember !== 'unknown' || !/^\d+$/u.test(key)) {
+    return fromMember;
+  }
+  return arraySlotEntryKind(holder, Number(key), context);
 }
 
 /** Whether `node` is a container literal, primitive/regex literal, primitive unary operator, or `undefined`. */

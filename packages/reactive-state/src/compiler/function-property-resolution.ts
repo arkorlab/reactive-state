@@ -55,6 +55,9 @@ export type ResolvedProperty =
 export interface ScanContext {
   readonly classifyExpression: (node: Expression, context: ScanContext) => EntryKind;
   hitCycle: boolean;
+  readonly mutableSpreadReachesFunction?:
+    | ((source: Expression, context: ScanContext) => boolean)
+    | undefined;
   readonly seen: Set<Node>;
 }
 
@@ -67,6 +70,7 @@ export function withBranch<T>(context: ScanContext, run: (branch: ScanContext) =
   const branch: ScanContext = {
     classifyExpression: context.classifyExpression,
     hitCycle: false,
+    mutableSpreadReachesFunction: context.mutableSpreadReachesFunction,
     seen: new Set(context.seen),
   };
   const result = run(branch);

@@ -158,6 +158,7 @@ function scanObjectLiteral(object: ObjectLiteralExpression, context: ScanContext
   const local: ScanContext = {
     classifyExpression: context.classifyExpression,
     hitCycle: false,
+    mutableSpreadReachesFunction: context.mutableSpreadReachesFunction,
     seen: new Set([...context.seen, object]),
   };
   for (const property of object.properties) {
@@ -255,6 +256,12 @@ function classifyAssignedNode(node: Node, context: ScanContext): EntryKind {
 
 /** Propagates function entries from an `Object.assign(target, source)` spread argument onto `scan`. */
 function recordObjectAssignSource(source: Expression, scan: TableScan, context: ScanContext): void {
+  if (
+    withBranch(context, (branch) => branch.mutableSpreadReachesFunction?.(source, branch) === true)
+  ) {
+    scan.stickyRenamed = true;
+    degradeExistingEntries(scan.entries, 'renamed');
+  }
   const inner = withBranch(context, (branch) => {
     const spread = holderObject(source, branch);
     return spread === undefined ? undefined : scanResolvedObject(spread, branch);
@@ -315,22 +322,33 @@ function recordComputedProperty(each: EntryKind, scan: TableScan): void {
 
 /** Merges a spread source's surviving entries and uncertainty flags into `scan`. */
 function mergeSpreadTable(source: Expression, scan: TableScan, context: ScanContext): void {
+  const reachesMutable = withBranch(
+    context,
+    (branch) => branch.mutableSpreadReachesFunction?.(source, branch) === true,
+  );
   const inner = withBranch(context, (branch) => {
     const spread = holderObject(source, branch);
     return spread === undefined ? undefined : scanResolvedObject(spread, branch);
   });
   if (inner === undefined) {
     scan.unverified = true;
-    degradeExistingEntries(scan.entries, 'unknown');
+    degradeExistingEntries(scan.entries, reachesMutable ? 'renamed' : 'unknown');
+    if (reachesMutable) {
+      scan.stickyRenamed = true;
+    }
     return;
   }
   mergeSpreadFlags(inner, scan);
   if (inner.unverified) {
     mergeUnverifiedEntries(inner.entries, scan.entries);
-    return;
+  } else {
+    for (const [key, kind] of inner.entries) {
+      mergeVerifiedSpreadEntry(key, kind, inner.optionalKeys.has(key), scan);
+    }
   }
-  for (const [key, kind] of inner.entries) {
-    mergeVerifiedSpreadEntry(key, kind, inner.optionalKeys.has(key), scan);
+  if (reachesMutable) {
+    scan.stickyRenamed = true;
+    degradeExistingEntries(scan.entries, 'renamed');
   }
 }
 

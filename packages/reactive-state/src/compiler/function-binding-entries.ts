@@ -26,16 +26,16 @@ import {
 import { bindingElementSteps } from './function-candidate-objects.ts';
 import {
   arraySlotEntryKind,
+  containerDynamicEntryKind,
+  containerMemberEntryKind,
   reassignedBindingEntryKind,
   selectInlineArrayElement,
 } from './function-reassigned-bindings.ts';
 import {
   combineBranchKinds,
-  dynamicObjectEntryKind,
   type EntryKind,
   isConstDeclaration,
   keyOf,
-  memberEntryKind,
   type ResolvedProperty,
   resolvePropertyValue,
   type ScanContext,
@@ -43,10 +43,16 @@ import {
 } from './function-table-entries.ts';
 import { bindingIdentifiers } from './scope.ts';
 
-export { dynamicObjectEntryKind } from './function-table-entries.ts';
+export {
+  arraySlotEntryKind,
+  containerDynamicEntryKind,
+  containerMemberEntryKind,
+  mutableSpreadReachesFunction,
+} from './function-reassigned-bindings.ts';
 
 const MISSING_CLEAN = 'missing-clean';
 const NON_FUNCTION: EntryKind = 'non-function';
+const BINDING_ENTRY_KINDS = new WeakMap<Node, EntryKind>();
 
 /** Resolves an identifier through declarations, destructuring patterns, and function parameters. */
 export function identifierEntryKind(node: Identifier, context: ScanContext): EntryKind {
@@ -54,17 +60,38 @@ export function identifierEntryKind(node: Identifier, context: ScanContext): Ent
   if (declared === undefined) {
     return 'unknown';
   }
-  if (isParameterDeclaration(declared)) {
-    return isOutsideParameterScope(node, declared)
-      ? 'unknown'
-      : parameterEntryKind(node, declared, context);
+  if (isParameterDeclaration(declared) && isOutsideParameterScope(node, declared)) {
+    return 'unknown';
   }
   const target = declaredBindingTarget(node, declared);
+  const cached = BINDING_ENTRY_KINDS.get(target);
+  if (cached !== undefined) {
+    return cached;
+  }
   if (context.seen.has(target)) {
     context.hitCycle = true;
     return 'unknown';
   }
-  context.seen.add(target);
+  return withBranch(context, (branch) => {
+    branch.seen.add(target);
+    const kind = computeDeclaredEntryKind(node, declared, target, branch);
+    if (!branch.hitCycle) {
+      BINDING_ENTRY_KINDS.set(target, kind);
+    }
+    return kind;
+  });
+}
+
+/** Computes the uncached `EntryKind` of `declared` inside `context` (with `target` already in `seen`). */
+function computeDeclaredEntryKind(
+  node: Identifier,
+  declared: NonNullable<ReturnType<typeof frameDeclarationOf>>,
+  target: Node,
+  context: ScanContext,
+): EntryKind {
+  if (isParameterDeclaration(declared)) {
+    return parameterEntryKind(node, declared, target, context);
+  }
   return isVariableDeclaration(declared) ? variableEntryKind(node, declared, context) : 'renamed';
 }
 
@@ -140,14 +167,9 @@ function simpleVariableEntryKind(
 function parameterEntryKind(
   node: Identifier,
   parameter: ParameterDeclaration,
+  target: Node,
   context: ScanContext,
 ): EntryKind {
-  const target = declaredBindingTarget(node, parameter);
-  if (context.seen.has(target)) {
-    context.hitCycle = true;
-    return 'unknown';
-  }
-  context.seen.add(target);
   const fromDeclaration = isIdentifier(parameter.name)
     ? simpleParameterEntryKind(parameter, context)
     : destructuredParameterEntryKind(node, parameter, context);
@@ -298,8 +320,8 @@ function slotEntryKind(
   if (isObjectBindingPattern(step.parent)) {
     const key = bindingElementKey(step);
     return key === undefined
-      ? dynamicObjectEntryKind(source.value, context)
-      : memberEntryKind(source.value, key, context);
+      ? containerDynamicEntryKind(source.value, context)
+      : containerMemberEntryKind(source.value, key, context);
   }
   return isArrayBindingPattern(step.parent)
     ? arraySlotEntryKind(source.value, step.parent.elements.indexOf(step), context)

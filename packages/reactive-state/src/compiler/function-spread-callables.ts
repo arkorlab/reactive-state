@@ -1,87 +1,40 @@
 import {
-  type BindingElement,
   type Expression,
-  type Identifier,
-  isArrowFunction,
-  isBinaryExpression,
   isComputedPropertyName,
-  isConditionalExpression,
-  isElementAccessExpression,
   isExpression,
-  isFunctionDeclaration,
-  isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
-  isObjectBindingPattern,
-  isPropertyAccessExpression,
   isPropertyAssignment,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
-  isVariableDeclaration,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   SyntaxKind,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { patternKey } from './code-globals.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
-import { declaredBindingTarget } from './function-binding-types.ts';
 import {
-  bindingElementSteps,
-  type CandidateCycleState,
-  candidateObjects,
-  isConstVariable,
-  literalElementKey,
-  LOGICAL_FORWARDING,
-  selectMemberObjects,
-  type VariableWriteMap,
-} from './function-candidate-objects.ts';
+  type AssignedCallable,
+  type CallableLookupContext,
+  type CallableTraversal,
+  expressionCallables,
+  type FileCallableIndex,
+  type ObjectCallables,
+  traversalCandidateObjects,
+  traversalObjectRestCopies,
+} from './function-callable-expressions.ts';
+import { literalElementKey } from './function-candidate-objects.ts';
 import {
   callableThisWrites,
   type CallableWrites,
   EMPTY_CALLABLE_WRITES,
-  staticElementKey,
   type ThisPropertyAssignment,
 } from './function-this-writes.ts';
-import { bindingIdentifiers } from './scope.ts';
 
-/** Member callable assignment recorded against an object literal (`obj.swap = fn` or `defineProperty`). */
-export interface AssignedCallable {
-  readonly callable: Node | Expression;
-  readonly key: string | undefined;
-}
-
-/** Per-file index of variable reassignments, member callable assignments, and `Object.assign` sources. */
-export interface FileCallableIndex {
-  readonly assignedSpreads: ReadonlyMap<ObjectLiteralExpression, readonly Expression[]>;
-  readonly memberCallables: ReadonlyMap<ObjectLiteralExpression, readonly AssignedCallable[]>;
-  readonly variableWrites: VariableWriteMap;
-}
-
-/** Surviving data callables and own accessors that can run with `this` bound to an object literal. */
-interface ObjectCallables {
-  readonly dynamic: ReadonlySet<Node>;
-  readonly named: ReadonlyMap<string, ReadonlySet<Node>>;
-  readonly ownAccessors: ReadonlySet<Node>;
-}
-
-/** Active-path cycle tracker threaded through nested `objectCallables` lookups. */
-interface CallableTraversal {
-  readonly activeObjects: Set<ObjectLiteralExpression>;
-  hitCycle: boolean;
-  readonly index: FileCallableIndex;
-}
-
-/** Shared lookup context while resolving callables across expressions and patterns. */
-interface CallableLookupContext {
-  readonly seen: Set<Node>;
-  readonly traversal: CallableTraversal;
-}
+export type { AssignedCallable, FileCallableIndex } from './function-callable-expressions.ts';
 
 const EMPTY_OBJECT_CALLABLES: ObjectCallables = {
   dynamic: new Set(),
@@ -96,15 +49,25 @@ export function callableWritesOnObject(
   object: ObjectLiteralExpression,
   index: FileCallableIndex,
 ): CallableWrites {
-  const rootTraversal: CallableTraversal = { activeObjects: new Set(), hitCycle: false, index };
+  const rootTraversal: CallableTraversal = {
+    activeObjects: new Set(),
+    getObjectCallables: objectCallables,
+    hitCycle: false,
+    index,
+  };
   const callables = objectCallables(object, rootTraversal);
   const candidates = collectAllCallables(callables);
   if (candidates.length === 0) {
     return EMPTY_CALLABLE_WRITES;
   }
   const resolveExpr = (value: Expression): readonly Node[] => {
-    const traversal: CallableTraversal = { activeObjects: new Set(), hitCycle: false, index };
-    return expressionCallables(value, { seen: new Set(), traversal });
+    const traversal: CallableTraversal = {
+      activeObjects: new Set(),
+      getObjectCallables: objectCallables,
+      hitCycle: false,
+      index,
+    };
+    return expressionCallables(value, { hitCycle: false, seen: new Set(), traversal });
   };
   let all = false;
   const keys = new Set<string>();
@@ -158,6 +121,7 @@ function objectCallables(
   }
   const local: CallableTraversal = {
     activeObjects: new Set([...traversal.activeObjects, object]),
+    getObjectCallables: objectCallables,
     hitCycle: false,
     index: traversal.index,
   };
@@ -175,19 +139,6 @@ function objectCallables(
     OBJECT_CALLABLES.set(object, result);
   }
   return result;
-}
-
-/** Resolves `candidateObjects` while propagating any variable-alias cycle onto `traversal`. */
-function traversalCandidateObjects(
-  source: Expression,
-  traversal: CallableTraversal,
-): readonly ObjectLiteralExpression[] {
-  const cycle: CandidateCycleState = { hitCycle: false, seen: new Set() };
-  const objects = candidateObjects(source, traversal.index.variableWrites, cycle.seen, cycle);
-  if (cycle.hitCycle) {
-    traversal.hitCycle = true;
-  }
-  return objects;
 }
 
 /** Records callables from one literal property or spread element onto `state`. */
@@ -240,7 +191,7 @@ function directElementCallables(
   if (isMethodDeclaration(property)) {
     return [property];
   }
-  const lookup: CallableLookupContext = { seen: new Set(), traversal };
+  const lookup: CallableLookupContext = { hitCycle: false, seen: new Set(), traversal };
   if (isPropertyAssignment(property)) {
     return expressionCallables(unwrapped(property.initializer), lookup);
   }
@@ -250,19 +201,31 @@ function directElementCallables(
   return [];
 }
 
-/** Unions data callables (excluding getters/setters) from `source` into `state`. */
+/** Unions data callables (excluding getters/setters and rest-excluded keys) from `source`. */
 function mergeSpreadCallables(
   source: Expression,
   traversal: CallableTraversal,
   state: { readonly dynamic: Set<Node>; readonly named: Map<string, Set<Node>> },
 ): void {
-  const spreadObjects = traversalCandidateObjects(source, traversal);
-  for (const spreadObj of spreadObjects) {
-    const inner = objectCallables(spreadObj, traversal);
-    for (const callable of inner.dynamic) {
-      state.dynamic.add(callable);
-    }
-    for (const [key, group] of inner.named) {
+  for (const spreadObj of traversalCandidateObjects(source, traversal)) {
+    copyObjectCallables(objectCallables(spreadObj, traversal), undefined, state);
+  }
+  for (const copy of traversalObjectRestCopies(source, traversal)) {
+    copyObjectCallables(objectCallables(copy.object, traversal), copy.excludedKeys, state);
+  }
+}
+
+/** Copies data callables from `inner` into `state`, skipping keys in `excludedKeys`. */
+function copyObjectCallables(
+  inner: ObjectCallables,
+  excludedKeys: ReadonlySet<string> | undefined,
+  state: { readonly dynamic: Set<Node>; readonly named: Map<string, Set<Node>> },
+): void {
+  for (const callable of inner.dynamic) {
+    state.dynamic.add(callable);
+  }
+  for (const [key, group] of inner.named) {
+    if (excludedKeys?.has(key) !== true) {
       addNamedCallables(state.named, key, group);
     }
   }
@@ -319,7 +282,7 @@ function recordAssignedItem(
   if (isMethodDeclaration(item.callable)) {
     resolved = [item.callable];
   } else if (isExpression(item.callable)) {
-    resolved = expressionCallables(item.callable, { seen: new Set(), traversal });
+    resolved = expressionCallables(item.callable, { hitCycle: false, seen: new Set(), traversal });
   }
   if (item.key === undefined) {
     for (const callable of resolved) {
@@ -344,197 +307,4 @@ function addNamedCallables(
   for (const item of items) {
     bucket.add(item);
   }
-}
-
-/** Resolves non-arrow callables reachable from `value` across aliases, branches, and member reads. */
-function expressionCallables(value: Expression, context: CallableLookupContext): readonly Node[] {
-  if (isFunctionExpression(value)) {
-    return [value];
-  }
-  if (isArrowFunction(value)) {
-    return [];
-  }
-  if (isConditionalExpression(value)) {
-    const left = { seen: new Set(context.seen), traversal: context.traversal };
-    const right = { seen: new Set(context.seen), traversal: context.traversal };
-    return [
-      ...expressionCallables(unwrapped(value.whenTrue), left),
-      ...expressionCallables(unwrapped(value.whenFalse), right),
-    ];
-  }
-  if (isBinaryExpression(value) && LOGICAL_FORWARDING.has(value.operatorToken.kind)) {
-    const left = { seen: new Set(context.seen), traversal: context.traversal };
-    const right = { seen: new Set(context.seen), traversal: context.traversal };
-    return [
-      ...expressionCallables(unwrapped(value.left), left),
-      ...expressionCallables(unwrapped(value.right), right),
-    ];
-  }
-  if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
-    const key = isPropertyAccessExpression(value) ? value.name.text : staticElementKey(value);
-    return lookupMemberCallables(unwrapped(value.expression), key, context);
-  }
-  return isIdentifier(value) ? identifierCallables(value, context) : [];
-}
-
-/** Resolves data callables stored under `key` (or any key when dynamic) on `holder`. */
-function lookupMemberCallables(
-  holder: Expression,
-  key: string | undefined,
-  context: CallableLookupContext,
-): readonly Node[] {
-  const found: Node[] = [];
-  const sourceObjects = traversalCandidateObjects(holder, context.traversal);
-  for (const srcObj of sourceObjects) {
-    const inner = objectCallables(srcObj, context.traversal);
-    appendObjectCallablesForKey(inner, key, found);
-  }
-  return found;
-}
-
-/** Appends dynamic and matching `key` callables from `inner` onto `found`. */
-function appendObjectCallablesForKey(
-  inner: ObjectCallables,
-  key: string | undefined,
-  found: Node[],
-): void {
-  for (const callable of inner.dynamic) {
-    found.push(callable);
-  }
-  if (key === undefined) {
-    const groups = inner.named.values();
-    for (const group of groups) {
-      for (const callable of group) {
-        found.push(callable);
-      }
-    }
-    return;
-  }
-  const matching = inner.named.get(key);
-  if (matching !== undefined) {
-    for (const callable of matching) {
-      found.push(callable);
-    }
-  }
-}
-
-/** Resolves callables referenced by an identifier (`function swap`, `const s = ...`, `const { swap } = base`). */
-function identifierCallables(node: Identifier, context: CallableLookupContext): readonly Node[] {
-  const declared = frameDeclarationOf(node);
-  if (declared === undefined) {
-    return [];
-  }
-  const target = declaredBindingTarget(node, declared);
-  if (context.seen.has(target)) {
-    context.traversal.hitCycle = true;
-    return [];
-  }
-  context.seen.add(target);
-  if (isFunctionDeclaration(declared)) {
-    return [declared];
-  }
-  if (!isVariableDeclaration(declared)) {
-    return [];
-  }
-  const initBranch = { seen: new Set(context.seen), traversal: context.traversal };
-  const results = isIdentifier(declared.name)
-    ? simpleVariableCallables(declared, initBranch)
-    : [...destructuredCallables(node, declared, initBranch)];
-  if (!isConstVariable(declared)) {
-    const writes = context.traversal.index.variableWrites.get(target);
-    if (writes !== undefined) {
-      for (const assigned of writes) {
-        const writeBranch = { seen: new Set(context.seen), traversal: context.traversal };
-        results.push(...expressionCallables(assigned, writeBranch));
-      }
-    }
-  }
-  return results;
-}
-
-/** Resolves callables from a simple identifier variable declaration's initializer. */
-function simpleVariableCallables(
-  declared: VariableDeclaration,
-  context: CallableLookupContext,
-): Node[] {
-  return declared.initializer === undefined
-    ? []
-    : [...expressionCallables(unwrapped(declared.initializer), context)];
-}
-
-/** Resolves callables bound through object destructuring (`const { swap = fn } = base`). */
-function destructuredCallables(
-  node: Identifier,
-  declared: VariableDeclaration,
-  context: CallableLookupContext,
-): readonly Node[] {
-  const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
-  const steps = bound === undefined ? [] : bindingElementSteps(bound);
-  const leaf = steps.at(-1);
-  if (leaf === undefined) {
-    return [];
-  }
-  const holders = resolveIntermediateObjectHolders(declared, steps.slice(0, -1), context.traversal);
-  if (holders === undefined) {
-    return [];
-  }
-  return collectLeafDestructuredCallables(holders, leaf, context);
-}
-
-/** Advances candidate object holder expressions across outer destructuring steps. */
-function resolveIntermediateObjectHolders(
-  declared: VariableDeclaration,
-  outerSteps: readonly BindingElement[],
-  traversal: CallableTraversal,
-): readonly Expression[] | undefined {
-  let holders: Expression[] =
-    declared.initializer === undefined ? [] : [unwrapped(declared.initializer)];
-  for (const step of outerSteps) {
-    if (!isObjectBindingPattern(step.parent) || step.dotDotDotToken !== undefined) {
-      return undefined;
-    }
-    holders = advanceSingleObjectStep(holders, step, traversal);
-  }
-  return holders;
-}
-
-/** Advances `holders` across a single intermediate object binding `step` and its default. */
-function advanceSingleObjectStep(
-  holders: readonly Expression[],
-  step: BindingElement,
-  traversal: CallableTraversal,
-): Expression[] {
-  const next: Expression[] = [];
-  const key = patternKey(step);
-  if (key !== undefined) {
-    for (const holder of holders) {
-      const objs = traversalCandidateObjects(holder, traversal);
-      next.push(...selectMemberObjects(objs, key, traversal.index.variableWrites, new Set()));
-    }
-  }
-  if (step.initializer !== undefined) {
-    next.push(unwrapped(step.initializer));
-  }
-  return next;
-}
-
-/** Collects callables selected by `leaf` from `holders` plus `leaf.initializer` default. */
-function collectLeafDestructuredCallables(
-  holders: readonly Expression[],
-  leaf: BindingElement,
-  context: CallableLookupContext,
-): readonly Node[] {
-  const results: Node[] = [];
-  if (isObjectBindingPattern(leaf.parent)) {
-    const key = patternKey(leaf);
-    if (key !== undefined) {
-      for (const holder of holders) {
-        results.push(...lookupMemberCallables(holder, key, context));
-      }
-    }
-  }
-  if (leaf.initializer !== undefined) {
-    results.push(...expressionCallables(unwrapped(leaf.initializer), context));
-  }
-  return results;
 }

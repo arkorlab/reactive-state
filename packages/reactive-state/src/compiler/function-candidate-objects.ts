@@ -1,49 +1,58 @@
 import {
-  type ArrayLiteralExpression,
   type BindingElement,
   type Expression,
   type Identifier,
   isArrayBindingPattern,
-  isArrayLiteralExpression,
   isBinaryExpression,
-  isBindingElement,
-  isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
   isIdentifier,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectBindingPattern,
   isObjectLiteralExpression,
-  isOmittedExpression,
-  isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
-  isSpreadElement,
-  isStringLiteral,
   isVariableDeclaration,
-  isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
-  type PropertyName,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
-import { declaredBindingTarget } from './function-binding-types.ts';
+import {
+  type AssignedBindingSource,
+  type AssignmentStep,
+  bindingElementSteps,
+  bindingReassignments,
+  bindingStepKey,
+  type CycleSeenState,
+  declaredBindingTarget,
+  isConstVariable,
+  literalElementKey,
+  normalizeAssignmentSteps,
+  selectRangeArrayExpressions,
+  selectSingleArrayExpressions,
+  STEP_ARRAY_REST,
+  STEP_DYNAMIC_MEMBER,
+  STEP_ELEMENT,
+  STEP_MEMBER,
+  STEP_OBJECT_REST,
+} from './function-assignment-patterns.ts';
 import { staticElementKey } from './function-this-writes.ts';
 import { bindingIdentifiers } from './scope.ts';
 
-/** Mutable cycle marker threaded through candidate-object lookups when caching subtrees. */
-export interface CandidateCycleState {
-  hitCycle: boolean;
-  readonly seen: Set<Node>;
-}
+export {
+  bindingElementSteps,
+  bindingStepKey,
+  type CycleSeenState as CandidateCycleState,
+  isConstVariable,
+  literalElementKey,
+  staticArgumentKey,
+} from './function-assignment-patterns.ts';
 
 /** Per-binding index of post-declaration expression writes (`x = rhs`). */
 export type VariableWriteMap = ReadonlyMap<Node, readonly Expression[]>;
@@ -55,15 +64,76 @@ export const LOGICAL_FORWARDING: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionToken,
 ]);
 
+const DYNAMIC_MEMBER_KEY = '\0*';
+
+const CANDIDATE_MEMO = new WeakMap<
+  VariableWriteMap,
+  Map<Node, readonly ObjectLiteralExpression[]>
+>();
+
+const MEMBER_EXPR_MEMO = new WeakMap<
+  VariableWriteMap,
+  WeakMap<ObjectLiteralExpression, Map<string, readonly Expression[]>>
+>();
+
+/** Returns the per-`VariableWriteMap` cache of cycle-free candidate-object evaluations. */
+function candidateMemo(
+  variableWrites: VariableWriteMap,
+): Map<Node, readonly ObjectLiteralExpression[]> {
+  let memo = CANDIDATE_MEMO.get(variableWrites);
+  if (memo === undefined) {
+    memo = new Map();
+    CANDIDATE_MEMO.set(variableWrites, memo);
+  }
+  return memo;
+}
+
+/** Returns the per-`(VariableWriteMap, holder)` cache of cycle-free member value expressions. */
+function holderMemberMemo(
+  variableWrites: VariableWriteMap,
+  holder: ObjectLiteralExpression,
+): Map<string, readonly Expression[]> {
+  let byHolder = MEMBER_EXPR_MEMO.get(variableWrites);
+  if (byHolder === undefined) {
+    byHolder = new WeakMap();
+    MEMBER_EXPR_MEMO.set(variableWrites, byHolder);
+  }
+  let byKey = byHolder.get(holder);
+  if (byKey === undefined) {
+    byKey = new Map();
+    byHolder.set(holder, byKey);
+  }
+  return byKey;
+}
+
+/** Evaluates `run` in a branch-local `seen` set and caches `keyNode` when no cycle back-edge hit. */
+function memoizedCandidateLookup(
+  keyNode: Node,
+  variableWrites: VariableWriteMap,
+  state: CycleSeenState,
+  run: (branch: CycleSeenState) => readonly ObjectLiteralExpression[],
+): readonly ObjectLiteralExpression[] {
+  const memo = candidateMemo(variableWrites);
+  const cached = memo.get(keyNode);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const branch: CycleSeenState = { hitCycle: false, seen: new Set(state.seen) };
+  const deduped = [...new Set(run(branch))];
+  if (branch.hitCycle) {
+    state.hitCycle = true;
+  } else {
+    memo.set(keyNode, deduped);
+  }
+  return deduped;
+}
+
 /** Runs `run` with a branch-local clone of `state.seen`, propagating `hitCycle` back to `state`. */
-function withCandidateBranch<T>(
-  state: CandidateCycleState,
-  run: (branch: CandidateCycleState) => T,
+export function withCandidateBranch<T>(
+  state: CycleSeenState,
+  run: (branch: CycleSeenState) => T,
 ): T {
-  const branch: CandidateCycleState = {
-    hitCycle: false,
-    seen: new Set(state.seen),
-  };
+  const branch: CycleSeenState = { hitCycle: false, seen: new Set(state.seen) };
   const result = run(branch);
   if (branch.hitCycle) {
     state.hitCycle = true;
@@ -71,68 +141,40 @@ function withCandidateBranch<T>(
   return result;
 }
 
-/** Collects enclosing `BindingElement`s from outermost pattern to innermost binding `bound`. */
-export function bindingElementSteps(bound: Identifier): readonly BindingElement[] {
-  const steps: BindingElement[] = [];
-  for (
-    let at: Node = bound.parent;
-    !isVariableDeclaration(at) && !isParameterDeclaration(at);
-    at = at.parent
-  ) {
-    if (isBindingElement(at)) {
-      steps.unshift(at);
-    }
-  }
-  return steps;
-}
-
-/** Whether `declared` belongs to a `const` variable declaration list. */
-export function isConstVariable(declared: VariableDeclaration): boolean {
-  return (
-    isVariableDeclarationList(declared.parent) &&
-    /^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
-  );
-}
-
-/** Static property key of an object literal element. */
-export function literalElementKey(property: ObjectLiteralElementLike): string | undefined {
-  if (isSpreadAssignment(property)) {
-    return undefined;
-  }
-  if (isShorthandPropertyAssignment(property)) {
-    return isIdentifier(property.name) ? property.name.text : undefined;
-  }
-  return keyOfPropertyName(property.name);
-}
-
-/** Static string, template, or numeric key expression. */
-export function staticArgumentKey(node: Expression): string | undefined {
-  if (isStringLiteral(node) || isNoSubstitutionTemplateLiteral(node)) {
-    return node.text;
-  }
-  return isNumericLiteral(node) ? String(Number(node.text)) : undefined;
-}
-
 /** Resolves `ObjectLiteralExpression`s reachable from `node` across aliases, members, and patterns. */
 export function candidateObjects(
   node: Expression,
   variableWrites: VariableWriteMap,
   seen: Set<Node>,
-  cycle?: CandidateCycleState,
+  cycle?: CycleSeenState,
 ): readonly ObjectLiteralExpression[] {
-  const state: CandidateCycleState = cycle ?? { hitCycle: false, seen };
+  const state: CycleSeenState = cycle ?? { hitCycle: false, seen };
   return candidateObjectsWithCycle(node, variableWrites, state);
 }
 
-/** Cycle-tracking worker resolving `ObjectLiteralExpression`s reachable from `node`. */
-function candidateObjectsWithCycle(
+/** Cycle-tracking worker resolving distinct `ObjectLiteralExpression`s reachable from `node`. */
+export function candidateObjectsWithCycle(
   node: Expression,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): readonly ObjectLiteralExpression[] {
   if (isObjectLiteralExpression(node)) {
     return [node];
   }
+  if (isIdentifier(node)) {
+    return identifierCandidateObjects(node, variableWrites, state);
+  }
+  return memoizedCandidateLookup(node, variableWrites, state, (branch) =>
+    computeExpressionCandidateObjects(node, variableWrites, branch),
+  );
+}
+
+/** Evaluates branch/member candidate object expressions for `node` inside `state`. */
+function computeExpressionCandidateObjects(
+  node: Expression,
+  variableWrites: VariableWriteMap,
+  state: CycleSeenState,
+): readonly ObjectLiteralExpression[] {
   if (isConditionalExpression(node)) {
     return [
       ...withCandidateBranch(state, (branch) =>
@@ -158,37 +200,67 @@ function candidateObjectsWithCycle(
     const holders = candidateObjectsWithCycle(unwrapped(node.expression), variableWrites, state);
     return selectMemberObjectsWithCycle(holders, key, variableWrites, state);
   }
-  return isIdentifier(node) ? identifierCandidateObjects(node, variableWrites, state) : [];
+  return [];
 }
 
-/** Resolves candidate object literals bound to `node` via simple or destructured declarations. */
+/** Resolves candidate object literals bound to `node` via declarations and reassignments. */
 function identifierCandidateObjects(
   node: Identifier,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): readonly ObjectLiteralExpression[] {
   const declared = frameDeclarationOf(node);
   if (declared === undefined || !isVariableDeclaration(declared)) {
     return [];
   }
   const target = declaredBindingTarget(node, declared);
+  const cached = candidateMemo(variableWrites).get(target);
+  if (cached !== undefined) {
+    return cached;
+  }
   if (state.seen.has(target)) {
     state.hitCycle = true;
     return [];
   }
-  state.seen.add(target);
-  const objects = withCandidateBranch(state, (branch) => {
-    return isIdentifier(declared.name)
-      ? simpleDeclarationObjects(declared, variableWrites, branch)
-      : [...patternDeclarationObjects(node, declared, variableWrites, branch)];
+  return memoizedCandidateLookup(target, variableWrites, state, (branch) => {
+    branch.seen.add(target);
+    const objects = withCandidateBranch(branch, (initBranch) => {
+      return isIdentifier(declared.name)
+        ? simpleDeclarationObjects(declared, variableWrites, initBranch)
+        : [...patternDeclarationObjects(node, declared, variableWrites, initBranch)];
+    });
+    if (!isConstVariable(declared)) {
+      objects.push(...mutableAssignedObjects(node, target, variableWrites, branch));
+    }
+    return objects;
   });
-  if (!isConstVariable(declared)) {
-    const writes = variableWrites.get(target);
-    if (writes !== undefined) {
-      for (const assigned of writes) {
+}
+
+/** Collects candidate objects from direct `variableWrites` and destructuring `bindingReassignments`. */
+function mutableAssignedObjects(
+  node: Identifier,
+  target: Node,
+  variableWrites: VariableWriteMap,
+  state: CycleSeenState,
+): readonly ObjectLiteralExpression[] {
+  const objects: ObjectLiteralExpression[] = [];
+  const writes = variableWrites.get(target);
+  if (writes !== undefined) {
+    for (const assigned of writes) {
+      objects.push(
+        ...withCandidateBranch(state, (branch) =>
+          candidateObjectsWithCycle(assigned, variableWrites, branch),
+        ),
+      );
+    }
+  }
+  const reassignments = bindingReassignments(node.getSourceFile()).get(target);
+  if (reassignments !== undefined) {
+    for (const source of reassignments) {
+      if (writes === undefined || source.steps.length > 0) {
         objects.push(
           ...withCandidateBranch(state, (branch) =>
-            candidateObjectsWithCycle(assigned, variableWrites, branch),
+            assignedSourceCandidateObjects(source, variableWrites, branch),
           ),
         );
       }
@@ -197,11 +269,84 @@ function identifierCandidateObjects(
   return objects;
 }
 
+/** Projects an `AssignedBindingSource` across its `AssignmentStep`s to candidate object literals. */
+function assignedSourceCandidateObjects(
+  source: AssignedBindingSource,
+  variableWrites: VariableWriteMap,
+  state: CycleSeenState,
+): readonly ObjectLiteralExpression[] {
+  const steps = normalizeAssignmentSteps(source.steps);
+  if (steps === undefined || steps.at(-1)?.kind === STEP_OBJECT_REST) {
+    return [];
+  }
+  const expressions = advanceAssignedExpressionSteps([source.root], steps, variableWrites, state);
+  if (expressions === undefined) {
+    return [];
+  }
+  return expressions.flatMap((expr) =>
+    withCandidateBranch(state, (branch) => candidateObjectsWithCycle(expr, variableWrites, branch)),
+  );
+}
+
+/** Advances candidate expressions across normalized `steps`, returning `undefined` on array rest. */
+export function advanceAssignedExpressionSteps(
+  initial: readonly Expression[],
+  steps: readonly AssignmentStep[],
+  variableWrites: VariableWriteMap,
+  state: CycleSeenState,
+): readonly Expression[] | undefined {
+  let expressions = initial;
+  let pendingExcluded: ReadonlySet<string> | undefined;
+  for (const step of steps) {
+    if (step.kind === STEP_ARRAY_REST) {
+      return undefined;
+    }
+    if (step.kind === STEP_OBJECT_REST) {
+      pendingExcluded = step.excludedKeys;
+    } else {
+      expressions = advanceSingleAssignedStep(expressions, step, pendingExcluded, {
+        state,
+        variableWrites,
+      });
+      pendingExcluded = undefined;
+    }
+  }
+  return expressions;
+}
+
+/** Advances candidate expressions across one non-rest `AssignmentStep`. */
+function advanceSingleAssignedStep(
+  expressions: readonly Expression[],
+  step: Exclude<
+    AssignmentStep,
+    { readonly kind: typeof STEP_ARRAY_REST | typeof STEP_OBJECT_REST }
+  >,
+  excludedKeys: ReadonlySet<string> | undefined,
+  env: { readonly state: CycleSeenState; readonly variableWrites: VariableWriteMap },
+): readonly Expression[] {
+  if (step.kind === STEP_MEMBER || step.kind === STEP_DYNAMIC_MEMBER) {
+    const key = step.kind === STEP_MEMBER ? step.key : undefined;
+    return expressions.flatMap((expr) => {
+      return withCandidateBranch(env.state, (branch) => {
+        const holders = candidateObjectsWithCycle(expr, env.variableWrites, branch);
+        return memberValueExpressions(holders, { excludedKeys, key }, env.variableWrites, branch);
+      });
+    });
+  }
+  return expressions.flatMap((expr) => {
+    return withCandidateBranch(env.state, (branch) => {
+      return step.kind === STEP_ELEMENT
+        ? selectSingleArrayExpressions(expr, step.index, branch)
+        : selectRangeArrayExpressions(expr, step.startIndex, branch);
+    });
+  });
+}
+
 /** Resolves candidate object literals from a direct `const x = ...` / `let x = ...` initializer. */
 function simpleDeclarationObjects(
   declared: VariableDeclaration,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): ObjectLiteralExpression[] {
   return declared.initializer === undefined
     ? []
@@ -213,7 +358,7 @@ function patternDeclarationObjects(
   node: Identifier,
   declared: VariableDeclaration,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): readonly ObjectLiteralExpression[] {
   const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
   if (bound === undefined) {
@@ -233,11 +378,11 @@ function patternDeclarationObjects(
 }
 
 /** Projects candidate container `expressions` across a single destructuring `step` and its default. */
-function advancePatternExpressions(
+export function advancePatternExpressions(
   expressions: readonly Expression[],
   step: BindingElement,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): Expression[] {
   const next: Expression[] = [];
   if (isObjectBindingPattern(step.parent)) {
@@ -245,19 +390,18 @@ function advancePatternExpressions(
     for (const expr of expressions) {
       const members = withCandidateBranch(state, (branch) => {
         const holders = candidateObjectsWithCycle(expr, variableWrites, branch);
-        return memberValueExpressions(holders, key, variableWrites, branch);
+        return memberValueExpressions(holders, { key }, variableWrites, branch);
       });
       next.push(...members);
     }
   } else if (isArrayBindingPattern(step.parent)) {
     const index = step.parent.elements.indexOf(step);
     for (const expr of expressions) {
-      const element = withCandidateBranch(state, (branch) =>
-        selectArrayElementExpression(expr, index, branch),
+      next.push(
+        ...withCandidateBranch(state, (branch) =>
+          selectSingleArrayExpressions(expr, index, branch),
+        ),
       );
-      if (element !== undefined) {
-        next.push(element);
-      }
     }
   }
   if (step.initializer !== undefined) {
@@ -276,48 +420,68 @@ export function selectMemberObjects(
   return selectMemberObjectsWithCycle(holders, key, variableWrites, { hitCycle: false, seen });
 }
 
-/** Cycle-aware worker selecting member object literals on `holders`. */
+/** Cycle-aware worker selecting distinct member object literals on `holders`. */
 function selectMemberObjectsWithCycle(
   holders: readonly ObjectLiteralExpression[],
   key: string | undefined,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): readonly ObjectLiteralExpression[] {
-  return memberValueExpressions(holders, key, variableWrites, state).flatMap((value) => {
-    return withCandidateBranch(state, (branch) =>
-      candidateObjectsWithCycle(value, variableWrites, branch),
-    );
-  });
+  const resolved = memberValueExpressions(holders, { key }, variableWrites, state).flatMap(
+    (value) => {
+      return withCandidateBranch(state, (branch) =>
+        candidateObjectsWithCycle(value, variableWrites, branch),
+      );
+    },
+  );
+  return [...new Set(resolved)];
 }
 
-/** Collects value expressions contributed by `key` across `holders` and their spread sources. */
+interface MemberSelectionFilter {
+  readonly excludedKeys?: ReadonlySet<string> | undefined;
+  readonly key: string | undefined;
+}
+
+/** Collects value expressions matching `filter` across `holders` and their spread sources. */
 function memberValueExpressions(
   holders: readonly ObjectLiteralExpression[],
-  key: string | undefined,
+  filter: MemberSelectionFilter,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): readonly Expression[] {
   const values: Expression[] = [];
+  const cacheable = filter.excludedKeys === undefined || filter.excludedKeys.size === 0;
+  const cacheKey = filter.key ?? DYNAMIC_MEMBER_KEY;
   for (const holder of holders) {
-    if (state.seen.has(holder)) {
+    const byKey = cacheable ? holderMemberMemo(variableWrites, holder) : undefined;
+    const cached = byKey?.get(cacheKey);
+    if (cached !== undefined) {
+      values.push(...cached);
+    } else if (state.seen.has(holder)) {
       state.hitCycle = true;
     } else {
       const memberValues = withCandidateBranch(state, (branch) => {
         branch.seen.add(holder);
-        return collectObjectMemberValues(holder, key, variableWrites, branch);
+        const collected = [
+          ...new Set(collectObjectMemberValues(holder, filter, variableWrites, branch)),
+        ];
+        if (byKey !== undefined && !branch.hitCycle) {
+          byKey.set(cacheKey, collected);
+        }
+        return collected;
       });
       values.push(...memberValues);
     }
   }
-  return values;
+  return [...new Set(values)];
 }
 
 /** Collects matching property and spread expressions inside a single `holder` object literal. */
 function collectObjectMemberValues(
   holder: ObjectLiteralExpression,
-  key: string | undefined,
+  filter: MemberSelectionFilter,
   variableWrites: VariableWriteMap,
-  state: CandidateCycleState,
+  state: CycleSeenState,
 ): readonly Expression[] {
   const found: Expression[] = [];
   for (const prop of holder.properties) {
@@ -328,18 +492,29 @@ function collectObjectMemberValues(
           variableWrites,
           branch,
         );
-        return memberValueExpressions(spreadHolders, key, variableWrites, branch);
+        return memberValueExpressions(spreadHolders, filter, variableWrites, branch);
       });
       found.push(...spreadValues);
     } else {
       const propKey = literalElementKey(prop);
       const value = propertyAssignmentExpression(prop);
-      if (value !== undefined && (key === undefined || propKey === undefined || propKey === key)) {
+      if (value !== undefined && matchesMemberFilter(propKey, filter)) {
         found.push(value);
       }
     }
   }
   return found;
+}
+
+/** Whether `propKey` satisfies `filter.key` and `filter.excludedKeys`. */
+function matchesMemberFilter(propKey: string | undefined, filter: MemberSelectionFilter): boolean {
+  if (propKey === undefined) {
+    return true;
+  }
+  if (filter.key !== undefined) {
+    return propKey === filter.key;
+  }
+  return filter.excludedKeys?.has(propKey) !== true;
 }
 
 /** Extracts the value expression of a `PropertyAssignment` or `ShorthandPropertyAssignment`. */
@@ -352,70 +527,4 @@ export function propertyAssignmentExpression(
   return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
     ? property.name
     : undefined;
-}
-
-/** Selects element `index` of a resolved `ArrayLiteralExpression` without prior spreads. */
-function selectArrayElementExpression(
-  holder: Expression,
-  index: number,
-  state: CandidateCycleState,
-): Expression | undefined {
-  const array = resolveSimpleArrayLiteral(holder, state);
-  if (
-    array === undefined ||
-    index < 0 ||
-    array.elements.slice(0, index + 1).some((each) => isSpreadElement(each))
-  ) {
-    return undefined;
-  }
-  const element = array.elements[index];
-  return element === undefined || isOmittedExpression(element) ? undefined : unwrapped(element);
-}
-
-/** Follows simple `const` identifier initializers to an `ArrayLiteralExpression`. */
-function resolveSimpleArrayLiteral(
-  holder: Expression,
-  state: CandidateCycleState,
-): ArrayLiteralExpression | undefined {
-  let current: Expression = holder;
-  for (;;) {
-    if (isArrayLiteralExpression(current)) {
-      return current;
-    }
-    const declared = isIdentifier(current) ? frameDeclarationOf(current) : undefined;
-    if (
-      declared === undefined ||
-      !isVariableDeclaration(declared) ||
-      !isIdentifier(declared.name) ||
-      !isConstVariable(declared) ||
-      declared.initializer === undefined
-    ) {
-      return undefined;
-    }
-    if (state.seen.has(declared.name)) {
-      state.hitCycle = true;
-      return undefined;
-    }
-    state.seen.add(declared.name);
-    current = unwrapped(declared.initializer);
-  }
-}
-
-/** Static object key selected by `step`. */
-export function bindingStepKey(step: BindingElement): string | undefined {
-  if (step.propertyName !== undefined) {
-    return keyOfPropertyName(step.propertyName);
-  }
-  return step.name !== undefined && isIdentifier(step.name) ? step.name.text : undefined;
-}
-
-/** Static string, template, identifier, or numeric property name. */
-function keyOfPropertyName(name: PropertyName): string | undefined {
-  if (isComputedPropertyName(name)) {
-    return staticArgumentKey(unwrapped(name.expression));
-  }
-  if (isNumericLiteral(name)) {
-    return String(Number(name.text));
-  }
-  return isIdentifier(name) || isStringLiteral(name) ? name.text : undefined;
 }
