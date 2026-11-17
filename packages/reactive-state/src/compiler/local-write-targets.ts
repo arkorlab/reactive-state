@@ -7,7 +7,6 @@ import {
   isNewExpression,
   isObjectLiteralExpression,
   isOmittedExpression,
-  isPropertyAccessExpression,
   isSpreadElement,
 } from 'typescript/ast';
 
@@ -38,39 +37,11 @@ export const NONE: Writes = { changes: false, values: [] };
 
 export type SlotKind = 'changed' | 'element' | 'entry';
 
-const ARRAY_ANSWER_METHODS: ReadonlySet<string> = new Set([
-  'concat',
-  'copyWithin',
-  'fill',
-  'filter',
-  'flat',
-  'flatMap',
-  'map',
-  'reverse',
-  'slice',
-  'sort',
-  'splice',
-  'toReversed',
-  'toSorted',
-  'toSpliced',
-  'with',
-]);
-
-/** Whether `key` parses as a number or `NaN` that is not a valid array index (`-1`, `1.5`, `-0`, `4294967295`). */
-function isNumericNonIndex(key: string): boolean {
-  if (key === '' || isIndex(key)) {
-    return false;
-  }
-  return key === 'NaN' || !Number.isNaN(Number(key));
-}
-
 /** Count of guaranteed dense leading elements in `array` before any spread or hole. */
 function densePrefixOf(array: ArrayLiteralExpression): number {
   let count = 0;
   for (const element of array.elements) {
-    if (isOmittedExpression(element) || isSpreadElement(element)) {
-      break;
-    }
+    if (isOmittedExpression(element) || isSpreadElement(element)) break;
     count += 1;
   }
   return count;
@@ -79,34 +50,13 @@ function densePrefixOf(array: ArrayLiteralExpression): number {
 /** Whether `node` constructs a sparse `Array(len)` or `new Array(len)` with holes. */
 function isSparseArrayCall(node: Expression): boolean {
   const value = unwrapped(node);
-  if (!isCallExpression(value) && !isNewExpression(value)) {
-    return false;
+  if (isConditionalExpression(value)) {
+    return isSparseArrayCall(value.whenTrue) || isSparseArrayCall(value.whenFalse);
   }
-  if (globalPath(unwrapped(value.expression))?.join('.') !== 'Array') {
-    return false;
-  }
+  if (!isCallExpression(value) && !isNewExpression(value)) return false;
+  if (globalPath(unwrapped(value.expression))?.join('.') !== 'Array') return false;
   const given = value.arguments ?? [];
   return given.length === 1 || given.some((each) => isSpreadElement(each));
-}
-
-/** Whether `node` is syntactically an `Array` value (`[…]`, `Array.of(…)`, `items.slice()`, etc.). */
-function isArrayExpression(node: Expression): boolean {
-  const value = unwrapped(node);
-  if (isArrayLiteralExpression(value)) {
-    return true;
-  }
-  if (isConditionalExpression(value)) {
-    return isArrayExpression(value.whenTrue) || isArrayExpression(value.whenFalse);
-  }
-  if (!isCallExpression(value) && !isNewExpression(value)) {
-    return false;
-  }
-  const callee = unwrapped(value.expression);
-  const path = globalPath(callee);
-  if (path !== undefined) {
-    return path[0] === 'Array' && path[1] !== 'isArray';
-  }
-  return isPropertyAccessExpression(callee) && ARRAY_ANSWER_METHODS.has(callee.name.text);
 }
 
 /** Checks whether writing `last` on `array` stays within its dense prefix without holes. */
@@ -124,57 +74,46 @@ export function slotEntryKind(
   last: string,
   target: Target,
 ): SlotKind {
-  if (container !== undefined && isObjectLiteralExpression(container)) {
-    return 'entry';
+  const value = container === undefined ? undefined : unwrapped(container);
+  if (value !== undefined && isObjectLiteralExpression(value)) return 'entry';
+  if (value !== undefined && isArrayLiteralExpression(value)) {
+    return arraySlotKind(value, last, target);
   }
-  if (container !== undefined && isArrayLiteralExpression(container)) {
-    return arraySlotKind(container, last, target);
-  }
-  if (container !== undefined && isSparseArrayCall(container)) {
-    return 'changed';
-  }
-  if (isIndex(last)) {
-    return Number(last) === 0 ? 'element' : 'changed';
-  }
-  if (isNumericNonIndex(last) || (container !== undefined && isArrayExpression(container))) {
-    return 'changed';
-  }
-  return 'entry';
+  if (value !== undefined && isSparseArrayCall(value)) return 'changed';
+  return isIndex(last) && Number(last) === 0 ? 'element' : 'changed';
 }
 
 /** Validates the target key and container, returning the slot classification. */
 export function checkedSlotOf(target: Target): SlotKind {
   const { keys } = target;
   const last = keys.at(-1);
-  if (last === undefined || last === 'length' || keys.includes('__proto__')) {
-    return 'changed';
-  }
+  if (last === undefined || last === 'length' || keys.includes('__proto__')) return 'changed';
   const container = unreplacedAt(target, keys.slice(0, -1));
   return slotEntryKind(container, last, target);
 }
 
 /** `delete target.prop`: safe only when the container at `keys.slice(0, -1)` is a plain object literal. */
 export function deletedAt(target: Target): Writes {
-  if (target.keys.length === 0) {
-    return NONE;
-  }
+  if (target.keys.length === 0) return NONE;
   const container = unreplacedAt(target, target.keys.slice(0, -1));
-  return container !== undefined && isObjectLiteralExpression(container) ? NONE : CHANGED;
+  return container !== undefined && isObjectLiteralExpression(unwrapped(container))
+    ? NONE
+    : CHANGED;
 }
 
 /** `Reflect.deleteProperty(target, key)`: safe only on an unreplaced plain object literal. */
 export function deletedByReflect(target: Target): Writes {
   const container = unreplacedAt(target, target.keys);
-  return container !== undefined && isObjectLiteralExpression(container) ? NONE : CHANGED;
+  return container !== undefined && isObjectLiteralExpression(unwrapped(container))
+    ? NONE
+    : CHANGED;
 }
 
 /** `Object.assign(target, ...sources)`: safe only on an unreplaced plain object literal without spreads. */
 export function assignedFrom(sources: readonly Expression[], target: Target): Writes {
   const at = unreplacedAt(target, target.keys);
   const isSpread = sources.some((each) => isSpreadElement(each));
-  if (isSpread || at === undefined || !isObjectLiteralExpression(at)) {
-    return CHANGED;
-  }
+  if (isSpread || at === undefined || !isObjectLiteralExpression(unwrapped(at))) return CHANGED;
   return {
     changes: false,
     values: sources.map((value) => ({ entry: true, inside: target.inside, value })),
@@ -183,13 +122,9 @@ export function assignedFrom(sources: readonly Expression[], target: Target): Wr
 
 /** Direct (`=` / `&&=` / `||=` / `??=`) assignment onto `target`. */
 export function assignedValue(value: Expression, target: Target): Writes {
-  if (target.keys.length === 0) {
-    return NONE;
-  }
+  if (target.keys.length === 0) return NONE;
   const slot = checkedSlotOf(target);
-  if (slot === 'changed') {
-    return CHANGED;
-  }
+  if (slot === 'changed') return CHANGED;
   return {
     changes: false,
     values: [{ entry: slot === 'entry', inside: target.inside, value }],
