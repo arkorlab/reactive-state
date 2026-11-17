@@ -30,7 +30,8 @@ function buildSpreadChain(
     const previous = `n${index - 1}`;
     lines.push(`const n${index} = { ...${previous}, ...${previous} };`);
   }
-  lines.push(`export const root = ${rootOf(`n${depth}`)};`);
+  const lastName = `n${depth}`;
+  lines.push(`export const root = ${rootOf(lastName)};`);
   return lines.join('\n');
 }
 
@@ -58,8 +59,8 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
     const rootInitializer = statements.at(-1)?.declarationList.declarations[0]?.initializer;
     if (
       emptyInitializer === undefined ||
-      !isObjectLiteralExpression(emptyInitializer) ||
-      rootInitializer === undefined
+      rootInitializer === undefined ||
+      !isObjectLiteralExpression(emptyInitializer)
     ) {
       throw new Error('Missing expected chain declarations.');
     }
@@ -68,7 +69,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
     const origin = proxyOrigin([rootInitializer], {
       follow: (name) => {
         if (name.text !== 'seed') {
-          return undefined;
+          return;
         }
         visits += 1;
         if (visits > CHAIN.visitBudget) {
@@ -89,6 +90,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
       buildSpreadChain('{ p: 1, ...seed }', (last) => last, CHAIN.baselineDepth),
     );
     const measured = measureChain(buildSpreadChain('{ p: 1, ...seed }', (last) => last));
+
     expect(measured.found).toBe(false);
     expect(measured.visits).toBe(baseline.visits);
     expect(measured.visits).toBeLessThanOrEqual(CHAIN.maxLeafVisits);
@@ -97,6 +99,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
 
   it('projects a present member across a 25-level sibling-spread chain under 100ms', () => {
     const measured = measureChain(buildSpreadChain('{ p: 1, ...seed }', (last) => `${last}.p`));
+
     expect(measured.found).toBe(false);
     expect(measured.visits).toBeLessThanOrEqual(CHAIN.maxLeafVisits);
     expect(measured.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
@@ -109,6 +112,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
         (last) => `(${last} as Record<string, unknown>).missing`,
       ),
     );
+
     expect(measured.found).toBe(false);
     expect(measured.visits).toBeLessThanOrEqual(CHAIN.maxLeafVisits);
     expect(measured.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
@@ -118,6 +122,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
     const measured = measureChain(
       buildSpreadChain('{ p: 1, ...seed }', (last) => `{ p: new Proxy({}, {}), ...${last} }`),
     );
+
     expect(measured.found).toBe(false);
     expect(measured.visits).toBeLessThanOrEqual(CHAIN.maxLeafVisits);
     expect(measured.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
@@ -128,6 +133,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
       buildSpreadChain('{ ...seed }', (last) => `{ p: 1, ...${last} }`),
       'unknown',
     );
+
     expect(measured.found).toBe(false);
     expect(measured.visits).toBeLessThanOrEqual(CHAIN.maxLeafVisits);
     expect(measured.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
@@ -137,6 +143,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
     const measured = measureChain(
       buildSpreadChain('{ p: new Proxy({}, {}), ...seed }', (last) => last),
     );
+
     expect(measured.found).toBe(true);
     expect(measured.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);
   });
@@ -149,6 +156,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
       'export const result = { beforeDelete, afterDelete: { p: new Proxy({}, {}), ...base } };',
     ].join('\n');
     using parsed = parseModule(api, 'proxy-mutated-spread.ts', source);
+
     expect(sharedProxyOrigin(parsed.sourceFile)).toBeDefined();
   });
 
@@ -165,6 +173,7 @@ describe('memoized spread-key resolution across repeated sibling spreads', () =>
     ].join('\n');
     using cleanParsed = parseModule(api, 'proxy-independent-clean.ts', overwritten);
     using proxyParsed = parseModule(api, 'proxy-independent-proxy.ts', surviving);
+
     expect(sharedProxyOrigin(cleanParsed.sourceFile)).toBeUndefined();
     expect(sharedProxyOrigin(proxyParsed.sourceFile)).toBeDefined();
   });

@@ -134,7 +134,7 @@ function readCachedInitializer(
   query: InitializerQuery,
 ): { readonly found: true; readonly value: Expression | undefined } | { readonly found: false } {
   const byBefore = state.initializers.get(query.declaration)?.get(query.before);
-  if (byBefore === undefined || !byBefore.has(query.preserves)) {
+  if (byBefore?.has(query.preserves) !== true) {
     return { found: false };
   }
   return { found: true, value: byBefore.get(query.preserves) };
@@ -274,7 +274,7 @@ function uninitializedAt(declaration: VariableDeclaration, before: Node, owner: 
     return true;
   }
   const points = readPoints(before, owner);
-  return points !== undefined && points.some((point) => earlyInOwner(declaration, point, owner));
+  return points?.some((point) => earlyInOwner(declaration, point, owner)) === true;
 }
 
 /** The function or module holding a declaration, with a cutoff only inside that same execution. */
@@ -459,17 +459,18 @@ function isMutableHolding(held: Expression | undefined, state: PlatformState): b
 
 /** Evaluates whether an unwrapped expression may produce a mutable object. */
 function computeMutable(value: Expression, state: PlatformState): boolean {
-  const undefinedGlobal = globalPathOf(value)?.join('.') === 'undefined';
-  if (isIdentifier(value) && !undefinedGlobal) {
+  if (globalPathOf(value)?.join('.') === 'undefined') {
+    return false;
+  }
+  if (isIdentifier(value)) {
     return identifierMutable(value, state);
   }
   return (
-    constantValue(value) === undefined &&
     value.kind !== SyntaxKind.NullKeyword &&
+    constantValue(value) === undefined &&
     !isBigIntLiteral(value) &&
     !isVoidExpression(value) &&
-    !isTemplateExpression(value) &&
-    !undefinedGlobal
+    !isTemplateExpression(value)
   );
 }
 
