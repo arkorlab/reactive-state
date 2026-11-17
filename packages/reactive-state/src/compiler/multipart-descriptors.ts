@@ -43,6 +43,8 @@ export interface BodyDescriptorWrite {
   readonly enumerableBody: boolean;
   readonly exactBody: boolean;
   readonly mayHideBody: boolean;
+  readonly preservesConfigurable?: boolean | undefined;
+  readonly preservesWritable?: boolean | undefined;
   readonly values: readonly Expression[];
   readonly writableBody: boolean;
 }
@@ -62,6 +64,19 @@ const DESCRIPTOR_WRITES = new WeakMap<
   ReadonlyMap<VariableDeclaration, readonly RecordedDescriptorBodyWrite[]>
 >();
 
+type DescriptorFlagState = 'absent' | 'other' | 'true';
+
+const UNKNOWN_DESCRIPTOR_WRITE: BodyDescriptorWrite = {
+  configurableBody: false,
+  enumerableBody: false,
+  exactBody: false,
+  mayHideBody: true,
+  preservesConfigurable: false,
+  preservesWritable: false,
+  values: [],
+  writableBody: false,
+};
+
 /** Extracts `body` candidates and enumerability from `defineProperty(target, key, descriptor)`. */
 export function singleDescriptorBodyWrite(
   key: Expression | undefined,
@@ -69,41 +84,20 @@ export function singleDescriptorBodyWrite(
   reflective: boolean,
 ): BodyDescriptorWrite | undefined {
   if (key === undefined) {
-    return {
-      configurableBody: false,
-      enumerableBody: false,
-      exactBody: false,
-      mayHideBody: true,
-      values: [],
-      writableBody: false,
-    };
+    return UNKNOWN_DESCRIPTOR_WRITE;
   }
   const names = framedKeyNames(key);
   if (names !== undefined && !names.includes(BODY_KEY)) {
     return undefined;
   }
   if (descriptor === undefined) {
-    return {
-      configurableBody: false,
-      enumerableBody: false,
-      exactBody: false,
-      mayHideBody: true,
-      values: [],
-      writableBody: false,
-    };
+    return UNKNOWN_DESCRIPTOR_WRITE;
   }
   const slot = descriptorSlotWrite(descriptor, reflective);
   if (names?.length === 1 && names[0] === BODY_KEY) {
     return slot;
   }
-  return {
-    configurableBody: false,
-    enumerableBody: false,
-    exactBody: false,
-    mayHideBody: true,
-    values: slot.values,
-    writableBody: false,
-  };
+  return { ...UNKNOWN_DESCRIPTOR_WRITE, values: slot.values };
 }
 
 /** Extracts `body` candidates and enumerability from `defineProperties` or `Object.create` maps. */
@@ -111,26 +105,15 @@ export function mapDescriptorBodyWrite(
   descriptors: Expression | undefined,
 ): BodyDescriptorWrite | undefined {
   if (descriptors === undefined) {
-    return {
-      configurableBody: false,
-      enumerableBody: false,
-      exactBody: false,
-      mayHideBody: true,
-      values: [],
-      writableBody: false,
-    };
+    return UNKNOWN_DESCRIPTOR_WRITE;
   }
   const map = unwrapped(descriptors);
   if (isObjectLiteralExpression(map)) {
     return literalMapDescriptorWrite(map);
   }
   return {
-    configurableBody: false,
-    enumerableBody: false,
-    exactBody: false,
-    mayHideBody: true,
+    ...UNKNOWN_DESCRIPTOR_WRITE,
     values: nestedDescriptorValues(map, [BODY_KEY, 'value'], new Set()),
-    writableBody: false,
   };
 }
 
@@ -226,6 +209,17 @@ export function optionPropertyKey(name: PropertyName): string | undefined {
   return isComputedPropertyName(name) ? constantKey(name.expression, new Set()) : undefined;
 }
 
+/** Whether a literal defines an own non-accessor `'body'` property under a static or constant key. */
+export function literalDefinesOwnBody(literal: ObjectLiteralExpression): boolean {
+  return literal.properties.some((property) => {
+    return (
+      !isSpreadAssignment(property) &&
+      optionPropertyValue(property) !== undefined &&
+      optionPropertyKey(property.name) === BODY_KEY
+    );
+  });
+}
+
 /** Whether a held entry points directly to a plain object literal without a `body` accessor. */
 export function plainBodyLiteralEntry(entry: {
   readonly keys: readonly string[];
@@ -241,76 +235,66 @@ export function plainBodyLiteralEntry(entry: {
 /** Evaluates one descriptor expression positioned at an exact `'body'` key. */
 function descriptorSlotWrite(descriptor: Expression, reflective: boolean): BodyDescriptorWrite {
   const values = descriptorValueCandidates(descriptor, new Set());
-  const exactValue = exactDataDescriptorValue(descriptor);
-  const exactBody = !reflective && exactValue !== undefined;
-  const configurableBody = exactBody && descriptorBooleanTrue(descriptor, 'configurable');
-  const enumerableBody = exactBody && descriptorBooleanTrue(descriptor, 'enumerable');
-  const writableBody = exactBody && descriptorBooleanTrue(descriptor, 'writable');
+  const literal = unwrapped(descriptor);
+  const closed =
+    !reflective && isObjectLiteralExpression(literal) && !hasAccessorDescriptorKey(literal);
+  const exactValue = closed ? exactDataDescriptorValue(literal) : undefined;
+  const exactBody = exactValue !== undefined;
+  const configurable = closed ? descriptorBooleanState(literal, 'configurable') : 'other';
+  const enumerable = closed ? descriptorBooleanState(literal, 'enumerable') : 'other';
+  const writable = closed ? descriptorBooleanState(literal, 'writable') : 'other';
+  const enumerableBody = exactBody && enumerable === 'true';
   return {
-    configurableBody,
+    configurableBody: configurable === 'true',
     enumerableBody,
     exactBody,
     mayHideBody: !enumerableBody,
+    preservesConfigurable: configurable !== 'other',
+    preservesWritable: writable !== 'other',
     values: exactValue === undefined ? values : [exactValue],
-    writableBody,
+    writableBody: writable === 'true',
   };
 }
 
 /** Walks a literal property-descriptor map (`{ body: { value, enumerable } }`) in property order. */
 function literalMapDescriptorWrite(map: ObjectLiteralExpression): BodyDescriptorWrite | undefined {
-  let affected = false;
-  let configurableBody = false;
-  let exactBody = false;
-  let enumerableBody = false;
-  let mayHideBody = false;
-  let writableBody = false;
-  let values: Expression[] = [];
+  let state: BodyDescriptorWrite | undefined;
   for (const property of map.properties) {
-    if (isSpreadAssignment(property)) {
-      affected = true;
-      configurableBody = false;
-      exactBody = false;
-      enumerableBody = false;
-      mayHideBody = true;
-      writableBody = false;
-      values.push(...nestedDescriptorValues(property.expression, [BODY_KEY, 'value'], new Set()));
-      continue;
-    }
-    const names = descriptorPropertyKeys(property.name);
-    if (names !== undefined && !names.includes(BODY_KEY)) {
-      continue;
-    }
-    affected = true;
-    const entry = optionPropertyValue(property);
-    if (entry !== undefined && names?.length === 1 && names[0] === BODY_KEY) {
-      const slot = descriptorSlotWrite(entry, false);
-      values = [...slot.values];
-      configurableBody = slot.configurableBody;
-      exactBody = slot.exactBody;
-      enumerableBody = slot.enumerableBody;
-      mayHideBody = slot.mayHideBody;
-      writableBody = slot.writableBody;
-      continue;
-    }
-    configurableBody = false;
-    exactBody = false;
-    enumerableBody = false;
-    mayHideBody = true;
-    writableBody = false;
-    if (entry !== undefined) {
-      values.push(...descriptorValueCandidates(entry, new Set()));
-    }
+    state = stepMapDescriptorProperty(property, state);
   }
-  return affected
-    ? {
-        configurableBody,
-        enumerableBody,
-        exactBody,
-        mayHideBody,
-        values: uniqueExpressions(values),
-        writableBody,
-      }
-    : undefined;
+  return state;
+}
+
+/** Updates accumulated `'body'` descriptor state across one `defineProperties` map element. */
+function stepMapDescriptorProperty(
+  property: ObjectLiteralElementLike,
+  current: BodyDescriptorWrite | undefined,
+): BodyDescriptorWrite | undefined {
+  if (isSpreadAssignment(property)) {
+    const spreadValues = nestedDescriptorValues(
+      property.expression,
+      [BODY_KEY, 'value'],
+      new Set(),
+    );
+    return {
+      ...UNKNOWN_DESCRIPTOR_WRITE,
+      values: uniqueExpressions([...(current?.values ?? []), ...spreadValues]),
+    };
+  }
+  const names = descriptorPropertyKeys(property.name);
+  if (names !== undefined && !names.includes(BODY_KEY)) {
+    return current;
+  }
+  const entry = optionPropertyValue(property);
+  if (entry !== undefined && names?.length === 1 && names[0] === BODY_KEY) {
+    const slot = descriptorSlotWrite(entry, false);
+    return { ...slot, values: uniqueExpressions(slot.values) };
+  }
+  const extra = entry === undefined ? [] : descriptorValueCandidates(entry, new Set());
+  return {
+    ...UNKNOWN_DESCRIPTOR_WRITE,
+    values: uniqueExpressions([...(current?.values ?? []), ...extra]),
+  };
 }
 
 /** Extracts a descriptor write and its variable holder when `call` is `defineProperty` or `defineProperties`. */
@@ -358,31 +342,33 @@ function variableHolderOf(target: Expression): VariableDeclaration | undefined {
 }
 
 /** Single data `value` expression of a closed descriptor literal with a definite `'value'` key. */
-function exactDataDescriptorValue(descriptor: Expression): Expression | undefined {
-  const literal = unwrapped(descriptor);
-  if (!isObjectLiteralExpression(literal) || hasAccessorDescriptorKey(literal)) {
-    return undefined;
-  }
+function exactDataDescriptorValue(literal: ObjectLiteralExpression): Expression | undefined {
   const choice = framedDescriptorChoices(literal, 'value');
   return choice !== undefined && !choice.absent && choice.values.length === 1
     ? choice.values[0]
     : undefined;
 }
 
-/** Whether a closed descriptor literal proves a definitely present `field: true` entry. */
-function descriptorBooleanTrue(descriptor: Expression, field: string): boolean {
-  const choice = framedDescriptorChoices(descriptor, field);
-  const only =
-    choice !== undefined && !choice.absent && choice.values.length === 1
-      ? choice.values[0]
-      : undefined;
-  return only !== undefined && unwrapped(only).kind === SyntaxKind.TrueKeyword;
+/** Classifies a descriptor boolean flag as definitely `'true'`, definitely `'absent'`, or `'other'`. */
+function descriptorBooleanState(
+  literal: ObjectLiteralExpression,
+  field: string,
+): DescriptorFlagState {
+  const choice = framedDescriptorChoices(literal, field);
+  if (choice === undefined) {
+    return 'other';
+  }
+  if (!choice.absent && choice.values.length === 1) {
+    const only = choice.values[0];
+    return only !== undefined && unwrapped(only).kind === SyntaxKind.TrueKeyword ? 'true' : 'other';
+  }
+  return choice.absent && choice.values.length === 0 ? 'absent' : 'other';
 }
 
-/** Rejects descriptors that also write `get` or `set` (which throw `TypeError` with `value`). */
+/** Rejects descriptor literals with spreads, non-data entries, unknown keys, or `get`/`set` fields. */
 function hasAccessorDescriptorKey(literal: ObjectLiteralExpression): boolean {
   for (const property of literal.properties) {
-    if (isSpreadAssignment(property)) {
+    if (isSpreadAssignment(property) || optionPropertyValue(property) === undefined) {
       return true;
     }
     const keys = descriptorPropertyKeys(property.name);

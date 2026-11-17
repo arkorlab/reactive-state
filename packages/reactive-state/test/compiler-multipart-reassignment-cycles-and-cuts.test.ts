@@ -319,6 +319,78 @@ const CASES = [
     source:
       'declare function getBox(): { body: FormData | string }; export function build() { const box: { body: FormData | string } = getBox(); const { body } = box; return new Response(body); }',
   },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-box-literal-with-opaque-call-body-destructured-retains-type-fallback',
+    source:
+      'declare function readBody(): FormData | string; export function build() { const box: { body: FormData | string } = { body: readBody() }; const { body } = box; return new Response(body); }',
+  },
+  {
+    expected: undefined,
+    id: 'typed-box-literal-with-fixed-string-body-destructured-not-flagged-pin',
+    source:
+      "export function build() { const box: { body: FormData | string } = { body: 'fixed' }; const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-nested-box-literal-with-opaque-call-body-destructured-flagged',
+    source:
+      'declare function readBody(): FormData | string; export function build() { const box: { inner: { body: FormData | string } } = { inner: { body: readBody() } }; const { body } = box.inner; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-parameter-box-replaced-with-opaque-call-body-destructured-flagged',
+    source:
+      'declare function readBody(): FormData | string; export function build(box: { body: FormData | string }) { box = { body: readBody() }; const { body } = box; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-direct-body-initialized-from-opaque-call-response-flagged',
+    source:
+      'declare function readBody(): FormData | string; export function build() { const body: FormData | string = readBody(); return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-options-literal-with-opaque-call-body-request-flagged',
+    source:
+      "declare function readBody(): FormData | string; export function build() { const opts: { body: FormData | string } = { body: readBody() }; return new Request('https://example.com/', opts); }",
+  },
+  {
+    expected: undefined,
+    id: 'self-spread-let-object-reassignment-fixed-body-not-cyclic',
+    source:
+      "export function build() { let box = { body: 'fixed' }; box = { ...box }; const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'self-spread-chained-let-object-reassignments-fixed-body-not-cyclic',
+    source:
+      "export function build() { let box: { body: string; extra?: number } = { body: 'fixed' }; box = { ...box }; box = { ...box, extra: 1 }; const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'self-spread-array-reassignment-fixed-body-not-cyclic',
+    source:
+      "export function build() { let items = ['fixed']; items = [...items]; const [body] = items; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'self-spread-let-object-reassignment-form-data-body-detected',
+    source:
+      'export function build() { let box = { body: new FormData() }; box = { ...box }; const { body } = box; return new Response(body); }',
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'self-spread-while-loop-reassignment-handled-soundly',
+    source:
+      "export function build(flag: boolean) { let box = { body: 'fixed' }; while (flag) { box = { ...box }; } const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'captured-sub-holder-before-rebind-retains-initial-form-data',
+    source:
+      "export function build() { let inner: { body: BodyInit } = { body: new FormData() }; const box = { inner }; inner = { body: 'fixed' }; const { body } = box.inner; return new Response(body); }",
+  },
 ] as const;
 
 describe('multipart destructured parameter reassignments, expansion cycles, and descriptor cuts', () => {

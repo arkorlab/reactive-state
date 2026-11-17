@@ -5,13 +5,9 @@ import {
   type Identifier,
   isBinaryExpression,
   isCallExpression,
-  isDeleteExpression,
   isElementAccessExpression,
-  isNewExpression,
-  isObjectLiteralExpression,
   isPropertyAccessExpression,
   isSpreadElement,
-  type NewExpression,
   type Node,
   type ParameterDeclaration,
   SyntaxKind,
@@ -21,16 +17,23 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf } from './framed-bindings.ts';
-import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
-import { framedLiteralAccessor } from './framed-member-accessors.ts';
+import { framedArgumentPrefix, framedMemberNames } from './framed-keys.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
-import { canCutPriorDescriptors } from './multipart-descriptor-cuts.ts';
+import {
+  canCutPriorDescriptors,
+  freshBodyObject,
+  opaqueTypedHolderBodies,
+  parameterDescriptorCutContext,
+} from './multipart-descriptor-cuts.ts';
 import { mapDescriptorBodyWrite, singleDescriptorBodyWrite } from './multipart-descriptors.ts';
 import {
   bindingDefaultsOf,
+  nodeRemovesParameterBody,
+  parameterCaptureOf,
+} from './multipart-held-bindings.ts';
+import {
   type BodyReading,
   definitelyBefore,
-  parameterCaptureOf,
   type ParameterResolution,
   parameterValues,
   reachesPoint,
@@ -52,17 +55,19 @@ export interface OptionsReader {
 }
 
 interface ParameterBodyWrite {
-  readonly assignCall?: CallExpression;
-  readonly assignSources?: readonly Expression[];
+  readonly assignCall?: CallExpression | undefined;
+  readonly assignSources?: readonly Expression[] | undefined;
   readonly capture: Identifier;
-  readonly configurableBody?: boolean;
-  readonly descriptorWrite?: boolean;
+  readonly configurableBody?: boolean | undefined;
+  readonly descriptorWrite?: boolean | undefined;
   readonly enumerableBody: boolean;
   readonly exactBody: boolean;
   readonly mayHideBody: boolean;
   readonly node: Node;
+  readonly preservesConfigurable?: boolean | undefined;
+  readonly preservesWritable?: boolean | undefined;
   readonly values: readonly Expression[];
-  readonly writableBody?: boolean;
+  readonly writableBody?: boolean | undefined;
 }
 
 interface CutContext {
@@ -76,7 +81,6 @@ interface CutContext {
 const BODY_KEY = 'body';
 const DEFINE_PROPERTIES = 'Object.defineProperties';
 const DEFINE_PROPERTY = 'Object.defineProperty';
-const DELETE_PROPERTY = 'Reflect.deleteProperty';
 const OBJECT_ASSIGN = 'Object.assign';
 const REFLECT_DEFINE_PROPERTY = 'Reflect.defineProperty';
 const DEFINED = { slots: 3 } as const;
@@ -102,7 +106,7 @@ export function parameterBodies(
   if (memberCut !== undefined) {
     return cutMemberReading(baseContext, memberCut, writes, reader);
   }
-  const sourceResolutions = resolved.sources.map((each) => resolveHeldReading(each, point));
+  const sourceResolutions = resolved.sources.map((each) => resolveHeldReading(each, point, name));
   const initial =
     resolved.replaced && resolved.ambiguous !== true
       ? { ambiguous: false, expressions: [] as readonly Expression[] }
@@ -114,17 +118,19 @@ export function parameterBodies(
   const memberReadings = writes.map((each) => writeReading(each, reader));
   const deleted = resolved.replaced && hasReachableBodyDelete(baseContext);
   const hidden = writes.some((each) => each.mayHideBody);
+  const bodies = uniqueExpressions([
+    ...wholeReadings.flatMap((each) => each.bodies),
+    ...memberReadings.flatMap((each) => each.bodies),
+  ]);
   const ambiguous =
     initial.ambiguous ||
     sourceResolutions.some((each) => each.ambiguous || each.typedFormData) ||
     wholeReadings.some((each) => each.ambiguous === true) ||
-    memberReadings.some((each) => each.ambiguous === true);
+    memberReadings.some((each) => each.ambiguous === true) ||
+    opaqueTypedHolderBodies(name, bodies, point);
   return {
     ambiguous,
-    bodies: uniqueExpressions([
-      ...wholeReadings.flatMap((each) => each.bodies),
-      ...memberReadings.flatMap((each) => each.bodies),
-    ]),
+    bodies,
     overwrites:
       !ambiguous &&
       resolved.replaced &&
@@ -221,14 +227,22 @@ function definiteBodyMemberCut(
   if (freshCut === undefined) {
     return undefined;
   }
-  const owner = executionOwner(context.point);
+  const cutContext = parameterDescriptorCutContext({
+    freshCut,
+    mayDelete: hasReachableBodyDelete(context),
+    overwrites: (write) => definitelyOverwritesBody(write, reader),
+    owner: executionOwner(context.point),
+    parameter: context.parameter,
+    sameCut: (capture) => capturesSameFreshCut(capture, freshCut, context.parameter),
+    writes,
+  });
   let latest: ParameterBodyWrite | undefined;
   for (const write of writes) {
     if (
       capturesSameFreshCut(write.capture, freshCut, context.parameter) &&
       definitelyOverwritesBody(write, reader) &&
       definitelyBefore(write.node, context.point) &&
-      canCutPriorDescriptors(write, writes, owner) &&
+      canCutPriorDescriptors(write, writes, cutContext) &&
       (latest === undefined || write.node.pos > latest.node.pos)
     ) {
       latest = write;
@@ -261,12 +275,6 @@ function definitelyEnumerableBody(write: ParameterBodyWrite, reader: OptionsRead
     return reader.readAssign(write.assignCall, write.assignSources ?? [], write.node).overwrites;
   }
   return write.enumerableBody;
-}
-
-/** Whether `node` is a fresh object literal without an accessor intercepting `body`. */
-function freshBodyObject(node: Expression): boolean {
-  const value = unwrapped(node);
-  return isObjectLiteralExpression(value) && !framedLiteralAccessor(value, BODY_KEY);
 }
 
 /** Collects reachable member writes to `body` on `parameter` (or whole `const` aliases) after `cut`. */
@@ -457,12 +465,13 @@ function definePropertiesBodyWrite(
 
 /** Checks whether any reachable deletion or non-global hand-off can remove `body` on `parameter`. */
 function hasReachableBodyDelete(context: CutContext): boolean {
+  const isTarget = (expr: Expression): boolean => activeParameterTarget(expr, context);
   const pending: Node[] = [context.parameter.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) {
       continue;
     }
-    if (removesParameterBody(node, context) && activeAtRead(node, context)) {
+    if (nodeRemovesParameterBody(node, isTarget) && activeAtRead(node, context)) {
       return true;
     }
     node.forEachChild((child) => {
@@ -470,50 +479,6 @@ function hasReachableBodyDelete(context: CutContext): boolean {
     });
   }
   return false;
-}
-
-/** Whether `node` deletes `body` (or an unknown key) on `parameter` or hands `parameter` to unknown code. */
-function removesParameterBody(node: Node, context: CutContext): boolean {
-  if (isCallExpression(node) || isNewExpression(node)) {
-    return callRemovesParameterBody(node, context);
-  }
-  if (!isDeleteExpression(node)) {
-    return false;
-  }
-  const target = unwrapped(node.expression);
-  if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) {
-    return false;
-  }
-  const names = framedMemberNames(target);
-  return activeParameterTarget(target.expression, context) && names?.includes(BODY_KEY) !== false;
-}
-
-/** Checks `Reflect.deleteProperty(options, key)` and non-global calls receiving `options`. */
-function callRemovesParameterBody(
-  node: CallExpression | NewExpression,
-  context: CutContext,
-): boolean {
-  const callee = unwrapped(node.expression);
-  const native = globalPathOf(callee)?.join('.');
-  if (native === DELETE_PROPERTY && isCallExpression(node)) {
-    const [target, key] = framedArgumentPrefix(node, node.arguments).values;
-    const names = key === undefined ? undefined : framedKeyNames(key);
-    return (
-      target !== undefined &&
-      activeParameterTarget(target, context) &&
-      names?.includes(BODY_KEY) !== false
-    );
-  }
-  if (native !== undefined) {
-    return false;
-  }
-  const handed = [...(node.arguments ?? [])].map((arg) =>
-    isSpreadElement(arg) ? arg.expression : arg,
-  );
-  if (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) {
-    handed.push(callee.expression);
-  }
-  return handed.some((each) => activeParameterTarget(each, context));
 }
 
 /** Whether `node` captures `parameter` and is not a pre-replacement alias of an old parameter value. */

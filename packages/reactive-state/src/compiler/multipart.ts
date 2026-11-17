@@ -26,14 +26,13 @@ import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
 import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
-import {
-  framedHeldVariable,
-  framedMemberDeletes,
-  framedMemberWrites,
-  type MemberDelete,
-} from './framed-member-writes.ts';
+import { framedHeldVariable, framedMemberWrites } from './framed-member-writes.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { resolveVariableDescriptorWrites } from './multipart-descriptor-cuts.ts';
+import {
+  holderMayDeleteBody,
+  opaqueTypedHolderBodies,
+  resolveVariableDescriptorWrites,
+} from './multipart-descriptor-cuts.ts';
 import {
   applyDescriptorWrite,
   mapDescriptorBodyWrite,
@@ -406,15 +405,20 @@ function variableBodies(
       };
     }),
   ];
-  const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state));
-  const ambiguous =
-    patternScan.dynamicOpaque || entryReadings.some((each) => each.ambiguous === true);
+  const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state, name));
   const bodies = uniqueExpressions([
     ...entryReadings.flatMap((each) => each.bodies),
     ...filteredDescriptors.activeValues.flatMap((each) => each.values),
   ]);
+  const ambiguous =
+    patternScan.dynamicOpaque ||
+    entryReadings.some((each) => each.ambiguous === true) ||
+    opaqueTypedHolderBodies(name, bodies, point);
   const hidesBody = filteredDescriptors.activeMetadata.some((each) => each.mayHideBody);
-  if (ambiguous || hidesBody || patternScan.ambiguous || removesHolderBody(name, holder, point)) {
+  const mayDelete = holderMayDeleteBody(name.getSourceFile(), holder, (change) =>
+    reachesHolderRead(change, holder, point),
+  );
+  if (ambiguous || hidesBody || mayDelete || patternScan.ambiguous) {
     return { ambiguous, bodies, overwrites: false };
   }
   const definiteEnumerable =
@@ -438,7 +442,12 @@ function variableBodies(
 }
 
 /** Body reading selected by one held options path, preserving ambiguity across member cycles. */
-function heldOptionReading(entry: Held, point: Node, state: AnalysisState): BodyReading {
+function heldOptionReading(
+  entry: Held,
+  point: Node,
+  state: AnalysisState,
+  activeSource?: Identifier,
+): BodyReading {
   if (entry.keys.length === 0) {
     return { bodies: [entry.value], overwrites: false };
   }
@@ -446,19 +455,20 @@ function heldOptionReading(entry: Held, point: Node, state: AnalysisState): Body
     const peeled = peeledMemberHolder(entry.value);
     return peeled === undefined
       ? bodiesOf(entry.value, readingPoint(entry.value, point), state)
-      : projectedHolderReading(peeled, point, state);
+      : projectedHolderReading(peeled, point, state, activeSource);
   }
   if (entry.keys.at(-1) === BODY_KEY) {
     const projected = projectedHolderReading(
       { keys: entry.keys.slice(0, -1), value: entry.value },
       point,
       state,
+      activeSource,
     );
     if (projected.ambiguous === true || projected.bodies.length > 0) {
       return projected;
     }
   }
-  const fallback = resolveHeldReading(entry, point);
+  const fallback = resolveHeldReading(entry, point, activeSource);
   return {
     ambiguous: fallback.ambiguous || fallback.typedFormData,
     bodies: fallback.expressions,
@@ -467,8 +477,13 @@ function heldOptionReading(entry: Held, point: Node, state: AnalysisState): Body
 }
 
 /** Resolves holder expressions along `holderEntry` and combines their option `BodyReading`s. */
-function projectedHolderReading(holderEntry: Held, point: Node, state: AnalysisState): BodyReading {
-  const holders = resolveHeldReading(holderEntry, point);
+function projectedHolderReading(
+  holderEntry: Held,
+  point: Node,
+  state: AnalysisState,
+  activeSource?: Identifier,
+): BodyReading {
+  const holders = resolveHeldReading(holderEntry, point, activeSource);
   const readings = holders.expressions.map((each) =>
     bodiesOf(each, readingPoint(each, point), state),
   );
@@ -486,25 +501,6 @@ function projectedHolderReading(holderEntry: Held, point: Node, state: AnalysisS
 function readingPoint(expression: Expression, point: Node): Node {
   const value = unwrapped(expression);
   return isCallExpression(value) || isObjectLiteralExpression(value) ? value : point;
-}
-
-/** Whether any reachable deletion or whole-object hand-off on `holder` may remove its `body` field. */
-function removesHolderBody(name: Identifier, holder: VariableDeclaration, point: Node): boolean {
-  return framedMemberDeletes(name.getSourceFile()).some((each) => {
-    return (
-      each.holder === holder &&
-      removesBodyField(each) &&
-      reachesHolderRead(each.node, holder, point)
-    );
-  });
-}
-
-/** Whether a recorded deletion or hand-off targets `body`, an unknown key, or the root holder itself. */
-function removesBodyField(change: MemberDelete): boolean {
-  if (change.handed) {
-    return change.path.length === 0;
-  }
-  return change.path.length === 1 && change.path[0]?.includes(BODY_KEY) !== false;
 }
 
 /** Whether `change` can execute before `point`, from another owner, on a shared holder, or via a loop. */

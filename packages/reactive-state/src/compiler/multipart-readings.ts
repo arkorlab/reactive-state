@@ -3,15 +3,12 @@ import {
   type BindingName,
   type Expression,
   type Identifier,
-  isArrayBindingPattern,
   isBinaryExpression,
-  isBindingElement,
   isBlock,
   isConditionalExpression,
   isExpressionStatement,
   isIdentifier,
   isNewExpression,
-  isObjectBindingPattern,
   isParameterDeclaration,
   isSourceFile,
   isVariableDeclaration,
@@ -26,17 +23,20 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
 import { framedValueShape } from './framed-values.ts';
 import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { namesType } from './framed.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
+import { leafMayBeOpaqueFormData } from './multipart-dynamic-sources.ts';
 import {
+  bindingDefaultsOf,
   type HeldResolution,
-  inspectHeldPath,
+  isUnrepeatedSelfWrite,
+  lastDefiniteBindingWrite,
   type ProjectionCallbacks,
-} from './multipart-held-paths.ts';
+} from './multipart-held-bindings.ts';
+import { inspectHeldPath, peeledMemberHolder } from './multipart-held-paths.ts';
 import {
   NO_PATTERN_REASSIGNMENT,
   patternBindingReassignments,
@@ -76,10 +76,16 @@ const PROJECTION_CALLBACKS: ProjectionCallbacks = {
   bindingDefaults: bindingDefaultsOf,
   isAssertedFormData: assertedAtMemberPath,
   isBindingTypedFormData: bindingTypedAtMemberPath,
+  isOpaqueLeaf: (leaf, point) => leafMayBeOpaqueFormData(leaf, point, PROJECTION_CALLBACKS),
   readParameter: parameterValues,
   readVariablePattern: variablePatternReassignments,
   selectValues: selectedValues,
 };
+
+/** Whether `leaf` may evaluate to an opaque runtime value rather than a closed non-`FormData` syntax. */
+export function opaqueBodyLeaf(leaf: Expression, point: Node): boolean {
+  return leafMayBeOpaqueFormData(leaf, point, PROJECTION_CALLBACKS);
+}
 
 /** Fresh memoization tables and empty cycle trail for one multipart construction check. */
 export function startAnalysis(): AnalysisState {
@@ -132,8 +138,12 @@ export function selectedValues(value: Expression): readonly Expression[] | undef
 }
 
 /** Unfolds concrete expressions and cycle/type flags along a `Held` member path at `point`. */
-export function resolveHeldReading(entry: Held, point: Node): HeldResolution {
-  return inspectHeldPath(entry, point, PROJECTION_CALLBACKS);
+export function resolveHeldReading(
+  entry: Held,
+  point: Node,
+  activeSource?: Identifier,
+): HeldResolution {
+  return inspectHeldPath(entry, point, PROJECTION_CALLBACKS, activeSource);
 }
 
 /** Values assigned to a parameter before `name`, noting whether a definite write replaced the initial binding. */
@@ -143,7 +153,9 @@ export function parameterValues(
 ): ParameterResolution {
   const owner = executionOwner(name);
   const cut = lastDefiniteBindingWrite(name, name, parameter, owner);
-  const sources = framedAssignedSources(name);
+  const sources = framedAssignedSources(name).filter(
+    (each) => !isUnrepeatedSelfWrite(each.value, name, parameter),
+  );
   const patternScan = patternBindingReassignments(
     name,
     parameter,
@@ -214,42 +226,6 @@ export function variablePatternReassignments(
   );
 }
 
-/** Identifier site where `node` directly reads `parameter`, following whole `const` aliases. */
-export function parameterCaptureOf(
-  node: Expression,
-  parameter: ParameterDeclaration,
-  bindingName?: string,
-): Identifier | undefined {
-  let current: Expression | undefined = unwrapped(node);
-  const seen = new Set<Node>();
-  while (current !== undefined && isIdentifier(current) && !seen.has(current)) {
-    seen.add(current);
-    const declared = frameDeclarationOf(current);
-    if (declared === parameter) {
-      const matchesBinding =
-        bindingName === undefined ? isIdentifier(parameter.name) : current.text === bindingName;
-      return matchesBinding ? current : undefined;
-    }
-    current = constantAliasValue(declared);
-  }
-  return undefined;
-}
-
-/** Initializer unwrapped from a whole `const` variable declaration; undefined otherwise. */
-function constantAliasValue(declared: Node | undefined): Expression | undefined {
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    !isIdentifier(declared.name) ||
-    !isVariableDeclarationList(declared.parent) ||
-    !/^const\s/u.test(declared.parent.getText(declared.getSourceFile())) ||
-    declared.initializer === undefined
-  ) {
-    return undefined;
-  }
-  return unwrapped(declared.initializer);
-}
-
 /** Whether a change may run before `point`: from another owner, earlier, or via an enclosing loop. */
 export function reachesPoint(
   change: Node,
@@ -261,6 +237,14 @@ export function reachesPoint(
     return false;
   }
   const owner = executionOwner(point);
+  if (
+    isBinaryExpression(change) &&
+    point.pos >= change.right.pos &&
+    point.end <= change.right.end &&
+    !repeatedFrameRead(change, point, binding, owner)
+  ) {
+    return false;
+  }
   if (
     executionOwner(change) !== owner ||
     change.pos < point.end ||
@@ -297,59 +281,12 @@ export function definitelyBefore(change: Node, point: Node): boolean {
   return false;
 }
 
-/** Latest plain statement assignment to `name` in an enclosing block before `anchor`. */
-function lastDefiniteBindingWrite(
-  anchor: Node,
-  name: Identifier,
-  binding: PatternTargetDeclaration,
-  owner: Node,
-): BinaryExpression | undefined {
-  let latest: BinaryExpression | undefined;
-  for (let at: Node = anchor; at !== owner && !isSourceFile(at); at = at.parent) {
-    const parent = at.parent;
-    if (!isBlock(parent) && !isSourceFile(parent)) {
-      continue;
-    }
-    for (const statement of parent.statements) {
-      if (statement === at) {
-        break;
-      }
-      const write = directBindingWrite(statement, name, binding, owner);
-      if (write !== undefined && (latest === undefined || write.pos > latest.pos)) {
-        latest = write;
-      }
-    }
-  }
-  return latest;
-}
-
-/** Plain `target = rhs` expression statement rebinding `name` in the same execution owner. */
-function directBindingWrite(
-  statement: Node,
-  name: Identifier,
-  binding: PatternTargetDeclaration,
-  owner: Node,
-): BinaryExpression | undefined {
-  if (!isExpressionStatement(statement)) {
-    return undefined;
-  }
-  const expression = unwrapped(statement.expression);
-  if (
-    isBinaryExpression(expression) &&
-    expression.operatorToken.kind === SyntaxKind.EqualsToken &&
-    isIdentifier(expression.left) &&
-    expression.left.text === name.text &&
-    frameDeclarationOf(expression.left) === binding &&
-    executionOwner(expression) === owner
-  ) {
-    return expression;
-  }
-  return undefined;
-}
-
 /** Whether a body is FormData the code constructs, assigns, or annotates, memoized across DAGs. */
 export function isFormData(node: Expression, state: AnalysisState): boolean {
   const value = unwrapped(node);
+  if (assertedAtMemberPath(node, []) && opaqueBodyLeaf(value, node)) {
+    return true;
+  }
   const cached = state.formData.get(value);
   if (cached !== undefined) {
     return cached;
@@ -376,6 +313,10 @@ function computeFormData(value: Expression, following: AnalysisState): boolean {
   if (alternatives !== undefined) {
     return alternatives.some((each) => isFormData(each, following));
   }
+  const peeled = peeledMemberHolder(value);
+  if (peeled !== undefined) {
+    return heldFormData(peeled, following, value);
+  }
   return (
     isNewExpression(value) && globalPathOf(unwrapped(value.expression))?.join('.') === 'FormData'
   );
@@ -400,7 +341,7 @@ function identifierFormData(name: Identifier, state: AnalysisState): boolean {
 function variableFormData(
   name: Identifier,
   declaration: VariableDeclaration,
-  keys: readonly string[],
+  _keys: readonly string[],
   state: AnalysisState,
 ): boolean {
   const held = framedHeldValues(name, [], name);
@@ -413,15 +354,26 @@ function variableFormData(
   }
   const defaulted =
     held.initial !== undefined && bindingDefaultFormData(name, declaration.name, state);
+  const liveHeld = held.held.filter(
+    (entry) => !isUnrepeatedSelfWrite(entry.value, name, declaration),
+  );
   const entries = [
     ...(held.initial === undefined ? [] : [held.initial]),
-    ...held.held,
+    ...liveHeld,
     ...patternScan.extraSources,
   ];
+  const declaredTyped = bindingTypedAtMemberPath(name, []);
   if (entries.length === 0) {
-    return defaulted || (keys.length === 0 && namesType(declaration.type, FORM_DATA_NAMES));
+    return defaulted || declaredTyped;
   }
-  return defaulted || entries.some((entry) => heldFormData(entry, state));
+  const hasOpaqueTypedLeaf =
+    declaredTyped &&
+    entries.some((entry) => entry.keys.length === 0 && opaqueBodyLeaf(entry.value, name));
+  return (
+    defaulted ||
+    hasOpaqueTypedLeaf ||
+    entries.some((entry) => heldFormData(entry, state, name, name))
+  );
 }
 
 /** Whether a parameter read (including projected reassignments or defaults) may hold `FormData`. */
@@ -434,23 +386,24 @@ function parameterFormData(
   const resolved = parameterValues(name, parameter);
   if (
     resolved.dynamicOpaque === true ||
-    resolved.sources.some((each) => heldFormData(each, state))
+    resolved.sources.some((each) => heldFormData(each, state, name, name))
   ) {
     return true;
   }
+  const typed = bindingTypedAtMemberPath(name, []);
   if (resolved.replaced && resolved.ambiguous !== true) {
-    return false;
+    return (
+      typed &&
+      resolved.sources.some((each) => each.keys.length === 0 && opaqueBodyLeaf(each.value, name))
+    );
   }
   const paramDefault =
     parameter.initializer !== undefined &&
-    heldFormData({ keys, value: parameter.initializer }, state);
+    heldFormData({ keys, value: parameter.initializer }, state, name);
   const patternDefault = keys.length > 0 && bindingDefaultFormData(name, parameter.name, state);
-  const assigned = framedAssignedSources(name).some((each) => heldFormData(each, state));
-  const typed =
-    (keys.length === 0 && namesType(parameter.type, FORM_DATA_NAMES)) ||
-    (keys.length > 0 &&
-      parameter.type !== undefined &&
-      namesLocalMemberType(parameter.type, keys, FORM_DATA_NAMES));
+  const assigned = framedAssignedSources(name)
+    .filter((each) => !isUnrepeatedSelfWrite(each.value, name, parameter))
+    .some((each) => heldFormData(each, state, name, name));
   return paramDefault || patternDefault || assigned || typed;
 }
 
@@ -463,35 +416,17 @@ function bindingDefaultFormData(
   return bindingDefaultsOf(name, root).some((each) => isFormData(each, state));
 }
 
-/** Collects `BindingElement` default initializers for `name` within `root`. */
-export function bindingDefaultsOf(name: Identifier, root: BindingName): readonly Expression[] {
-  const found: Expression[] = [];
-  const pending: Node[] = [root];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (
-      isBindingElement(node) &&
-      node.name !== undefined &&
-      isIdentifier(node.name) &&
-      node.name.text === name.text &&
-      node.initializer !== undefined
-    ) {
-      found.push(node.initializer);
-    }
-    if (isObjectBindingPattern(node) || isArrayBindingPattern(node) || isBindingElement(node)) {
-      node.forEachChild((child) => {
-        pending.push(child);
-      });
-    }
-  }
-  return found;
-}
-
 /** Whether a held value or destructured member path may evaluate to `FormData`. */
-function heldFormData(entry: Held, state: AnalysisState): boolean {
+function heldFormData(
+  entry: Held,
+  state: AnalysisState,
+  point: Node,
+  activeSource?: Identifier,
+): boolean {
   if (entry.keys.length === 0) {
     return isFormData(entry.value, state);
   }
-  const resolved = resolveHeldReading(entry, entry.value);
+  const resolved = resolveHeldReading(entry, point, activeSource);
   return (
     resolved.ambiguous ||
     resolved.typedFormData ||
@@ -508,7 +443,7 @@ function assertedAtMemberPath(raw: Expression, keys: readonly string[]): boolean
 }
 
 /** Whether `id`'s declared binding type annotation names `FormData` at `keys`. */
-function bindingTypedAtMemberPath(id: Identifier, keys: readonly string[]): boolean {
+export function bindingTypedAtMemberPath(id: Identifier, keys: readonly string[]): boolean {
   const selected = frameBindingOf(id);
   return (
     selected?.binding.type !== undefined &&
@@ -524,16 +459,20 @@ export function spreadHolderArrays(
 ): { readonly ambiguous: boolean; readonly expressions: readonly Expression[] } {
   if (isVariableDeclaration(binding)) {
     const held = framedHeldValues(name, [], point);
+    const liveHeld =
+      held === undefined
+        ? []
+        : held.held.filter((entry) => !isUnrepeatedSelfWrite(entry.value, point, binding));
     const entries =
-      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...held.held];
-    const readings = entries.map((each) => resolveHeldReading(each, point));
+      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...liveHeld];
+    const readings = entries.map((each) => resolveHeldReading(each, point, name));
     return {
       ambiguous: readings.some((each) => each.ambiguous || each.typedFormData),
       expressions: readings.flatMap((each) => each.expressions),
     };
   }
   const resolved = parameterValues(name, binding);
-  const readings = resolved.sources.map((each) => resolveHeldReading(each, point));
+  const readings = resolved.sources.map((each) => resolveHeldReading(each, point, name));
   const sourceValues = readings.flatMap((each) => each.expressions);
   return {
     ambiguous: readings.some((each) => each.ambiguous || each.typedFormData),

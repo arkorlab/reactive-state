@@ -30,7 +30,7 @@ import { assignmentPatternDefault, iteratedFrameSources } from './framed-assignm
 import { frameDeclarationOf } from './framed-bindings.ts';
 import type { Held } from './framed-held-members.ts';
 import { resolveDynamicObjectSources, staticPropertyName } from './multipart-dynamic-sources.ts';
-import type { ProjectionCallbacks } from './multipart-held-paths.ts';
+import type { ProjectionCallbacks } from './multipart-held-bindings.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Projected destructuring reassignments and dynamic pattern scans for multipart checks. */

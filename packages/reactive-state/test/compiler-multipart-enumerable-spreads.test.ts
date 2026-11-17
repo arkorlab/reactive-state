@@ -124,6 +124,36 @@ const CASES = [
     expected: MULTIPART_REASON,
     id: 'computed-possibly-absent-value-define-property-retains-prior-form-data',
   },
+  {
+    body: "const opts = { body: new FormData() }; Object.defineProperty(opts, 'body', { writable: true }); opts.body = 'fixed'; return new Request('https://example.com/', opts);",
+    expected: undefined,
+    id: 'writable-only-define-property-followed-by-body-assignment-replaces-form-data',
+  },
+  {
+    body: "const opts = { body: new FormData() }; Object.defineProperties(opts, { body: { writable: true } }); opts.body = 'fixed'; return new Request('https://example.com/', opts);",
+    expected: undefined,
+    id: 'writable-only-define-properties-followed-by-body-assignment-replaces-form-data',
+  },
+  {
+    body: "const opts = { body: new FormData() }; Object.defineProperty(opts, 'body', { enumerable: false }); opts.body = 'fixed'; return new Request('https://example.com/', opts);",
+    expected: undefined,
+    id: 'omitted-writable-on-existing-own-body-preserves-writability-for-later-cut',
+  },
+  {
+    body: "options = { body: new FormData() }; Object.defineProperty(options, 'body', { writable: true }); options.body = 'fixed'; return new Request('https://example.com/', options);",
+    expected: undefined,
+    id: 'parameter-writable-only-define-property-followed-by-body-assignment-replaces-form-data',
+  },
+  {
+    body: "const opts = { body: new FormData() }; Object.defineProperty(opts, 'body', { writable: false }); opts.body = 'fixed'; return new Request('https://example.com/', opts);",
+    expected: MULTIPART_REASON,
+    id: 'writable-false-define-property-blocks-later-body-assignment-cut-pin',
+  },
+  {
+    body: "const opts: RequestInit = { body: 'init' }; delete opts.body; Object.defineProperty(opts, 'body', { value: new FormData() }); opts.body = 'fixed'; return new Request('https://example.com/', opts);",
+    expected: MULTIPART_REASON,
+    id: 'deleted-initial-body-before-omitted-writable-define-property-blocks-later-cut-pin',
+  },
 ] as const;
 
 describe('multipart enumerability checks across spreads, Object.assign, and descriptor mutators', () => {

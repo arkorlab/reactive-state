@@ -3,79 +3,35 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
+  isCallExpression,
   isElementAccessExpression,
   isIdentifier,
+  isObjectLiteralExpression,
   isOmittedExpression,
-  isParameterDeclaration,
   isPropertyAccessExpression,
+  isSpreadAssignment,
   isSpreadElement,
-  isVariableDeclaration,
   type Node,
-  type ParameterDeclaration,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { globalPathOf } from './code-globals.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
-import { framedHeldValues, type Held } from './framed-held-members.ts';
+import type { Held } from './framed-held-members.ts';
 import { framedObjectSources } from './framed-object-members.ts';
+import {
+  type ChildCandidate,
+  type ExpandedStep,
+  expandIdentifierStep,
+  type HeldResolution,
+  type HeldWorkItem,
+  initialActiveBindings,
+  type ProjectionCallbacks,
+} from './multipart-held-bindings.ts';
 
 /** Bounded member-path unfolding across aliases, arrays, literals, and parameter sources. */
 
-export interface HeldResolution {
-  readonly ambiguous: boolean;
-  readonly closed: boolean;
-  readonly expressions: readonly Expression[];
-  readonly typedFormData: boolean;
-}
-
-export interface ProjectionCallbacks {
-  readonly bindingDefaults: (
-    name: Identifier,
-    root: ParameterDeclaration['name'],
-  ) => readonly Expression[];
-  readonly isAssertedFormData: (raw: Expression, keys: readonly string[]) => boolean;
-  readonly isBindingTypedFormData: (id: Identifier, keys: readonly string[]) => boolean;
-  readonly readParameter: (
-    name: Identifier,
-    parameter: ParameterDeclaration,
-  ) => {
-    readonly ambiguous?: boolean | undefined;
-    readonly dynamicOpaque?: boolean | undefined;
-    readonly replaced: boolean;
-    readonly sources: readonly Held[];
-  };
-  readonly readVariablePattern: (
-    name: Identifier,
-    declaration: VariableDeclaration,
-    point: Node,
-  ) => {
-    readonly ambiguous: boolean;
-    readonly dynamicOpaque: boolean;
-    readonly extraSources: readonly Held[];
-  };
-  readonly selectValues: (value: Expression) => readonly Expression[] | undefined;
-}
-
-interface HeldWorkItem {
-  readonly activeBindings: ReadonlyMap<Node, ReadonlySet<string>>;
-  readonly activeExpressions: ReadonlySet<Expression>;
-  readonly enclosingBindingTyped: boolean;
-  readonly held: Held;
-}
-
-interface ChildCandidate {
-  readonly enclosingBindingTyped?: boolean | undefined;
-  readonly held: Held;
-}
-
-interface ExpandedStep {
-  readonly ambiguous: boolean;
-  readonly bindingTypedFormData: boolean;
-  readonly children: readonly ChildCandidate[];
-  readonly closed: boolean;
-}
-
+const OBJECT_ASSIGN = 'Object.assign';
 const PROJECTION_LIMITS = {
   maxDepth: 16,
 } as const;
@@ -85,6 +41,7 @@ export function inspectHeldPath(
   entry: Held,
   point: Node,
   callbacks: ProjectionCallbacks,
+  activeSource?: Identifier,
 ): HeldResolution {
   const expressions: Expression[] = [];
   let ambiguous = false;
@@ -93,15 +50,24 @@ export function inspectHeldPath(
   const seen = new Map<Expression, Set<string>>();
   const pending: HeldWorkItem[] = [
     {
-      activeBindings: new Map(),
+      activeBindings: initialActiveBindings(activeSource, point),
       activeExpressions: new Set(),
       enclosingBindingTyped: false,
+      evalAt: undefined,
       held: entry,
+      trailingOuter: entry.keys.length,
     },
   ];
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (at.held.keys.length === 0) {
       expressions.push(at.held.value);
+      const leafPoint = at.evalAt ?? point;
+      if (
+        callbacks.isAssertedFormData(at.held.value, []) ||
+        (at.enclosingBindingTyped && callbacks.isOpaqueLeaf(at.held.value, leafPoint))
+      ) {
+        typedFormData = true;
+      }
       continue;
     }
     const step = evaluateWorkItem(at, point, seen, callbacks);
@@ -135,17 +101,19 @@ function evaluateWorkItem(
     return { ambiguous: true, closed: false, next: [], typedFormData: false };
   }
   const value = unwrapped(at.held.value);
-  if (repeatsOnActiveChain(at, value)) {
+  const evalPoint = at.evalAt ?? point;
+  if (repeatsOnActiveChain(at, value, evalPoint)) {
     return { ambiguous: true, closed: false, next: [], typedFormData: false };
   }
-  if (markVisitedHeldPath(seen, value, at.held.keys, at.enclosingBindingTyped)) {
+  if (markVisitedHeldPath(seen, value, at, evalPoint)) {
     return { ambiguous: false, closed: true, next: [], typedFormData: false };
   }
   const assertedFormData = callbacks.isAssertedFormData(at.held.value, at.held.keys);
-  const activeBindings = nextActiveBindings(at.activeBindings, value);
+  const activeBindings = nextActiveBindings(at.activeBindings, value, evalPoint);
   const activeExpressions = new Set([...at.activeExpressions, value]);
   const expanded = expandHeldStep(at, value, point, callbacks);
-  const unclosedEnclosingTyped = !expanded.closed && at.enclosingBindingTyped;
+  const unclosedEnclosingTyped =
+    !expanded.closed && expanded.overridesEnclosingType !== true && at.enclosingBindingTyped;
   return {
     ambiguous: expanded.ambiguous,
     closed: expanded.closed,
@@ -154,15 +122,17 @@ function evaluateWorkItem(
         activeBindings,
         activeExpressions,
         enclosingBindingTyped: child.enclosingBindingTyped ?? at.enclosingBindingTyped,
+        evalAt: child.evalAt ?? at.evalAt,
         held: child.held,
+        trailingOuter: child.trailingOuter ?? at.trailingOuter,
       };
     }),
     typedFormData: assertedFormData || expanded.bindingTypedFormData || unclosedEnclosingTyped,
   };
 }
 
-/** Whether `value` or its bound declaration+identifier repeats along the active expansion chain. */
-function repeatsOnActiveChain(at: HeldWorkItem, value: Expression): boolean {
+/** Whether `value` or its bound declaration+identifier+site repeats along the active expansion chain. */
+function repeatsOnActiveChain(at: HeldWorkItem, value: Expression, evalPoint: Node): boolean {
   if (at.activeExpressions.has(value)) {
     return true;
   }
@@ -170,19 +140,22 @@ function repeatsOnActiveChain(at: HeldWorkItem, value: Expression): boolean {
     return false;
   }
   const selected = frameBindingOf(value);
-  return (
-    selected !== undefined && at.activeBindings.get(selected.binding)?.has(value.text) === true
-  );
+  const token = `${value.text}@${String(evalPoint.pos)}`;
+  return selected !== undefined && at.activeBindings.get(selected.binding)?.has(token) === true;
 }
 
-/** Records `(value, keys, enclosingTyped)` in `seen`, returning `true` when already expanded. */
+/** Records `(value, keys, enclosingTyped, site)` in `seen`, returning `true` when already expanded. */
 function markVisitedHeldPath(
   seen: Map<Expression, Set<string>>,
   value: Expression,
-  keys: readonly string[],
-  enclosingBindingTyped: boolean,
+  at: HeldWorkItem,
+  evalPoint: Node,
 ): boolean {
-  const serialized = `${enclosingBindingTyped ? '1' : '0'}:${JSON.stringify(keys)}`;
+  const siteKey =
+    isObjectLiteralExpression(value) || isArrayLiteralExpression(value)
+      ? 'lit'
+      : String(evalPoint.pos);
+  const serialized = `${at.enclosingBindingTyped ? '1' : '0'}:${siteKey}:${String(at.trailingOuter)}:${JSON.stringify(at.held.keys)}`;
   const visited = seen.get(value) ?? new Set<string>();
   if (visited.has(serialized)) {
     return true;
@@ -192,10 +165,11 @@ function markVisitedHeldPath(
   return false;
 }
 
-/** Extends `activeBindings` with `(binding, value.text)` when `value` is a bound identifier. */
+/** Extends `activeBindings` with `(binding, text@pos)` when `value` is a bound identifier. */
 function nextActiveBindings(
   activeBindings: ReadonlyMap<Node, ReadonlySet<string>>,
   value: Expression,
+  evalPoint: Node,
 ): ReadonlyMap<Node, ReadonlySet<string>> {
   if (!isIdentifier(value)) {
     return activeBindings;
@@ -204,11 +178,12 @@ function nextActiveBindings(
   if (selected === undefined) {
     return activeBindings;
   }
-  const names = new Set([...(activeBindings.get(selected.binding) ?? []), value.text]);
+  const token = `${value.text}@${String(evalPoint.pos)}`;
+  const names = new Set([...(activeBindings.get(selected.binding) ?? []), token]);
   return new Map([...activeBindings, [selected.binding, names]]);
 }
 
-/** Wraps plain `Held` entries into `ChildCandidate` items preserving enclosing type state. */
+/** Wraps plain `Held` entries into `ChildCandidate` items preserving enclosing type and site state. */
 function plainChildren(entries: readonly Held[]): readonly ChildCandidate[] {
   return entries.map((held) => ({ held }));
 }
@@ -217,7 +192,7 @@ function plainChildren(entries: readonly Held[]): readonly ChildCandidate[] {
 function expandHeldStep(
   at: HeldWorkItem,
   value: Expression,
-  point: Node,
+  outerPoint: Node,
   callbacks: ProjectionCallbacks,
 ): ExpandedStep {
   const keys = at.held.keys;
@@ -232,13 +207,19 @@ function expandHeldStep(
   }
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     const memberKey = frameMemberName(value);
+    const nextTrailing = at.evalAt === undefined ? at.trailingOuter + 1 : at.trailingOuter;
     return {
       ambiguous: false,
       bindingTypedFormData: false,
       children:
         memberKey === undefined
           ? []
-          : plainChildren([{ keys: [memberKey, ...keys], value: value.expression }]),
+          : [
+              {
+                held: { keys: [memberKey, ...keys], value: value.expression },
+                trailingOuter: nextTrailing,
+              },
+            ],
       closed: memberKey !== undefined,
     };
   }
@@ -246,10 +227,10 @@ function expandHeldStep(
     const [firstKey, ...restKeys] = keys;
     return firstKey === undefined
       ? { ambiguous: false, bindingTypedFormData: false, children: [], closed: true }
-      : arrayPathEntries(value, firstKey, restKeys);
+      : arrayPathEntries(value, firstKey, restKeys, at.trailingOuter);
   }
   if (isIdentifier(value)) {
-    return expandIdentifierStep(value, keys, point, callbacks);
+    return expandIdentifierStep(value, at, outerPoint, callbacks);
   }
   const objectSources = framedObjectSources(value, keys);
   if (objectSources === undefined) {
@@ -261,118 +242,34 @@ function expandHeldStep(
   return {
     ambiguous: false,
     bindingTypedFormData: false,
-    children: plainChildren(entries),
+    children: entries.map((each) => literalSourceCandidate(each, at.trailingOuter)),
     closed: entries.length === objectSources.length,
   };
 }
 
-/** Expands a variable or parameter identifier along `keys`, guarding replaced binding types. */
-function expandIdentifierStep(
-  id: Identifier,
-  keys: readonly string[],
-  point: Node,
-  callbacks: ProjectionCallbacks,
-): ExpandedStep {
-  const selected = frameBindingOf(id);
-  if (selected === undefined) {
-    return { ambiguous: false, bindingTypedFormData: false, children: [], closed: false };
-  }
-  const defaults =
-    selected.keys.length === 0
-      ? []
-      : callbacks.bindingDefaults(id, selected.binding.name).map((value) => ({ keys, value }));
-  if (isVariableDeclaration(selected.binding)) {
-    return expandVariableIdentifier(id, selected.binding, { callbacks, defaults, keys, point });
-  }
-  if (!isParameterDeclaration(selected.binding)) {
-    return { ambiguous: false, bindingTypedFormData: false, children: [], closed: false };
-  }
-  const resolved = callbacks.readParameter(id, selected.binding);
-  const fromSources = resolved.sources.map((each) => {
-    return {
-      enclosingBindingTyped: false,
-      held: { keys: [...each.keys, ...keys], value: each.value },
-    };
-  });
-  if (resolved.replaced && resolved.ambiguous !== true) {
-    return {
-      ambiguous: Boolean(resolved.dynamicOpaque),
-      bindingTypedFormData: false,
-      children: fromSources,
-      closed: resolved.dynamicOpaque !== true,
-    };
-  }
-  const fullKeys = [...selected.keys, ...keys];
-  const paramDefault =
-    selected.binding.initializer === undefined
-      ? []
-      : [
-          {
-            enclosingBindingTyped: false,
-            held: { keys: fullKeys, value: selected.binding.initializer },
-          },
-        ];
-  const defaultChildren = defaults.map((held) => ({ enclosingBindingTyped: false, held }));
+/** Builds a `ChildCandidate` for an object-literal or `Object.assign` member source. */
+function literalSourceCandidate(each: Held, currentTrailing: number): ChildCandidate {
+  const rawRemaining = isShallowCopySource(each.value)
+    ? Math.max(0, each.keys.length - 1)
+    : each.keys.length;
   return {
-    ambiguous: Boolean(resolved.dynamicOpaque),
-    bindingTypedFormData: callbacks.isBindingTypedFormData(id, keys),
-    children: [...fromSources, ...paramDefault, ...defaultChildren],
-    closed: false,
+    evalAt: each.value,
+    held: each,
+    trailingOuter: Math.min(currentTrailing, rawRemaining),
   };
 }
 
-/** Expands a `VariableDeclaration` identifier along `keys`, preserving binding type only while live. */
-function expandVariableIdentifier(
-  id: Identifier,
-  declaration: VariableDeclaration,
-  context: {
-    readonly callbacks: ProjectionCallbacks;
-    readonly defaults: readonly Held[];
-    readonly keys: readonly string[];
-    readonly point: Node;
-  },
-): ExpandedStep {
-  const { callbacks, defaults, keys, point } = context;
-  const held = framedHeldValues(id, keys, point);
-  const patternScan = callbacks.readVariablePattern(id, declaration, point);
-  const declaredTyped = callbacks.isBindingTypedFormData(id, keys);
-  const patternChildren = patternScan.extraSources.map((each) => {
-    return {
-      enclosingBindingTyped: false,
-      held: { keys: [...each.keys, ...keys], value: each.value },
-    };
-  });
-  const defaultChildren = defaults.map((entry) => ({ enclosingBindingTyped: false, held: entry }));
-  if (held === undefined) {
-    return {
-      ambiguous: patternScan.dynamicOpaque,
-      bindingTypedFormData: declaredTyped,
-      children: [...patternChildren, ...defaultChildren],
-      closed: false,
-    };
+/** Whether `source` is a shallow-copied spread or `Object.assign` source expression. */
+function isShallowCopySource(source: Expression): boolean {
+  const parent = source.parent;
+  if (isSpreadAssignment(parent)) {
+    return true;
   }
-  const initialChildren =
-    held.initial === undefined
-      ? []
-      : [{ enclosingBindingTyped: declaredTyped, held: held.initial }];
-  const heldChildren = held.held.map((entry) => {
-    return {
-      enclosingBindingTyped: declaredTyped,
-      held: entry,
-    };
-  });
-  const hasSources =
-    initialChildren.length > 0 || heldChildren.length > 0 || patternChildren.length > 0;
-  const closed = !patternScan.ambiguous && hasSources;
-  const initialSurvives =
-    held.initial !== undefined ||
-    (declaration.initializer === undefined && heldChildren.length === 0);
-  return {
-    ambiguous: patternScan.dynamicOpaque,
-    bindingTypedFormData: !closed && initialSurvives && declaredTyped,
-    children: [...initialChildren, ...heldChildren, ...patternChildren, ...defaultChildren],
-    closed,
-  };
+  return (
+    isCallExpression(parent) &&
+    globalPathOf(unwrapped(parent.expression))?.join('.') === OBJECT_ASSIGN &&
+    parent.arguments[0] !== source
+  );
 }
 
 /** Selects matching element and spread-offset candidates from an `ArrayLiteralExpression` for `firstKey`. */
@@ -380,12 +277,13 @@ function arrayPathEntries(
   array: ArrayLiteralExpression,
   firstKey: string,
   restKeys: readonly string[],
+  currentTrailing: number,
 ): ExpandedStep {
   if (!/^\d+$/u.test(firstKey)) {
     return { ambiguous: false, bindingTypedFormData: false, children: [], closed: true };
   }
   const requestedIndex = Number(firstKey);
-  const entries: Held[] = [];
+  const candidates: ChildCandidate[] = [];
   let fixedBefore = 0;
   let spreadSeen = false;
   for (const element of array.elements) {
@@ -398,7 +296,11 @@ function arrayPathEntries(
         (!spreadSeen && fixedBefore === requestedIndex) ||
         (spreadSeen && requestedIndex >= fixedBefore)
       ) {
-        entries.push({ keys: restKeys, value: element });
+        candidates.push({
+          evalAt: element,
+          held: { keys: restKeys, value: element },
+          trailingOuter: Math.min(currentTrailing, restKeys.length),
+        });
       }
       fixedBefore += 1;
       continue;
@@ -413,12 +315,20 @@ function arrayPathEntries(
       spreadSeen,
       restKeys,
     );
-    entries.push(...spreadSlice.entries);
+    candidates.push(
+      ...spreadSlice.entries.map((held) => {
+        return {
+          evalAt: element.expression,
+          held,
+          trailingOuter: Math.min(currentTrailing, restKeys.length),
+        };
+      }),
+    );
     if (spreadSlice.ambiguous) {
       return {
         ambiguous: true,
         bindingTypedFormData: false,
-        children: plainChildren(entries),
+        children: candidates,
         closed: false,
       };
     }
@@ -427,7 +337,7 @@ function arrayPathEntries(
   return {
     ambiguous: false,
     bindingTypedFormData: false,
-    children: plainChildren(entries),
+    children: candidates,
     closed: true,
   };
 }
