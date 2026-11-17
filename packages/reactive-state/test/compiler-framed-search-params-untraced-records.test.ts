@@ -278,6 +278,69 @@ const OVERRIDES = [
   },
 ] as const;
 
+/**
+ * The methods that copy a list answer the list they are called on: only `concat` adds what it is
+ * given to it, and `map` and `flatMap` what their callback answers. Another argument (a `this`, an
+ * index, a depth) is not an entry.
+ */
+const LISTS = [
+  {
+    id: 'concat-reads-the-list-it-adds',
+    body: `return new URLSearchParams([['x', 'y']].concat([['z', error as never]]));`,
+    converts: true,
+  },
+  {
+    id: 'concat-reads-every-list-it-adds',
+    body: `const first = [['x', 'y']]; const second = [['z', error as never]]; return new URLSearchParams(([] as string[][]).concat(first, second));`,
+    converts: true,
+  },
+  {
+    id: 'concat-of-texts',
+    body: `return new URLSearchParams([['x', 'y']].concat([['z', 'w']]));`,
+    converts: false,
+  },
+  {
+    id: 'filter-reads-the-list',
+    body: `return new URLSearchParams([['x', error as never]].filter(() => true));`,
+    converts: true,
+  },
+  {
+    id: 'filter-does-not-read-its-this-argument',
+    body: `const rows = [['x', 'y']]; return new URLSearchParams(rows.filter(() => true, error as never));`,
+    converts: false,
+  },
+  {
+    id: 'slice-reads-the-list',
+    body: `return new URLSearchParams([['x', error as never]].slice(0));`,
+    converts: true,
+  },
+  {
+    id: 'slice-does-not-read-an-error-given-as-an-index',
+    body: `return new URLSearchParams([['x', 'y']].slice(0, error as never));`,
+    converts: false,
+  },
+  {
+    id: 'flat-does-not-read-an-error-given-as-the-depth',
+    body: `return new URLSearchParams([['x', 'y']].flat(error as never));`,
+    converts: false,
+  },
+  {
+    id: 'sort-reads-the-list',
+    body: `return new URLSearchParams([['x', error as never]].sort());`,
+    converts: true,
+  },
+  {
+    id: 'map-reads-what-its-callback-answers',
+    body: `return new URLSearchParams(['x'].map((name) => [name, error as never]));`,
+    converts: true,
+  },
+  {
+    id: 'map-does-not-read-its-this-argument',
+    body: `return new URLSearchParams(['x'].map((name) => [name, 'y'], error as never));`,
+    converts: false,
+  },
+] as const;
+
 const WRITTEN = [
   {
     id: 'write-into-an-object-with-no-prototype',
@@ -452,7 +515,16 @@ const PINNED = [
   },
 ] as const;
 
-const CASES = [...COPIES, ...ENTRIES, ...BRANCHES, ...OVERRIDES, ...WRITTEN, ...TEXTS, ...PINNED];
+const CASES = [
+  ...COPIES,
+  ...ENTRIES,
+  ...BRANCHES,
+  ...OVERRIDES,
+  ...LISTS,
+  ...WRITTEN,
+  ...TEXTS,
+  ...PINNED,
+];
 
 describe('records a native call builds or copies, read by what they are made of', () => {
   it.each(CASES)('$id', ({ body, converts }) => {

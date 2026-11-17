@@ -34,9 +34,8 @@ const FIRST: ReadonlySet<string> = new Set([
   'Set',
 ]);
 
-/** Methods answering a copy of the list they are called on, the first two adding what they are given. */
+/** Methods answering a copy of the list they are called on: another argument is no entry of it. */
 const COPYING: ReadonlySet<string> = new Set([
-  'concat',
   'filter',
   'flat',
   'reverse',
@@ -53,9 +52,9 @@ const MAPPING: ReadonlySet<string> = new Set(['flatMap', 'map']);
  * What a record or a list of entries made by a native call is made of: `Object.assign({}, a, b)` of
  * the records it is given, in order, as `{ ...a, ...b }` is; `Object.fromEntries(rows)`,
  * `Object.entries(record)`, `new Map(rows)`, `new Set(rows)` and `Array.from(rows)` of their first
- * argument; the methods that copy a list (`rows.filter(…)`, `rows.concat(more)`) of the list and
- * what is added to it, and `rows.map(…)` of the list and what its callback answers. A call of any
- * other function is not one of these forms: what it answers is not followed.
+ * argument; the methods that copy a list (`rows.filter(…)`) of the list, `rows.concat(more)` of the
+ * list and what is added to it, and `rows.map(…)` of the list and what its callback answers. A call
+ * of any other function is not one of these forms: what it answers is not followed.
  */
 export function framedRecordForm(node: Expression): RecordForm | undefined {
   const value = unwrapped(node);
@@ -77,8 +76,9 @@ export function framedRecordForm(node: Expression): RecordForm | undefined {
   const method = frameMemberName(callee);
   if (method === undefined) return undefined;
   const receiver = unwrapped(callee.expression);
-  if (COPYING.has(method))
+  if (method === 'concat')
     return { operands: [receiver, ...given(value.arguments)], ordered: false };
+  if (COPYING.has(method)) return { operands: [receiver], ordered: false };
   if (MAPPING.has(method))
     return { operands: [receiver, ...answered(value.arguments[0])], ordered: false };
   return undefined;
