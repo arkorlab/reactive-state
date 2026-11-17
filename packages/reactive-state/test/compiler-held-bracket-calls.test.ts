@@ -3,6 +3,7 @@ import {
   isCallExpression,
   isElementAccessExpression,
   isFunctionDeclaration,
+  type Identifier,
   isIdentifier,
   isPropertyAccessExpression,
   type Node,
@@ -99,6 +100,22 @@ function runCall(root: Node): CallExpression {
   throw new Error('Expected a method call in run().');
 }
 
+function receiverCallTarget(call: CallExpression): {
+  readonly method: string;
+  readonly receiver: Identifier;
+} {
+  const method = methodOf(call);
+  const callee = unwrapped(call.expression);
+  const receiver =
+    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
+      ? unwrapped(callee.expression)
+      : undefined;
+  if (method === undefined || receiver === undefined || !isIdentifier(receiver)) {
+    throw new Error('Expected a receiver identifier call.');
+  }
+  return { method, receiver };
+}
+
 describe('held method calls through bracket member access on this', () => {
   let api: API;
 
@@ -113,15 +130,7 @@ describe('held method calls through bracket member access on this', () => {
   it.each(CASES)('$id', ({ source, writes }) => {
     using parsed = parseModule(api, 'held-bracket-calls.ts', source);
     const call = runCall(parsed.sourceFile);
-    const method = methodOf(call);
-    const callee = unwrapped(call.expression);
-    const receiver =
-      isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
-        ? unwrapped(callee.expression)
-        : undefined;
-    if (method === undefined || receiver === undefined || !isIdentifier(receiver)) {
-      throw new Error('Expected a receiver identifier call.');
-    }
+    const { method, receiver } = receiverCallTarget(call);
 
     expect(writesThis(methodsOf(receiver), method, writtenBy, { seen: new Set(), call })).toBe(
       writes,

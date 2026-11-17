@@ -3,6 +3,7 @@ import {
   isCallExpression,
   isElementAccessExpression,
   isFunctionDeclaration,
+  type Identifier,
   isIdentifier,
   isPropertyAccessExpression,
   type Node,
@@ -101,7 +102,7 @@ function runCall(root: Node): CallExpression {
   for (const statement of statements) {
     let found: CallExpression | undefined;
     const visit = (node: Node): void => {
-      if (isCallExpression(node) && found === undefined) {
+      if (found === undefined && isCallExpression(node)) {
         found = node;
       }
       node.forEachChild(visit);
@@ -112,6 +113,22 @@ function runCall(root: Node): CallExpression {
     }
   }
   throw new Error('Expected call in run()');
+}
+
+function receiverCallTarget(call: CallExpression): {
+  readonly method: string;
+  readonly receiver: Identifier;
+} {
+  const method = methodOf(call);
+  const callee = unwrapped(call.expression);
+  const receiver =
+    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
+      ? unwrapped(callee.expression)
+      : undefined;
+  if (method === undefined || receiver === undefined || !isIdentifier(receiver)) {
+    throw new Error('Expected a receiver identifier call.');
+  }
+  return { method, receiver };
 }
 
 describe('ancestor binding path tracking across nested rest and destructuring aliases', () => {
@@ -128,15 +145,7 @@ describe('ancestor binding path tracking across nested rest and destructuring al
   it.each(CASES)('$id', ({ source, writes }) => {
     using parsed = parseModule(api, 'this-nested-rest-paths.ts', source);
     const call = runCall(parsed.sourceFile);
-    const method = methodOf(call);
-    const callee = unwrapped(call.expression);
-    const receiver =
-      isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
-        ? unwrapped(callee.expression)
-        : undefined;
-    if (method === undefined || receiver === undefined || !isIdentifier(receiver)) {
-      throw new Error('Expected a receiver identifier call.');
-    }
+    const { method, receiver } = receiverCallTarget(call);
 
     expect(writesThis(methodsOf(receiver), method, writtenBy, { seen: new Set(), call })).toBe(
       writes,
