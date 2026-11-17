@@ -7,7 +7,6 @@ import {
   isIdentifier,
   isPropertyAccessExpression,
   isSpreadElement,
-  type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -18,8 +17,8 @@ import { patternSymbolName } from './pattern-writes.ts';
 import { constFollowedValue, unmutatedTuple } from './tuple-spreads.ts';
 
 /**
- * Call arguments mutated beside a method's receiver: explicit 4th-argument receivers of
- * `Reflect.set`, slot-aligned spread expansion, and direct, borrowed or bound global invocations.
+ * Call arguments mutated beside a method's receiver: slot-aligned spread expansion, `.bind`
+ * chain unwrapping, and direct, borrowed or bound global invocations.
  */
 
 export interface CallArgument {
@@ -33,21 +32,52 @@ export interface SlotArgument {
   readonly spread: boolean;
 }
 
+export interface UnwrappedBind {
+  readonly boundArgs: readonly CallArgument[];
+  readonly boundThis: Expression | undefined;
+  readonly hasBind: boolean;
+  readonly target: Expression;
+}
+
 interface GlobalCall {
   readonly given: readonly CallArgument[];
   readonly path: string;
 }
 
-const SLOTS = { reflectSetReceiver: 3 } as const;
-const PRIMITIVE_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN', 'undefined']);
-
 /** Wraps ordinary and spread call-site argument nodes into uniform `CallArgument` descriptors. */
 export function asCallArguments(list: readonly Expression[]): readonly CallArgument[] {
-  return list.map((each) =>
-    isSpreadElement(each)
+  return list.map((each) => {
+    return isSpreadElement(each)
       ? { expression: each.expression, spread: true }
-      : { expression: each, spread: false },
-  );
+      : { expression: each, spread: false };
+  });
+}
+
+/** Peels `.bind(...)` chains off `node`, preserving the first bound `this` and prebound arguments. */
+export function unwrapBoundTarget(node: Expression): UnwrappedBind {
+  const segments: (readonly CallArgument[])[] = [];
+  const seen = new Set<Expression>();
+  let current = followedValue(node);
+  let boundThis: Expression | undefined;
+  while (isCallExpression(current) && !seen.has(current)) {
+    seen.add(current);
+    const binder = followedValue(current.expression);
+    if (
+      (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
+      memberNameOf(binder) !== 'bind'
+    ) {
+      break;
+    }
+    boundThis = current.arguments[0];
+    segments.push(asCallArguments(current.arguments.slice(1)));
+    current = followedValue(binder.expression);
+  }
+  return {
+    boundArgs: segments.length === 0 ? [] : segments.toReversed().flat(),
+    boundThis,
+    hasBind: segments.length > 0,
+    target: current,
+  };
 }
 
 /** A direct, aliased, borrowed or bound invocation of a global function and its arguments. */
@@ -56,8 +86,7 @@ export function globalCallOf(call: CallExpression): GlobalCall | undefined {
   const direct = globalPathOf(callee)?.join('.');
   if (direct === 'Reflect.apply') {
     const [first, , third] = call.arguments;
-    const target = first === undefined ? undefined : globalPathOf(followedValue(first))?.join('.');
-    return target === undefined ? undefined : { given: appliedArguments(third), path: target };
+    return first === undefined ? undefined : globalFromTarget(first, appliedArguments(third));
   }
   const member =
     isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
@@ -67,18 +96,28 @@ export function globalCallOf(call: CallExpression): GlobalCall | undefined {
     (member === 'call' || member === 'apply') &&
     (isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
   ) {
-    const target = globalPathOf(followedValue(callee.expression))?.join('.');
-    if (target !== undefined) {
-      const given =
-        member === 'apply'
-          ? appliedArguments(call.arguments[1])
-          : asCallArguments(call.arguments.slice(1));
-      return { given, path: target };
+    const trailing =
+      member === 'apply'
+        ? appliedArguments(call.arguments[1])
+        : asCallArguments(call.arguments.slice(1));
+    const borrowed = globalFromTarget(callee.expression, trailing);
+    if (borrowed !== undefined) {
+      return borrowed;
     }
   }
   return direct === undefined
     ? boundGlobalCall(callee, asCallArguments(call.arguments))
     : { given: asCallArguments(call.arguments), path: direct };
+}
+
+/** Resolves `fn` (possibly `.bind`-wrapped) to a global function path with `trailing` arguments. */
+function globalFromTarget(
+  fn: Expression,
+  trailing: readonly CallArgument[],
+): GlobalCall | undefined {
+  const bound = unwrapBoundTarget(fn);
+  const path = globalPathOf(bound.target)?.join('.');
+  return path === undefined ? undefined : { given: [...bound.boundArgs, ...trailing], path };
 }
 
 /** Selects the argument at `slot` after expanding known tuple spreads, or a covering spread holder. */
@@ -112,17 +151,6 @@ export function slotArguments(
   return candidates;
 }
 
-/** Explicit 4th-argument receivers of `Reflect.set`, through known tuple spreads or opaque spreads. */
-export function reflectSetReceivers(given: readonly CallArgument[]): readonly Node[] {
-  return slotArguments(given, SLOTS.reflectSetReceiver)
-    .filter(
-      (each) =>
-        each.spread ||
-        !PRIMITIVE_GLOBALS.has(globalPathOf(unwrapped(each.expression))?.join('.') ?? ''),
-    )
-    .map((each) => each.expression);
-}
-
 /** Pushes an unchanged array-literal spread's elements onto `stack` when statically known. */
 function expandTupleSpread(
   expression: Expression,
@@ -143,25 +171,9 @@ function boundGlobalCall(
   callee: Expression,
   trailing: readonly CallArgument[],
 ): GlobalCall | undefined {
-  const segments: (readonly CallArgument[])[] = [trailing];
-  const seen = new Set<Expression>();
-  let current = callee;
-  while (isCallExpression(current) && !seen.has(current)) {
-    seen.add(current);
-    const binder = unwrapped(current.expression);
-    if (
-      (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
-      memberNameOf(binder) !== 'bind'
-    ) {
-      return undefined;
-    }
-    segments.push(asCallArguments(current.arguments.slice(1)));
-    current = followedValue(binder.expression);
-  }
-  const target = globalPathOf(current)?.join('.');
-  return target === undefined || segments.length === 1
-    ? undefined
-    : { given: segments.toReversed().flat(), path: target };
+  const bound = unwrapBoundTarget(callee);
+  const path = bound.hasBind ? globalPathOf(bound.target)?.join('.') : undefined;
+  return path === undefined ? undefined : { given: [...bound.boundArgs, ...trailing], path };
 }
 
 /** The arguments written for `apply`, or an unknown-list spread where the code does not write them apart. */

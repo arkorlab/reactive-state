@@ -29,9 +29,9 @@ import {
   followedValue,
   globalCallOf,
   memberNameOf,
-  reflectSetReceivers,
-  slotArguments,
+  unwrapBoundTarget,
 } from './written-arguments.ts';
+import { dispatchEventTargets, reflectSetReceivers } from './written-slot-targets.ts';
 import { transferredBy } from './written-transfers.ts';
 
 /**
@@ -268,9 +268,7 @@ export function writtenArgumentBy(node: Node): readonly Node[] {
   if ((invoked?.method ?? methodOf(node)) !== 'dispatchEvent') {
     return [];
   }
-  return slotArguments(invoked?.given ?? asCallArguments(node.arguments), 0).map(
-    (each) => each.expression,
-  );
+  return dispatchEventTargets(invoked?.given ?? asCallArguments(node.arguments));
 }
 
 /**
@@ -369,22 +367,23 @@ function isStream(receiver: Expression, seen: Set<Expression>): boolean {
  * `Reflect.apply(Map.prototype.set, table, [key, value])` — none of another call.
  */
 function borrowedOf(call: CallExpression): LentMethod | undefined {
-  const callee = unwrapped(call.expression);
+  const callee = followedValue(call.expression);
   const [first, second] = call.arguments;
   if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
-    return lentOf(first, second, appliedArguments(call.arguments[2]));
+    return first === undefined
+      ? undefined
+      : lentTargetOf(first, second, appliedArguments(call.arguments[2]));
   }
-  if (
-    !isPropertyAccessExpression(callee) ||
-    (callee.name.text !== 'call' && callee.name.text !== 'apply')
-  ) {
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) {
+    return undefined;
+  }
+  const member = memberNameOf(callee);
+  if (member !== 'call' && member !== 'apply') {
     return undefined;
   }
   const given =
-    callee.name.text === 'apply'
-      ? appliedArguments(second)
-      : asCallArguments(call.arguments.slice(1));
-  return lentOf(callee.expression, first, given);
+    member === 'apply' ? appliedArguments(second) : asCallArguments(call.arguments.slice(1));
+  return lentTargetOf(callee.expression, first, given);
 }
 
 /**
@@ -392,26 +391,24 @@ function borrowedOf(call: CallExpression): LentMethod | undefined {
  * `push` of `const push = items.push.bind(items)` or `Array.prototype.push.bind(items)`.
  */
 function boundOf(call: CallExpression): LentMethod | undefined {
-  const segments: (readonly CallArgument[])[] = [asCallArguments(call.arguments)];
-  const seen = new Set<Expression>();
-  let current = followedValue(call.expression);
-  let receiver: Expression | undefined;
-  while (isCallExpression(current) && !seen.has(current)) {
-    seen.add(current);
-    const binder = unwrapped(current.expression);
-    if (
-      (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
-      memberNameOf(binder) !== 'bind'
-    ) {
-      return undefined;
-    }
-    receiver = current.arguments[0];
-    segments.push(asCallArguments(current.arguments.slice(1)));
-    current = followedValue(binder.expression);
-  }
-  return segments.length === 1
-    ? undefined
-    : lentOf(current, receiver, segments.toReversed().flat());
+  const bound = unwrapBoundTarget(call.expression);
+  return bound.hasBind
+    ? lentOf(bound.target, bound.boundThis, [
+        ...bound.boundArgs,
+        ...asCallArguments(call.arguments),
+      ])
+    : undefined;
+}
+
+/** Resolves `fn` (possibly `.bind`-wrapped) to a lent method on its effective receiver. */
+function lentTargetOf(
+  fn: Expression,
+  receiver: Expression | undefined,
+  trailing: readonly CallArgument[],
+): LentMethod | undefined {
+  const bound = unwrapBoundTarget(fn);
+  const effectiveReceiver = bound.hasBind ? bound.boundThis : receiver;
+  return lentOf(bound.target, effectiveReceiver, [...bound.boundArgs, ...trailing]);
 }
 
 /** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
