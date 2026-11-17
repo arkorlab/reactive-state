@@ -40,9 +40,8 @@ import {
   constantDeclaration,
   isAssignmentOperator,
   queueBranchExpressions,
-  type SpreadUnfold,
   unfoldApplyOperand,
-  unfoldSpreadExpression,
+  unfoldCallArguments,
 } from './framed-template-argument-spreads.ts';
 import { peeled } from './framed-written-targets.ts';
 
@@ -78,6 +77,7 @@ const OBJECT_MUTATORS: ReadonlySet<string> = new Set([
 ]);
 
 const REFLECT_MUTATORS: ReadonlySet<string> = new Set(['defineProperty', 'set']);
+const NO_EXPRESSIONS: readonly Expression[] = [];
 
 export interface NodeSinks {
   readonly mutated: readonly FrameDeclaration[];
@@ -198,34 +198,16 @@ function callTargetSinks(call: CallExpression | NewExpression, owner: Node): Nod
   const callee = peeled(call.expression);
   const argsUnfold = unfoldCallArguments(call.arguments, owner);
   let unresolvable = collectCalleeSinks(callee, mutated, value) || !argsUnfold.resolved;
-  const applyOperand = applyArgumentsOperand(call, callee, argsUnfold.elements);
-  if (applyOperand !== undefined) {
+  for (const applyOperand of applyArgumentsOperands(call, callee, argsUnfold.slots)) {
     const applied = unfoldApplyOperand(applyOperand, owner);
     if (!applied.resolved) unresolvable = true;
     collectArgumentListSinks(applied.elements, mutated, value);
   }
   collectArgumentListSinks(argsUnfold.elements, mutated, value);
-  const mutatedTarget = knownMutatedTargetArgument(call, callee, argsUnfold.elements);
-  if (mutatedTarget !== undefined && !collectReceiverHolders(mutatedTarget, mutated)) {
-    unresolvable = true;
+  for (const mutatedTarget of knownMutatedTargetArguments(call, callee, argsUnfold.slots)) {
+    if (!collectReceiverHolders(mutatedTarget, mutated)) unresolvable = true;
   }
   return { mutated, unresolvable, value };
-}
-
-function unfoldCallArguments(args: readonly Expression[] | undefined, owner: Node): SpreadUnfold {
-  if (args === undefined) return { elements: [], resolved: true };
-  const elements: Expression[] = [];
-  let resolved = true;
-  for (const arg of args) {
-    if (!isSpreadElement(arg)) {
-      elements.push(arg);
-      continue;
-    }
-    const spread = unfoldSpreadExpression(arg.expression, owner);
-    if (!spread.resolved) resolved = false;
-    elements.push(...spread.elements);
-  }
-  return { elements, resolved };
 }
 
 function collectArgumentListSinks(
@@ -233,7 +215,37 @@ function collectArgumentListSinks(
   mutated: FrameDeclaration[],
   value: FrameDeclaration[],
 ): void {
-  for (const item of items) collectArgumentExpressionSinks(item, mutated, value);
+  const pending: Expression[] = [...items];
+  const visited = new Set<Expression>();
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const current = peeled(next);
+    if (visited.has(current)) continue;
+    visited.add(current);
+    stepArgumentExpressionSink(current, pending, mutated, value);
+  }
+}
+
+function stepArgumentExpressionSink(
+  current: Expression,
+  pending: Expression[],
+  mutated: FrameDeclaration[],
+  value: FrameDeclaration[],
+): void {
+  if (isAnswering(current)) {
+    value.push(...parametersOf(current));
+    return;
+  }
+  if (isIdentifier(current)) {
+    pushLocalCallableParameters(current, value);
+    pushMutableIdentifier(current, mutated);
+    return;
+  }
+  if (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
+    pending.push(current.expression);
+    return;
+  }
+  if (queueBranchExpressions(current, pending)) return;
+  queueLiteralContainerValues(current, pending);
 }
 
 function collectCalleeSinks(
@@ -282,35 +294,6 @@ function queueCalleeContainerTarget(current: Expression, pending: Expression[]):
     isObjectLiteralExpression(target)
   ) {
     pending.push(target);
-  }
-}
-
-function collectArgumentExpressionSinks(
-  expr: Expression,
-  mutated: FrameDeclaration[],
-  value: FrameDeclaration[],
-): void {
-  const pending: Expression[] = [expr];
-  const visited = new Set<Expression>();
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const current = peeled(next);
-    if (visited.has(current)) continue;
-    visited.add(current);
-    if (isAnswering(current)) {
-      value.push(...parametersOf(current));
-      continue;
-    }
-    if (isIdentifier(current)) {
-      pushLocalCallableParameters(current, value);
-      pushMutableIdentifier(current, mutated);
-      continue;
-    }
-    if (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
-      pending.push(current.expression);
-      continue;
-    }
-    if (queueBranchExpressions(current, pending)) continue;
-    queueLiteralContainerValues(current, pending);
   }
 }
 
@@ -399,52 +382,52 @@ function queueObjectReceiverProperties(
   return plain;
 }
 
-function applyArgumentsOperand(
+function applyArgumentsOperands(
   call: CallExpression | NewExpression,
   callee: Expression,
-  unfoldedArgs: readonly Expression[],
-): Expression | undefined {
+  slots: ReadonlyMap<number, readonly Expression[]>,
+): readonly Expression[] {
   if (
     !isCallExpression(call) ||
     (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee))
   ) {
-    return undefined;
+    return NO_EXPRESSIONS;
   }
   const method = memberNameOf(callee);
   const receiverGlobal = globalOf(peeled(callee.expression));
   if (receiverGlobal === 'Reflect') {
-    if (method === 'apply') return unfoldedArgs[2];
-    if (method === 'construct') return unfoldedArgs[1];
-    return undefined;
+    if (method === 'apply') return slots.get(2) ?? NO_EXPRESSIONS;
+    if (method === 'construct') return slots.get(1) ?? NO_EXPRESSIONS;
+    return NO_EXPRESSIONS;
   }
-  return method === 'apply' ? unfoldedArgs[1] : undefined;
+  return method === 'apply' ? (slots.get(1) ?? NO_EXPRESSIONS) : NO_EXPRESSIONS;
 }
 
-function knownMutatedTargetArgument(
+function knownMutatedTargetArguments(
   call: CallExpression | NewExpression,
   callee: Expression,
-  unfoldedArgs: readonly Expression[],
-): Expression | undefined {
+  slots: ReadonlyMap<number, readonly Expression[]>,
+): readonly Expression[] {
   if (
     !isCallExpression(call) ||
     (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee))
   ) {
-    return undefined;
+    return NO_EXPRESSIONS;
   }
   const method = memberNameOf(callee);
-  if (method === undefined) return undefined;
+  if (method === undefined) return NO_EXPRESSIONS;
   const receiver = peeled(callee.expression);
-  if (isStaticMutator(receiver, method)) return unfoldedArgs[0];
-  if (method !== 'call' && method !== 'apply') return undefined;
+  if (isStaticMutator(receiver, method)) return slots.get(0) ?? NO_EXPRESSIONS;
+  if (method !== 'call' && method !== 'apply') return NO_EXPRESSIONS;
   if (!isPropertyAccessExpression(receiver) && !isElementAccessExpression(receiver)) {
-    return undefined;
+    return NO_EXPRESSIONS;
   }
   const innerMethod = memberNameOf(receiver);
-  if (innerMethod === undefined) return undefined;
+  if (innerMethod === undefined) return NO_EXPRESSIONS;
   if (method === 'call' && isStaticMutator(peeled(receiver.expression), innerMethod)) {
-    return unfoldedArgs[1];
+    return slots.get(1) ?? NO_EXPRESSIONS;
   }
-  return MUTATING_METHODS.has(innerMethod) ? unfoldedArgs[0] : undefined;
+  return MUTATING_METHODS.has(innerMethod) ? (slots.get(0) ?? NO_EXPRESSIONS) : NO_EXPRESSIONS;
 }
 
 function isDirectMutatingMethod(callee: Expression): boolean {

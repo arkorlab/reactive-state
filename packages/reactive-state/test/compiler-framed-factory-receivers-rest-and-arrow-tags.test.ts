@@ -352,6 +352,74 @@ const CASES = [
     id: 'arrow-tag-with-untainted-unresolvable-receiver-write-beside-unused-arguments-preserved',
     source: `function run(error: Error) { const _unused = arguments[0]; const box = { text: 'fixed' }; const pick = () => box; pick().text = 'updated'; const tag = (strings: TemplateStringsArray, _v: unknown) => box.text + (strings[0] ?? ''); return tag\`\${error}\`; }`,
   },
+  {
+    framed: true,
+    id: 'arrow-tag-reads-holder-filled-by-diverging-length-branch-spread-array-from-arguments',
+    source: `function run(flag: boolean, error: Error) { let saved = 'fixed'; const plain = [0]; Array.from(...(flag ? ([arguments] as const) : ([plain, (item: unknown) => { saved = String(item); return 0; }] as const))); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-diverging-branch-spread-into-object-assign-unresolvable-slot-zero',
+    source: `function run(flag: boolean, error: Error) { const safe = { text: 'safe' }; const box = { text: 'fixed' }; const pick = () => box; Object.assign(...(flag ? ([safe, { text: 'ok' }] as const) : ([pick(), { text: String(arguments[0]) }] as const))); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-empty-branch-spread-shifting-unresolvable-object-assign-slot-zero',
+    source: `function run(flag: boolean, error: Error) { const safe = { text: 'safe' }; const box = { text: 'fixed' }; const pick = () => box; Object.assign(...(flag ? ([] as const) : ([safe] as const)), pick(), { text: String(arguments[0]) }); const tag = (_s: TemplateStringsArray, _v: unknown) => box.text; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-diverging-branch-spread-into-apply-unresolvable-slot-one',
+    source: `function run(flag: boolean, error: Error) { let saved = 'fixed'; const makeArgs = () => [arguments, (item: unknown) => { saved = String(item); return 0; }] as const; Array.from.apply(...(flag ? ([null, [['ok']]] as const) : ([null, makeArgs()] as const))); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+] as const;
+
+const DIAMOND_CASES = [
+  {
+    framed: true,
+    id: 'arrow-tag-after-24-level-conditional-spread-diamond-with-arguments-mapper',
+    source: spreadDiamondSource(
+      "let saved = 'fixed'; const a0 = [arguments, (item: unknown) => { saved = String(item); return 0; }] as const;",
+      (prev) => `flag ? [...${prev}] : [...${prev}]`,
+      `Array.from(...a24); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`;`,
+    ),
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-overflowed-24-level-concat-spread-diamond-with-arguments',
+    source: spreadDiamondSource(
+      "let saved = 'fixed'; const a0 = [arguments, (item: unknown) => { saved = String(item); return 0; }] as const;",
+      (prev) => `flag ? [...${prev}, ...${prev}] : [...${prev}]`,
+      `Array.from(...a24); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`;`,
+    ),
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-overflowed-24-level-mapper-spread-diamond-beside-arguments',
+    source: spreadDiamondSource(
+      "let saved = 'fixed'; const a0 = [(item: unknown) => { saved = String(item); return 0; }] as const;",
+      (prev) => `[...${prev}, ...${prev}]`,
+      `Array.from(arguments, ...a24); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`;`,
+    ),
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-untainted-24-level-conditional-spread-diamond-preserved',
+    source: spreadDiamondSource(
+      'const _unused = arguments[0]; const a0 = [0];',
+      (prev) => `flag ? [...${prev}] : [...${prev}]`,
+      `const _max = Math.max(...a24); const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`;`,
+    ),
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-untainted-overflowed-24-level-concat-spread-diamond-preserved',
+    source: spreadDiamondSource(
+      'const _unused = arguments[0]; const a0 = [0];',
+      (prev) => `[...${prev}, ...${prev}]`,
+      `const _max = Math.max(...a24); const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`;`,
+    ),
+  },
 ] as const;
 
 describe('written-error factory side effects, receivers, rest arguments, and arrow tags', () => {
@@ -368,11 +436,39 @@ describe('written-error factory side effects, receivers, rest arguments, and arr
   it.each(CASES)('$id', ({ framed, source }) => {
     expect(readsFrames(api, source)).toBe(framed);
   });
+
+  it.each(DIAMOND_CASES)('$id', ({ framed, source }) => {
+    using parsed = parseModule(api, 'factory-receivers-rest-and-arrow-tags.ts', source);
+    const started = performance.now();
+    const result = hasFramedRead(parsed.sourceFile);
+    const elapsed = performance.now() - started;
+
+    expect(result).toBe(framed);
+    expect(elapsed).toBeLessThan(50);
+  });
 });
+
+function spreadDiamondSource(
+  preamble: string,
+  stepExpr: (prev: string) => string,
+  tail: string,
+): string {
+  const steps: string[] = [preamble];
+  for (let index = 1; index <= 24; index += 1) {
+    const prev = `a${index - 1}`;
+    steps.push(`const a${index} = ${stepExpr(prev)};`);
+  }
+  steps.push(tail);
+  return `function run(flag: boolean, error: Error) { ${steps.join(' ')} }`;
+}
 
 function readsFrames(api: API, source: string): boolean {
   using parsed = parseModule(api, 'factory-receivers-rest-and-arrow-tags.ts', source);
-  const pending: Node[] = [parsed.sourceFile];
+  return hasFramedRead(parsed.sourceFile);
+}
+
+function hasFramedRead(root: Node): boolean {
+  const pending: Node[] = [root];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isErased(node)) continue;
     if (framedRead(node) !== undefined) return true;
