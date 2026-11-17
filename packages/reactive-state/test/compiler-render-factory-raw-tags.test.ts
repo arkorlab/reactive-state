@@ -209,6 +209,48 @@ const CASES = [
     dateText: undefined,
     local: undefined,
   },
+  {
+    id: 'conditional-outer-factory-sharing-inner-helper-String-raw-branch',
+    source: `export function Widget(flag:boolean){const noop=(_s:TemplateStringsArray,_d:Date)=>"safe";const passthrough=<T,>(fn:T):T=>fn;const outer=<T,>(fn:T):T=>passthrough(fn);const date=new Date(0);return <p>{(flag?outer(String.raw):outer(noop))\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'conditional-outer-factory-sharing-inner-default-param-String-raw',
+    source: `export function Widget(flag:boolean){const noop=(_s:TemplateStringsArray,_d:Date)=>"safe";const inner=(tag:typeof String.raw,chosen=tag)=>chosen;const outer=(tag:typeof String.raw)=>inner(tag);const date=new Date(0);return <p>{(flag?outer(String.raw):outer(noop))\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'bound-factory-callee-sharing-inner-helper-across-branches',
+    source: `export function Widget(flag:boolean){const noop=(_s:TemplateStringsArray,_d:Date)=>"safe";const id=<T,>(v:T):T=>v;const makeBoundId=<T,>(x:T)=>id.bind(null,x);const invoke=<T,>(fn:T):T=>makeBoundId(fn)();const date=new Date(0);return <p>{(flag?invoke(String.raw):invoke(noop))\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'bound-factory-callee-preserving-inner-parameter-env-with-ISO-tag',
+    source: `export function Widget(){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();const id=<T,>(v:T):T=>v;const run=(helper:typeof id)=>{const makeBound=(x:typeof iso)=>helper.bind(null,x);return makeBound(iso)();};const raw=run(id);const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'recursive-factory-rotating-params-retains-String-raw-date',
+    source: `export function Widget(n:number){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();function rotate(a:typeof String.raw,b:typeof String.raw,c:typeof String.raw,steps:number):typeof String.raw{return steps>0?rotate(b,c,a,steps-1):a;}const date=new Date(0);return <p>{rotate(iso,iso,String.raw,n)\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'recursive-factory-helper-with-safe-ISO-tag-terminates-pin',
+    source: `export function Widget(n:number){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();function loop(fn:typeof iso,steps:number):typeof iso{return steps>0?loop(fn,steps-1):fn;}const date=new Date(0);return <p>{loop(iso,n)\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
 ] as const;
 
 describe('factory-produced and unresolved call-result raw template tags', () => {

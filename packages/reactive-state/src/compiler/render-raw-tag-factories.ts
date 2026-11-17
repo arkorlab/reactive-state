@@ -8,34 +8,28 @@ import {
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
-  isNewExpression,
   isObjectLiteralExpression,
   isSpreadElement,
-  isVoidExpression,
   type MethodDeclaration,
-  type ParameterDeclaration,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, overloadsOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedAppliedArguments } from './framed-keys.ts';
 import { framedAssignedSources } from './framed-writes.ts';
-import { constantValue } from './numbers.ts';
 import {
   boundCallTargets,
   type TagBoundValue,
-  tagPathKey,
-  type TagParameterEntry,
   type TagParameterEnv,
-  type TagParameterValue,
   type TagPath,
+  tagPathKey,
 } from './render-raw-tag-calls.ts';
-import { canonicalArrayTagIndex, type ObjectTagSink } from './render-raw-tag-paths.ts';
+import { buildFactoryParameterEnv } from './render-raw-tag-envs.ts';
+import type { ObjectTagSink } from './render-raw-tag-paths.ts';
 
-/** Factory-call and parameter-bound path expansions for template tag candidates. */
+/** Factory-call return-path expansions for template tag candidates. */
 
 type CalleeStepOutcome = 'done' | 'expand' | 'unresolved';
 
@@ -46,71 +40,21 @@ export type FactoryStepExpander = (
 ) => boolean;
 
 interface FactoryCalleeItem {
+  readonly env: TagParameterEnv | undefined;
+  readonly given: readonly TagBoundValue[] | null;
   readonly node: Expression;
   readonly suffix: readonly (string | undefined)[];
-  readonly given: readonly Expression[] | null;
-  readonly env: TagParameterEnv | undefined;
 }
 
 interface FactoryResolveContext {
   readonly call?: CallExpression | undefined;
-  readonly callSitePos: number;
+  readonly callees: FactoryCalleeItem[];
   readonly outerSuffix: readonly (string | undefined)[];
   readonly pending: TagPath[];
-  readonly callees: FactoryCalleeItem[];
   readonly step: FactoryStepExpander;
 }
 
 const FACTORY_SEARCH = { depth: 8, limit: 64 } as const;
-
-/** Expands a parameter identifier bound by an enclosing factory invocation. */
-export function pushFactoryParameterTagPaths(
-  name: Identifier,
-  declared: ParameterDeclaration,
-  suffix: readonly (string | undefined)[],
-  context: { readonly env: TagParameterEnv | undefined; readonly pending: TagPath[] },
-): { readonly handled: boolean; readonly opaque: boolean } {
-  const entry = context.env?.entries.get(declared);
-  if (entry === undefined) return { handled: false, opaque: false };
-  if (entry.kind === 'opaque') return { handled: true, opaque: true };
-  const keys = frameBindingOf(name)?.keys ?? [];
-  pushBoundParameterValues(entry, [...keys, ...suffix], context.pending);
-  return { handled: true, opaque: false };
-}
-
-function pushBoundParameterValues(
-  entry: TagParameterValue,
-  fullSuffix: readonly (string | undefined)[],
-  pending: TagPath[],
-): void {
-  if (entry.rest === true) {
-    pushRestParameterValues(entry, fullSuffix, pending);
-    return;
-  }
-  for (const item of entry.values) {
-    pending.push({ env: item.env, node: item.node, suffix: fullSuffix });
-  }
-}
-
-function pushRestParameterValues(
-  entry: TagParameterValue,
-  fullSuffix: readonly (string | undefined)[],
-  pending: TagPath[],
-): void {
-  if (fullSuffix.length === 0) return;
-  const [head, ...tail] = fullSuffix;
-  if (head === undefined) {
-    for (const item of entry.values) {
-      pending.push({ env: item.env, node: item.node, suffix: tail });
-    }
-    return;
-  }
-  const index = canonicalArrayTagIndex(head);
-  const selected = index === undefined ? undefined : entry.values[index];
-  if (selected !== undefined) {
-    pending.push({ env: selected.env, node: selected.node, suffix: tail });
-  }
-}
 
 /** Resolves factory call return paths, returning `true` when any candidate callee remains opaque. */
 export function expandFactoryCallTagPaths(
@@ -118,9 +62,9 @@ export function expandFactoryCallTagPaths(
   outerSuffix: readonly (string | undefined)[],
   env: TagParameterEnv | undefined,
   options: {
-    readonly step: FactoryStepExpander;
-    readonly pending: TagPath[];
     readonly depth: number;
+    readonly pending: TagPath[];
+    readonly step: FactoryStepExpander;
   },
 ): boolean {
   if (options.depth >= FACTORY_SEARCH.depth) return true;
@@ -129,7 +73,6 @@ export function expandFactoryCallTagPaths(
   const callees = [...initial];
   return drainFactoryCallees(callees, {
     call,
-    callSitePos: call.pos,
     callees,
     outerSuffix,
     pending: options.pending,
@@ -140,13 +83,12 @@ export function expandFactoryCallTagPaths(
 /** Resolves a factory expression invoked as a template tag (`makeRaw\`...\`\`${date}\``). */
 export function expandTaggedFactoryPaths(
   calleeTag: Expression,
-  callSitePos: number,
   outerSuffix: readonly (string | undefined)[],
   options: {
-    readonly env: TagParameterEnv | undefined;
-    readonly step: FactoryStepExpander;
-    readonly pending: TagPath[];
     readonly depth: number;
+    readonly env: TagParameterEnv | undefined;
+    readonly pending: TagPath[];
+    readonly step: FactoryStepExpander;
   },
 ): boolean {
   if (options.depth >= FACTORY_SEARCH.depth) return true;
@@ -154,7 +96,6 @@ export function expandTaggedFactoryPaths(
     { env: options.env, given: null, node: calleeTag, suffix: [] },
   ];
   return drainFactoryCallees(callees, {
-    callSitePos,
     callees,
     outerSuffix,
     pending: options.pending,
@@ -172,12 +113,22 @@ function drainFactoryCallees(
     steps += 1;
     if (steps > FACTORY_SEARCH.limit) return true;
     const value = unwrapped(current.node);
-    const key = `${tagPathKey(value, current.suffix, current.env)}:${String(current.given?.length ?? -1)}`;
+    const key = `${tagPathKey(value, current.suffix, current.env)}:(${givenArgsKey(current.given)})`;
     if (seen.has(key)) continue;
     seen.add(key);
     if (stepFactoryCallee(value, current, context) === 'unresolved') return true;
   }
   return false;
+}
+
+function givenArgsKey(given: readonly TagBoundValue[] | null): string {
+  if (given === null) return '?';
+  return given
+    .map((arg) => {
+      const scope = arg.env === undefined ? '' : `@${String(arg.env.id)}`;
+      return `${String(arg.node.pos)}:${String(arg.node.end)}${scope}`;
+    })
+    .join(',');
 }
 
 function seedFactoryCallees(
@@ -188,9 +139,17 @@ function seedFactoryCallees(
   if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
     const [target, , argList] = call.arguments;
     if (target === undefined || isSpreadElement(target)) return undefined;
-    return [{ env, given: extractAppliedList(call, argList), node: target, suffix: [] }];
+    const listArg = argList === undefined ? undefined : { env, node: argList };
+    return [{ env, given: extractAppliedList(call, listArg), node: target, suffix: [] }];
   }
-  return [{ env, given: call.arguments, node: call.expression, suffix: [] }];
+  return [
+    {
+      env,
+      given: call.arguments.map((node) => ({ env, node })),
+      node: call.expression,
+      suffix: [],
+    },
+  ];
 }
 
 function stepFactoryCallee(
@@ -243,18 +202,22 @@ function stepBoundCalleeCall(
   current: FactoryCalleeItem,
   context: FactoryResolveContext,
 ): CalleeStepOutcome {
-  const bound = boundCallTargets(value, (inner, innerSuffix, nextPending) => {
-    return context.step(inner, innerSuffix, {
-      env: current.env,
-      methods: [],
-      pending: nextPending,
-    });
-  });
+  const bound = boundCallTargets(
+    value,
+    (inner, innerSuffix, nextPending, innerEnv) => {
+      return context.step(inner, innerSuffix, {
+        env: innerEnv,
+        methods: [],
+        pending: nextPending,
+      });
+    },
+    current.env,
+  );
   if (bound.exhausted) return 'unresolved';
   if (!bound.handled) return 'expand';
   for (const target of bound.targets) {
     context.callees.push({
-      env: current.env,
+      env: target.env,
       given: mergeCallArguments(target.given, current.given),
       node: target.node,
       suffix: [],
@@ -356,133 +319,43 @@ function pushCallableReturnPaths(
   current: FactoryCalleeItem,
   context: FactoryResolveContext,
 ): void {
-  const calleeEnv = buildFactoryParameterEnv(context.callSitePos, fn, current.given, current.env);
+  const calleeEnv = buildFactoryParameterEnv(fn, current.given, current.env);
   for (const returned of returnedBy(fn)) {
     context.pending.push({ env: calleeEnv, node: returned, suffix: context.outerSuffix });
   }
 }
 
-function buildOpaqueParameterEnv(
-  fn: Answering,
-  callSitePos: number,
-  callerEnv: TagParameterEnv | undefined,
-): TagParameterEnv | undefined {
-  const params = runtimeParameters(fn);
-  if (params.length === 0) return callerEnv;
-  const entries = new Map<ParameterDeclaration, TagParameterEntry>(callerEnv?.entries);
-  for (const param of params) entries.set(param, { kind: 'opaque' });
-  return { entries, id: callSitePos };
-}
-
-function buildFactoryParameterEnv(
-  callSitePos: number,
-  fn: Answering,
-  given: readonly Expression[] | null,
-  callerEnv: TagParameterEnv | undefined,
-): TagParameterEnv | undefined {
-  const params = runtimeParameters(fn);
-  if (params.length === 0) return callerEnv;
-  if (given === null) return buildOpaqueParameterEnv(fn, callSitePos, callerEnv);
-  const entries = new Map<ParameterDeclaration, TagParameterEntry>(callerEnv?.entries);
-  for (const param of params) entries.set(param, { kind: 'opaque' });
-  const firstSpread = given.findIndex((arg) => isSpreadElement(arg));
-  for (const [index, param] of params.entries()) {
-    const defaultEnv: TagParameterEnv = {
-      entries: new Map(entries),
-      id: callSitePos + param.pos + 1,
-    };
-    entries.set(
-      param,
-      bindOneParameter(param, index, { callerEnv, defaultEnv, firstSpread, given }),
-    );
-  }
-  return { entries, id: callSitePos };
-}
-
-function bindOneParameter(
-  param: ParameterDeclaration,
-  index: number,
-  callArgs: {
-    readonly given: readonly Expression[];
-    readonly firstSpread: number;
-    readonly callerEnv: TagParameterEnv | undefined;
-    readonly defaultEnv: TagParameterEnv;
-  },
-): TagParameterEntry {
-  const { callerEnv, defaultEnv, firstSpread, given } = callArgs;
-  if (firstSpread !== -1 && index >= firstSpread) return { kind: 'opaque' };
-  if (param.dotDotDotToken !== undefined) {
-    return firstSpread === -1
-      ? {
-          kind: 'values',
-          rest: true,
-          values: given.slice(index).map((node) => ({ env: callerEnv, node })),
-        }
-      : { kind: 'opaque' };
-  }
-  const arg = given[index];
-  const values: TagBoundValue[] = [];
-  if (arg !== undefined && !isDefinitelyUndefined(arg)) {
-    values.push({ env: callerEnv, node: arg });
-  }
-  if (param.initializer !== undefined && (arg === undefined || !isDefinitelyPresent(arg))) {
-    values.push({ env: defaultEnv, node: param.initializer });
-  }
-  return { kind: 'values', values };
-}
-
-function runtimeParameters(fn: Answering): readonly ParameterDeclaration[] {
-  return fn.parameters.filter((each) => !isIdentifier(each.name) || each.name.text !== 'this');
-}
-
-function isDefinitelyUndefined(value: Expression): boolean {
-  const actual = unwrapped(value);
-  return isVoidExpression(actual) || globalPathOf(actual)?.join('.') === 'undefined';
-}
-
-function isDefinitelyPresent(value: Expression): boolean {
-  const actual = unwrapped(value);
-  return (
-    isObjectLiteralExpression(actual) ||
-    isArrayLiteralExpression(actual) ||
-    isNewExpression(actual) ||
-    isArrowFunction(actual) ||
-    isFunctionExpression(actual) ||
-    actual.kind === SyntaxKind.NullKeyword ||
-    actual.kind === SyntaxKind.TrueKeyword ||
-    actual.kind === SyntaxKind.FalseKeyword ||
-    constantValue(actual) !== undefined
-  );
-}
-
 function mergeCallArguments(
-  prefix: readonly Expression[] | null,
-  rest: readonly Expression[] | null,
-): readonly Expression[] | null {
+  prefix: readonly TagBoundValue[] | null,
+  rest: readonly TagBoundValue[] | null,
+): readonly TagBoundValue[] | null {
   return prefix === null || rest === null ? null : [...prefix, ...rest];
 }
 
-function sliceCallReceiverArg(given: readonly Expression[] | null): readonly Expression[] | null {
+function sliceCallReceiverArg(
+  given: readonly TagBoundValue[] | null,
+): readonly TagBoundValue[] | null {
   if (given === null) return null;
   const [first, ...rest] = given;
-  return first !== undefined && isSpreadElement(first) ? null : rest;
+  return first !== undefined && isSpreadElement(first.node) ? null : rest;
 }
 
 function extractMethodApplyArgs(
   call: CallExpression | undefined,
-  given: readonly Expression[] | null,
-): readonly Expression[] | null {
+  given: readonly TagBoundValue[] | null,
+): readonly TagBoundValue[] | null {
   if (call === undefined || given === null) return null;
   const [first, list] = given;
-  if (first !== undefined && isSpreadElement(first)) return null;
+  if (first !== undefined && isSpreadElement(first.node)) return null;
   return extractAppliedList(call, list);
 }
 
 function extractAppliedList(
   call: CallExpression,
-  list: Expression | undefined,
-): readonly Expression[] | null {
+  list: TagBoundValue | undefined,
+): readonly TagBoundValue[] | null {
   if (list === undefined) return [];
-  if (isSpreadElement(list)) return null;
-  return framedAppliedArguments(call, list) ?? null;
+  if (isSpreadElement(list.node)) return null;
+  const listed = framedAppliedArguments(call, list.node);
+  return listed === undefined ? null : listed.map((node) => ({ env: list.env, node }));
 }

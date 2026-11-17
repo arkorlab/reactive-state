@@ -93,8 +93,9 @@ function wrapperVisitKey(fn: WrapperFunction, query: RawWrapperSearch): string {
   const offset = query.paramOffset ?? 1;
   const bound = query.boundArgs ?? 0;
   const maxSubs = query.maxTemplateSubs ?? 'inf';
+  const scope = query.env === undefined ? '' : `@${String(query.env.id)}`;
   const indices = [...query.datedIndices].toSorted((a, b) => a - b).join(',');
-  return `${String(fn.pos)}:${String(offset)}:${String(bound)}:${String(maxSubs)}:${indices}`;
+  return `${String(fn.pos)}:${String(offset)}:${String(bound)}:${String(maxSubs)}:${indices}${scope}`;
 }
 
 function walkWrapperBody(

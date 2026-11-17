@@ -55,11 +55,8 @@ import {
   type TagParameterEnv,
   type TagPath,
 } from './render-raw-tag-calls.ts';
-import {
-  expandFactoryCallTagPaths,
-  expandTaggedFactoryPaths,
-  pushFactoryParameterTagPaths,
-} from './render-raw-tag-factories.ts';
+import { pushFactoryParameterTagPaths } from './render-raw-tag-envs.ts';
+import { expandFactoryCallTagPaths, expandTaggedFactoryPaths } from './render-raw-tag-factories.ts';
 import {
   type ObjectTagSink,
   pushArrayCallTagPaths,
@@ -211,8 +208,13 @@ function expandTagPath(
   if (isCallExpression(value) && suffix.length === 0) {
     const bound = pushBoundTagPaths(
       value,
-      (inner, innerSuffix, nextPending) =>
-        expandNonBoundTagPath(inner, innerSuffix, { ...sink, pending: nextPending }),
+      (inner, innerSuffix, nextPending, innerEnv) => {
+        return expandNonBoundTagPath(inner, innerSuffix, {
+          ...sink,
+          env: innerEnv,
+          pending: nextPending,
+        });
+      },
       sink.pending,
       { boundArgs: sink.boundArgs, env: sink.env },
     );
@@ -237,8 +239,7 @@ function expandNonBoundTagPath(
     return false;
   }
   if (isCallExpression(value)) return expandCallTagPath(value, suffix, sink);
-  if (isTaggedTemplateExpression(value))
-    return expandTaggedCallTagPath(value.tag, value.pos, suffix, sink);
+  if (isTaggedTemplateExpression(value)) return expandTaggedCallTagPath(value.tag, suffix, sink);
   if (isAwaitExpression(value)) {
     sink.pending.push({ env: sink.env, node: value.expression, suffix });
     return false;
@@ -265,11 +266,10 @@ function expandCallTagPath(
 
 function expandTaggedCallTagPath(
   calleeTag: Expression,
-  callSitePos: number,
   suffix: readonly (string | undefined)[],
   sink: TagExpandSink,
 ): boolean {
-  return expandTaggedFactoryPaths(calleeTag, callSitePos, suffix, {
+  return expandTaggedFactoryPaths(calleeTag, suffix, {
     depth: sink.depth,
     env: sink.env,
     pending: sink.pending,

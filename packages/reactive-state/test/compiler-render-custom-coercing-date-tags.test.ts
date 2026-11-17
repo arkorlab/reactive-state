@@ -223,6 +223,27 @@ const CASES = [
     dateText: undefined,
     local: undefined,
   },
+  {
+    id: 'self-reassigned-array-slice-copy-joining-date',
+    source: `export function Widget(){const fmt=(_s:TemplateStringsArray,d:Date)=>{let values=[d];values=values.slice();return values.join("");};const date=new Date(0);return <p>{fmt\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'self-reassigned-borrowed-Array-prototype-slice-call-joining-date',
+    source: `export function Widget(){const fmt=(_s:TemplateStringsArray,d:Date)=>{let values=[d];values=Array.prototype.slice.call(values);return values.join("");};const date=new Date(0);return <p>{fmt\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'self-reassigned-array-slice-on-plain-span-while-date-uses-ISO-pin',
+    source: `export function Widget(){const fmt=(_s:TemplateStringsArray,label:string,d:Date)=>{let values=[label];values=values.slice();return \`\${values.join("")}:\${d.toISOString()}\`;};const date=new Date(0);return <p>{fmt\`\${"at"}\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
 ] as const;
 
 describe('custom text-coercing template tags and outer-owned raw containers', () => {

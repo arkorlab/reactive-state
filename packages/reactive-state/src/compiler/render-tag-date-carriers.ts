@@ -63,7 +63,9 @@ const PASSTHROUGH_ARRAY_METHODS: ReadonlySet<string> = new Set([
   'filter',
   'flat',
   'reverse',
+  'sort',
   'toReversed',
+  'toSorted',
   'values',
 ]);
 
@@ -226,7 +228,7 @@ function variableCarriesDated(
   seen: Set<Node>,
 ): boolean {
   if (isVariableDeclarationList(declared.parent) && isForOfStatement(declared.parent.parent)) {
-    return forOfVariableCarriesDated(name, declared, declared.parent.parent.expression, {
+    return forOfVariableCarriesDated(name, declared.parent.parent.expression, {
       ctx,
       seen,
     });
@@ -244,7 +246,6 @@ function variableCarriesDated(
 
 function forOfVariableCarriesDated(
   name: Identifier,
-  declared: VariableDeclaration,
   iterable: Expression,
   walk: { readonly ctx: DatedCarrierContext; readonly seen: Set<Node> },
 ): boolean {
@@ -262,9 +263,6 @@ function forOfVariableCarriesDated(
       walk.ctx.datedIndices,
       walk.seen,
     );
-  }
-  if (isIdentifier(declared.name) || frameBindingOf(name)?.keys.length === 0) {
-    return carriesDatedSubstitution(iter, walk.ctx.bindings, walk.ctx.datedIndices, walk.seen);
   }
   return carriesDatedSubstitution(iter, walk.ctx.bindings, walk.ctx.datedIndices, walk.seen);
 }
@@ -409,7 +407,9 @@ function callResultCarriesDated(
   ) {
     const [target, start, end] = call.arguments;
     return (
-      target !== undefined && !isSpreadElement(target) && sliceCarriesDated(target, start, end, ctx)
+      target !== undefined &&
+      !isSpreadElement(target) &&
+      sliceCarriesDated(target, start, end, { ctx, seen })
     );
   }
   return arrayMethodResultCarriesDated(call, callee.expression, method, { ctx, seen });
@@ -440,7 +440,7 @@ function arrayMethodResultCarriesDated(
 ): boolean {
   const { ctx, seen } = walk;
   if (method === 'slice')
-    return sliceCarriesDated(receiver, call.arguments[0], call.arguments[1], ctx);
+    return sliceCarriesDated(receiver, call.arguments[0], call.arguments[1], { ctx, seen });
   if (method === 'at') {
     const key = call.arguments[0] === undefined ? undefined : constantValue(call.arguments[0]);
     const rawKey = typeof key === 'number' && key >= 0 ? String(key) : undefined;
@@ -487,8 +487,9 @@ function sliceCarriesDated(
   target: Expression,
   startArg: Expression | undefined,
   endArg: Expression | undefined,
-  ctx: DatedCarrierContext,
+  walk: { readonly ctx: DatedCarrierContext; readonly seen: Set<Node> },
 ): boolean {
+  const { ctx, seen } = walk;
   const recv = unwrapped(target);
   const start = nonNegativeIntConstant(startArg) ?? 0;
   const end = nonNegativeIntConstant(endArg);
@@ -510,7 +511,7 @@ function sliceCarriesDated(
       end === undefined ? undefined : base + end,
     );
   }
-  return carriesDatedSubstitution(recv, ctx.bindings, ctx.datedIndices, new Set());
+  return carriesDatedSubstitution(recv, ctx.bindings, ctx.datedIndices, seen);
 }
 
 function nonNegativeIntConstant(arg: Expression | undefined): number | undefined {
