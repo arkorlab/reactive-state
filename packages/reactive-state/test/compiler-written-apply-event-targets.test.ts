@@ -148,6 +148,66 @@ const KEPT_APPLY_CASES: readonly KeptApplyCase[] = [
     id: 'const-undefined-apply-list-dispatch-event-pin',
     keptRoot: undefined,
   },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; Array.prototype.push.call(args, sharedEvent); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'borrowed-array-push-call-local-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; Reflect.apply(Array.prototype.push, args, [sharedEvent]); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'reflect-apply-array-push-local-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const append = args.push.bind(args); append(sharedEvent); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'bound-array-push-local-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); { var args = [sharedEvent]; } emitter.dispatchEvent.apply(emitter, args);',
+    id: 'hoisted-var-array-in-nested-block-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); { var { list: args } = { list: [sharedEvent] }; } emitter.dispatchEvent.apply(emitter, args);',
+    id: 'hoisted-destructured-var-array-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['branchedSharedEvent'],
+    body: 'const emitter = new EventTarget(); emitter.dispatchEvent(branchedSharedEvent);',
+    id: 'module-conditional-const-event-retained-identity',
+    keptRoot: 'branchedSharedEvent',
+  },
+  {
+    argumentRoots: ['branchedSharedTarget'],
+    body: "Reflect.set({}, 'next', 1, branchedSharedTarget);",
+    id: 'module-conditional-const-reflect-set-fourth-receiver-identity',
+    keptRoot: 'branchedSharedTarget',
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; args.push(new Event('local'), sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'pushed-second-slot-shared-event-not-kept-pin',
+    keptRoot: undefined,
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; args.push(new Event('local')); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'sequential-second-push-shared-event-not-kept-pin',
+    keptRoot: undefined,
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; if (flag) { args.push(new Event('local')); } args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'conditional-first-push-then-shared-event-still-reaches-first-slot',
+    keptRoot: 'sharedEvent',
+  },
 ];
 
 const ARGUMENT_EFFECT_CASES = [
@@ -181,8 +241,11 @@ describe('retained event and Reflect.set receiver targets behind local apply and
 
   it.each(KEPT_APPLY_CASES)('$id', ({ argumentRoots, body, keptRoot }) => {
     const source = [
+      'declare const enabled: boolean;',
       "const sharedEvent = new Event('ping');",
+      "const branchedSharedEvent = enabled ? new Event('a') : new Event('b');",
       'const sharedTarget: Record<string, unknown> = {};',
+      'const branchedSharedTarget = enabled ? { a: 1 } : { b: 2 };',
       'declare const sharedArgs: Event[];',
       `export function run(flag: boolean): void { void flag; ${body} }`,
     ].join('\n');

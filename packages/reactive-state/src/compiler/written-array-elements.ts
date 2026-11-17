@@ -1,12 +1,13 @@
 import {
+  type ArrayLiteralExpression,
   type BinaryExpression,
   type CallExpression,
   type Expression,
   type Identifier,
-  isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
   isCallExpression,
+  isConditionalExpression,
   isDeleteExpression,
   isElementAccessExpression,
   isIdentifier,
@@ -15,7 +16,6 @@ import {
   isParenthesizedExpression,
   isPropertyAccessExpression,
   isSatisfiesExpression,
-  isSpreadElement,
   isStringLiteral,
   isVariableDeclaration,
   type Node,
@@ -27,10 +27,12 @@ import { unwrapped } from './bounded.ts';
 import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 import { readsBinding } from './scope.ts';
-import { constInitializerOf } from './tuple-spreads.ts';
+import { constInitializerOf, unmutatedTuple } from './tuple-spreads.ts';
 import {
+  asCallArguments,
   type CallArgument,
   globalCallOf,
+  lentMethodOf,
   memberNameOf,
   slotArguments,
 } from './written-arguments.ts';
@@ -46,15 +48,26 @@ export interface IndexedElementWrite {
   readonly value: Expression;
 }
 
+export interface HolderPushCall {
+  readonly args: readonly CallArgument[];
+  readonly call: CallExpression;
+  readonly receiver: Expression;
+}
+
 export interface HolderArrayWrites {
   readonly indexedWrites: IndexedElementWrite[];
-  readonly pushedWrites: IndexedElementWrite[];
+  readonly pushCalls: HolderPushCall[];
   reassigned: boolean;
   reordered: boolean;
   shortened: boolean;
 }
 
 export type ModuleArrayWrites = ReadonlyMap<FrameDeclaration, HolderArrayWrites>;
+
+interface MutatorSite {
+  readonly call: CallExpression;
+  readonly receiver: Expression;
+}
 
 const ARRAY_WRITES = new WeakMap<SourceFile, ModuleArrayWrites>();
 const REORDERING_METHODS: ReadonlySet<string> = new Set([
@@ -82,36 +95,17 @@ export function moduleArrayWrites(file: SourceFile): ModuleArrayWrites {
       pending.push(child);
     });
   }
+  for (const entry of byHolder.values()) {
+    entry.pushCalls.sort((left, right) => left.call.pos - right.call.pos);
+  }
   ARRAY_WRITES.set(file, byHolder);
   return byHolder;
 }
 
-/** Minimum length before any `push` when `holder` starts from a fixed array literal and never shrinks. */
-export function floorInitialLength(
-  holder: FrameDeclaration | undefined,
-  writes: HolderArrayWrites,
-): number {
-  if (
-    holder === undefined ||
-    writes.reassigned ||
-    writes.reordered ||
-    writes.shortened ||
-    !isVariableDeclaration(holder) ||
-    holder.initializer === undefined
-  ) {
-    return 0;
-  }
-  const initial = unwrapped(holder.initializer);
-  if (!isArrayLiteralExpression(initial)) {
-    return 0;
-  }
-  let count = 0;
-  for (const element of initial.elements) {
-    if (!isSpreadElement(element)) {
-      count += 1;
-    }
-  }
-  return count;
+/** Direct binding identifier after peeling type casts, parentheses and non-null wrappers. */
+export function directArrayIdentifier(node: Node): Identifier | undefined {
+  const plain = plainTarget(node);
+  return isIdentifier(plain) && readsBinding(plain) ? plain : undefined;
 }
 
 type AliasLinks = ReadonlyMap<FrameDeclaration, ReadonlySet<FrameDeclaration>>;
@@ -136,7 +130,7 @@ function recordAliasNode(node: Node, aliases: Map<FrameDeclaration, Set<FrameDec
     return;
   }
   if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
-    const left = directIdentifier(node.left);
+    const left = directArrayIdentifier(node.left);
     const holder = left === undefined ? undefined : frameDeclarationOf(left);
     if (holder !== undefined) {
       linkAliasSource(holder, node.right, aliases);
@@ -144,13 +138,19 @@ function recordAliasNode(node: Node, aliases: Map<FrameDeclaration, Set<FrameDec
   }
 }
 
-/** Adds `rhs`'s declaration to `holder`'s alias set when `rhs` is a distinct binding read. */
+/** Adds `rhs` declaration targets (including conditional branches) to `holder`'s alias set. */
 function linkAliasSource(
   holder: FrameDeclaration,
   rhs: Expression,
   aliases: Map<FrameDeclaration, Set<FrameDeclaration>>,
 ): void {
-  const sourceIdent = directIdentifier(rhs);
+  const plain = unwrapped(rhs);
+  if (isConditionalExpression(plain)) {
+    linkAliasSource(holder, plain.whenTrue, aliases);
+    linkAliasSource(holder, plain.whenFalse, aliases);
+    return;
+  }
+  const sourceIdent = directArrayIdentifier(plain);
   const target = sourceIdent === undefined ? undefined : frameDeclarationOf(sourceIdent);
   if (target === undefined || target === holder) {
     return;
@@ -194,7 +194,7 @@ function indexAssignmentWrite(
   byHolder: Map<FrameDeclaration, HolderArrayWrites>,
 ): void {
   const left = plainTarget(node.left);
-  const direct = directIdentifier(left);
+  const direct = directArrayIdentifier(left);
   if (direct !== undefined) {
     const selfOwner = frameDeclarationOf(direct);
     if (selfOwner !== undefined) {
@@ -220,7 +220,7 @@ function indexAssignmentWrite(
   }
 }
 
-/** Records `Reflect.set(holder, index, value)` and mutating array method calls on `holder`. */
+/** Records `Reflect.set`, borrowed/bound mutators and direct mutating array calls on `holder`. */
 function indexCallWrite(
   call: CallExpression,
   aliases: AliasLinks,
@@ -229,6 +229,16 @@ function indexCallWrite(
   const globalCall = globalCallOf(call);
   if (globalCall?.path === 'Reflect.set') {
     indexReflectSetWrite(globalCall.given, aliases, byHolder);
+    return;
+  }
+  const lent = lentMethodOf(call);
+  if (lent !== undefined) {
+    for (const owner of canonicalHoldersOf(lent.receiver, aliases)) {
+      indexMethodMutator(lent.method, lent.given, ensureHolderWrites(byHolder, owner), {
+        call,
+        receiver: lent.receiver,
+      });
+    }
     return;
   }
   const callee = unwrapped(call.expression);
@@ -240,7 +250,12 @@ function indexCallWrite(
     return;
   }
   for (const owner of canonicalHoldersOf(callee.expression, aliases)) {
-    indexMethodMutator(method, call.arguments, ensureHolderWrites(byHolder, owner));
+    indexMethodMutator(
+      method,
+      asCallArguments(call.arguments),
+      ensureHolderWrites(byHolder, owner),
+      { call, receiver: callee.expression },
+    );
   }
 }
 
@@ -261,7 +276,8 @@ function indexReflectSetWrite(
   const keySlot = slotArguments(given, 1)[0];
   const index =
     keySlot === undefined || keySlot.spread ? undefined : literalSlotIndex(keySlot.expression);
-  for (const valueSlot of slotArguments(given, 2)) {
+  const valueSlots = slotArguments(given, 2);
+  for (const valueSlot of valueSlots) {
     if (!valueSlot.spread) {
       for (const owner of owners) {
         ensureHolderWrites(byHolder, owner).indexedWrites.push({
@@ -277,8 +293,9 @@ function indexReflectSetWrite(
 /** Records `push`, `unshift`, `splice`, `fill` and reordering/shortening method effects on `entry`. */
 function indexMethodMutator(
   method: string,
-  args: readonly Expression[],
+  given: readonly CallArgument[],
   entry: HolderArrayWrites,
+  site: MutatorSite,
 ): void {
   if (REORDERING_METHODS.has(method)) {
     entry.reordered = true;
@@ -287,38 +304,55 @@ function indexMethodMutator(
     entry.shortened = true;
   }
   if (method === 'push') {
-    for (const arg of args) {
-      entry.pushedWrites.push(asIndexedWrite(arg));
-    }
+    entry.pushCalls.push({ args: given, call: site.call, receiver: site.receiver });
     return;
   }
   if (method === 'unshift') {
-    for (const arg of args) {
-      entry.indexedWrites.push(asIndexedWrite(arg));
+    for (const arg of given) {
+      entry.indexedWrites.push({ index: undefined, spread: arg.spread, value: arg.expression });
     }
     return;
   }
   if (method === 'splice') {
-    for (const arg of args.slice(2)) {
-      entry.indexedWrites.push(asIndexedWrite(arg));
-    }
+    recordSpliceInsertions(given, entry);
     return;
   }
-  if (method === 'fill' && args[0] !== undefined) {
-    entry.indexedWrites.push(asIndexedWrite(args[0]));
+  if (method === 'fill') {
+    const fillSlots = slotArguments(given, 0);
+    for (const slot of fillSlots) {
+      entry.indexedWrites.push({ index: undefined, spread: slot.spread, value: slot.expression });
+    }
   }
 }
 
-/** Converts a mutator call argument into an `IndexedElementWrite` descriptor. */
-function asIndexedWrite(arg: Expression): IndexedElementWrite {
-  return isSpreadElement(arg)
-    ? { index: undefined, spread: true, value: arg.expression }
-    : { index: undefined, spread: false, value: arg };
+/** Records `splice` inserted items from argument index 2 onward, preserving covering spreads. */
+function recordSpliceInsertions(given: readonly CallArgument[], entry: HolderArrayWrites): void {
+  const stack = given.toReversed();
+  const seen = new Set<ArrayLiteralExpression>();
+  let index = 0;
+  let shifted = false;
+  for (let current = stack.pop(); current !== undefined; current = stack.pop()) {
+    if (current.spread) {
+      const tuple = unmutatedTuple(current.expression);
+      if (tuple !== undefined && !seen.has(tuple)) {
+        seen.add(tuple);
+        stack.push(...asCallArguments(tuple.elements).toReversed());
+        continue;
+      }
+      entry.indexedWrites.push({ index: undefined, spread: true, value: current.expression });
+      shifted = true;
+      continue;
+    }
+    if ((shifted || index >= 2) && current.expression.kind !== SyntaxKind.OmittedExpression) {
+      entry.indexedWrites.push({ index: undefined, spread: false, value: current.expression });
+    }
+    index += 1;
+  }
 }
 
 /** Resolves `node` to its own `FrameDeclaration` plus any transitive alias targets. */
 function canonicalHoldersOf(node: Node, aliases: AliasLinks): readonly FrameDeclaration[] {
-  const ident = directIdentifier(node);
+  const ident = directArrayIdentifier(node);
   const root = ident === undefined ? undefined : frameDeclarationOf(ident);
   if (root === undefined) {
     return [];
@@ -349,7 +383,7 @@ function ensureHolderWrites(
   if (entry === undefined) {
     entry = {
       indexedWrites: [],
-      pushedWrites: [],
+      pushCalls: [],
       reassigned: false,
       reordered: false,
       shortened: false,
@@ -372,12 +406,6 @@ function literalSlotIndex(node: Expression): number | undefined {
   return typeof evaluated === 'number' && Number.isSafeInteger(evaluated) && evaluated >= 0
     ? evaluated
     : undefined;
-}
-
-/** Direct binding identifier after peeling type casts, parentheses and non-null wrappers. */
-function directIdentifier(node: Node): Identifier | undefined {
-  const plain = plainTarget(node);
-  return isIdentifier(plain) && readsBinding(plain) ? plain : undefined;
 }
 
 /** Peels parentheses, `as`, `satisfies` and `!` wrappers off `node`. */

@@ -22,14 +22,11 @@ import { globalPathOf } from './code-globals.ts';
 import { initializerOf, takenApartOf } from './framed.ts';
 import { isStickyPattern, keepsPatternIndex, symbolPatternChanges } from './pattern-writes.ts';
 import {
-  appliedArguments,
   argumentAt,
   asCallArguments,
-  type CallArgument,
-  followedValue,
   globalCallOf,
+  lentMethodOf,
   memberNameOf,
-  unwrapBoundTarget,
 } from './written-arguments.ts';
 import { dispatchEventTargets, reflectSetReceivers } from './written-slot-targets.ts';
 import { transferredBy } from './written-transfers.ts';
@@ -246,7 +243,7 @@ export function writtenCallValues(call: CallExpression): readonly Expression[] {
   if (globalCall !== undefined) {
     return globalCall.given.map((each) => each.expression);
   }
-  const lent = borrowedOf(call) ?? boundOf(call);
+  const lent = lentMethodOf(call);
   if (lent !== undefined) {
     return lent.given.map((each) => each.expression);
   }
@@ -264,7 +261,7 @@ export function writtenArgumentBy(node: Node): readonly Node[] {
   if (globalCall?.path === 'Reflect.set') {
     return reflectSetReceivers(globalCall.given);
   }
-  const invoked = borrowedOf(node) ?? boundOf(node);
+  const invoked = lentMethodOf(node);
   if ((invoked?.method ?? methodOf(node)) !== 'dispatchEvent') {
     return [];
   }
@@ -283,7 +280,7 @@ function calledWrite(call: CallExpression): Node | undefined {
   if (globalCall !== undefined && CHANGING_FUNCTIONS.has(globalCall.path)) {
     return argumentAt(globalCall.given, 0);
   }
-  const borrowed = borrowedOf(call) ?? boundOf(call);
+  const borrowed = lentMethodOf(call);
   if (borrowed !== undefined) {
     return changes(borrowed.method, borrowed.receiver) ? borrowed.receiver : undefined;
   }
@@ -359,73 +356,4 @@ function isStream(receiver: Expression, seen: Set<Expression>): boolean {
     );
   }
   return false;
-}
-
-/**
- * The method `call` borrows of another value, and what it calls it on — of `call` and `apply`,
- * `RegExp.prototype.test.call(word, text)`, `Array.prototype.push.apply(list, items)`, and of
- * `Reflect.apply(Map.prototype.set, table, [key, value])` — none of another call.
- */
-function borrowedOf(call: CallExpression): LentMethod | undefined {
-  const callee = followedValue(call.expression);
-  const [first, second] = call.arguments;
-  if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
-    return first === undefined
-      ? undefined
-      : lentTargetOf(first, second, appliedArguments(call.arguments[2]));
-  }
-  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) {
-    return undefined;
-  }
-  const member = memberNameOf(callee);
-  if (member !== 'call' && member !== 'apply') {
-    return undefined;
-  }
-  const given =
-    member === 'apply' ? appliedArguments(second) : asCallArguments(call.arguments.slice(1));
-  return lentTargetOf(callee.expression, first, given);
-}
-
-/**
- * The method `call` holds bound through `.bind(...)`, and what its first bind bound `this` to —
- * `push` of `const push = items.push.bind(items)` or `Array.prototype.push.bind(items)`.
- */
-function boundOf(call: CallExpression): LentMethod | undefined {
-  const bound = unwrapBoundTarget(call.expression);
-  return bound.hasBind
-    ? lentOf(bound.target, bound.boundThis, [
-        ...bound.boundArgs,
-        ...asCallArguments(call.arguments),
-      ])
-    : undefined;
-}
-
-/** Resolves `fn` (possibly `.bind`-wrapped) to a lent method on its effective receiver. */
-function lentTargetOf(
-  fn: Expression,
-  receiver: Expression | undefined,
-  trailing: readonly CallArgument[],
-): LentMethod | undefined {
-  const bound = unwrapBoundTarget(fn);
-  const effectiveReceiver = bound.hasBind ? bound.boundThis : receiver;
-  return lentOf(bound.target, effectiveReceiver, [...bound.boundArgs, ...trailing]);
-}
-
-/** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
-interface LentMethod {
-  readonly given: readonly CallArgument[];
-  readonly method: string;
-  readonly receiver: Expression;
-}
-
-/** The name of the method `method` reads, lent to `receiver`; none of a method the compile cannot name. */
-function lentOf(
-  method: Expression | undefined,
-  receiver: Expression | undefined,
-  given: readonly CallArgument[],
-): LentMethod | undefined {
-  const name = memberNameOf(method);
-  return name === undefined || receiver === undefined
-    ? undefined
-    : { given, method: name, receiver };
 }

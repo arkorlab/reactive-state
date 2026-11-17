@@ -3,8 +3,6 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isBinaryExpression,
-  isConditionalExpression,
   isIdentifier,
   isSpreadElement,
   type Node,
@@ -13,9 +11,8 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
-import { framedAssignedValues } from './framed-writes.ts';
-import { initializerOf } from './framed.ts';
+import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { framedAssignedSources } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
 import {
   constFollowedValue,
@@ -24,12 +21,14 @@ import {
   unmutatedTuple,
 } from './tuple-spreads.ts';
 import { asCallArguments, type CallArgument, slotArguments } from './written-arguments.ts';
+import { moduleArrayWrites } from './written-array-elements.ts';
 import {
-  floorInitialLength,
-  type HolderArrayWrites,
-  type IndexedElementWrite,
-  moduleArrayWrites,
-} from './written-array-elements.ts';
+  applyHolderWrites,
+  branchOperands,
+  projectMemberKeys,
+  selectedInitialExpressions,
+  type SpreadWork,
+} from './written-slot-pushes.ts';
 
 /**
  * Slot-specific write targets (`dispatchEvent`'s 1st argument and `Reflect.set`'s 4th-argument
@@ -38,14 +37,6 @@ import {
 
 export interface SlotTargetOptions {
   readonly skipPrimitiveGlobals?: boolean;
-}
-
-interface SpreadWork {
-  readonly expression: Expression;
-  readonly held: boolean;
-  readonly maxOffset: number;
-  readonly minOffset: number;
-  readonly reordered: boolean;
 }
 
 interface SlotTargetState {
@@ -57,14 +48,6 @@ interface SlotTargetState {
 
 const SLOTS = { dispatchEvent: 0, reflectSetReceiver: 3 } as const;
 const PRIMITIVE_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN', 'undefined']);
-const EITHER_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.AmpersandAmpersandToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.BarBarToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-  SyntaxKind.QuestionQuestionToken,
-]);
 
 /** Explicit 4th-argument receivers of `Reflect.set`, through spreads, `apply` lists or branches. */
 export function reflectSetReceivers(given: readonly CallArgument[]): readonly Node[] {
@@ -88,8 +71,9 @@ export function slotTargets(
     targets: [],
     visited: new Map(),
   };
+  const candidates = slotArguments(given, slot);
   let shiftedSpread = false;
-  for (const candidate of slotArguments(given, slot)) {
+  for (const candidate of candidates) {
     if (candidate.spread) {
       const maxOffset = slot - candidate.index;
       const minOffset = shiftedSpread ? 0 : maxOffset;
@@ -192,7 +176,7 @@ function stepHeldSpread(work: SpreadWork, pending: SpreadWork[], state: SlotTarg
   }
 }
 
-/** Follows a held array identifier's initializer, reassignments and indexed element writes. */
+/** Follows a held array identifier's initializer, reassignments and indexed/pushed writes. */
 function stepHeldIdentifier(
   ident: Identifier,
   work: SpreadWork,
@@ -200,42 +184,33 @@ function stepHeldIdentifier(
   state: SlotTargetState,
 ): void {
   const owner = frameDeclarationOf(ident);
+  const selected = frameBindingOf(ident);
   const writes =
     owner === undefined ? undefined : moduleArrayWrites(ident.getSourceFile()).get(owner);
   const reordered = work.reordered || (writes?.reordered ?? false);
+  const initialValues = selected === undefined ? [] : selectedInitialExpressions(ident, selected);
   if (writes !== undefined) {
-    const pushReady = reordered || work.maxOffset >= floorInitialLength(owner, writes);
-    applyHolderWrites(writes, { ...work, reordered }, pushReady, { pending, state });
+    applyHolderWrites(
+      writes,
+      { ident, initialValues, owner, selected },
+      { ...work, reordered },
+      {
+        onPositional: (expr) => {
+          collectPositionalTarget(expr, state, new Set());
+        },
+        pending,
+      },
+    );
   }
-  for (const assigned of framedAssignedValues(ident).toReversed()) {
-    pending.push({ ...work, expression: assigned, held: true, reordered });
+  const assignedSources = framedAssignedSources(ident).toReversed();
+  for (const source of assignedSources) {
+    const projected = projectMemberKeys(source.value, source.keys);
+    for (const value of projected.toReversed()) {
+      pending.push({ ...work, expression: value, held: true, reordered });
+    }
   }
-  const initial = initializerOf(ident);
-  if (initial !== undefined) {
+  for (const initial of initialValues.toReversed()) {
     pending.push({ ...work, expression: initial, held: true, reordered });
-  }
-}
-
-/** Collects in-place slot assignments and appended elements recorded against a holder. */
-function applyHolderWrites(
-  writes: HolderArrayWrites,
-  work: SpreadWork,
-  pushReady: boolean,
-  queue: { readonly pending: SpreadWork[]; readonly state: SlotTargetState },
-): void {
-  for (const entry of writes.indexedWrites) {
-    const matches =
-      work.reordered ||
-      entry.index === undefined ||
-      (entry.index >= work.minOffset && entry.index <= work.maxOffset);
-    if (matches) {
-      collectElementOrSpread(entry, queue.pending, queue.state);
-    }
-  }
-  if (pushReady) {
-    for (const pushed of writes.pushedWrites) {
-      collectElementOrSpread(pushed, queue.pending, queue.state);
-    }
   }
 }
 
@@ -322,25 +297,6 @@ function stepNestedArraySpread(
   return cursor.shifted;
 }
 
-/** Collects a written element expression or queues a spread argument from `push`/`unshift`/`splice`. */
-function collectElementOrSpread(
-  entry: IndexedElementWrite,
-  pending: SpreadWork[],
-  state: SlotTargetState,
-): void {
-  if (entry.spread) {
-    pending.push({
-      expression: entry.value,
-      held: true,
-      maxOffset: Number.MAX_SAFE_INTEGER,
-      minOffset: 0,
-      reordered: true,
-    });
-  } else {
-    collectPositionalTarget(entry.value, state, new Set());
-  }
-}
-
 /** Collects positional targets across conditional, logical, comma and constant branch aliases. */
 function collectPositionalTarget(
   expression: Expression,
@@ -366,7 +322,6 @@ function collectPositionalTarget(
       for (const branch of aliasBranches) {
         collectPositionalTarget(branch, state, seen);
       }
-      return;
     }
   }
   recordTarget(plain, state);
@@ -385,19 +340,4 @@ function recordTarget(expression: Expression, state: SlotTargetState): void {
   }
   state.recorded.add(expression);
   state.targets.push(expression);
-}
-
-/** Conditional, logical, comma or assignment operand expressions that can supply a value. */
-function branchOperands(node: Expression): readonly Expression[] | undefined {
-  if (isConditionalExpression(node)) {
-    return [node.whenTrue, node.whenFalse];
-  }
-  if (!isBinaryExpression(node)) {
-    return undefined;
-  }
-  const operator = node.operatorToken.kind;
-  if (operator === SyntaxKind.CommaToken || operator === SyntaxKind.EqualsToken) {
-    return [node.right];
-  }
-  return EITHER_OPERATORS.has(operator) ? [node.left, node.right] : undefined;
 }

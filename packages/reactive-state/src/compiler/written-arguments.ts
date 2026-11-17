@@ -7,18 +7,20 @@ import {
   isIdentifier,
   isPropertyAccessExpression,
   isSpreadElement,
+  isVariableDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { initializerOf } from './framed.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { patternSymbolName } from './pattern-writes.ts';
+import { readsBinding } from './scope.ts';
 import { constFollowedValue, unmutatedTuple } from './tuple-spreads.ts';
 
 /**
  * Call arguments mutated beside a method's receiver: slot-aligned spread expansion, `.bind`
- * chain unwrapping, and direct, borrowed or bound global invocations.
+ * chain unwrapping, and direct, borrowed or bound global and method invocations.
  */
 
 export interface CallArgument {
@@ -37,6 +39,13 @@ export interface UnwrappedBind {
   readonly boundThis: Expression | undefined;
   readonly hasBind: boolean;
   readonly target: Expression;
+}
+
+/** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
+export interface LentMethod {
+  readonly given: readonly CallArgument[];
+  readonly method: string;
+  readonly receiver: Expression;
 }
 
 interface GlobalCall {
@@ -78,6 +87,11 @@ export function unwrapBoundTarget(node: Expression): UnwrappedBind {
     hasBind: segments.length > 0,
     target: current,
   };
+}
+
+/** A borrowed (`.call`, `.apply`, `Reflect.apply`) or `.bind`-wrapped method call on its receiver. */
+export function lentMethodOf(call: CallExpression): LentMethod | undefined {
+  return borrowedMethodOf(call) ?? boundMethodOf(call);
 }
 
 /** A direct, aliased, borrowed or bound invocation of a global function and its arguments. */
@@ -176,6 +190,61 @@ function boundGlobalCall(
   return path === undefined ? undefined : { given: [...bound.boundArgs, ...trailing], path };
 }
 
+/** The method `call` borrows via `.call`, `.apply` or `Reflect.apply`, with its target receiver. */
+function borrowedMethodOf(call: CallExpression): LentMethod | undefined {
+  const callee = followedValue(call.expression);
+  const [first, second] = call.arguments;
+  if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
+    return first === undefined
+      ? undefined
+      : lentTargetOf(first, second, appliedArguments(call.arguments[2]));
+  }
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) {
+    return undefined;
+  }
+  const member = memberNameOf(callee);
+  if (member !== 'call' && member !== 'apply') {
+    return undefined;
+  }
+  const given =
+    member === 'apply' ? appliedArguments(second) : asCallArguments(call.arguments.slice(1));
+  return lentTargetOf(callee.expression, first, given);
+}
+
+/** The method `call` invokes through `.bind(...)` and the receiver its first bind fixed `this` to. */
+function boundMethodOf(call: CallExpression): LentMethod | undefined {
+  const bound = unwrapBoundTarget(call.expression);
+  return bound.hasBind
+    ? lentOf(bound.target, bound.boundThis, [
+        ...bound.boundArgs,
+        ...asCallArguments(call.arguments),
+      ])
+    : undefined;
+}
+
+/** Resolves `fn` (possibly `.bind`-wrapped) to a lent method on its effective receiver. */
+function lentTargetOf(
+  fn: Expression,
+  receiver: Expression | undefined,
+  trailing: readonly CallArgument[],
+): LentMethod | undefined {
+  const bound = unwrapBoundTarget(fn);
+  const effectiveReceiver = bound.hasBind ? bound.boundThis : receiver;
+  return lentOf(bound.target, effectiveReceiver, [...bound.boundArgs, ...trailing]);
+}
+
+/** Packages `method` and `receiver` into a `LentMethod` when the member name is statically known. */
+function lentOf(
+  method: Expression | undefined,
+  receiver: Expression | undefined,
+  given: readonly CallArgument[],
+): LentMethod | undefined {
+  const name = memberNameOf(method);
+  return name === undefined || receiver === undefined
+    ? undefined
+    : { given, method: name, receiver };
+}
+
 /** The arguments written for `apply`, or an unknown-list spread where the code does not write them apart. */
 export function appliedArguments(node: Expression | undefined): readonly CallArgument[] {
   if (node === undefined) {
@@ -202,13 +271,17 @@ export function memberNameOf(node: Expression | undefined): string | undefined {
     : undefined;
 }
 
-/** What a name is declared of, through other names; itself where it shows none. */
+/** What a name is declared of, through whole-identifier variable initializers; itself otherwise. */
 export function followedValue(node: Expression): Expression {
   let value = unwrapped(node);
   const seen = new Set<Expression>();
-  while (isIdentifier(value) && !seen.has(value)) {
+  while (isIdentifier(value) && readsBinding(value) && !seen.has(value)) {
     seen.add(value);
-    const declared = initializerOf(value);
+    const selected = frameBindingOf(value);
+    const declared =
+      selected?.keys.length === 0 && isVariableDeclaration(selected.binding)
+        ? selected.binding.initializer
+        : undefined;
     if (declared === undefined) {
       break;
     }
