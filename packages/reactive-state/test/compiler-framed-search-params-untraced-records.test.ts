@@ -341,6 +341,30 @@ const LISTS = [
   },
 ] as const;
 
+/** Two names a pattern takes apart are two values, each read on its own. */
+const PATTERNS = [
+  {
+    id: 'destructured-names-read-apart',
+    body: `{ const [safe, error] = [{ k: 'ok' } as ${RECORD}, {} as ${RECORD}]; return new URLSearchParams(Object.assign({}, safe, error)); }`,
+    converts: true,
+  },
+  {
+    id: 'destructured-names-read-apart-the-other-way-round',
+    body: `{ const [safe, error] = [{ k: 'ok' } as ${RECORD}, {} as ${RECORD}]; return new URLSearchParams(Object.assign({}, error, safe)); }`,
+    converts: true,
+  },
+  {
+    id: 'destructured-names-of-an-object-pattern-read-apart',
+    body: `{ const { safe, error } = { safe: { k: 'ok' } as ${RECORD}, error: {} as ${RECORD} }; return new URLSearchParams(Object.assign({}, safe, error)); }`,
+    converts: true,
+  },
+  {
+    id: 'destructured-names-of-texts',
+    body: `const [safe, other] = [{ k: 'ok' } as ${RECORD}, {} as ${RECORD}]; other.x = 'fixed'; return new URLSearchParams(Object.assign({}, safe, other));`,
+    converts: false,
+  },
+] as const;
+
 const WRITTEN = [
   {
     id: 'write-into-an-object-with-no-prototype',
@@ -521,6 +545,7 @@ const CASES = [
   ...BRANCHES,
   ...OVERRIDES,
   ...LISTS,
+  ...PATTERNS,
   ...WRITTEN,
   ...TEXTS,
   ...PINNED,

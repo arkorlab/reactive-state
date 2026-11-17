@@ -399,12 +399,15 @@ function appendNamedRecords(
     appendAliasRecords(value, reading, into.records, into.blocked);
     return;
   }
-  const binding = frameBindingOf(value)?.binding;
-  if (binding === undefined) {
+  const selected = frameBindingOf(value);
+  if (selected === undefined) {
     if (operand) into.records.push({ named: new Map(), unknown: [value] });
     return;
   }
-  const cached = operand ? reading.forms.get(binding) : undefined;
+  const { binding } = selected;
+  // A name a pattern takes apart shares its declaration with the others: only a whole one is cached.
+  const whole = operand && selected.keys.length === 0;
+  const cached = whole ? reading.forms.get(binding) : undefined;
   if (cached !== undefined) {
     into.records.push(...cached);
     return;
@@ -429,7 +432,7 @@ function appendNamedRecords(
   addBindings(open, made?.blocked ?? NO_BLOCKED);
   open.delete(binding);
   addBindings(into.blocked, open);
-  if (operand && open.size === 0) reading.forms.set(binding, records);
+  if (whole && open.size === 0) reading.forms.set(binding, records);
   into.records.push(...records);
 }
 
