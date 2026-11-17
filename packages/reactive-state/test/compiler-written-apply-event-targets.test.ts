@@ -298,6 +298,54 @@ const KEPT_APPLY_CASES: readonly KeptApplyCase[] = [
     id: 'reflect-set-fourth-receiver-local-event-not-kept-pin',
     keptRoot: undefined,
   },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; args[Symbol.length] = sharedEvent; emitter.dispatchEvent.apply(emitter, args);',
+    id: 'symbol-constructor-length-index-zero-write-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const zeroKey = Symbol.length; args[zeroKey] = sharedEvent; emitter.dispatchEvent.apply(emitter, args);',
+    id: 'const-alias-symbol-length-index-zero-write-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; (args as unknown as Record<string, unknown>)[Symbol.iterator.description!] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'symbol-iterator-description-key-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; (args as unknown as Record<string, unknown>)[Symbol.for('length').description!] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'symbol-for-length-description-key-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; let key: PropertyKey = Symbol.iterator; key = 'length'; (args as unknown as Record<PropertyKey, unknown>)[key] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'mutable-let-reassigned-from-symbol-to-length-truncates-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; (args as unknown as Record<symbol, unknown>)[Symbol.iterator] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'well-known-symbol-iterator-property-write-does-not-truncate-pin',
+    keptRoot: undefined,
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; (args as unknown as Record<symbol, unknown>)[Symbol.for('length')] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'symbol-for-call-property-write-does-not-truncate-pin',
+    keptRoot: undefined,
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; const tag = Symbol('length'); (args as unknown as Record<symbol, unknown>)[tag] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'symbol-call-const-alias-property-write-does-not-truncate-pin',
+    keptRoot: undefined,
+  },
 ];
 
 const ARGUMENT_EFFECT_CASES = [

@@ -4,6 +4,7 @@ import {
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
+  isCallExpression,
   isExpression,
   isIdentifier,
   isNonNullExpression,
@@ -20,7 +21,7 @@ import { globalPathOf } from './code-globals.ts';
 import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
 import { constantValue } from './numbers.ts';
 import { readsBinding } from './scope.ts';
-import { constInitializerOf } from './tuple-spreads.ts';
+import { constFollowedValue, constInitializerOf } from './tuple-spreads.ts';
 import {
   asCallArguments,
   branchOperands,
@@ -49,6 +50,24 @@ export const ALIAS_ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BarBarEqualsToken,
   SyntaxKind.EqualsToken,
   SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+const WELL_KNOWN_SYMBOLS: ReadonlySet<string> = new Set([
+  'Symbol.asyncDispose',
+  'Symbol.asyncIterator',
+  'Symbol.dispose',
+  'Symbol.hasInstance',
+  'Symbol.isConcatSpreadable',
+  'Symbol.iterator',
+  'Symbol.match',
+  'Symbol.matchAll',
+  'Symbol.replace',
+  'Symbol.search',
+  'Symbol.species',
+  'Symbol.split',
+  'Symbol.toPrimitive',
+  'Symbol.toStringTag',
+  'Symbol.unscopables',
 ]);
 
 /** Direct binding identifier after peeling type casts, parentheses and non-null wrappers. */
@@ -162,9 +181,9 @@ export function classifyArrayKey(root: Expression): ArrayKeyInfo {
       continue;
     }
     seen.add(plain);
-    const branches = branchOperands(plain);
-    if (branches !== undefined) {
-      pending.push(...branches);
+    const next = keyStepOperands(plain);
+    if (next !== undefined) {
+      pending.push(...next);
       continue;
     }
     const leaf = classifyLeafArrayKey(plain);
@@ -176,6 +195,9 @@ export function classifyArrayKey(root: Expression): ArrayKeyInfo {
       sawLeaf = true;
       singleIndex = leaf.index;
     }
+  }
+  if (!sawLeaf) {
+    return { index: undefined, mayBeIndex: true, mayBeLength: true };
   }
   return { index: multipleLeaves ? undefined : singleIndex, mayBeIndex, mayBeLength };
 }
@@ -258,6 +280,16 @@ function candidateSlotExpressions(candidate: SlotArgument, slot: number): readon
     .map((sub) => sub.expression);
 }
 
+/** Next expressions to inspect when `plain` is a branch expression or whole `const` binding read. */
+function keyStepOperands(plain: Expression): readonly Expression[] | undefined {
+  const branches = branchOperands(plain);
+  if (branches !== undefined) {
+    return branches;
+  }
+  const init = isIdentifier(plain) && readsBinding(plain) ? constInitializerOf(plain) : undefined;
+  return init === undefined ? undefined : [init];
+}
+
 /** Classifies a single non-branch property key expression on an array holder. */
 function classifyLeafArrayKey(plain: Expression): ArrayKeyInfo {
   const evaluated = constantValue(plain, constInitializerOf);
@@ -277,14 +309,27 @@ function classifyLeafArrayKey(plain: Expression): ArrayKeyInfo {
     const validIndex = /^(?:0|[1-9]\d*)$/u.test(evaluated) && Number.isSafeInteger(parsed);
     return { index: validIndex ? parsed : undefined, mayBeIndex: validIndex, mayBeLength: false };
   }
-  const path = globalPathOf(plain);
-  const nonKeyLiteral =
-    plain.kind === SyntaxKind.TrueKeyword ||
-    plain.kind === SyntaxKind.FalseKeyword ||
-    plain.kind === SyntaxKind.NullKeyword ||
-    path?.[0] === 'Symbol' ||
-    path?.join('.') === 'undefined';
-  return nonKeyLiteral
+  return isNonArrayPropertyKey(plain)
     ? { index: undefined, mayBeIndex: false, mayBeLength: false }
     : { index: undefined, mayBeIndex: true, mayBeLength: true };
+}
+
+/** Guaranteed non-index, non-`'length'` property keys (`boolean`, `null`, `undefined` or `symbol`). */
+function isNonArrayPropertyKey(plain: Expression): boolean {
+  if (
+    plain.kind === SyntaxKind.TrueKeyword ||
+    plain.kind === SyntaxKind.FalseKeyword ||
+    plain.kind === SyntaxKind.NullKeyword
+  ) {
+    return true;
+  }
+  const path = globalPathOf(plain)?.join('.');
+  if (path === 'undefined' || (path !== undefined && WELL_KNOWN_SYMBOLS.has(path))) {
+    return true;
+  }
+  if (!isCallExpression(plain)) {
+    return false;
+  }
+  const calleePath = globalPathOf(constFollowedValue(plain.expression))?.join('.');
+  return calleePath === 'Symbol' || calleePath === 'Symbol.for';
 }
