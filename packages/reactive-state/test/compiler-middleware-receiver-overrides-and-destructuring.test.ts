@@ -100,6 +100,93 @@ const PURE_READ_OVERRIDE_CASES = [
   },
 ] as const;
 
+const COMPUTED_OVERRIDE_CASES = [
+  {
+    expected: { origins: [], single: false },
+    id: 'computed-literal-type-key-at-override-rejected',
+    source:
+      'function read(key: "at", fresh: { a: number }) { const items = [{ a: 1 }]; items[key] = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'computed-union-key-find-override-rejected',
+    source:
+      'function read(key: "find" | "other", fresh: { a: number }) { const items = [{ a: 1 }]; (items as Record<string, unknown>)[key] = () => fresh; return /*read*/ items.find(() => true); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'computed-arbitrary-string-key-at-override-rejected',
+    source:
+      'function read(key: string, fresh: { a: number }) { const items = [{ a: 1 }]; (items as Record<string, unknown>)[key] = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'computed-call-key-slice-override-rejected',
+    source:
+      'function read(pickKey: () => string, fresh: { a: number }) { const items = [{ a: 1 }]; (items as Record<string, unknown>)[pickKey()] = () => [fresh]; return /*read*/ items.slice()[0]; }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'computed-type-asserted-number-key-at-override-rejected',
+    source:
+      'function read(key: string, fresh: { a: number }) { const items = [{ a: 1 }]; (items as Record<number, unknown>)[key as unknown as number] = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'let-alias-own-at-override-rejected',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }]; let alias = items; alias.at = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'destructured-alias-computed-key-at-override-rejected',
+    source:
+      'function read(key: "at", fresh: { a: number }) { const items = [{ a: 1 }]; const [alias] = [items]; alias[key] = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'borrowed-define-property-call-at-override-rejected',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }]; Object.defineProperty.call(Object, items, "at", { value: () => fresh }); return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'const-aliased-reflect-set-dynamic-key-at-override-rejected',
+    source:
+      'function read(key: string, fresh: { a: number }) { const items = [{ a: 1 }]; const assignKey = Reflect.set; assignKey(items, key, () => fresh); return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'spread-object-assign-unknown-source-at-override-rejected',
+    source:
+      'function read(patch: Record<string, unknown>) { const items = [{ a: 1 }]; const args = [items, patch] as const; Object.assign(...args); return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'computed-unrelated-literal-type-key-retains-whole-receiver-pin',
+    source:
+      'function read(key: "other", fresh: { a: number }) { const items = [{ a: 1 }]; (items as Record<string, unknown>)[key] = () => fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'computed-numeric-parameter-index-write-retains-whole-receiver-pin',
+    source:
+      'function read(index: number, fresh: { a: number }) { const items = [{ a: 1 }, { a: 2 }]; items[index] = fresh; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'define-property-unrelated-key-retains-whole-receiver-pin',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }]; Object.defineProperty(items, "other", { value: fresh }); return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'borrowed-native-at-under-arbitrary-computed-key-retains-whole-receiver-pin',
+    source:
+      'function read(key: string, fresh: { a: number }) { const items = [{ a: 1 }]; (items as Record<string, unknown>)[key] = () => fresh; return /*read*/ Array.prototype.at.call(items, 0); }',
+  },
+] as const;
+
 /** Finds the expression immediately following an inline marker comment inside the first function. */
 function markedExpression(source: string, markerText: string, root: Node): Expression {
   const sourceFile = root.getSourceFile();
@@ -156,6 +243,10 @@ describe('middleware receiver overrides, computed selector keys, and destructuri
   }
 
   it.each(PURE_READ_OVERRIDE_CASES)('$id', ({ expected, source }) => {
+    expect(resolvedIn(source)).toStrictEqual(expected);
+  });
+
+  it.each(COMPUTED_OVERRIDE_CASES)('$id', ({ expected, source }) => {
     expect(resolvedIn(source)).toStrictEqual(expected);
   });
 });

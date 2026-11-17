@@ -346,7 +346,7 @@ function harmlessDirectPureCall(
   return (
     PURE_ARRAY_READS.has(key) &&
     !context.replacedGlobal(call, key) &&
-    !middlewareReplacedReceiverSelector(call, receiver, key, context.sourceOf) &&
+    !middlewareReplacedReceiverSelector(call, receiver, key, context) &&
     call.arguments.every((argument) => framedQuietPrimitive(argument))
   );
 }

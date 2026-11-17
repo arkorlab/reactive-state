@@ -413,7 +413,10 @@ function replacedSelection(call: CallExpression, selected: SelectionCall): boole
   if (replacedNativeSelection(call, selected.method)) return true;
   return (
     !selected.borrowed &&
-    middlewareReplacedReceiverSelector(call, selected.receiver, selected.method, literalSource)
+    middlewareReplacedReceiverSelector(call, selected.receiver, selected.method, {
+      memberOf: literalMember,
+      sourceOf: literalSource,
+    })
   );
 }
 
