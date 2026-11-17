@@ -32,9 +32,9 @@ import { framedAccessorTakes, framedLiteralAccessor } from './framed-member-acce
 import {
   framedHeldVariable,
   framedMemberDeletes,
-  framedMemberWrites,
+  framedMemberWritesOf,
   framedPrototypeWrites,
-  framedVariableWrites,
+  framedVariableWritesOf,
   type MemberDelete,
   type MemberWrite,
 } from './framed-member-writes.ts';
@@ -182,9 +182,8 @@ export function framedHeldFields(
   const holder = framedHeldVariable(selected.binding);
   const names = assignedFieldNames(name);
   const unknown: Held[] = [];
-  for (const write of framedMemberWrites(name.getSourceFile())) {
-    if (write.holder !== holder || write.path.length !== 1 || !reaches(write.node, name, point))
-      continue;
+  for (const write of framedMemberWritesOf(name.getSourceFile(), holder)) {
+    if (write.path.length !== 1 || !reaches(write.node, name, point)) continue;
     const [first] = write.path;
     if (first === undefined) unknown.push({ value: write.value, keys: [] });
     else for (const each of first) names.add(each);
@@ -290,9 +289,10 @@ function memberChanges(
   path: readonly string[],
   point: Node,
 ): readonly Change[] {
+  if (path.length === 0) return [];
   const reached: Change[] = [];
-  for (const write of framedMemberWrites(name.getSourceFile())) {
-    if (write.holder !== holder || write.path.length > path.length) continue;
+  for (const write of framedMemberWritesOf(name.getSourceFile(), holder)) {
+    if (write.path.length > path.length) continue;
     if (write.path.some((names, index) => names?.includes(path[index] ?? '') === false)) continue;
     if (!reaches(write.node, name, point)) continue;
     reached.push({
@@ -327,18 +327,15 @@ function lastDefinite(search: DefiniteSearch): Change | undefined {
 /** Plain assignments of the variable read directly, each replacing the object it holds. */
 function reassignments({ holder, path, point, direct }: DefiniteSearch): readonly Change[] {
   if (!direct) return [];
-  return framedVariableWrites(point.getSourceFile())
-    .filter((write) => write.binding === holder)
-    .map((write) => ({ node: write.node, held: { value: write.value, keys: path } }));
+  const writes = framedVariableWritesOf(point.getSourceFile(), holder);
+  return writes.map((write) => ({ node: write.node, held: { value: write.value, keys: path } }));
 }
 
 /** Member writes on the path into the fresh ordinary object a variable assigned nothing anew holds. */
 function overwrites({ holder, path, point, assigned }: DefiniteSearch): readonly Change[] {
   const { initializer } = holder;
   if (initializer === undefined || assigned > 0 || !ordinaryObject(initializer)) return [];
-  const writes = framedMemberWrites(point.getSourceFile()).filter(
-    (write) => write.holder === holder,
-  );
+  const writes = framedMemberWritesOf(point.getSourceFile(), holder);
   return writes
     .filter((write) => exactPrefix(write, path) && replacesMember(initializer, write, writes))
     .map((write) => {
