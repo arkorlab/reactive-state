@@ -195,6 +195,89 @@ const BRANCHES = [
   },
 ] as const;
 
+/**
+ * A source of `Object.assign` that may or may not define a field replaces an earlier value of it
+ * only where every way it is chosen defines it: the Error written before stays in the record
+ * otherwise, as it does under the spread of the same source.
+ */
+const OVERRIDES = [
+  {
+    id: 'assign-over-a-conditional-held-in-a-constant',
+    body: `const tail: ${RECORD} = flag ? { x: 'ok' } : {}; return new URLSearchParams(Object.assign({}, { x: error as never }, tail));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-conditional-written-as-the-argument',
+    body: `return new URLSearchParams(Object.assign({}, { x: error as never }, flag ? { x: 'ok' } : {}));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-nullish-default-held-in-a-constant',
+    body: `const tail: ${RECORD} = options ?? { x: 'ok' }; return new URLSearchParams(Object.assign({}, { x: error as never }, tail));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-logical-or-default-held-in-a-constant',
+    body: `const tail: ${RECORD} = options || { x: 'ok' }; return new URLSearchParams(Object.assign({}, { x: error as never }, tail));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-nullish-default-written-as-the-argument',
+    body: `return new URLSearchParams(Object.assign({}, { x: error as never }, options ?? { x: 'ok' }));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-short-circuited-source',
+    body: `return new URLSearchParams(Object.assign({}, { x: error as never }, flag && { x: 'ok' }));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-conditional-list-spread-into-the-call',
+    body: `return new URLSearchParams(Object.assign({}, { x: error as never }, ...(flag ? [{ x: 'ok' }] : [])));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-conditional-list-held-in-a-constant',
+    body: `const tails = flag ? [{ x: 'ok' }] : []; return new URLSearchParams(Object.assign({}, { x: error as never }, ...tails));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-variable-set-on-one-path',
+    body: `let tail: ${RECORD} = {}; if (flag) { tail = { x: 'ok' }; } return new URLSearchParams(Object.assign({}, { x: error as never }, tail));`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-a-conditional-held-in-a-constant',
+    body: `const tail: ${RECORD} = flag ? { x: 'ok' } : {}; return new URLSearchParams({ x: error as never, ...tail });`,
+    converts: true,
+  },
+  {
+    id: 'spread-of-a-conditional-written-in-the-literal',
+    body: `return new URLSearchParams({ x: error as never, ...(flag ? { x: 'ok' } : {}) });`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-conditional-defining-the-field-on-both-branches',
+    body: `return new URLSearchParams(Object.assign({}, { x: error as never }, flag ? { x: 'a' } : { x: 'b' }));`,
+    converts: false,
+  },
+  {
+    id: 'assign-over-a-constant-conditional-defining-the-field-on-both-branches',
+    body: `const tail: ${RECORD} = flag ? { x: 'a' } : { x: 'b' }; return new URLSearchParams(Object.assign({}, { x: error as never }, tail));`,
+    converts: false,
+  },
+  {
+    id: 'assign-over-a-conditional-defining-another-field',
+    body: `return new URLSearchParams(Object.assign({}, { x: error as never }, flag ? { y: 'a' } : { y: 'b' }));`,
+    converts: true,
+  },
+  {
+    id: 'assign-over-a-source-that-defines-the-field',
+    body: `const tail: ${RECORD} = { x: 'ok' }; return new URLSearchParams(Object.assign({}, { x: error as never }, tail));`,
+    converts: false,
+  },
+] as const;
+
 const WRITTEN = [
   {
     id: 'write-into-an-object-with-no-prototype',
@@ -369,7 +452,7 @@ const PINNED = [
   },
 ] as const;
 
-const CASES = [...COPIES, ...ENTRIES, ...BRANCHES, ...WRITTEN, ...TEXTS, ...PINNED];
+const CASES = [...COPIES, ...ENTRIES, ...BRANCHES, ...OVERRIDES, ...WRITTEN, ...TEXTS, ...PINNED];
 
 describe('records a native call builds or copies, read by what they are made of', () => {
   it.each(CASES)('$id', ({ body, converts }) => {

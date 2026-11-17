@@ -2,12 +2,14 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
+  isBinaryExpression,
   isIdentifier,
   isObjectLiteralExpression,
   isOmittedExpression,
   isSpreadElement,
   type Node,
   type ObjectLiteralExpression,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -298,11 +300,38 @@ function appendReplacement(
 ): void {
   const branched = framedSourceValues(value);
   const form = framedRecordForm(value);
-  if (branched !== undefined) into.pending.push(...branched);
+  if (branched !== undefined && operand && alternativesOf(value, branched) > 1)
+    appendAlternatives(value, branched, reading, into);
+  else if (branched !== undefined) into.pending.push(...branched);
   else if (isObjectLiteralExpression(value)) into.records.push(reading.fieldsOf(value));
   else if (form !== undefined) appendFormRecords(form, reading, into.records, into.blocked);
   else if (isIdentifier(value)) appendNamedRecords(value, reading, into, operand);
   else if (operand) appendOperandValues(value, into.pending, into.records);
+}
+
+/** How many ways a branch may go: `a && b` answers `a` as well, which no record's field comes from. */
+function alternativesOf(value: Expression, branches: readonly Expression[]): number {
+  const skipped =
+    isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken;
+  return branches.length + (skipped ? 1 : 0);
+}
+
+/**
+ * The record an operand makes where it is chosen among alternatives: a field is definite only where
+ * every alternative defines it, and holds what any does; an alternative that does not define it, or
+ * makes no record, leaves it possible.
+ */
+function appendAlternatives(
+  value: Expression,
+  branches: readonly Expression[],
+  reading: ReplacementReading,
+  into: { readonly records: RecordFields[]; readonly blocked: Set<FrameBinding> },
+): void {
+  const parts = branches.map((each) => replacementRecords(each, reading, true));
+  for (const part of parts) addBindings(into.blocked, part.blocked);
+  const made = parts.map((part) => unionFields(part.records));
+  if (alternativesOf(value, branches) > branches.length) made.push(NO_FIELDS);
+  into.records.push(unionFields(made));
 }
 
 /** The records a native form's operands are, in the order it copies them or as alternatives. */
@@ -424,12 +453,19 @@ function formInitializer(name: Identifier): Expression | undefined {
     : undefined;
 }
 
-/** The fields every record may hold: the name of any, with the values of each. */
+/**
+ * The fields any of the records may hold, with the values of each; a field is definite only where
+ * every record defines it, and is otherwise one that may be there.
+ */
 function unionFields(records: readonly RecordFields[]): RecordFields {
   const named = new Map<string, readonly Expression[]>();
   const unknown = new Set<Expression>();
   for (const record of records) {
     for (const [key, values] of record.named) {
+      if (records.some((each) => !each.named.has(key))) {
+        addExpressions(unknown, values);
+        continue;
+      }
       const merged = new Set<Expression>(named.get(key));
       addExpressions(merged, values);
       named.set(key, [...merged]);
