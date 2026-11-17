@@ -18,6 +18,7 @@ import {
   isMethodDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isReturnStatement,
@@ -55,6 +56,7 @@ export interface QuietRawProof {
 }
 
 export interface QuietRawWalkState {
+  readonly rootConsumer: Expression;
   readonly outerConsumer: Expression;
   readonly allowedOwners: Set<Node>;
   readonly proof: QuietRawProof;
@@ -78,6 +80,22 @@ export function createQuietRawWalkState(outerConsumer: Expression): QuietRawWalk
     outerConsumer,
     params: new Map(),
     proof: { calls: new Set(), fields: new Set() },
+    rootConsumer: outerConsumer,
+  };
+}
+
+export function forkQuietRawWalkState(
+  innerConsumer: Expression,
+  parent: QuietRawWalkState,
+): QuietRawWalkState {
+  return {
+    allowedOwners: new Set([...parent.allowedOwners, innerConsumer]),
+    callScope: parent.callScope,
+    depth: parent.depth,
+    outerConsumer: innerConsumer,
+    params: new Map(parent.params),
+    proof: { calls: new Set(), fields: new Set() },
+    rootConsumer: parent.rootConsumer,
   };
 }
 
@@ -93,13 +111,9 @@ export function stepQuietFactoryParameter(
   state: QuietRawWalkState,
 ): Expression | undefined {
   const declared = frameDeclarationOf(name);
-  return declared !== undefined && isParameterDeclarationNode(declared)
+  return declared !== undefined && isParameterDeclaration(declared)
     ? state.params.get(declared)
     : undefined;
-}
-
-function isParameterDeclarationNode(node: Node): node is ParameterDeclaration {
-  return !isVariableDeclaration(node) && !isFunctionDeclaration(node) && 'dotDotDotToken' in node;
 }
 
 /** Whole const aliases in an allowed owner, requiring literal containers to remain unexposed. */
@@ -112,6 +126,7 @@ export function quietWholeConstInitializer(
   const { binding } = selected;
   if (
     !hasAllowedQuietOwner(binding, state) ||
+    (framedPrefixSameOwner(binding, state.rootConsumer) && binding.end > state.rootConsumer.pos) ||
     !isVariableDeclaration(binding) ||
     !isVariableDeclarationList(binding.parent) ||
     binding.initializer === undefined
@@ -166,53 +181,68 @@ export function stepQuietFactoryCall(
   const fn = resolveQuietCallableWithState(call.expression, state);
   state.depth -= 1;
   if (fn === undefined || answersLater(fn) || fn.body === undefined) return undefined;
-  if (!quietFactoryParameters(fn, state)) return undefined;
-  const returned = quietFactoryBodyReturn(fn.body, state);
+  const nextParams = bindQuietFactoryParameters(call, fn, state);
+  if (nextParams === undefined) return undefined;
+  const bodyWalk: QuietRawWalkState = { ...state, params: nextParams };
+  const returned = quietFactoryBodyReturn(fn.body, bodyWalk);
   if (returned === undefined) return undefined;
-  applyQuietFactoryBinding(call, fn, returned, state);
-  return returned;
-}
-
-function applyQuietFactoryBinding(
-  call: CallExpression,
-  fn: WrapperFunction,
-  returned: Expression,
-  state: QuietRawWalkState,
-): void {
-  const nextParams = new Map(state.params);
-  for (const [index, param] of fn.parameters.entries()) {
-    const supplied = call.arguments[index] ?? param.initializer;
-    if (supplied === undefined) {
-      nextParams.delete(param);
-      continue;
-    }
-    const unwrappedArg = unwrapped(supplied);
-    const mapped = isIdentifier(unwrappedArg)
-      ? (stepQuietFactoryParameter(unwrappedArg, state) ?? supplied)
-      : supplied;
-    nextParams.set(param, mapped);
-  }
   state.params = nextParams;
   state.allowedOwners.add(returned);
   state.callScope = call.pos;
-  if (framedPrefixSameOwner(call, state.outerConsumer)) state.proof.calls.add(call);
+  if (hasAllowedQuietOwner(call, state)) state.proof.calls.add(call);
+  return returned;
 }
 
-function quietFactoryParameters(fn: WrapperFunction, state: QuietRawWalkState): boolean {
-  for (const param of fn.parameters) {
-    if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined) return false;
-    if (param.initializer !== undefined && !isQuietFactoryValue(param.initializer, state, 0)) {
-      return false;
+function bindQuietFactoryParameters(
+  call: CallExpression,
+  fn: WrapperFunction,
+  state: QuietRawWalkState,
+): Map<ParameterDeclaration, Expression> | undefined {
+  const runtimeParams = fn.parameters.filter(
+    (param, index) => !(index === 0 && isIdentifier(param.name) && param.name.text === 'this'),
+  );
+  const nextParams = new Map(state.params);
+  for (const param of runtimeParams) nextParams.delete(param);
+  const defaultWalk: QuietRawWalkState = {
+    ...state,
+    allowedOwners: new Set([...state.allowedOwners, fn]),
+    params: nextParams,
+  };
+  for (const [index, param] of runtimeParams.entries()) {
+    if (!isIdentifier(param.name) || param.dotDotDotToken !== undefined) return undefined;
+    if (
+      param.initializer !== undefined &&
+      !isQuietFactoryValue(param.initializer, defaultWalk, 0)
+    ) {
+      return undefined;
+    }
+    const arg = call.arguments[index];
+    if (arg !== undefined && !isDefinitelyUndefinedArg(arg)) {
+      nextParams.set(param, resolveMappedParamExpr(arg, state));
+      continue;
+    }
+    if (param.initializer !== undefined) {
+      nextParams.set(param, resolveMappedParamExpr(param.initializer, defaultWalk));
     }
   }
-  return true;
+  return nextParams;
+}
+
+function isDefinitelyUndefinedArg(expr: Expression): boolean {
+  const src = framedQuietSource(expr) ?? expr;
+  return globalPathOf(unwrapped(src))?.join('.') === 'undefined';
+}
+
+function resolveMappedParamExpr(expr: Expression, state: QuietRawWalkState): Expression {
+  const actual = unwrapped(expr);
+  return isIdentifier(actual) ? (stepQuietFactoryParameter(actual, state) ?? expr) : expr;
 }
 
 function quietFactoryArguments(args: readonly Expression[], state: QuietRawWalkState): boolean {
   return args.every((arg) => !isSpreadElement(arg) && isQuietFactoryValue(arg, state, 0));
 }
 
-function quietFactoryBodyReturn(
+export function quietFactoryBodyReturn(
   body: Block | Expression,
   state: QuietRawWalkState,
 ): Expression | undefined {
@@ -335,7 +365,7 @@ function stepQuietMemberTarget(
 ): QuietWrapperStep | undefined {
   const name = frameMemberName(value);
   if (name === undefined || !hasAllowedQuietOwner(value, state)) return undefined;
-  if (framedPrefixSameOwner(value, state.outerConsumer)) state.proof.fields.add(value);
+  state.proof.fields.add(value);
   tail.unshift(name);
   return { next: value.expression };
 }

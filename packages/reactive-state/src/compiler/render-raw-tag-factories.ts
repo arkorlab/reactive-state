@@ -26,6 +26,7 @@ import { framedAssignedSources } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 import {
   boundCallTargets,
+  type TagBoundValue,
   tagPathKey,
   type TagParameterEntry,
   type TagParameterEnv,
@@ -86,8 +87,8 @@ function pushBoundParameterValues(
     pushRestParameterValues(entry, fullSuffix, pending);
     return;
   }
-  for (const value of entry.values) {
-    pending.push({ env: entry.callerEnv, node: value, suffix: fullSuffix });
+  for (const item of entry.values) {
+    pending.push({ env: item.env, node: item.node, suffix: fullSuffix });
   }
 }
 
@@ -99,15 +100,15 @@ function pushRestParameterValues(
   if (fullSuffix.length === 0) return;
   const [head, ...tail] = fullSuffix;
   if (head === undefined) {
-    for (const value of entry.values) {
-      pending.push({ env: entry.callerEnv, node: value, suffix: tail });
+    for (const item of entry.values) {
+      pending.push({ env: item.env, node: item.node, suffix: tail });
     }
     return;
   }
   const index = canonicalArrayTagIndex(head);
   const selected = index === undefined ? undefined : entry.values[index];
   if (selected !== undefined) {
-    pending.push({ env: entry.callerEnv, node: selected, suffix: tail });
+    pending.push({ env: selected.env, node: selected.node, suffix: tail });
   }
 }
 
@@ -383,10 +384,17 @@ function buildFactoryParameterEnv(
   if (params.length === 0) return callerEnv;
   if (given === null) return buildOpaqueParameterEnv(fn, callSitePos, callerEnv);
   const entries = new Map<ParameterDeclaration, TagParameterEntry>(callerEnv?.entries);
+  for (const param of params) entries.set(param, { kind: 'opaque' });
   const firstSpread = given.findIndex((arg) => isSpreadElement(arg));
-  const callArgs = { callerEnv, firstSpread, given };
   for (const [index, param] of params.entries()) {
-    entries.set(param, bindOneParameter(param, index, callArgs));
+    const defaultEnv: TagParameterEnv = {
+      entries: new Map(entries),
+      id: callSitePos + param.pos + 1,
+    };
+    entries.set(
+      param,
+      bindOneParameter(param, index, { callerEnv, defaultEnv, firstSpread, given }),
+    );
   }
   return { entries, id: callSitePos };
 }
@@ -398,22 +406,29 @@ function bindOneParameter(
     readonly given: readonly Expression[];
     readonly firstSpread: number;
     readonly callerEnv: TagParameterEnv | undefined;
+    readonly defaultEnv: TagParameterEnv;
   },
 ): TagParameterEntry {
-  const { callerEnv, firstSpread, given } = callArgs;
+  const { callerEnv, defaultEnv, firstSpread, given } = callArgs;
   if (firstSpread !== -1 && index >= firstSpread) return { kind: 'opaque' };
   if (param.dotDotDotToken !== undefined) {
     return firstSpread === -1
-      ? { callerEnv, kind: 'values', rest: true, values: given.slice(index) }
+      ? {
+          kind: 'values',
+          rest: true,
+          values: given.slice(index).map((node) => ({ env: callerEnv, node })),
+        }
       : { kind: 'opaque' };
   }
   const arg = given[index];
-  const values: Expression[] = [];
-  if (arg !== undefined && !isDefinitelyUndefined(arg)) values.push(arg);
-  if (param.initializer !== undefined && (arg === undefined || !isDefinitelyPresent(arg))) {
-    values.push(param.initializer);
+  const values: TagBoundValue[] = [];
+  if (arg !== undefined && !isDefinitelyUndefined(arg)) {
+    values.push({ env: callerEnv, node: arg });
   }
-  return { callerEnv, kind: 'values', values };
+  if (param.initializer !== undefined && (arg === undefined || !isDefinitelyPresent(arg))) {
+    values.push({ env: defaultEnv, node: param.initializer });
+  }
+  return { kind: 'values', values };
 }
 
 function runtimeParameters(fn: Answering): readonly ParameterDeclaration[] {

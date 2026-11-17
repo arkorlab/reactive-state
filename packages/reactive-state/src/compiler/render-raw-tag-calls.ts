@@ -29,11 +29,17 @@ import { bindingIdentifiers } from './scope.ts';
 
 /** Bounded unwrapping of `.bind`, `.call`, `.apply` and `Reflect.apply` tag expressions. */
 
+export type BoundArgCount = number | 'unknown';
+
+export interface TagBoundValue {
+  readonly node: Expression;
+  readonly env: TagParameterEnv | undefined;
+}
+
 export interface TagParameterValue {
   readonly kind: 'values';
-  readonly values: readonly Expression[];
+  readonly values: readonly TagBoundValue[];
   readonly rest?: boolean | undefined;
-  readonly callerEnv: TagParameterEnv | undefined;
 }
 
 export type TagParameterEntry = TagParameterValue | { readonly kind: 'opaque' };
@@ -47,6 +53,7 @@ export interface TagPath {
   readonly node: Expression;
   readonly suffix: readonly (string | undefined)[];
   readonly env?: TagParameterEnv | undefined;
+  readonly boundArgs?: BoundArgCount | undefined;
 }
 
 export interface BoundCallTarget {
@@ -123,22 +130,44 @@ export function pushBoundTagPaths(
   call: CallExpression,
   expand: ExpandTagPath,
   pending: TagPath[],
-  env?: TagParameterEnv,
+  options?: {
+    readonly env?: TagParameterEnv | undefined;
+    readonly boundArgs?: BoundArgCount | undefined;
+  },
 ): { readonly exhausted: boolean; readonly handled: boolean } {
   const resolved = boundCallTargets(call, expand);
   for (const target of resolved.targets) {
-    pending.push({ env, node: target.node, suffix: [] });
+    pending.push({
+      boundArgs: combineBoundArgCounts(target.given, options?.boundArgs),
+      env: options?.env,
+      node: target.node,
+      suffix: [],
+    });
   }
   return { exhausted: resolved.exhausted, handled: resolved.handled };
+}
+
+function combineBoundArgCounts(
+  given: readonly Expression[] | null,
+  outer: BoundArgCount | undefined,
+): BoundArgCount | undefined {
+  let combined: BoundArgCount | undefined = 'unknown';
+  if (outer !== 'unknown' && given?.every((arg) => !isSpreadElement(arg)) === true) {
+    const total = given.length + (outer ?? 0);
+    combined = total === 0 ? undefined : total;
+  }
+  return combined;
 }
 
 export function tagPathKey(
   value: Expression,
   suffix: readonly (string | undefined)[],
   env?: TagParameterEnv,
+  boundArgs?: BoundArgCount,
 ): string {
   const scope = env === undefined ? '' : `@${String(env.id)}`;
-  return `${String(value.pos)}:${String(value.end)}:${suffix.map((part = '*') => part).join('.')}${scope}`;
+  const bound = boundArgs === undefined ? '' : `#${String(boundArgs)}`;
+  return `${String(value.pos)}:${String(value.end)}:${suffix.map((part = '*') => part).join('.')}${scope}${bound}`;
 }
 
 function boundLeafTarget(item: TagCallable): BoundCallTarget | undefined {

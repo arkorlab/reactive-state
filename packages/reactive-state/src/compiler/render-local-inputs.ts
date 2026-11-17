@@ -3,6 +3,7 @@ import {
   type CallExpression,
   type ElementAccessExpression,
   type Expression,
+  type FunctionDeclaration,
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
@@ -34,12 +35,13 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
+import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { GLOBAL_OBJECTS, globalPathOf, isTakenApart, useOf } from './code-globals.ts';
+import { globalPathOf, isTakenApart, useOf } from './code-globals.ts';
 import { sourceArrayFunction, sourceArrayMethod } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { computedBindingContainer, framedKeyNames, framedMemberNames } from './framed-keys.ts';
-import { framedNativeConstructor, framedSourceValues } from './framed-sources.ts';
+import { framedSourceValues } from './framed-sources.ts';
 import { framedAssignedSources } from './framed-writes.ts';
 import { assignedNames, localDateOwnData, localDateOwnMethod } from './local-date-inputs.ts';
 import { dateText, localNamed } from './local-reads.ts';
@@ -47,6 +49,7 @@ import { renderDateText } from './render-date-text.ts';
 import { renderIntlInput } from './render-intl-inputs.ts';
 import { reflectedRead } from './render-intl-reflections.ts';
 import {
+  type BoundArgCount,
   pushBoundTagPaths,
   tagPathKey,
   type TagParameterEnv,
@@ -64,11 +67,10 @@ import {
   pushArrayLiteralTagPaths,
   pushObjectTagPaths,
 } from './render-raw-tag-paths.ts';
-import {
-  datedTemplateSpanIndices,
-  type RawWrapperSearch,
-  wrapperForwardsRawDate,
-} from './render-raw-tag-wrappers.ts';
+import { datedTemplateSpanIndices, wrapperForwardsRawDate } from './render-raw-tag-wrappers.ts';
+import type { RawWrapperSearch } from './render-raw-wrapper-bindings.ts';
+import { inheritBoundArgCount, matchesDirectRawOrStringTag } from './render-tag-date-calls.ts';
+import { isOuterTemplateConsumedAsText } from './render-tag-date-coercions.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** What a read takes a method of, where the code shows it: the value, and the keys selected within it. */
@@ -90,7 +92,6 @@ const LOCALE_MEMBERS: ReadonlySet<string> = new Set([
   'toLocaleString',
   'toLocaleUpperCase',
 ]);
-const RAW_TAGS: ReadonlySet<string> = new Set(['String.raw']);
 const TAG_SEARCH = { limit: 64 } as const;
 
 /**
@@ -116,10 +117,11 @@ interface TagExpandSink {
   readonly pending: TagPath[];
   readonly methods: MethodDeclaration[];
   readonly env: TagParameterEnv | undefined;
+  readonly boundArgs: BoundArgCount | undefined;
   readonly depth: number;
 }
 
-/** Tagged templates pass Date substitutions raw unless a tag path can select native String.raw. */
+/** Tagged templates pass Date substitutions raw unless a tag path can coerce them to local-time text. */
 function localDateText(node: Node): string | undefined {
   const text = dateText(node);
   if (
@@ -129,6 +131,7 @@ function localDateText(node: Node): string | undefined {
     node.parent.template === node &&
     !maySelectNativeRaw(node.parent.tag, {
       datedIndices: datedTemplateSpanIndices(node),
+      outerConsumedAsText: isOuterTemplateConsumedAsText(node),
       seenWrappers: new Set(),
       spanCount: node.templateSpans.length,
     })
@@ -137,9 +140,11 @@ function localDateText(node: Node): string | undefined {
   return text;
 }
 
-/** Constant, multi-branch, reflected, bound, array, factory and wrapper tag paths reaching native String.raw. */
+/** Constant, multi-branch, reflected, bound, array, factory and custom tag paths coercing Date values. */
 function maySelectNativeRaw(tag: Expression, search: RawWrapperSearch): boolean {
-  const pending: TagPath[] = [{ env: search.env, node: tag, suffix: [] }];
+  const pending: TagPath[] = [
+    { boundArgs: search.boundArgs, env: search.env, node: tag, suffix: [] },
+  ];
   const methods: MethodDeclaration[] = [];
   const seen = new Set<string>();
   let steps = 0;
@@ -147,15 +152,28 @@ function maySelectNativeRaw(tag: Expression, search: RawWrapperSearch): boolean 
     steps += 1;
     if (steps > TAG_SEARCH.limit) return true;
     const value = unwrapped(current.node);
-    const key = tagPathKey(value, current.suffix, current.env);
+    const key = tagPathKey(value, current.suffix, current.env, current.boundArgs);
     if (seen.has(key)) continue;
     seen.add(key);
-    const stepSearch: RawWrapperSearch = { ...search, env: current.env };
-    if (matchesDirectRawTag(value, current.suffix)) return true;
+    const stepSearch: RawWrapperSearch = {
+      ...search,
+      boundArgs: current.boundArgs,
+      env: current.env,
+    };
+    if (matchesDirectRawOrStringTag(value, current.suffix, stepSearch)) return true;
     if (current.suffix.length === 0 && matchesRawWrapperTag(value, stepSearch)) return true;
-    const sink: TagExpandSink = { depth: 0, env: current.env, methods, pending, rootRead: tag };
+    const prevLength = pending.length;
+    const sink: TagExpandSink = {
+      boundArgs: current.boundArgs,
+      depth: 0,
+      env: current.env,
+      methods,
+      pending,
+      rootRead: tag,
+    };
     if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, sink))
       return true;
+    inheritBoundArgCount(pending, prevLength, current.boundArgs);
     if (drainWrapperMethods(methods, stepSearch)) return true;
   }
   return false;
@@ -176,39 +194,12 @@ function matchesRawWrapperTag(value: Expression, search: RawWrapperSearch): bool
   }
   if (!isIdentifier(value)) return false;
   const declared = frameDeclarationOf(value);
-  return (
-    declared !== undefined &&
-    isFunctionDeclaration(declared) &&
-    wrapperForwardsRawDate(declared, query)
+  if (declared === undefined || !isFunctionDeclaration(declared)) return false;
+  const impl = overloadsOf(declared).find(
+    (candidate): candidate is FunctionDeclaration =>
+      isFunctionDeclaration(candidate) && candidate.body !== undefined,
   );
-}
-
-/** Direct native String.raw references and global holders followed by remaining member segments. */
-function matchesDirectRawTag(value: Expression, suffix: readonly (string | undefined)[]): boolean {
-  if (suffix.length === 0 && framedNativeConstructor(value, RAW_TAGS)) return true;
-  const direct = globalPathOf(value);
-  return direct !== undefined && matchesNativeRawPath([...direct, ...suffix]);
-}
-
-/** Leading global-object segments collapse before checking the String.raw member pair. */
-function matchesNativeRawPath(parts: readonly (string | undefined)[]): boolean {
-  let index = 0;
-  while (parts.length - index > 2 && isPossibleGlobalHolder(parts[index])) index += 1;
-  while (parts.length - index > 1 && isKnownGlobalHolder(parts[index])) index += 1;
-  if (parts.length - index !== 2) return false;
-  const holder = parts[index];
-  const member = parts[index + 1];
-  return (
-    (holder === undefined || holder === 'String') && (member === undefined || member === 'raw')
-  );
-}
-
-function isKnownGlobalHolder(name: string | undefined): boolean {
-  return name !== undefined && GLOBAL_OBJECTS.has(name);
-}
-
-function isPossibleGlobalHolder(name: string | undefined): boolean {
-  return name === undefined || GLOBAL_OBJECTS.has(name);
+  return impl === undefined || wrapperForwardsRawDate(impl, query);
 }
 
 /** Expands one non-global tag expression into the receiver, bound, array, factory or binding sources it may read. */
@@ -223,7 +214,7 @@ function expandTagPath(
       (inner, innerSuffix, nextPending) =>
         expandNonBoundTagPath(inner, innerSuffix, { ...sink, pending: nextPending }),
       sink.pending,
-      sink.env,
+      { boundArgs: sink.boundArgs, env: sink.env },
     );
     if (bound.exhausted) return true;
     if (bound.handled) return false;
@@ -294,6 +285,7 @@ function stepFactoryInnerPath(
   outerSink: TagExpandSink,
 ): boolean {
   return expandNonBoundTagPath(inner, innerSuffix, {
+    boundArgs: outerSink.boundArgs,
     depth: outerSink.depth + 1,
     env: objectSink.env,
     methods: objectSink.methods,
@@ -377,11 +369,8 @@ function pushIdentifierTagPaths(
   }
   if (pushArrayIdentifierTagPaths(name, suffix, { env, pending, rootRead })) return true;
   const declared = frameDeclarationOf(name);
-  if (
-    declared === undefined ||
-    (!isVariableDeclaration(declared) && !isParameterDeclaration(declared))
-  )
-    return false;
+  if (declared === undefined) return true;
+  if (!isVariableDeclaration(declared) && !isParameterDeclaration(declared)) return false;
   if (isParameterDeclaration(declared)) {
     const paramOutcome = pushFactoryParameterTagPaths(name, declared, suffix, { env, pending });
     if (paramOutcome.handled) return paramOutcome.opaque;

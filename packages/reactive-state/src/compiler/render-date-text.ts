@@ -33,7 +33,6 @@ import {
   framedQuietPrimitive,
   framedQuietSource,
 } from './framed-native-evaluation.ts';
-import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
@@ -42,6 +41,7 @@ import { localDateProjection } from './local-date-projections.ts';
 import { constantValue } from './numbers.ts';
 import {
   createQuietRawWalkState,
+  hasAllowedQuietOwner,
   type QuietRawProof,
   type QuietRawWalkState,
   quietWholeConstInitializer,
@@ -52,9 +52,12 @@ import { wrappedRawTagProof } from './render-date-raw-wrappers.ts';
 
 /** Native text conversions retain stored Date identities at the original rendered conversion. */
 
+const STRING_NAME = 'String';
+const STRING_RAW_NAME = 'String.raw';
 const DATES: ReadonlySet<string> = new Set(['Date']);
-const RAW_TAGS: ReadonlySet<string> = new Set(['String.raw']);
-const RAW_DATE_FIELDS: ReadonlySet<string> = new Set(['Date', 'String', 'String.raw']);
+const RAW_TAGS: ReadonlySet<string> = new Set([STRING_RAW_NAME]);
+const STRINGS: ReadonlySet<string> = new Set([STRING_NAME]);
+const RAW_DATE_FIELDS: ReadonlySet<string> = new Set(['Date', STRING_NAME, STRING_RAW_NAME]);
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
 const DATE_RANGE = { maximum: 8_640_000_000_000_000 } as const;
 const ARRAY_INDEX = { limit: 4_294_967_295, walkSteps: 64 } as const;
@@ -153,6 +156,7 @@ function taggedRawProof(node: Node): QuietRawProof | undefined {
     rawProofOf: nativeRawProof,
     seenWrappers: new Set(),
     spanCount: node.templateSpans.length,
+    stringProofOf: nativeStringProof,
   });
 }
 
@@ -167,11 +171,45 @@ export function renderDateConversionSource(value: Expression, read: Expression):
 }
 
 /** Constant-key, whole-alias, and quiet-factory native String.raw targets with prefix proof. */
+interface NativeTargetSpec {
+  readonly natives: ReadonlySet<string>;
+  readonly pathMatches: (parts: readonly string[]) => boolean;
+}
+
 export function nativeRawProof(
   target: Expression,
   consumer: Expression,
+  existingWalk?: QuietRawWalkState,
 ): QuietRawProof | undefined {
-  const walk = createQuietRawWalkState(consumer);
+  return nativeTargetProof(
+    target,
+    consumer,
+    { natives: RAW_TAGS, pathMatches: isNativeRawPath },
+    existingWalk,
+  );
+}
+
+/** Constant-key, whole-alias, and quiet-factory native String constructor targets with proof. */
+export function nativeStringProof(
+  target: Expression,
+  consumer: Expression,
+  existingWalk?: QuietRawWalkState,
+): QuietRawProof | undefined {
+  return nativeTargetProof(
+    target,
+    consumer,
+    { natives: STRINGS, pathMatches: isNativeStringPath },
+    existingWalk,
+  );
+}
+
+function nativeTargetProof(
+  target: Expression,
+  consumer: Expression,
+  spec: NativeTargetSpec,
+  existingWalk?: QuietRawWalkState,
+): QuietRawProof | undefined {
+  const walk = existingWalk ?? createQuietRawWalkState(consumer);
   const tail: string[] = [];
   const seen = new Set<string>();
   let value = unwrapped(target);
@@ -179,9 +217,10 @@ export function nativeRawProof(
     const key = `${String(value.pos)}:${String(value.end)}:${tail.join('.')}@${String(walk.callScope)}`;
     if (seen.has(key)) return undefined;
     seen.add(key);
-    if (tail.length === 0 && framedNativeConstructor(value, RAW_TAGS)) return walk.proof;
+    if (tail.length === 0 && framedNativeConstructor(value, spec.natives)) return walk.proof;
     const direct = globalPathOf(value);
-    if (direct !== undefined) return isNativeRawPath([...direct, ...tail]) ? walk.proof : undefined;
+    if (direct !== undefined)
+      return spec.pathMatches([...direct, ...tail]) ? walk.proof : undefined;
     const next = advanceRawTarget(value, tail, walk);
     if (next === undefined) return undefined;
     value = unwrapped(next);
@@ -193,7 +232,13 @@ export function nativeRawProof(
 function isNativeRawPath(parts: readonly string[]): boolean {
   let index = 0;
   while (parts.length - index > 1 && GLOBAL_OBJECTS.has(parts[index] ?? '')) index += 1;
-  return parts.length - index === 2 && parts[index] === 'String' && parts[index + 1] === 'raw';
+  return parts.length - index === 2 && parts[index] === STRING_NAME && parts[index + 1] === 'raw';
+}
+
+function isNativeStringPath(parts: readonly string[]): boolean {
+  let index = 0;
+  while (parts.length - index > 1 && GLOBAL_OBJECTS.has(parts[index] ?? '')) index += 1;
+  return parts.length - index === 1 && parts[index] === STRING_NAME;
 }
 
 /** One constant member access, unexposed literal selection, quiet factory call or const alias step. */
@@ -205,7 +250,7 @@ function advanceRawTarget(
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     const name = frameMemberName(value);
     if (name === undefined) return undefined;
-    if (framedPrefixSameOwner(value, walk.outerConsumer)) walk.proof.fields.add(value);
+    if (hasAllowedQuietOwner(value, walk)) walk.proof.fields.add(value);
     tail.unshift(name);
     return value.expression;
   }

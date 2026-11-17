@@ -1,67 +1,83 @@
 import {
   type CallExpression,
   type Expression,
-  isBlock,
+  isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
-  isIdentifier,
-  isObjectBindingPattern,
+  isNewExpression,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
-  isReturnStatement,
   isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
   type Node,
-  type ParameterDeclaration,
+  SyntaxKind,
   type TemplateExpression,
 } from 'typescript/ast';
 
 import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
+import { frameMemberName } from './framed-bindings.ts';
 import { framedQuietPrimitive } from './framed-native-evaluation.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
 import {
   createQuietRawWalkState,
+  forkQuietRawWalkState,
+  quietFactoryBodyReturn,
   type QuietRawProof,
+  type QuietRawWalkState,
   resolveQuietCallableWithState,
 } from './render-date-raw-factories.ts';
-import {
-  forwardsCallSiteRaw,
-  type ForwardedSlotsResult,
-  ownRawPropertyInitializer,
-  type RawWrapperSearch,
-} from './render-raw-tag-wrappers.ts';
+import { forwardsCallSiteRaw, ownRawPropertyInitializer } from './render-raw-tag-wrappers.ts';
 import {
   collectWrapperBindings,
-  findRawBindingLocalName,
+  directPositionalParamIndex,
+  type ForwardedSlotsResult,
   isIdentifierForParam,
+  isQuietDatedArrayCarrier,
+  isQuietDatedCarrier,
+  isQuietDatedPositional,
+  isQuietOperand,
+  quietWrapperParameters,
+  type RawWrapperSearch,
   type WrapperBindings,
-  type WrapperFunction,
 } from './render-raw-wrapper-bindings.ts';
+import { isCoercingDateMethodName } from './render-tag-date-coercions.ts';
 
-/** Quiet synchronous String.raw wrapper verification for projected Date template substitutions. */
+/** Quiet synchronous tag and helper verification for projected Date template substitutions. */
 
 const RAW_DATE_FIELDS: ReadonlySet<string> = new Set(['Date', 'String', 'String.raw']);
+const ARRAY_TEXT_METHODS: ReadonlySet<string> = new Set(['join', 'toLocaleString', 'toString']);
+
+export type QuietTargetProofFn = (
+  target: Expression,
+  consumer: Expression,
+  walk?: QuietRawWalkState,
+) => QuietRawProof | undefined;
 
 export interface QuietRawWrapperState extends RawWrapperSearch {
-  readonly rawProofOf: (target: Expression, consumer: Expression) => QuietRawProof | undefined;
+  readonly rawProofOf: QuietTargetProofFn;
+  readonly stringProofOf?: QuietTargetProofFn | undefined;
+  readonly parentWalk?: QuietRawWalkState | undefined;
 }
 
 interface QuietSpineContext {
   readonly bindings: WrapperBindings;
-  readonly nextSeen: ReadonlySet<Node>;
+  readonly nextSeen: ReadonlySet<string>;
+  readonly outerConsumer: Expression;
+  readonly proof: QuietRawProof;
   readonly state: QuietRawWrapperState;
+  readonly walk: QuietRawWalkState;
 }
 
 interface InnerTargetCheck {
   readonly datedIndices: ReadonlySet<number>;
   readonly spanCount: number;
-  readonly nextSeen: ReadonlySet<Node>;
+  readonly nextSeen: ReadonlySet<string>;
   readonly state: QuietRawWrapperState;
   readonly proof: QuietRawProof;
+  readonly walk: QuietRawWalkState;
 }
 
 interface QuietCallArgContext {
@@ -70,41 +86,48 @@ interface QuietCallArgContext {
   readonly forwardedSlots: Set<number>;
 }
 
-/** Resolves quiet synchronous wrapper tags on projected-Date templates and returns read prefix proof. */
+/** Resolves quiet synchronous wrapper or coercing tags on projected-Date templates. */
 export function wrappedRawTagProof(
   tag: Expression,
   outerConsumer: Expression,
   state: QuietRawWrapperState,
 ): QuietRawProof | undefined {
   if (state.datedIndices.size === 0) return undefined;
-  const walk = createQuietRawWalkState(outerConsumer);
+  const paramOffset = state.paramOffset ?? 1;
+  const walk =
+    state.parentWalk === undefined
+      ? createQuietRawWalkState(outerConsumer)
+      : forkQuietRawWalkState(outerConsumer, state.parentWalk);
   const fn = resolveQuietCallableWithState(tag, walk);
-  if (fn === undefined || state.seenWrappers.has(fn)) return undefined;
-  if (answersLater(fn) || !quietWrapperParameters(fn)) return undefined;
-  const returned = singleReturnedExpression(fn);
+  if (fn === undefined || answersLater(fn) || !quietWrapperParameters(fn, paramOffset)) {
+    return undefined;
+  }
+  const wrapperKey = `${String(fn.pos)}:${String(fn.end)}:${String(paramOffset)}@${String(walk.callScope)}`;
+  if (state.seenWrappers.has(wrapperKey) || fn.body === undefined) return undefined;
+  const bodyWalk = forkQuietRawWalkState(outerConsumer, walk);
+  bodyWalk.allowedOwners.add(fn);
+  const returned = quietFactoryBodyReturn(fn.body, bodyWalk);
   if (returned === undefined) return undefined;
-  const bindings = collectWrapperBindings(fn);
-  const nextSeen = new Set([...state.seenWrappers, fn]);
-  return verifyLeftmostRawSpine(returned, outerConsumer, walk.proof, {
+  const bindings = collectWrapperBindings(fn, paramOffset);
+  const nextSeen = new Set([...state.seenWrappers, wrapperKey]);
+  return verifyLeftmostRawSpine(returned, {
     bindings,
     nextSeen,
+    outerConsumer,
+    proof: walk.proof,
     state,
+    walk,
   })
     ? walk.proof
     : undefined;
 }
 
-function verifyLeftmostRawSpine(
-  returned: Expression,
-  outerConsumer: Expression,
-  proof: QuietRawProof,
-  context: QuietSpineContext,
-): boolean {
+function verifyLeftmostRawSpine(returned: Expression, context: QuietSpineContext): boolean {
   let current: Expression = returned;
   const seen = new Set<Node>();
   while (!seen.has(current)) {
     seen.add(current);
-    if (matchesQuietWrappedNode(current, outerConsumer, proof, context)) return true;
+    if (matchesQuietWrappedNode(current, context)) return true;
     if (!isCallExpression(current)) return false;
     const callee = unwrapped(current.expression);
     if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
@@ -113,13 +136,8 @@ function verifyLeftmostRawSpine(
   return false;
 }
 
-function matchesQuietWrappedNode(
-  candidate: Expression,
-  outerConsumer: Expression,
-  proof: QuietRawProof,
-  context: QuietSpineContext,
-): boolean {
-  const { bindings, nextSeen, state } = context;
+function matchesQuietWrappedNode(candidate: Expression, context: QuietSpineContext): boolean {
+  const { bindings, nextSeen, outerConsumer, proof, state, walk } = context;
   if (isTaggedTemplateExpression(candidate) && isTemplateExpression(candidate.template)) {
     const innerDated = quietTemplateForwardedIndices(
       candidate.template,
@@ -135,21 +153,178 @@ function matchesQuietWrappedNode(
         proof,
         spanCount: candidate.template.templateSpans.length,
         state,
+        walk,
       })
     );
   }
-  if (!isCallExpression(candidate)) return false;
-  const forwarded = quietCallForwardedSlots(candidate, bindings, state);
+  if (isTemplateExpression(candidate)) {
+    return (
+      quietUntaggedTemplateCoerces(candidate, bindings, state.datedIndices) &&
+      verifyLocalQuietPrefix(candidate)
+    );
+  }
+  if (isBinaryExpression(candidate) && candidate.operatorToken.kind === SyntaxKind.PlusToken) {
+    return (
+      quietBinaryPlusCoerces(candidate.left, candidate.right, bindings, state.datedIndices) &&
+      verifyLocalQuietPrefix(candidate)
+    );
+  }
+  if (isNewExpression(candidate)) {
+    return verifyQuietStringTarget(
+      candidate.expression,
+      candidate.arguments ?? [],
+      candidate,
+      context,
+    );
+  }
+  return isCallExpression(candidate) && matchesQuietCallNode(candidate, context);
+}
+
+function matchesQuietCallNode(call: CallExpression, context: QuietSpineContext): boolean {
+  const { bindings, nextSeen, outerConsumer, proof, state, walk } = context;
+  if ((state.paramOffset ?? 1) === 1) {
+    const forwarded = quietCallForwardedSlots(call, bindings, state);
+    if (
+      forwarded !== undefined &&
+      forwarded.forwardedSlots.size > 0 &&
+      verifyInnerRawTarget(call.expression, call, outerConsumer, {
+        datedIndices: forwarded.forwardedSlots,
+        nextSeen,
+        proof,
+        spanCount: forwarded.effectiveSpanCount,
+        state,
+        walk,
+      })
+    ) {
+      return true;
+    }
+  }
+  if (verifyQuietStringTarget(call.expression, call.arguments, call, context)) return true;
+  if (
+    quietDirectMethodCoerces(call, bindings, state.datedIndices) &&
+    verifyLocalQuietPrefix(call)
+  ) {
+    return true;
+  }
+  return verifyQuietHelperCall(call, context);
+}
+
+function verifyLocalQuietPrefix(consumer: Expression): boolean {
+  return framedQuietTextPrefix(consumer, RAW_DATE_FIELDS);
+}
+
+function verifyQuietStringTarget(
+  target: Expression,
+  args: readonly Expression[],
+  consumer: Expression,
+  context: QuietSpineContext,
+): boolean {
+  const { bindings, outerConsumer, proof, state, walk } = context;
+  const [first, ...rest] = args;
+  if (
+    first === undefined ||
+    state.stringProofOf === undefined ||
+    !isQuietDatedCarrier(unwrapped(first), bindings, state.datedIndices) ||
+    rest.some((arg) => !isQuietOperand(arg, bindings))
+  ) {
+    return false;
+  }
+  const innerWalk = forkQuietRawWalkState(consumer, walk);
+  const innerProof = state.stringProofOf(target, consumer, innerWalk);
+  if (
+    innerProof === undefined ||
+    !framedQuietTextPrefix(
+      consumer,
+      RAW_DATE_FIELDS,
+      (c) => innerProof.calls.has(c),
+      innerProof.fields,
+    )
+  ) {
+    return false;
+  }
+  mergeSameOwnerProof(innerProof, outerConsumer, proof);
+  return true;
+}
+
+function verifyQuietHelperCall(call: CallExpression, context: QuietSpineContext): boolean {
+  const { bindings, nextSeen, outerConsumer, proof, state, walk } = context;
+  const forwarded = collectQuietCallSlots(call.arguments, bindings, state);
+  if (forwarded === undefined || forwarded.forwardedSlots.size === 0) return false;
+  const innerWalk = forkQuietRawWalkState(call, walk);
+  const nested = wrappedRawTagProof(call.expression, call, {
+    datedIndices: forwarded.forwardedSlots,
+    paramOffset: 0,
+    parentWalk: innerWalk,
+    rawProofOf: state.rawProofOf,
+    seenWrappers: nextSeen,
+    spanCount: forwarded.effectiveSpanCount,
+    stringProofOf: state.stringProofOf,
+  });
+  if (
+    nested === undefined ||
+    !framedQuietTextPrefix(call, RAW_DATE_FIELDS, (c) => nested.calls.has(c), nested.fields)
+  ) {
+    return false;
+  }
+  mergeSameOwnerProof(nested, outerConsumer, proof);
+  return true;
+}
+
+function quietDirectMethodCoerces(
+  call: CallExpression,
+  bindings: WrapperBindings,
+  datedIndices: ReadonlySet<number>,
+): boolean {
+  const callee = unwrapped(call.expression);
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
+  const method = frameMemberName(callee);
+  if (method === undefined) return false;
+  const recv = unwrapped(callee.expression);
+  const quietArgs = call.arguments.every((arg) => isQuietOperand(arg, bindings));
+  if (isQuietDatedPositional(recv, bindings, datedIndices)) {
+    return quietArgs && isCoercingDateMethodName(method);
+  }
+  if (isQuietDatedArrayCarrier(recv, bindings, datedIndices)) {
+    return quietArgs && ARRAY_TEXT_METHODS.has(method);
+  }
+  if (method === 'concat' && framedQuietPrimitive(recv)) {
+    return (
+      call.arguments.every((arg) => {
+        return (
+          isQuietOperand(arg, bindings) ||
+          isQuietDatedCarrier(unwrapped(arg), bindings, datedIndices)
+        );
+      }) &&
+      call.arguments.some((arg) => isQuietDatedCarrier(unwrapped(arg), bindings, datedIndices))
+    );
+  }
+  return false;
+}
+
+function quietUntaggedTemplateCoerces(
+  template: TemplateExpression,
+  bindings: WrapperBindings,
+  datedIndices: ReadonlySet<number>,
+): boolean {
+  for (const span of template.templateSpans) {
+    const expr = unwrapped(span.expression);
+    if (isQuietDatedCarrier(expr, bindings, datedIndices)) return true;
+    if (!isQuietOperand(span.expression, bindings)) return false;
+  }
+  return false;
+}
+
+function quietBinaryPlusCoerces(
+  left: Expression,
+  right: Expression,
+  bindings: WrapperBindings,
+  datedIndices: ReadonlySet<number>,
+): boolean {
   return (
-    forwarded !== undefined &&
-    forwarded.forwardedSlots.size > 0 &&
-    verifyInnerRawTarget(candidate.expression, candidate, outerConsumer, {
-      datedIndices: forwarded.forwardedSlots,
-      nextSeen,
-      proof,
-      spanCount: forwarded.effectiveSpanCount,
-      state,
-    })
+    (isQuietDatedCarrier(unwrapped(left), bindings, datedIndices) &&
+      isQuietOperand(right, bindings)) ||
+    (isQuietOperand(left, bindings) &&
+      isQuietDatedCarrier(unwrapped(right), bindings, datedIndices))
   );
 }
 
@@ -159,7 +334,8 @@ function verifyInnerRawTarget(
   outerConsumer: Expression,
   check: InnerTargetCheck,
 ): boolean {
-  const innerProof = check.state.rawProofOf(innerTarget, innerConsumer);
+  const innerWalk = forkQuietRawWalkState(innerConsumer, check.walk);
+  const innerProof = check.state.rawProofOf(innerTarget, innerConsumer, innerWalk);
   if (
     innerProof !== undefined &&
     framedQuietTextPrefix(
@@ -174,9 +350,11 @@ function verifyInnerRawTarget(
   }
   const nested = wrappedRawTagProof(innerTarget, innerConsumer, {
     datedIndices: check.datedIndices,
+    parentWalk: innerWalk,
     rawProofOf: check.state.rawProofOf,
     seenWrappers: check.nextSeen,
     spanCount: check.spanCount,
+    stringProofOf: check.state.stringProofOf,
   });
   if (
     nested === undefined ||
@@ -253,7 +431,8 @@ function collectQuietCallSlots(
     if (nextSlot === undefined) return undefined;
     slot = nextSlot;
   }
-  return { effectiveSpanCount: state.spanCount, forwardedSlots };
+  const highest = forwardedSlots.size === 0 ? 0 : Math.max(...forwardedSlots) + 1;
+  return { effectiveSpanCount: Math.max(state.spanCount, slot, highest), forwardedSlots };
 }
 
 function stepQuietCallArg(
@@ -265,7 +444,7 @@ function stepQuietCallArg(
   const { bindings, forwardedSlots, state } = context;
   const paramIndex = directPositionalParamIndex(unwrapped(arg), bindings);
   if (paramIndex !== undefined) {
-    if (slot < state.spanCount && state.datedIndices.has(paramIndex)) forwardedSlots.add(slot);
+    if (state.datedIndices.has(paramIndex)) forwardedSlots.add(slot);
     return slot + 1;
   }
   return framedQuietPrimitive(arg) ? slot + 1 : undefined;
@@ -289,15 +468,6 @@ function stepSpreadQuietCallArg(
   return slot + Math.max(0, state.spanCount - restSubs.startIndex);
 }
 
-function directPositionalParamIndex(
-  expr: Expression,
-  bindings: WrapperBindings,
-): number | undefined {
-  if (!isIdentifier(expr)) return undefined;
-  const declared = frameDeclarationOf(expr);
-  return declared === undefined ? undefined : bindings.positionalSubs.get(declared);
-}
-
 function quietCallSiteForwardsTemplate(
   callSiteExpr: Expression,
   bindings: WrapperBindings,
@@ -307,36 +477,4 @@ function quietCallSiteForwardsTemplate(
   if (!isObjectLiteralExpression(value) || value.properties.length !== 1) return false;
   const rawValue = ownRawPropertyInitializer(value);
   return rawValue !== undefined && forwardsCallSiteRaw(rawValue, bindings);
-}
-
-function quietWrapperParameters(fn: WrapperFunction): boolean {
-  for (const [index, param] of fn.parameters.entries()) {
-    if (param.initializer !== undefined) return false;
-    if (isIdentifier(param.name)) continue;
-    if (index === 0 && param.dotDotDotToken === undefined && isQuietRawPattern(param)) continue;
-    return false;
-  }
-  return true;
-}
-
-function isQuietRawPattern(param: ParameterDeclaration): boolean {
-  if (!isObjectBindingPattern(param.name) || param.name.elements.length !== 1) return false;
-  const [element] = param.name.elements;
-  return (
-    element !== undefined &&
-    element.initializer === undefined &&
-    findRawBindingLocalName(param) !== undefined
-  );
-}
-
-function singleReturnedExpression(fn: WrapperFunction): Expression | undefined {
-  if (fn.body === undefined) return undefined;
-  if (!isBlock(fn.body)) return unwrapped(fn.body);
-  const [first] = fn.body.statements;
-  return first !== undefined &&
-    fn.body.statements.length === 1 &&
-    isReturnStatement(first) &&
-    first.expression !== undefined
-    ? unwrapped(first.expression)
-    : undefined;
 }
