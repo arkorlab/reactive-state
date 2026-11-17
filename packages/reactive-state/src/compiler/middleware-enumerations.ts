@@ -39,6 +39,7 @@ import {
 } from './middleware-array-elements.ts';
 import { middlewareArrayIteratorOrigin } from './middleware-array-iterators.ts';
 import { canonicalArrayIndex } from './middleware-array-selector-guards.ts';
+import { middlewareExpressionReplaced } from './middleware-assignment-targets.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
@@ -448,11 +449,7 @@ function otherWrapperSlotUnchanged(
   return index !== undefined && index < wrapperLength;
 }
 
-/** A direct assignment, count or deletion changes a selected fresh wrapper value. */
+/** Direct, destructured, update, loop, or delete writes change a selected fresh wrapper value. */
 function replacesValue(expression: Expression): boolean {
-  const write = writtenBy(useOf(expression).parent);
-  return (
-    write !== undefined &&
-    targetsOf(write).some((target) => unwrapped(target as Expression) === unwrapped(expression))
-  );
+  return middlewareExpressionReplaced(expression);
 }

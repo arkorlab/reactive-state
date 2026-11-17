@@ -7,7 +7,6 @@ import {
   isArrowFunction,
   isCallExpression,
   isElementAccessExpression,
-  isExpression,
   isFunctionExpression,
   isIdentifier,
   isObjectLiteralExpression,
@@ -29,10 +28,9 @@ import { argumentArrayExposed } from './framed-array-selections.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedQuietPrimitive } from './framed-native-evaluation.ts';
-import { targetsOf } from './kept.ts';
 import { canonicalArrayIndex } from './middleware-array-selector-guards.ts';
+import { middlewareExpressionReplaced } from './middleware-assignment-targets.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
-import { writtenBy } from './written.ts';
 
 /** Native array callbacks receive original item and array identities, but scalar indexes are copies. */
 const ARRAY_CALLBACKS = new Set([
@@ -265,13 +263,7 @@ function harmlessReceiverRead(
   if (frameMemberName(parent) === undefined) return false;
   const grand = useOf(parent).parent;
   if (isCallExpression(grand) && unwrapped(grand.expression) === unwrapped(parent)) return false;
-  const write = writtenBy(grand);
-  return (
-    write === undefined ||
-    targetsOf(write).every(
-      (target) => !isExpression(target) || unwrapped(target) !== unwrapped(parent),
-    )
-  );
+  return !middlewareExpressionReplaced(parent);
 }
 
 /** Checks whether evaluating `call` touches any receiver alias in a potentially mutating way. */

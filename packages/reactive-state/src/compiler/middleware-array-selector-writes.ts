@@ -31,7 +31,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, useOf } from './code-globals.ts';
+import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { memberPath } from './exported-values.ts';
 import { framedAccessorQuietValue } from './framed-accessor-descriptors.ts';
@@ -44,8 +44,8 @@ import { framedAppliedArguments, framedArgumentPrefix, framedMemberNames } from 
 import { unchangedNativeBind } from './framed-native-bind.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { declarationOf } from './framed.ts';
-import { targetsOf } from './kept.ts';
 import { quietDefinitionPrefix } from './middleware-array-conversions.ts';
+import { middlewareWriteTargets } from './middleware-assignment-targets.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
@@ -106,17 +106,6 @@ const SELECTOR_MUTATOR_GLOBALS = new Set([
   'Reflect.setPrototypeOf',
 ]);
 
-/** Direct assignments, counts, loops or deletions targeting `expression` replace its current value. */
-export function middlewareExpressionReplaced(expression: Expression): boolean {
-  const write = writtenBy(useOf(expression).parent);
-  return (
-    write !== undefined &&
-    targetsOf(write).some(
-      (target) => isExpression(target) && unwrapped(target) === unwrapped(expression),
-    )
-  );
-}
-
 /** Rejects shown receiver-owned selector replacements on non-borrowed native selector calls. */
 export function middlewareReplacedReceiverSelector(
   call: CallExpression,
@@ -172,7 +161,9 @@ function writesReceiverSelector(
   const write = writtenBy(node);
   return (
     write !== undefined &&
-    targetsOf(write).some((target) => directSelectorWrite(target, receiver, method, context))
+    middlewareWriteTargets(write).some((target) =>
+      directSelectorWrite(target, receiver, method, context),
+    )
   );
 }
 
@@ -426,7 +417,10 @@ function bindingReassigned(binding: FrameBinding): boolean {
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
     const write = writtenBy(node);
-    if (write !== undefined && targetsOf(write).some((target) => writesBinding(target, binding)))
+    if (
+      write !== undefined &&
+      middlewareWriteTargets(write).some((target) => writesBinding(target, binding))
+    )
       return true;
     node.forEachChild((child) => {
       pending.push(child);
@@ -532,3 +526,5 @@ function stepLiteralReceiver(
   const next = memberOf(root, first);
   if (next !== undefined) state.pending.push({ expression: next, keys: rest });
 }
+
+export { middlewareExpressionReplaced } from './middleware-assignment-targets.ts';

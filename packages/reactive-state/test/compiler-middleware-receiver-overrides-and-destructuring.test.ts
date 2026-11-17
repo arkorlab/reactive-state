@@ -1,8 +1,19 @@
-import { type Expression, isExpression, isFunctionDeclaration, type Node } from 'typescript/ast';
+import {
+  type CallExpression,
+  type Expression,
+  isCallExpression,
+  isExpression,
+  isFunctionDeclaration,
+  isIdentifier,
+  type Node,
+} from 'typescript/ast';
 import type { API } from 'typescript/sync';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { unwrapped } from '../src/compiler/bounded.ts';
+import { initializerOf } from '../src/compiler/framed.ts';
 import { middlewareArrayElement } from '../src/compiler/middleware-array-elements.ts';
+import { middlewareCallbackHandoff } from '../src/compiler/middleware-callback-handoffs.ts';
 import {
   middlewareCopiedCollections,
   middlewareEnumeration,
@@ -187,6 +198,200 @@ const COMPUTED_OVERRIDE_CASES = [
   },
 ] as const;
 
+const DESTRUCTURING_SELECTOR_CASES = [
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'negative-at-after-array-destructuring-out-of-bounds-write',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }, { a: 2 }]; [items[2]] = [fresh]; return /*read*/ items.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:'], single: true },
+    id: 'slice-wrapper-negative-at-after-destructuring-out-of-bounds-write',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); [copy[2]] = [{ a: 3 }]; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'slice-wrapper-target-slot-destructuring-overwrite-clears-origin',
+    source:
+      'function read() { const items = [{ a: 1 }, { a: 2 }]; const copy = items.slice(); [copy[1]] = [{ a: 3 }]; return /*read*/ copy.at(-1); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'parenthesized-destructuring-own-at-override-rejected',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }]; ([items.at]) = [() => fresh]; return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: ['items:1'], single: true },
+    id: 'destructuring-uncalled-own-slice-override-keeps-negative-at-pin',
+    source:
+      'function read(fresh: { a: number }) { const items = [{ a: 1 }, { a: 2 }]; [items.slice] = [() => [fresh]]; return /*read*/ items.at(-1); }',
+  },
+] as const;
+
+interface HandoffSummary {
+  readonly callback: string | undefined;
+  readonly unknown: boolean;
+  readonly slots: readonly number[];
+  readonly arraySlot: number;
+  readonly primitiveItems: boolean;
+}
+
+const HANDOFF_DESTRUCTURING_CASES: readonly {
+  readonly id: string;
+  readonly source: string;
+  readonly expected: HandoffSummary | undefined;
+}[] = [
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-array-destructuring-element-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; [items[0]] = [{ a: 1 }]; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'find-object-destructuring-length-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: { a: number } | undefined) => boolean) { const items: Array<{ a: number }> = []; ({ len: items.length } = { len: 1 }); return /*call*/ items.find(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-rest-destructuring-element-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: unknown[]) => void) { const items: unknown[][] = []; [...items[0]] = [{ a: 1 }]; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-object-rest-destructuring-element-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: Record<string, unknown>) => void) { const items: Array<Record<string, unknown>> = []; ({ ...items[0] } = { a: 1 }); return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-for-of-destructuring-element-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; let count = 0; for ([items[0]] of [[{ a: 1 }]]) { count += 1; } void count; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-for-in-destructuring-element-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: unknown) => void) { const items: string[] = []; let count = 0; for ([items[0]] in { a: 1 }) { count += 1; } void count; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-nested-default-pattern-element-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; [{ item: items[0] } = { item: { a: 1 } }] = [undefined]; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-call-argument-destructuring-write-grows-empty-receiver',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; return /*call*/ items.forEach(visit, ([items[0]] = [{ a: 1 }])); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: false,
+    },
+    id: 'foreach-destructuring-rhs-read-keeps-known-handoff-pin',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items = [{ a: 1 }]; let picked: { a: number } | undefined; [picked] = [items[0]]; void picked; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: false,
+    },
+    id: 'foreach-destructuring-default-rhs-read-keeps-known-handoff-pin',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items = [{ a: 1 }]; let picked: { a: number } | undefined; [picked = items[0]] = [undefined]; void picked; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: undefined,
+    id: 'foreach-shorthand-default-rhs-length-read-keeps-empty-pin',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; let len = 0; ({ len = items.length } = {}); void len; return /*call*/ items.forEach(visit); }',
+  },
+  {
+    expected: undefined,
+    id: 'foreach-computed-key-length-read-in-destructuring-keeps-empty-pin',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; let out = 0; ({ [items.length]: out } = { 0: 1 }); void out; return /*call*/ items.forEach(visit); }',
+  },
+];
+
+/** Follows lexical initializers to a written receiver literal while leaving parameters unresolved. */
+function selectedLiteral(expression: Expression): Expression | undefined {
+  let current = unwrapped(expression);
+  const seen = new Set<Expression>();
+  while (isIdentifier(current)) {
+    if (seen.has(current)) return undefined;
+    seen.add(current);
+    const initializer = initializerOf(current);
+    if (initializer === undefined) return undefined;
+    current = unwrapped(initializer);
+  }
+  return current;
+}
+
 /** Finds the expression immediately following an inline marker comment inside the first function. */
 function markedExpression(source: string, markerText: string, root: Node): Expression {
   const sourceFile = root.getSourceFile();
@@ -207,6 +412,13 @@ function markedExpression(source: string, markerText: string, root: Node): Expre
   visit(fn);
   if (target === undefined) throw new Error('Missing marked expression.');
   return target;
+}
+
+/** Finds the call expression immediately following the inline call marker comment. */
+function markedCall(source: string, root: Node): CallExpression {
+  const expression = markedExpression(source, '/*call*/', root);
+  if (!isCallExpression(expression)) throw new Error('Expected a marked call expression.');
+  return expression;
 }
 
 describe('middleware receiver overrides, computed selector keys, and destructuring targets', () => {
@@ -246,7 +458,30 @@ describe('middleware receiver overrides, computed selector keys, and destructuri
     expect(resolvedIn(source)).toStrictEqual(expected);
   });
 
+  /** Summarizes callback handoff metadata for the marked call expression. */
+  function handoffIn(source: string): HandoffSummary | undefined {
+    using parsed = parseModule(api, 'receiver-destructuring-handoffs.ts', source);
+    const call = markedCall(source, parsed.sourceFile);
+    const handoff = middlewareCallbackHandoff(call, (value) => selectedLiteral(value));
+    if (handoff === undefined) return undefined;
+    return {
+      arraySlot: handoff.arraySlot,
+      callback: handoff.callback?.getText(parsed.sourceFile),
+      primitiveItems: handoff.primitiveItems,
+      slots: handoff.slots,
+      unknown: handoff.unknown,
+    };
+  }
+
   it.each(COMPUTED_OVERRIDE_CASES)('$id', ({ expected, source }) => {
     expect(resolvedIn(source)).toStrictEqual(expected);
+  });
+
+  it.each(DESTRUCTURING_SELECTOR_CASES)('$id', ({ expected, source }) => {
+    expect(resolvedIn(source)).toStrictEqual(expected);
+  });
+
+  it.each(HANDOFF_DESTRUCTURING_CASES)('$id', ({ expected, source }) => {
+    expect(handoffIn(source)).toStrictEqual(expected);
   });
 });
