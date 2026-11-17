@@ -55,7 +55,7 @@ import {
   ownerScopeOf,
   resolveLocalConst,
   topWrapped,
-} from './retained-match-intrinsics.ts';
+} from './retained-match-paths.ts';
 import { bindingIdentifiers, readsBinding } from './scope.ts';
 
 /**

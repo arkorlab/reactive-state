@@ -26,15 +26,15 @@ import { frameMemberName } from './framed-bindings.ts';
 import { readsOf } from './local-module-reads.ts';
 import { handedTo, isConstList } from './local-write-paths.ts';
 import { constantValue } from './numbers.ts';
+import { mutatesMatchIntrinsics } from './retained-match-intrinsics.ts';
 import {
   constBindingOf,
   isMutationTarget,
   memberOrSymbolKey,
-  mutatesMatchIntrinsics,
   ownerScopeOf,
   resolveLocalConst,
   topWrapped,
-} from './retained-match-intrinsics.ts';
+} from './retained-match-paths.ts';
 import { isNullishOrString } from './retained-match-receivers.ts';
 
 /**
@@ -43,7 +43,7 @@ import { isNullishOrString } from './retained-match-receivers.ts';
  * dynamic-flag, custom-receiver, or mutated matches that return decorated or arbitrary results.
  */
 
-export { symbolMethodName } from './retained-match-intrinsics.ts';
+export { symbolMethodName } from './retained-match-paths.ts';
 
 interface RegExpObligation {
   readonly expr: Expression;
