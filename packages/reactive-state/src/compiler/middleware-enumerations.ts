@@ -40,6 +40,7 @@ import {
 import { middlewareArrayIteratorOrigin } from './middleware-array-iterators.ts';
 import { canonicalArrayIndex } from './middleware-array-selector-guards.ts';
 import { middlewareExpressionReplaced } from './middleware-assignment-targets.ts';
+import { nestedCopiedAtEnumeration, nestedCopiedAtOrigins } from './middleware-nested-copy-at.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
@@ -81,7 +82,12 @@ export function middlewareEnumeration(
   | { readonly of: Expression; readonly keys: readonly string[]; readonly quiet: boolean }
   | undefined {
   const reading = copiedReading(expression);
-  if (reading === undefined) return undefined;
+  if (reading === undefined) {
+    return nestedCopiedAtEnumeration(expression, {
+      projectCall: projectNestedCopyCall,
+      resolveEnumeration: middlewareEnumeration,
+    });
+  }
   const { value, keys, captures, relative } = reading;
   const stableLength = relative
     ? (length: number): boolean => wrapperLengthUnchanged(captures, keys.length - 1, length)
@@ -102,7 +108,13 @@ export function middlewareCopiedCollections(
   | NonNullable<ReturnType<typeof middlewareArrayIteratorOrigin>>
 )[] {
   const reading = copiedReading(expression);
-  if (reading === undefined) return [];
+  if (reading === undefined) {
+    return nestedCopiedAtOrigins(expression, {
+      projectCall: projectNestedCopyCall,
+      resolveEnumeration: middlewareEnumeration,
+      resolveOrigins: middlewareCopiedCollections,
+    });
+  }
   const { value, keys, captures, relative } = reading;
   const stableLength = relative
     ? (length: number): boolean => wrapperLengthUnchanged(captures, keys.length - 1, length)
@@ -123,7 +135,10 @@ function copiedReading(expression: Expression): CopyReading | undefined {
   let value = unwrapped(expression);
   let relative = false;
   for (;;) {
-    const source = copiedSource(value, keys, captures, seen);
+    const source =
+      relative && (isPropertyAccessExpression(value) || isElementAccessExpression(value))
+        ? undefined
+        : copiedSource(value, keys, captures, seen);
     if (source !== undefined) {
       value = source;
       continue;
@@ -452,4 +467,19 @@ function otherWrapperSlotUnchanged(
 /** Direct, destructured, update, loop, or delete writes change a selected fresh wrapper value. */
 function replacesValue(expression: Expression): boolean {
   return middlewareExpressionReplaced(expression);
+}
+
+/** Projects a single-origin native collection copy call for inner-array stability tracing. */
+function projectNestedCopyCall(
+  call: CallExpression,
+  keys: readonly string[],
+): { readonly keys: readonly string[]; readonly of: Expression } | undefined {
+  const direct = enumerationProjection(call, keys) ?? middlewareArraySlice(call, keys);
+  if (direct !== undefined) return { keys: direct.keys, of: direct.of };
+  const iterator = middlewareArrayIteratorOrigin(call, keys);
+  if (iterator !== undefined) return { keys: iterator.keys, of: iterator.of };
+  const copied = middlewareArrayCopiedOrigins(call, keys);
+  return copied.length === 1 && copied[0] !== undefined
+    ? { keys: copied[0].keys, of: copied[0].of }
+    : undefined;
 }

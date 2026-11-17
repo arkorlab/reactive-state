@@ -33,7 +33,6 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
-import { memberPath } from './exported-values.ts';
 import { framedAccessorQuietValue } from './framed-accessor-descriptors.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
@@ -42,42 +41,25 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedAppliedArguments, framedArgumentPrefix, framedMemberNames } from './framed-keys.ts';
 import { unchangedNativeBind } from './framed-native-bind.ts';
-import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { declarationOf } from './framed.ts';
+import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { quietDefinitionPrefix } from './middleware-array-conversions.ts';
 import { middlewareWriteTargets } from './middleware-assignment-targets.ts';
+import {
+  type ReceiverResolutionContext,
+  sameSelectorReceiver,
+} from './middleware-receiver-identities.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
 /** Receiver-owned selector override and member-write target checks for native array guards. */
 
-export interface ReceiverResolutionContext {
-  readonly sourceOf: (expression: Expression) => Expression | undefined;
-  readonly memberOf: (value: Expression, name: string) => Expression | undefined;
-}
+export type { ReceiverResolutionContext } from './middleware-receiver-identities.ts';
 
 interface InvokedSelectorMutator {
   readonly mutator: string;
   readonly candidates: readonly Expression[];
   readonly applied?: Expression | undefined;
   readonly direct: boolean;
-}
-
-interface ReceiverWork {
-  readonly expression: Expression;
-  readonly keys: readonly string[];
-}
-
-interface ReceiverIdentitySet {
-  readonly bindings: ReadonlySet<string>;
-  readonly literals: ReadonlySet<Expression>;
-}
-
-interface ReceiverState {
-  readonly bindings: Set<string>;
-  readonly literals: Set<Expression>;
-  readonly seen: Set<string>;
-  readonly pending: ReceiverWork[];
 }
 
 const DEFINERS = new Set(['Object.defineProperty', 'Reflect.defineProperty']);
@@ -434,97 +416,6 @@ function writesBinding(target: Node, binding: FrameBinding): boolean {
   if (!isExpression(target)) return false;
   const value = unwrapped(target);
   return isIdentifier(value) && frameBindingOf(value)?.binding === binding;
-}
-
-/** Matches two receiver expressions across syntax, literal sources, mutable aliases, and patterns. */
-function sameSelectorReceiver(
-  left: Expression,
-  right: Expression,
-  context: ReceiverResolutionContext,
-): boolean {
-  const first = unwrapped(left);
-  const second = unwrapped(right);
-  if (first === second) return true;
-  const leftSet = collectReceiverIdentities(first, context);
-  const rightSet = collectReceiverIdentities(second, context);
-  for (const literal of rightSet.literals) {
-    if (leftSet.literals.has(literal)) return true;
-  }
-  for (const key of rightSet.bindings) {
-    if (leftSet.bindings.has(key)) return true;
-  }
-  return false;
-}
-
-/** Collects reachable literal sources and `(declarationPos:path)` keys across alias chains. */
-function collectReceiverIdentities(
-  expression: Expression,
-  context: ReceiverResolutionContext,
-): ReceiverIdentitySet {
-  const state: ReceiverState = {
-    bindings: new Set<string>(),
-    literals: new Set<Expression>(),
-    pending: [{ expression, keys: [] }],
-    seen: new Set<string>(),
-  };
-  for (let item = state.pending.pop(); item !== undefined; item = state.pending.pop()) {
-    const value = unwrapped(item.expression);
-    if (item.keys.length === 0) recordDirectSource(value, context.sourceOf, state.literals);
-    const path = memberPath(value);
-    const keys = [...path.keys, ...item.keys];
-    if (isIdentifier(path.root)) stepIdentifierReceiver(path.root, keys, state);
-    else stepLiteralReceiver(path.root, keys, context.memberOf, state);
-  }
-  return { bindings: state.bindings, literals: state.literals };
-}
-
-/** Adds any resolved literal container for a zero-offset receiver candidate. */
-function recordDirectSource(
-  value: Expression,
-  sourceOf: (expression: Expression) => Expression | undefined,
-  literals: Set<Expression>,
-): void {
-  const resolved = sourceOf(value);
-  if (resolved !== undefined) literals.add(resolved);
-}
-
-/** Records a lexical binding key and queues its initializer and assigned source values. */
-function stepIdentifierReceiver(
-  root: Identifier,
-  keys: readonly string[],
-  state: ReceiverState,
-): void {
-  const selected = frameBindingOf(root);
-  const declared = selected?.binding ?? declarationOf(root);
-  if (declared === undefined) return;
-  const fullKeys = [...(selected?.keys ?? []), ...keys];
-  const key = `${String(declared.pos)}:${fullKeys.join('.')}`;
-  state.bindings.add(key);
-  if (selected === undefined || state.seen.has(key)) return;
-  state.seen.add(key);
-  if (selected.binding.initializer !== undefined)
-    state.pending.push({ expression: selected.binding.initializer, keys: fullKeys });
-  if (selected.keys.length === 0) {
-    for (const assigned of framedAssignedValues(root)) {
-      state.pending.push({ expression: assigned, keys });
-    }
-  }
-}
-
-/** Steps pending member keys through literal containers or records the terminal literal node. */
-function stepLiteralReceiver(
-  root: Expression,
-  keys: readonly string[],
-  memberOf: (value: Expression, name: string) => Expression | undefined,
-  state: ReceiverState,
-): void {
-  const [first, ...rest] = keys;
-  if (first === undefined) {
-    state.literals.add(root);
-    return;
-  }
-  const next = memberOf(root, first);
-  if (next !== undefined) state.pending.push({ expression: next, keys: rest });
 }
 
 export { middlewareExpressionReplaced } from './middleware-assignment-targets.ts';

@@ -229,6 +229,54 @@ const DESTRUCTURING_SELECTOR_CASES = [
     source:
       'function read(fresh: { a: number }) { const items = [{ a: 1 }, { a: 2 }]; [items.slice] = [() => [fresh]]; return /*read*/ items.at(-1); }',
   },
+  {
+    expected: { origins: ['rows:0'], single: true },
+    id: 'nested-copied-inner-array-push-invalidates-negative-at',
+    source:
+      'function read(fresh: { a: number }) { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.slice(); copy[0]!.push(fresh); return /*read*/ copy[0]!.at(-1); }',
+  },
+  {
+    expected: { origins: ['rows:0'], single: true },
+    id: 'nested-copied-source-inner-array-push-invalidates-negative-at',
+    source:
+      'function read(fresh: { a: number }) { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.slice(); rows[0]!.push(fresh); return /*read*/ copy[0]!.at(-1); }',
+  },
+  {
+    expected: { origins: ['rows:0'], single: true },
+    id: 'nested-copied-const-inner-alias-push-invalidates-negative-at',
+    source:
+      'function read(fresh: { a: number }) { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.slice(); const inner = copy[0]!; inner.push(fresh); return /*read*/ inner.at(-1); }',
+  },
+  {
+    expected: { origins: ['[{ a: 3 }, { a: 4 }]:'], single: false },
+    id: 'nested-with-copy-inner-array-push-invalidates-negative-at',
+    source:
+      'function read(fresh: { a: number }) { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.with(0, [{ a: 3 }, { a: 4 }]); copy[0]!.push(fresh); return /*read*/ copy[0]!.at(-1); }',
+  },
+  {
+    expected: { origins: ['rows:0.1'], single: true },
+    id: 'nested-copied-unmutated-inner-array-normalizes-negative-at-pin',
+    source:
+      'function read() { const rows = [[{ a: 1 }, { a: 2 }]]; const copy = rows.slice(); return /*read*/ copy[0]!.at(-1); }',
+  },
+  {
+    expected: { origins: ['items:0'], single: true },
+    id: 'self-referential-unrelated-let-member-cycle-terminates-preserving-at-pin',
+    source:
+      'function read() { let node: { next?: unknown; at?: unknown } = { next: [] }; node = node.next as typeof node; const items = [{ a: 1 }]; node.at = () => ({ a: 2 }); return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'self-referential-let-member-cycle-aliasing-items-rejects-at',
+    source:
+      'function read() { const items = [{ a: 1 }]; let node: { next?: unknown; at?: unknown } = { next: items }; node = node.next as typeof node; node.at = () => ({ a: 2 }); return /*read*/ items.at(0); }',
+  },
+  {
+    expected: { origins: [], single: false },
+    id: 'self-referential-parameter-seeded-member-cycle-fails-closed-on-at',
+    source:
+      'function read(seed: { next?: unknown; at?: unknown }) { let node = seed; node = node.next as typeof node; const items = [{ a: 1 }]; node.at = () => ({ a: 2 }); return /*read*/ items.at(0); }',
+  },
 ] as const;
 
 interface HandoffSummary {

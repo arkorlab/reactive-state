@@ -60,6 +60,12 @@ interface SelectorGuardContext {
   readonly replacedGlobal: (at: Node, method: string) => boolean;
   readonly sourceOf: (expression: Expression) => Expression | undefined;
   readonly memberOf: (value: Expression, name: string) => Expression | undefined;
+  readonly projectCall?:
+    | ((
+        call: CallExpression,
+        keys: readonly string[],
+      ) => { readonly keys: readonly string[]; readonly of: Expression } | undefined)
+    | undefined;
 }
 
 const BORROWED_GLOBALS = new Set(['Array', 'Reflect']);
@@ -118,7 +124,7 @@ export function middlewareStableSelectorCall(
   receiver: Expression,
   context: SelectorGuardContext,
 ): boolean {
-  const trace = receiverLiteralTrace(receiver, context.memberOf);
+  const trace = receiverLiteralTrace(receiver, context);
   if (trace === undefined) return false;
   if (trace.aliases.size === 0) return true;
   const harmless = (name: Identifier): boolean => {
@@ -249,7 +255,7 @@ function wholeConstValue(expression: Expression): Expression | undefined {
 /** Records every binding and syntax step along `receiver`'s constant literal resolution path. */
 function receiverLiteralTrace(
   receiver: Expression,
-  memberOf: (value: Expression, name: string) => Expression | undefined,
+  context: SelectorGuardContext,
 ): ReceiverTrace | undefined {
   let value = unwrapped(receiver);
   const keys: string[] = [];
@@ -265,7 +271,7 @@ function receiverLiteralTrace(
     keys.unshift(...path.keys);
     const next = isIdentifier(path.root)
       ? stepTraceIdentifier(path.root, keys.length === 0, aliases, directAliases)
-      : stepTraceLiteral(path.root, keys, memberOf);
+      : stepTraceLiteral(path.root, keys, context);
     if (next === undefined)
       return !isIdentifier(path.root) && keys.length === 0 && isArrayLiteralExpression(path.root)
         ? { aliases, directAliases, chainNodes }
@@ -293,10 +299,16 @@ function stepTraceIdentifier(
 function stepTraceLiteral(
   value: Expression,
   keys: string[],
-  memberOf: (target: Expression, name: string) => Expression | undefined,
+  context: SelectorGuardContext,
 ): Expression | undefined {
+  if (isCallExpression(value) && context.projectCall !== undefined) {
+    const projected = context.projectCall(value, keys);
+    if (projected === undefined) return undefined;
+    keys.splice(0, keys.length, ...projected.keys);
+    return projected.of;
+  }
   const key = keys.shift();
-  return key === undefined ? undefined : memberOf(value, key);
+  return key === undefined ? undefined : context.memberOf(value, key);
 }
 
 /** Marks every unwrapped member expression along a static property chain as part of the receiver. */

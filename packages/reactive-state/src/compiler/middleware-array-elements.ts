@@ -181,7 +181,7 @@ export function middlewareArraySlice(
 /** A quiet native at selects one copied slot without changing the wrapper before that read. */
 export function middlewareCopyAt(
   call: CallExpression,
-): { readonly of: Expression; readonly key: string } | undefined {
+): { readonly borrowed: boolean; readonly key: string; readonly of: Expression } | undefined {
   const selected = nativeSelectionCall(call);
   if (selected?.method !== 'at' || replacedSelection(call, selected)) return undefined;
   const prefix =
@@ -195,7 +195,7 @@ export function middlewareCopyAt(
     return undefined;
   const index = nativeIndex(prefix.values[0]);
   return index !== undefined && Number.isFinite(index)
-    ? { of: selected.receiver, key: String(index) }
+    ? { borrowed: selected.borrowed, key: String(index), of: selected.receiver }
     : undefined;
 }
 
@@ -472,4 +472,9 @@ function nativeArrayTarget(target: Node, method: string): boolean {
   }
 }
 
-export { literalSource as middlewareArraySource };
+export {
+  ARRAY_SELECTORS as MIDDLEWARE_ARRAY_SELECTORS,
+  literalSource as middlewareArraySource,
+  literalMember as middlewareLiteralMember,
+  replacedNativeSelection as middlewareReplacedNativeSelection,
+};
