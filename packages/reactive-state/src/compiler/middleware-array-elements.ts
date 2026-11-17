@@ -418,7 +418,7 @@ function replacedSelection(call: CallExpression, selected: SelectionCall): boole
 }
 
 /** A source-written native Array or prototype replacement adds no selector identity proof. */
-function replacedNativeSelection(call: CallExpression, method: string): boolean {
+function replacedNativeSelection(call: Node, method: string): boolean {
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;

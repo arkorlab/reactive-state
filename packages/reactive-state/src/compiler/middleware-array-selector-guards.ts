@@ -6,7 +6,6 @@ import {
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
-  isExpression,
   isIdentifier,
   isNumericLiteral,
   isObjectLiteralExpression,
@@ -29,23 +28,19 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
-import { destructuredFirst } from './destructuring-order.ts';
 import { memberPath } from './exported-values.ts';
-import { framedAccessorQuietValue } from './framed-accessor-descriptors.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
-import { sourceArrayFunction } from './framed-array-functions.ts';
-import { executionOwner } from './framed-array-mutations.ts';
 import { argumentArrayExposed } from './framed-array-selections.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
-import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { unchangedNativeBind } from './framed-native-bind.ts';
 import { framedQuietPrimitive, framedQuietSource } from './framed-native-evaluation.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import { declarationOf, initializerOf } from './framed.ts';
-import { targetsOf } from './kept.ts';
-import { quietDefinitionPrefix } from './middleware-array-conversions.ts';
+import { middlewareWrapperTail } from './middleware-array-copy-arguments.ts';
+import {
+  middlewareExpressionReplaced,
+  middlewareReplacedReceiverSelector,
+} from './middleware-array-selector-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
-import { writtenBy } from './written.ts';
 
 /** Receiver stability, opaque element retention, and own-method guards for array selectors. */
 
@@ -62,14 +57,13 @@ interface ScalarStep {
 
 interface SelectorGuardContext {
   readonly selectors: ReadonlySet<string>;
-  readonly replacedGlobal: (call: CallExpression, method: string) => boolean;
+  readonly replacedGlobal: (at: Node, method: string) => boolean;
   readonly sourceOf: (expression: Expression) => Expression | undefined;
   readonly memberOf: (value: Expression, name: string) => Expression | undefined;
 }
 
-const DEFINERS = new Set(['Object.defineProperty', 'Reflect.defineProperty']);
-const DEFINER_GLOBALS = new Set(['Array', 'Object', 'Reflect']);
-const DEFINITION = { slots: 3 } as const;
+const BORROWED_GLOBALS = new Set(['Array', 'Reflect']);
+const BORROWED_PATH = { length: 3 } as const;
 const INDEX = { limit: 4_294_967_295 } as const;
 const OBJECT_PROTOTYPE_KEYS = new Set([
   '__defineGetter__',
@@ -100,15 +94,6 @@ const PURE_ARRAY_READS = new Set([
   'toSpliced',
   'values',
   'with',
-]);
-const SELECTOR_MUTATOR_GLOBALS = new Set([
-  'Object.assign',
-  'Object.defineProperties',
-  'Object.defineProperty',
-  'Object.setPrototypeOf',
-  'Reflect.defineProperty',
-  'Reflect.set',
-  'Reflect.setPrototypeOf',
 ]);
 
 /** Canonical ECMA-262 array indices range below `2 ** 32 - 1` and format without extra characters. */
@@ -144,29 +129,6 @@ export function middlewareStableSelectorCall(
   };
   if (argumentArrayExposed(memberPath(receiver).root, trace.aliases, harmless, true)) return false;
   return !callTouchesAliases(call, trace.aliases, harmless);
-}
-
-/** Rejects shown receiver-owned selector replacements on non-borrowed native selector calls. */
-export function middlewareReplacedReceiverSelector(
-  call: CallExpression,
-  receiver: Expression,
-  method: string,
-  sourceOf: (expression: Expression) => Expression | undefined,
-): boolean {
-  if (sourceArrayFunction(call.expression)) return true;
-  const pending: Node[] = [call.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      writesReceiverSelector(node, receiver, method, sourceOf) &&
-      possiblePriorSelectorWrite(node, call)
-    )
-      return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
 }
 
 /** Checks whether a variable declaration belongs to a lexical `const` declaration list. */
@@ -347,7 +309,7 @@ function recordMemberNodes(expression: Expression, nodes: Set<Expression>): void
   }
 }
 
-/** Quiet element reads and own selector writes preserve the array's length and element slots. */
+/** Quiet element reads, unoverridden pure reads, and own selector writes preserve slots and length. */
 function harmlessSelectorArrayUse(
   reference: Identifier,
   directAliases: ReadonlySet<FrameBinding>,
@@ -355,6 +317,7 @@ function harmlessSelectorArrayUse(
 ): boolean {
   const selected = frameBindingOf(reference);
   if (selected === undefined || !directAliases.has(selected.binding)) return false;
+  if (harmlessBorrowedPureRead(reference, context)) return true;
   const parent = useOf(reference).parent;
   if (
     (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
@@ -365,13 +328,76 @@ function harmlessSelectorArrayUse(
   if (key === undefined) return false;
   const grand = useOf(parent).parent;
   if (isCallExpression(grand) && unwrapped(grand.expression) === unwrapped(parent))
-    return (
-      PURE_ARRAY_READS.has(key) &&
-      !context.replacedGlobal(grand, key) &&
-      grand.arguments.every((argument) => framedQuietPrimitive(argument))
-    );
-  if (!replacesExpression(parent)) return true;
-  return !isDeleteExpression(grand) && context.selectors.has(key);
+    return harmlessDirectPureCall(grand, parent.expression, key, context);
+  if (!middlewareExpressionReplaced(parent))
+    return !context.selectors.has(key) || !context.replacedGlobal(parent, key);
+  return (
+    !isDeleteExpression(grand) && context.selectors.has(key) && !context.replacedGlobal(parent, key)
+  );
+}
+
+/** Non-borrowed pure reads stay harmless only while neither Array.prototype nor `receiver` overrides `key`. */
+function harmlessDirectPureCall(
+  call: CallExpression,
+  receiver: Expression,
+  key: string,
+  context: SelectorGuardContext,
+): boolean {
+  return (
+    PURE_ARRAY_READS.has(key) &&
+    !context.replacedGlobal(call, key) &&
+    !middlewareReplacedReceiverSelector(call, receiver, key, context.sourceOf) &&
+    call.arguments.every((argument) => framedQuietPrimitive(argument))
+  );
+}
+
+/** Borrowed `Array.prototype` pure reads ignore receiver-owned overrides while arguments stay quiet. */
+function harmlessBorrowedPureRead(reference: Identifier, context: SelectorGuardContext): boolean {
+  const { at, parent } = useOf(reference);
+  if (!isCallExpression(parent)) return false;
+  const borrowed = borrowedTextCall(parent);
+  const method = borrowed?.path[2];
+  if (
+    borrowed === undefined ||
+    method === undefined ||
+    borrowed.path.length !== BORROWED_PATH.length ||
+    borrowed.path[0] !== 'Array' ||
+    borrowed.path[1] !== 'prototype' ||
+    borrowed.receiver !== at ||
+    !PURE_ARRAY_READS.has(method)
+  )
+    return false;
+  return (
+    !context.replacedGlobal(parent, method) &&
+    unchangedNativeBind(parent.expression, parent, BORROWED_GLOBALS) &&
+    quietBorrowedPureArguments(parent, borrowed.given, borrowed.applied)
+  );
+}
+
+/** Validates quiet primitive argument lists across borrowed `.call`, `.apply`, and `Reflect.apply`. */
+function quietBorrowedPureArguments(
+  call: CallExpression,
+  given: readonly Expression[],
+  applied: Expression | undefined,
+): boolean {
+  const reflected = globalPathOf(unwrapped(call.expression))?.join('.') === 'Reflect.apply';
+  if (reflected && (applied === undefined || nullishArgumentList(applied))) return false;
+  const values =
+    applied === undefined || (!reflected && nullishArgumentList(applied))
+      ? given
+      : framedAppliedArguments(call, applied);
+  if (values === undefined) return false;
+  const prefix = framedArgumentPrefix(call, values, Infinity);
+  if (prefix.unknown || prefix.alternatives !== undefined) return false;
+  return [...prefix.values, ...middlewareWrapperTail(call)].every((value) =>
+    framedQuietPrimitive(value),
+  );
+}
+
+/** Checks whether an `.apply` list expression is literal `null` or global `undefined`. */
+function nullishArgumentList(expression: Expression): boolean {
+  const value = unwrapped(expression);
+  return value.kind === SyntaxKind.NullKeyword || globalPathOf(value)?.join('.') === 'undefined';
 }
 
 /** Scans a call for any non-harmless alias reference evaluated in its callee or argument list. */
@@ -405,156 +431,4 @@ function quietMemberKey(expression: Expression): string | undefined {
   return frameMemberName(expression);
 }
 
-/** Direct assignments, counts, loops or deletions targeting `expression` replace its current value. */
-function replacesExpression(expression: Expression): boolean {
-  const write = writtenBy(useOf(expression).parent);
-  return (
-    write !== undefined &&
-    targetsOf(write).some(
-      (target) => isExpression(target) && unwrapped(target) === unwrapped(expression),
-    )
-  );
-}
-
-/** Completed writes before method lookup, loop writes, and referenced closures can install own methods. */
-function possiblePriorSelectorWrite(operation: Node, call: CallExpression): boolean {
-  if (!framedPossibleBranch(operation)) return false;
-  const reader = executionOwner(call);
-  const writer = executionOwner(operation);
-  if (writer !== reader) return !unreferencedLocalFunction(writer, reader);
-  if (operation.end <= call.expression.end && !destructuredFirst(call.expression, operation))
-    return true;
-  return repeatedFrameRead(operation, call.expression, call.getSourceFile(), reader);
-}
-
-/** Detects assignments or Object/Reflect definitions that can install `method` or a prototype on `receiver`. */
-function writesReceiverSelector(
-  node: Node,
-  receiver: Expression,
-  method: string,
-  sourceOf: (expression: Expression) => Expression | undefined,
-): boolean {
-  if (isDeleteExpression(node)) return false;
-  const write = writtenBy(node);
-  if (write === undefined) return false;
-  if (!isCallExpression(node))
-    return targetsOf(write).some((target) =>
-      directSelectorWrite(target, receiver, method, sourceOf),
-    );
-  const mutator = calledSelectorMutator(node);
-  return (
-    mutator !== undefined &&
-    isExpression(write) &&
-    sameSelectorReceiver(write, receiver, sourceOf) &&
-    !definesUnrelatedReceiverProperty(node, mutator, method)
-  );
-}
-
-/** Direct property or `__proto__` assignment onto the same array receiver installs a non-native lookup. */
-function directSelectorWrite(
-  target: Node,
-  receiver: Expression,
-  method: string,
-  sourceOf: (expression: Expression) => Expression | undefined,
-): boolean {
-  if (!isExpression(target)) return false;
-  const value = unwrapped(target);
-  if (!isPropertyAccessExpression(value) && !isElementAccessExpression(value)) return false;
-  const key = frameMemberName(value);
-  return (
-    (key === method || key === '__proto__') &&
-    sameSelectorReceiver(value.expression, receiver, sourceOf)
-  );
-}
-
-/** Extracts the global Object/Reflect mutator path across direct, borrowed, and bound invocations. */
-function calledSelectorMutator(call: CallExpression): string | undefined {
-  const direct = globalPathOf(unwrapped(call.expression))?.join('.');
-  if (direct !== undefined && SELECTOR_MUTATOR_GLOBALS.has(direct)) return direct;
-  const borrowed = borrowedTextCall(call)?.path.join('.');
-  if (borrowed !== undefined && SELECTOR_MUTATOR_GLOBALS.has(borrowed)) return borrowed;
-  const callee = unwrapped(call.expression);
-  const bound = isIdentifier(callee) ? initializerOf(callee) : undefined;
-  const boundCall = bound === undefined ? undefined : unwrapped(bound);
-  if (boundCall === undefined || !isCallExpression(boundCall)) return undefined;
-  const binder = unwrapped(boundCall.expression);
-  if (
-    (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
-    frameMemberName(binder) !== 'bind'
-  )
-    return undefined;
-  const target = globalPathOf(unwrapped(binder.expression))?.join('.');
-  return target !== undefined && SELECTOR_MUTATOR_GLOBALS.has(target) ? target : undefined;
-}
-
-/** Quiet single-property definitions naming a different non-prototype key leave `method` untouched. */
-function definesUnrelatedReceiverProperty(
-  call: CallExpression,
-  mutator: string,
-  method: string,
-): boolean {
-  if (!DEFINERS.has(mutator) || call.arguments.length !== DEFINITION.slots) return false;
-  const path = globalPathOf(unwrapped(call.expression))?.join('.');
-  if (path !== mutator) return false;
-  const [, property, descriptor] = call.arguments;
-  if (property === undefined || descriptor === undefined) return false;
-  const key = unwrapped(property);
-  const data = unwrapped(descriptor);
-  return (
-    isStringLiteral(key) &&
-    key.text !== method &&
-    key.text !== '__proto__' &&
-    isObjectLiteralExpression(data) &&
-    framedAccessorQuietValue(data) &&
-    unchangedNativeBind(call.expression, call, DEFINER_GLOBALS) &&
-    quietDefinitionPrefix(call)
-  );
-}
-
-/** Matches two receiver expressions through syntax identity, shared literal source, or shared bindings. */
-function sameSelectorReceiver(
-  left: Expression,
-  right: Expression,
-  sourceOf: (expression: Expression) => Expression | undefined,
-): boolean {
-  const first = unwrapped(left);
-  const second = unwrapped(right);
-  if (first === second) return true;
-  const firstSource = sourceOf(first);
-  const secondSource = sourceOf(second);
-  if (firstSource !== undefined && firstSource === secondSource) return true;
-  const firstKeys = receiverIdentities(first);
-  if (firstKeys.size === 0) return false;
-  for (const key of receiverIdentities(second)) {
-    if (firstKeys.has(key)) return true;
-  }
-  return false;
-}
-
-/** Collects `(declarationPos:memberPath)` keys across `const` alias steps for receiver matching. */
-function receiverIdentities(expression: Expression): ReadonlySet<string> {
-  const found = new Set<string>();
-  const initial = memberPath(expression);
-  let keys = [...initial.keys];
-  let root = initial.root;
-  const seen = new Set<Node>();
-  while (isIdentifier(root)) {
-    const binding = frameBindingOf(root);
-    const declared = binding?.binding ?? declarationOf(root);
-    if (declared === undefined || seen.has(declared)) break;
-    seen.add(declared);
-    const prefix = binding === undefined ? [] : binding.keys;
-    found.add(`${String(declared.pos)}:${[...prefix, ...keys].join('.')}`);
-    if (
-      binding === undefined ||
-      binding.keys.length > 0 ||
-      !isConstDeclaration(binding.binding) ||
-      binding.binding.initializer === undefined
-    )
-      break;
-    const next = memberPath(binding.binding.initializer);
-    keys = [...next.keys, ...keys];
-    root = next.root;
-  }
-  return found;
-}
+export { middlewareReplacedReceiverSelector } from './middleware-array-selector-writes.ts';
