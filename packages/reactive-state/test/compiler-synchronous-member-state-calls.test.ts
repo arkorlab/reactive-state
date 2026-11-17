@@ -180,8 +180,8 @@ describe('synchronous member and class state calls', () => {
         : `hook:${state.callee.text}`;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      const [prefix = message] = message.split(':');
-      const [clause = prefix] = prefix.split(', after ');
+      const [prefix = message] = message.split(':', 2);
+      const [clause = prefix] = prefix.split(', after ', 2);
       return `refused:${clause}`;
     }
   }

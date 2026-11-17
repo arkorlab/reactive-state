@@ -110,15 +110,16 @@ function lookupModuleExport(
 ): ExportLookup<DeclaredValue> {
   return resolveExportGraph(
     exportTarget(file, name),
-    (target) =>
-      inspectModuleExport(
+    (target) => {
+      return inspectModuleExport(
         {
           file: target.file,
           modules,
           sourceFile: modules.parse(target.file, false).sourceFile,
         },
         target.name,
-      ),
+      );
+    },
     memo,
   );
 }
@@ -243,7 +244,7 @@ function namedExport(
   reading: ModuleReading,
 ): ExportRule<DeclaredValue> | undefined {
   const { exportClause: clause } = statement;
-  if (statement.isTypeOnly || clause === undefined) {
+  if (clause === undefined || statement.isTypeOnly) {
     return undefined;
   }
   if (!isNamedExports(clause)) {

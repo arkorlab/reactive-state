@@ -145,7 +145,7 @@ describe('type-only import declaration emission', () => {
     const { modules } = readImports(
       declarations,
       parsed.sourceFile,
-      () => ({ kind: 'package' }),
+      () => ({ file: undefined, id: undefined, kind: 'package' }),
       (reason) => {
         throw new Error(reason);
       },

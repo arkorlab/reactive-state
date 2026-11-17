@@ -1,70 +1,86 @@
 import {
+  type BindingElement,
+  type BindingName,
   type CallExpression,
   type ClassDeclaration,
   type ClassExpression,
-  type ConstructorDeclaration,
-  type GetAccessorDeclaration,
+  type ElementAccessExpression,
+  isArrayBindingPattern,
   isArrayLiteralExpression,
-  isArrowFunction,
-  isAsExpression,
   isBinaryExpression,
+  isBindingElement,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
   isComputedPropertyName,
-  isConditionalExpression,
   isConstructorDeclaration,
   isDecorator,
   isElementAccessExpression,
-  isExpressionWithTypeArguments,
   isFunctionDeclaration,
   isFunctionExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isMethodDeclaration,
   isNewExpression,
-  isNonNullExpression,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
-  isParenthesizedExpression,
+  isOmittedExpression,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
-  isSatisfiesExpression,
   isShorthandPropertyAssignment,
-  isSetAccessorDeclaration,
   isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
-  isTypeAssertion,
+  isTemplateExpression,
   isVariableDeclaration,
-  type MethodDeclaration,
+  type NewExpression,
   type Node,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
-  type SetAccessorDeclaration,
+  type PropertyAccessExpression,
   SyntaxKind,
+  type TaggedTemplateExpression,
 } from 'typescript/ast';
 
-import { isTypeOnly } from './scope.ts';
-
-type DeferredMember =
-  | ConstructorDeclaration
-  | GetAccessorDeclaration
-  | MethodDeclaration
-  | SetAccessorDeclaration;
-
-const LOGICAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandToken,
-  SyntaxKind.BarBarToken,
-  SyntaxKind.QuestionQuestionToken,
-]);
+import {
+  accessModeOf,
+  type Binding,
+  type CallableNode,
+  createScopeTable,
+  extendsExpressionOf,
+  forEachDecorator,
+  forEachHeaderNode,
+  hasModifier,
+  isCallableNode,
+  isDeferredMember,
+  isErasedOrAmbient,
+  isPassiveDeferredFunction,
+  type ScopeTable,
+  unwrapExpression,
+} from './statement-call-scopes.ts';
+import {
+  projectMemberFromValue,
+  type ResolvedValue,
+  resolveSpecTargets,
+  resolveTargets,
+  staticAccessKey,
+  type TargetContext,
+} from './statement-call-targets.ts';
+import {
+  bindingElementKey,
+  collectExecutableRoot,
+  staticPropertyNameKey,
+} from './statement-call-writes.ts';
 
 interface WalkState {
   readonly activated: Set<Node>;
-  readonly collectedScopes: Set<Node>;
-  readonly localTargets: Map<string, Node[]>;
+  readonly constructed: Set<Node>;
+  readonly ctx: TargetContext;
   readonly onCall: (call: CallExpression) => boolean;
+  readonly scopes: ScopeTable;
   stopped: boolean;
+  readonly wholeEscaped: Set<Node>;
 }
 
 /**
@@ -75,363 +91,420 @@ export function forEachSynchronousCall(
   root: Node,
   onCall: (call: CallExpression) => boolean,
 ): void {
+  const scopes = createScopeTable(root);
   const state: WalkState = {
     activated: new Set(),
-    collectedScopes: new Set(),
-    localTargets: new Map(),
+    constructed: new Set(),
+    ctx: {
+      onActivate: (callable) => {
+        activateCallable(callable, state);
+      },
+      scopes,
+    },
     onCall,
+    scopes,
     stopped: false,
+    wholeEscaped: new Set(),
   };
-  collectScopeTargets(root, state);
+  collectScopeWithPropagation(root, state);
+  if (isCallExpression(root)) {
+    visitNode(root, state);
+    return;
+  }
   root.forEachChild((child) => {
     visitNode(child, state);
   });
 }
 
+function collectScopeWithPropagation(execRoot: Node, state: WalkState): void {
+  collectExecutableRoot(execRoot, state.scopes, (binding, spec) => {
+    const resolved = resolveSpecTargets(spec, state.ctx);
+    if (binding.escaped) {
+      for (const value of resolved) {
+        activateWholeValue(value, state);
+      }
+    } else if (binding.invoked) {
+      for (const value of resolved) {
+        if (value.kind === 'node' && isCallableNode(value.node)) {
+          activateCallable(value.node, state);
+        }
+      }
+    }
+  });
+}
+
 function visitNode(node: Node, state: WalkState): void {
-  if (state.stopped || isErasedOrAmbient(node) || isDeferredFunction(node, state.activated)) {
+  if (state.stopped || isErasedOrAmbient(node) || isPassiveDeferredFunction(node)) {
     return;
   }
-  if (isCallExpression(node) && state.onCall(node)) {
-    state.stopped = true;
+  if (isCallExpression(node)) {
+    if (state.onCall(node)) {
+      state.stopped = true;
+      return;
+    }
+    handleCallExpression(node, state);
     return;
   }
-  if (isIdentifier(node) && standsInMemberOrInvocation(node)) {
-    enterLocalTargets(node.text, state);
+  if (isNewExpression(node)) {
+    handleNewExpression(node, state);
     return;
   }
-  if (shouldCollectChildScope(node)) {
-    collectScopeTargets(node, state);
+  if (isTaggedTemplateExpression(node)) {
+    handleTaggedTemplate(node, state);
+    return;
   }
+  observeNodeOperations(node, state);
   forEachActiveChild(node, state);
 }
 
-function enterLocalTargets(name: string, state: WalkState): void {
-  const targets = state.localTargets.get(name);
-  if (targets === undefined) {
-    return;
-  }
-  for (const target of targets) {
-    activateTarget(target, state);
-  }
-}
-
-function activateTarget(target: Node, state: WalkState): void {
-  const queue: Node[] = [target];
-  for (const queued of queue) {
-    const current = unwrapTarget(queued);
-    if (state.activated.has(current)) {
-      continue;
+function observeNodeOperations(node: Node, state: WalkState): void {
+  if (isClassStaticBlockDeclaration(node)) {
+    collectScopeWithPropagation(node, state);
+  } else if (isDecorator(node)) {
+    invokeExpression(node.expression, state);
+  } else if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
+    observeMemberAccess(node, state);
+  } else if (isSpreadAssignment(node)) {
+    observeObjectSpread(node.expression, state);
+  } else if (isVariableDeclaration(node) || isParameterDeclaration(node)) {
+    if (node.initializer !== undefined && !isIdentifier(node.name)) {
+      observeBindingPattern(node.name, resolveTargets(node.initializer, state.ctx), state);
     }
-    state.activated.add(current);
-    enqueueInnerTargets(current, state.localTargets, queue);
-    visitNode(current, state);
+  } else if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
+    observeAssignmentPattern(node.left, node.right, state);
   }
-}
-
-function unwrapTarget(node: Node): Node {
-  let current = node;
-  while (isWrapperExpression(current)) {
-    current = (current as { readonly expression: Node }).expression;
-  }
-  return current;
-}
-
-function enqueueInnerTargets(
-  node: Node,
-  localTargets: ReadonlyMap<string, Node[]>,
-  queue: Node[],
-): void {
-  if (isIdentifier(node)) {
-    queue.push(...(localTargets.get(node.text) ?? []));
-    return;
-  }
-  if (isConditionalExpression(node)) {
-    queue.push(node.whenTrue, node.whenFalse);
-    return;
-  }
-  if (isBinaryExpression(node)) {
-    enqueueBinaryTargets(node, queue);
-    return;
-  }
-  if (isArrayLiteralExpression(node)) {
-    enqueueArrayTargets(node.elements, queue);
-    return;
-  }
-  if (isObjectLiteralExpression(node)) {
-    enqueueObjectTargets(node, queue);
-  }
-}
-
-function enqueueArrayTargets(elements: readonly Node[], queue: Node[]): void {
-  for (const element of elements) {
-    queue.push(isSpreadElement(element) ? element.expression : element);
-  }
-}
-
-function enqueueBinaryTargets(
-  node: Node & {
-    readonly left: Node;
-    readonly operatorToken: { readonly kind: SyntaxKind };
-    readonly right: Node;
-  },
-  queue: Node[],
-): void {
-  const operator = node.operatorToken.kind;
-  if (operator === SyntaxKind.CommaToken) {
-    queue.push(node.right);
-  } else if (LOGICAL_OPERATORS.has(operator)) {
-    queue.push(node.left, node.right);
-  }
-}
-
-function enqueueObjectTargets(node: ObjectLiteralExpression, queue: Node[]): void {
-  for (const property of node.properties) {
-    if (isPropertyAssignment(property)) {
-      queue.push(property.initializer);
-    } else if (isShorthandPropertyAssignment(property)) {
-      queue.push(property.name);
-    } else if (isSpreadAssignment(property)) {
-      queue.push(property.expression);
-    }
-  }
-}
-
-function shouldCollectChildScope(node: Node): boolean {
-  return (
-    isArrowFunction(node) ||
-    isFunctionExpression(node) ||
-    isFunctionDeclaration(node) ||
-    isClassStaticBlockDeclaration(node)
-  );
-}
-
-function collectScopeTargets(scopeRoot: Node, state: WalkState): void {
-  if (state.collectedScopes.has(scopeRoot)) {
-    return;
-  }
-  state.collectedScopes.add(scopeRoot);
-  const scan = (node: Node): void => {
-    if (isErasedOrAmbient(node)) {
-      return;
-    }
-    recordDeclarationTarget(node, state.localTargets);
-    if (node !== scopeRoot && isScopeBoundary(node)) {
-      return;
-    }
-    node.forEachChild(scan);
-  };
-  scopeRoot.forEachChild(scan);
-}
-
-function recordDeclarationTarget(node: Node, localTargets: Map<string, Node[]>): void {
-  if ((isFunctionDeclaration(node) || isClassDeclaration(node)) && node.name !== undefined) {
-    appendTarget(localTargets, node.name.text, node);
-    return;
-  }
-  if (isVariableDeclaration(node) && isIdentifier(node.name) && node.initializer !== undefined) {
-    appendTarget(localTargets, node.name.text, node.initializer);
-  }
-}
-
-function appendTarget(localTargets: Map<string, Node[]>, name: string, target: Node): void {
-  const existing = localTargets.get(name);
-  if (existing === undefined) {
-    localTargets.set(name, [target]);
-  } else {
-    existing.push(target);
-  }
-}
-
-function isScopeBoundary(node: Node): boolean {
-  return (
-    isArrowFunction(node) ||
-    isFunctionExpression(node) ||
-    isFunctionDeclaration(node) ||
-    isDeferredMember(node)
-  );
-}
-
-function isErasedOrAmbient(node: Node): boolean {
-  if (isTypeOnly(node) || hasModifier(node, SyntaxKind.DeclareKeyword)) {
-    return true;
-  }
-  return isPropertyDeclaration(node) && hasModifier(node, SyntaxKind.AbstractKeyword);
-}
-
-function isDeferredFunction(node: Node, activated: ReadonlySet<Node>): boolean {
-  if (activated.has(node)) {
-    return false;
-  }
-  if (isFunctionDeclaration(node)) {
-    return true;
-  }
-  return (isArrowFunction(node) || isFunctionExpression(node)) && !standsInInvocation(node);
 }
 
 function forEachActiveChild(node: Node, state: WalkState): void {
   const visit = (child: Node): void => {
     visitNode(child, state);
   };
-  if (isDeferredMember(node) && !hasActiveOwner(node, state.activated)) {
-    visitMemberHeader(node, visit);
+  if (isDeferredMember(node)) {
+    forEachHeaderNode(node, visit);
     return;
   }
-  if (
-    isPropertyDeclaration(node) &&
-    !hasModifier(node, SyntaxKind.StaticKeyword) &&
-    !hasActiveOwner(node, state.activated)
-  ) {
-    node.forEachChild((child) => {
-      if (child !== node.initializer) {
-        visit(child);
-      }
-    });
+  if (isPropertyDeclaration(node) && !hasModifier(node, SyntaxKind.StaticKeyword)) {
+    forEachDecorator(node.modifiers, visit);
+    if (isComputedPropertyName(node.name)) {
+      visit(node.name);
+    }
     return;
   }
   node.forEachChild(visit);
 }
 
-function hasActiveOwner(member: Node, activated: ReadonlySet<Node>): boolean {
-  const owner = member.parent;
-  if (owner === undefined || !isOwnerContainer(owner)) {
-    return false;
+function handleCallExpression(node: CallExpression, state: WalkState): void {
+  invokeExpression(node.expression, state);
+  invokeBorrowedReceiver(node.expression, state);
+  for (const arg of node.arguments) {
+    activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state);
   }
-  return activated.has(owner) || standsInMemberOrInvocation(owner);
+  node.forEachChild((child) => {
+    visitNode(child, state);
+  });
 }
 
-function isOwnerContainer(
-  node: Node,
-): node is ClassDeclaration | ClassExpression | ObjectLiteralExpression {
-  return isObjectLiteralExpression(node) || isClassExpression(node) || isClassDeclaration(node);
-}
-
-function standsInInvocation(node: Node): boolean {
-  let current = node;
-  for (;;) {
-    const { parent } = current;
-    if (parent === undefined) {
-      return false;
+function handleNewExpression(node: NewExpression, state: WalkState): void {
+  constructExpression(node.expression, state);
+  if (node.arguments !== undefined) {
+    for (const arg of node.arguments) {
+      activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state);
     }
-    if (isInvocationParent(parent)) {
-      return true;
+  }
+  node.forEachChild((child) => {
+    visitNode(child, state);
+  });
+}
+
+function handleTaggedTemplate(node: TaggedTemplateExpression, state: WalkState): void {
+  invokeExpression(node.tag, state);
+  if (isTemplateExpression(node.template)) {
+    for (const span of node.template.templateSpans) {
+      activateEscapedExpression(span.expression, state);
     }
-    if (!forwardsToInvocation(current, parent)) {
-      return false;
+  }
+  node.forEachChild((child) => {
+    visitNode(child, state);
+  });
+}
+
+function invokeExpression(expr: Node, state: WalkState): void {
+  const seenBindings = new Set<Binding>();
+  const targets = resolveTargets(expr, state.ctx, new Set(), seenBindings);
+  for (const binding of seenBindings) {
+    binding.invoked = true;
+  }
+  for (const target of targets) {
+    if (target.kind === 'node' && isCallableNode(target.node)) {
+      activateCallable(target.node, state);
     }
-    current = parent;
   }
 }
 
-function standsInMemberOrInvocation(node: Node): boolean {
-  let current = node;
-  for (;;) {
-    const { parent } = current;
-    if (parent === undefined) {
-      return false;
-    }
-    if (isInvocationParent(parent) || isMemberReceiver(current, parent)) {
-      return true;
-    }
-    if (!forwardsToInvocation(current, parent)) {
-      return false;
-    }
-    current = parent;
-  }
-}
-
-function isInvocationParent(parent: Node): boolean {
-  return isCallExpression(parent) || isNewExpression(parent) || isTaggedTemplateExpression(parent);
-}
-
-function isMemberReceiver(current: Node, parent: Node): boolean {
-  return (
-    (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
-    parent.expression === current
-  );
-}
-
-function forwardsToInvocation(current: Node, parent: Node): boolean {
-  if (isWrapperExpression(parent) || isContainerParent(current, parent)) {
-    return true;
-  }
-  return isBranchingParent(current, parent) || isMemberReceiver(current, parent);
-}
-
-function isWrapperExpression(node: Node): boolean {
-  return (
-    isParenthesizedExpression(node) ||
-    isAsExpression(node) ||
-    isSatisfiesExpression(node) ||
-    isNonNullExpression(node) ||
-    isTypeAssertion(node) ||
-    isExpressionWithTypeArguments(node)
-  );
-}
-
-function isContainerParent(current: Node, parent: Node): boolean {
-  if (
-    isSpreadElement(parent) ||
-    isArrayLiteralExpression(parent) ||
-    isSpreadAssignment(parent) ||
-    isObjectLiteralExpression(parent)
-  ) {
-    return true;
-  }
-  return isPropertyAssignment(parent) && parent.initializer === current;
-}
-
-function isBranchingParent(current: Node, parent: Node): boolean {
-  if (isConditionalExpression(parent)) {
-    return current !== parent.condition;
-  }
-  if (!isBinaryExpression(parent)) {
-    return false;
-  }
-  const operator = parent.operatorToken.kind;
-  return (
-    LOGICAL_OPERATORS.has(operator) ||
-    (operator === SyntaxKind.CommaToken && current === parent.right)
-  );
-}
-
-function isDeferredMember(node: Node): node is DeferredMember {
-  return (
-    isMethodDeclaration(node) ||
-    isGetAccessorDeclaration(node) ||
-    isSetAccessorDeclaration(node) ||
-    isConstructorDeclaration(node)
-  );
-}
-
-function visitMemberHeader(member: DeferredMember, visit: (child: Node) => void): void {
-  visitDecorators(member.modifiers, visit);
-  if (!isConstructorDeclaration(member) && isComputedPropertyName(member.name)) {
-    visit(member.name);
-  }
-  for (const parameter of member.parameters) {
-    visitDecorators(parameter.modifiers, visit);
-  }
-}
-
-function visitDecorators(
-  modifiers: readonly Node[] | undefined,
-  visit: (child: Node) => void,
-): void {
-  if (modifiers === undefined) {
+function invokeBorrowedReceiver(calleeExpr: Node, state: WalkState): void {
+  const clean = unwrapExpression(calleeExpr);
+  if (!isPropertyAccessExpression(clean) && !isElementAccessExpression(clean)) {
     return;
   }
-  for (const modifier of modifiers) {
-    if (isDecorator(modifier)) {
-      visit(modifier);
+  const key = staticAccessKey(clean, state.scopes);
+  if (key !== 'call' && key !== 'apply') {
+    return;
+  }
+  const receivers = resolveTargets(clean.expression, state.ctx);
+  for (const receiver of receivers) {
+    if (receiver.kind === 'node' && isCallableNode(receiver.node)) {
+      activateCallable(receiver.node, state);
     }
   }
 }
 
-function hasModifier(node: Node, kind: SyntaxKind): boolean {
-  return (
-    (node as { readonly modifiers?: readonly Node[] }).modifiers?.some(
-      (each) => each.kind === kind,
-    ) === true
+function constructExpression(expr: Node, state: WalkState): void {
+  const targets = resolveTargets(expr, state.ctx);
+  for (const target of targets) {
+    if (target.kind !== 'node') {
+      continue;
+    }
+    if (isClassDeclaration(target.node) || isClassExpression(target.node)) {
+      constructClass(target.node, state);
+    } else if (isFunctionDeclaration(target.node) || isFunctionExpression(target.node)) {
+      activateCallable(target.node, state);
+    }
+  }
+}
+
+function constructClass(cls: ClassDeclaration | ClassExpression, state: WalkState): void {
+  if (state.stopped || state.constructed.has(cls)) {
+    return;
+  }
+  state.constructed.add(cls);
+  const baseExpr = extendsExpressionOf(cls);
+  if (baseExpr !== undefined) {
+    constructExpression(baseExpr, state);
+  }
+  for (const member of cls.members) {
+    if (isErasedOrAmbient(member)) {
+      continue;
+    }
+    if (
+      isPropertyDeclaration(member) &&
+      !hasModifier(member, SyntaxKind.StaticKeyword) &&
+      member.initializer !== undefined
+    ) {
+      visitNode(member.initializer, state);
+    } else if (isConstructorDeclaration(member)) {
+      activateCallable(member, state);
+    }
+  }
+}
+
+function activateCallable(callable: CallableNode, state: WalkState): void {
+  if (state.stopped || isErasedOrAmbient(callable) || state.activated.has(callable)) {
+    return;
+  }
+  state.activated.add(callable);
+  collectScopeWithPropagation(callable, state);
+  for (const parameter of callable.parameters) {
+    parameter.forEachChild((child) => {
+      if (!isDecorator(child)) {
+        visitNode(child, state);
+      }
+    });
+  }
+  if (callable.body !== undefined) {
+    visitNode(callable.body, state);
+  }
+}
+
+function activateEscapedExpression(expr: Node, state: WalkState): void {
+  const seenBindings = new Set<Binding>();
+  const targets = resolveTargets(expr, state.ctx, new Set(), seenBindings);
+  for (const binding of seenBindings) {
+    binding.escaped = true;
+  }
+  for (const target of targets) {
+    activateWholeValue(target, state);
+  }
+}
+
+function activateWholeValue(value: ResolvedValue, state: WalkState): void {
+  if (state.stopped) {
+    return;
+  }
+  if (value.kind === 'instance') {
+    activateWholeClass(value.cls, state);
+    return;
+  }
+  activateWholeNode(value.node, state);
+}
+
+function activateWholeNode(node: Node, state: WalkState): void {
+  if (isCallableNode(node)) {
+    activateCallable(node, state);
+    return;
+  }
+  if (isClassDeclaration(node) || isClassExpression(node)) {
+    activateWholeClass(node, state);
+    return;
+  }
+  if (state.wholeEscaped.has(node)) {
+    return;
+  }
+  if (isObjectLiteralExpression(node)) {
+    state.wholeEscaped.add(node);
+    activateWholeObject(node, state);
+  } else if (isArrayLiteralExpression(node)) {
+    state.wholeEscaped.add(node);
+    activateWholeArray(node.elements, state);
+  }
+}
+
+function activateWholeArray(elements: readonly Node[], state: WalkState): void {
+  for (const element of elements) {
+    if (!isOmittedExpression(element)) {
+      activateEscapedExpression(isSpreadElement(element) ? element.expression : element, state);
+    }
+  }
+}
+
+function activateWholeObject(object: ObjectLiteralExpression, state: WalkState): void {
+  for (const property of object.properties) {
+    if (isDeferredMember(property)) {
+      activateCallable(property, state);
+    } else if (isPropertyAssignment(property)) {
+      activateEscapedExpression(property.initializer, state);
+    } else if (isShorthandPropertyAssignment(property)) {
+      activateEscapedExpression(property.name, state);
+    } else if (isSpreadAssignment(property)) {
+      activateEscapedExpression(property.expression, state);
+    }
+  }
+}
+
+function activateWholeClass(cls: ClassDeclaration | ClassExpression, state: WalkState): void {
+  if (state.wholeEscaped.has(cls)) {
+    return;
+  }
+  state.wholeEscaped.add(cls);
+  constructClass(cls, state);
+  for (const member of cls.members) {
+    if (isDeferredMember(member)) {
+      activateCallable(member, state);
+    }
+  }
+}
+
+function observeMemberAccess(
+  access: ElementAccessExpression | PropertyAccessExpression,
+  state: WalkState,
+): void {
+  const mode = accessModeOf(access);
+  const key = staticAccessKey(access, state.scopes);
+  const receivers = resolveTargets(access.expression, state.ctx);
+  for (const receiver of receivers) {
+    projectMemberFromValue(receiver, { key, mode, seen: new Set() }, state.ctx);
+  }
+}
+
+function observeObjectSpread(expr: Node, state: WalkState): void {
+  const sources = resolveTargets(expr, state.ctx);
+  for (const source of sources) {
+    projectMemberFromValue(source, { key: undefined, mode: 'read', seen: new Set() }, state.ctx);
+  }
+}
+
+function observeBindingPattern(
+  pattern: BindingName,
+  sources: readonly ResolvedValue[],
+  state: WalkState,
+): void {
+  if (isIdentifier(pattern) || sources.length === 0) {
+    return;
+  }
+  if (isObjectBindingPattern(pattern)) {
+    observeObjectBindingElements(pattern.elements, sources, state);
+  } else if (isArrayBindingPattern(pattern)) {
+    observeArrayBindingElements(pattern.elements, sources, state);
+  }
+}
+
+function observeObjectBindingElements(
+  elements: readonly BindingElement[],
+  sources: readonly ResolvedValue[],
+  state: WalkState,
+): void {
+  for (const element of elements) {
+    const key =
+      element.dotDotDotToken === undefined ? bindingElementKey(element, state.scopes) : undefined;
+    observeProjectedElement(element, sources, key, state);
+  }
+}
+
+function observeArrayBindingElements(
+  elements: readonly Node[],
+  sources: readonly ResolvedValue[],
+  state: WalkState,
+): void {
+  for (const [index, element] of elements.entries()) {
+    if (!isOmittedExpression(element) && isBindingElement(element)) {
+      const key = element.dotDotDotToken === undefined ? String(index) : undefined;
+      observeProjectedElement(element, sources, key, state);
+    }
+  }
+}
+
+function observeProjectedElement(
+  element: BindingElement,
+  sources: readonly ResolvedValue[],
+  key: string | undefined,
+  state: WalkState,
+): void {
+  const projected = sources.flatMap((src) =>
+    projectMemberFromValue(src, { key, mode: 'read', seen: new Set() }, state.ctx),
   );
+  if (element.name !== undefined && !isIdentifier(element.name)) {
+    const nextSources =
+      element.initializer === undefined
+        ? projected
+        : [...projected, ...resolveTargets(element.initializer, state.ctx)];
+    observeBindingPattern(element.name, nextSources, state);
+  }
+}
+
+function observeAssignmentPattern(left: Node, right: Node, state: WalkState): void {
+  const target = unwrapExpression(left);
+  if (isObjectLiteralExpression(target)) {
+    observeObjectAssignmentPattern(target.properties, resolveTargets(right, state.ctx), state);
+  } else if (isArrayLiteralExpression(target)) {
+    observeArrayAssignmentPattern(target.elements, resolveTargets(right, state.ctx), state);
+  }
+}
+
+function observeObjectAssignmentPattern(
+  properties: readonly ObjectLiteralElementLike[],
+  sources: readonly ResolvedValue[],
+  state: WalkState,
+): void {
+  for (const property of properties) {
+    const key = isSpreadAssignment(property)
+      ? undefined
+      : staticPropertyNameKey(property.name, state.scopes);
+    for (const src of sources) {
+      projectMemberFromValue(src, { key, mode: 'read', seen: new Set() }, state.ctx);
+    }
+  }
+}
+
+function observeArrayAssignmentPattern(
+  elements: readonly Node[],
+  sources: readonly ResolvedValue[],
+  state: WalkState,
+): void {
+  for (const [index, element] of elements.entries()) {
+    if (!isOmittedExpression(element)) {
+      const key = isSpreadElement(element) ? undefined : String(index);
+      for (const src of sources) {
+        projectMemberFromValue(src, { key, mode: 'read', seen: new Set() }, state.ctx);
+      }
+    }
+  }
 }
