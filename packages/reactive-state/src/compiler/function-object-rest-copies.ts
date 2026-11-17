@@ -54,6 +54,32 @@ function restCopyMemo(variableWrites: VariableWriteMap): Map<Node, readonly Obje
   return memo;
 }
 
+/** Deduplicates `ObjectRestCopy` entries by source object identity and excluded key set. */
+function deduplicateRestCopies(copies: readonly ObjectRestCopy[]): readonly ObjectRestCopy[] {
+  if (copies.length <= 1) {
+    return copies;
+  }
+  const seen = new Map<ObjectLiteralExpression, ReadonlySet<string>[]>();
+  const unique: ObjectRestCopy[] = [];
+  for (const copy of copies) {
+    const bucket = seen.get(copy.object) ?? [];
+    if (bucket.every((prev) => !sameKeySet(prev, copy.excludedKeys))) {
+      bucket.push(copy.excludedKeys);
+      seen.set(copy.object, bucket);
+      unique.push(copy);
+    }
+  }
+  return unique;
+}
+
+function sameKeySet(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const key of left) {
+    if (!right.has(key)) return false;
+  }
+  return true;
+}
+
 /** Evaluates `run` in an isolated branch and caches `keyNode` when no cycle back-edge hit. */
 function memoizedRestCopies(
   keyNode: Node,
@@ -67,7 +93,7 @@ function memoizedRestCopies(
     return cached;
   }
   const branch: CycleSeenState = { hitCycle: false, seen: new Set(state.seen) };
-  const result = run(branch);
+  const result = deduplicateRestCopies(run(branch));
   if (branch.hitCycle) {
     state.hitCycle = true;
   } else {
@@ -84,12 +110,14 @@ function withExtraExcluded(
   if (extraExcluded.size === 0 || copies.length === 0) {
     return copies;
   }
-  return copies.map((copy) => {
-    return {
-      excludedKeys: new Set([...extraExcluded, ...copy.excludedKeys]),
-      object: copy.object,
-    };
-  });
+  return deduplicateRestCopies(
+    copies.map((copy) => {
+      return {
+        excludedKeys: new Set([...extraExcluded, ...copy.excludedKeys]),
+        object: copy.object,
+      };
+    }),
+  );
 }
 
 /** Collects shallow object-rest copy sources reachable from `node` (for `{ ...rest }`). */
@@ -294,7 +322,7 @@ function emitRestCopiesFromHolders(
     );
     out.push(...withExtraExcluded(chained, excludedKeys));
   }
-  return out;
+  return deduplicateRestCopies(out);
 }
 
 /** Static sibling keys preceding an object binding rest element `...rest`. */

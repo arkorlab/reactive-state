@@ -40,6 +40,16 @@ function buildConditionalChain(
  * conditional and logical alias diamonds memoize cycle-free subtrees and deduplicate candidates in
  * linear time without caching active cycle cuts.
  */
+const REST_DIAMOND_LEVELS = 24;
+
+function buildRestCopyDiamond(): string {
+  const lines: string[] = [];
+  for (let i = 1; i <= REST_DIAMOND_LEVELS; i += 1) {
+    lines.push(`const m${String(i)} = flag ? m${String(i - 1)} : m${String(i - 1)};`);
+  }
+  return lines.join(' ');
+}
+
 const CASES = [
   {
     id: 'array-rest-plain-identifier-static-index-read-name',
@@ -246,6 +256,18 @@ const CASES = [
     reason: NAME_REASON,
     source:
       'function named() {} export function out(flag: boolean) { const m0 = { swap() { (this as { pick?: () => void }).pick = named; } }; let a: Record<string, unknown> = {}; let b: Record<string, unknown> = {}; b = flag ? a : {}; a = flag ? b : m0; const first = { ...a }; void first; const helpers = { ...b, pick() {} }; (helpers as { swap?: () => void }).swap?.(); return helpers.pick.name; }',
+  },
+  {
+    id: 'conditional-object-rest-alias-diamond-24-levels-spread-callable-flagged',
+    maxInitReads: 8,
+    reason: NAME_REASON,
+    source: `function named() {} export function run(flag: boolean) { const { skip: _s, ...m0 } = { skip: 1, swap() { (this as { pick?: () => void }).pick = named; } }; ${buildRestCopyDiamond()} const helpers = { ...m24, pick() {} }; helpers.swap(); return helpers.pick.name; }`,
+  },
+  {
+    id: 'conditional-object-rest-alias-diamond-24-levels-excluded-callable-preserved',
+    maxInitReads: 8,
+    reason: undefined,
+    source: `function named() {} export function run(flag: boolean) { const { swap: _s, ...m0 } = { swap() { (this as { pick?: () => void }).pick = named; }, keep() {} }; ${buildRestCopyDiamond()} const helpers = { ...m24, pick() {} }; return helpers.pick.name; }`,
   },
 ] as const;
 
