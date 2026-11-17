@@ -3,12 +3,13 @@ import {
   type BindingName,
   type ClassDeclaration,
   type ClassExpression,
-  type ElementAccessExpression,
   type ConstructorDeclaration,
+  type ElementAccessExpression,
   type FunctionDeclaration,
   type FunctionExpression,
   type GetAccessorDeclaration,
   type Identifier,
+  isArrayLiteralExpression,
   isArrowFunction,
   isAsExpression,
   isBinaryExpression,
@@ -32,19 +33,27 @@ import {
   isMethodDeclaration,
   isModuleDeclaration,
   isNonNullExpression,
+  isNoSubstitutionTemplateLiteral,
+  isObjectLiteralExpression,
   isParameterDeclaration,
   isParenthesizedExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
+  isPropertyAssignment,
   isPropertyDeclaration,
   isSatisfiesExpression,
   isSetAccessorDeclaration,
   isSourceFile,
+  isSpreadAssignment,
+  isSpreadElement,
+  isStringLiteral,
   isTypeAssertion,
   isVariableDeclarationList,
   type MethodDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   type PropertyAccessExpression,
+  type PropertyAssignment,
   type SetAccessorDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
@@ -68,15 +77,22 @@ export type DeferredMember =
   | MethodDeclaration
   | SetAccessorDeclaration;
 
-export type TargetSpec =
-  | { readonly kind: 'elements'; readonly source: Node }
-  | { readonly key: string | undefined; readonly kind: 'member'; readonly source: Node }
+export type ValueSpec =
+  | {
+      readonly excluded: ReadonlySet<string>;
+      readonly kind: 'object-rest';
+      readonly source: ValueSpec;
+    }
+  | { readonly key: string | undefined; readonly kind: 'member'; readonly source: ValueSpec }
+  | { readonly kind: 'array-rest'; readonly offset: number; readonly source: ValueSpec }
+  | { readonly kind: 'elements'; readonly source: ValueSpec }
+  | { readonly kind: 'union'; readonly left: ValueSpec; readonly right: ValueSpec }
+  | { readonly kind: 'unknown' }
   | { readonly kind: 'value'; readonly node: Node };
 
 export interface Binding {
-  escaped: boolean;
-  invoked: boolean;
-  readonly specs: TargetSpec[];
+  readonly specs: ValueSpec[];
+  readonly watchers: Map<string, () => void>;
 }
 
 export interface LexicalScope {
@@ -86,13 +102,45 @@ export interface LexicalScope {
 
 export interface ScopeTable {
   readonly collected: Set<Node>;
+  readonly nextNodeId: { value: number };
+  readonly nodeIds: WeakMap<Node, number>;
   readonly root: Node;
   readonly scopes: Map<Node, LexicalScope>;
 }
 
+export const ARRAY_SLICE_KIND = 'array-slice' as const;
+export const OBJECT_REST_KIND = 'object-rest' as const;
+
+const MAX_ARRAY_INDEX = 4_294_967_295;
+
 export function createScopeTable(root: Node): ScopeTable {
   const scopes = new Map<Node, LexicalScope>([[root, { bindings: new Map(), parent: undefined }]]);
-  return { collected: new Set(), root, scopes };
+  return {
+    collected: new Set(),
+    nextNodeId: { value: 1 },
+    nodeIds: new WeakMap(),
+    root,
+    scopes,
+  };
+}
+
+export function nodeIdOf(node: Node, table: ScopeTable): number {
+  const existing = table.nodeIds.get(node);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const assigned = table.nextNodeId.value;
+  table.nextNodeId.value += 1;
+  table.nodeIds.set(node, assigned);
+  return assigned;
+}
+
+export function addToSet<T>(set: ReadonlySet<T>, item: T): Set<T> {
+  return new Set([...set, item]);
+}
+
+export function formatExcludedKeys(excluded: ReadonlySet<string>): string {
+  return [...excluded].toSorted((left, right) => left.localeCompare(right)).join(',');
 }
 
 export function getOrCreateScope(
@@ -114,7 +162,7 @@ export function ensureBinding(scope: LexicalScope, name: string): Binding {
   if (existing !== undefined) {
     return existing;
   }
-  const created: Binding = { escaped: false, invoked: false, specs: [] };
+  const created: Binding = { specs: [], watchers: new Map() };
   scope.bindings.set(name, created);
   return created;
 }
@@ -202,7 +250,7 @@ export function childContainerScope(
 
 export function resetPatternBindings(name: BindingName, scope: LexicalScope): void {
   for (const bound of bindingIdentifiers(name)) {
-    scope.bindings.set(bound.text, { escaped: false, invoked: false, specs: [] });
+    scope.bindings.set(bound.text, { specs: [], watchers: new Map() });
   }
 }
 
@@ -321,13 +369,75 @@ function evaluatesOutsideNodeScope(
   );
 }
 
+function unwrapParentChain(node: Node): Node {
+  let current = node;
+  while (
+    isParenthesizedExpression(current.parent) ||
+    isAsExpression(current.parent) ||
+    isSatisfiesExpression(current.parent) ||
+    isNonNullExpression(current.parent) ||
+    isTypeAssertion(current.parent)
+  ) {
+    current = current.parent;
+  }
+  return current;
+}
+
+function assignmentContainerStep(node: Node): Node | undefined {
+  const container = node.parent;
+  if (isArrayLiteralExpression(container)) {
+    return container;
+  }
+  if (
+    isPropertyAssignment(container) &&
+    container.initializer === node &&
+    isObjectLiteralExpression(container.parent)
+  ) {
+    return container.parent;
+  }
+  if (
+    isSpreadAssignment(container) &&
+    container.expression === node &&
+    isObjectLiteralExpression(container.parent)
+  ) {
+    return container.parent;
+  }
+  if (
+    isSpreadElement(container) &&
+    container.expression === node &&
+    isArrayLiteralExpression(container.parent)
+  ) {
+    return container.parent;
+  }
+  return undefined;
+}
+
+function isInDestructuringOrLoopTarget(start: Node): boolean {
+  let current = unwrapParentChain(start);
+  for (;;) {
+    const { parent } = current;
+    if ((isForOfStatement(parent) || isForInStatement(parent)) && parent.initializer === current) {
+      return true;
+    }
+    if (
+      isBinaryExpression(parent) &&
+      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+      parent.left === current
+    ) {
+      return true;
+    }
+    const next = assignmentContainerStep(current);
+    if (next === undefined) {
+      return false;
+    }
+    current = unwrapParentChain(next);
+  }
+}
+
 export function accessModeOf(
   access: ElementAccessExpression | PropertyAccessExpression,
 ): AccessMode {
-  let current: Node = access;
-  while (isParenthesizedExpression(current.parent)) {
-    current = current.parent;
-  }
+  const current = unwrapParentChain(access);
   const { parent } = current;
   if (isBinaryExpression(parent) && parent.left === current) {
     const { kind } = parent.operatorToken;
@@ -344,7 +454,7 @@ export function accessModeOf(
   ) {
     return 'readwrite';
   }
-  return 'read';
+  return isInDestructuringOrLoopTarget(current) ? 'write' : 'read';
 }
 
 export function extendsExpressionOf(cls: ClassDeclaration | ClassExpression): Node | undefined {
@@ -358,4 +468,21 @@ export function extendsExpressionOf(cls: ClassDeclaration | ClassExpression): No
     }
   }
   return undefined;
+}
+
+export function isProtoSetterProperty(
+  property: ObjectLiteralElementLike,
+): property is PropertyAssignment {
+  if (!isPropertyAssignment(property) || isComputedPropertyName(property.name)) {
+    return false;
+  }
+  const { name } = property;
+  return (
+    (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name)) &&
+    name.text === '__proto__'
+  );
+}
+
+export function isArrayIndexKey(key: string): boolean {
+  return /^(?:0|[1-9]\d*)$/u.test(key) && Number(key) < MAX_ARRAY_INDEX;
 }

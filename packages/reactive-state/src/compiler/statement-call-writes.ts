@@ -9,6 +9,7 @@ import {
   isClassExpression,
   isComputedPropertyName,
   isDecorator,
+  isForInStatement,
   isForOfStatement,
   isFunctionDeclaration,
   isFunctionExpression,
@@ -21,10 +22,13 @@ import {
   isObjectLiteralExpression,
   isOmittedExpression,
   isParameterDeclaration,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isPrivateIdentifier,
   isPropertyAssignment,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
+  isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
   isVariableDeclarationList,
@@ -54,13 +58,13 @@ import {
   resolveLexicalBinding,
   type ScopeTable,
   seedVarFromParentParameters,
-  type TargetSpec,
   unwrapExpression,
+  type ValueSpec,
 } from './statement-call-scopes.ts';
 
 interface ScanFrame {
   readonly execRoot: Node;
-  readonly onSpecAdded: (binding: Binding, spec: TargetSpec) => void;
+  readonly onSpecAdded: (binding: Binding) => void;
   readonly table: ScopeTable;
 }
 
@@ -71,10 +75,12 @@ const VALUE_ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
+const UNKNOWN_SPEC: ValueSpec = { kind: 'unknown' };
+
 export function collectExecutableRoot(
   execRoot: Node,
   table: ScopeTable,
-  onSpecAdded: (binding: Binding, spec: TargetSpec) => void,
+  onSpecAdded: (binding: Binding) => void,
 ): void {
   if (table.collected.has(execRoot)) {
     return;
@@ -89,7 +95,11 @@ export function collectExecutableRoot(
   scanWrites(execRoot, frame);
 }
 
-export function staticPropertyNameKey(name: PropertyName, table: ScopeTable): string | undefined {
+export function staticPropertyNameKey(
+  name: PropertyName,
+  table: ScopeTable,
+  seenBindings?: Set<Binding>,
+): string | undefined {
   if (
     isIdentifier(name) ||
     isPrivateIdentifier(name) ||
@@ -101,10 +111,16 @@ export function staticPropertyNameKey(name: PropertyName, table: ScopeTable): st
   if (isNumericLiteral(name)) {
     return String(Number(name.text));
   }
-  return isComputedPropertyName(name) ? staticExpressionKey(name.expression, table) : undefined;
+  return isComputedPropertyName(name)
+    ? staticExpressionKey(name.expression, table, seenBindings)
+    : undefined;
 }
 
-export function staticExpressionKey(expr: Node, table: ScopeTable): string | undefined {
+export function staticExpressionKey(
+  expr: Node,
+  table: ScopeTable,
+  seenBindings?: Set<Binding>,
+): string | undefined {
   const seen = new Set<Binding>();
   let current = unwrapExpression(expr);
   for (;;) {
@@ -118,6 +134,9 @@ export function staticExpressionKey(expr: Node, table: ScopeTable): string | und
       return undefined;
     }
     const binding = resolveLexicalBinding(current, table);
+    if (binding !== undefined) {
+      seenBindings?.add(binding);
+    }
     const onlySpec = binding?.specs.length === 1 ? binding.specs[0] : undefined;
     if (binding === undefined || onlySpec?.kind !== 'value' || seen.has(binding)) {
       return undefined;
@@ -127,7 +146,11 @@ export function staticExpressionKey(expr: Node, table: ScopeTable): string | und
   }
 }
 
-export function bindingElementKey(element: BindingElement, table: ScopeTable): string | undefined {
+export function bindingElementKey(
+  element: BindingElement,
+  table: ScopeTable,
+  seenBindings?: Set<Binding>,
+): string | undefined {
   const keyNode = element.propertyName ?? element.name;
   if (keyNode === undefined) {
     return undefined;
@@ -137,8 +160,14 @@ export function bindingElementKey(element: BindingElement, table: ScopeTable): s
     isNumericLiteral(keyNode) ||
     isNoSubstitutionTemplateLiteral(keyNode) ||
     isComputedPropertyName(keyNode)
-    ? staticPropertyNameKey(keyNode, table)
+    ? staticPropertyNameKey(keyNode, table, seenBindings)
     : undefined;
+}
+
+function withOptionalDefault(spec: ValueSpec, defaultNode: Node | undefined): ValueSpec {
+  return defaultNode === undefined
+    ? spec
+    : { kind: 'union', left: spec, right: { kind: 'value', node: defaultNode } };
 }
 
 function scanDeclarations(node: Node, outerScope: LexicalScope, frame: ScanFrame): void {
@@ -180,12 +209,7 @@ function scanScopedChildren(node: Node, outerScope: LexicalScope, frame: ScanFra
   }
   const childScope = childContainerScope(node, outerScope, frame.table);
   if (isCatchClause(node) && node.variableDeclaration !== undefined) {
-    bindPatternSpecs(
-      node.variableDeclaration.name,
-      node.variableDeclaration.initializer,
-      childScope,
-      frame.table,
-    );
+    bindPatternSpecs(node.variableDeclaration.name, UNKNOWN_SPEC, childScope, frame.table);
   }
   node.forEachChild((child) => {
     scanDeclarations(child, childScope, frame);
@@ -199,7 +223,12 @@ function scanFunctionScope(fn: CallableNode, outerScope: LexicalScope, frame: Sc
   }
   for (const parameter of fn.parameters) {
     resetPatternBindings(parameter.name, fnScope);
-    bindPatternSpecs(parameter.name, parameter.initializer, fnScope, frame.table);
+    bindPatternSpecs(
+      parameter.name,
+      withOptionalDefault(UNKNOWN_SPEC, parameter.initializer),
+      fnScope,
+      frame.table,
+    );
   }
   const headerName: Node | undefined =
     isMethodDeclaration(fn) || isGetAccessorDeclaration(fn) || isSetAccessorDeclaration(fn)
@@ -218,6 +247,16 @@ function scanFunctionScope(fn: CallableNode, outerScope: LexicalScope, frame: Sc
   });
 }
 
+function declarationSourceSpec(parent: Node, initializer: Node | undefined): ValueSpec {
+  if (isForOfStatement(parent)) {
+    return { kind: 'elements', source: { kind: 'value', node: parent.expression } };
+  }
+  if (initializer === undefined || isForInStatement(parent)) {
+    return UNKNOWN_SPEC;
+  }
+  return { kind: 'value', node: initializer };
+}
+
 function registerVariableList(
   list: VariableDeclarationList,
   outerScope: LexicalScope,
@@ -226,44 +265,27 @@ function registerVariableList(
   const varScopeNode = isBlockScoped(list) ? undefined : nearestVarScopeNode(list, table.root);
   const targetScope =
     varScopeNode === undefined ? outerScope : getOrCreateScope(varScopeNode, outerScope, table);
-  const loopParent = list.parent;
   for (const declaration of list.declarations) {
     if (varScopeNode !== undefined) {
       seedVarFromParentParameters(declaration.name, targetScope);
     }
-    if (isForOfStatement(loopParent)) {
-      bindIterablePattern(declaration.name, loopParent.expression, targetScope);
-    } else {
-      bindPatternSpecs(declaration.name, declaration.initializer, targetScope, table);
-    }
+    const spec = declarationSourceSpec(list.parent, declaration.initializer);
+    bindPatternSpecs(declaration.name, spec, targetScope, table);
   }
-}
-
-function bindIterablePattern(name: BindingName, iterable: Node, scope: LexicalScope): void {
-  if (isIdentifier(name)) {
-    ensureBinding(scope, name.text).specs.push({ kind: 'elements', source: iterable });
-    return;
-  }
-  resetPatternBindings(name, scope);
 }
 
 function bindPatternSpecs(
   name: BindingName,
-  source: Node | undefined,
+  source: ValueSpec,
   scope: LexicalScope,
   table: ScopeTable,
 ): void {
   if (isIdentifier(name)) {
-    const binding = ensureBinding(scope, name.text);
-    if (source !== undefined) {
-      binding.specs.push({ kind: 'value', node: source });
-    }
+    ensureBinding(scope, name.text).specs.push(source);
     return;
   }
   if (isObjectBindingPattern(name)) {
-    for (const element of name.elements) {
-      bindObjectElementSpecs(element, source, scope, table);
-    }
+    bindObjectPatternSpecs(name.elements, source, scope, table);
     return;
   }
   for (const [index, element] of name.elements.entries()) {
@@ -273,26 +295,38 @@ function bindPatternSpecs(
   }
 }
 
-function bindObjectElementSpecs(
-  element: BindingElement,
-  source: Node | undefined,
+function bindObjectPatternSpecs(
+  elements: readonly BindingElement[],
+  source: ValueSpec,
   scope: LexicalScope,
   table: ScopeTable,
 ): void {
-  if (element.name === undefined) {
-    return;
+  const excluded = new Set<string>();
+  for (const element of elements) {
+    if (element.name === undefined) {
+      continue;
+    }
+    if (element.dotDotDotToken !== undefined) {
+      bindPatternSpecs(
+        element.name,
+        { excluded: new Set(excluded), kind: 'object-rest', source },
+        scope,
+        table,
+      );
+      continue;
+    }
+    const key = bindingElementKey(element, table);
+    if (key !== undefined) {
+      excluded.add(key);
+    }
+    const selected = withOptionalDefault({ key, kind: 'member', source }, element.initializer);
+    bindPatternSpecs(element.name, selected, scope, table);
   }
-  if (element.dotDotDotToken !== undefined) {
-    bindPatternSpecs(element.name, source, scope, table);
-    return;
-  }
-  const key = bindingElementKey(element, table);
-  bindSelectedElement(element, { key, source }, scope, table);
 }
 
 function bindArrayElementSpecs(
   element: BindingElement,
-  slot: { readonly index: number; readonly source: Node | undefined },
+  slot: { readonly index: number; readonly source: ValueSpec },
   scope: LexicalScope,
   table: ScopeTable,
 ): void {
@@ -300,32 +334,19 @@ function bindArrayElementSpecs(
     return;
   }
   if (element.dotDotDotToken !== undefined) {
-    bindIterablePattern(element.name, slot.source ?? element, scope);
+    bindPatternSpecs(
+      element.name,
+      { kind: 'array-rest', offset: slot.index, source: slot.source },
+      scope,
+      table,
+    );
     return;
   }
-  bindSelectedElement(element, { key: String(slot.index), source: slot.source }, scope, table);
-}
-
-function bindSelectedElement(
-  element: BindingElement,
-  selection: { readonly key: string | undefined; readonly source: Node | undefined },
-  scope: LexicalScope,
-  table: ScopeTable,
-): void {
-  if (element.name === undefined) {
-    return;
-  }
-  if (!isIdentifier(element.name)) {
-    bindPatternSpecs(element.name, element.initializer, scope, table);
-    return;
-  }
-  const binding = ensureBinding(scope, element.name.text);
-  if (selection.source !== undefined) {
-    binding.specs.push({ key: selection.key, kind: 'member', source: selection.source });
-  }
-  if (element.initializer !== undefined) {
-    binding.specs.push({ kind: 'value', node: element.initializer });
-  }
+  const selected = withOptionalDefault(
+    { key: String(slot.index), kind: 'member', source: slot.source },
+    element.initializer,
+  );
+  bindPatternSpecs(element.name, selected, scope, table);
 }
 
 function scanWrites(node: Node, frame: ScanFrame): void {
@@ -347,54 +368,85 @@ function scanWrites(node: Node, frame: ScanFrame): void {
 }
 
 function observeWriteNode(node: Node, frame: ScanFrame): void {
-  if (isBinaryExpression(node) && VALUE_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind)) {
-    recordAssignmentWrites(node.left, node.right, frame);
+  if (isBinaryExpression(node)) {
+    const { kind } = node.operatorToken;
+    if (VALUE_ASSIGNMENT_OPERATORS.has(kind)) {
+      recordAssignmentTarget(node.left, { kind: 'value', node: node.right }, frame);
+    } else if (
+      kind >= SyntaxKind.FirstCompoundAssignment &&
+      kind <= SyntaxKind.LastCompoundAssignment
+    ) {
+      recordAssignmentTarget(node.left, UNKNOWN_SPEC, frame);
+    }
+    return;
+  }
+  if (
+    (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)) &&
+    (node.operator === SyntaxKind.PlusPlusToken || node.operator === SyntaxKind.MinusMinusToken)
+  ) {
+    recordAssignmentTarget(node.operand, UNKNOWN_SPEC, frame);
     return;
   }
   if (isForOfStatement(node) && !isVariableDeclarationList(node.initializer)) {
-    const target = unwrapExpression(node.initializer);
-    if (isIdentifier(target)) {
-      appendSpec(target, { kind: 'elements', source: node.expression }, frame);
-    }
+    recordAssignmentTarget(
+      node.initializer,
+      { kind: 'elements', source: { kind: 'value', node: node.expression } },
+      frame,
+    );
+  } else if (isForInStatement(node) && !isVariableDeclarationList(node.initializer)) {
+    recordAssignmentTarget(node.initializer, UNKNOWN_SPEC, frame);
   }
 }
 
-function recordAssignmentWrites(left: Node, right: Node, frame: ScanFrame): void {
-  const target = unwrapExpression(left);
+function recordAssignmentTarget(lhs: Node, source: ValueSpec, frame: ScanFrame): void {
+  const target = unwrapExpression(lhs);
+  if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken) {
+    recordAssignmentTarget(target.left, withOptionalDefault(source, target.right), frame);
+    return;
+  }
   if (isIdentifier(target)) {
-    appendSpec(target, { kind: 'value', node: right }, frame);
+    appendSpec(target, source, frame);
   } else if (isObjectLiteralExpression(target)) {
-    recordObjectAssignmentWrites(target.properties, right, frame);
+    recordObjectAssignmentWrites(target.properties, source, frame);
   } else if (isArrayLiteralExpression(target)) {
-    recordArrayAssignmentWrites(target.elements, right, frame);
+    recordArrayAssignmentWrites(target.elements, source, frame);
   }
 }
 
 function recordObjectAssignmentWrites(
   properties: readonly ObjectLiteralElementLike[],
-  right: Node,
+  source: ValueSpec,
   frame: ScanFrame,
 ): void {
+  const excluded = new Set<string>();
   for (const property of properties) {
     if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
-      appendSpec(property.name, { key: property.name.text, kind: 'member', source: right }, frame);
-      if (property.objectAssignmentInitializer !== undefined) {
-        appendSpec(
-          property.name,
-          { kind: 'value', node: property.objectAssignmentInitializer },
-          frame,
-        );
-      }
+      const key = property.name.text;
+      excluded.add(key);
+      appendSpec(
+        property.name,
+        withOptionalDefault({ key, kind: 'member', source }, property.objectAssignmentInitializer),
+        frame,
+      );
     } else if (isPropertyAssignment(property)) {
       const key = staticPropertyNameKey(property.name, frame.table);
-      recordAssignedMemberSlot(property.initializer, { key, source: right }, frame);
+      if (key !== undefined) {
+        excluded.add(key);
+      }
+      recordAssignmentTarget(property.initializer, { key, kind: 'member', source }, frame);
+    } else if (isSpreadAssignment(property)) {
+      recordAssignmentTarget(
+        property.expression,
+        { excluded: new Set(excluded), kind: 'object-rest', source },
+        frame,
+      );
     }
   }
 }
 
 function recordArrayAssignmentWrites(
   elements: readonly Node[],
-  right: Node,
+  source: ValueSpec,
   frame: ScanFrame,
 ): void {
   for (const [index, element] of elements.entries()) {
@@ -402,40 +454,22 @@ function recordArrayAssignmentWrites(
       continue;
     }
     if (isSpreadElement(element)) {
-      const inner = unwrapExpression(element.expression);
-      if (isIdentifier(inner)) {
-        appendSpec(inner, { kind: 'elements', source: right }, frame);
-      }
-      continue;
-    }
-    recordAssignedMemberSlot(element, { key: String(index), source: right }, frame);
-  }
-}
-
-function recordAssignedMemberSlot(
-  lhs: Node,
-  slot: { readonly key: string | undefined; readonly source: Node },
-  frame: ScanFrame,
-): void {
-  const clean = unwrapExpression(lhs);
-  if (isIdentifier(clean)) {
-    appendSpec(clean, { key: slot.key, kind: 'member', source: slot.source }, frame);
-    return;
-  }
-  if (isBinaryExpression(clean) && clean.operatorToken.kind === SyntaxKind.EqualsToken) {
-    const inner = unwrapExpression(clean.left);
-    if (isIdentifier(inner)) {
-      appendSpec(inner, { key: slot.key, kind: 'member', source: slot.source }, frame);
-      appendSpec(inner, { kind: 'value', node: clean.right }, frame);
+      recordAssignmentTarget(
+        element.expression,
+        { kind: 'array-rest', offset: index, source },
+        frame,
+      );
+    } else {
+      recordAssignmentTarget(element, { key: String(index), kind: 'member', source }, frame);
     }
   }
 }
 
-function appendSpec(identifier: Identifier, spec: TargetSpec, frame: ScanFrame): void {
+function appendSpec(identifier: Identifier, spec: ValueSpec, frame: ScanFrame): void {
   const binding = resolveLexicalBinding(identifier, frame.table);
   if (binding === undefined) {
     return;
   }
   binding.specs.push(spec);
-  frame.onSpecAdded(binding, spec);
+  frame.onSpecAdded(binding);
 }

@@ -1,14 +1,9 @@
 import {
-  type BindingElement,
-  type BindingName,
   type CallExpression,
   type ClassDeclaration,
   type ClassExpression,
-  type ElementAccessExpression,
-  isArrayBindingPattern,
-  isArrayLiteralExpression,
+  isArrowFunction,
   isBinaryExpression,
-  isBindingElement,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
@@ -17,18 +12,13 @@ import {
   isConstructorDeclaration,
   isDecorator,
   isElementAccessExpression,
+  isForOfStatement,
   isFunctionDeclaration,
   isFunctionExpression,
-  isIdentifier,
   isNewExpression,
-  isObjectBindingPattern,
-  isObjectLiteralExpression,
-  isOmittedExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
-  isPropertyAssignment,
   isPropertyDeclaration,
-  isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
@@ -36,15 +26,25 @@ import {
   isVariableDeclaration,
   type NewExpression,
   type Node,
-  type ObjectLiteralElementLike,
-  type ObjectLiteralExpression,
-  type PropertyAccessExpression,
   SyntaxKind,
   type TaggedTemplateExpression,
 } from 'typescript/ast';
 
 import {
-  accessModeOf,
+  type ResolvedValue,
+  type TargetContext,
+  valueIdentityKey,
+} from './statement-call-classes.ts';
+import { activateEscapedExpression, type EscapeDriver } from './statement-call-escapes.ts';
+import { projectMemberFromValue } from './statement-call-members.ts';
+import {
+  observeAssignmentDestructuring,
+  observeDeclarationDestructuring,
+  observeForOfDestructuring,
+  observeMemberAccess,
+  observeObjectSpread,
+} from './statement-call-patterns.ts';
+import {
   type Binding,
   type CallableNode,
   createScopeTable,
@@ -56,31 +56,34 @@ import {
   isDeferredMember,
   isErasedOrAmbient,
   isPassiveDeferredFunction,
+  nodeIdOf,
   type ScopeTable,
   unwrapExpression,
 } from './statement-call-scopes.ts';
 import {
-  projectMemberFromValue,
-  type ResolvedValue,
-  resolveSpecTargets,
+  EMPTY_NODE_SET,
   resolveTargets,
   staticAccessKey,
-  type TargetContext,
+  superConstructorTargets,
 } from './statement-call-targets.ts';
-import {
-  bindingElementKey,
-  collectExecutableRoot,
-  staticPropertyNameKey,
-} from './statement-call-writes.ts';
+import { collectExecutableRoot } from './statement-call-writes.ts';
+
+interface ActiveReceiverEntry {
+  readonly owner: Node;
+  readonly receiver: ResolvedValue;
+}
 
 interface WalkState {
-  readonly activated: Set<Node>;
-  readonly constructed: Set<Node>;
+  readonly activated: Map<Node, Set<string>>;
+  readonly activeReceivers: ActiveReceiverEntry[];
+  readonly constructed: Map<Node, Set<string>>;
   readonly ctx: TargetContext;
+  readonly dirtyBindings: Set<Binding>;
+  readonly driver: EscapeDriver;
+  flushing: boolean;
   readonly onCall: (call: CallExpression) => boolean;
   readonly scopes: ScopeTable;
   stopped: boolean;
-  readonly wholeEscaped: Set<Node>;
 }
 
 /**
@@ -91,21 +94,7 @@ export function forEachSynchronousCall(
   root: Node,
   onCall: (call: CallExpression) => boolean,
 ): void {
-  const scopes = createScopeTable(root);
-  const state: WalkState = {
-    activated: new Set(),
-    constructed: new Set(),
-    ctx: {
-      onActivate: (callable) => {
-        activateCallable(callable, state);
-      },
-      scopes,
-    },
-    onCall,
-    scopes,
-    stopped: false,
-    wholeEscaped: new Set(),
-  };
+  const state = createWalkState(root, onCall);
   collectScopeWithPropagation(root, state);
   if (isCallExpression(root)) {
     visitNode(root, state);
@@ -116,21 +105,156 @@ export function forEachSynchronousCall(
   });
 }
 
+function createWalkState(root: Node, onCall: (call: CallExpression) => boolean): WalkState {
+  const scopes = createScopeTable(root);
+  const activeReceivers: ActiveReceiverEntry[] = [];
+  const wholeEscaped = new Set<string>();
+  const state: WalkState = {
+    activated: new Map(),
+    activeReceivers,
+    constructed: new Map(),
+    ctx: {
+      activeReceiverFor: (owner) => findActiveReceiver(activeReceivers, owner),
+      ensureScope: (execRoot) => {
+        collectScopeWithPropagation(execRoot, state);
+      },
+      onActivate: (callable, receiver) => {
+        activateCallable(callable, state, receiver);
+      },
+      project: (receiver, query) => projectMemberFromValue(receiver, query, state.ctx),
+      resolve: (expr, seenNodes, seenBindings) =>
+        resolveTargets(expr, state.ctx, seenNodes, seenBindings),
+      scopes,
+      withActiveReceiver: (owner, receiver, run) =>
+        runWithReceiver(activeReceivers, owner, receiver, run),
+    },
+    dirtyBindings: new Set(),
+    driver: {
+      activateCallable: (callable, receiver) => {
+        activateCallable(callable, state, receiver);
+      },
+      constructClass: (cls, instanceReceiver) => {
+        constructClass(cls, state, instanceReceiver);
+      },
+      get ctx() {
+        return state.ctx;
+      },
+      isStopped: () => state.stopped,
+      scopes,
+      watch: (watcherKey, run) => {
+        watchResolution(watcherKey, state, run);
+      },
+      wholeEscaped,
+    },
+    flushing: false,
+    onCall,
+    scopes,
+    stopped: false,
+  };
+  return state;
+}
+
+function findActiveReceiver(
+  stack: readonly ActiveReceiverEntry[],
+  owner: Node,
+): ResolvedValue | undefined {
+  for (let index = stack.length - 1; index >= 0; index -= 1) {
+    const entry = stack[index];
+    if (entry?.owner === owner) {
+      return entry.receiver;
+    }
+  }
+  return undefined;
+}
+
+function runWithReceiver<T>(
+  stack: ActiveReceiverEntry[],
+  owner: Node,
+  receiver: ResolvedValue | undefined,
+  run: () => T,
+): T {
+  if (receiver === undefined) {
+    return run();
+  }
+  stack.push({ owner, receiver });
+  try {
+    return run();
+  } finally {
+    stack.pop();
+  }
+}
+
 function collectScopeWithPropagation(execRoot: Node, state: WalkState): void {
-  collectExecutableRoot(execRoot, state.scopes, (binding, spec) => {
-    const resolved = resolveSpecTargets(spec, state.ctx);
-    if (binding.escaped) {
-      for (const value of resolved) {
-        activateWholeValue(value, state);
-      }
-    } else if (binding.invoked) {
-      for (const value of resolved) {
-        if (value.kind === 'node' && isCallableNode(value.node)) {
-          activateCallable(value.node, state);
-        }
-      }
+  collectExecutableRoot(execRoot, state.scopes, (binding) => {
+    if (binding.watchers.size > 0) {
+      state.dirtyBindings.add(binding);
     }
   });
+  flushDirtyBindings(state);
+}
+
+function flushDirtyBindings(state: WalkState): void {
+  if (state.flushing) {
+    return;
+  }
+  state.flushing = true;
+  try {
+    while (!state.stopped && state.dirtyBindings.size > 0) {
+      const batch = [...state.dirtyBindings];
+      state.dirtyBindings.clear();
+      const callbacks = new Map<string, () => void>();
+      for (const binding of batch) {
+        for (const [key, callback] of binding.watchers) {
+          callbacks.set(key, callback);
+        }
+      }
+      for (const callback of callbacks.values()) {
+        if (state.driver.isStopped()) {
+          break;
+        }
+        callback();
+      }
+    }
+  } finally {
+    state.flushing = false;
+  }
+}
+
+function watchResolution(
+  watcherKey: string,
+  state: WalkState,
+  run: (seenBindings: Set<Binding>) => void,
+): void {
+  if (state.stopped) {
+    return;
+  }
+  const replay = (): void => {
+    if (state.stopped) {
+      return;
+    }
+    const seenBindings = new Set<Binding>();
+    run(seenBindings);
+    for (const binding of seenBindings) {
+      binding.watchers.set(watcherKey, replay);
+    }
+  };
+  replay();
+}
+
+function markKeyedVisit(map: Map<Node, Set<string>>, node: Node, key: string): boolean {
+  let keys = map.get(node);
+  if (keys === undefined) {
+    keys = new Set();
+    map.set(node, keys);
+  } else if (keys.has(key)) {
+    return false;
+  }
+  keys.add(key);
+  return true;
+}
+
+function receiverSlotKey(receiver: ResolvedValue | undefined, scopes: ScopeTable): string {
+  return receiver === undefined ? '_' : valueIdentityKey(receiver, scopes);
 }
 
 function visitNode(node: Node, state: WalkState): void {
@@ -163,15 +287,15 @@ function observeNodeOperations(node: Node, state: WalkState): void {
   } else if (isDecorator(node)) {
     invokeExpression(node.expression, state);
   } else if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
-    observeMemberAccess(node, state);
+    observeMemberAccess(node, state.driver);
   } else if (isSpreadAssignment(node)) {
-    observeObjectSpread(node.expression, state);
+    observeObjectSpread(node.expression, state.driver);
   } else if (isVariableDeclaration(node) || isParameterDeclaration(node)) {
-    if (node.initializer !== undefined && !isIdentifier(node.name)) {
-      observeBindingPattern(node.name, resolveTargets(node.initializer, state.ctx), state);
-    }
+    observeDeclarationDestructuring(node, state.driver);
   } else if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
-    observeAssignmentPattern(node.left, node.right, state);
+    observeAssignmentDestructuring(node.left, node.right, state.driver);
+  } else if (isForOfStatement(node)) {
+    observeForOfDestructuring(node, state.driver);
   }
 }
 
@@ -194,10 +318,15 @@ function forEachActiveChild(node: Node, state: WalkState): void {
 }
 
 function handleCallExpression(node: CallExpression, state: WalkState): void {
-  invokeExpression(node.expression, state);
-  invokeBorrowedReceiver(node.expression, state);
+  const callee = unwrapExpression(node.expression);
+  if (callee.kind === SyntaxKind.SuperKeyword) {
+    invokeSuperConstructor(callee, state);
+  } else {
+    invokeExpression(node.expression, state);
+    invokeBorrowedReceiver(node, state);
+  }
   for (const arg of node.arguments) {
-    activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state);
+    activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state.driver);
   }
   node.forEachChild((child) => {
     visitNode(child, state);
@@ -208,7 +337,7 @@ function handleNewExpression(node: NewExpression, state: WalkState): void {
   constructExpression(node.expression, state);
   if (node.arguments !== undefined) {
     for (const arg of node.arguments) {
-      activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state);
+      activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state.driver);
     }
   }
   node.forEachChild((child) => {
@@ -220,7 +349,7 @@ function handleTaggedTemplate(node: TaggedTemplateExpression, state: WalkState):
   invokeExpression(node.tag, state);
   if (isTemplateExpression(node.template)) {
     for (const span of node.template.templateSpans) {
-      activateEscapedExpression(span.expression, state);
+      activateEscapedExpression(span.expression, state.driver);
     }
   }
   node.forEachChild((child) => {
@@ -229,57 +358,101 @@ function handleTaggedTemplate(node: TaggedTemplateExpression, state: WalkState):
 }
 
 function invokeExpression(expr: Node, state: WalkState): void {
-  const seenBindings = new Set<Binding>();
-  const targets = resolveTargets(expr, state.ctx, new Set(), seenBindings);
-  for (const binding of seenBindings) {
-    binding.invoked = true;
-  }
-  for (const target of targets) {
-    if (target.kind === 'node' && isCallableNode(target.node)) {
-      activateCallable(target.node, state);
+  watchResolution(`invoke:${nodeIdOf(expr, state.scopes)}`, state, (seenBindings) => {
+    const targets = resolveTargets(expr, state.ctx, EMPTY_NODE_SET, seenBindings);
+    for (const target of targets) {
+      if (target.kind === 'node' && isCallableNode(target.node)) {
+        activateCallable(target.node, state, target.receiver);
+      }
     }
-  }
+  });
 }
 
-function invokeBorrowedReceiver(calleeExpr: Node, state: WalkState): void {
-  const clean = unwrapExpression(calleeExpr);
+function invokeSuperConstructor(superNode: Node, state: WalkState): void {
+  watchResolution(`super:${nodeIdOf(superNode, state.scopes)}`, state, (seenBindings) => {
+    const { bases, selves } = superConstructorTargets(superNode, state.ctx, seenBindings);
+    const receivers: readonly (ResolvedValue | undefined)[] =
+      selves.length > 0 ? selves : [undefined];
+    for (const base of bases) {
+      if (base.kind !== 'node') {
+        continue;
+      }
+      for (const self of receivers) {
+        if (isClassDeclaration(base.node) || isClassExpression(base.node)) {
+          constructClass(base.node, state, self);
+        } else if (isFunctionDeclaration(base.node) || isFunctionExpression(base.node)) {
+          activateCallable(base.node, state, self);
+        }
+      }
+    }
+  });
+}
+
+function invokeBorrowedReceiver(call: CallExpression, state: WalkState): void {
+  const clean = unwrapExpression(call.expression);
   if (!isPropertyAccessExpression(clean) && !isElementAccessExpression(clean)) {
     return;
   }
-  const key = staticAccessKey(clean, state.scopes);
-  if (key !== 'call' && key !== 'apply') {
-    return;
-  }
-  const receivers = resolveTargets(clean.expression, state.ctx);
-  for (const receiver of receivers) {
-    if (receiver.kind === 'node' && isCallableNode(receiver.node)) {
-      activateCallable(receiver.node, state);
+  watchResolution(`borrow:${nodeIdOf(call, state.scopes)}`, state, (seenBindings) => {
+    const key = staticAccessKey(clean, state.scopes, seenBindings);
+    if (key !== 'call' && key !== 'apply') {
+      return;
     }
-  }
+    const receivers = resolveTargets(clean.expression, state.ctx, EMPTY_NODE_SET, seenBindings);
+    const firstArg = call.arguments[0];
+    const thisArgs =
+      firstArg === undefined || isSpreadElement(firstArg)
+        ? []
+        : resolveTargets(firstArg, state.ctx, EMPTY_NODE_SET, seenBindings);
+    for (const fnTarget of receivers) {
+      if (fnTarget.kind !== 'node' || !isCallableNode(fnTarget.node)) {
+        continue;
+      }
+      if (
+        isArrowFunction(fnTarget.node) ||
+        fnTarget.receiver !== undefined ||
+        thisArgs.length === 0
+      ) {
+        activateCallable(fnTarget.node, state, fnTarget.receiver);
+        continue;
+      }
+      for (const thisArg of thisArgs) {
+        activateCallable(fnTarget.node, state, thisArg);
+      }
+    }
+  });
 }
 
-function constructExpression(expr: Node, state: WalkState): void {
-  const targets = resolveTargets(expr, state.ctx);
-  for (const target of targets) {
-    if (target.kind !== 'node') {
-      continue;
+function constructExpression(expr: Node, state: WalkState, instanceReceiver?: ResolvedValue): void {
+  const receiverPart = receiverSlotKey(instanceReceiver, state.scopes);
+  watchResolution(`new:${nodeIdOf(expr, state.scopes)}:${receiverPart}`, state, (seenBindings) => {
+    const targets = resolveTargets(expr, state.ctx, EMPTY_NODE_SET, seenBindings);
+    for (const target of targets) {
+      if (target.kind !== 'node') {
+        continue;
+      }
+      if (isClassDeclaration(target.node) || isClassExpression(target.node)) {
+        constructClass(target.node, state, instanceReceiver);
+      } else if (isFunctionDeclaration(target.node) || isFunctionExpression(target.node)) {
+        activateCallable(target.node, state, instanceReceiver);
+      }
     }
-    if (isClassDeclaration(target.node) || isClassExpression(target.node)) {
-      constructClass(target.node, state);
-    } else if (isFunctionDeclaration(target.node) || isFunctionExpression(target.node)) {
-      activateCallable(target.node, state);
-    }
-  }
+  });
 }
 
-function constructClass(cls: ClassDeclaration | ClassExpression, state: WalkState): void {
-  if (state.stopped || state.constructed.has(cls)) {
+function constructClass(
+  cls: ClassDeclaration | ClassExpression,
+  state: WalkState,
+  instanceReceiver?: ResolvedValue,
+): void {
+  const effectiveReceiver: ResolvedValue = instanceReceiver ?? { cls, kind: 'instance' };
+  const slotKey = receiverSlotKey(effectiveReceiver, state.scopes);
+  if (state.stopped || !markKeyedVisit(state.constructed, cls, slotKey)) {
     return;
   }
-  state.constructed.add(cls);
   const baseExpr = extendsExpressionOf(cls);
   if (baseExpr !== undefined) {
-    constructExpression(baseExpr, state);
+    constructExpression(baseExpr, state, effectiveReceiver);
   }
   for (const member of cls.members) {
     if (isErasedOrAmbient(member)) {
@@ -290,221 +463,41 @@ function constructClass(cls: ClassDeclaration | ClassExpression, state: WalkStat
       !hasModifier(member, SyntaxKind.StaticKeyword) &&
       member.initializer !== undefined
     ) {
-      visitNode(member.initializer, state);
+      const initializer = member.initializer;
+      state.ctx.withActiveReceiver(member, effectiveReceiver, () => {
+        visitNode(initializer, state);
+      });
     } else if (isConstructorDeclaration(member)) {
-      activateCallable(member, state);
+      activateCallable(member, state, effectiveReceiver);
     }
   }
 }
 
-function activateCallable(callable: CallableNode, state: WalkState): void {
-  if (state.stopped || isErasedOrAmbient(callable) || state.activated.has(callable)) {
+function activateCallable(
+  callable: CallableNode,
+  state: WalkState,
+  receiver?: ResolvedValue,
+): void {
+  const effectiveReceiver = isArrowFunction(callable) ? undefined : receiver;
+  const slotKey = receiverSlotKey(effectiveReceiver, state.scopes);
+  if (
+    state.stopped ||
+    isErasedOrAmbient(callable) ||
+    !markKeyedVisit(state.activated, callable, slotKey)
+  ) {
     return;
   }
-  state.activated.add(callable);
   collectScopeWithPropagation(callable, state);
-  for (const parameter of callable.parameters) {
-    parameter.forEachChild((child) => {
-      if (!isDecorator(child)) {
-        visitNode(child, state);
-      }
-    });
-  }
-  if (callable.body !== undefined) {
-    visitNode(callable.body, state);
-  }
-}
-
-function activateEscapedExpression(expr: Node, state: WalkState): void {
-  const seenBindings = new Set<Binding>();
-  const targets = resolveTargets(expr, state.ctx, new Set(), seenBindings);
-  for (const binding of seenBindings) {
-    binding.escaped = true;
-  }
-  for (const target of targets) {
-    activateWholeValue(target, state);
-  }
-}
-
-function activateWholeValue(value: ResolvedValue, state: WalkState): void {
-  if (state.stopped) {
-    return;
-  }
-  if (value.kind === 'instance') {
-    activateWholeClass(value.cls, state);
-    return;
-  }
-  activateWholeNode(value.node, state);
-}
-
-function activateWholeNode(node: Node, state: WalkState): void {
-  if (isCallableNode(node)) {
-    activateCallable(node, state);
-    return;
-  }
-  if (isClassDeclaration(node) || isClassExpression(node)) {
-    activateWholeClass(node, state);
-    return;
-  }
-  if (state.wholeEscaped.has(node)) {
-    return;
-  }
-  if (isObjectLiteralExpression(node)) {
-    state.wholeEscaped.add(node);
-    activateWholeObject(node, state);
-  } else if (isArrayLiteralExpression(node)) {
-    state.wholeEscaped.add(node);
-    activateWholeArray(node.elements, state);
-  }
-}
-
-function activateWholeArray(elements: readonly Node[], state: WalkState): void {
-  for (const element of elements) {
-    if (!isOmittedExpression(element)) {
-      activateEscapedExpression(isSpreadElement(element) ? element.expression : element, state);
+  state.ctx.withActiveReceiver(callable, effectiveReceiver, () => {
+    for (const parameter of callable.parameters) {
+      parameter.forEachChild((child) => {
+        if (!isDecorator(child)) {
+          visitNode(child, state);
+        }
+      });
     }
-  }
-}
-
-function activateWholeObject(object: ObjectLiteralExpression, state: WalkState): void {
-  for (const property of object.properties) {
-    if (isDeferredMember(property)) {
-      activateCallable(property, state);
-    } else if (isPropertyAssignment(property)) {
-      activateEscapedExpression(property.initializer, state);
-    } else if (isShorthandPropertyAssignment(property)) {
-      activateEscapedExpression(property.name, state);
-    } else if (isSpreadAssignment(property)) {
-      activateEscapedExpression(property.expression, state);
+    if (callable.body !== undefined) {
+      visitNode(callable.body, state);
     }
-  }
-}
-
-function activateWholeClass(cls: ClassDeclaration | ClassExpression, state: WalkState): void {
-  if (state.wholeEscaped.has(cls)) {
-    return;
-  }
-  state.wholeEscaped.add(cls);
-  constructClass(cls, state);
-  for (const member of cls.members) {
-    if (isDeferredMember(member)) {
-      activateCallable(member, state);
-    }
-  }
-}
-
-function observeMemberAccess(
-  access: ElementAccessExpression | PropertyAccessExpression,
-  state: WalkState,
-): void {
-  const mode = accessModeOf(access);
-  const key = staticAccessKey(access, state.scopes);
-  const receivers = resolveTargets(access.expression, state.ctx);
-  for (const receiver of receivers) {
-    projectMemberFromValue(receiver, { key, mode, seen: new Set() }, state.ctx);
-  }
-}
-
-function observeObjectSpread(expr: Node, state: WalkState): void {
-  const sources = resolveTargets(expr, state.ctx);
-  for (const source of sources) {
-    projectMemberFromValue(source, { key: undefined, mode: 'read', seen: new Set() }, state.ctx);
-  }
-}
-
-function observeBindingPattern(
-  pattern: BindingName,
-  sources: readonly ResolvedValue[],
-  state: WalkState,
-): void {
-  if (isIdentifier(pattern) || sources.length === 0) {
-    return;
-  }
-  if (isObjectBindingPattern(pattern)) {
-    observeObjectBindingElements(pattern.elements, sources, state);
-  } else if (isArrayBindingPattern(pattern)) {
-    observeArrayBindingElements(pattern.elements, sources, state);
-  }
-}
-
-function observeObjectBindingElements(
-  elements: readonly BindingElement[],
-  sources: readonly ResolvedValue[],
-  state: WalkState,
-): void {
-  for (const element of elements) {
-    const key =
-      element.dotDotDotToken === undefined ? bindingElementKey(element, state.scopes) : undefined;
-    observeProjectedElement(element, sources, key, state);
-  }
-}
-
-function observeArrayBindingElements(
-  elements: readonly Node[],
-  sources: readonly ResolvedValue[],
-  state: WalkState,
-): void {
-  for (const [index, element] of elements.entries()) {
-    if (!isOmittedExpression(element) && isBindingElement(element)) {
-      const key = element.dotDotDotToken === undefined ? String(index) : undefined;
-      observeProjectedElement(element, sources, key, state);
-    }
-  }
-}
-
-function observeProjectedElement(
-  element: BindingElement,
-  sources: readonly ResolvedValue[],
-  key: string | undefined,
-  state: WalkState,
-): void {
-  const projected = sources.flatMap((src) =>
-    projectMemberFromValue(src, { key, mode: 'read', seen: new Set() }, state.ctx),
-  );
-  if (element.name !== undefined && !isIdentifier(element.name)) {
-    const nextSources =
-      element.initializer === undefined
-        ? projected
-        : [...projected, ...resolveTargets(element.initializer, state.ctx)];
-    observeBindingPattern(element.name, nextSources, state);
-  }
-}
-
-function observeAssignmentPattern(left: Node, right: Node, state: WalkState): void {
-  const target = unwrapExpression(left);
-  if (isObjectLiteralExpression(target)) {
-    observeObjectAssignmentPattern(target.properties, resolveTargets(right, state.ctx), state);
-  } else if (isArrayLiteralExpression(target)) {
-    observeArrayAssignmentPattern(target.elements, resolveTargets(right, state.ctx), state);
-  }
-}
-
-function observeObjectAssignmentPattern(
-  properties: readonly ObjectLiteralElementLike[],
-  sources: readonly ResolvedValue[],
-  state: WalkState,
-): void {
-  for (const property of properties) {
-    const key = isSpreadAssignment(property)
-      ? undefined
-      : staticPropertyNameKey(property.name, state.scopes);
-    for (const src of sources) {
-      projectMemberFromValue(src, { key, mode: 'read', seen: new Set() }, state.ctx);
-    }
-  }
-}
-
-function observeArrayAssignmentPattern(
-  elements: readonly Node[],
-  sources: readonly ResolvedValue[],
-  state: WalkState,
-): void {
-  for (const [index, element] of elements.entries()) {
-    if (!isOmittedExpression(element)) {
-      const key = isSpreadElement(element) ? undefined : String(index);
-      for (const src of sources) {
-        projectMemberFromValue(src, { key, mode: 'read', seen: new Set() }, state.ctx);
-      }
-    }
-  }
+  });
 }

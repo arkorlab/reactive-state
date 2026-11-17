@@ -1,83 +1,67 @@
 import {
-  type ArrayLiteralExpression,
   type CallExpression,
   type ClassDeclaration,
   type ClassExpression,
   type ElementAccessExpression,
-  type GetAccessorDeclaration,
-  isArrayLiteralExpression,
   isArrowFunction,
   isBinaryExpression,
-  isBlock,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
   isConditionalExpression,
+  isConstructorDeclaration,
   isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isMethodDeclaration,
   isNewExpression,
   isObjectLiteralExpression,
-  isOmittedExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
-  isReturnStatement,
-  isSetAccessorDeclaration,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
-  type MethodDeclaration,
   type NewExpression,
   type Node,
   type ObjectLiteralExpression,
   type PropertyAccessExpression,
-  type PropertyDeclaration,
-  type SetAccessorDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
 import {
-  type AccessMode,
-  extendsExpressionOf,
+  EMPTY_NODE_SET,
+  EMPTY_PROJECT_SET,
+  type ResolvedValue,
+  returnedTargetsOf,
+  type TargetContext,
+} from './statement-call-classes.ts';
+import { projectMemberFromValue } from './statement-call-members.ts';
+import {
+  addToSet,
+  ARRAY_SLICE_KIND,
   type Binding,
-  type CallableNode,
+  extendsExpressionOf,
   hasModifier,
   isCallableNode,
   isDeferredMember,
-  isErasedOrAmbient,
-  isPassiveDeferredFunction,
+  isProtoSetterProperty,
+  OBJECT_REST_KIND,
   resolveLexicalBinding,
   type ScopeTable,
-  type TargetSpec,
   unwrapExpression,
+  type ValueSpec,
 } from './statement-call-scopes.ts';
-import { staticExpressionKey, staticPropertyNameKey } from './statement-call-writes.ts';
+import { staticExpressionKey } from './statement-call-writes.ts';
 
-export type ResolvedValue =
-  | { readonly cls: ClassDeclaration | ClassExpression; readonly kind: 'instance' }
-  | { readonly kind: 'node'; readonly node: Node };
+export { EMPTY_NODE_SET, EMPTY_PROJECT_SET } from './statement-call-classes.ts';
 
-export interface TargetContext {
-  readonly onActivate: (callable: CallableNode) => void;
-  readonly scopes: ScopeTable;
+interface ResolutionTrace {
+  readonly seenBindings?: Set<Binding> | undefined;
+  readonly seenNodes: ReadonlySet<Node>;
+  readonly seenSpecs: ReadonlySet<ValueSpec>;
 }
 
-export interface MemberQuery {
-  readonly key: string | undefined;
-  readonly mode: AccessMode;
-  readonly seen: Set<Node>;
-}
-
-type NamedClassMember =
-  | GetAccessorDeclaration
-  | MethodDeclaration
-  | PropertyDeclaration
-  | SetAccessorDeclaration;
+const EMPTY_SPEC_SET: ReadonlySet<ValueSpec> = new Set();
 
 const FORWARDED_BINARY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AmpersandAmpersandEqualsToken,
@@ -91,99 +75,158 @@ const FORWARDED_BINARY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 export function resolveTargets(
   expr: Node,
   ctx: TargetContext,
-  seen = new Set<Node>(),
+  seenNodes: ReadonlySet<Node> = EMPTY_NODE_SET,
   seenBindings?: Set<Binding>,
 ): readonly ResolvedValue[] {
+  return resolveTargetsWithTrace(expr, ctx, {
+    seenBindings,
+    seenNodes,
+    seenSpecs: EMPTY_SPEC_SET,
+  });
+}
+
+function resolveTargetsWithTrace(
+  expr: Node,
+  ctx: TargetContext,
+  trace: ResolutionTrace,
+): readonly ResolvedValue[] {
   const clean = unwrapExpression(expr);
-  if (seen.has(clean)) {
+  if (trace.seenNodes.has(clean)) {
     return [];
   }
-  seen.add(clean);
+  const nextTrace: ResolutionTrace = {
+    ...trace,
+    seenNodes: addToSet(trace.seenNodes, clean),
+  };
   if (isIdentifier(clean)) {
     const binding = resolveLexicalBinding(clean, ctx.scopes);
     if (binding === undefined) {
       return [];
     }
-    seenBindings?.add(binding);
-    return binding.specs.flatMap((spec) => resolveSpecTargets(spec, ctx, seen, seenBindings));
+    nextTrace.seenBindings?.add(binding);
+    return binding.specs.flatMap((spec) =>
+      resolveSpecTargets(spec, ctx, { ...nextTrace, seenSpecs: EMPTY_SPEC_SET }),
+    );
   }
   if (clean.kind === SyntaxKind.ThisKeyword) {
-    return resolveThisTargets(clean);
+    return resolveThisTargets(clean, ctx);
+  }
+  if (clean.kind === SyntaxKind.SuperKeyword) {
+    return resolveSuperTargets(clean, ctx, nextTrace);
   }
   if (isConditionalExpression(clean)) {
     return [
-      ...resolveTargets(clean.whenTrue, ctx, seen, seenBindings),
-      ...resolveTargets(clean.whenFalse, ctx, seen, seenBindings),
+      ...resolveTargetsWithTrace(clean.whenTrue, ctx, nextTrace),
+      ...resolveTargetsWithTrace(clean.whenFalse, ctx, nextTrace),
     ];
   }
   if (isBinaryExpression(clean)) {
-    return resolveBinaryTargets(clean, ctx, seen, seenBindings);
+    return resolveBinaryTargets(clean, ctx, nextTrace);
   }
-  return resolveStructuredTargets(clean, ctx, seen, seenBindings);
+  return resolveStructuredTargets(clean, ctx, nextTrace);
 }
 
-export function resolveSpecTargets(
-  spec: TargetSpec,
+function resolveSpecTargets(
+  spec: ValueSpec,
   ctx: TargetContext,
-  seen = new Set<Node>(),
-  seenBindings?: Set<Binding>,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
-  if (spec.kind === 'value') {
-    return resolveTargets(spec.node, ctx, seen, seenBindings);
+  if (trace.seenSpecs.has(spec)) {
+    return [];
   }
-  const key = spec.kind === 'member' ? spec.key : undefined;
-  return resolveTargets(spec.source, ctx, seen).flatMap((src) =>
-    projectMemberFromValue(src, { key, mode: 'read', seen }, ctx),
-  );
-}
-
-export function projectMemberFromValue(
-  receiver: ResolvedValue,
-  query: MemberQuery,
-  ctx: TargetContext,
-): readonly ResolvedValue[] {
-  if (receiver.kind === 'instance') {
-    return projectClassMembers({ cls: receiver.cls, wantStatic: false }, query, ctx);
+  const nextTrace: ResolutionTrace = {
+    ...trace,
+    seenSpecs: addToSet(trace.seenSpecs, spec),
+  };
+  switch (spec.kind) {
+    case 'unknown': {
+      return [];
+    }
+    case 'value': {
+      return resolveTargetsWithTrace(spec.node, ctx, nextTrace);
+    }
+    case 'union': {
+      return [
+        ...resolveSpecTargets(spec.left, ctx, nextTrace),
+        ...resolveSpecTargets(spec.right, ctx, nextTrace),
+      ];
+    }
+    case 'array-rest': {
+      return resolveSpecTargets(spec.source, ctx, nextTrace).map((src) => {
+        return src.kind === ARRAY_SLICE_KIND
+          ? { kind: ARRAY_SLICE_KIND, offset: src.offset + spec.offset, source: src.source }
+          : { kind: ARRAY_SLICE_KIND, offset: spec.offset, source: src };
+      });
+    }
+    case OBJECT_REST_KIND: {
+      return resolveSpecTargets(spec.source, ctx, nextTrace).map((src) => {
+        return src.kind === OBJECT_REST_KIND
+          ? {
+              excluded: new Set([...src.excluded, ...spec.excluded]),
+              kind: OBJECT_REST_KIND,
+              source: src.source,
+            }
+          : { excluded: spec.excluded, kind: OBJECT_REST_KIND, source: src };
+      });
+    }
+    case 'elements':
+    case 'member': {
+      const key = spec.kind === 'member' ? spec.key : undefined;
+      return resolveSpecTargets(spec.source, ctx, nextTrace).flatMap((src) => {
+        return projectMemberFromValue(
+          src,
+          {
+            key,
+            mode: 'read',
+            ownOnly: false,
+            seenBindings: nextTrace.seenBindings,
+            seenNodes: nextTrace.seenNodes,
+            seenProjections: EMPTY_PROJECT_SET,
+          },
+          ctx,
+        );
+      });
+    }
   }
-  const { node } = receiver;
-  if (isObjectLiteralExpression(node)) {
-    return projectObjectMembers(node, query, ctx);
-  }
-  if (isArrayLiteralExpression(node)) {
-    return query.mode === 'write' ? [] : projectArrayMembers(node, query, ctx);
-  }
-  if (isClassDeclaration(node) || isClassExpression(node)) {
-    return projectClassMembers({ cls: node, wantStatic: true }, query, ctx);
-  }
-  return [];
 }
 
 export function staticAccessKey(
   access: ElementAccessExpression | PropertyAccessExpression,
   scopes: ScopeTable,
+  seenBindings?: Set<Binding>,
 ): string | undefined {
   return isPropertyAccessExpression(access)
     ? access.name.text
-    : staticExpressionKey(access.argumentExpression, scopes);
+    : staticExpressionKey(access.argumentExpression, scopes, seenBindings);
 }
 
 function resolveStructuredTargets(
   clean: Node,
   ctx: TargetContext,
-  seen: Set<Node>,
-  seenBindings?: Set<Binding>,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
   if (isPropertyAccessExpression(clean) || isElementAccessExpression(clean)) {
-    const key = staticAccessKey(clean, ctx.scopes);
-    return resolveTargets(clean.expression, ctx, seen).flatMap((receiver) =>
-      projectMemberFromValue(receiver, { key, mode: 'read', seen }, ctx),
-    );
+    const key = staticAccessKey(clean, ctx.scopes, trace.seenBindings);
+    return resolveTargetsWithTrace(clean.expression, ctx, trace).flatMap((receiver) => {
+      return projectMemberFromValue(
+        receiver,
+        {
+          key,
+          mode: 'read',
+          ownOnly: false,
+          seenBindings: trace.seenBindings,
+          seenNodes: trace.seenNodes,
+          seenProjections: EMPTY_PROJECT_SET,
+        },
+        ctx,
+      );
+    });
   }
   if (isCallExpression(clean)) {
-    return resolveCallReturnTargets(clean, ctx, seen, seenBindings);
+    return resolveCallReturnTargets(clean, ctx, trace);
   }
   if (isNewExpression(clean)) {
-    return resolveNewTargets(clean, ctx, seen);
+    return resolveNewTargets(clean, ctx, trace);
   }
   return [{ kind: 'node', node: clean }];
 }
@@ -195,17 +238,16 @@ function resolveBinaryTargets(
     readonly right: Node;
   },
   ctx: TargetContext,
-  seen: Set<Node>,
-  seenBindings?: Set<Binding>,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
   const operator = node.operatorToken.kind;
   if (operator === SyntaxKind.CommaToken || operator === SyntaxKind.EqualsToken) {
-    return resolveTargets(node.right, ctx, seen, seenBindings);
+    return resolveTargetsWithTrace(node.right, ctx, trace);
   }
   return FORWARDED_BINARY_OPERATORS.has(operator)
     ? [
-        ...resolveTargets(node.left, ctx, seen, seenBindings),
-        ...resolveTargets(node.right, ctx, seen, seenBindings),
+        ...resolveTargetsWithTrace(node.left, ctx, trace),
+        ...resolveTargetsWithTrace(node.right, ctx, trace),
       ]
     : [];
 }
@@ -213,26 +255,61 @@ function resolveBinaryTargets(
 function resolveCallReturnTargets(
   call: CallExpression,
   ctx: TargetContext,
-  seen: Set<Node>,
-  seenBindings?: Set<Binding>,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
-  const results: ResolvedValue[] = [];
   const callee = unwrapExpression(call.expression);
+  if (callee.kind === SyntaxKind.SuperKeyword) {
+    return resolveThisTargets(callee, ctx);
+  }
+  const results: ResolvedValue[] = [];
   if (
     (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) &&
-    staticAccessKey(callee, ctx.scopes) === 'bind'
+    staticAccessKey(callee, ctx.scopes, trace.seenBindings) === 'bind'
   ) {
-    const boundTargets = resolveTargets(callee.expression, ctx, seen, seenBindings);
-    for (const boundTarget of boundTargets) {
-      if (boundTarget.kind === 'node' && isCallableNode(boundTarget.node)) {
-        results.push(boundTarget);
-      }
-    }
+    results.push(...resolveBindCallTargets(call, callee.expression, ctx, trace));
   }
-  const calleeValues = resolveTargets(call.expression, ctx, seen);
+  const calleeValues = resolveTargetsWithTrace(call.expression, ctx, trace);
   for (const calleeVal of calleeValues) {
     if (calleeVal.kind === 'node' && isCallableNode(calleeVal.node)) {
-      results.push(...returnedTargetsOf(calleeVal.node, ctx, seen));
+      results.push(
+        ...returnedTargetsOf(calleeVal.node, ctx, {
+          receiver: calleeVal.receiver,
+          seenBindings: trace.seenBindings,
+          seenNodes: trace.seenNodes,
+        }),
+      );
+    }
+  }
+  return results;
+}
+
+function resolveBindCallTargets(
+  call: CallExpression,
+  targetExpr: Node,
+  ctx: TargetContext,
+  trace: ResolutionTrace,
+): readonly ResolvedValue[] {
+  const boundTargets = resolveTargetsWithTrace(targetExpr, ctx, trace);
+  const firstArg = call.arguments[0];
+  const thisTargets =
+    firstArg === undefined || isSpreadElement(firstArg)
+      ? []
+      : resolveTargetsWithTrace(firstArg, ctx, trace);
+  const results: ResolvedValue[] = [];
+  for (const boundTarget of boundTargets) {
+    if (boundTarget.kind !== 'node' || !isCallableNode(boundTarget.node)) {
+      continue;
+    }
+    if (
+      isArrowFunction(boundTarget.node) ||
+      boundTarget.receiver !== undefined ||
+      thisTargets.length === 0
+    ) {
+      results.push(boundTarget);
+      continue;
+    }
+    for (const receiver of thisTargets) {
+      results.push({ kind: 'node', node: boundTarget.node, receiver });
     }
   }
   return results;
@@ -241,46 +318,64 @@ function resolveCallReturnTargets(
 function resolveNewTargets(
   node: NewExpression,
   ctx: TargetContext,
-  seen: Set<Node>,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
-  const instances: ResolvedValue[] = [];
-  const candidates = resolveTargets(node.expression, ctx, seen);
-  for (const target of candidates) {
-    if (
-      target.kind === 'node' &&
+  return resolveTargetsWithTrace(node.expression, ctx, trace).flatMap((target) => {
+    return target.kind === 'node' &&
       (isClassDeclaration(target.node) || isClassExpression(target.node))
-    ) {
-      instances.push({ cls: target.node, kind: 'instance' });
-    }
-  }
-  return instances;
+      ? [{ cls: target.node, kind: 'instance' as const }]
+      : [];
+  });
 }
 
-function resolveThisTargets(thisNode: Node): readonly ResolvedValue[] {
+export function resolveThisTargets(thisNode: Node, ctx: TargetContext): readonly ResolvedValue[] {
   let current: Node = thisNode.parent;
   for (;;) {
     if (isArrowFunction(current)) {
       current = current.parent;
       continue;
     }
-    if (isClassStaticBlockDeclaration(current)) {
-      const owner = current.parent;
-      return isClassDeclaration(owner) || isClassExpression(owner)
-        ? [{ kind: 'node', node: owner }]
-        : [];
-    }
-    if (isDeferredMember(current) || isPropertyDeclaration(current)) {
-      return ownerTargetOfMember(current);
-    }
-    if (
-      isFunctionDeclaration(current) ||
-      isFunctionExpression(current) ||
-      current.kind === SyntaxKind.SourceFile
-    ) {
-      return [];
+    const resolved = thisTargetsAtBoundary(current, ctx);
+    if (resolved !== undefined) {
+      return resolved;
     }
     current = current.parent;
   }
+}
+
+function thisTargetsAtBoundary(
+  current: Node,
+  ctx: TargetContext,
+): readonly ResolvedValue[] | undefined {
+  if (isClassStaticBlockDeclaration(current)) {
+    const owner = current.parent;
+    return isClassDeclaration(owner) || isClassExpression(owner)
+      ? [{ kind: 'node', node: owner }]
+      : [];
+  }
+  if (isDeferredMember(current) || isPropertyDeclaration(current)) {
+    const active = ctx.activeReceiverFor(current);
+    return active === undefined ? ownerTargetOfMember(current) : [active];
+  }
+  if (isFunctionDeclaration(current) || isFunctionExpression(current)) {
+    return functionThisFallback(current, ctx);
+  }
+  return current.kind === SyntaxKind.SourceFile ? [] : undefined;
+}
+
+function functionThisFallback(fn: Node, ctx: TargetContext): readonly ResolvedValue[] {
+  const active = ctx.activeReceiverFor(fn);
+  if (active !== undefined) {
+    return [active];
+  }
+  if (
+    isFunctionExpression(fn) &&
+    isPropertyAssignment(fn.parent) &&
+    isObjectLiteralExpression(fn.parent.parent)
+  ) {
+    return [{ kind: 'node', node: fn.parent.parent }];
+  }
+  return [];
 }
 
 function ownerTargetOfMember(member: Node): readonly ResolvedValue[] {
@@ -296,223 +391,122 @@ function ownerTargetOfMember(member: Node): readonly ResolvedValue[] {
   return [];
 }
 
-function projectObjectMembers(
-  object: ObjectLiteralExpression,
-  query: MemberQuery,
-  ctx: TargetContext,
-): readonly ResolvedValue[] {
-  const found: ResolvedValue[] = [];
-  for (const property of object.properties) {
-    if (isSpreadAssignment(property)) {
-      const spreadValues = resolveTargets(property.expression, ctx, new Set(query.seen));
-      for (const spreadVal of spreadValues) {
-        found.push(
-          ...projectMemberFromValue(spreadVal, { ...query, seen: new Set(query.seen) }, ctx),
-        );
-      }
+function enclosingSuperMember(superNode: Node): Node | undefined {
+  let current: Node = superNode.parent;
+  for (;;) {
+    if (isArrowFunction(current)) {
+      current = current.parent;
       continue;
     }
-    if (matchesKey(query.key, staticPropertyNameKey(property.name, ctx.scopes))) {
-      found.push(...evaluateObjectMember(property, query, ctx));
+    if (
+      isClassStaticBlockDeclaration(current) ||
+      isDeferredMember(current) ||
+      isPropertyDeclaration(current)
+    ) {
+      return current;
     }
+    if (
+      isFunctionDeclaration(current) ||
+      isFunctionExpression(current) ||
+      current.kind === SyntaxKind.SourceFile
+    ) {
+      return undefined;
+    }
+    current = current.parent;
   }
-  return found;
 }
 
-function evaluateObjectMember(
-  property: Node,
-  query: MemberQuery,
+function resolveSuperTargets(
+  superNode: Node,
   ctx: TargetContext,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
-  if (isGetAccessorDeclaration(property) || isSetAccessorDeclaration(property)) {
-    return evaluateAccessor(property, query, ctx);
-  }
-  if (query.mode === 'write') {
+  const member = enclosingSuperMember(superNode);
+  if (member === undefined) {
     return [];
   }
-  if (isMethodDeclaration(property)) {
-    return [{ kind: 'node', node: property }];
+  const owner = member.parent;
+  const selfTargets = resolveThisTargets(superNode, ctx);
+  if (isObjectLiteralExpression(owner)) {
+    return resolveObjectSuperTargets(owner, selfTargets, ctx, trace);
   }
-  if (isPropertyAssignment(property)) {
-    return resolveTargets(property.initializer, ctx, new Set(query.seen));
+  if (!isClassDeclaration(owner) && !isClassExpression(owner)) {
+    return [];
   }
-  return isShorthandPropertyAssignment(property)
-    ? resolveTargets(property.name, ctx, new Set(query.seen))
-    : [];
+  const wantStatic =
+    isClassStaticBlockDeclaration(member) || hasModifier(member, SyntaxKind.StaticKeyword);
+  return resolveClassSuperTargets({ owner, selfTargets, wantStatic }, ctx, trace);
 }
 
-function projectArraySpread(
-  spreadExpr: Node,
-  seen: ReadonlySet<Node>,
+function resolveObjectSuperTargets(
+  owner: ObjectLiteralExpression,
+  selfTargets: readonly ResolvedValue[],
   ctx: TargetContext,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
-  const found: ResolvedValue[] = [];
-  const innerTargets = resolveTargets(spreadExpr, ctx, new Set(seen));
-  for (const inner of innerTargets) {
-    found.push(
-      ...projectMemberFromValue(inner, { key: undefined, mode: 'read', seen: new Set(seen) }, ctx),
-    );
-  }
-  return found;
-}
-
-function arraySlotMatches(
-  targetIndex: number | undefined,
-  fixedIndex: number,
-  spreadSeen: boolean,
-): boolean {
-  if (targetIndex === undefined) {
-    return true;
-  }
-  return spreadSeen ? fixedIndex <= targetIndex : fixedIndex === targetIndex;
-}
-
-function projectArrayMembers(
-  array: ArrayLiteralExpression,
-  query: MemberQuery,
-  ctx: TargetContext,
-): readonly ResolvedValue[] {
-  const targetIndex =
-    query.key !== undefined && /^\d+$/u.test(query.key) ? Number(query.key) : undefined;
-  const found: ResolvedValue[] = [];
-  let fixedIndex = 0;
-  let spreadSeen = false;
-  for (const element of array.elements) {
-    if (isSpreadElement(element)) {
-      spreadSeen = true;
-      if (targetIndex === undefined || fixedIndex <= targetIndex) {
-        found.push(...projectArraySpread(element.expression, query.seen, ctx));
-      }
+  const results: ResolvedValue[] = [];
+  for (const prop of owner.properties) {
+    if (!isProtoSetterProperty(prop)) {
       continue;
     }
-    if (arraySlotMatches(targetIndex, fixedIndex, spreadSeen) && !isOmittedExpression(element)) {
-      found.push(...resolveTargets(element, ctx, new Set(query.seen)));
-    }
-    fixedIndex += 1;
-  }
-  return found;
-}
-
-function projectClassMembers(
-  receiver: { readonly cls: ClassDeclaration | ClassExpression; readonly wantStatic: boolean },
-  query: MemberQuery,
-  ctx: TargetContext,
-): readonly ResolvedValue[] {
-  const found: ResolvedValue[] = [];
-  for (const member of receiver.cls.members) {
-    if (
-      !isErasedOrAmbient(member) &&
-      isNamedClassMember(member) &&
-      hasModifier(member, SyntaxKind.StaticKeyword) === receiver.wantStatic &&
-      matchesKey(query.key, staticPropertyNameKey(member.name, ctx.scopes))
-    ) {
-      found.push(...evaluateClassMember(member, query, ctx));
+    for (const protoVal of resolveTargetsWithTrace(prop.initializer, ctx, trace)) {
+      for (const self of selfTargets) {
+        results.push({ base: protoVal, kind: 'super', self });
+      }
     }
   }
-  found.push(...projectInheritedMembers(receiver, query, ctx));
-  return found;
+  return results;
 }
 
-function projectInheritedMembers(
-  receiver: { readonly cls: ClassDeclaration | ClassExpression; readonly wantStatic: boolean },
-  query: MemberQuery,
+function resolveClassSuperTargets(
+  spec: {
+    readonly owner: ClassDeclaration | ClassExpression;
+    readonly selfTargets: readonly ResolvedValue[];
+    readonly wantStatic: boolean;
+  },
   ctx: TargetContext,
+  trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
-  const baseExpr = extendsExpressionOf(receiver.cls);
+  const baseExpr = extendsExpressionOf(spec.owner);
   if (baseExpr === undefined) {
     return [];
   }
-  const found: ResolvedValue[] = [];
-  const baseValues = resolveTargets(baseExpr, ctx, new Set(query.seen));
-  for (const baseVal of baseValues) {
+  const results: ResolvedValue[] = [];
+  for (const baseVal of resolveTargetsWithTrace(baseExpr, ctx, trace)) {
     if (
       baseVal.kind === 'node' &&
       (isClassDeclaration(baseVal.node) || isClassExpression(baseVal.node))
     ) {
-      const nextReceiver: ResolvedValue = receiver.wantStatic
+      const baseTarget: ResolvedValue = spec.wantStatic
         ? baseVal
-        : { cls: baseVal.node, kind: 'instance' };
-      found.push(
-        ...projectMemberFromValue(nextReceiver, { ...query, seen: new Set(query.seen) }, ctx),
-      );
+        : { cls: baseVal.node, isPrototype: true, kind: 'instance' };
+      for (const self of spec.selfTargets) {
+        results.push({ base: baseTarget, kind: 'super', self });
+      }
     }
   }
-  return found;
+  return results;
 }
 
-function evaluateClassMember(
-  member: NamedClassMember,
-  query: MemberQuery,
+export function superConstructorTargets(
+  superNode: Node,
   ctx: TargetContext,
-): readonly ResolvedValue[] {
-  if (isGetAccessorDeclaration(member) || isSetAccessorDeclaration(member)) {
-    return evaluateAccessor(member, query, ctx);
+  seenBindings?: Set<Binding>,
+): { readonly bases: readonly ResolvedValue[]; readonly selves: readonly ResolvedValue[] } {
+  const member = enclosingSuperMember(superNode);
+  if (member === undefined || !isConstructorDeclaration(member)) {
+    return { bases: [], selves: [] };
   }
-  if (query.mode === 'write') {
-    return [];
+  const owner = member.parent;
+  if (!isClassDeclaration(owner) && !isClassExpression(owner)) {
+    return { bases: [], selves: [] };
   }
-  if (isMethodDeclaration(member)) {
-    return [{ kind: 'node', node: member }];
+  const baseExpr = extendsExpressionOf(owner);
+  if (baseExpr === undefined) {
+    return { bases: [], selves: [] };
   }
-  return member.initializer === undefined
-    ? []
-    : resolveTargets(member.initializer, ctx, new Set(query.seen));
-}
-
-function evaluateAccessor(
-  accessor: GetAccessorDeclaration | SetAccessorDeclaration,
-  query: MemberQuery,
-  ctx: TargetContext,
-): readonly ResolvedValue[] {
-  if (isGetAccessorDeclaration(accessor)) {
-    if (query.mode === 'write') {
-      return [];
-    }
-    ctx.onActivate(accessor);
-    return returnedTargetsOf(accessor, ctx, query.seen);
-  }
-  if (query.mode !== 'read') {
-    ctx.onActivate(accessor);
-  }
-  return [];
-}
-
-function returnedTargetsOf(
-  callable: CallableNode,
-  ctx: TargetContext,
-  seen: Set<Node>,
-): readonly ResolvedValue[] {
-  const { body } = callable;
-  if (body === undefined) {
-    return [];
-  }
-  if (!isBlock(body)) {
-    return resolveTargets(body, ctx, new Set(seen));
-  }
-  const returns: Node[] = [];
-  const collectReturns = (node: Node): void => {
-    if (node !== body && (isPassiveDeferredFunction(node) || isDeferredMember(node))) {
-      return;
-    }
-    if (isReturnStatement(node) && node.expression !== undefined) {
-      returns.push(node.expression);
-      return;
-    }
-    node.forEachChild(collectReturns);
+  return {
+    bases: resolveTargets(baseExpr, ctx, EMPTY_NODE_SET, seenBindings),
+    selves: resolveThisTargets(superNode, ctx),
   };
-  collectReturns(body);
-  return returns.flatMap((expr) => resolveTargets(expr, ctx, new Set(seen)));
-}
-
-function isNamedClassMember(member: Node): member is NamedClassMember {
-  return (
-    isPropertyDeclaration(member) ||
-    isMethodDeclaration(member) ||
-    isGetAccessorDeclaration(member) ||
-    isSetAccessorDeclaration(member)
-  );
-}
-
-function matchesKey(queried: string | undefined, declared: string | undefined): boolean {
-  return queried === undefined || declared === undefined || declared === queried;
 }
