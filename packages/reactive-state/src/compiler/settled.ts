@@ -24,11 +24,12 @@ import { fixedDateInput, fixedDateText } from './dated.ts';
 import { framedRead } from './framed.ts';
 import { functionRead } from './function-reads.ts';
 import { handedGlobal } from './handed-globals.ts';
-import { methodsOf, writesThis } from './held-methods.ts';
 import { inputMetadata } from './input-metadata.ts';
-import { isKept, readsKeptIterator, rootOf, runsPerCall, targetsOf } from './kept.ts';
+import { isKept, readsKeptIterator, runsPerCall } from './kept.ts';
 import { dateText, LOCAL_METHODS, localRead } from './local-reads.ts';
 import { platformOtherwise } from './platform-otherwise.ts';
+import { keptRootOf, keptTargetsOf, nestedKeptMethodWrite } from './settled-receivers.ts';
+import { keptCallParameterWrite } from './settled-writes.ts';
 import { sharedProxyOrigin } from './shared-proxies.ts';
 import { timedMaking } from './timed.ts';
 import { CHANGING_FUNCTIONS, methodOf, writtenArgumentBy, writtenBy } from './written.ts';
@@ -379,45 +380,29 @@ function isTypeOfExpression(node: Node | undefined): boolean {
  * global's, what a call it keeps declared; none of another.
  */
 export function keptWrite(node: Node): Identifier | undefined {
-  const written = writtenBy(node);
-  const argument = writtenArgumentBy(node);
-  if ((written === undefined && argument.length === 0) || !runsPerCall(node)) {
+  if (!runsPerCall(node)) {
     return undefined;
   }
+  const written = writtenBy(node);
+  const argument = writtenArgumentBy(node);
   for (const changed of [written, ...argument]) {
     if (changed === undefined) {
       continue;
     }
-    for (const target of targetsOf(changed)) {
-      const root = rootOf(target);
+    for (const target of keptTargetsOf(changed)) {
+      const root = keptRootOf(target);
       if (root !== undefined && isKept(root, writtenBy)) {
         return root;
       }
     }
   }
-  return undefined;
+  return keptCallParameterWrite(node);
 }
 
 /**
  * The name the module holds once a call of a method of writes through `this` (`writesThis`) each
- * time a function of its calls it — `counter.bump()` of `const counter = { n: 0, bump() { return
- * ++this.n; } }`, of what a class of its makes there, of what a function of its answers there, or
- * of a class's own — none of another.
+ * time a function of its calls it — `counter.bump()` or `store.counter.bump()` — none of another.
  */
 export function keptMethodWrite(node: Node): Identifier | undefined {
-  const method = isCallExpression(node) ? methodOf(node) : undefined;
-  if (method === undefined || !isCallExpression(node) || !runsPerCall(node)) {
-    return undefined;
-  }
-  const callee = unwrapped(node.expression);
-  const receiver =
-    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
-      ? unwrapped(callee.expression)
-      : undefined;
-  return receiver !== undefined &&
-    isIdentifier(receiver) &&
-    isKept(receiver, writtenBy) &&
-    writesThis(methodsOf(receiver), method, writtenBy, { seen: new Set(), call: node })
-    ? receiver
-    : undefined;
+  return nestedKeptMethodWrite(node);
 }
