@@ -1,8 +1,11 @@
 import {
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
   isIdentifier,
   isObjectLiteralExpression,
+  isOmittedExpression,
+  isSpreadElement,
   type Node,
   type ObjectLiteralExpression,
 } from 'typescript/ast';
@@ -16,6 +19,7 @@ import {
   toRecordFields,
   withCapturedWrites,
 } from './framed-record-captured-writes.ts';
+import { framedRecordForm, type RecordForm } from './framed-record-forms.ts';
 import { framedRecordOrigin } from './framed-record-origins.ts';
 import { framedSourceValues } from './framed-sources.ts';
 
@@ -42,15 +46,21 @@ interface RecordContext {
   readonly fieldsOf: FieldsOf;
   readonly aliases: Map<Identifier, readonly RecordFields[]>;
   readonly origins: Map<Identifier, OriginEntry>;
+  readonly forms: Map<FrameBinding, readonly RecordFields[]>;
   readonly seen: ReadonlySet<FrameBinding>;
 }
 
-interface RecordReading extends RecordContext {
+interface ReplacementReading extends RecordContext {
+  readonly replacements: Map<Expression, AliasResolution>;
+}
+
+interface RecordReading extends ReplacementReading {
   readonly name: Identifier;
   readonly fields: RecordFields;
   readonly point: Node;
-  readonly replacements: Map<Expression, AliasResolution>;
 }
+
+const NO_FIELDS: RecordFields = { named: new Map(), unknown: [] };
 
 /**
  * What a possibly changed saved record may hold where `point` reads it: each field its literal wrote,
@@ -72,9 +82,43 @@ export function framedChangedRecord(
       fieldsOf: cachedFields(fieldsOf),
       aliases: new Map(),
       origins: new Map(),
+      forms: new Map(),
       seen: new Set(),
     }).captured,
   );
+}
+
+/**
+ * What a record the compile follows to no literal may hold where `point` reads it: one a native
+ * call builds or copies, a conditional or a nullish default chooses, or a variable holds of one —
+ * what any value it is made of may hold, and what is written into the variable and assigned to it.
+ * The fields keep no definite name: the form decides what it copies at run time. Nothing for a value
+ * that is no such form, whose answer is not followed.
+ */
+export function framedFormRecord(
+  expression: Expression,
+  point: Node,
+  fieldsOf: FieldsOf,
+): RecordFields | undefined {
+  const value = unwrapped(expression);
+  if (!isIdentifier(value) && !isForm(value)) return undefined;
+  const reading: ReplacementReading = {
+    consumer: point,
+    fieldsOf: cachedFields(fieldsOf),
+    aliases: new Map(),
+    origins: new Map(),
+    forms: new Map(),
+    seen: new Set(),
+    replacements: new Map(),
+  };
+  const records: RecordFields[] = [];
+  if (isIdentifier(value))
+    appendNamedRecords(value, reading, { records, blocked: new Set() }, false);
+  else records.push(...replacementRecords(value, reading).records);
+  const merged = unionFields(records);
+  const unknown = new Set<Expression>(merged.unknown);
+  for (const values of merged.named.values()) addExpressions(unknown, values);
+  return { named: new Map(), unknown: [...unknown] };
 }
 
 /** Resolves a variable's reachable fields while guarding cyclic record-alias assignments. */
@@ -148,7 +192,7 @@ function cachedFields(fieldsOf: FieldsOf): FieldsOf {
 /** Memoizes record-origin lookups per alias identifier for the fixed consumer point. */
 function cachedOrigin(
   value: Identifier,
-  reading: RecordReading,
+  reading: ReplacementReading,
 ): ReturnType<typeof framedRecordOrigin> {
   const existing = reading.origins.get(value);
   if (existing !== undefined) return existing.found;
@@ -209,8 +253,16 @@ function heldFieldValues(
   return [...values];
 }
 
-/** Reads and caches source-written literals and record aliases reachable from an expression. */
-function replacementRecords(expression: Expression, reading: RecordReading): AliasResolution {
+/**
+ * Reads and caches source-written literals and record aliases reachable from an expression. An
+ * `operand` is read as what a native form copies: where it is no record, a list's elements and any
+ * other value are what it may hold.
+ */
+function replacementRecords(
+  expression: Expression,
+  reading: ReplacementReading,
+  operand = false,
+): AliasResolution {
   const existing = reading.replacements.get(expression);
   if (existing !== undefined) return existing;
   const pending: Expression[] = [expression];
@@ -221,20 +273,176 @@ function replacementRecords(expression: Expression, reading: RecordReading): Ali
     const value = unwrapped(current);
     if (visited.has(value)) continue;
     visited.add(value);
-    const branched = framedSourceValues(value);
-    if (branched !== undefined) pending.push(...branched);
-    else if (isObjectLiteralExpression(value)) records.push(reading.fieldsOf(value));
-    else appendAliasRecords(value, reading, records, blocked);
+    appendReplacement(value, reading, { pending, records, blocked }, operand);
   }
   const resolved: AliasResolution = { records, blocked };
   reading.replacements.set(expression, resolved);
   return resolved;
 }
 
+/** Whether a value is a branch or a native form: what it answers is what its operands hold. */
+function isForm(value: Expression): boolean {
+  return framedSourceValues(value) !== undefined || framedRecordForm(value) !== undefined;
+}
+
+/** What one reachable value adds: the fields of a literal, an alias, a form's operands or itself. */
+function appendReplacement(
+  value: Expression,
+  reading: ReplacementReading,
+  into: {
+    readonly pending: Expression[];
+    readonly records: RecordFields[];
+    readonly blocked: Set<FrameBinding>;
+  },
+  operand: boolean,
+): void {
+  const branched = framedSourceValues(value);
+  const form = framedRecordForm(value);
+  if (branched !== undefined) into.pending.push(...branched);
+  else if (isObjectLiteralExpression(value)) into.records.push(reading.fieldsOf(value));
+  else if (form !== undefined) appendFormRecords(form, reading, into.records, into.blocked);
+  else if (isIdentifier(value)) appendNamedRecords(value, reading, into, operand);
+  else if (operand) appendOperandValues(value, into.pending, into.records);
+}
+
+/** The records a native form's operands are, in the order it copies them or as alternatives. */
+function appendFormRecords(
+  form: RecordForm,
+  reading: ReplacementReading,
+  records: RecordFields[],
+  blocked: Set<FrameBinding>,
+): void {
+  const parts = form.operands.map((each) => replacementRecords(each, reading, true));
+  for (const part of parts) addBindings(blocked, part.blocked);
+  if (!form.ordered) {
+    for (const part of parts) records.push(...part.records);
+    return;
+  }
+  records.push(copiedInOrder(parts));
+}
+
+/**
+ * The record `Object.assign` makes of what it is given, a later definite field replacing an earlier
+ * one as in a spread; an operand that may be one of several records replaces nothing for sure.
+ */
+function copiedInOrder(parts: readonly AliasResolution[]): RecordFields {
+  const named = new Map<string, readonly Expression[]>();
+  const unknown = new Set<Expression>();
+  for (const part of parts) {
+    const [only, ...more] = part.records;
+    if (only !== undefined && more.length === 0) {
+      for (const [key, values] of only.named) named.set(key, values);
+      addExpressions(unknown, only.unknown);
+      continue;
+    }
+    for (const record of part.records) {
+      for (const values of record.named.values()) addExpressions(unknown, values);
+      addExpressions(unknown, record.unknown);
+    }
+  }
+  return { named, unknown: [...unknown] };
+}
+
+/** A list's elements are read in turn, a spread's source for its own; any other value is itself. */
+function appendOperandValues(
+  value: Expression,
+  pending: Expression[],
+  records: RecordFields[],
+): void {
+  if (!isArrayLiteralExpression(value)) {
+    records.push({ named: new Map(), unknown: [value] });
+    return;
+  }
+  for (const element of value.elements) {
+    if (isOmittedExpression(element)) continue;
+    pending.push(isSpreadElement(element) ? element.expression : element);
+  }
+}
+
+/** A name is a record alias where its initializer is a literal, and a native form's where it is not. */
+function appendNamedRecords(
+  value: Identifier,
+  reading: ReplacementReading,
+  into: { readonly records: RecordFields[]; readonly blocked: Set<FrameBinding> },
+  operand: boolean,
+): void {
+  if (cachedOrigin(value, reading) !== undefined) {
+    appendAliasRecords(value, reading, into.records, into.blocked);
+    return;
+  }
+  const binding = frameBindingOf(value)?.binding;
+  if (binding === undefined) {
+    if (operand) into.records.push({ named: new Map(), unknown: [value] });
+    return;
+  }
+  const cached = operand ? reading.forms.get(binding) : undefined;
+  if (cached !== undefined) {
+    into.records.push(...cached);
+    return;
+  }
+  if (reading.seen.has(binding)) {
+    into.blocked.add(binding);
+    return;
+  }
+  const inner: ReplacementReading = {
+    ...reading,
+    seen: new Set([...reading.seen, binding]),
+    replacements: new Map(),
+  };
+  const end = formInitializer(value);
+  const made = end === undefined ? undefined : replacementRecords(end, inner, operand);
+  const base = made === undefined ? NO_FIELDS : unionFields(made.records);
+  // Read where the whole record is read, so that one reading of the name serves every use of it.
+  const changed = changedRecord(value, base, reading.consumer, inner);
+  const records = [toRecordFields(changed.captured)];
+  if (operand && made === undefined) records.push({ named: new Map(), unknown: [value] });
+  const open = new Set(changed.blocked);
+  addBindings(open, made?.blocked ?? NO_BLOCKED);
+  open.delete(binding);
+  addBindings(into.blocked, open);
+  if (operand && open.size === 0) reading.forms.set(binding, records);
+  into.records.push(...records);
+}
+
+/** What a name's constant initializer chain ends at, where it ends at a native form or a list. */
+function formInitializer(name: Identifier): Expression | undefined {
+  const seen = new Set<FrameBinding>();
+  let value: Expression = name;
+  while (isIdentifier(value)) {
+    const reading = frameBindingOf(value);
+    if (reading === undefined || reading.keys.length > 0 || seen.has(reading.binding))
+      return undefined;
+    seen.add(reading.binding);
+    const initializer = reading.binding.initializer;
+    if (initializer === undefined) return undefined;
+    value = unwrapped(initializer);
+  }
+  return framedSourceValues(value) !== undefined ||
+    framedRecordForm(value) !== undefined ||
+    isArrayLiteralExpression(value)
+    ? value
+    : undefined;
+}
+
+/** The fields every record may hold: the name of any, with the values of each. */
+function unionFields(records: readonly RecordFields[]): RecordFields {
+  const named = new Map<string, readonly Expression[]>();
+  const unknown = new Set<Expression>();
+  for (const record of records) {
+    for (const [key, values] of record.named) {
+      const merged = new Set<Expression>(named.get(key));
+      addExpressions(merged, values);
+      named.set(key, [...merged]);
+    }
+    addExpressions(unknown, record.unknown);
+  }
+  return { named, unknown: [...unknown] };
+}
+
 /** Appends resolved alias records and any ancestor bindings that truncated cyclic walks. */
 function appendAliasRecords(
   value: Expression,
-  reading: RecordReading,
+  reading: ReplacementReading,
   records: RecordFields[],
   blocked: Set<FrameBinding>,
 ): void {
@@ -244,7 +452,7 @@ function appendAliasRecords(
 }
 
 /** Resolves a source-known record alias once unless an active ancestor binding truncates a cycle. */
-function aliasRecords(value: Expression, reading: RecordReading): AliasResolution {
+function aliasRecords(value: Expression, reading: ReplacementReading): AliasResolution {
   if (!isIdentifier(value)) return { records: [], blocked: NO_BLOCKED };
   const cached = reading.aliases.get(value);
   if (cached !== undefined) return { records: cached, blocked: NO_BLOCKED };
@@ -267,6 +475,7 @@ function aliasRecords(value: Expression, reading: RecordReading): AliasResolutio
     fieldsOf: reading.fieldsOf,
     aliases: reading.aliases,
     origins: reading.origins,
+    forms: reading.forms,
     seen: reading.seen,
   });
   const records = [
