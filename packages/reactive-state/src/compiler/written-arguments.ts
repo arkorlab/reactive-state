@@ -2,7 +2,9 @@ import {
   type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
+  isBinaryExpression,
   isCallExpression,
+  isConditionalExpression,
   isElementAccessExpression,
   isIdentifier,
   isPropertyAccessExpression,
@@ -51,6 +53,30 @@ export interface LentMethod {
 interface GlobalCall {
   readonly given: readonly CallArgument[];
   readonly path: string;
+}
+
+const EITHER_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/** Conditional, logical, comma or assignment operand expressions that can supply a value. */
+export function branchOperands(node: Expression): readonly Expression[] | undefined {
+  if (isConditionalExpression(node)) {
+    return [node.whenTrue, node.whenFalse];
+  }
+  if (!isBinaryExpression(node)) {
+    return undefined;
+  }
+  const operator = node.operatorToken.kind;
+  if (operator === SyntaxKind.CommaToken || operator === SyntaxKind.EqualsToken) {
+    return [node.right];
+  }
+  return EITHER_OPERATORS.has(operator) ? [node.left, node.right] : undefined;
 }
 
 /** Wraps ordinary and spread call-site argument nodes into uniform `CallArgument` descriptors. */

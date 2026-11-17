@@ -20,11 +20,15 @@ import {
   spreadOnlyInitializer,
   unmutatedTuple,
 } from './tuple-spreads.ts';
-import { asCallArguments, type CallArgument, slotArguments } from './written-arguments.ts';
+import {
+  asCallArguments,
+  branchOperands,
+  type CallArgument,
+  slotArguments,
+} from './written-arguments.ts';
 import { moduleArrayWrites } from './written-array-elements.ts';
 import {
   applyHolderWrites,
-  branchOperands,
   projectMemberKeys,
   selectedInitialExpressions,
   type SpreadWork,

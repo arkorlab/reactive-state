@@ -3,15 +3,15 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isBinaryExpression,
   isBlock,
-  isConditionalExpression,
   isDoStatement,
+  isElementAccessExpression,
   isExpressionStatement,
   isForInStatement,
   isForOfStatement,
   isForStatement,
   isIdentifier,
+  isPropertyAccessExpression,
   isSourceFile,
   isVariableDeclaration,
   isVariableDeclarationList,
@@ -32,7 +32,12 @@ import { framedObjectSources } from './framed-object-members.ts';
 import { framedPatternDefaults } from './framed-pattern-defaults.ts';
 import { isBlockScoped, readsBinding } from './scope.ts';
 import { constInitializerOf, unmutatedTuple } from './tuple-spreads.ts';
-import { asCallArguments, type CallArgument, slotArguments } from './written-arguments.ts';
+import {
+  asCallArguments,
+  branchOperands,
+  type CallArgument,
+  slotArguments,
+} from './written-arguments.ts';
 import {
   directArrayIdentifier,
   type HolderArrayWrites,
@@ -68,30 +73,6 @@ export interface HolderBindingContext {
 interface LengthBounds {
   readonly max: number;
   readonly min: number;
-}
-
-const EITHER_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.AmpersandAmpersandToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.BarBarToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-  SyntaxKind.QuestionQuestionToken,
-]);
-
-/** Conditional, logical, comma or assignment operand expressions that can supply a value. */
-export function branchOperands(node: Expression): readonly Expression[] | undefined {
-  if (isConditionalExpression(node)) {
-    return [node.whenTrue, node.whenFalse];
-  }
-  if (!isBinaryExpression(node)) {
-    return undefined;
-  }
-  const operator = node.operatorToken.kind;
-  if (operator === SyntaxKind.CommaToken || operator === SyntaxKind.EqualsToken) {
-    return [node.right];
-  }
-  return EITHER_OPERATORS.has(operator) ? [node.left, node.right] : undefined;
 }
 
 /** Resolves a lexical or hoisted binding's initializer and pattern defaults along `selected.keys`. */
@@ -203,7 +184,7 @@ function collectElementOrSpread(entry: IndexedElementWrite, sink: HolderWriteSin
   }
 }
 
-/** Walks `writes.pushCalls` tracking `[min, max]` slot offsets before and within each `push`. */
+/** Walks post-ordered `writes.pushCalls` tracking `[min, max]` slot offsets across pushes. */
 function collectAlignedPushes(
   writes: HolderArrayWrites,
   binding: HolderBindingContext,
@@ -211,14 +192,19 @@ function collectAlignedPushes(
   sink: HolderWriteSink,
 ): void {
   const start = initialPushBounds(writes, binding);
+  const holderOwner = binding.owner === undefined ? undefined : executionOwner(binding.owner);
   let curMin = start.min;
   let curMax = writes.pushCalls.some((pushCall) => isRepeatablePush(pushCall.call, binding.owner))
     ? Number.MAX_SAFE_INTEGER
     : start.max;
   for (const pushCall of writes.pushCalls) {
-    const delta = collectSinglePushCall(pushCall.args, { max: curMax, min: curMin }, work, sink);
+    const sameOwner = holderOwner !== undefined && executionOwner(pushCall.call) === holderOwner;
+    const callBase: LengthBounds = sameOwner
+      ? { max: curMax, min: curMin }
+      : { max: Number.MAX_SAFE_INTEGER, min: start.min };
+    const delta = collectSinglePushCall(pushCall.args, callBase, work, sink);
     curMax = satAdd(curMax, delta.max);
-    if (isDefinitePushBefore(pushCall, binding.owner, binding.ident)) {
+    if (sameOwner && isDefinitePushBefore(pushCall, binding.owner, binding.ident)) {
       curMin = satAdd(curMin, delta.min);
     }
   }
@@ -398,6 +384,7 @@ function isDefinitePushBefore(
     !isVariableDeclaration(owner) ||
     !isIdentifier(owner.name) ||
     pushCall.call.end > readSite.pos ||
+    hasOptionalPushChain(pushCall.call) ||
     !isExpressionStatement(pushCall.call.parent)
   ) {
     return false;
@@ -411,6 +398,18 @@ function isDefinitePushBefore(
     holderOwner === executionOwner(readSite) &&
     executionOwner(pushCall.call) === holderOwner &&
     hasOnlyPlainBlockAncestors(pushCall.call.parent, holderOwner)
+  );
+}
+
+/** Whether `call` or its member callee may short-circuit through `?.`. */
+function hasOptionalPushChain(call: HolderPushCall['call']): boolean {
+  if (call.questionDotToken !== undefined) {
+    return true;
+  }
+  const callee = unwrapped(call.expression);
+  return (
+    (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) &&
+    callee.questionDotToken !== undefined
   );
 }
 

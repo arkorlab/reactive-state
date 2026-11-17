@@ -208,6 +208,96 @@ const KEPT_APPLY_CASES: readonly KeptApplyCase[] = [
     id: 'conditional-first-push-then-shared-event-still-reaches-first-slot',
     keptRoot: 'sharedEvent',
   },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: unknown[] = []; args.push(new Event('local'), args.push(sharedEvent)); emitter.dispatchEvent.apply(emitter, args as [Event]);",
+    id: 'nested-push-argument-evaluates-inner-push-into-first-slot',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: unknown[] = []; const alias = args; args.push(new Event('local'), alias.push(sharedEvent)); emitter.dispatchEvent.apply(emitter, args as [Event]);",
+    id: 'nested-push-across-holder-and-alias-evaluates-inner-first',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; fill(); args.push(new Event('local')); function fill(): void { args.push(sharedEvent); } emitter.dispatchEvent.apply(emitter, args);",
+    id: 'hoisted-helper-push-called-before-definite-local-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const alias = args || []; alias.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'logical-or-array-alias-push-reaches-underlying-apply-holder',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const alias = (flag && args) || (undefined ?? args); alias.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'nullish-coalescing-and-logical-and-array-alias-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; let alias: Event[] | undefined; alias ??= args; alias.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'nullish-assignment-array-alias-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; args['length'] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'bracket-string-length-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; const dynamicKey: string = flag ? 'length' : 'other'; (args as unknown as Record<string, unknown>)[dynamicKey] = 0; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'dynamic-bracket-key-possible-length-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; Reflect.set(args, 'length', 0); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'reflect-set-length-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; Object.defineProperty(args, 'length', { value: 0 }); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'object-define-property-length-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; Reflect.set({}, '0', sharedEvent, args); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'reflect-set-fourth-receiver-slot-zero-write-apply-dispatch-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; Reflect.set({}, 'length', 0, args); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'reflect-set-fourth-receiver-length-truncation-before-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; Object.defineProperty(args, 0, { value: sharedEvent }); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'object-define-property-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('first')]; args[0] = new Event('second'); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'indexed-slot-zero-local-overwrite-before-second-push-not-kept-pin',
+    keptRoot: undefined,
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; Reflect.set({}, '0', new Event('local'), args); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'reflect-set-fourth-receiver-local-event-not-kept-pin',
+    keptRoot: undefined,
+  },
 ];
 
 const ARGUMENT_EFFECT_CASES = [
