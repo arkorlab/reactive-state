@@ -23,6 +23,7 @@ import {
   isRegularExpressionLiteral,
   isSatisfiesExpression,
   isTemplateExpression,
+  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclarationList,
   isVoidExpression,
@@ -32,16 +33,16 @@ import {
 } from 'typescript/ast';
 
 import { type Answering, parametersOf } from './answers.ts';
-import { globalOf, unwrapped } from './bounded.ts';
+import { globalOf } from './bounded.ts';
 import { targetsOf } from './kept.ts';
-import { readsOf } from './local-module-reads.ts';
 import { constantValue } from './numbers.ts';
 import { parameterValue } from './parameter-values.ts';
-import { bindsHoistedName } from './proxy-parameter-writes.ts';
+import { bindsHoistedName, cachedParameterReads } from './proxy-parameter-writes.ts';
 import {
   type Context,
   type Frame,
   type Origin,
+  peeled,
   type PresenceCache,
   type PresenceMode,
   sourcePath,
@@ -52,6 +53,7 @@ import { writtenBy } from './written.ts';
 
 /** Bound parameter metadata for a reference inside an active call frame. */
 export interface ParameterFrame {
+  readonly declared: Identifier;
   readonly frame: Frame;
   readonly index: number;
   readonly parameter: ParameterDeclaration;
@@ -69,9 +71,6 @@ interface PresenceOutcome {
   readonly result: boolean;
   readonly value: Expression;
 }
-
-/** Memoized `readsOf(declared, fn)` predicates keyed by parameter declaration identifier. */
-const PARAMETER_READS = new WeakMap<Identifier, (node: Node) => node is Identifier>();
 
 /** Memoized parameter-reassignment flags keyed by parameter declaration identifier. */
 const PARAMETER_REASSIGNED = new WeakMap<Identifier, boolean>();
@@ -94,36 +93,23 @@ export function parameterFrame(
   frames: readonly Frame[],
 ): ParameterFrame | undefined {
   for (const frame of frames.toReversed()) {
-    const parameters = parametersOf(frame.fn);
-    const index = parameters.findIndex(
-      (parameter) =>
-        isIdentifier(parameter.name) &&
-        parameter.name.text === name.text &&
-        cachedParameterReads(parameter.name, frame.fn)(name),
-    );
-    const parameter = parameters[index];
-    if (parameter !== undefined) {
-      return { frame, index, parameter };
+    for (const [index, parameter] of parametersOf(frame.fn).entries()) {
+      const declared = bindingIdentifiers(parameter.name).find(
+        (each) => each.text === name.text && cachedParameterReads(each, frame.fn)(name),
+      );
+      if (declared !== undefined) {
+        return { declared, frame, index, parameter };
+      }
     }
   }
   return undefined;
 }
 
-/** Returns a memoized `readsOf(declared, fn)` predicate for parameter `declared`. */
-function cachedParameterReads(
-  declared: Identifier,
-  fn: Answering,
-): (node: Node) => node is Identifier {
-  let predicate = PARAMETER_READS.get(declared);
-  if (predicate === undefined) {
-    predicate = readsOf(declared, fn);
-    PARAMETER_READS.set(declared, predicate);
+/** Checks whether `root` contains a non-call write targeting `declared` inside `fn`. */
+function subtreeWritesBinding(root: Node, fn: Answering, declared: Identifier): boolean {
+  if (!anyTargetNamesIn(root).has(declared.text)) {
+    return false;
   }
-  return predicate;
-}
-
-/** Whether `fn` directly reassigns `declared` anywhere in its body. */
-export function bindingChanged(fn: Answering, declared: Identifier): boolean {
   const isRead = cachedParameterReads(declared, fn);
   const visit = (node: Node): boolean => {
     const target = isCallExpression(node) ? undefined : writtenBy(node);
@@ -138,7 +124,7 @@ export function bindingChanged(fn: Answering, declared: Identifier): boolean {
     }
     return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
   };
-  return fn.body !== undefined && visit(fn.body);
+  return visit(root);
 }
 
 /** Classifies whether an argument origin is guaranteed `undefined`, defined, or possibly either. */
@@ -154,7 +140,7 @@ export function argumentPresence(given: Origin): 'defined' | 'possible' | 'undef
 
 /** Resolves `node` unless it names an active parameter binding in `context.frames`. */
 function resolvePresenceTarget(node: Expression, context: Context): Expression {
-  const direct = unwrapped(node);
+  const direct = peeled(node);
   return isIdentifier(direct) && parameterFrame(direct, context.frames) !== undefined
     ? direct
     : sourceValue(direct, context);
@@ -177,13 +163,13 @@ function guaranteedUndefined(given: Origin): boolean {
 /** Checks whether a parameter reference `name` evaluates to `undefined` on every path. */
 function parameterUndefined(name: Identifier, context: Context): boolean {
   const binding = parameterFrame(name, context.frames);
-  if (binding === undefined || !isIdentifier(binding.parameter.name)) {
+  if (binding === undefined) {
     return false;
   }
-  const { frame, index, parameter } = binding;
+  const { declared, frame, index, parameter } = binding;
   const scoped = frameContextOf(context, frame);
-  const reassigned = parameterReassigned(frame.fn, parameter.name);
-  const replaced = reassigned ? parameterValue(frame.fn, parameter.name, name) : undefined;
+  const reassigned = frameReassignsParameter(binding);
+  const replaced = reassigned ? parameterValue(frame.fn, declared, name) : undefined;
   if (replaced !== undefined) {
     return guaranteedUndefined({
       context: scoped,
@@ -192,7 +178,13 @@ function parameterUndefined(name: Identifier, context: Context): boolean {
       value: replaced.value,
     });
   }
-  if (parameter.dotDotDotToken !== undefined || reassigned || frame.given === undefined) {
+  if (
+    reassigned ||
+    frame.given === undefined ||
+    parameter.dotDotDotToken !== undefined ||
+    (frame.openTail === true && index >= frame.given.length) ||
+    !isIdentifier(parameter.name)
+  ) {
     return false;
   }
   const given = frame.given[index];
@@ -242,17 +234,17 @@ function computeDefined(value: Expression, context: Context, nullable: boolean):
 /** Checks whether a parameter reference `name` never evaluates to `undefined` (or `null`). */
 function parameterDefined(name: Identifier, context: Context, nullable: boolean): boolean {
   const binding = parameterFrame(name, context.frames);
-  if (binding === undefined || !isIdentifier(binding.parameter.name)) {
+  if (binding === undefined) {
     return false;
   }
-  const { frame, parameter } = binding;
+  const { declared, frame, parameter } = binding;
   const scoped = frameContextOf(context, frame);
-  const reassigned = parameterReassigned(frame.fn, parameter.name);
-  const replaced = reassigned ? parameterValue(frame.fn, parameter.name, name) : undefined;
+  const reassigned = frameReassignsParameter(binding);
+  const replaced = reassigned ? parameterValue(frame.fn, declared, name) : undefined;
   if (replaced !== undefined) {
     return guaranteedDefined(replaced.value, scoped, nullable);
   }
-  if (reassigned) {
+  if (reassigned || !isIdentifier(parameter.name)) {
     return false;
   }
   if (parameter.dotDotDotToken !== undefined) {
@@ -269,7 +261,7 @@ function incomingParameterDefined(
 ): boolean {
   const { frame, index, parameter } = binding;
   const { initializer } = parameter;
-  if (frame.given === undefined) {
+  if (frame.given === undefined || (frame.openTail === true && index >= frame.given.length)) {
     return (
       nullable && initializer !== undefined && guaranteedDefined(initializer, scoped, nullable)
     );
@@ -286,8 +278,8 @@ function incomingParameterDefined(
   return nullable && initializer !== undefined && guaranteedDefined(initializer, scoped, nullable);
 }
 
-/** Whether `fn` writes to `declared` or declares an initialized or loop-head `var` of its name. */
-export function parameterReassigned(fn: Answering, declared: Identifier): boolean {
+/** Whether `fn.body` writes to `declared` or declares an initialized or loop-head `var` of it. */
+function bodyReassigned(fn: Answering, declared: Identifier): boolean {
   const cached = PARAMETER_REASSIGNED.get(declared);
   if (cached !== undefined) {
     return cached;
@@ -297,16 +289,47 @@ export function parameterReassigned(fn: Answering, declared: Identifier): boolea
     return false;
   }
   const result =
-    bindingChanged(fn, declared) ||
-    hoistedIn([fn.body]).some(
-      (each) =>
+    subtreeWritesBinding(fn.body, fn, declared) ||
+    hoistedIn([fn.body]).some((each) => {
+      return (
         bindsHoistedName(each.name, declared.text) &&
         (each.initializer !== undefined ||
           isForInStatement(each.parent.parent) ||
-          isForOfStatement(each.parent.parent)),
-    );
+          isForOfStatement(each.parent.parent))
+      );
+    });
   PARAMETER_REASSIGNED.set(declared, result);
   return result;
+}
+
+/** Whether `fn` writes to `declared` across parameter defaults, body, or `var` declarations. */
+export function parameterReassigned(fn: Answering, declared: Identifier): boolean {
+  return (
+    bodyReassigned(fn, declared) ||
+    parametersOf(fn).some((param) => subtreeWritesBinding(param, fn, declared))
+  );
+}
+
+/** Checks whether `binding.declared` can be reassigned in `binding.frame`'s reachable code. */
+function frameReassignsParameter(binding: ParameterFrame): boolean {
+  const { declared, frame } = binding;
+  if (bodyReassigned(frame.fn, declared)) {
+    return true;
+  }
+  return parametersOf(frame.fn).some((param, index) => {
+    if (subtreeWritesBinding(param.name, frame.fn, declared)) {
+      return true;
+    }
+    if (
+      param.initializer === undefined ||
+      !subtreeWritesBinding(param.initializer, frame.fn, declared)
+    ) {
+      return false;
+    }
+    const arg =
+      frame.given !== undefined && index < frame.given.length ? frame.given[index] : undefined;
+    return !(arg?.keys.length === 0 && guaranteedDefined(arg.value, arg.context, true));
+  });
 }
 
 /** Collects and memoizes all identifier texts written or `var`-declared anywhere inside `node`. */
@@ -331,14 +354,24 @@ function anyTargetNamesIn(node: Node): ReadonlySet<string> {
   return names;
 }
 
+/** Adds all identifier texts bound by `list`'s variable declarations into `out`. */
+function addDeclarationListNames(
+  list: Node & {
+    readonly declarations: readonly { readonly name: Parameters<typeof bindingIdentifiers>[0] }[];
+  },
+  out: Set<string>,
+): void {
+  for (const declaration of list.declarations) {
+    for (const ident of bindingIdentifiers(declaration.name)) {
+      out.add(ident.text);
+    }
+  }
+}
+
 /** Adds identifier names targeted directly at `node` by non-call writes or `var` declarations. */
 function addDirectTargetNames(node: Node, out: Set<string>): void {
   if (isVariableDeclarationList(node) && !isBlockScoped(node)) {
-    for (const declaration of node.declarations) {
-      for (const ident of bindingIdentifiers(declaration.name)) {
-        out.add(ident.text);
-      }
-    }
+    addDeclarationListNames(node, out);
     return;
   }
   const target = isCallExpression(node) ? undefined : writtenBy(node);
@@ -346,11 +379,7 @@ function addDirectTargetNames(node: Node, out: Set<string>): void {
     return;
   }
   if (isVariableDeclarationList(target)) {
-    for (const declaration of target.declarations) {
-      for (const ident of bindingIdentifiers(declaration.name)) {
-        out.add(ident.text);
-      }
-    }
+    addDeclarationListNames(target, out);
     return;
   }
   for (const each of targetsOf(target)) {
@@ -368,7 +397,8 @@ function unwrappedNode(node: Node): Node {
     isParenthesizedExpression(current) ||
     isAsExpression(current) ||
     isSatisfiesExpression(current) ||
-    isNonNullExpression(current)
+    isNonNullExpression(current) ||
+    isTypeAssertion(current)
   ) {
     current = current.expression;
   }
@@ -376,7 +406,7 @@ function unwrappedNode(node: Node): Node {
 }
 
 /** Trims `context.frames` to `frame` and its enclosing callers when evaluating `frame`'s code. */
-function frameContextOf(context: Context, frame: Frame): Context {
+export function frameContextOf(context: Context, frame: Frame): Context {
   const index = context.frames.lastIndexOf(frame);
   return index === -1 || index === context.frames.length - 1
     ? context

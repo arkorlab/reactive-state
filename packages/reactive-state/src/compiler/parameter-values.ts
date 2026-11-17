@@ -14,6 +14,7 @@ import {
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isTypeAssertion,
   isVariableStatement,
   isWhileStatement,
   type Node,
@@ -21,7 +22,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, standsIn } from './answers.ts';
+import { type Answering, parametersOf, standsIn } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { readsOf } from './local-module-reads.ts';
 import { hoistedIn, isBlockScoped, withinFunction } from './scope.ts';
@@ -31,6 +32,15 @@ import { writtenBy } from './written.ts';
 export interface ParameterValue {
   readonly value: Expression;
   readonly statement: Statement;
+}
+
+/** Peels parentheses and TypeScript assertion wrappers, including `<T>expr`. */
+function peelValue(node: Expression): Expression {
+  let current = unwrapped(node);
+  while (isTypeAssertion(current)) {
+    current = unwrapped(current.expression);
+  }
+  return current;
 }
 
 /** A plain assignment or `var` initializer that certainly ran before `name` was read. */
@@ -76,11 +86,11 @@ function replacementIn(statement: Statement, name: string): Expression | undefin
   if (!isExpressionStatement(statement)) {
     return undefined;
   }
-  const expression = unwrapped(statement.expression);
+  const expression = peelValue(statement.expression);
   if (!isBinaryExpression(expression) || expression.operatorToken.kind !== SyntaxKind.EqualsToken) {
     return undefined;
   }
-  const target = unwrapped(expression.left);
+  const target = peelValue(expression.left);
   return isIdentifier(target) && target.text === name ? expression.right : undefined;
 }
 
@@ -115,7 +125,10 @@ function uncertainReplacement(
     }
     return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
   };
-  return fn.body !== undefined && visit(fn.body);
+  return (
+    parametersOf(fn).some((parameter) => visit(parameter)) ||
+    (fn.body !== undefined && visit(fn.body))
+  );
 }
 
 /** Whether `write` can run after `replacement` and before `read`, including an earlier iteration. */
@@ -138,8 +151,12 @@ function repeatsBefore(write: Node, read: Node, fn: Answering): boolean {
       continue;
     }
     const once =
-      (isForStatement(parent) && parent.initializer === each) ||
-      ((isForOfStatement(parent) || isForInStatement(parent)) && parent.expression === each);
+      (isForStatement(parent) &&
+        parent.initializer?.pos === each.pos &&
+        parent.initializer.end === each.end) ||
+      ((isForOfStatement(parent) || isForInStatement(parent)) &&
+        parent.expression.pos === each.pos &&
+        parent.expression.end === each.end);
     if (!once) {
       return true;
     }

@@ -10,6 +10,7 @@ import {
   isBlock,
   isComputedPropertyName,
   isExpressionStatement,
+  isExpression,
   isForInStatement,
   isForOfStatement,
   isForStatement,
@@ -31,8 +32,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import type { Answering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
+import { type Answering, parametersOf } from './answers.ts';
 import { readsOf } from './local-module-reads.ts';
 import { arrayChangedBefore } from './proxy-arrays.ts';
 import {
@@ -43,6 +43,7 @@ import {
 import {
   heldConstant,
   type Origin,
+  peeled,
   propertyKey,
   type ProxyReading,
   writtenBefore,
@@ -98,7 +99,7 @@ export function definitelyReassignedBefore(
     }
     if (
       isForStatement(parent) &&
-      child !== parent.initializer &&
+      (parent.initializer?.pos !== child.pos || parent.initializer.end !== child.end) &&
       forInitializerReassigns(parent.initializer, target)
     ) {
       return true;
@@ -114,30 +115,54 @@ export function definitelyReassignedBefore(
   return false;
 }
 
-/** Collects all candidate origins written into `declared` across assignments, `var`s, and loops. */
+/** Origin contexts and lazy bypassed-initializer check for `assignedParameterOrigins`. */
+export interface ParameterWriteScan {
+  readonly bodyAt: Origin;
+  readonly defaultAt: Origin;
+  readonly isBypassed?: ((index: number) => boolean) | undefined;
+}
+
+/** Collects candidate origins written into `declared` across parameter defaults, `var`s, and body. */
 export function assignedParameterOrigins(
   fn: Answering,
   declared: Identifier,
-  at: Origin,
+  scan: ParameterWriteScan,
 ): readonly Origin[] {
-  if (fn.body === undefined || !writtenNamesIn(fn.body).has(declared.text)) {
+  if (!writtenNamesIn(fn).has(declared.text)) {
     return [];
   }
   const isRead = cachedParameterReads(declared, fn);
-  const found: Origin[] = [...hoistedParameterOrigins(fn.body, declared.text, at)];
-  const visit = (node: Node): void => {
-    if (isTypeOnly(node) || !writtenNamesIn(node).has(declared.text)) {
-      return;
-    }
-    found.push(...nodeAssignedOrigins(node, isRead, at));
-    node.forEachChild(visit);
+  const found: Origin[] =
+    fn.body === undefined ? [] : [...hoistedParameterOrigins(fn.body, declared.text, scan.bodyAt)];
+  const visitWith = (origin: Origin) => {
+    const visit = (node: Node): void => {
+      if (isTypeOnly(node) || !writtenNamesIn(node).has(declared.text)) {
+        return;
+      }
+      found.push(...nodeAssignedOrigins(node, isRead, origin));
+      node.forEachChild(visit);
+    };
+    return visit;
   };
-  visit(fn.body);
+  const visitDefault = visitWith(scan.defaultAt);
+  for (const [index, parameter] of parametersOf(fn).entries()) {
+    visitDefault(parameter.name);
+    if (
+      parameter.initializer !== undefined &&
+      writtenNamesIn(parameter.initializer).has(declared.text) &&
+      scan.isBypassed?.(index) !== true
+    ) {
+      visitDefault(parameter.initializer);
+    }
+  }
+  if (fn.body !== undefined) {
+    visitWith(scan.bodyAt)(fn.body);
+  }
   return found;
 }
 
 /** Returns a memoized `readsOf(declared, fn)` predicate for parameter `declared`. */
-function cachedParameterReads(
+export function cachedParameterReads(
   declared: Identifier,
   fn: Answering,
 ): (node: Node) => node is Identifier {
@@ -183,16 +208,16 @@ function addDirectWrittenNames(node: Node, out: Set<string>): void {
     collectTargetTexts(node.left, out);
     return;
   }
-  if (
-    (isForOfStatement(node) || isForInStatement(node)) &&
-    !isVariableDeclarationList(node.initializer)
-  ) {
+  if ((isForOfStatement(node) || isForInStatement(node)) && isExpression(node.initializer)) {
     collectTargetTexts(node.initializer, out);
   }
 }
 
 /** Collects all identifier texts declared inside `name`. */
-function collectBindingNameTexts(name: BindingName, out: Set<string>): void {
+function collectBindingNameTexts(name: BindingName | undefined, out: Set<string>): void {
+  if (name === undefined) {
+    return;
+  }
   if (isIdentifier(name)) {
     out.add(name.text);
     return;
@@ -212,33 +237,46 @@ function collectBindingNameTexts(name: BindingName, out: Set<string>): void {
 
 /** Collects identifier texts in destructuring or simple assignment target positions of `target`. */
 function collectTargetTexts(target: Expression, out: Set<string>): void {
-  const current = unwrapped(target);
-  if (isIdentifier(current)) {
-    out.add(current.text);
-    return;
-  }
-  if (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
-    collectTargetTexts(current.left, out);
-    return;
-  }
-  if (isArrayLiteralExpression(current)) {
-    for (const element of current.elements) {
-      if (!isOmittedExpression(element)) {
-        collectTargetTexts(isSpreadElement(element) ? element.expression : element, out);
-      }
+  const pending: Expression[] = [target];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const current = peeled(next);
+    if (isIdentifier(current)) {
+      out.add(current.text);
+    } else if (
+      isBinaryExpression(current) &&
+      current.operatorToken.kind === SyntaxKind.EqualsToken
+    ) {
+      pending.push(current.left);
+    } else if (isArrayLiteralExpression(current)) {
+      pushArrayTargetElements(current.elements, pending);
+    } else if (isObjectLiteralExpression(current)) {
+      pushObjectTargetProperties(current.properties, out, pending);
     }
-    return;
   }
-  if (!isObjectLiteralExpression(current)) {
-    return;
+}
+
+/** Queues non-omitted array destructuring target elements onto `pending`. */
+function pushArrayTargetElements(elements: readonly Expression[], pending: Expression[]): void {
+  for (const element of elements) {
+    if (!isOmittedExpression(element)) {
+      pending.push(isSpreadElement(element) ? element.expression : element);
+    }
   }
-  for (const property of current.properties) {
-    if (isShorthandPropertyAssignment(property)) {
+}
+
+/** Records shorthand target names and queues nested object destructuring targets onto `pending`. */
+function pushObjectTargetProperties(
+  properties: readonly ObjectLiteralElementLike[],
+  out: Set<string>,
+  pending: Expression[],
+): void {
+  for (const property of properties) {
+    if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
       out.add(property.name.text);
     } else if (isPropertyAssignment(property)) {
-      collectTargetTexts(property.initializer, out);
+      pending.push(property.initializer);
     } else if (isSpreadAssignment(property)) {
-      collectTargetTexts(property.expression, out);
+      pending.push(property.expression);
     }
   }
 }
@@ -302,7 +340,7 @@ function forInitializerReassigns(
       )
     );
   }
-  return expressionReassigns(initializer, target.isRead);
+  return isExpression(initializer) && expressionReassigns(initializer, target.isRead);
 }
 
 /** Checks whether a `for..of` or `for..in` loop header assigns `target` on each iteration. */
@@ -313,7 +351,7 @@ function loopHeadBinds(initializer: ForInitializer, target: ParameterTarget): bo
       initializer.declarations.some((each) => bindsHoistedName(each.name, target.text))
     );
   }
-  return unconditionallyBindsPattern(initializer, target.isRead);
+  return isExpression(initializer) && unconditionallyBindsPattern(initializer, target.isRead);
 }
 
 /** Checks whether `expr` unconditionally assigns `isRead` through `=` or comma operands. */
@@ -321,17 +359,24 @@ function expressionReassigns(
   expr: Expression,
   isRead: (node: Node) => node is Identifier,
 ): boolean {
-  const current = unwrapped(expr);
-  if (!isBinaryExpression(current)) {
-    return false;
+  const pending: Expression[] = [expr];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const current = peeled(next);
+    if (!isBinaryExpression(current)) {
+      continue;
+    }
+    if (current.operatorToken.kind === SyntaxKind.CommaToken) {
+      pending.push(current.left, current.right);
+      continue;
+    }
+    if (
+      current.operatorToken.kind === SyntaxKind.EqualsToken &&
+      unconditionallyBindsPattern(current.left, isRead)
+    ) {
+      return true;
+    }
   }
-  if (current.operatorToken.kind === SyntaxKind.CommaToken) {
-    return expressionReassigns(current.left, isRead) || expressionReassigns(current.right, isRead);
-  }
-  return (
-    current.operatorToken.kind === SyntaxKind.EqualsToken &&
-    unconditionallyBindsPattern(current.left, isRead)
-  );
+  return false;
 }
 
 /** Checks whether an assignment target or destructuring pattern unconditionally binds `isRead`. */
@@ -339,22 +384,20 @@ function unconditionallyBindsPattern(
   pattern: Expression,
   isRead: (node: Node) => node is Identifier,
 ): boolean {
-  const current = unwrapped(pattern);
+  let current = peeled(pattern);
+  while (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
+    current = peeled(current.left);
+  }
   if (isIdentifier(current)) {
     return isRead(current);
   }
-  if (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
-    return unconditionallyBindsPattern(current.left, isRead);
-  }
   if (isArrayLiteralExpression(current)) {
-    return current.elements.some(
-      (element) =>
+    return current.elements.some((element) => {
+      return (
         !isOmittedExpression(element) &&
-        unconditionallyBindsPattern(
-          isSpreadElement(element) ? element.expression : element,
-          isRead,
-        ),
-    );
+        unconditionallyBindsPattern(isSpreadElement(element) ? element.expression : element, isRead)
+      );
+    });
   }
   return (
     isObjectLiteralExpression(current) &&
@@ -378,7 +421,7 @@ function objectPropertyBinds(
 
 /** Checks whether `expr` is statically proven to yield at least one `for..of` iteration. */
 function isNonEmptyIterable(expr: Expression, reading: ProxyReading): boolean {
-  const direct = unwrapped(expr);
+  const direct = peeled(expr);
   if (isArrayLiteralExpression(direct)) {
     return direct.elements.some((element) => !isSpreadElement(element));
   }
@@ -389,7 +432,7 @@ function isNonEmptyIterable(expr: Expression, reading: ProxyReading): boolean {
     return false;
   }
   const held = heldConstant(direct, reading);
-  const resolved = held === undefined ? undefined : unwrapped(held);
+  const resolved = held === undefined ? undefined : peeled(held);
   return (
     resolved !== undefined &&
     isArrayLiteralExpression(resolved) &&
@@ -399,12 +442,12 @@ function isNonEmptyIterable(expr: Expression, reading: ProxyReading): boolean {
 
 /** Checks whether `expr` is an unmutated object literal with at least one enumerable own key. */
 function hasEnumerableOwnKey(expr: Expression, reading: ProxyReading): boolean {
-  const direct = unwrapped(expr);
+  const direct = peeled(expr);
   const literal =
     isIdentifier(direct) && !writtenBefore(direct, reading)
       ? heldConstant(direct, reading)
       : direct;
-  const resolved = literal === undefined ? undefined : unwrapped(literal);
+  const resolved = literal === undefined ? undefined : peeled(literal);
   if (resolved === undefined || !isObjectLiteralExpression(resolved)) {
     return false;
   }

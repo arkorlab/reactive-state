@@ -19,7 +19,6 @@ import {
 } from 'typescript/ast';
 
 import { answersLater, isAnswering, returnedBy } from './answers.ts';
-import { unwrapped } from './bounded.ts';
 import { metadataCallee } from './input-callees.ts';
 import { mutatedArrayOrigins } from './proxy-array-writes.ts';
 import {
@@ -28,6 +27,11 @@ import {
   holdsArrayLiteral,
   spreadElementOrigins,
 } from './proxy-arrays.ts';
+import {
+  holdsObjectLiteral,
+  mutatedObjectOrigins,
+  objectChangedBefore,
+} from './proxy-object-writes.ts';
 import { parameterFrame, parameterOrigins, spreadBinding } from './proxy-parameters.ts';
 import {
   type Context,
@@ -37,10 +41,10 @@ import {
   objectOrigins,
   type Origin,
   originKey,
+  peeled,
   type ProxyReading,
   sourcePath,
   sourceValue,
-  writtenBefore,
 } from './proxy-values.ts';
 
 export type { ProxyReading } from './proxy-values.ts';
@@ -66,7 +70,7 @@ export function proxyOrigin(
     ...callableReturnOrigins(context),
   ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const value = unwrapped(next.value);
+    const value = peeled(next.value);
     if (next.seen.has(value) || markVisited(visited, next.context, value, originStateKey(next))) {
       continue;
     }
@@ -114,17 +118,18 @@ function markVisited(
 /** Encodes the member projection and spread state carried by `origin` unambiguously. */
 function originStateKey(origin: Origin): string {
   const path = origin.keys.map((key) => (key === null ? '*' : `${key.length}:${key}`)).join(',');
-  if (origin.spread !== true) {
+  if (origin.spread !== true && (origin.excluded === undefined || origin.excluded.size === 0)) {
     return path;
   }
   const skipped =
     origin.excluded === undefined
       ? ''
       : [...origin.excluded]
-          .toSorted()
+          .toSorted((left, right) => left.localeCompare(right))
           .map((key) => `${key.length}:${key}`)
           .join(',');
-  return `${path}|spread|${skipped}`;
+  const mode = origin.spread === true ? 'spread' : 'plain';
+  return `${path}|${mode}|${skipped}`;
 }
 
 /** Whether the value itself, or the known proxy member of a revocable pair, is a Proxy. */
@@ -186,15 +191,7 @@ function containerOrigins(at: Origin): readonly Origin[] {
 
 /** Projects indexed elements or non-excluded object-spread entries from an array literal. */
 function arrayOrigins(value: ArrayLiteralExpression, at: Origin): readonly Origin[] {
-  const expanded = argumentOrigins(
-    value.elements.map((each) => ({
-      ...at,
-      excluded: undefined,
-      keys: [],
-      spread: undefined,
-      value: each,
-    })),
-  );
+  const expanded = argumentOrigins(value.elements.map((each) => asSlotOrigin(each, at)));
   if (expanded === undefined) {
     return unexpandedArrayOrigins(value, at);
   }
@@ -244,18 +241,19 @@ function projectAllElements(
   rest: readonly (string | null)[],
   at: Origin,
 ): readonly Origin[] {
-  return elements.flatMap((each) =>
-    isOmittedExpression(each.value)
-      ? []
-      : [
-          {
-            ...each,
-            excluded: at.excluded,
-            keys: [...each.keys, ...rest],
-            spread: at.spread,
-          },
-        ],
-  );
+  return elements.flatMap((each) => {
+    if (isOmittedExpression(each.value)) {
+      return [];
+    }
+    return [
+      {
+        ...each,
+        excluded: at.excluded,
+        keys: [...each.keys, ...rest],
+        spread: at.spread,
+      },
+    ];
+  });
 }
 
 /** A parameter's actual argument or a lexical constant, with the argument's original scope. */
@@ -268,9 +266,8 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
   if (held === undefined) {
     return [];
   }
-  const target = unwrapped(held);
-  if (isObjectLiteralExpression(target) && writtenBefore(name, at.context)) {
-    return [];
+  if (holdsObjectLiteral(held) && objectChangedBefore(name, at.context)) {
+    return mutatedObjectOrigins(name, held, at);
   }
   if (holdsArrayLiteral(held) && arrayChangedBefore(name, at.context)) {
     return mutatedArrayOrigins(name, held, at);
@@ -291,25 +288,29 @@ function callOrigins(call: CallExpression, at: Origin): readonly Origin[] {
   if (target === undefined || !isAnswering(target) || answersLater(target)) {
     return [];
   }
-  const given = argumentOrigins(
-    call.arguments.map((value) => ({
-      ...at,
-      excluded: undefined,
-      keys: [],
-      spread: undefined,
-      value,
-    })),
-  );
+  const expanded = callArgumentOrigins(call.arguments.map((value) => asSlotOrigin(value, at)));
   const context: Context = {
     ...at.context,
     calls: new Set([...at.context.calls, call]),
-    frames: [...at.context.frames, { fn: target, given }],
+    frames: [
+      ...at.context.frames,
+      { fn: target, given: expanded.given, openTail: expanded.openTail },
+    ],
   };
   return returnedBy(target).map((value) => ({ ...at, context, seen: new Set(), value }));
 }
 
 /** Known tuple spreads expand in argument order; an unknown iterator leaves arity unproven. */
 function argumentOrigins(given: readonly Origin[]): readonly Origin[] | undefined {
+  const expanded = callArgumentOrigins(given);
+  return expanded.openTail ? undefined : expanded.given;
+}
+
+/** Expands known tuple spreads while preserving the prefix before an unexpanded spread. */
+function callArgumentOrigins(given: readonly Origin[]): {
+  readonly given: readonly Origin[];
+  readonly openTail: boolean;
+} {
   const pending = given.toReversed();
   const result: Origin[] = [];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
@@ -319,11 +320,11 @@ function argumentOrigins(given: readonly Origin[]): readonly Origin[] | undefine
     }
     const expanded = spreadOrigins({ ...next, value: next.value.expression });
     if (expanded === undefined) {
-      return undefined;
+      return { given: result, openTail: true };
     }
     pending.push(...expanded.toReversed());
   }
-  return result;
+  return { given: result, openTail: false };
 }
 
 /** A literal tuple or an unchanged rest array, retaining each element's original context. */
@@ -331,7 +332,7 @@ function spreadOrigins(origin: Origin): readonly Origin[] | undefined {
   let at = origin;
   const seen = new Set<Expression>();
   for (;;) {
-    const value = unwrapped(at.value);
+    const value = peeled(at.value);
     if (seen.has(value) || at.seen.has(value)) {
       return undefined;
     }
@@ -377,4 +378,9 @@ function logicalOrigins(
     return [{ ...at, value: choosesRight ? right : left }];
   }
   return [left, right].map((each) => ({ ...at, value: each }));
+}
+
+/** Wraps an array element or call argument expression into a fresh top-level `Origin` slot. */
+function asSlotOrigin(value: Expression, at: Origin): Origin {
+  return { ...at, excluded: undefined, keys: [], spread: undefined, value };
 }

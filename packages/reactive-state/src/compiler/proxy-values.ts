@@ -18,6 +18,7 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isStringLiteral,
+  isTypeAssertion,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -44,6 +45,7 @@ export interface ProxyReading {
 export interface Frame {
   readonly fn: Answering;
   readonly given: readonly Origin[] | undefined;
+  readonly openTail?: boolean | undefined;
 }
 
 /** Query kind for memoized parameter and argument definedness checks. */
@@ -86,6 +88,15 @@ export interface Origin {
   readonly seen: ReadonlySet<Expression>;
   readonly spread?: boolean | undefined;
   readonly excluded?: ReadonlySet<string> | undefined;
+}
+
+/** Peels parentheses, `as`, `<T>`, `satisfies`, and `!` wrappers from an expression. */
+export function peeled(node: Expression): Expression {
+  let current = unwrapped(node);
+  while (isTypeAssertion(current)) {
+    current = unwrapped(current.expression);
+  }
+  return current;
 }
 
 /** Memoized local `const` initializer lookups (`null` when not a local `const` read). */
@@ -134,7 +145,7 @@ export function literalTruth(value: Expression): boolean | undefined {
 
 /** A lexical constant followed without executing application code or constructing compiler modules. */
 export function sourceValue(node: Expression, reading: ProxyReading): Expression {
-  let value = unwrapped(node);
+  let value = peeled(node);
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
@@ -142,7 +153,7 @@ export function sourceValue(node: Expression, reading: ProxyReading): Expression
     if (held === undefined) {
       break;
     }
-    value = unwrapped(held);
+    value = peeled(held);
   }
   return value;
 }
@@ -181,34 +192,65 @@ function literalKey(node: Node): string | undefined {
     : undefined;
 }
 
+interface WrittenRootSite {
+  readonly end: number;
+  readonly pos: number;
+  readonly root: Identifier;
+}
+
+/** Memoized explicit write sites keyed by `SourceFile` so write-free modules check in O(1). */
+const FILE_WRITTEN_ROOTS = new WeakMap<Node, readonly WrittenRootSite[]>();
+
+/** Collects and memoizes all `(pos, end, root)` write sites inside `file`. */
+function writtenRootsInFile(file: Node): readonly WrittenRootSite[] {
+  const cached = FILE_WRITTEN_ROOTS.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const sites: WrittenRootSite[] = [];
+  const visit = (node: Node): void => {
+    const target = writtenBy(node);
+    if (target !== undefined) {
+      for (const each of targetsOf(target)) {
+        const root = rootOf(each);
+        if (root !== undefined) {
+          sites.push({ end: node.end, pos: node.pos, root });
+        }
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(file);
+  FILE_WRITTEN_ROOTS.set(file, sites);
+  return sites;
+}
+
 /** A prior explicit write prevents projecting a captured literal's original data entries. */
 export function writtenBefore(name: Identifier, reading: ProxyReading): boolean {
-  const declared = metadataInitializer(name)?.parent;
+  const declared = cachedMetadataInitializer(name)?.parent;
   if (declared === undefined) {
     return false;
   }
-  const visit = (node: Node): boolean => {
-    if (node.pos >= name.pos || node.end <= declared.end) {
-      return false;
+  const sites = writtenRootsInFile(name.getSourceFile());
+  if (sites.length === 0) {
+    return false;
+  }
+  let targetValue: Expression | undefined;
+  for (const site of sites) {
+    if (site.pos >= name.pos || site.end <= declared.end) {
+      continue;
     }
-    const target = writtenBy(node);
-    if (
-      target !== undefined &&
-      targetsOf(target).some((each) => {
-        const root = rootOf(each);
-        return root !== undefined && sourceValue(root, reading) === sourceValue(name, reading);
-      })
-    ) {
+    targetValue ??= sourceValue(name, reading);
+    if (sourceValue(site.root, reading) === targetValue) {
       return true;
     }
-    return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
-  };
-  return visit(name.getSourceFile());
+  }
+  return false;
 }
 
 /** Guaranteed own enumerable numeric keys copied when spreading a fresh inline array literal. */
 function inlineArraySpreadKeys(node: Expression): ReadonlySet<string> | undefined {
-  const current = unwrapped(node);
+  const current = peeled(node);
   if (!isArrayLiteralExpression(current)) {
     return undefined;
   }
@@ -259,7 +301,7 @@ function unmutatedObjectLiteral(
   reading: ProxyReading,
   seen: ReadonlySet<Expression>,
 ): ObjectLiteralExpression | undefined {
-  let current = unwrapped(node);
+  let current = peeled(node);
   const visited = new Set(seen);
   while (isIdentifier(current) && !visited.has(current)) {
     if (writtenBefore(current, reading)) {
@@ -270,7 +312,7 @@ function unmutatedObjectLiteral(
     if (held === undefined) {
       return undefined;
     }
-    current = unwrapped(held);
+    current = peeled(held);
   }
   return isObjectLiteralExpression(current) && !visited.has(current) ? current : undefined;
 }
@@ -292,7 +334,7 @@ function spreadEntryKeys(
     isMethodDeclaration(property)
   ) {
     const key = propertyKey(property.name, context);
-    if (key !== undefined && (isComputedPropertyName(property.name) || key !== '__proto__')) {
+    if (key !== undefined && (key !== '__proto__' || isComputedPropertyName(property.name))) {
       return new Set([key]);
     }
   }

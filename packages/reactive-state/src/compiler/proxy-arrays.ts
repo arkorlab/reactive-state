@@ -29,6 +29,7 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
+  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
   isVoidExpression,
@@ -39,12 +40,12 @@ import {
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
 import { rootOf, targetsOf } from './kept.ts';
 import { readsOf } from './local-module-reads.ts';
 import {
   cachedMetadataInitializer,
   type Origin,
+  peeled,
   type ProxyReading,
   sourcePath,
   writtenBefore,
@@ -57,7 +58,7 @@ export interface ArrayScope {
   readonly afterEnd: number;
   readonly aliases: ReadonlySet<Identifier>;
   readonly owner: Node;
-  readonly readSite: Identifier;
+  readonly readSite: Node;
 }
 
 /** Memoized transitive `const` alias sets keyed by root declaration identifier. */
@@ -94,23 +95,18 @@ const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 /** Parses a canonical non-negative integer property key (`'0'`, `'1'`, ...) into an index. */
 export function arrayIndex(key: string): number | undefined {
   const index = Number(key);
-  return Number.isInteger(index) && index >= 0 && String(index) === key ? index : undefined;
+  return Number.isSafeInteger(index) && index >= 0 && String(index) === key ? index : undefined;
 }
 
 /** Filters array or rest elements by `at.excluded` when spread into an object literal. */
 export function spreadElementOrigins(elements: readonly Origin[], at: Origin): readonly Origin[] {
-  return elements.flatMap((each, index) =>
-    (at.spread === true && at.excluded?.has(String(index))) || isOmittedExpression(each.value)
-      ? []
-      : [
-          {
-            ...each,
-            excluded: undefined,
-            keys: each.keys,
-            spread: undefined,
-          },
-        ],
-  );
+  return elements.flatMap((each, index) => {
+    const isExcluded = at.spread === true && at.excluded?.has(String(index)) === true;
+    if (isExcluded || isOmittedExpression(each.value)) {
+      return [];
+    }
+    return [{ ...each, excluded: undefined, keys: each.keys, spread: undefined }];
+  });
 }
 
 /** Whether `held` can evaluate to an array literal across local constants and branches. */
@@ -118,7 +114,7 @@ export function holdsArrayLiteral(held: Expression): boolean {
   const pending: Expression[] = [held];
   const visited = new Set<Expression>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const value = unwrapped(next);
+    const value = peeled(next);
     if (visited.has(value)) {
       continue;
     }
@@ -226,6 +222,9 @@ export function mayRunBefore(useSite: Node, scope: ArrayScope): boolean {
   if (useSite === owner || useSite.end <= afterEnd) {
     return false;
   }
+  if (readSite === owner) {
+    return true;
+  }
   if (useSite === readSite) {
     return repeatsBefore(useSite, readSite, owner);
   }
@@ -247,7 +246,8 @@ export function unwrappedUse(node: Expression): {
       isParenthesizedExpression(parent) ||
       isAsExpression(parent) ||
       isSatisfiesExpression(parent) ||
-      isNonNullExpression(parent)
+      isNonNullExpression(parent) ||
+      isTypeAssertion(parent)
     ) {
       expr = parent;
       continue;
@@ -275,14 +275,14 @@ function rootArrayDeclaration(name: Identifier): VariableDeclaration | undefined
     }
     seen.add(parent);
     root = parent;
-    const target = unwrapped(initialized);
+    const target = peeled(initialized);
     current = isIdentifier(target) ? target : undefined;
   }
   return root;
 }
 
 /** Expands `seed` across transitive `const alias = ...` bindings inside `searchRoot`. */
-function collectAliasIdentifiers(
+export function collectAliasIdentifiers(
   seed: Identifier,
   scopeOwner: Node,
   searchRoot: Node,
@@ -452,6 +452,7 @@ function stepTargetParent(current: Node): Node | undefined {
     isAsExpression(parent) ||
     isSatisfiesExpression(parent) ||
     isNonNullExpression(parent) ||
+    isTypeAssertion(parent) ||
     isArrayLiteralExpression(parent) ||
     isObjectLiteralExpression(parent) ||
     isSpreadElement(parent) ||
@@ -473,17 +474,22 @@ function stepTargetParent(current: Node): Node | undefined {
 }
 
 /** Returns the innermost function-like or static-block owner of `node`, or its `SourceFile`. */
-function enclosingOwner(node: Node): Node {
+export function enclosingOwner(node: Node): Node {
   let current = node;
   while (!isSourceFile(current)) {
     const { parent } = current;
     if (
       (isFunctionLikeDeclaration(parent) || isClassStaticBlockDeclaration(parent)) &&
-      parent.body === current
+      parent.body?.pos === current.pos &&
+      parent.body.end === current.end
     ) {
       return parent;
     }
-    if (isAnswering(parent) && parent.body === current) {
+    if (
+      isAnswering(parent) &&
+      parent.body?.pos === current.pos &&
+      parent.body.end === current.end
+    ) {
       return parent;
     }
     current = parent;
@@ -499,8 +505,12 @@ function repeatsBefore(useSite: Node, readSite: Node, owner: Node): boolean {
       continue;
     }
     const once =
-      (isForStatement(parent) && parent.initializer === each) ||
-      ((isForOfStatement(parent) || isForInStatement(parent)) && parent.expression === each);
+      (isForStatement(parent) &&
+        parent.initializer?.pos === each.pos &&
+        parent.initializer.end === each.end) ||
+      ((isForOfStatement(parent) || isForInStatement(parent)) &&
+        parent.expression.pos === each.pos &&
+        parent.expression.end === each.end);
     if (!once) {
       return true;
     }
