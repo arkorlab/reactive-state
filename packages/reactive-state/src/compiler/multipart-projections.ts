@@ -234,14 +234,15 @@ function stepObjectTarget(
   };
   for (const property of object.properties) {
     if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
-      excludedKeys.add(property.name.text);
+      const propName = property.name.text;
+      excludedKeys.add(propName);
       if (matchesBinding(property.name, target)) {
         acc.matched = true;
         if (step.fromDynamic) {
           acc.extraSources.push(
             ...step.sources.map((each) => {
               return {
-                keys: [...each.keys, property.name.text],
+                keys: [...each.keys, propName],
                 value: each.value,
               };
             }),

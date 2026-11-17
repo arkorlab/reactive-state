@@ -268,6 +268,7 @@ function enclosingLiteralEntry(
   const inner = unwrapped(ref);
   if (
     isShorthandPropertyAssignment(parent) &&
+    isIdentifier(inner) &&
     parent.name === inner &&
     isObjectLiteralExpression(parent.parent)
   ) {
@@ -378,7 +379,11 @@ function safeCallArgumentUse(
 
 /** Queues all identifier reads of `declaration` wrapped past parentheses and type assertions. */
 function pushReads(declaration: Node, index: ContainerIndex, pending: Expression[]): void {
-  for (const read of index.bindingReads.get(declaration) ?? []) {
+  const reads = index.bindingReads.get(declaration);
+  if (reads === undefined) {
+    return;
+  }
+  for (const read of reads) {
     pending.push(wrappedExpression(read));
   }
 }
@@ -434,7 +439,11 @@ function recordWriteTargets(
   writtenMembers: Set<Node>,
 ): void {
   const written = isCallExpression(node) ? undefined : writtenBy(node);
-  for (const target of written === undefined ? [] : targetsOf(written)) {
+  if (written === undefined) {
+    return;
+  }
+  const targets = targetsOf(written);
+  for (const target of targets) {
     const each = isExpression(target) ? unwrapped(target) : target;
     if (isPropertyAccessExpression(each) || isElementAccessExpression(each)) {
       writtenMembers.add(each);

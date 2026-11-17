@@ -5,10 +5,11 @@ import {
   isPropertyAccessExpression,
   type Node,
 } from 'typescript/ast';
-import { API } from 'typescript/sync';
+import type { API } from 'typescript/sync';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { inputMetadata } from '../src/compiler/input-metadata.ts';
+import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 const FROZEN_REASON =
   "calls `Object.isFrozen()` on what may be an input, whose flags differ between the browser's mutable value and the authority's frozen copy";
@@ -117,7 +118,7 @@ describe('metadata container diamonds, prototype installations, and setter-backe
   let api: API;
 
   beforeAll(() => {
-    api = new API({ cwd: process.cwd() });
+    api = openTypeScript();
   });
 
   afterAll(() => {
@@ -126,7 +127,8 @@ describe('metadata container diamonds, prototype installations, and setter-backe
 
   /** Evaluates `inputMetadata` and elapsed milliseconds on the `Object.isFrozen` call in `body`. */
   function analyzed(body: string): { readonly answer: string | undefined; readonly took: number } {
-    using parsed = api.createSourceFile(
+    using parsed = parseModule(
+      api,
       'input-container-diamonds.ts',
       `export function check(input: { count: number }, flag: boolean): boolean { ${body} }
 `,
@@ -157,6 +159,7 @@ describe('metadata container diamonds, prototype installations, and setter-backe
 
   it.each(CASES)('$id', ({ body, expected }) => {
     const done = analyzed(body);
+
     expect(done.answer).toBe(expected);
     expect(done.took).toBeLessThan(LIMITS.budgetMs);
   });

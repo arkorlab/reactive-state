@@ -1,8 +1,9 @@
 import { isIdentifier, isNewExpression, type NewExpression, type Node } from 'typescript/ast';
-import { API } from 'typescript/sync';
+import type { API } from 'typescript/sync';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { multipartMaking } from '../src/compiler/multipart.ts';
+import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 const MULTIPART_REASON =
   'makes a `Request` or `Response` of `FormData`, whose multipart boundary is random';
@@ -118,7 +119,7 @@ describe('multipart alias replacements, Object.assign spreads, defaults, and can
   let api: API;
 
   beforeAll(() => {
-    api = new API({ cwd: process.cwd() });
+    api = openTypeScript();
   });
 
   afterAll(() => {
@@ -127,7 +128,8 @@ describe('multipart alias replacements, Object.assign spreads, defaults, and can
 
   /** Evaluates `multipartMaking` and elapsed milliseconds on the Request or Response in `body`. */
   function analyzed(body: string): { readonly answer: string | undefined; readonly took: number } {
-    using parsed = api.createSourceFile(
+    using parsed = parseModule(
+      api,
       'multipart-alias-replacements.ts',
       `export function build(options: RequestInit, flag: boolean, defaultedBody: BodyInit = new FormData()): Request | Response { ${body} }
 `,
@@ -156,6 +158,7 @@ describe('multipart alias replacements, Object.assign spreads, defaults, and can
 
   it.each(CASES)('$id', ({ body, expected }) => {
     const done = analyzed(body);
+
     expect(done.answer).toBe(expected);
     expect(done.took).toBeLessThan(LIMITS.budgetMs);
   });

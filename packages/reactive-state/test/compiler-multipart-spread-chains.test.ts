@@ -1,8 +1,9 @@
 import { isIdentifier, isNewExpression, type NewExpression, type Node } from 'typescript/ast';
-import { API } from 'typescript/sync';
+import type { API } from 'typescript/sync';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { multipartMaking } from '../src/compiler/multipart.ts';
+import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 const MULTIPART_REASON =
   'makes a `Request` or `Response` of `FormData`, whose multipart boundary is random';
@@ -40,29 +41,55 @@ const LAST_LINEAR = `o${String(CHAIN_STEPS.linearLength)}`;
 const LAST_DIAMOND = `o${String(CHAIN_STEPS.diamondLength)}`;
 const LAST_BODY = `b${String(CHAIN_STEPS.bodyLength)}`;
 
+const LINEAR_FIXED_CHAIN = optionsChain(
+  CHAIN_STEPS.linearLength,
+  "const o0: RequestInit = { method: 'POST', body: 'fixed' };",
+  (prev) => `{ ...${prev} }`,
+);
+const LINEAR_FORM_DATA_CHAIN = optionsChain(
+  CHAIN_STEPS.linearLength,
+  "const o0: RequestInit = { method: 'POST', body: new FormData() };",
+  (prev) => `{ ...${prev} }`,
+);
+const DIAMOND_CONDITIONAL_CHAIN = optionsChain(
+  CHAIN_STEPS.diamondLength,
+  "const o0: RequestInit = { method: 'POST', body: 'fixed' };",
+  (prev) => `flag ? { ...${prev} } : { ...${prev} }`,
+);
+const DIAMOND_ASSIGN_CHAIN = optionsChain(
+  CHAIN_STEPS.diamondLength,
+  "const o0: RequestInit = { method: 'POST', body: 'fixed' };",
+  (prev) => `Object.assign({}, ${prev}, { ...${prev} })`,
+);
+const DIAMOND_BODY_CHAIN = responseBodyChain(
+  CHAIN_STEPS.bodyLength,
+  "const b0: BodyInit = 'fixed';",
+  (prev) => `flag ? ${prev} : (${prev})`,
+);
+
 const CASES = [
   {
-    body: `${optionsChain(CHAIN_STEPS.linearLength, "const o0: RequestInit = { method: 'POST', body: 'fixed' };", (prev) => `{ ...${prev} }`)} return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...${LAST_LINEAR} });`,
+    body: `${LINEAR_FIXED_CHAIN} return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...${LAST_LINEAR} });`,
     expected: undefined,
     id: 'linear-spread-chain-overwriting-form-data',
   },
   {
-    body: `${optionsChain(CHAIN_STEPS.linearLength, "const o0: RequestInit = { method: 'POST', body: new FormData() };", (prev) => `{ ...${prev} }`)} return new Request('https://example.com/', ${LAST_LINEAR});`,
+    body: `${LINEAR_FORM_DATA_CHAIN} return new Request('https://example.com/', ${LAST_LINEAR});`,
     expected: MULTIPART_REASON,
     id: 'linear-spread-chain-retaining-form-data',
   },
   {
-    body: `${optionsChain(CHAIN_STEPS.diamondLength, "const o0: RequestInit = { method: 'POST', body: 'fixed' };", (prev) => `flag ? { ...${prev} } : { ...${prev} }`)} return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...${LAST_DIAMOND} });`,
+    body: `${DIAMOND_CONDITIONAL_CHAIN} return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...${LAST_DIAMOND} });`,
     expected: undefined,
     id: 'diamond-conditional-spread-chain-overwriting',
   },
   {
-    body: `${optionsChain(CHAIN_STEPS.diamondLength, "const o0: RequestInit = { method: 'POST', body: 'fixed' };", (prev) => `Object.assign({}, ${prev}, { ...${prev} })`)} return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...${LAST_DIAMOND} });`,
+    body: `${DIAMOND_ASSIGN_CHAIN} return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...${LAST_DIAMOND} });`,
     expected: undefined,
     id: 'diamond-object-assign-spread-chain',
   },
   {
-    body: `${responseBodyChain(CHAIN_STEPS.bodyLength, "const b0: BodyInit = 'fixed';", (prev) => `flag ? ${prev} : (${prev})`)} return new Response(${LAST_BODY});`,
+    body: `${DIAMOND_BODY_CHAIN} return new Response(${LAST_BODY});`,
     expected: undefined,
     id: 'diamond-response-body-conditional-chain',
   },
@@ -87,7 +114,7 @@ describe('multipart body analysis reuse across spread chains and diamonds', () =
   let api: API;
 
   beforeAll(() => {
-    api = new API({ cwd: process.cwd() });
+    api = openTypeScript();
   });
 
   afterAll(() => {
@@ -96,7 +123,8 @@ describe('multipart body analysis reuse across spread chains and diamonds', () =
 
   /** Evaluates `multipartMaking` and elapsed milliseconds on the Request/Response in `body`. */
   function analyzed(body: string): { readonly answer: string | undefined; readonly took: number } {
-    using parsed = api.createSourceFile(
+    using parsed = parseModule(
+      api,
       'multipart-spread-chains.ts',
       `export function build(flag: boolean): Request | Response { ${body} }\n`,
     );
@@ -124,6 +152,7 @@ describe('multipart body analysis reuse across spread chains and diamonds', () =
 
   it.each(CASES)('$id', ({ body, expected }) => {
     const done = analyzed(body);
+
     expect(done.answer).toBe(expected);
     expect(done.took).toBeLessThan(CHAIN_STEPS.budgetMs);
   });
