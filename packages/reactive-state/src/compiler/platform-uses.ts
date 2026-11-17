@@ -6,6 +6,7 @@ import {
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
+  isDecorator,
   isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionLikeDeclaration,
@@ -23,6 +24,7 @@ import {
   isShorthandPropertyAssignment,
   isSourceFile,
   isSpreadAssignment,
+  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
   isVariableStatement,
@@ -30,13 +32,17 @@ import {
   type NewExpression,
   type Node,
   SyntaxKind,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, isAnswering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
-import { declarationOf } from './framed.ts';
+import { literalName, unwrapped } from './bounded.ts';
+import { GLOBAL_OBJECTS, globalPathOf } from './code-globals.ts';
+import { declarationOf, takenApartOf } from './framed.ts';
 import { metadataCallee } from './input-callees.ts';
+import { readsOf } from './local-module-reads.ts';
 import { isTypeOnly, withinFunction } from './scope.ts';
+import { writtenBy } from './written.ts';
 
 /** Platform constructors that read input options without storing or returning an alias to them. */
 const SAFE_PLATFORM_NEW: ReadonlySet<string> = new Set([
@@ -69,6 +75,13 @@ const EQUALITY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ExclamationEqualsToken,
 ]);
 
+/** Binary operators that select between operand values without constructing a fresh primitive. */
+const BRANCH_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
 /** Source ranges of nodes in one syntax tree preserve ancestry for the loop's work. */
 export function contains(outer: Node, inner: Node): boolean {
   return (
@@ -94,25 +107,26 @@ export function runsInOwner(node: Node, owner: Node): boolean {
 /** Whether `parent` defers evaluating `child` until a separate call or construction runs. */
 function defersEvaluation(parent: Node, child: Node): boolean {
   if (isFunctionLikeDeclaration(parent)) {
-    return parent.name !== child;
+    const isOwnName = 'name' in parent && parent.name === child;
+    return !isOwnName && !isDecorator(child);
   }
   return (
     isPropertyDeclaration(parent) &&
-    parent.initializer === child &&
+    parent.initializer?.pos === child.pos &&
+    parent.initializer.end === child.end &&
     parent.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) !== true
   );
 }
 
-/** A nested source body reads captured inputs when its known direct callers execute. */
+/** A nested source body or parameter default reads captured inputs when its callers execute. */
 export function readPoints(before: Node, owner: Node): readonly Node[] | undefined {
   if (!contains(owner, before)) {
     return undefined;
   }
   for (let child = before; child !== owner && !isSourceFile(child); child = child.parent) {
-    const fn = child.parent;
-    const body: Node | undefined = isAnswering(fn) ? fn.body : undefined;
-    if (fn !== owner && body === child && isAnswering(fn)) {
-      return invocationPoints(fn, owner);
+    const parent = child.parent;
+    if (parent !== owner && defersEvaluation(parent, child)) {
+      return isAnswering(parent) ? invocationPoints(parent, owner) : undefined;
     }
   }
   return [before];
@@ -256,7 +270,7 @@ function hasNoGetter(held: Expression | undefined): boolean {
   if (held === undefined) {
     return true;
   }
-  const value = unwrapped(held);
+  const value = peelPlatform(held);
   return (
     !isObjectLiteralExpression(value) ||
     !value.properties.some((each) => isGetAccessorDeclaration(each))
@@ -293,14 +307,24 @@ export function sourceFunction(callee: Expression): Answering | undefined {
   return fn !== undefined && isAnswering(fn) ? fn : undefined;
 }
 
-/** Wrappers that preserve a reference's identity. */
+/** Wrappers that preserve a reference's identity, including angle-bracket type assertions. */
 export function wrappedBy(node: Node): boolean {
   return (
     isParenthesizedExpression(node) ||
     isAsExpression(node) ||
     isSatisfiesExpression(node) ||
-    isNonNullExpression(node)
+    isNonNullExpression(node) ||
+    isTypeAssertion(node)
   );
+}
+
+/** Peels parentheses and TypeScript assertion syntax from `node`. */
+export function peelPlatform(node: Expression): Expression {
+  let current = unwrapped(node);
+  while (isTypeAssertion(current)) {
+    current = unwrapped(current.expression);
+  }
+  return current;
 }
 
 /** Identifier spellings appearing anywhere within a write target expression or pattern. */
@@ -314,4 +338,166 @@ export function targetNames(target: Node): ReadonlySet<string> {
   };
   visit(target);
   return names;
+}
+
+/** Global paths reachable through `node`, following local aliases and static member projections. */
+export function platformPathsOf(node: Expression, immutableOnly = false): readonly string[] {
+  const found = new Set<string>();
+  const seen = new Set<string>();
+  const pending: { readonly expr: Expression; readonly suffix: readonly string[] }[] = [
+    { expr: node, suffix: [] },
+  ];
+  for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+    const value = peelPlatform(item.expr);
+    const key = `${value.pos}:${value.end}:${item.suffix.join('.')}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    const direct = globalPathOf(value);
+    if (direct !== undefined) {
+      found.add(normalizeGlobalParts([...direct, ...item.suffix]));
+      continue;
+    }
+    pushAliasSteps(value, item.suffix, immutableOnly, pending);
+  }
+  return [...found];
+}
+
+/** Strips leading global-object segments such as `globalThis` when followed by a member path. */
+function normalizeGlobalParts(parts: string[]): string {
+  while (parts.length > 1 && GLOBAL_OBJECTS.has(parts[0] ?? '')) {
+    parts.shift();
+  }
+  return parts.join('.');
+}
+
+/** Enqueues member projections, branch operands, and lexical alias sources for `value`. */
+function pushAliasSteps(
+  value: Expression,
+  suffix: readonly string[],
+  immutableOnly: boolean,
+  pending: { readonly expr: Expression; readonly suffix: readonly string[] }[],
+): void {
+  if (isPropertyAccessExpression(value)) {
+    pending.push({ expr: value.expression, suffix: [value.name.text, ...suffix] });
+    return;
+  }
+  if (isElementAccessExpression(value)) {
+    const member = literalName(value);
+    if (member !== undefined) {
+      pending.push({ expr: value.expression, suffix: [member, ...suffix] });
+    }
+    return;
+  }
+  if (!immutableOnly && isConditionalExpression(value)) {
+    pending.push({ expr: value.whenTrue, suffix }, { expr: value.whenFalse, suffix });
+    return;
+  }
+  if (isBinaryExpression(value)) {
+    pushBinaryAliasSteps(value, suffix, immutableOnly, pending);
+    return;
+  }
+  if (isIdentifier(value)) {
+    pushIdentifierAliasSteps(value, suffix, immutableOnly, pending);
+  }
+}
+
+/** Enqueues comma-expression results and, when allowed, logical branch operands. */
+function pushBinaryAliasSteps(
+  value: Expression & {
+    readonly left: Expression;
+    readonly right: Expression;
+    readonly operatorToken: { readonly kind: SyntaxKind };
+  },
+  suffix: readonly string[],
+  immutableOnly: boolean,
+  pending: { readonly expr: Expression; readonly suffix: readonly string[] }[],
+): void {
+  const kind = value.operatorToken.kind;
+  if (kind === SyntaxKind.CommaToken) {
+    pending.push({ expr: value.right, suffix });
+  } else if (!immutableOnly && BRANCH_OPERATORS.has(kind)) {
+    pending.push({ expr: value.left, suffix }, { expr: value.right, suffix });
+  }
+}
+
+/** Enqueues variable initializers, destructured global members, and reassignments for `id`. */
+function pushIdentifierAliasSteps(
+  id: Identifier,
+  suffix: readonly string[],
+  immutableOnly: boolean,
+  pending: { readonly expr: Expression; readonly suffix: readonly string[] }[],
+): void {
+  const declared = declarationOf(id);
+  if (declared !== undefined && isVariableDeclaration(declared) && isIdentifier(declared.name)) {
+    const writes = bindingWrites(declared);
+    if (immutableOnly && writes.reassigned) {
+      return;
+    }
+    if (declared.initializer !== undefined) {
+      pending.push({ expr: declared.initializer, suffix });
+    }
+    if (!immutableOnly) {
+      for (const expr of writes.assigned) {
+        pending.push({ expr, suffix });
+      }
+    }
+    return;
+  }
+  const taken = takenApartOf(id);
+  if (taken !== undefined && (!immutableOnly || !identifierReassigned(id))) {
+    pending.push({ expr: taken.of, suffix: [taken.key, ...suffix] });
+  }
+}
+
+/** Collects direct reassignments targeting `declaration`'s identifier within its source file. */
+function bindingWrites(declaration: VariableDeclaration): {
+  readonly assigned: readonly Expression[];
+  readonly reassigned: boolean;
+} {
+  if (!isIdentifier(declaration.name)) {
+    return { assigned: [], reassigned: true };
+  }
+  const sourceFile = declaration.getSourceFile();
+  const isRead = readsOf(declaration.name, sourceFile);
+  const assigned: Expression[] = [];
+  let reassigned = false;
+  const visit = (node: Node): void => {
+    const target = writtenBy(node);
+    if (target !== undefined && bindsTarget(target, isRead, false)) {
+      reassigned = true;
+      if (
+        isBinaryExpression(node) &&
+        node.operatorToken.kind === SyntaxKind.EqualsToken &&
+        isIdentifier(peelPlatform(node.left)) &&
+        isRead(peelPlatform(node.left))
+      ) {
+        assigned.push(node.right);
+      }
+    }
+    node.forEachChild(visit);
+  };
+  sourceFile.forEachChild(visit);
+  return { assigned, reassigned };
+}
+
+/** Whether any write in `id`'s source file reassigns `id`'s binding. */
+function identifierReassigned(id: Identifier): boolean {
+  const sourceFile = id.getSourceFile();
+  const isRead = readsOf(id, sourceFile);
+  let reassigned = false;
+  const visit = (node: Node): void => {
+    if (reassigned) {
+      return;
+    }
+    const target = writtenBy(node);
+    if (target !== undefined && bindsTarget(target, isRead, false)) {
+      reassigned = true;
+      return;
+    }
+    node.forEachChild(visit);
+  };
+  sourceFile.forEachChild(visit);
+  return reassigned;
 }

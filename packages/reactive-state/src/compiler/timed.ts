@@ -1,25 +1,20 @@
 import {
   type Expression,
-  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isBigIntLiteral,
   isBinaryExpression,
-  isBindingElement,
   isCallExpression,
   isClassExpression,
   isComputedPropertyName,
   isConditionalExpression,
-  isElementAccessExpression,
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
-  isObjectBindingPattern,
   isObjectLiteralExpression,
-  isPropertyAccessExpression,
   isPropertyAssignment,
   isRegularExpressionLiteral,
   isSetAccessorDeclaration,
@@ -28,24 +23,22 @@ import {
   isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
-  isVariableDeclaration,
   type NewExpression,
   type Node,
   type ObjectLiteralElementLike,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { literalName, unwrapped } from './bounded.ts';
-import { globalPathOf, patternKey } from './code-globals.ts';
-import { initializerOf } from './framed.ts';
+import { globalPathOf } from './code-globals.ts';
 import { constantValue } from './numbers.ts';
 import { platformInitializer } from './platform-inputs.ts';
+import { peelPlatform, platformPathsOf } from './platform-uses.ts';
+import { eventReadsClock } from './timed-events.ts';
 
-/**
- * What of a shared module's code reads the time through what the platform makes (`settled.ts`): a
- * `File` made of no `lastModified`, which it takes of now, and an event's `timeStamp`, of when the
- * event was made.
- */
+export { eventReadsClock } from './timed-events.ts';
+
+/** Argument index of the options bag on `new File(bits, name, options)`. */
+const FILE_OPTIONS_INDEX = 2;
 
 /**
  * What of `node` reads the time through what the platform makes: `new File(…)` of no
@@ -61,15 +54,9 @@ export function timedMaking(node: Node): string | undefined {
     : undefined;
 }
 
-/** Whether `node` reads the creation time of an event the code makes. */
-export function eventReadsClock(node: Node): boolean {
-  const read = memberRead(node);
-  return read?.name === 'timeStamp' && isEvent(unwrapped(read.of), new Set());
-}
-
-/** Whether `node` names the global class `name`. */
+/** Whether `node` names or aliases the global class `name`. */
 function isClass(node: Expression, name: string): boolean {
-  return globalPathOf(unwrapped(node))?.join('.') === name;
+  return platformPathsOf(node).includes(name);
 }
 
 /**
@@ -80,7 +67,7 @@ function isDated(made: NewExpression): boolean {
   if (made.arguments?.some((each) => isSpreadElement(each)) === true) {
     return false;
   }
-  const options = made.arguments?.[2];
+  const options = made.arguments?.[FILE_OPTIONS_INDEX];
   const value = options === undefined ? undefined : declaredValue(options, made);
   if (
     value === undefined ||
@@ -143,7 +130,7 @@ function keyOf(name: Node): string | undefined {
 
 /** What an unchanged variable is declared of at `before` (or at each read site), without looping. */
 function declaredValue(node: Expression, before?: Node): Expression {
-  let value = unwrapped(node);
+  let value = peelPlatform(node);
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
@@ -151,7 +138,7 @@ function declaredValue(node: Expression, before?: Node): Expression {
     if (declared === undefined) {
       break;
     }
-    value = unwrapped(declared);
+    value = peelPlatform(declared);
   }
   return value;
 }
@@ -180,7 +167,7 @@ function definedValue(node: Expression, seen = new Set<Expression>(), nullable =
   }
   if (isCallExpression(value)) {
     return ['Boolean', 'Number', 'String'].includes(
-      globalPathOf(unwrapped(value.expression))?.join('.') ?? '',
+      globalPathOf(peelPlatform(value.expression))?.join('.') ?? '',
     );
   }
   return definedLiteral(value, nullable);
@@ -214,44 +201,4 @@ function definedBinary(value: Expression, seen: Set<Expression>, nullable: boole
   return (
     value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen, nullable)
   );
-}
-
-/**
- * What `node` reads a member of, by the member's name: `event.timeStamp`, `event['timeStamp']`,
- * `const { timeStamp } = event`; none of another node.
- */
-function memberRead(node: Node): { readonly name: string; readonly of: Expression } | undefined {
-  if (isPropertyAccessExpression(node)) {
-    return { name: node.name.text, of: node.expression };
-  }
-  if (isElementAccessExpression(node)) {
-    const name = literalName(node);
-    return name === undefined ? undefined : { name, of: node.expression };
-  }
-  if (!isBindingElement(node) || !isObjectBindingPattern(node.parent)) {
-    return undefined;
-  }
-  const declaration = node.parent.parent;
-  const name = patternKey(node);
-  return name !== undefined &&
-    isVariableDeclaration(declaration) &&
-    declaration.initializer !== undefined
-    ? { name, of: declaration.initializer }
-    : undefined;
-}
-
-/**
- * Whether `node` is an event the code makes: `new Event('x')`, or what a variable around it is
- * declared of (`initializerOf`), in turn.
- */
-function isEvent(node: Expression, seen: Set<Identifier>): boolean {
-  if (isNewExpression(node)) {
-    return isClass(node.expression, 'Event');
-  }
-  if (!isIdentifier(node) || seen.has(node)) {
-    return false;
-  }
-  seen.add(node);
-  const declared = initializerOf(node);
-  return declared !== undefined && isEvent(unwrapped(declared), seen);
 }
