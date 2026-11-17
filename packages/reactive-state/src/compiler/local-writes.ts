@@ -36,6 +36,7 @@ import { followedOf, type JsonReading } from './json-reading.ts';
 import { readsOf } from './local-module-reads.ts';
 import { aliasedDeclaration, followedAlias, readsUntouchedMember } from './local-reading.ts';
 import { assignedBinary, updatedAt } from './local-write-arithmetic.ts';
+import { functionsOf, handedArguments, type ResolvedCallable } from './local-write-callbacks.ts';
 import {
   ASSIGNING,
   handedTo,
@@ -247,7 +248,7 @@ function writesAt(
 ): Writes {
   const { keys, top } = memberChain(name, walk.resolve);
   const target: Target = {
-    callsLocal: (callee) => walk.calls.functionOf(callee) !== undefined,
+    callsLocal: (callee) => functionsOf(callee, walk.calls, walk.resolve).length > 0,
     declared,
     initializer,
     inside: receiverOf(top),
@@ -269,8 +270,11 @@ function writesAt(
   }
   const tagged = taggedBy(top);
   if (tagged !== undefined) {
-    const fn = walk.calls.functionOf(unwrapped(tagged.tag));
-    return fn !== undefined && writesParameters(fn, walk, () => true) ? CHANGED : NONE;
+    return functionsOf(tagged.tag, walk.calls, walk.resolve).some((callable) =>
+      writesParameters(callable.fn, walk, (index) => callable.anyIndex || index >= callable.offset),
+    )
+      ? CHANGED
+      : NONE;
   }
   return heldBy(top, target, walk);
 }
@@ -344,27 +348,40 @@ function handed(
     return handedGlobal(global, call, node, { target, walk });
   }
   const given = call.arguments ?? [];
-  const fn = isCallExpression(call) ? walk.calls.functionOf(callee) : undefined;
-  const isWritten = fn !== undefined && changesParameters(fn, given, node, walk);
+  const callables = isCallExpression(call) ? functionsOf(callee, walk.calls, walk.resolve) : [];
+  const isWritten = callables.some((callable) =>
+    changesParameters(callable, call, { given, node, walk }),
+  );
   return isWritten || changesHanded(call, walk) ? CHANGED : NONE;
 }
 
-/** Whether `fn`, called with `given`, writes into the parameters `node` is passed at. */
+/** Whether `callable`, called with `given`, writes into the parameters `node` is passed at. */
 function changesParameters(
-  fn: Answering,
-  given: readonly Expression[],
-  node: Expression,
-  walk: Walk,
+  callable: ResolvedCallable,
+  call: CallExpression | NewExpression,
+  {
+    given,
+    node,
+    walk,
+  }: { readonly given: readonly Expression[]; readonly node: Expression; readonly walk: Walk },
 ): boolean {
-  return writesParameters(fn, walk, (index) => givenAt(given, fn, index).includes(node));
+  if (callable.anyIndex) {
+    return writesParameters(callable.fn, walk, (index) => index >= callable.offset);
+  }
+  const shifted =
+    callable.offset === 0
+      ? given
+      : [...Array.from({ length: callable.offset }, () => call.expression), ...given];
+  return writesParameters(callable.fn, walk, (index) =>
+    givenAt(shifted, callable.fn, index).includes(node),
+  );
 }
 
-/** Whether an inline callback argument of `call` writes into its parameters. */
+/** Whether a callback argument of `call` writes into its parameters. */
 function changesHanded(call: CallExpression | NewExpression, walk: Walk): boolean {
-  return (call.arguments ?? []).some((argument) => {
-    const fn = unwrapped(argument);
-    return (
-      (isArrowFunction(fn) || isFunctionExpression(fn)) && writesParameters(fn, walk, () => true)
+  return handedArguments(call, walk.resolve).some((argument) => {
+    return functionsOf(argument, walk.calls, walk.resolve).some((callable) =>
+      writesParameters(callable.fn, walk, (index) => callable.anyIndex || index >= callable.offset),
     );
   });
 }
