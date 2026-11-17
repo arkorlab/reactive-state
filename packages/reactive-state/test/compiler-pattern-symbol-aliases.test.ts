@@ -186,11 +186,11 @@ function bracketKeyOf(call: CallExpression | undefined): string | undefined {
   if (isElementAccessExpression(callee)) {
     return patternSymbolName(callee.argumentExpression);
   }
-  if (
-    isPropertyAccessExpression(callee) &&
-    isElementAccessExpression(unwrapped(callee.expression))
-  ) {
-    return patternSymbolName(unwrapped(callee.expression).argumentExpression);
+  if (isPropertyAccessExpression(callee)) {
+    const inner = unwrapped(callee.expression);
+    if (isElementAccessExpression(inner)) {
+      return patternSymbolName(inner.argumentExpression);
+    }
   }
   return undefined;
 }

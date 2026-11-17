@@ -184,7 +184,8 @@ function enqueueTupleSlice(
   state: TransferState,
 ): void {
   const needed = CLONE_OPTIONS_SLOT - mode.startIndex;
-  for (const sub of slotArguments(asCallArguments(tuple.elements), needed)) {
+  const candidates = slotArguments(asCallArguments(tuple.elements), needed);
+  for (const sub of candidates) {
     if (sub.spread) {
       pending.push({
         expression: sub.expression,
