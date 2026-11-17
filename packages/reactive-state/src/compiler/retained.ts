@@ -20,6 +20,7 @@ import { unwrapped } from './bounded.ts';
 import { literalKey } from './exported-values.ts';
 import { globalPath } from './global-answers.ts';
 import { ITERATING } from './iterators.ts';
+import { isGlobalMatch, symbolMethodName } from './retained-matches.ts';
 
 /**
  * What the answer of a call of a global's function or of a value's method holds of what the call
@@ -376,7 +377,7 @@ const PROMISING: ReadonlySet<string> = new Set(['catch', 'finally', 'then']);
  * `index`, `input`, `groups`, which the authority refuses as no JSON — or `null`: a pattern's
  * `exec`, text's `match`.
  */
-const MATCHING: ReadonlySet<string> = new Set(['exec', 'match', 'Symbol.match']);
+const MATCHING: ReadonlySet<string> = new Set(['exec']);
 
 /**
  * The methods that answer a view of the typed array, or the `Buffer`, they are called on:
@@ -437,6 +438,13 @@ export function heldBy(call: CallExpression): Held | undefined {
   // `params.append('a', 'b')` of `new URLSearchParams()`: nothing, of the platform's alone.
   if (VOIDING.has(name)) {
     return { ...HOLDING_NOTHING, voidsOn: callee.expression };
+  }
+  if (name === 'match' || name === 'Symbol.match') {
+    if (isGlobalMatch(call, callee, name)) {
+      const optional = isOptional(call);
+      return { ...HOLDING_NOTHING, nothing: optional, optional };
+    }
+    return { ...HOLDING_NOTHING, nonJson: true, ownedBy: { name, receiver: callee.expression } };
   }
   if (ANSWERING_NON_JSON.some((names) => names.has(name))) {
     return { ...HOLDING_NOTHING, nonJson: true, ownedBy: { name, receiver: callee.expression } };
@@ -600,8 +608,7 @@ function methodName(callee: Expression): string | undefined {
     return undefined;
   }
   const key = unwrapped(callee.argumentExpression);
-  const symbol = globalPath(key)?.join('.');
-  return literalKey(key) ?? (symbol?.startsWith('Symbol.') === true ? symbol : undefined);
+  return literalKey(key) ?? symbolMethodName(key);
 }
 
 /** Whether `node`, a member a call reads, stands in an optional chain: `items?.at(0)`, `a?.b.at(0)`. */
