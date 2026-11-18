@@ -15,12 +15,15 @@ import {
   isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
+  isVariableDeclaration,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, isAnswering, returnedBy } from './answers.ts';
+import { declarationOf } from './framed.ts';
 import { metadataCallee } from './input-callees.ts';
+import { assignedValuesOf } from './platform-uses.ts';
 import { mutatedArrayOrigins } from './proxy-array-writes.ts';
 import {
   arrayChangedBefore,
@@ -333,7 +336,7 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
   }
   const held = heldConstant(name, at.context);
   if (held === undefined) {
-    return [];
+    return mutableOrigins(name, at);
   }
   if (holdsObjectLiteral(held) && objectChangedBefore(name, at.context)) {
     return mutatedObjectOrigins(name, held, at);
@@ -342,6 +345,20 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return mutatedArrayOrigins(name, held, at);
   }
   return [{ ...at, value: held }];
+}
+
+/**
+ * What a `let` or `var` binding can hold: its initializer and the right side of every assignment to
+ * it, wherever the file writes it. A name that is neither is followed no further.
+ */
+function mutableOrigins(name: Identifier, at: Origin): readonly Origin[] {
+  const declared = declarationOf(name);
+  if (declared === undefined || !isVariableDeclaration(declared) || !isIdentifier(declared.name)) {
+    return [];
+  }
+  const initial = declared.initializer === undefined ? [] : [declared.initializer];
+
+  return [...initial, ...assignedValuesOf(declared)].map((value) => ({ ...at, value }));
 }
 
 /** A source call's returned expressions, binding ordinary parameters to their actual arguments. */

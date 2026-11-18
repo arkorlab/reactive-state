@@ -473,8 +473,33 @@ function pushIdentifierAliasSteps(
   }
 }
 
+/** The right sides of the assignments to `declaration`'s binding anywhere in its source file. */
+export function assignedValuesOf(declaration: VariableDeclaration): readonly Expression[] {
+  return bindingWrites(declaration).assigned;
+}
+
+/** What `bindingWrites` found of each declaration, which the walk over the file need not repeat. */
+const BINDING_WRITES = new WeakMap<
+  VariableDeclaration,
+  { readonly assigned: readonly Expression[]; readonly reassigned: boolean }
+>();
+
 /** Collects direct reassignments targeting `declaration`'s identifier within its source file. */
 function bindingWrites(declaration: VariableDeclaration): {
+  readonly assigned: readonly Expression[];
+  readonly reassigned: boolean;
+} {
+  const known = BINDING_WRITES.get(declaration);
+  if (known !== undefined) {
+    return known;
+  }
+  const found = scanBindingWrites(declaration);
+  BINDING_WRITES.set(declaration, found);
+  return found;
+}
+
+/** Walks `declaration`'s source file for the writes that bind its identifier. */
+function scanBindingWrites(declaration: VariableDeclaration): {
   readonly assigned: readonly Expression[];
   readonly reassigned: boolean;
 } {
