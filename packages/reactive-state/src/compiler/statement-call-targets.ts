@@ -51,6 +51,7 @@ import {
   unwrapExpression,
   type ValueSpec,
 } from './statement-call-scopes.ts';
+import { ownerTargetsOfMember } from './statement-call-subclasses.ts';
 import { staticExpressionKey } from './statement-call-writes.ts';
 
 export { EMPTY_NODE_SET, EMPTY_PROJECT_SET } from './statement-call-classes.ts';
@@ -109,7 +110,7 @@ function resolveTargetsWithTrace(
     );
   }
   if (clean.kind === SyntaxKind.ThisKeyword) {
-    return resolveThisTargets(clean, ctx);
+    return resolveThisTargets(clean, ctx, nextTrace.seenBindings);
   }
   if (clean.kind === SyntaxKind.SuperKeyword) {
     return resolveSuperTargets(clean, ctx, nextTrace);
@@ -259,7 +260,7 @@ function resolveCallReturnTargets(
 ): readonly ResolvedValue[] {
   const callee = unwrapExpression(call.expression);
   if (callee.kind === SyntaxKind.SuperKeyword) {
-    return resolveThisTargets(callee, ctx);
+    return resolveThisTargets(callee, ctx, trace.seenBindings);
   }
   const results: ResolvedValue[] = [];
   if (
@@ -328,14 +329,18 @@ function resolveNewTargets(
   });
 }
 
-export function resolveThisTargets(thisNode: Node, ctx: TargetContext): readonly ResolvedValue[] {
+export function resolveThisTargets(
+  thisNode: Node,
+  ctx: TargetContext,
+  seenBindings?: Set<Binding>,
+): readonly ResolvedValue[] {
   let current: Node = thisNode.parent;
   for (;;) {
     if (isArrowFunction(current)) {
       current = current.parent;
       continue;
     }
-    const resolved = thisTargetsAtBoundary(current, ctx);
+    const resolved = thisTargetsAtBoundary(current, ctx, seenBindings);
     if (resolved !== undefined) {
       return resolved;
     }
@@ -346,6 +351,7 @@ export function resolveThisTargets(thisNode: Node, ctx: TargetContext): readonly
 function thisTargetsAtBoundary(
   current: Node,
   ctx: TargetContext,
+  seenBindings?: Set<Binding>,
 ): readonly ResolvedValue[] | undefined {
   if (isClassStaticBlockDeclaration(current)) {
     const owner = current.parent;
@@ -355,7 +361,7 @@ function thisTargetsAtBoundary(
   }
   if (isDeferredMember(current) || isPropertyDeclaration(current)) {
     const active = ctx.activeReceiverFor(current);
-    return active === undefined ? ownerTargetOfMember(current) : [active];
+    return active === undefined ? ownerTargetsOfMember(current, ctx, seenBindings) : [active];
   }
   if (isFunctionDeclaration(current) || isFunctionExpression(current)) {
     return functionThisFallback(current, ctx);
@@ -374,19 +380,6 @@ function functionThisFallback(fn: Node, ctx: TargetContext): readonly ResolvedVa
     isObjectLiteralExpression(fn.parent.parent)
   ) {
     return [{ kind: 'node', node: fn.parent.parent }];
-  }
-  return [];
-}
-
-function ownerTargetOfMember(member: Node): readonly ResolvedValue[] {
-  const owner = member.parent;
-  if (isObjectLiteralExpression(owner)) {
-    return [{ kind: 'node', node: owner }];
-  }
-  if (isClassDeclaration(owner) || isClassExpression(owner)) {
-    return hasModifier(member, SyntaxKind.StaticKeyword)
-      ? [{ kind: 'node', node: owner }]
-      : [{ cls: owner, kind: 'instance' }];
   }
   return [];
 }
@@ -426,7 +419,7 @@ function resolveSuperTargets(
     return [];
   }
   const owner = member.parent;
-  const selfTargets = resolveThisTargets(superNode, ctx);
+  const selfTargets = resolveThisTargets(superNode, ctx, trace.seenBindings);
   if (isObjectLiteralExpression(owner)) {
     return resolveObjectSuperTargets(owner, selfTargets, ctx, trace);
   }
@@ -507,6 +500,6 @@ export function superConstructorTargets(
   }
   return {
     bases: resolveTargets(baseExpr, ctx, EMPTY_NODE_SET, seenBindings),
-    selves: resolveThisTargets(superNode, ctx),
+    selves: resolveThisTargets(superNode, ctx, seenBindings),
   };
 }
