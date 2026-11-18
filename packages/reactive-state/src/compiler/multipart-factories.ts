@@ -1,13 +1,6 @@
-import {
-  type CallExpression,
-  type Expression,
-  isIdentifier,
-  isSpreadElement,
-} from 'typescript/ast';
+import { type CallExpression, type Expression, isSpreadElement } from 'typescript/ast';
 
-import { type Answering, answersLater, isAnswering, overloadsOf, returnedBy } from './answers.ts';
-import { unwrapped } from './bounded.ts';
-import { parameterOf } from './framed.ts';
+import { answersLater, isAnswering, overloadsOf, returnedBy } from './answers.ts';
 import { metadataCallee } from './input-callees.ts';
 
 /**
@@ -15,14 +8,22 @@ import { metadataCallee } from './input-callees.ts';
  * body or `Request` options made by a helper, `new Response(makeBody())`, read where it returns.
  */
 
+export interface SourceFactory {
+  /** What the call gives it: each argument, a spread one by what it spreads. */
+  readonly given: readonly Expression[];
+  /** What it can return: each `return` of its body, whatever the control flow. */
+  readonly returned: readonly Expression[];
+}
+
 /**
- * The expressions a call of a source-written synchronous function can return: each `return` of its
- * body, whatever the control flow, and the argument written at the call for a parameter it returns
- * as it is; of a function declared over overloads, those of the implementation. None for a callee
- * the source does not show, one without a body, an `async` function, which answers a promise, or a
- * generator, which answers an iterator.
+ * A call of a source-written synchronous function: what it returns and what it is given. The
+ * result may be what it is given (`return body`, `{ body }`, `flag ? a : b`), which the check does
+ * not follow into the function by parameter: a caller reads the arguments as well. A function
+ * declared over overloads is its implementation. None for a callee the source does not show, one
+ * without a body, an `async` function, which answers a promise, or a generator, which answers an
+ * iterator.
  */
-export function factoryReturns(call: CallExpression): readonly Expression[] | undefined {
+export function sourceFactory(call: CallExpression): SourceFactory | undefined {
   const resolved = metadataCallee(call.expression);
   const callee =
     resolved !== undefined && isAnswering(resolved)
@@ -31,28 +32,8 @@ export function factoryReturns(call: CallExpression): readonly Expression[] | un
   if (callee === undefined || answersLater(callee)) {
     return undefined;
   }
-  const returned: Expression[] = [];
-  for (const value of returnedBy(callee)) {
-    returned.push(value);
-    const given = passedArgument(value, callee, call);
-    if (given !== undefined) {
-      returned.push(given);
-    }
-  }
-  return returned;
-}
-
-/** The argument a call writes for the parameter that `value` returns, when `value` is that name. */
-function passedArgument(
-  value: Expression,
-  callee: Answering,
-  call: CallExpression,
-): Expression | undefined {
-  const name = unwrapped(value);
-  const parameter = isIdentifier(name) ? parameterOf(name) : undefined;
-  const index = parameter === undefined ? -1 : callee.parameters.indexOf(parameter);
-  if (index === -1 || call.arguments.slice(0, index + 1).some((each) => isSpreadElement(each))) {
-    return undefined;
-  }
-  return call.arguments[index];
+  return {
+    given: call.arguments.map((each) => (isSpreadElement(each) ? each.expression : each)),
+    returned: returnedBy(callee),
+  };
 }

@@ -33,7 +33,7 @@ import {
   singleDescriptorBodyWrite,
   type RecordedDescriptorBodyWrite,
 } from './multipart-descriptors.ts';
-import { factoryReturns } from './multipart-factories.ts';
+import { sourceFactory } from './multipart-factories.ts';
 import { peeledMemberHolder, selectedValues, uniqueExpressions } from './multipart-held-paths.ts';
 import { parameterBodies } from './multipart-parameters.ts';
 import {
@@ -183,12 +183,33 @@ function callExpressionBodies(
     : factoryBodies(call, following);
 }
 
-/** The options a source-written function returns, each read where its `return` writes it. */
+/**
+ * The options a source-written function returns, each read where its `return` writes it, and
+ * ambiguous when the call gives it `FormData` or options that carry it: the function may put
+ * what it is given into the options it returns.
+ */
 function factoryBodies(call: CallExpression, following: AnalysisState): BodyReading {
-  const returned = factoryReturns(call);
-  return returned === undefined
-    ? EMPTY_BODIES
-    : combineBranchReadings(returned.map((each) => bodiesOf(each, each, following)));
+  const factory = sourceFactory(call);
+  if (factory === undefined) {
+    return EMPTY_BODIES;
+  }
+  const reading = combineBranchReadings(
+    factory.returned.map((each) => bodiesOf(each, each, following)),
+  );
+  return factory.given.some((each) => givesFormData(each, call, following))
+    ? { ...reading, ambiguous: true }
+    : reading;
+}
+
+/** Whether an argument is `FormData`, or options whose body may be. */
+function givesFormData(argument: Expression, point: Node, state: AnalysisState): boolean {
+  const fresh: AnalysisState = { ...state, seen: new Set() };
+  const reading = bodiesOf(argument, point, state);
+  return (
+    isFormData(argument, fresh) ||
+    reading.ambiguous === true ||
+    reading.bodies.some((body) => isFormData(body, fresh))
+  );
 }
 
 /** Evaluates `Object.create(proto, descriptors?)`, keeping prototype `body` reads non-enumerable. */
