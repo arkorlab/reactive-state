@@ -27,6 +27,7 @@ interface Case {
 
 const INPUTS: Inputs = { flag: true, keys: ['a', 'b'] };
 const THIRD = 3;
+const FIVE = 5;
 
 function box<T>(value: T): T {
   return value;
@@ -242,6 +243,33 @@ const CASES: readonly Case[] = [
       const target = box<{ meta?: Meta }>({ meta: [] });
       target.meta ??= {};
       Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
+  {
+    body: 'const defaults: { meta: Meta } = { meta: [] }; const target: { meta: Meta } = { ...defaults }; if (keys.length > 5) { target.meta = {}; } Object.assign(target.meta, { extra: 1 }); return target;',
+    changed: true,
+    id: 'assigned-in-a-branch-over-a-container-a-spread-may-hold',
+    run: ({ keys }) => {
+      const defaults = box<{ meta: Meta }>({ meta: [] });
+      const target = box<{ meta: Meta }>({ ...defaults });
+      if (keys.length > FIVE) {
+        target.meta = {};
+      }
+      Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
+  {
+    body: 'const target: Record<string, Meta> = {}; for (const key of keys) { target[key] = {}; Object.assign(target[key], { extra: 1 }); } return target;',
+    changed: false,
+    id: 'dictionary-of-objects-built-in-a-loop-of-an-empty-object',
+    run: ({ keys }) => {
+      const target = box<Record<string, Meta>>({});
+      for (const key of keys) {
+        target[key] = {};
+        Object.assign(target[key], { extra: 1 });
+      }
       return target;
     },
   },

@@ -299,26 +299,27 @@ function entryOf(
 /**
  * Whether what `initializer` writes holds no entry at `keys`: the member before the last key is an
  * object the code writes, with no spread and no key the compile cannot read, and none of its
- * entries is the last key.
+ * entries is the last key. Of a last key the compile cannot read, the object holds no entry at all.
  */
 export function lacksEntryAt(
   initializer: Expression | undefined,
   keys: readonly (string | undefined)[],
   resolve?: Resolve,
 ): boolean {
+  if (keys.length === 0) {
+    return false;
+  }
   const last = keys.at(-1);
-  const holder =
-    last === undefined ? undefined : writtenAt(initializer, keys.slice(0, -1), resolve);
-  return (
-    holder !== undefined &&
-    isObjectLiteralExpression(holder) &&
-    holder.properties.every((property) => {
-      const named = isSpreadAssignment(property)
-        ? undefined
-        : objectElementKey(property.name, resolve);
-      return named !== undefined && named !== last && named !== '__proto__';
-    })
-  );
+  const holder = writtenAt(initializer, keys.slice(0, -1), resolve);
+  if (holder === undefined || !isObjectLiteralExpression(holder)) {
+    return false;
+  }
+  return holder.properties.every((property) => {
+    const named = isSpreadAssignment(property)
+      ? undefined
+      : objectElementKey(property.name, resolve);
+    return last !== undefined && named !== undefined && named !== last && named !== '__proto__';
+  });
 }
 
 /** What an object or an array `initializer` writes there holds at `keys` in turn; none else. */
