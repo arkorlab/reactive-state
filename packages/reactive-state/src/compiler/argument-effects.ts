@@ -104,7 +104,7 @@ function invoked(node: Node): node is NativeInvocation {
   return isCallExpression(node) || isNewExpression(node) || isTaggedTemplateExpression(node);
 }
 
-/** Source invocation roots, preserving generator suspension and native call handling. */
+/** Source invocation roots and native call handling. */
 function queueInvocation(
   node: NativeInvocation,
   current: Execution,
@@ -160,7 +160,9 @@ function queueSource(
   }
   const given = isTaggedTemplateExpression(node) ? tagArguments(node) : (node.arguments ?? []);
   queueDefaults(fn, given, current, pending);
-  if (!generator(fn) && fn.body !== undefined) {
+  // A generator's call only acquires its iterator, but what consumes it within the argument
+  // (`Array.from(gen())`, `[...gen()]`, `new Set(gen())`) runs the body: it is walked as any body.
+  if (fn.body !== undefined) {
     pending.push({ ...current, root: fn.body, fn });
   }
   return fn.body !== undefined;
@@ -259,7 +261,7 @@ function sourceConstructor(node: Node): Node | undefined {
     : node;
 }
 
-/** Generator parameters execute now, but acquiring the iterator does not execute its body. */
+/** A native's generator callback is called, not consumed: its parameters run, its body does not. */
 function generator(node: Node): boolean {
   return (
     (isFunctionDeclaration(node) || isFunctionExpression(node) || isMethodDeclaration(node)) &&

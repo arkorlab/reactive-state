@@ -93,6 +93,18 @@ export interface VariableWrite {
 /** The plain variable assignments of each module, read once. */
 const ASSIGNED_OF = new WeakMap<SourceFile, readonly VariableWrite[]>();
 
+/** Member writes grouped by canonical holder declaration for each module. */
+const HOLDER_WRITES_OF = new WeakMap<
+  SourceFile,
+  ReadonlyMap<VariableDeclaration, readonly MemberWrite[]>
+>();
+
+/** Plain variable assignments grouped by target declaration for each module. */
+const BINDING_WRITES_OF = new WeakMap<
+  SourceFile,
+  ReadonlyMap<VariableDeclaration, readonly VariableWrite[]>
+>();
+
 /** Each member write of a module, by the variable it writes into through whole constant aliases. */
 export function framedMemberWrites(file: SourceFile): readonly MemberWrite[] {
   const known = WRITES_OF.get(file);
@@ -278,6 +290,44 @@ export function framedVariableWrites(file: SourceFile): readonly VariableWrite[]
   }
   ASSIGNED_OF.set(file, writes);
   return writes;
+}
+
+/** Member writes in `file` targeting `holder`, indexed once per module. */
+export function framedMemberWritesOf(
+  file: SourceFile,
+  holder: VariableDeclaration,
+): readonly MemberWrite[] {
+  let byHolder = HOLDER_WRITES_OF.get(file);
+  if (byHolder === undefined) {
+    const grouped = new Map<VariableDeclaration, MemberWrite[]>();
+    for (const write of framedMemberWrites(file)) {
+      const existing = grouped.get(write.holder);
+      if (existing === undefined) grouped.set(write.holder, [write]);
+      else existing.push(write);
+    }
+    byHolder = grouped;
+    HOLDER_WRITES_OF.set(file, byHolder);
+  }
+  return byHolder.get(holder) ?? [];
+}
+
+/** Plain whole-variable assignments in `file` targeting `binding`, indexed once per module. */
+export function framedVariableWritesOf(
+  file: SourceFile,
+  binding: VariableDeclaration,
+): readonly VariableWrite[] {
+  let byBinding = BINDING_WRITES_OF.get(file);
+  if (byBinding === undefined) {
+    const grouped = new Map<VariableDeclaration, VariableWrite[]>();
+    for (const write of framedVariableWrites(file)) {
+      const existing = grouped.get(write.binding);
+      if (existing === undefined) grouped.set(write.binding, [write]);
+      else existing.push(write);
+    }
+    byBinding = grouped;
+    BINDING_WRITES_OF.set(file, byBinding);
+  }
+  return byBinding.get(binding) ?? [];
 }
 
 /** The variable a plain `name = value` assigns. */

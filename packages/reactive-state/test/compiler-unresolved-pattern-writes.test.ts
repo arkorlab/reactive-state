@@ -1,4 +1,11 @@
-import { type CallExpression, isCallExpression, type Node, type SourceFile } from 'typescript/ast';
+import {
+  type CallExpression,
+  isCallExpression,
+  isElementAccessExpression,
+  isPropertyAccessExpression,
+  type Node,
+  type SourceFile,
+} from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
 import { rootOf } from '../src/compiler/kept.ts';
@@ -163,24 +170,35 @@ function finalCall(file: SourceFile): CallExpression | undefined {
   return found;
 }
 
+/** Evaluates the pattern statefulness helper selected by `mode` against `call`. */
+function evaluatePatternFlag(
+  call: CallExpression | undefined,
+  mode: 'index' | 'sticky-arg' | 'sticky-receiver',
+): boolean | undefined {
+  if (call === undefined) {
+    return undefined;
+  }
+  const callee = call.expression;
+  const receiver =
+    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
+      ? callee.expression
+      : undefined;
+  if (mode === 'index') {
+    return receiver === undefined ? undefined : keepsPatternIndex(receiver);
+  }
+  if (mode === 'sticky-receiver') {
+    return receiver === undefined ? undefined : isStickyPattern(receiver);
+  }
+  const firstArg = call.arguments[0];
+  return firstArg === undefined ? undefined : isStickyPattern(firstArg);
+}
+
 describe('unresolved and mutable pattern receivers in pattern-writes', () => {
   it.each(CASES)('$id', ({ source, mode, stateful, writtenRoot }) => {
     using api = openTypeScript();
     using parsed = parseModule(api, 'unresolved-pattern-writes.ts', source);
     const call = finalCall(parsed.sourceFile);
-    const receiver =
-      call !== undefined && 'expression' in call.expression
-        ? call.expression.expression
-        : undefined;
-    const firstArg = call?.arguments[0];
-    let flagResult: boolean | undefined;
-    if (mode === 'index' && receiver !== undefined) {
-      flagResult = keepsPatternIndex(receiver);
-    } else if (mode === 'sticky-receiver' && receiver !== undefined) {
-      flagResult = isStickyPattern(receiver);
-    } else if (mode === 'sticky-arg' && firstArg !== undefined) {
-      flagResult = isStickyPattern(firstArg);
-    }
+    const flagResult = evaluatePatternFlag(call, mode);
     const target = call === undefined ? undefined : writtenBy(call);
 
     expect(flagResult).toBe(stateful);

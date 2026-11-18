@@ -148,8 +148,7 @@ function incrementedCounter(file: SourceFile): Identifier | undefined {
 /** The final call expression inside the named function declaration in `file`. */
 function lastCallIn(file: SourceFile, fnName: string): CallExpression | undefined {
   const fn = file.statements.find(
-    (statement): statement is Node & { readonly name?: Identifier } =>
-      isFunctionDeclaration(statement) && statement.name?.text === fnName,
+    (statement) => isFunctionDeclaration(statement) && statement.name?.text === fnName,
   );
   if (fn === undefined) {
     return undefined;

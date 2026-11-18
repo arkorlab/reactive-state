@@ -39,10 +39,12 @@ export function unmutatedTuple(expression: Expression): ArrayLiteralExpression |
 export function spreadOnlyInitializer(expression: Expression): Expression | undefined {
   const value = unwrapped(expression);
   const declared = isIdentifier(value) ? constVariableDeclaration(value) : undefined;
-  return declared?.initializer !== undefined &&
-    !nonSpreadDeclarationsIn(declared.getSourceFile()).has(declared)
-    ? unwrapped(declared.initializer)
-    : undefined;
+  if (declared?.initializer === undefined) {
+    return undefined;
+  }
+  return nonSpreadDeclarationsIn(declared.getSourceFile()).has(declared)
+    ? undefined
+    : unwrapped(declared.initializer);
 }
 
 /** Initializer of a whole-identifier `const` declaration, or none when mutable or destructured. */

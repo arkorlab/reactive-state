@@ -47,7 +47,7 @@ const KEPT_MUTATED_SPREAD_CASES = [
       "const args: unknown[] = [{}, 'next', () => ++count, {}]; args[3] = store; Reflect.set(...args);",
     kept: true,
     primaryRoot: 'args',
-    argumentRoots: ['args'],
+    argumentRoots: ['store', 'args'],
   },
   {
     id: 'reassigned-let-tuple-spread-object-assign',
@@ -134,7 +134,7 @@ const CALL_WRITE_TARGET_CASES = [
     statement:
       "const args = [new Event('init')]; args[0] = sharedEvent; emitter.dispatchEvent(...args);",
     primaryRoot: 'emitter',
-    argumentRoots: ['args'],
+    argumentRoots: ['sharedEvent', 'args'],
   },
   {
     id: 'mutated-const-spread-trailing-reflect-set-receiver',
@@ -174,8 +174,7 @@ function incrementedCounter(file: SourceFile): Identifier | undefined {
 /** The final call expression inside the named function declaration in `file`. */
 function lastCallIn(file: SourceFile, fnName: string): CallExpression | undefined {
   const fn = file.statements.find(
-    (statement): statement is Node & { readonly name?: Identifier } =>
-      isFunctionDeclaration(statement) && statement.name?.text === fnName,
+    (statement) => isFunctionDeclaration(statement) && statement.name?.text === fnName,
   );
   if (fn === undefined) {
     return undefined;
