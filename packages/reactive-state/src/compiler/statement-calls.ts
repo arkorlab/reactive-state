@@ -72,6 +72,14 @@ import {
 } from './statement-call-targets.ts';
 import { collectExecutableRoot } from './statement-call-writes.ts';
 
+/** The operators that store their right operand in the left one. */
+const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 interface ActiveReceiverEntry {
   readonly owner: Node;
   readonly receiver: ResolvedValue;
@@ -310,7 +318,7 @@ function observeNodeOperations(node: Node, state: WalkState): void {
     observeObjectSpread(node.expression, state.driver);
   } else if (isVariableDeclaration(node) || isParameterDeclaration(node)) {
     observeDeclarationDestructuring(node, state.driver);
-  } else if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
+  } else if (isBinaryExpression(node) && VALUE_ASSIGNMENTS.has(node.operatorToken.kind)) {
     observeAssignmentDestructuring(node.left, node.right, state.driver);
   } else if (isForOfStatement(node)) {
     observeForOfDestructuring(node, state.driver);

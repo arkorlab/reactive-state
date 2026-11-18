@@ -7,10 +7,12 @@ import {
   isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
+  isElementAccessExpression,
   isIdentifier,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isPropertyAccessExpression,
   isPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
@@ -22,7 +24,11 @@ import {
 } from 'typescript/ast';
 
 import { EMPTY_NODE_SET, EMPTY_PROJECT_SET, type ResolvedValue } from './statement-call-classes.ts';
-import type { EscapeDriver } from './statement-call-escapes.ts';
+import {
+  activateEscapedExpression,
+  activateWholeValue,
+  type EscapeDriver,
+} from './statement-call-escapes.ts';
 import { projectMemberFromValue } from './statement-call-members.ts';
 import {
   accessModeOf,
@@ -198,6 +204,11 @@ export function observeAssignmentDestructuring(
   driver: EscapeDriver,
 ): void {
   const target = unwrapExpression(left);
+  if (isPropertyAccessExpression(target) || isElementAccessExpression(target)) {
+    // What a member holds is not followed, so what is stored there escapes, as an argument does.
+    activateEscapedExpression(right, driver);
+    return;
+  }
   if (!isObjectLiteralExpression(target) && !isArrayLiteralExpression(target)) {
     return;
   }
@@ -226,6 +237,10 @@ function observeAssignmentTargets(
     observeObjectAssignmentPattern(target.properties, sources, walk);
   } else if (isArrayLiteralExpression(target)) {
     observeArrayAssignmentPattern(target.elements, sources, walk);
+  } else if (isPropertyAccessExpression(target) || isElementAccessExpression(target)) {
+    for (const source of sources) {
+      activateWholeValue(source, walk.driver);
+    }
   }
 }
 
