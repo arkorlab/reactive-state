@@ -5,6 +5,10 @@ import {
   isBlock,
   isClassDeclaration,
   isConstructorDeclaration,
+  isDoStatement,
+  isForInStatement,
+  isForOfStatement,
+  isForStatement,
   isIdentifier,
   isCallExpression,
   isExpressionStatement,
@@ -15,6 +19,7 @@ import {
   isSourceFile,
   isTaggedTemplateExpression,
   isVariableStatement,
+  isWhileStatement,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -32,7 +37,7 @@ export function calleeUncertain(value: Expression, at: Expression): boolean {
   if (interveningEvaluation(value, at)) {
     return true;
   }
-  if (executionOf(value) === executionOf(at)) {
+  if (executionOf(value) === executionOf(at) && !repeatedAround(value, at)) {
     return false;
   }
   const before = constructionBoundary(value, at);
@@ -61,6 +66,28 @@ interface ConstructionBoundary {
   readonly body: Block;
   readonly execution: Node;
   readonly end: number;
+}
+
+/** Whether a loop, which does not build `value`, runs `at` again, so a write after `at` precedes its next run. */
+function repeatedAround(value: Expression, at: Expression): boolean {
+  const execution = executionOf(at);
+  for (let each: Node = at.parent; each !== execution; each = each.parent) {
+    if (isLoop(each) && !contains(each, value)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether `node` is a statement that runs its body again: `for`, `for…in`, `for…of`, `while`, `do`. */
+function isLoop(node: Node): boolean {
+  return (
+    isForStatement(node) ||
+    isForInStatement(node) ||
+    isForOfStatement(node) ||
+    isWhileStatement(node) ||
+    isDoStatement(node)
+  );
 }
 
 /** Direct constructions in one sequential body finish before its later statements run. */
@@ -203,7 +230,7 @@ function refersTo(node: Expression, value: Expression): boolean {
 }
 
 /** An outer literal's replacement also invalidates a nested literal selected from it. */
-function contains(outer: Expression, inner: Expression): boolean {
+function contains(outer: Node, inner: Node): boolean {
   for (let at: Node = inner; !isSourceFile(at); at = at.parent) {
     if (at === outer) {
       return true;
