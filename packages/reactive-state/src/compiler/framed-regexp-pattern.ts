@@ -34,10 +34,16 @@ const MATCH = new Set(['Symbol.match']);
 const PATTERN = new Set(['RegExp']);
 const NATIVES = new Set([
   'Error',
+  'Function.prototype.apply',
+  'Function.prototype.call',
   'RangeError',
   'Reflect.apply',
   'Reflect.construct',
+  'Reflect.construct.apply',
+  'Reflect.construct.call',
   'RegExp',
+  'RegExp.apply',
+  'RegExp.call',
   'Symbol.match',
   'SyntaxError',
   'TypeError',
@@ -55,16 +61,18 @@ interface PatternFields {
 export function framedRegExpPattern(
   call: CallExpression | NewExpression,
   args: readonly Expression[],
-  constructed: boolean,
+  mode: boolean | { readonly constructed: boolean; readonly newTarget?: Expression | null },
   error: (value: Expression) => boolean,
 ): boolean {
+  const constructed = typeof mode === 'boolean' ? mode : mode.constructed;
+  const newTarget = typeof mode === 'boolean' ? undefined : mode.newTarget;
   const prefix = framedArgumentPrefix(call, args, 2);
   const pattern = prefix.values[0];
   if (
     pattern === undefined ||
     prefix.unknown ||
     prefix.alternatives !== undefined ||
-    !knownNewTarget(call) ||
+    !knownNewTarget(call, newTarget) ||
     !quietValues(call.arguments ?? []) ||
     !quietPrefix(call)
   )
@@ -153,7 +161,12 @@ function convertedError(
 }
 
 /** A custom Reflect.construct new target can run an application-owned prototype getter. */
-function knownNewTarget(call: CallExpression | NewExpression): boolean {
+function knownNewTarget(
+  call: CallExpression | NewExpression,
+  newTarget?: Expression | null,
+): boolean {
+  if (newTarget === null) return false;
+  if (newTarget !== undefined) return framedNativeConstructor(newTarget, PATTERN);
   if (!isCallExpression(call) || globalPathOf(call.expression)?.join('.') !== 'Reflect.construct')
     return true;
   const prefix = framedArgumentPrefix(call, call.arguments, Infinity);
