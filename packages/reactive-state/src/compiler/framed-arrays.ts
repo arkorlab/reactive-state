@@ -15,7 +15,7 @@ import { unwrapped } from './bounded.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { writtenAsWhole } from './framed-array-identity.ts';
+import { givenValues, writtenAsWhole } from './framed-array-identity.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import { mayBecomeArray, mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
@@ -74,6 +74,22 @@ export function framedArrayString(
   return value !== undefined && arrayError(value, words, call);
 }
 
+/**
+ * An implicit conversion, a `+` or `+=` operand or a template span, reads the elements of an array it
+ * can follow: a literal, its constant aliases, a written type that says it holds errors, what the
+ * program writes into it, what a name is given where it is assigned. A name it cannot follow, a
+ * parameter assigned as a whole (`count += 1`), a name a swap or a loop writes, an array written
+ * through an element, is taken as the program shows it: an operand is far oftener text or a number
+ * than a list, and `String(name)` alone refuses such a name.
+ */
+export function framedArrayOperand(
+  value: Expression | undefined,
+  words: ArrayWords,
+  call: Node,
+): boolean {
+  return value !== undefined && arrayError(value, words, call, 'followed');
+}
+
 /** Borrowed native methods retain their receiver and the explicit join separator. */
 function borrowedArrayText(
   borrowed: NonNullable<ReturnType<typeof borrowedTextCall>>,
@@ -123,8 +139,21 @@ function appliedSeparator(
     : arrayError(value, words, call);
 }
 
-/** Literal arrays, their lexical aliases, and explicitly array-typed inputs retain element words. */
-export function arrayError(value: Expression, words: ArrayWords, call: Node): boolean {
+/** How an array the compile cannot follow reads: refused as one that may hold an error, or only as far as it is followed. */
+type Reading = 'followed' | 'refused';
+
+/**
+ * Literal arrays, their lexical aliases, and explicitly array-typed inputs retain element words. A
+ * name written as a whole, a list that may have changed and an array written where no reader follows
+ * hold an error where the reading is `refused`, the default; where it is `followed` they are read by
+ * what they are shown to hold alone.
+ */
+export function arrayError(
+  value: Expression,
+  words: ArrayWords,
+  call: Node,
+  reading: Reading = 'refused',
+): boolean {
   const pending: Expression[] = [value];
   const seen = new Set<FrameBinding>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
@@ -139,9 +168,14 @@ export function arrayError(value: Expression, words: ArrayWords, call: Node): bo
         destructuredList(
           each,
           (element, keys) => words.error(element, keys),
-          (source) => sourceChanged(source, call, (element, keys) => words.error(element, keys)),
+          (source) => {
+            return (
+              reading === 'refused' &&
+              sourceChanged(source, call, (element, keys) => words.error(element, keys))
+            );
+          },
         )) ||
-      bindingArrayWords(each, { call, words, pending, seen })
+      bindingArrayWords(each, { call, words, pending, seen, reading })
     )
       return true;
   }
@@ -153,10 +187,11 @@ function writtenElementErrors(
   value: Expression,
   call: Node,
   words: ArrayWords,
-  pending: Expression[],
+  context: { readonly pending: Expression[]; readonly reading: Reading },
 ): boolean {
+  const { pending, reading } = context;
   if (arrayWritesUnfollowed(value, call, (element, keys) => words.error(element, keys)))
-    return true;
+    return reading === 'refused';
   for (const source of writtenArrayElements(value, call)) {
     if (source.array === true) {
       pending.push(source.value);
@@ -233,13 +268,17 @@ function bindingArrayWords(
     readonly call: Node;
     readonly words: ArrayWords;
     readonly pending: Expression[];
+    readonly reading: Reading;
     readonly seen: Set<FrameBinding>;
   },
 ): boolean {
-  const { call, words, pending, seen } = context;
+  const { call, words, pending, seen, reading } = context;
   const binding = unseenArrayBinding(value, seen);
   if (binding === undefined) return false;
-  if (rewrittenArray(binding) || writtenElementErrors(value, call, words, pending)) return true;
+  if (reading === 'refused' && rewrittenArray(binding)) return true;
+  if (writtenElementErrors(value, call, words, { pending, reading })) return true;
+  if (reading === 'followed')
+    for (const given of givenValues(binding)) if (given !== undefined) pending.push(given);
   if (binding.initializer !== undefined) pending.push(binding.initializer);
   return false;
 }

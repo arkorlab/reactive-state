@@ -36,7 +36,12 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
 import { framedAbortReason } from './framed-abort-reasons.ts';
 import { framedArrayResult } from './framed-array-results.ts';
-import { framedArrayString, framedArrayText, framedArrayWrittenWords } from './framed-arrays.ts';
+import {
+  framedArrayOperand,
+  framedArrayString,
+  framedArrayText,
+  framedArrayWrittenWords,
+} from './framed-arrays.ts';
 import { frameDeclarationOf, framedInputName, frameTypeOf } from './framed-bindings.ts';
 import { observedErrorAt, type ErrorObservation } from './framed-callback-observations.ts';
 import { framedClonedObjectData } from './framed-cloned-object-data.ts';
@@ -248,7 +253,7 @@ function thrownText(node: Node, textValue: ErrorObservation['words']): boolean {
   return convertedTextAt(node, words);
 }
 
-/** Explicit `String(...)`, template spans, and `+` / `+=` convert errors and error arrays. */
+/** Explicit `String(...)` reads every array; template spans and `+` / `+=` the arrays they can follow. */
 function convertedTextAt(
   node: Node,
   words: {
@@ -256,14 +261,14 @@ function convertedTextAt(
     readonly typed: (value: Expression) => boolean;
   },
 ): boolean {
-  const converts = (value: Expression | undefined): boolean =>
-    words.error(value) || framedArrayString(value, words, node);
   if (
     (isCallExpression(node) || isNewExpression(node)) &&
     globalPathOf(unwrapped(node.expression))?.join('.') === 'String'
   ) {
-    return converts(node.arguments?.[0]);
+    return words.error(node.arguments?.[0]) || framedArrayString(node.arguments?.[0], words, node);
   }
+  const converts = (value: Expression | undefined): boolean =>
+    words.error(value) || framedArrayOperand(value, words, node);
   if (framedTemplateText(node, converts)) {
     return true;
   }
