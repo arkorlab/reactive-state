@@ -37,7 +37,7 @@ import {
 } from './statement-call-classes.ts';
 import {
   activateArrayReceiver,
-  activateConstructorReturns,
+  activateReturnedValues,
   activateEscapedExpression,
   type EscapeDriver,
 } from './statement-call-escapes.ts';
@@ -403,7 +403,7 @@ function invokeSuperConstructor(superNode: Node, state: WalkState): void {
           constructClass(base.node, state, self);
         } else if (isFunctionDeclaration(base.node) || isFunctionExpression(base.node)) {
           activateCallable(base.node, state, self);
-          activateConstructorReturns(base.node, state.driver);
+          activateReturnedValues(base.node, self, state.driver);
         }
       }
     }
@@ -457,7 +457,7 @@ function constructExpression(expr: Node, state: WalkState, instanceReceiver?: Re
         constructClass(target.node, state, instanceReceiver);
       } else if (isFunctionDeclaration(target.node) || isFunctionExpression(target.node)) {
         activateCallable(target.node, state, instanceReceiver);
-        activateConstructorReturns(target.node, state.driver);
+        activateReturnedValues(target.node, instanceReceiver, state.driver);
       }
     }
   });
@@ -492,7 +492,7 @@ function constructClass(
       });
     } else if (isConstructorDeclaration(member)) {
       activateCallable(member, state, effectiveReceiver);
-      activateConstructorReturns(member, state.driver);
+      activateReturnedValues(member, effectiveReceiver, state.driver);
     }
   }
 }

@@ -106,14 +106,23 @@ export function activateArrayReceiver(call: CallExpression, driver: EscapeDriver
 }
 
 /**
- * A constructor that returns an object makes `new` evaluate to that object in place of the instance,
- * which is not followed, so what it returns escapes, as an argument of a call does.
+ * What a function returns escapes with it where the function does: a constructor's return value
+ * stands in for the instance, and the result of a callback that a helper receives is called, or
+ * read for a method, by code the walk has no parameter to follow it into. An escaped function is
+ * visited once for each receiver, so functions that return each other end.
  */
-export function activateConstructorReturns(callable: CallableNode, driver: EscapeDriver): void {
-  if (callable.body === undefined || !isBlock(callable.body)) {
+export function activateReturnedValues(
+  callable: CallableNode,
+  receiver: ResolvedValue | undefined,
+  driver: EscapeDriver,
+): void {
+  const key = `returns:${nodeIdOf(callable, driver.scopes)}:${receiver === undefined ? '_' : valueIdentityKey(receiver, driver.scopes)}`;
+  if (callable.body === undefined || driver.wholeEscaped.has(key)) {
     return;
   }
-  for (const expr of returnExpressionsOf(callable.body)) {
+  driver.wholeEscaped.add(key);
+  const returned = isBlock(callable.body) ? returnExpressionsOf(callable.body) : [callable.body];
+  for (const expr of returned) {
     activateEscapedExpression(expr, driver);
   }
 }
@@ -124,6 +133,7 @@ export function activateWholeValue(value: ResolvedValue, driver: EscapeDriver): 
   }
   if (value.kind === 'node' && isCallableNode(value.node)) {
     driver.activateCallable(value.node, value.receiver);
+    activateReturnedValues(value.node, value.receiver, driver);
     return;
   }
   const visitKey = valueIdentityKey(value, driver.scopes);
