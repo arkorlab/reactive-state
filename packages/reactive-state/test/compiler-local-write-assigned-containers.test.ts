@@ -36,6 +36,8 @@ interface Nest {
   extra?: number;
 }
 
+type Meta = Record<string, unknown> | unknown[];
+
 const CASES: readonly Case[] = [
   {
     body: "const target: { user?: { name?: string } } = {}; target.user = {}; target.user.name = 'x'; return target;",
@@ -185,6 +187,64 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: 'const defaults: { meta?: Meta } = { meta: [] }; const target: { meta?: Meta } = { ...defaults }; target.meta ??= {}; Object.assign(target.meta, { extra: 1 }); return target;',
+    changed: true,
+    id: 'nullish-assigned-over-a-container-a-spread-may-hold',
+    run: () => {
+      const defaults = box<{ meta?: Meta }>({ meta: [] });
+      const target = box<{ meta?: Meta }>({ ...defaults });
+      target.meta ??= {};
+      Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
+  {
+    body: 'const defaults: { meta?: Meta | null } = { meta: [] }; const target: { meta?: Meta | null } = { ...defaults }; target.meta ||= {}; Object.assign(target.meta, { extra: 1 }); return target;',
+    changed: true,
+    id: 'or-assigned-over-a-container-a-spread-may-hold',
+    run: () => {
+      const defaults = box<{ meta?: Meta | null }>({ meta: [] });
+      const target = box<{ meta?: Meta | null }>({ ...defaults });
+      // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- exercises the logical assignment
+      target.meta ||= {};
+      Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta?: Meta } = { meta: {} }; target.meta ??= {}; Object.assign(target.meta, { extra: 1 }); return target;',
+    changed: false,
+    id: 'nullish-assigned-over-an-object-the-initializer-writes',
+    run: () => {
+      const target = box<{ meta?: Meta }>({ meta: {} });
+      target.meta ??= {};
+      Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta?: Meta; other: number } = { other: 1 }; target.meta ??= {}; Object.assign(target.meta, { extra: 1 }); return target;',
+    changed: false,
+    id: 'nullish-assigned-over-a-key-the-initializer-lacks',
+    run: () => {
+      const target = box<{ meta?: Meta; other: number }>({ other: 1 });
+      target.meta ??= {};
+      Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta?: Meta } = { meta: [] }; target.meta ??= {}; Object.assign(target.meta, { extra: 1 }); return target;',
+    changed: true,
+    id: 'pin-nullish-assigned-over-an-array-the-initializer-writes',
+    run: () => {
+      const target = box<{ meta?: Meta }>({ meta: [] });
+      target.meta ??= {};
+      Object.assign(target.meta, { extra: 1 });
+      return target;
+    },
+  },
 ];
 
 describe('local writes into a container the code assigned', () => {
@@ -202,7 +262,7 @@ describe('local writes into a container the code assigned', () => {
     using parsed = parseModule(
       api,
       'assigned-containers.ts',
-      `type Tree = Record<string, { n?: number }>;\ninterface Nest { extra?: number }\nexport function build(flag: boolean, keys: readonly string[]) { ${body} }\n`,
+      `type Tree = Record<string, { n?: number }>;\ninterface Nest { extra?: number }\ntype Meta = Record<string, unknown> | unknown[];\nexport function build(flag: boolean, keys: readonly string[]) { ${body} }\n`,
     );
 
     expect(isJson(run(INPUTS))).toBe(!changed);

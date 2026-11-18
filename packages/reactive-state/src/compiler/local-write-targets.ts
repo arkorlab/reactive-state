@@ -9,6 +9,7 @@ import {
   isObjectLiteralExpression,
   isOmittedExpression,
   isSpreadElement,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -20,6 +21,7 @@ import {
   isConstIdentifier,
   isIndex,
   isShrunkAt,
+  lacksEntryAt,
   memberChain,
   pathsOverlap,
   type Target,
@@ -102,6 +104,12 @@ function containerAt(
   }
   const initial = writtenAt(target.initializer, containerKeys, target.resolve);
   const given: Expression[] = initial === undefined ? [] : [unwrapped(initial)];
+  // Holds where the value the container has before a conditional assignment is shown: written by
+  // the initializer, by an assignment, or absent from an object the initializer writes plainly.
+  const known = {
+    isHeld:
+      initial !== undefined || lacksEntryAt(target.initializer, containerKeys, target.resolve),
+  };
   const isHazard = anyAliasRead(target, containerKeys, (node, suffix, at, queue) => {
     const { keys, top } = memberChain(node, at.resolve);
     const { parent } = top;
@@ -113,14 +121,15 @@ function containerAt(
       ASSIGNING.has(parent.operatorToken.kind)
     ) {
       given.push(unwrapped(parent.right));
+      known.isHeld ||= parent.operatorToken.kind === SyntaxKind.EqualsToken;
       return false;
     }
     return checkPrefixRead(node, suffix, at, queue);
   });
   const [first] = given;
-  return !isHazard && first !== undefined && given.every((each) => isObjectLiteralExpression(each))
-    ? first
-    : undefined;
+  const isObjects = given.every((each) => isObjectLiteralExpression(each));
+  const isKnown = known.isHeld && isObjects && !isHazard;
+  return isKnown ? first : undefined;
 }
 
 /**
