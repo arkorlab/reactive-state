@@ -87,6 +87,20 @@ const ELEMENT_MAPPER_METHODS: ReadonlySet<string> = new Set([
 ]);
 const REDUCE_MAPPER_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
 const SORT_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
+/** String methods that convert their first argument, the text they search for or split by, to text. */
+const SEARCH_METHODS: ReadonlySet<string> = new Set([
+  'endsWith',
+  'includes',
+  'indexOf',
+  'lastIndexOf',
+  'match',
+  'matchAll',
+  'search',
+  'split',
+  'startsWith',
+]);
+/** The search methods an array has too, which compares by identity and converts nothing. */
+const ARRAY_SEARCH_METHODS: ReadonlySet<string> = new Set(['includes', 'indexOf', 'lastIndexOf']);
 
 export interface WrapperCoerceContext {
   readonly bindings: WrapperBindings;
@@ -305,6 +319,29 @@ function sortCoerces(args: CallArgumentList, context: WrapperCoerceContext): boo
   return externalCallbackCoerces(actual, new Set([0, 1]), 2, context);
 }
 
+/**
+ * A search method converts the text it searches for, and so does `String.prototype` called on
+ * another receiver, which converts that too. The methods an array has as well compare by identity,
+ * so a receiver that holds the Date, or an array literal, is that array.
+ */
+function searchCoerces(
+  method: string,
+  unpacked: UnwrappedCall,
+  context: WrapperCoerceContext,
+  borrowedStringProto: boolean,
+): boolean {
+  const recv = unpacked.receiver;
+  const recvDated = recv !== undefined && carriesDatedExpr(recv, context);
+  if (borrowedStringProto) {
+    return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
+  }
+  const isArray =
+    ARRAY_SEARCH_METHODS.has(method) &&
+    recv !== undefined &&
+    (recvDated || isArrayLiteralExpression(unwrapped(recv)));
+  return !isArray && callArgSlotCarriesDated(unpacked.args, 0, context);
+}
+
 function stringMethodCoerces(
   method: string,
   unpacked: UnwrappedCall,
@@ -323,6 +360,8 @@ function stringMethodCoerces(
     }
     return recvDated || anyCallArgCarriesDated(unpacked.args, context);
   }
+  if (SEARCH_METHODS.has(method))
+    return searchCoerces(method, unpacked, context, borrowedStringProto);
   if (method === 'padStart' || method === 'padEnd') {
     return recvDated || callArgSlotCarriesDated(unpacked.args, 1, context);
   }
