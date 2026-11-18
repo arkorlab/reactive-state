@@ -115,13 +115,16 @@ function collectIdentifierMethods(
 }
 
 /** Appends one candidate receiver's surviving methods without overwriting earlier branches. */
-function appendMethods(target: Map<string, Node[]>, source: ReadonlyMap<string, Node>): void {
-  for (const [key, method] of source) {
+function appendMethods(
+  target: Map<string, Node[]>,
+  source: ReadonlyMap<string, readonly Node[]>,
+): void {
+  for (const [key, bodies] of source) {
     const existing = target.get(key);
     if (existing === undefined) {
-      target.set(key, [method]);
+      target.set(key, [...bodies]);
     } else {
-      existing.push(method);
+      existing.push(...bodies);
     }
   }
 }
