@@ -24,7 +24,6 @@ import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
 import {
   framedHeldVariable,
-  framedMemberDeletes,
   framedMemberWrites,
   framedPrototypeWrites,
   framedVariableWrites,
@@ -32,17 +31,14 @@ import {
 import { framedLiteralPrototypes } from './framed-object-members.ts';
 import { repeatedFrameRead } from './framed-writes.ts';
 import {
+  descriptorPreservesNonEnumerable,
   holderDescriptorBodyWrites,
   literalDefinesOwnBody,
+  literalHasNoOwnBody,
   plainBodyLiteralEntry,
   type RecordedDescriptorBodyWrite,
 } from './multipart-descriptors.ts';
-import {
-  bindingTypedAtMemberPath,
-  definitelyBefore,
-  opaqueBodyLeaf,
-  supersededBefore,
-} from './multipart-readings.ts';
+import { definitelyBefore, holderMayDeleteBody, supersededBefore } from './multipart-readings.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Definite variable-rebind and writable/configurable member-cut filtering for `body` descriptors. */
@@ -94,17 +90,6 @@ export function freshBodyObject(node: Expression): boolean {
   );
 }
 
-/** Whether `name`'s declared `'body'` type names `FormData` while surviving `bodies` carry an opaque leaf. */
-export function opaqueTypedHolderBodies(
-  name: Identifier,
-  bodies: readonly Expression[],
-  point: Node,
-): boolean {
-  return (
-    bindingTypedAtMemberPath(name, [BODY_KEY]) && bodies.some((each) => opaqueBodyLeaf(each, point))
-  );
-}
-
 /** Builds a `DescriptorCutContext` for a parameter replaced by a sole fresh object literal. */
 export function parameterDescriptorCutContext<
   T extends PriorDescriptorCandidate & { readonly capture: Identifier },
@@ -149,12 +134,13 @@ export function parameterDescriptorCutContext<
 export function resolveVariableDescriptorWrites(input: VariableDescriptorCutInput): {
   readonly activeMetadata: readonly RecordedDescriptorBodyWrite[];
   readonly activeValues: readonly RecordedDescriptorBodyWrite[];
+  readonly definitelyNonEnumerable: boolean;
   readonly extraHeld: readonly Held[];
 } {
   const { declaration, holder, point, reaches } = input;
   const descriptorWrites = holderDescriptorBodyWrites(holder, reaches);
   if (descriptorWrites.length === 0) {
-    return { activeMetadata: [], activeValues: [], extraHeld: [] };
+    return { activeMetadata: [], activeValues: [], definitelyNonEnumerable: false, extraHeld: [] };
   }
   const file = holder.getSourceFile();
   const rebindCuts =
@@ -168,6 +154,8 @@ export function resolveVariableDescriptorWrites(input: VariableDescriptorCutInpu
   );
   const canCutValues = canCutHolderBodyValues(input, activeMetadata, file);
   const valueCuts = canCutValues ? definiteHolderBodyValueCuts(activeMetadata, input, file) : [];
+  const definitelyNonEnumerable =
+    canCutValues && holderBodyDefinitelyNonEnumerable(activeMetadata, input, file);
   const activeValues = activeMetadata.filter((desc) =>
     valueCuts.every((cut) => cut === desc.node || !supersededBefore(desc.node, cut, point)),
   );
@@ -179,7 +167,7 @@ export function resolveVariableDescriptorWrites(input: VariableDescriptorCutInpu
     point,
     reaches,
   });
-  return { activeMetadata, activeValues, extraHeld };
+  return { activeMetadata, activeValues, definitelyNonEnumerable, extraHeld };
 }
 
 /** Whether `holder` is a single un-locked plain object literal whose `body` cuts can be proven. */
@@ -328,13 +316,13 @@ function attributeProvenTrue(
   });
 }
 
-/** Latest `definitelyBefore` descriptor in `relevant` that explicitly sets the attribute to `true`. */
-function latestDefiniteAttributeReset(
-  relevant: readonly PriorDescriptorCandidate[],
+/** Latest `definitelyBefore` descriptor in `relevant` matching `setsTrue`. */
+function latestDefiniteAttributeReset<T extends { readonly node: Node }>(
+  relevant: readonly T[],
   writeNode: Node,
-  setsTrue: (item: PriorDescriptorCandidate) => boolean,
-): PriorDescriptorCandidate | undefined {
-  let latest: PriorDescriptorCandidate | undefined;
+  setsTrue: (item: T) => boolean,
+): T | undefined {
+  let latest: T | undefined;
   for (const item of relevant) {
     if (
       setsTrue(item) &&
@@ -429,20 +417,43 @@ function definiteHolderBodyValueCuts(
   return cuts;
 }
 
-/** Whether any reachable deletion or whole-object hand-off on `holder` may remove `'body'`. */
-export function holderMayDeleteBody(
+/** Whether `holder`'s own `'body'` property is guaranteed non-enumerable at `input.point`. */
+function holderBodyDefinitelyNonEnumerable(
+  activeMetadata: readonly RecordedDescriptorBodyWrite[],
+  input: VariableDescriptorCutInput,
   file: SourceFile,
-  holder: VariableDeclaration,
-  reaches: (change: Node) => boolean,
 ): boolean {
-  return framedMemberDeletes(file).some((each) => {
-    if (each.holder !== holder || !reaches(each.node)) {
-      return false;
-    }
-    return each.handed
-      ? each.path.length === 0
-      : each.path.length === 1 && each.path[0]?.includes(BODY_KEY) !== false;
-  });
+  const init = input.whole.initial === undefined ? undefined : unwrapped(input.whole.initial.value);
+  if (init === undefined || !isObjectLiteralExpression(init)) {
+    return false;
+  }
+  const ordinary = framedMemberWrites(file)
+    .filter((write) => eligibleNonDescriptorBodyWrite(write, input.holder, input.reaches))
+    .map((write) => write.node);
+  if (
+    ordinary.length === 0 &&
+    literalHasNoOwnBody(init) &&
+    activeMetadata.every((each) => descriptorPreservesNonEnumerable(each.enumerableState))
+  ) {
+    return true;
+  }
+  const owner = executionOwner(input.point);
+  const reset = latestDefiniteAttributeReset(
+    activeMetadata,
+    input.point,
+    (item) => item.enumerableState === 'false',
+  );
+  return (
+    reset !== undefined &&
+    ordinary.every((node) => supersededBefore(node, reset.node, input.point)) &&
+    activeMetadata.every((other) => {
+      const follows =
+        executionOwner(other.node) !== owner ||
+        other.node.pos > reset.node.pos ||
+        repeatedFrameRead(other.node, input.point, input.holder, owner);
+      return other === reset || !follows || descriptorPreservesNonEnumerable(other.enumerableState);
+    })
+  );
 }
 
 /** Whether any reachable `Object.freeze`, `Object.seal`, or `preventExtensions` call targets `holder`. */

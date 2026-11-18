@@ -31,16 +31,19 @@ import { framedHeldValues } from './framed-held-members.ts';
 import { framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 import { framedLiteralAccessor } from './framed-member-accessors.ts';
 import { framedHeldVariable } from './framed-member-writes.ts';
-import { framedObjectSources } from './framed-object-members.ts';
-import { type BodyReading, selectedValues, uniqueExpressions } from './multipart-readings.ts';
+import { nestedDescriptorValues, uniqueExpressions } from './multipart-held-paths.ts';
+import { type BodyReading, enumerableBodiesOf } from './multipart-readings.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Property-descriptor body extraction, enumerability proofs, and option literal key helpers. */
 
+export type DescriptorFlagState = 'absent' | 'false' | 'other' | 'true';
+
 export interface BodyDescriptorWrite {
   readonly configurableBody: boolean;
   readonly enumerableBody: boolean;
+  readonly enumerableState: DescriptorFlagState;
   readonly exactBody: boolean;
   readonly mayHideBody: boolean;
   readonly preservesConfigurable?: boolean | undefined;
@@ -64,11 +67,10 @@ const DESCRIPTOR_WRITES = new WeakMap<
   ReadonlyMap<VariableDeclaration, readonly RecordedDescriptorBodyWrite[]>
 >();
 
-type DescriptorFlagState = 'absent' | 'other' | 'true';
-
 const UNKNOWN_DESCRIPTOR_WRITE: BodyDescriptorWrite = {
   configurableBody: false,
   enumerableBody: false,
+  enumerableState: 'other',
   exactBody: false,
   mayHideBody: true,
   preservesConfigurable: false,
@@ -117,7 +119,7 @@ export function mapDescriptorBodyWrite(
   };
 }
 
-/** Applies a descriptor write onto a target `BodyReading`, preserving enumerability requirements. */
+/** Applies a descriptor write onto a target `BodyReading`, separating `[[Get]]` from enumerable copies. */
 export function applyDescriptorWrite(
   base: BodyReading,
   write: BodyDescriptorWrite | undefined,
@@ -125,9 +127,30 @@ export function applyDescriptorWrite(
   if (write === undefined) {
     return base;
   }
+  const ambiguous = !write.exactBody && Boolean(base.ambiguous);
+  const bodies = uniqueExpressions(
+    write.exactBody ? write.values : [...base.bodies, ...write.values],
+  );
+  const nonEnumerable =
+    write.enumerableState === 'false' ||
+    (write.enumerableState === 'absent' && base.noEnumerableBody === true);
+  if (nonEnumerable) {
+    return {
+      ambiguous,
+      bodies,
+      enumerableBodies: [],
+      noEnumerableBody: !ambiguous,
+      overwrites: false,
+    };
+  }
+  const priorEnumerable =
+    write.enumerableState === 'absent' ? enumerableBodiesOf(base) : base.bodies;
   return {
-    ambiguous: !write.exactBody && Boolean(base.ambiguous),
-    bodies: uniqueExpressions(write.exactBody ? write.values : [...base.bodies, ...write.values]),
+    ambiguous,
+    bodies,
+    enumerableBodies: write.exactBody
+      ? bodies
+      : uniqueExpressions([...priorEnumerable, ...write.values]),
     overwrites: write.enumerableBody || (!write.mayHideBody && base.overwrites),
   };
 }
@@ -220,6 +243,22 @@ export function literalDefinesOwnBody(literal: ObjectLiteralExpression): boolean
   });
 }
 
+/** Whether `state` neither sets `enumerable: true` nor leaves `enumerable` runtime-unknown. */
+export function descriptorPreservesNonEnumerable(state: DescriptorFlagState | undefined): boolean {
+  return state === 'false' || state === 'absent';
+}
+
+/** Whether a spread-free literal has only statically known non-`'body'` property names. */
+export function literalHasNoOwnBody(literal: ObjectLiteralExpression): boolean {
+  return literal.properties.every((property) => {
+    if (isSpreadAssignment(property)) {
+      return false;
+    }
+    const keys = descriptorPropertyKeys(property.name);
+    return keys !== undefined && !keys.includes(BODY_KEY);
+  });
+}
+
 /** Whether a held entry points directly to a plain object literal without a `body` accessor. */
 export function plainBodyLiteralEntry(entry: {
   readonly keys: readonly string[];
@@ -247,10 +286,11 @@ function descriptorSlotWrite(descriptor: Expression, reflective: boolean): BodyD
   return {
     configurableBody: configurable === 'true',
     enumerableBody,
+    enumerableState: enumerable,
     exactBody,
     mayHideBody: !enumerableBody,
-    preservesConfigurable: configurable !== 'other',
-    preservesWritable: writable !== 'other',
+    preservesConfigurable: configurable === 'true' || configurable === 'absent',
+    preservesWritable: writable === 'true' || writable === 'absent',
     values: exactValue === undefined ? values : [exactValue],
     writableBody: writable === 'true',
   };
@@ -349,7 +389,7 @@ function exactDataDescriptorValue(literal: ObjectLiteralExpression): Expression 
     : undefined;
 }
 
-/** Classifies a descriptor boolean flag as definitely `'true'`, definitely `'absent'`, or `'other'`. */
+/** Classifies a descriptor boolean flag as `'true'`, `'false'`, `'absent'`, or `'other'`. */
 function descriptorBooleanState(
   literal: ObjectLiteralExpression,
   field: string,
@@ -360,7 +400,11 @@ function descriptorBooleanState(
   }
   if (!choice.absent && choice.values.length === 1) {
     const only = choice.values[0];
-    return only !== undefined && unwrapped(only).kind === SyntaxKind.TrueKeyword ? 'true' : 'other';
+    const kind = only === undefined ? undefined : unwrapped(only).kind;
+    if (kind === SyntaxKind.TrueKeyword) {
+      return 'true';
+    }
+    return kind === SyntaxKind.FalseKeyword ? 'false' : 'other';
   }
   return choice.absent && choice.values.length === 0 ? 'absent' : 'other';
 }
@@ -389,83 +433,6 @@ function descriptorValueCandidates(
     return entries;
   }
   return nestedDescriptorValues(descriptor, ['value'], seen);
-}
-
-const NESTED_DESCRIPTOR_PROJECTIONS = new WeakMap<SourceFile, Map<string, readonly Expression[]>>();
-
-function descriptorProjectionCache(file: SourceFile): Map<string, readonly Expression[]> {
-  let cache = NESTED_DESCRIPTOR_PROJECTIONS.get(file);
-  if (cache === undefined) {
-    cache = new Map();
-    NESTED_DESCRIPTOR_PROJECTIONS.set(file, cache);
-  }
-  return cache;
-}
-
-/** Follows identifiers, branches, and literal member paths to extract nested descriptor values. */
-function nestedDescriptorValues(
-  node: Expression,
-  keys: readonly string[],
-  seen: ReadonlySet<Expression>,
-): readonly Expression[] {
-  return resolveNestedDescriptorValues(
-    node,
-    keys,
-    seen,
-    descriptorProjectionCache(node.getSourceFile()),
-  ).values;
-}
-
-function resolveNestedDescriptorValues(
-  node: Expression,
-  keys: readonly string[],
-  seen: ReadonlySet<Expression>,
-  memo: Map<string, readonly Expression[]>,
-): { readonly cycled: boolean; readonly values: readonly Expression[] } {
-  const value = unwrapped(node);
-  if (keys.length === 0) {
-    return { cycled: false, values: [value] };
-  }
-  if (seen.has(value)) {
-    return { cycled: true, values: [] };
-  }
-  const cacheKey = `${value.pos}:${value.end}:${keys.length}:${keys.join('\0')}`;
-  const cached = memo.get(cacheKey);
-  if (cached !== undefined) {
-    return { cycled: false, values: cached };
-  }
-  const nextSeen = new Set([...seen, value]);
-  const entries = nestedProjectionEntries(value, keys);
-  let cycled = false;
-  const collected: Expression[] = [];
-  for (const entry of entries) {
-    const sub = resolveNestedDescriptorValues(entry.value, entry.keys, nextSeen, memo);
-    if (sub.cycled) cycled = true;
-    collected.push(...sub.values);
-  }
-  const values = uniqueExpressions(collected);
-  if (!cycled) {
-    memo.set(cacheKey, values);
-  }
-  return { cycled, values };
-}
-
-function nestedProjectionEntries(
-  value: Expression,
-  keys: readonly string[],
-): readonly { readonly keys: readonly string[]; readonly value: Expression }[] {
-  const alternatives = selectedValues(value);
-  if (alternatives !== undefined) {
-    return alternatives.map((each) => ({ keys, value: each }));
-  }
-  if (isIdentifier(value)) {
-    const held = framedHeldValues(value, keys, value);
-    if (held === undefined) return [];
-    return held.initial === undefined ? held.held : [held.initial, ...held.held];
-  }
-  const sources = framedObjectSources(value, keys);
-  if (sources === undefined) return [];
-  return sources.filter((each) => each.value !== value || each.keys.length !== keys.length);
 }
 
 /** Written key names of an object literal element, or undefined when computed dynamically. */

@@ -2,9 +2,9 @@ import {
   type CallExpression,
   type Expression,
   type Identifier,
-  isArrayLiteralExpression,
   isCallExpression,
   isIdentifier,
+  isNewExpression,
   isObjectLiteralExpression,
   isParameterDeclaration,
   isSpreadAssignment,
@@ -18,43 +18,39 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf } from './code-globals.ts';
-import { destructuredFirst } from './destructuring-order.ts';
-import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
-import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
-import { framedLiteralAccessor } from './framed-member-accessors.ts';
-import { framedHeldVariable, framedMemberWrites } from './framed-member-writes.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
-import {
-  holderMayDeleteBody,
-  opaqueTypedHolderBodies,
-  resolveVariableDescriptorWrites,
-} from './multipart-descriptor-cuts.ts';
+import { framedArgumentPrefix } from './framed-keys.ts';
+import { framedHeldVariable } from './framed-member-writes.ts';
+import { objectAssignCallBodies, objectAssignSourcesBodies } from './multipart-assign-spreads.ts';
+import { resolveVariableDescriptorWrites } from './multipart-descriptor-cuts.ts';
 import {
   applyDescriptorWrite,
   mapDescriptorBodyWrite,
   optionPropertyKey,
   optionPropertyValue,
   singleDescriptorBodyWrite,
-  variableMayHideBody,
+  type RecordedDescriptorBodyWrite,
 } from './multipart-descriptors.ts';
-import { peeledMemberHolder } from './multipart-held-paths.ts';
-import { parameterBodies, parameterMayHideBody } from './multipart-parameters.ts';
+import { peeledMemberHolder, selectedValues, uniqueExpressions } from './multipart-held-paths.ts';
+import { parameterBodies } from './multipart-parameters.ts';
 import {
   type AnalysisState,
   type BodyReading,
+  combineBranchReadings,
   definitelyBefore,
   EMPTY_BODIES,
+  enumerableBodiesOf,
+  holderMayDeleteBody,
   isFormData,
   mergeSpread,
+  opaqueTypedHolderBodies,
+  PLAIN_EMPTY_BODIES,
+  reachesHolderRead,
+  readingPoint,
   resolveHeldReading,
-  selectedValues,
-  spreadHolderArrays,
   startAnalysis,
-  uniqueExpressions,
   variablePatternReassignments,
 } from './multipart-readings.ts';
 
@@ -134,17 +130,19 @@ function computeBodiesOf(value: Expression, point: Node, following: AnalysisStat
   }
   const alternatives = selectedValues(value);
   if (alternatives !== undefined) {
-    const readings = alternatives.map((each) => bodiesOf(each, point, following));
-    return {
-      ambiguous: readings.some((each) => each.ambiguous === true),
-      bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
-      overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
-    };
+    return combineBranchReadings(alternatives.map((each) => bodiesOf(each, point, following)));
   }
   if (isCallExpression(value)) {
     return callExpressionBodies(value, point, following);
   }
-  return isObjectLiteralExpression(value) ? literalBodies(value, following) : EMPTY_BODIES;
+  if (isObjectLiteralExpression(value)) {
+    return literalBodies(value, following);
+  }
+  const isFreshEmptyObject =
+    isNewExpression(value) &&
+    (value.arguments?.length ?? 0) === 0 &&
+    globalPathOf(unwrapped(value.expression))?.join('.') === 'Object';
+  return isFreshEmptyObject ? PLAIN_EMPTY_BODIES : EMPTY_BODIES;
 }
 
 /** Evaluates `Object.assign`, `Object.defineProperty`, `Object.defineProperties`, and `Object.create` options. */
@@ -155,10 +153,7 @@ function callExpressionBodies(
 ): BodyReading {
   const path = globalPathOf(unwrapped(call.expression))?.join('.');
   if (path === 'Object.assign') {
-    const merged = objectAssignSourcesBodies(call, call.arguments, point, following);
-    return assignTargetMayHideBody(call, point, following)
-      ? { ambiguous: merged.ambiguous, bodies: merged.bodies, overwrites: false }
-      : merged;
+    return objectAssignCallBodies(call, { point, readOptions: bodiesOf, state: following });
   }
   if (path === 'Object.defineProperty') {
     const [target, key, descriptor] = framedArgumentPrefix(
@@ -193,65 +188,22 @@ function objectCreateBodies(
 ): BodyReading {
   const [proto, descriptors] = framedArgumentPrefix(call, call.arguments).values;
   const protoReading = proto === undefined ? EMPTY_BODIES : bodiesOf(proto, point, following);
+  const base: BodyReading = {
+    ambiguous: protoReading.ambiguous,
+    bodies: protoReading.bodies,
+    enumerableBodies: [],
+    noEnumerableBody: true,
+    overwrites: false,
+  };
   const firstOnly =
     call.arguments.length < 2 &&
     (call.arguments[0] === undefined || !isSpreadElement(call.arguments[0]));
-  if (firstOnly) {
-    return { ambiguous: protoReading.ambiguous, bodies: protoReading.bodies, overwrites: false };
-  }
-  const write = mapDescriptorBodyWrite(descriptors);
-  if (write === undefined) {
-    return { ambiguous: protoReading.ambiguous, bodies: protoReading.bodies, overwrites: false };
-  }
-  return {
-    ambiguous: !write.exactBody && Boolean(protoReading.ambiguous),
-    bodies: uniqueExpressions(
-      write.exactBody ? write.values : [...protoReading.bodies, ...write.values],
-    ),
-    overwrites: write.enumerableBody,
-  };
-}
-
-/** Whether `Object.assign`'s target argument may already carry a non-enumerable `body` property. */
-function assignTargetMayHideBody(call: CallExpression, point: Node, state: AnalysisState): boolean {
-  const first = call.arguments[0];
-  if (first === undefined) {
-    return false;
-  }
-  const prefix = isSpreadElement(first)
-    ? framedArgumentPrefix(call, [first], 1)
-    : { unknown: false, values: [first] };
-  const target = prefix.unknown ? undefined : prefix.values[0];
-  if (target === undefined) {
-    return true;
-  }
-  const value = unwrapped(target);
-  if (isObjectLiteralExpression(value) && !framedLiteralAccessor(value, BODY_KEY)) {
-    return false;
-  }
-  if (bodiesOf(value, point, state).overwrites) {
-    return false;
-  }
-  return !isIdentifier(value) || identifierMayHideBody(value, point);
-}
-
-/** Whether an identifier target of `Object.assign` may hold or acquire a non-enumerable `body`. */
-function identifierMayHideBody(name: Identifier, point: Node): boolean {
-  const selected = frameBindingOf(name);
-  if (selected === undefined || selected.keys.length > 0) {
-    return true;
-  }
-  if (isParameterDeclaration(selected.binding)) {
-    return parameterMayHideBody(name, selected.binding, point);
-  }
-  return variableMayHideBody(name, selected.binding, (change, holder) =>
-    reachesHolderRead(change, holder, point),
-  );
+  return firstOnly ? base : applyDescriptorWrite(base, mapDescriptorBodyWrite(descriptors));
 }
 
 /** Surviving body candidates across the properties and spreads of a written options literal. */
 function literalBodies(value: ObjectLiteralExpression, following: AnalysisState): BodyReading {
-  let current = EMPTY_BODIES;
+  let current = PLAIN_EMPTY_BODIES;
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) {
       current = mergeSpread(current, bodiesOf(property.expression, property, following));
@@ -260,97 +212,6 @@ function literalBodies(value: ObjectLiteralExpression, following: AnalysisState)
     current = propertyBodies(property, current, following);
   }
   return current;
-}
-
-/** Surviving body candidates across positional and spread sources passed to `Object.assign`. */
-function objectAssignSourcesBodies(
-  call: CallExpression,
-  args: readonly Expression[],
-  point: Node,
-  following: AnalysisState,
-): BodyReading {
-  let current = EMPTY_BODIES;
-  for (const argument of args) {
-    const reading = isSpreadElement(argument)
-      ? spreadArgumentBodies(call, argument.expression, point, following)
-      : bodiesOf(argument, point, following);
-    current = mergeSpread(current, reading);
-  }
-  return current;
-}
-
-/** Expands tuple, array, conditional, and mutable-array spread arguments in `Object.assign`. */
-function spreadArgumentBodies(
-  call: CallExpression,
-  expression: Expression,
-  point: Node,
-  state: AnalysisState,
-): BodyReading {
-  const value = unwrapped(expression);
-  if (state.seen.has(value)) {
-    state.cuts.count += 1;
-    return EMPTY_BODIES;
-  }
-  const next: AnalysisState = { ...state, seen: new Set([...state.seen, value]) };
-  const tuple = framedAppliedArguments(call, value);
-  if (tuple !== undefined) {
-    return objectAssignSourcesBodies(call, tuple, point, next);
-  }
-  if (isArrayLiteralExpression(value)) {
-    return objectAssignSourcesBodies(call, value.elements, point, next);
-  }
-  const alternatives = selectedValues(value);
-  if (alternatives !== undefined) {
-    const readings = alternatives.map((each) => spreadArgumentBodies(call, each, point, next));
-    return {
-      ambiguous: readings.some((each) => each.ambiguous === true),
-      bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
-      overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
-    };
-  }
-  return isIdentifier(value) ? identifierSpreadBodies(call, value, point, next) : EMPTY_BODIES;
-}
-
-/** Conservative fallback candidates when an `Object.assign` spread reads a mutable array binding. */
-function identifierSpreadBodies(
-  call: CallExpression,
-  name: Identifier,
-  point: Node,
-  state: AnalysisState,
-): BodyReading {
-  const selected = frameBindingOf(name);
-  if (selected === undefined || selected.keys.length > 0) {
-    return EMPTY_BODIES;
-  }
-  const holderArrays = spreadHolderArrays(name, selected.binding, point);
-  const arrayReadings = holderArrays.expressions.flatMap((candidate) => {
-    const array = unwrapped(candidate);
-    return isArrayLiteralExpression(array)
-      ? [objectAssignSourcesBodies(call, array.elements, point, state)]
-      : [];
-  });
-  const memberReadings = isVariableDeclaration(selected.binding)
-    ? spreadMemberReadings(name, selected.binding, point, state)
-    : [];
-  const allReadings = [...arrayReadings, ...memberReadings];
-  return {
-    ambiguous: holderArrays.ambiguous || allReadings.some((each) => each.ambiguous === true),
-    bodies: uniqueExpressions(allReadings.flatMap((each) => each.bodies)),
-    overwrites: false,
-  };
-}
-
-/** Member-write `BodyReading`s on a mutable array variable spread into `Object.assign`. */
-function spreadMemberReadings(
-  name: Identifier,
-  binding: VariableDeclaration,
-  point: Node,
-  state: AnalysisState,
-): readonly BodyReading[] {
-  const holder = framedHeldVariable(binding);
-  return framedMemberWrites(name.getSourceFile())
-    .filter((write) => write.holder === holder && write.path.length === 1)
-    .map((write) => bodiesOf(write.value, point, state));
 }
 
 /** Possible request bodies carried by a variable or parameter options alias at `point`. */
@@ -364,7 +225,8 @@ function identifierBodies(name: Identifier, point: Node, state: AnalysisState): 
   }
   return isParameterDeclaration(selected.binding)
     ? parameterBodies(name, selected.binding, point, {
-        readAssign: (call, sources, at) => objectAssignSourcesBodies(call, sources, at, state),
+        readAssign: (call, sources, at) =>
+          objectAssignSourcesBodies(call, sources, { point: at, readOptions: bodiesOf, state }),
         readOptions: (each, at) => bodiesOf(each, at, state),
       })
     : EMPTY_BODIES;
@@ -388,8 +250,10 @@ function variableBodies(
     ambiguousPattern: patternScan.ambiguous,
     declaration,
     holder,
-    overwritesAssign: (call, sources) =>
-      objectAssignSourcesBodies(call, sources, call, state).overwrites,
+    overwritesAssign: (call, sources) => {
+      return objectAssignSourcesBodies(call, sources, { point: call, readOptions: bodiesOf, state })
+        .overwrites;
+    },
     point,
     reaches: (change) => reachesHolderRead(change, holder, point),
     whole,
@@ -398,12 +262,7 @@ function variableBodies(
     ...(bodyHeld.initial === undefined ? [] : [bodyHeld.initial]),
     ...bodyHeld.held,
     ...filteredDescriptors.extraHeld,
-    ...patternScan.extraSources.map((each) => {
-      return {
-        keys: [...each.keys, BODY_KEY],
-        value: each.value,
-      };
-    }),
+    ...patternScan.extraSources.map((each) => ({ ...each, keys: [...each.keys, BODY_KEY] })),
   ];
   const entryReadings = entries.map((entry) => heldOptionReading(entry, point, state, name));
   const bodies = uniqueExpressions([
@@ -414,31 +273,108 @@ function variableBodies(
     patternScan.dynamicOpaque ||
     entryReadings.some((each) => each.ambiguous === true) ||
     opaqueTypedHolderBodies(name, bodies, point);
-  const hidesBody = filteredDescriptors.activeMetadata.some((each) => each.mayHideBody);
   const mayDelete = holderMayDeleteBody(name.getSourceFile(), holder, (change) =>
     reachesHolderRead(change, holder, point),
   );
-  if (ambiguous || hidesBody || mayDelete || patternScan.ambiguous) {
-    return { ambiguous, bodies, overwrites: false };
+  if (
+    !mayDelete &&
+    !ambiguous &&
+    !patternScan.ambiguous &&
+    filteredDescriptors.definitelyNonEnumerable
+  ) {
+    return { ambiguous, bodies, enumerableBodies: [], noEnumerableBody: true, overwrites: false };
+  }
+  const pureWhole =
+    !mayDelete &&
+    filteredDescriptors.activeMetadata.length === 0 &&
+    bodyHeld.held.length === 0 &&
+    patternScan.extraSources.length === 0;
+  const wholeEnum = pureWholeVariableEnumeration({
+    ambiguous: ambiguous || patternScan.ambiguous,
+    name,
+    point,
+    pureWhole,
+    state,
+    whole,
+  });
+  const overwrites = variableOverwritesBody({
+    activeMetadata: filteredDescriptors.activeMetadata,
+    blocked:
+      ambiguous ||
+      mayDelete ||
+      patternScan.ambiguous ||
+      filteredDescriptors.activeMetadata.some((each) => each.mayHideBody),
+    hasBodyInitial: bodyHeld.initial !== undefined,
+    point,
+    state,
+    whole,
+  });
+  return { ambiguous, bodies, ...wholeEnum, overwrites };
+}
+
+/** Enumerable copy candidates when a variable only forwards whole-object initializers/rebindings. */
+function pureWholeVariableEnumeration(input: {
+  readonly ambiguous: boolean;
+  readonly name: Identifier;
+  readonly point: Node;
+  readonly pureWhole: boolean;
+  readonly state: AnalysisState;
+  readonly whole: { readonly held: readonly Held[]; readonly initial?: Held | undefined };
+}): Pick<BodyReading, 'enumerableBodies' | 'noEnumerableBody'> {
+  if (!input.pureWhole) {
+    return {};
+  }
+  const entries =
+    input.whole.initial === undefined
+      ? input.whole.held
+      : [input.whole.initial, ...input.whole.held];
+  const readings = entries.map((each) => {
+    return each.keys.length === 0
+      ? bodiesOf(each.value, readingPoint(each.value, input.point), input.state)
+      : projectedHolderReading(each, input.point, input.state, input.name);
+  });
+  return {
+    enumerableBodies: uniqueExpressions(readings.flatMap((each) => enumerableBodiesOf(each))),
+    noEnumerableBody:
+      !input.ambiguous &&
+      readings.length > 0 &&
+      readings.every((each) => each.noEnumerableBody === true),
+  };
+}
+
+/** Whether spreading a variable definitely overwrites an earlier `body` property. */
+function variableOverwritesBody(input: {
+  readonly activeMetadata: readonly RecordedDescriptorBodyWrite[];
+  readonly blocked: boolean;
+  readonly hasBodyInitial: boolean;
+  readonly point: Node;
+  readonly state: AnalysisState;
+  readonly whole: { readonly held: readonly Held[]; readonly initial?: Held | undefined };
+}): boolean {
+  if (input.blocked) {
+    return false;
   }
   const definiteEnumerable =
-    bodyHeld.initial === undefined ||
-    filteredDescriptors.activeMetadata.some(
-      (each) => each.enumerableBody && definitelyBefore(each.node, point),
+    !input.hasBodyInitial ||
+    input.activeMetadata.some(
+      (each) => each.enumerableBody && definitelyBefore(each.node, input.point),
     );
-  if (definiteEnumerable && whole.initial !== undefined && whole.held.length === 0) {
-    return { bodies, overwrites: true };
+  if (definiteEnumerable && input.whole.initial !== undefined && input.whole.held.length === 0) {
+    return true;
   }
-  const wholeEntries = whole.initial === undefined ? whole.held : [whole.initial, ...whole.held];
-  const overwrites =
-    wholeEntries.length > 0 &&
-    wholeEntries.every((each) => {
+  const entries =
+    input.whole.initial === undefined
+      ? input.whole.held
+      : [input.whole.initial, ...input.whole.held];
+  return (
+    entries.length > 0 &&
+    entries.every((each) => {
       return (
         each.keys.length === 0 &&
-        bodiesOf(each.value, readingPoint(each.value, point), state).overwrites
+        bodiesOf(each.value, readingPoint(each.value, input.point), input.state).overwrites
       );
-    });
-  return { bodies, overwrites };
+    })
+  );
 }
 
 /** Body reading selected by one held options path, preserving ambiguity across member cycles. */
@@ -487,38 +423,19 @@ function projectedHolderReading(
   const readings = holders.expressions.map((each) =>
     bodiesOf(each, readingPoint(each, point), state),
   );
+  const ambiguous =
+    holders.ambiguous || holders.typedFormData || readings.some((each) => each.ambiguous === true);
   return {
-    ambiguous:
-      holders.ambiguous ||
-      holders.typedFormData ||
-      readings.some((each) => each.ambiguous === true),
+    ambiguous,
     bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
+    enumerableBodies: uniqueExpressions(readings.flatMap((each) => enumerableBodiesOf(each))),
+    noEnumerableBody:
+      !ambiguous &&
+      holders.closed &&
+      readings.length > 0 &&
+      readings.every((each) => each.noEnumerableBody === true),
     overwrites: false,
   };
-}
-
-/** Evaluation point where an option source's own fields are read rather than forwarded by reference. */
-function readingPoint(expression: Expression, point: Node): Node {
-  const value = unwrapped(expression);
-  return isCallExpression(value) || isObjectLiteralExpression(value) ? value : point;
-}
-
-/** Whether `change` can execute before `point`, from another owner, on a shared holder, or via a loop. */
-function reachesHolderRead(change: Node, holder: VariableDeclaration, point: Node): boolean {
-  if (!framedPossibleBranch(change)) {
-    return false;
-  }
-  const owner = executionOwner(point);
-  if (
-    executionOwner(change) !== owner ||
-    executionOwner(holder) !== owner ||
-    change.pos < point.end ||
-    destructuredFirst(change, point) ||
-    ownerKeyFirst(change, point)
-  ) {
-    return true;
-  }
-  return repeatedFrameRead(change, point, holder, owner);
 }
 
 /** What a surviving property proves or may add to the possible request bodies. */
@@ -535,7 +452,16 @@ function propertyBodies(
   if (key === BODY_KEY) {
     return { bodies: held === undefined ? [] : [held], overwrites: true };
   }
-  return key === undefined && held !== undefined && isFormData(held, { ...state, seen: new Set() })
-    ? { ...previous, bodies: uniqueExpressions([...previous.bodies, held]) }
-    : previous;
+  if (key !== undefined) {
+    return previous;
+  }
+  const cleared: BodyReading =
+    previous.noEnumerableBody === true ? { ...previous, noEnumerableBody: false } : previous;
+  return held !== undefined && isFormData(held, { ...state, seen: new Set() })
+    ? {
+        ...cleared,
+        bodies: uniqueExpressions([...cleared.bodies, held]),
+        enumerableBodies: uniqueExpressions([...enumerableBodiesOf(cleared), held]),
+      }
+    : cleared;
 }

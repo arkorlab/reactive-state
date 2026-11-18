@@ -3,7 +3,9 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
+  isBinaryExpression,
   isCallExpression,
+  isConditionalExpression,
   isElementAccessExpression,
   isIdentifier,
   isObjectLiteralExpression,
@@ -12,12 +14,14 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   type Node,
+  type SourceFile,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
-import type { Held } from './framed-held-members.ts';
+import { framedHeldValues, type Held } from './framed-held-members.ts';
 import { framedObjectSources } from './framed-object-members.ts';
 import {
   type ChildCandidate,
@@ -378,4 +382,112 @@ export function peeledMemberHolder(node: Expression): Held | undefined {
     current = unwrapped(current.expression);
   }
   return keys.length === 0 ? undefined : { keys, value: current };
+}
+
+/** Deduplicates candidate body expressions by AST node identity. */
+export function uniqueExpressions(items: readonly Expression[]): readonly Expression[] {
+  return items.length <= 1 ? items : [...new Set(items)];
+}
+
+/** The alternatives an expression can select as its value, without interpreting its condition. */
+export function selectedValues(value: Expression): readonly Expression[] | undefined {
+  if (isConditionalExpression(value)) {
+    return [value.whenTrue, value.whenFalse];
+  }
+  if (!isBinaryExpression(value)) {
+    return undefined;
+  }
+  if (value.operatorToken.kind === SyntaxKind.CommaToken) {
+    return [value.right];
+  }
+  return [
+    SyntaxKind.AmpersandAmpersandToken,
+    SyntaxKind.BarBarToken,
+    SyntaxKind.QuestionQuestionToken,
+  ].includes(value.operatorToken.kind)
+    ? [value.left, value.right]
+    : undefined;
+}
+
+const NESTED_DESCRIPTOR_PROJECTIONS = new WeakMap<SourceFile, Map<string, readonly Expression[]>>();
+
+function descriptorProjectionCache(file: SourceFile): Map<string, readonly Expression[]> {
+  const cached = NESTED_DESCRIPTOR_PROJECTIONS.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const created = new Map<string, readonly Expression[]>();
+  NESTED_DESCRIPTOR_PROJECTIONS.set(file, created);
+  return created;
+}
+
+/** Follows identifiers, branches, and literal member paths to extract nested descriptor values. */
+export function nestedDescriptorValues(
+  node: Expression,
+  keys: readonly string[],
+  seen: ReadonlySet<Expression>,
+): readonly Expression[] {
+  return resolveNestedDescriptorValues(
+    node,
+    keys,
+    seen,
+    descriptorProjectionCache(node.getSourceFile()),
+  ).values;
+}
+
+function resolveNestedDescriptorValues(
+  node: Expression,
+  keys: readonly string[],
+  seen: ReadonlySet<Expression>,
+  memo: Map<string, readonly Expression[]>,
+): { readonly cycled: boolean; readonly values: readonly Expression[] } {
+  const value = unwrapped(node);
+  if (keys.length === 0) {
+    return { cycled: false, values: [value] };
+  }
+  if (seen.has(value)) {
+    return { cycled: true, values: [] };
+  }
+  const cacheKey = `${String(value.pos)}:${String(value.end)}:${String(keys.length)}:${keys.join('\0')}`;
+  const cached = memo.get(cacheKey);
+  if (cached !== undefined) {
+    return { cycled: false, values: cached };
+  }
+  const nextSeen = new Set([...seen, value]);
+  let cycled = false;
+  const collected: Expression[] = [];
+  for (const entry of nestedProjectionEntries(value, keys)) {
+    const sub = resolveNestedDescriptorValues(entry.value, entry.keys, nextSeen, memo);
+    if (sub.cycled) {
+      cycled = true;
+    }
+    collected.push(...sub.values);
+  }
+  const values = uniqueExpressions(collected);
+  if (!cycled) {
+    memo.set(cacheKey, values);
+  }
+  return { cycled, values };
+}
+
+function nestedProjectionEntries(
+  value: Expression,
+  keys: readonly string[],
+): readonly { readonly keys: readonly string[]; readonly value: Expression }[] {
+  const alternatives = selectedValues(value);
+  if (alternatives !== undefined) {
+    return alternatives.map((each) => ({ keys, value: each }));
+  }
+  if (isIdentifier(value)) {
+    const held = framedHeldValues(value, keys, value);
+    if (held === undefined) {
+      return [];
+    }
+    return held.initial === undefined ? held.held : [held.initial, ...held.held];
+  }
+  const sources = framedObjectSources(value, keys);
+  if (sources === undefined) {
+    return [];
+  }
+  return sources.filter((each) => each.value !== value || each.keys.length !== keys.length);
 }

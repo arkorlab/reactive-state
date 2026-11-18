@@ -154,6 +154,61 @@ const CASES = [
     expected: MULTIPART_REASON,
     id: 'deleted-initial-body-before-omitted-writable-define-property-blocks-later-cut-pin',
   },
+  {
+    body: "return new Request('https://example.com/', { method: 'POST', ...Object.defineProperty({}, 'body', { value: new FormData() }) });",
+    expected: undefined,
+    id: 'spread-inline-define-property-default-non-enumerable-form-data-ignored',
+  },
+  {
+    body: "return new Request('https://example.com/', { method: 'POST', ...Object.defineProperty({ body: 'old' }, 'body', { value: new FormData(), enumerable: false }) });",
+    expected: undefined,
+    id: 'spread-inline-define-property-explicit-enumerable-false-on-prior-enumerable-ignored',
+  },
+  {
+    body: "return new Request('https://example.com/', Object.assign({ method: 'POST' }, Object.defineProperty({}, 'body', { value: new FormData() })));",
+    expected: undefined,
+    id: 'object-assign-source-define-property-default-non-enumerable-form-data-ignored',
+  },
+  {
+    body: "const defined = Object.defineProperty({}, 'body', { value: new FormData() }); return new Request('https://example.com/', { method: 'POST', ...defined });",
+    expected: undefined,
+    id: 'const-alias-of-define-property-default-non-enumerable-form-data-spread-ignored',
+  },
+  {
+    body: "const local: RequestInit = {}; Object.defineProperty(local, 'body', { value: new FormData() }); return new Request('https://example.com/', { method: 'POST', ...local });",
+    expected: undefined,
+    id: 'const-holder-define-property-default-non-enumerable-form-data-spread-ignored',
+  },
+  {
+    body: "options = {}; Object.defineProperty(options, 'body', { value: new FormData() }); return new Request('https://example.com/', { method: 'POST', ...options });",
+    expected: undefined,
+    id: 'parameter-fresh-define-property-default-non-enumerable-form-data-spread-ignored',
+  },
+  {
+    body: "return new Request('https://example.com/', { method: 'POST', ...Object.create(null, { body: { value: new FormData() } }) });",
+    expected: undefined,
+    id: 'spread-object-create-descriptors-default-non-enumerable-form-data-ignored',
+  },
+  {
+    body: "return new Request('https://example.com/', { ...Object.defineProperty({ body: 'old' }, 'body', { value: new FormData() }) });",
+    expected: MULTIPART_REASON,
+    id: 'spread-inline-define-property-omitted-enumerable-on-prior-enumerable-body-flagged-pin',
+  },
+  {
+    body: "const local: RequestInit = { body: 'old' }; Object.defineProperty(local, 'body', { value: new FormData() }); return new Request('https://example.com/', { ...local });",
+    expected: MULTIPART_REASON,
+    id: 'const-holder-prior-enumerable-omitted-enumerable-define-property-spread-flagged-pin',
+  },
+  {
+    body: "return new Request('https://example.com/', Object.defineProperty({}, 'body', { value: new FormData() }));",
+    expected: MULTIPART_REASON,
+    id: 'direct-define-property-default-non-enumerable-form-data-flagged-pin',
+  },
+  {
+    body: "return new Request('https://example.com/', Object.assign(Object.defineProperty({}, 'body', { value: new FormData() }), { method: 'POST' }));",
+    expected: MULTIPART_REASON,
+    id: 'object-assign-target-define-property-default-non-enumerable-form-data-direct-flagged-pin',
+  },
 ] as const;
 
 describe('multipart enumerability checks across spreads, Object.assign, and descriptor mutators', () => {

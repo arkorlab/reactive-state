@@ -36,6 +36,7 @@ import {
   type ObjectLiteralExpression,
   type ParameterDeclaration,
   type PropertyName,
+  type SourceFile,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -309,50 +310,88 @@ const ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 const HANDING_CONSTRUCTORS: ReadonlySet<string> = new Set(['FormData', 'Object', 'Proxy']);
 
+interface OpaqueFileCache {
+  readonly active: Set<string>;
+  cuts: number;
+  readonly memo: Map<string, boolean>;
+}
+
+interface OpaqueWalkState {
+  readonly cache: OpaqueFileCache;
+  readonly callbacks: ProjectionCallbacks;
+}
+
+const OPAQUE_LEAF_CACHE = new WeakMap<SourceFile, OpaqueFileCache>();
+
+function opaqueLeafCache(file: SourceFile): OpaqueFileCache {
+  const cached = OPAQUE_LEAF_CACHE.get(file);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const created: OpaqueFileCache = { active: new Set(), cuts: 0, memo: new Map() };
+  OPAQUE_LEAF_CACHE.set(file, created);
+  return created;
+}
+
 /** Whether `leaf` is an opaque expression whose concrete runtime value is not proven non-`FormData`. */
 export function leafMayBeOpaqueFormData(
   leaf: Expression,
   point: Node,
   callbacks: ProjectionCallbacks,
 ): boolean {
-  return checkOpaqueLeaf(leaf, point, callbacks, new Set());
+  return checkOpaqueLeaf(leaf, point, { cache: opaqueLeafCache(leaf.getSourceFile()), callbacks });
 }
 
-/** Recursive opaque-leaf check guarded by `(value.pos, point.pos)` against binding cycles. */
-function checkOpaqueLeaf(
-  leaf: Expression,
-  point: Node,
-  callbacks: ProjectionCallbacks,
-  seen: Set<string>,
-): boolean {
-  if (callbacks.isAssertedFormData(leaf, [])) {
+/** Recursive opaque-leaf check separating active cycle trail from cycle-free memoized results. */
+function checkOpaqueLeaf(leaf: Expression, point: Node, state: OpaqueWalkState): boolean {
+  if (state.callbacks.isAssertedFormData(leaf, [])) {
     return true;
   }
   const value = unwrapped(leaf);
-  const visitKey = `${String(value.pos)}:${String(point.pos)}`;
-  if (seen.has(visitKey)) {
+  const visitKey = `${String(value.pos)}:${String(value.end)}:${String(point.pos)}:${String(point.end)}`;
+  const cached = state.cache.memo.get(visitKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (state.cache.active.has(visitKey)) {
+    state.cache.cuts += 1;
     return true;
   }
-  seen.add(visitKey);
-  const alternatives = callbacks.selectValues(value);
+  const cutsBefore = state.cache.cuts;
+  state.cache.active.add(visitKey);
+  let result: boolean;
+  try {
+    result = evaluateOpaqueValue(value, point, state);
+  } finally {
+    state.cache.active.delete(visitKey);
+  }
+  if (state.cache.cuts === cutsBefore) {
+    state.cache.memo.set(visitKey, result);
+  }
+  return result;
+}
+
+/** Evaluates an unwrapped non-cached leaf expression against syntax, binary, binding, and member shapes. */
+function evaluateOpaqueValue(value: Expression, point: Node, state: OpaqueWalkState): boolean {
+  const alternatives = state.callbacks.selectValues(value);
   if (alternatives !== undefined) {
-    return alternatives.some((each) => checkOpaqueLeaf(each, point, callbacks, seen));
+    return alternatives.some((each) => checkOpaqueLeaf(each, point, state));
   }
   if (isClosedNonFormDataSyntax(value)) {
     return false;
   }
   if (isBinaryExpression(value)) {
-    return inspectBinaryLeaf(value, point, callbacks, seen);
+    return inspectBinaryLeaf(value, point, state);
   }
   if (isNewExpression(value)) {
     const ctor = globalPathOf(unwrapped(value.expression))?.join('.');
     return ctor === undefined || HANDING_CONSTRUCTORS.has(ctor);
   }
   if (isIdentifier(value)) {
-    return inspectIdentifierLeaf(value, point, callbacks, seen);
+    return inspectIdentifierLeaf(value, point, state);
   }
   const peeled = peeledMemberHolder(value);
-  return peeled === undefined || inspectMemberLeaf(peeled, point, callbacks, seen);
+  return peeled === undefined || inspectMemberLeaf(peeled, point, state);
 }
 
 /** Whether `value` is literal, container, callable, or unary syntax that never evaluates to `FormData`. */
@@ -389,31 +428,18 @@ function isClosedNonFormDataSyntax(value: Expression): boolean {
 }
 
 /** Evaluates binary expressions, recursing into assignment operands and treating arithmetic/comparisons as non-`FormData`. */
-function inspectBinaryLeaf(
-  value: BinaryExpression,
-  point: Node,
-  callbacks: ProjectionCallbacks,
-  seen: Set<string>,
-): boolean {
+function inspectBinaryLeaf(value: BinaryExpression, point: Node, state: OpaqueWalkState): boolean {
   if (!ASSIGNMENT_OPERATORS.has(value.operatorToken.kind)) {
     return false;
   }
   if (value.operatorToken.kind === SyntaxKind.EqualsToken) {
-    return checkOpaqueLeaf(value.right, point, callbacks, seen);
+    return checkOpaqueLeaf(value.right, point, state);
   }
-  return (
-    checkOpaqueLeaf(value.left, point, callbacks, seen) ||
-    checkOpaqueLeaf(value.right, point, callbacks, seen)
-  );
+  return checkOpaqueLeaf(value.left, point, state) || checkOpaqueLeaf(value.right, point, state);
 }
 
 /** Evaluates an identifier leaf across bound variables, parameters, and `undefined`. */
-function inspectIdentifierLeaf(
-  id: Identifier,
-  point: Node,
-  callbacks: ProjectionCallbacks,
-  seen: Set<string>,
-): boolean {
+function inspectIdentifierLeaf(id: Identifier, point: Node, state: OpaqueWalkState): boolean {
   if (id.text === 'undefined' && frameDeclarationOf(id) === undefined) {
     return false;
   }
@@ -422,11 +448,11 @@ function inspectIdentifierLeaf(
     return true;
   }
   if (isVariableDeclaration(selected.binding)) {
-    return inspectVariableLeaf(id, selected.binding, point, { callbacks, seen });
+    return inspectVariableLeaf(id, selected.binding, point, state);
   }
   return (
     !isParameterDeclaration(selected.binding) ||
-    inspectParameterLeaf(id, selected.binding, point, { callbacks, seen })
+    inspectParameterLeaf(id, selected.binding, point, state)
   );
 }
 
@@ -435,9 +461,9 @@ function inspectVariableLeaf(
   id: Identifier,
   declaration: VariableDeclaration,
   point: Node,
-  state: { readonly callbacks: ProjectionCallbacks; readonly seen: Set<string> },
+  state: OpaqueWalkState,
 ): boolean {
-  const { callbacks, seen } = state;
+  const { callbacks } = state;
   if (declaration.type?.kind === SyntaxKind.StringKeyword) {
     return false;
   }
@@ -452,7 +478,7 @@ function inspectVariableLeaf(
   const defaults = isIdentifier(declaration.name)
     ? []
     : callbacks.bindingDefaults(id, declaration.name);
-  if (defaults.some((each) => checkOpaqueLeaf(each, each, callbacks, seen))) {
+  if (defaults.some((each) => checkOpaqueLeaf(each, each, state))) {
     return true;
   }
   const liveHeld = held.held.filter(
@@ -468,8 +494,8 @@ function inspectVariableLeaf(
   }
   return entries.some((entry) => {
     return entry.keys.length === 0
-      ? checkOpaqueLeaf(entry.value, entry.value, callbacks, seen)
-      : inspectMemberLeaf(entry, point, callbacks, seen);
+      ? checkOpaqueLeaf(entry.value, entry.value, state)
+      : inspectMemberLeaf(entry, point, state);
   });
 }
 
@@ -478,17 +504,16 @@ function inspectParameterLeaf(
   id: Identifier,
   parameter: ParameterDeclaration,
   point: Node,
-  state: { readonly callbacks: ProjectionCallbacks; readonly seen: Set<string> },
+  state: OpaqueWalkState,
 ): boolean {
-  const { callbacks, seen } = state;
-  const resolved = callbacks.readParameter(id, parameter);
+  const resolved = state.callbacks.readParameter(id, parameter);
   if (resolved.dynamicOpaque === true) {
     return true;
   }
   const sourceOpaque = resolved.sources.some((entry) => {
     return entry.keys.length === 0
-      ? checkOpaqueLeaf(entry.value, point, callbacks, seen)
-      : inspectMemberLeaf(entry, point, callbacks, seen);
+      ? checkOpaqueLeaf(entry.value, point, state)
+      : inspectMemberLeaf(entry, point, state);
   });
   if (resolved.replaced && resolved.ambiguous !== true) {
     return sourceOpaque;
@@ -497,13 +522,8 @@ function inspectParameterLeaf(
 }
 
 /** Checks whether a peeled member path leaf (`obj.prop`) may resolve to an opaque value. */
-function inspectMemberLeaf(
-  peeled: Held,
-  point: Node,
-  callbacks: ProjectionCallbacks,
-  seen: Set<string>,
-): boolean {
-  const sub = inspectHeldPath(peeled, point, callbacks);
+function inspectMemberLeaf(peeled: Held, point: Node, state: OpaqueWalkState): boolean {
+  const sub = inspectHeldPath(peeled, point, state.callbacks);
   if (sub.ambiguous || sub.typedFormData) {
     return true;
   }
@@ -516,8 +536,8 @@ function inspectMemberLeaf(
     return (
       selected === undefined ||
       !hasNarrowingTypeAnnotation(selected.binding.type) ||
-      callbacks.isBindingTypedFormData(holder, peeled.keys)
+      state.callbacks.isBindingTypedFormData(holder, peeled.keys)
     );
   }
-  return sub.expressions.some((expr) => checkOpaqueLeaf(expr, point, callbacks, seen));
+  return sub.expressions.some((expr) => checkOpaqueLeaf(expr, point, state));
 }

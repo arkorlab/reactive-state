@@ -391,6 +391,36 @@ const CASES = [
     source:
       "export function build() { let inner: { body: BodyInit } = { body: new FormData() }; const box = { inner }; inner = { body: 'fixed' }; const { body } = box.inner; return new Response(body); }",
   },
+  {
+    expected: undefined,
+    id: 'typed-union-conditional-same-string-variable-diamond-response',
+    source:
+      "export function build(flag: boolean) { const text = 'fixed'; const body: FormData | string = flag ? text : text; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'typed-holder-projected-conditional-same-string-variable-diamond-response',
+    source:
+      "export function build(flag: boolean) { const text = 'fixed'; const box: { body: FormData | string } = { body: flag ? text : text }; const { body } = box; return new Response(body); }",
+  },
+  {
+    expected: undefined,
+    id: 'typed-union-deep-24-level-alias-diamond-response',
+    source:
+      "export function build(flag: boolean) { const m0 = 'fixed'; const m1 = flag ? m0 : m0; const m2 = flag ? m1 : m1; const m3 = flag ? m2 : m2; const m4 = flag ? m3 : m3; const m5 = flag ? m4 : m4; const m6 = flag ? m5 : m5; const m7 = flag ? m6 : m6; const m8 = flag ? m7 : m7; const m9 = flag ? m8 : m8; const m10 = flag ? m9 : m9; const m11 = flag ? m10 : m10; const m12 = flag ? m11 : m11; const m13 = flag ? m12 : m12; const m14 = flag ? m13 : m13; const m15 = flag ? m14 : m14; const m16 = flag ? m15 : m15; const m17 = flag ? m16 : m16; const m18 = flag ? m17 : m17; const m19 = flag ? m18 : m18; const m20 = flag ? m19 : m19; const m21 = flag ? m20 : m20; const m22 = flag ? m21 : m21; const m23 = flag ? m22 : m22; const m24 = flag ? m23 : m23; const body: FormData | string = m24; return new Response(body); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-union-genuine-loop-comma-self-cycle-still-flagged-pin',
+    source:
+      "export function build(flag: boolean) { let text: FormData | string = 'fixed'; while (flag) { text = (0, text); } return new Response(text); }",
+  },
+  {
+    expected: MULTIPART_REASON,
+    id: 'typed-holder-mutual-loop-cycle-terminates-and-flags-pin',
+    source:
+      "export function build(flag: boolean) { let text: FormData | string = 'fixed'; let box: { v: FormData | string } = { v: 'fixed' }; while (flag) { box = { v: text }; text = box.v; } return new Response(text); }",
+  },
 ] as const;
 
 describe('multipart destructured parameter reassignments, expansion cycles, and descriptor cuts', () => {

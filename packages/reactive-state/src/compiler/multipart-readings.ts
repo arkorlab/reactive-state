@@ -5,26 +5,29 @@ import {
   type Identifier,
   isBinaryExpression,
   isBlock,
-  isConditionalExpression,
+  isCallExpression,
   isExpressionStatement,
   isIdentifier,
   isNewExpression,
+  isObjectLiteralExpression,
   isParameterDeclaration,
   isSourceFile,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
   type ParameterDeclaration,
-  SyntaxKind,
+  type SourceFile,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { ownerKeyFirst } from './class-key-order.ts';
 import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { framedHeldValues, type Held } from './framed-held-members.ts';
+import { framedMemberDeletes } from './framed-member-writes.ts';
 import { framedValueShape } from './framed-values.ts';
 import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
@@ -36,7 +39,12 @@ import {
   lastDefiniteBindingWrite,
   type ProjectionCallbacks,
 } from './multipart-held-bindings.ts';
-import { inspectHeldPath, peeledMemberHolder } from './multipart-held-paths.ts';
+import {
+  inspectHeldPath,
+  peeledMemberHolder,
+  selectedValues,
+  uniqueExpressions,
+} from './multipart-held-paths.ts';
 import {
   NO_PATTERN_REASSIGNMENT,
   patternBindingReassignments,
@@ -49,6 +57,8 @@ import {
 export interface BodyReading {
   readonly ambiguous?: boolean | undefined;
   readonly bodies: readonly Expression[];
+  readonly enumerableBodies?: readonly Expression[] | undefined;
+  readonly noEnumerableBody?: boolean | undefined;
   readonly overwrites: boolean;
 }
 
@@ -69,6 +79,14 @@ export interface ParameterResolution {
 }
 
 export const EMPTY_BODIES: BodyReading = { bodies: [], overwrites: false };
+export const PLAIN_EMPTY_BODIES: BodyReading = {
+  bodies: [],
+  enumerableBodies: [],
+  noEnumerableBody: true,
+  overwrites: false,
+};
+
+const BODY_KEY = 'body';
 
 const FORM_DATA_NAMES: ReadonlySet<string> = new Set(['FormData']);
 
@@ -97,44 +115,93 @@ export function startAnalysis(): AnalysisState {
   };
 }
 
-/** Deduplicates candidate body expressions by AST node identity. */
-export function uniqueExpressions(items: readonly Expression[]): readonly Expression[] {
-  return items.length <= 1 ? items : [...new Set(items)];
+/** Enumerable own `body` candidates of `reading`, defaulting to `reading.bodies` when unfiltered. */
+export function enumerableBodiesOf(reading: BodyReading): readonly Expression[] {
+  return reading.enumerableBodies ?? reading.bodies;
 }
 
-/** Combines an earlier body reading with a spread source that may or may not define `body`. */
+/** Combines alternative branch `BodyReading`s across conditionals and logical expressions. */
+export function combineBranchReadings(readings: readonly BodyReading[]): BodyReading {
+  return {
+    ambiguous: readings.some((each) => each.ambiguous === true),
+    bodies: uniqueExpressions(readings.flatMap((each) => each.bodies)),
+    enumerableBodies: uniqueExpressions(readings.flatMap((each) => enumerableBodiesOf(each))),
+    noEnumerableBody:
+      readings.length > 0 && readings.every((each) => each.noEnumerableBody === true),
+    overwrites: readings.length > 0 && readings.every((each) => each.overwrites),
+  };
+}
+
+/** Combines an earlier body reading with a spread source that copies only enumerable own properties. */
 export function mergeSpread(previous: BodyReading, spread: BodyReading): BodyReading {
+  if (spread.noEnumerableBody === true && spread.ambiguous !== true) {
+    return previous;
+  }
+  const spreadBodies = enumerableBodiesOf(spread);
+  const prevEnumerable = enumerableBodiesOf(previous);
   return {
     ambiguous: spread.overwrites
       ? Boolean(spread.ambiguous)
       : Boolean(previous.ambiguous) || Boolean(spread.ambiguous),
     bodies: uniqueExpressions(
-      spread.overwrites ? spread.bodies : [...previous.bodies, ...spread.bodies],
+      spread.overwrites ? spreadBodies : [...previous.bodies, ...spreadBodies],
+    ),
+    enumerableBodies: uniqueExpressions(
+      spread.overwrites ? spreadBodies : [...prevEnumerable, ...spreadBodies],
     ),
     overwrites: previous.overwrites || spread.overwrites,
   };
 }
 
-/** The alternatives an expression can select as its value, without interpreting its condition. */
-export function selectedValues(value: Expression): readonly Expression[] | undefined {
-  if (isConditionalExpression(value)) {
-    return [value.whenTrue, value.whenFalse];
-  }
-  if (isBinaryExpression(value)) {
-    if (value.operatorToken.kind === SyntaxKind.CommaToken) {
-      return [value.right];
+/** Whether `name`'s declared `'body'` type names `FormData` while surviving `bodies` carry an opaque leaf. */
+export function opaqueTypedHolderBodies(
+  name: Identifier,
+  bodies: readonly Expression[],
+  point: Node,
+): boolean {
+  return (
+    bindingTypedAtMemberPath(name, [BODY_KEY]) && bodies.some((each) => opaqueBodyLeaf(each, point))
+  );
+}
+
+/** Whether any reachable deletion or whole-object hand-off on `holder` may remove `'body'`. */
+export function holderMayDeleteBody(
+  file: SourceFile,
+  holder: VariableDeclaration,
+  reaches: (change: Node) => boolean,
+): boolean {
+  return framedMemberDeletes(file).some((each) => {
+    if (each.holder !== holder || !reaches(each.node)) {
+      return false;
     }
-    if (
-      [
-        SyntaxKind.AmpersandAmpersandToken,
-        SyntaxKind.BarBarToken,
-        SyntaxKind.QuestionQuestionToken,
-      ].includes(value.operatorToken.kind)
-    ) {
-      return [value.left, value.right];
-    }
+    return each.handed
+      ? each.path.length === 0
+      : each.path.length === 1 && each.path[0]?.includes(BODY_KEY) !== false;
+  });
+}
+
+/** Evaluation point where an option source's own fields are read rather than forwarded by reference. */
+export function readingPoint(expression: Expression, point: Node): Node {
+  const value = unwrapped(expression);
+  return isCallExpression(value) || isObjectLiteralExpression(value) ? value : point;
+}
+
+/** Whether `change` can execute before `point`, from another owner, on a shared holder, or via a loop. */
+export function reachesHolderRead(change: Node, holder: VariableDeclaration, point: Node): boolean {
+  if (!framedPossibleBranch(change)) {
+    return false;
   }
-  return undefined;
+  const owner = executionOwner(point);
+  if (
+    executionOwner(change) !== owner ||
+    executionOwner(holder) !== owner ||
+    change.pos < point.end ||
+    destructuredFirst(change, point) ||
+    ownerKeyFirst(change, point)
+  ) {
+    return true;
+  }
+  return repeatedFrameRead(change, point, holder, owner);
 }
 
 /** Unfolds concrete expressions and cycle/type flags along a `Held` member path at `point`. */
@@ -449,36 +516,4 @@ export function bindingTypedAtMemberPath(id: Identifier, keys: readonly string[]
     selected?.binding.type !== undefined &&
     namesLocalMemberType(selected.binding.type, [...selected.keys, ...keys], FORM_DATA_NAMES)
   );
-}
-
-/** Array expressions assigned or defaulted on a variable or parameter spread source. */
-export function spreadHolderArrays(
-  name: Identifier,
-  binding: VariableDeclaration | ParameterDeclaration,
-  point: Node,
-): { readonly ambiguous: boolean; readonly expressions: readonly Expression[] } {
-  if (isVariableDeclaration(binding)) {
-    const held = framedHeldValues(name, [], point);
-    const liveHeld =
-      held === undefined
-        ? []
-        : held.held.filter((entry) => !isUnrepeatedSelfWrite(entry.value, point, binding));
-    const entries =
-      held === undefined ? [] : [...(held.initial ? [held.initial] : []), ...liveHeld];
-    const readings = entries.map((each) => resolveHeldReading(each, point, name));
-    return {
-      ambiguous: readings.some((each) => each.ambiguous || each.typedFormData),
-      expressions: readings.flatMap((each) => each.expressions),
-    };
-  }
-  const resolved = parameterValues(name, binding);
-  const readings = resolved.sources.map((each) => resolveHeldReading(each, point, name));
-  const sourceValues = readings.flatMap((each) => each.expressions);
-  return {
-    ambiguous: readings.some((each) => each.ambiguous || each.typedFormData),
-    expressions:
-      resolved.replaced || binding.initializer === undefined
-        ? sourceValues
-        : [binding.initializer, ...sourceValues],
-  };
 }
