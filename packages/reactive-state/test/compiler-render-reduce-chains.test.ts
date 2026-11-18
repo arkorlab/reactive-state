@@ -47,6 +47,8 @@ const PUSH = '.reduce((out,value)=>{out.push(value);return out;},[])';
 const TEXT = '.reduce((text,value)=>text+String(value.length),"")';
 const FILTER = '.filter(()=>true)';
 const MAP = '.map((value)=>value)';
+const NAMED_MAP = '.map(identity)';
+const IDENTITY = 'const identity=(value:unknown)=>value;';
 
 const CASES = [
   { id: 'reductions-building-an-array', stage: SPREAD, verdict: 'refused' },
@@ -54,6 +56,7 @@ const CASES = [
   { id: 'reductions-without-an-initial-value-pin', stage: BARE, verdict: 'refused' },
   { id: 'reductions-pushing-into-the-accumulator', stage: PUSH, verdict: 'refused' },
   { id: 'reductions-building-text-pin', stage: TEXT, verdict: 'taken' },
+  { id: 'maps-with-a-named-callback', stage: NAMED_MAP, pre: IDENTITY, verdict: 'refused' },
   { id: 'filters-pin', stage: FILTER, verdict: 'refused' },
   { id: 'maps-pin', stage: MAP, verdict: 'refused' },
   {
@@ -84,9 +87,11 @@ async function verdictOf(source: string): Promise<string> {
 describe('a pipeline of array methods in a tag', () => {
   it.each(CASES)(
     '$id',
-    async ({ stage, verdict }) => {
+    async (row) => {
+      const { stage, verdict } = row;
+      const pre = 'pre' in row ? row.pre : '';
       const tag = `(_s:TemplateStringsArray,...values:unknown[])=>String(values${stage.repeat(STAGES)})`;
-      const source = `export function Widget(){const tag=${tag};return <p>{tag\`\${new Date(0)}\`}</p>;}`;
+      const source = `${pre}export function Widget(){const tag=${tag};return <p>{tag\`\${new Date(0)}\`}</p>;}`;
 
       await expect(verdictOf(source)).resolves.toBe(verdict);
     },
