@@ -35,7 +35,11 @@ import {
   type TargetContext,
   valueIdentityKey,
 } from './statement-call-classes.ts';
-import { activateEscapedExpression, type EscapeDriver } from './statement-call-escapes.ts';
+import {
+  activateArrayReceiver,
+  activateEscapedExpression,
+  type EscapeDriver,
+} from './statement-call-escapes.ts';
 import { projectMemberFromValue } from './statement-call-members.ts';
 import {
   observeAssignmentDestructuring,
@@ -324,6 +328,7 @@ function handleCallExpression(node: CallExpression, state: WalkState): void {
   } else {
     invokeExpression(node.expression, state);
     invokeBorrowedReceiver(node, state);
+    activateArrayReceiver(node, state.driver);
   }
   for (const arg of node.arguments) {
     activateEscapedExpression(isSpreadElement(arg) ? arg.expression : arg, state.driver);

@@ -1,13 +1,16 @@
 import {
+  type CallExpression,
   type ClassDeclaration,
   type ClassExpression,
   isArrayLiteralExpression,
   isClassDeclaration,
   isClassExpression,
+  isElementAccessExpression,
   isGetAccessorDeclaration,
   isMethodDeclaration,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
   isSetAccessorDeclaration,
@@ -34,6 +37,7 @@ import {
   extendsExpressionOf,
   formatExcludedKeys,
   hasModifier,
+  isArrayIndexKey,
   isCallableNode,
   isDeferredMember,
   isErasedOrAmbient,
@@ -41,8 +45,9 @@ import {
   nodeIdOf,
   OBJECT_REST_KIND,
   type ScopeTable,
+  unwrapExpression,
 } from './statement-call-scopes.ts';
-import { resolveTargets } from './statement-call-targets.ts';
+import { resolveTargets, staticAccessKey } from './statement-call-targets.ts';
 import { staticPropertyNameKey } from './statement-call-writes.ts';
 
 export interface EscapeDriver {
@@ -63,6 +68,37 @@ export function activateEscapedExpression(expr: Node, driver: EscapeDriver): voi
     const targets = resolveTargets(expr, driver.ctx, EMPTY_NODE_SET, seenBindings);
     for (const target of targets) {
       activateWholeValue(target, driver);
+    }
+  });
+}
+
+/**
+ * A method called by name on an array (`forEach`, `map`, `at`, `pop`, `find`) may run, or hand back
+ * to be run, any function the array holds, so the array escapes as an argument does. An element
+ * read by an index (`steps[0]()`) is followed on its own, and `length` is not a call.
+ */
+export function activateArrayReceiver(call: CallExpression, driver: EscapeDriver): void {
+  const callee = unwrapExpression(call.expression);
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) {
+    return;
+  }
+  driver.watch(`arrayrecv:${nodeIdOf(call, driver.scopes)}`, (seenBindings) => {
+    const key = staticAccessKey(callee, driver.scopes, seenBindings);
+    if (key === undefined || isArrayIndexKey(key)) {
+      return;
+    }
+    for (const target of resolveTargets(
+      callee.expression,
+      driver.ctx,
+      EMPTY_NODE_SET,
+      seenBindings,
+    )) {
+      if (
+        target.kind === ARRAY_SLICE_KIND ||
+        (target.kind === 'node' && isArrayLiteralExpression(target.node))
+      ) {
+        activateWholeValue(target, driver);
+      }
     }
   });
 }
