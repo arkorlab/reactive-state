@@ -5,6 +5,9 @@ import {
   type GetAccessorDeclaration,
   type Identifier,
   isArrowFunction,
+  isPropertyAccessExpression,
+  isElementAccessExpression,
+  isBinaryExpression,
   isClassDeclaration,
   isClassExpression,
   isComputedPropertyName,
@@ -86,8 +89,51 @@ export function memberMethods(
     for (const each of classes) {
       memberEntries(each, methods, { statics, fields: true });
     }
+    for (const each of classes) {
+      constructorCallables(each, methods);
+    }
   }
   return methods;
+}
+
+/**
+ * The functions a constructor installs on the instance, `this.bump = () => { … }` or `this['bump'] =
+ * function () { … }`, in the order it runs them, replacing a method or field of the name; a value
+ * that is no function written there leaves what the name held, and the functions the constructor
+ * defines, which run later, install nothing.
+ */
+function constructorCallables(declared: ClassLikeDeclaration, methods: Map<string, Node>): void {
+  const constructor = declared.members.find(
+    (member): member is ConstructorDeclaration =>
+      isConstructorDeclaration(member) && member.body !== undefined,
+  );
+  const visit = (node: Node): void => {
+    if (isArrowFunction(node) || ownsThis(node)) {
+      return;
+    }
+    if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.EqualsToken) {
+      const key = installedKey(unwrapped(node.left));
+      const value = unwrapped(node.right);
+      if (key !== undefined && (isArrowFunction(value) || isFunctionExpression(value))) {
+        methods.set(key, value);
+      }
+    }
+    node.forEachChild(visit);
+  };
+  constructor?.body?.forEachChild(visit);
+}
+
+/** The member `this.name` or `this['name']` names, as text. */
+function installedKey(target: Expression): string | undefined {
+  if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) {
+    return undefined;
+  }
+  if (target.expression.kind !== SyntaxKind.ThisKeyword) {
+    return undefined;
+  }
+  return isPropertyAccessExpression(target)
+    ? keyOf(target.name)
+    : literalKey(unwrapped(target.argumentExpression));
 }
 
 /** A static string, template or numeric property key as its runtime property name. */
