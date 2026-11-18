@@ -86,8 +86,8 @@ const CASES = [
     source: `export function p(): string { const dates = [new Date(0)]; dates[0]!.toString = () => 'fixed'; return \`\${dates}\`; }`,
   },
   {
-    framed: true,
-    id: 'swapped-name-string-refused-before',
+    framed: false,
+    id: 'swapped-name-string-taken-once-the-swap-is-read',
     source:
       "export function p(): string { let a = 'x'; let b = 'y'; [a, b] = [b, a]; return String(a); }",
   },
@@ -258,6 +258,30 @@ const CASES = [
     id: 'name-started-as-an-addition-of-scalars',
     source:
       "export function p(): string { let total = 1 + 2; total = total + 3; return '' + total; }",
+  },
+  {
+    framed: false,
+    id: 'call-result-name-swapped-with-a-scalar-name',
+    source:
+      "export function p(text: string): string { let a = text.replace(/ /g, ''); let b = text.length > 3 ? 'x' : 'y'; [a, b] = [b, a]; return a + b; }",
+  },
+  {
+    framed: true,
+    id: 'call-result-name-swapped-with-a-call-result-name',
+    source:
+      'export function p(text: string): string { let a = text.trim(); let b = text.slice(1); [a, b] = [b, a]; return a + b; }',
+  },
+  {
+    framed: true,
+    id: 'name-swapped-with-an-error-array-name',
+    source:
+      "export function p(error: Error): string { let a: unknown = 'x'; let b: unknown = [error]; [a, b] = [b, a]; return '' + a; }",
+  },
+  {
+    framed: true,
+    id: 'name-given-an-error-array-by-a-pattern-after-a-spread',
+    source:
+      "export function p(error: Error, rest: unknown[]): string { let a: unknown = 'x'; let b: unknown = 'y'; [a, b] = [...rest, [error]]; return '' + b; }",
   },
   {
     framed: false,

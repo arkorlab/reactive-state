@@ -317,7 +317,16 @@ function bindingArrayWords(
  */
 function followedGivens(binding: FrameBinding): boolean {
   if (writtenScalar(binding)) return true;
-  return givenValues(binding).every((given) => given !== undefined && isNoArray(given));
+  return givenValues(binding).every(
+    (given) => given !== undefined && (isNoArray(given) || isScalarName(given)),
+  );
+}
+
+/** Whether a value is a name the code writes as a scalar: what a swap of names gives one of them. */
+function isScalarName(value: Expression): boolean {
+  const name = unwrapped(value);
+  const selected = isIdentifier(name) ? frameBindingOf(name) : undefined;
+  return selected?.keys.length === 0 && writtenScalar(selected.binding);
 }
 
 /**
