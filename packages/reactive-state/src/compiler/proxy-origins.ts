@@ -33,6 +33,7 @@ import {
 import { constructedOrigins, fieldOrigins } from './proxy-constructions.ts';
 import { indirectCall } from './proxy-indirect-calls.ts';
 import { type WrittenMember, writesInto } from './proxy-mutable-writes.ts';
+import { nativeResultOrigins } from './proxy-native-results.ts';
 import {
   holdsObjectLiteral,
   mutatedObjectOrigins,
@@ -393,7 +394,10 @@ function callOrigins(call: CallExpression, at: Origin): readonly Origin[] {
     return returnsOf(call, target, call.arguments, at);
   }
   const indirect = indirectCall(call, at.context);
-  return indirect === undefined ? [] : returnsOf(call, indirect.fn, indirect.given, at);
+  if (indirect !== undefined) {
+    return returnsOf(call, indirect.fn, indirect.given, at);
+  }
+  return path === undefined ? [] : nativeResultOrigins(call, path, at);
 }
 
 /** The returned expressions of `target` run by `call` with `given`, none shown when undefined. */
