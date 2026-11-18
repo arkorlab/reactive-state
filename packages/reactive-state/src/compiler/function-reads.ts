@@ -1,4 +1,5 @@
 import {
+  type BinaryExpression,
   type ElementAccessExpression,
   type Expression,
   isArrayLiteralExpression,
@@ -60,6 +61,19 @@ const BUNDLED: ReadonlySet<string> = new Set(['name', 'toString']);
 
 /** The operators that make text of a function beside them: `+`, `+=`. */
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
+
+/** The operators that answer their left or their right operand: `||`, `??`. */
+const EITHER_OPERAND: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/** The operators that answer their right operand, or a falsy left one: `&&`, `,`, `=`. */
+const RIGHT_OPERAND: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.CommaToken,
+  SyntaxKind.EqualsToken,
+]);
 
 const EXPRESSION_ENTRY_KINDS = new WeakMap<Expression, EntryKind>();
 
@@ -178,7 +192,21 @@ function computeComplexExpressionEntryKind(node: Expression, context: ScanContex
   if (isElementAccessExpression(node)) {
     return elementEntryKind(node, context);
   }
-  return 'unknown';
+  return isBinaryExpression(node) ? operandEntryKind(node, context) : 'unknown';
+}
+
+/**
+ * Classifies an operator that answers one of its operands: `a && b` answers `b` or something falsy,
+ * which no function is; `a || b` and `a ?? b` answer either; `(a, b)` and `a = b` answer `b`.
+ */
+function operandEntryKind(node: BinaryExpression, context: ScanContext): EntryKind {
+  const operator = node.operatorToken.kind;
+  const right = withBranch(context, (branch) => expressionEntryKind(unwrapped(node.right), branch));
+  if (EITHER_OPERAND.has(operator)) {
+    const left = withBranch(context, (branch) => expressionEntryKind(unwrapped(node.left), branch));
+    return combineBranchKinds(left, right);
+  }
+  return RIGHT_OPERAND.has(operator) ? right : 'unknown';
 }
 
 /** Classifies a bracket entry read on an object or array holder, with static or dynamic key. */
