@@ -25,9 +25,11 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
+import { sourceArrayFunction } from './framed-array-functions.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { computedBindingContainer, framedMemberNames } from './framed-keys.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
+import { methodsOf } from './held-methods.ts';
 import { LOCAL_METHODS } from './local-reads.ts';
 import { constantValue } from './numbers.ts';
 import {
@@ -280,7 +282,29 @@ function borrowedGlobalCoerces(
   return false;
 }
 
+/**
+ * A method called by name converts what it is handed as the language's method of that name does,
+ * unless the code shows that the method is one it writes: its own body is read as a helper's.
+ */
 function memberMethodCallCoerces(
+  method: string,
+  unpacked: UnwrappedCall,
+  context: WrapperCoerceContext,
+): boolean {
+  return nativeMethodCoerces(method, unpacked, context) && !sourceOwnMethod(method, unpacked);
+}
+
+/**
+ * Whether the code shows the method called to be a function it writes: one an unmodified object
+ * literal holds, or a method of a class of the module that the receiver is made of or is.
+ */
+function sourceOwnMethod(method: string, unpacked: UnwrappedCall): boolean {
+  if (sourceArrayFunction(unwrapped(unpacked.target))) return true;
+  const holder = unpacked.receiver === undefined ? undefined : unwrapped(unpacked.receiver);
+  return holder !== undefined && isIdentifier(holder) && methodsOf(holder).has(method);
+}
+
+function nativeMethodCoerces(
   method: string,
   unpacked: UnwrappedCall,
   context: WrapperCoerceContext,
