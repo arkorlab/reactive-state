@@ -39,6 +39,7 @@ import {
 import { holderDeclaresArrayElementFunction } from './function-binding-types.ts';
 import { LOGICAL_FORWARDING, propertyAssignmentExpression } from './function-candidate-objects.ts';
 import { objectPostWrites } from './function-entry-writes.ts';
+import { reachesThroughAliases } from './function-holder-aliases.ts';
 import {
   dynamicObjectEntryKind,
   type EntryKind,
@@ -85,13 +86,9 @@ export function containerMemberEntryKind(
   if (base !== 'unknown') {
     return base;
   }
-  const hit = withBranch(context, (branch) => {
-    return mutableHolderReassignmentReachesFunction(
-      holder,
-      [{ key: name, kind: STEP_MEMBER }],
-      branch,
-    );
-  });
+  const hit = withBranch(context, (branch) =>
+    heldReassignmentReachesFunction(holder, [{ key: name, kind: STEP_MEMBER }], branch),
+  );
   return hit ? 'renamed' : 'unknown';
 }
 
@@ -110,19 +107,15 @@ export function containerDynamicEntryKind(holder: Expression, context: ScanConte
   if (viaArray) {
     return 'renamed';
   }
-  const viaMutable = withBranch(context, (branch) => {
-    return mutableHolderReassignmentReachesFunction(
-      holder,
-      [{ kind: STEP_DYNAMIC_MEMBER }],
-      branch,
-    );
-  });
+  const viaMutable = withBranch(context, (branch) =>
+    heldReassignmentReachesFunction(holder, [{ kind: STEP_DYNAMIC_MEMBER }], branch),
+  );
   return viaMutable ? 'renamed' : 'unknown';
 }
 
 /** Whether spreading a mutable holder `source` can introduce functions from its reassignments. */
 export function mutableSpreadReachesFunction(source: Expression, context: ScanContext): boolean {
-  return mutableHolderReassignmentReachesFunction(source, [{ kind: STEP_DYNAMIC_MEMBER }], context);
+  return heldReassignmentReachesFunction(source, [{ kind: STEP_DYNAMIC_MEMBER }], context);
 }
 
 /** Classifies element `index` on an inline, constant, annotated, or reassigned array holder. */
@@ -149,13 +142,9 @@ export function arraySlotEntryKind(
   if (holderDeclaresArrayElementFunction(holder, index)) {
     return 'renamed';
   }
-  const viaMutable = withBranch(context, (branch) => {
-    return mutableHolderReassignmentReachesFunction(
-      holder,
-      [{ index, kind: STEP_ELEMENT }],
-      branch,
-    );
-  });
+  const viaMutable = withBranch(context, (branch) =>
+    heldReassignmentReachesFunction(holder, [{ index, kind: STEP_ELEMENT }], branch),
+  );
   return viaMutable ? 'renamed' : 'unknown';
 }
 
@@ -474,6 +463,20 @@ function arrayRangeReachesFunction(
     reaches: reachesAssignedFunction,
     tailSteps,
   });
+}
+
+/**
+ * Whether a reassignment of the binding `holder` names, or of a binding `holder` is a `const` alias
+ * of (`const alias = holder`), reaches a function along `steps`.
+ */
+function heldReassignmentReachesFunction(
+  holder: Expression,
+  steps: readonly AssignmentStep[],
+  context: ScanContext,
+): boolean {
+  return reachesThroughAliases(holder, context, (binding, inner) =>
+    mutableHolderReassignmentReachesFunction(binding, steps, inner),
+  );
 }
 
 /** Follows reassignments on a mutable container identifier `current` along `remainingSteps`. */
