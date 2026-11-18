@@ -260,6 +260,42 @@ const CASES = [
       "export function p(): string { let total = 1 + 2; total = total + 3; return '' + total; }",
   },
   {
+    framed: false,
+    id: 'text-name-annotated-by-a-local-alias-given-a-call-result',
+    source:
+      "type Label = string; export function p(): string { let label: Label = 'abc'; label = label.slice(1); return 'prefix:' + label; }",
+  },
+  {
+    framed: false,
+    id: 'name-annotated-by-literal-types-given-a-call-result',
+    source:
+      "export function p(pick: () => 'a' | 'b'): string { let mode: 'a' | 'b' = 'a'; mode = pick(); return '' + mode; }",
+  },
+  {
+    framed: false,
+    id: 'name-annotated-by-a-scalar-or-undefined-given-a-call-result',
+    source:
+      "type Count = number | undefined; export function p(items: string[]): string { let count: Count = 0; count = items.length; return '' + count; }",
+  },
+  {
+    framed: true,
+    id: 'name-annotated-by-an-alias-of-unknown-given-an-error-array',
+    source:
+      "type Mixed = unknown; export function p(error: Error): string { let value: Mixed = 'x'; value = [error]; return '' + value; }",
+  },
+  {
+    framed: true,
+    id: 'name-annotated-by-a-generic-alias-given-an-error-array',
+    source:
+      "type Same<T> = T; export function p(error: Error): string { let value: Same<unknown> = 'x'; value = [error]; return '' + value; }",
+  },
+  {
+    framed: true,
+    id: 'name-annotated-by-a-union-with-an-array-given-an-error-array',
+    source:
+      "export function p(error: Error): string { let value: string | unknown[] = 'x'; value = [error]; return '' + value; }",
+  },
+  {
     framed: true,
     id: 'typed-error-list-given-to-a-helper-that-pushes',
     source:

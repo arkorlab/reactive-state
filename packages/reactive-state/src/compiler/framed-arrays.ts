@@ -9,7 +9,6 @@ import {
   isPropertyAccessExpression,
   isSpreadElement,
   type Node,
-  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -35,6 +34,7 @@ import { mutatorInvocation } from './framed-mutator-calls.ts';
 import { destructuredList } from './framed-nested-lists.ts';
 import { methodMayBeOverridden } from './framed-overridden-methods.ts';
 import { sourceChanged } from './framed-pattern-sources.ts';
+import { isScalarType } from './framed-scalar-types.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
@@ -320,13 +320,6 @@ function followedGivens(binding: FrameBinding): boolean {
   return givenValues(binding).every((given) => given !== undefined && isNoArray(given));
 }
 
-const SCALAR_TYPES: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.BigIntKeyword,
-  SyntaxKind.BooleanKeyword,
-  SyntaxKind.NumberKeyword,
-  SyntaxKind.StringKeyword,
-]);
-
 /**
  * Whether the code writes a name as a text, a number, a boolean or a bigint: its annotation says so,
  * or, with none, it starts as a literal or an operator's scalar. TypeScript refuses to give such a
@@ -334,6 +327,6 @@ const SCALAR_TYPES: ReadonlySet<SyntaxKind> = new Set([
  * is no array, a call result included (`text = JSON.stringify(value)`).
  */
 function writtenScalar(binding: FrameBinding): boolean {
-  if (binding.type !== undefined) return SCALAR_TYPES.has(binding.type.kind);
+  if (binding.type !== undefined) return isScalarType(binding.type);
   return binding.initializer !== undefined && isScalarValue(binding.initializer);
 }
