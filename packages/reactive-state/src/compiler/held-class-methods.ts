@@ -5,8 +5,10 @@ import {
   type GetAccessorDeclaration,
   type Identifier,
   isArrowFunction,
+  isBlock,
   isPropertyAccessExpression,
   isElementAccessExpression,
+  isExpressionStatement,
   isBinaryExpression,
   isClassDeclaration,
   isClassExpression,
@@ -22,6 +24,7 @@ import {
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
+  isParenthesizedExpression,
   isPrivateIdentifier,
   isPropertyAssignment,
   isPropertyDeclaration,
@@ -54,7 +57,9 @@ import { receiverOf } from './this-aliases.ts';
  * The methods of what `value` makes, where the code writes it: an object, `{ bump() { … } }`, or an
  * instance of a class of the module's, `new Counter()`; none of another value.
  */
-export function instanceMethods(value: Expression): ReadonlyMap<string, Node> | undefined {
+export function instanceMethods(
+  value: Expression,
+): ReadonlyMap<string, readonly Node[]> | undefined {
   if (isObjectLiteralExpression(value)) {
     return objectMethods(value);
   }
@@ -72,12 +77,15 @@ export function instanceMethods(value: Expression): ReadonlyMap<string, Node> | 
     : objectMethods(replacement);
 }
 
-/** The surviving methods of a class or its instances, including source-written bases. */
+/**
+ * The surviving methods of a class or its instances, including source-written bases: each name holds
+ * every body that may run, more than one only where a constructor installs on a path that may not run.
+ */
 export function memberMethods(
   declared: ClassLikeDeclaration,
   statics: boolean,
-): ReadonlyMap<string, Node> {
-  const methods = new Map<string, Node>();
+): ReadonlyMap<string, readonly Node[]> {
+  const methods = new Map<string, readonly Node[]>();
   const classes = baseClasses(declared);
   for (const each of classes) {
     memberEntries(each, methods, { statics, fields: false });
@@ -88,8 +96,6 @@ export function memberMethods(
   if (!statics) {
     for (const each of classes) {
       memberEntries(each, methods, { statics, fields: true });
-    }
-    for (const each of classes) {
       constructorCallables(each, methods);
     }
   }
@@ -98,15 +104,20 @@ export function memberMethods(
 
 /**
  * The functions a constructor installs on the instance, `this.bump = () => { … }` or `this['bump'] =
- * function () { … }`, in the order it runs them, replacing a method or field of the name; a value
- * that is no function written there leaves what the name held, and the functions the constructor
- * defines, which run later, install nothing.
+ * function () { … }`, in the order it runs them: one the constructor always runs replaces the method
+ * or field of the name, one on a path that may not run (a branch, a loop, an operand, a `try`) is one
+ * more body the name may hold; a value that is no function written there leaves what the name held,
+ * and the functions the constructor defines, which run later, install nothing.
  */
-function constructorCallables(declared: ClassLikeDeclaration, methods: Map<string, Node>): void {
+function constructorCallables(
+  declared: ClassLikeDeclaration,
+  methods: Map<string, readonly Node[]>,
+): void {
   const constructor = declared.members.find(
     (member): member is ConstructorDeclaration =>
       isConstructorDeclaration(member) && member.body !== undefined,
   );
+  const body = constructor?.body;
   const visit = (node: Node): void => {
     if (isArrowFunction(node) || ownsThis(node)) {
       return;
@@ -115,12 +126,26 @@ function constructorCallables(declared: ClassLikeDeclaration, methods: Map<strin
       const key = installedKey(unwrapped(node.left));
       const value = unwrapped(node.right);
       if (key !== undefined && (isArrowFunction(value) || isFunctionExpression(value))) {
-        methods.set(key, value);
+        const held = methods.get(key) ?? [];
+        methods.set(key, alwaysRuns(node, body) ? [value] : [...held, value]);
       }
     }
     node.forEachChild(visit);
   };
-  constructor?.body?.forEachChild(visit);
+  body?.forEachChild(visit);
+}
+
+/** Whether `node` runs whenever the constructor does: only statements and plain braces lie between. */
+function alwaysRuns(node: Node, body: Node | undefined): boolean {
+  for (let at: Node = node.parent; at !== body; at = at.parent) {
+    if (!isExpressionStatement(at) && !isBlock(at) && !isParenthesizedExpression(at)) {
+      return false;
+    }
+    if (isBlock(at) && at.parent !== body && !isBlock(at.parent)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /** The member `this.name` or `this['name']` names, as text. */
@@ -245,10 +270,9 @@ export function superMethods(at: Node, key: string | undefined): readonly Node[]
   }
   const methods = memberMethods(base, around.isStatic);
   if (key !== undefined) {
-    const method = methods.get(key);
-    return method === undefined ? [] : [method];
+    return methods.get(key) ?? [];
   }
-  return [...methods].filter(([name]) => !name.startsWith('#')).map(([, method]) => method);
+  return [...methods].filter(([name]) => !name.startsWith('#')).flatMap(([, bodies]) => bodies);
 }
 
 /** The class `at` stands in, and whether the member of it that holds `at` is `static`. */
@@ -353,12 +377,12 @@ function constructorOf(name: Identifier): ClassLikeDeclaration | undefined {
  * The methods an object the code writes holds of its own, by their names: none of an arrow's; those
  * of an object it spreads, which a later property of the same name replaces.
  */
-function objectMethods(value: ObjectLiteralExpression): ReadonlyMap<string, Node> {
-  const methods = new Map<string, Node>();
+function objectMethods(value: ObjectLiteralExpression): ReadonlyMap<string, readonly Node[]> {
+  const methods = new Map<string, readonly Node[]>();
   const entries = objectEntries(value, new Set());
   for (const [key, method] of entries) {
     if (method !== undefined) {
-      methods.set(key, method);
+      methods.set(key, [method]);
     }
   }
   return methods;
@@ -463,7 +487,7 @@ function inlineClass(value: Expression): ClassLikeDeclaration | undefined {
 /** Own prototype entries precede instance fields; a surviving nonfunction also shadows a base. */
 function memberEntries(
   declared: ClassLikeDeclaration,
-  methods: Map<string, Node>,
+  methods: Map<string, readonly Node[]>,
   phase: { readonly statics: boolean; readonly fields: boolean },
 ): void {
   for (const member of declared.members) {
@@ -490,7 +514,7 @@ function memberEntries(
     if (fn === undefined) {
       methods.delete(key);
     } else {
-      methods.set(key, fn);
+      methods.set(key, [fn]);
     }
   }
 }
