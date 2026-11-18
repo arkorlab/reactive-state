@@ -1,6 +1,5 @@
 import {
   type ArrowFunction,
-  type CallExpression,
   type Expression,
   type FunctionExpression,
   type Identifier,
@@ -45,6 +44,11 @@ export const ELEMENT_CALLBACK_METHODS: ReadonlySet<string> = new Set([
 export const REDUCE_ARRAY_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
 /** The sorts, whose callback is a comparator handed two elements of the receiver. */
 export const COMPARATOR_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
+
+/** What an array method is called with: its arguments, as a direct call, or one unpacked from `call`, `apply` or `Reflect.apply`, writes them. */
+export interface CalledWith {
+  readonly arguments: readonly Expression[];
+}
 
 /** The parameter an element callback (`map`, `filter`, ...) is handed the array in: after the element and the index. */
 export const ELEMENT_CALLBACK_ARRAY_SLOT = 2;
@@ -135,7 +139,7 @@ function callbackKeepsCarrier(
  * here, never both: a chain of reductions stays one question per stage.
  */
 function reduceResultCarriesDated(
-  call: CallExpression,
+  call: CalledWith,
   receiver: Expression,
   carries: (expression: Expression) => boolean,
 ): boolean {
@@ -166,7 +170,7 @@ const HOLDING_ARRAY_METHODS: ReadonlySet<string> = new Set(['fill', 'toSpliced',
  * put in. `carries` asks one expression.
  */
 export function elementMethodCarriesDated(
-  call: CallExpression,
+  call: CalledWith,
   receiver: Expression,
   method: string,
   carries: (expression: Expression) => boolean,

@@ -1,16 +1,7 @@
-import {
-  type CallExpression,
-  type Expression,
-  isArrayLiteralExpression,
-  isElementAccessExpression,
-  isOmittedExpression,
-  isPropertyAccessExpression,
-  isSpreadElement,
-} from 'typescript/ast';
+import { type Expression, isSpreadElement } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { GLOBAL_OBJECTS, globalPathOf } from './code-globals.ts';
-import { frameMemberName } from './framed-bindings.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import type { BoundArgCount, TagPath } from './render-raw-tag-calls.ts';
 import {
@@ -22,20 +13,15 @@ import {
   type RawWrapperSearch,
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
+import {
+  type CallArgumentList,
+  KIND_ELEMENTS,
+  KIND_SPREAD,
+  KIND_WHOLE_ARGS,
+} from './render-tag-date-call-unpacking.ts';
 import { carriesDatedSubstitution } from './render-tag-date-carriers.ts';
 
-/** Unpacks direct, `.call`, `.apply`, and `Reflect.apply` invocations and maps dated call slots. */
-
-export type CallArgumentList =
-  | { readonly kind: 'elements'; readonly elements: readonly Expression[] }
-  | { readonly kind: 'whole-arguments' }
-  | { readonly kind: 'spread-list'; readonly list: Expression };
-
-export interface UnwrappedCall {
-  readonly target: Expression;
-  readonly receiver: Expression | undefined;
-  readonly args: CallArgumentList;
-}
+/** Maps the dated slots of the calls a tag's body makes, and finds the direct String and raw-String references among them. */
 
 export interface CallSlotContext {
   readonly bindings: WrapperBindings;
@@ -44,88 +30,6 @@ export interface CallSlotContext {
 
 export function carriesDatedExpr(expr: Expression, context: CallSlotContext): boolean {
   return carriesDatedSubstitution(expr, context.bindings, context.query.datedIndices, new Set());
-}
-
-const KIND_ELEMENTS = 'elements' as const;
-const KIND_SPREAD = 'spread-list' as const;
-const KIND_WHOLE_ARGS = 'whole-arguments' as const;
-
-export function unpackCallExpression(
-  call: CallExpression,
-  bindings: WrapperBindings,
-): UnwrappedCall | undefined {
-  const callee = unwrapped(call.expression);
-  if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
-    return unpackReflectApplyCall(call, bindings);
-  }
-  if (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) {
-    return unpackMemberCall(call, callee, bindings);
-  }
-  return {
-    args: { elements: call.arguments, kind: KIND_ELEMENTS },
-    receiver: undefined,
-    target: callee,
-  };
-}
-
-function unpackReflectApplyCall(
-  call: CallExpression,
-  bindings: WrapperBindings,
-): UnwrappedCall | undefined {
-  const [target, recv, list] = call.arguments;
-  if (target === undefined || isSpreadElement(target)) return undefined;
-  const args = unpackAppliedList(list, bindings);
-  if (args === undefined) return undefined;
-  return { args, receiver: optionalReceiver(recv), target };
-}
-
-function unpackMemberCall(
-  call: CallExpression,
-  callee: Expression & { readonly expression: Expression },
-  bindings: WrapperBindings,
-): UnwrappedCall | undefined {
-  const member = frameMemberName(callee);
-  if (member === 'apply') {
-    const [recv, list] = call.arguments;
-    const args = unpackAppliedList(list, bindings);
-    return args === undefined
-      ? undefined
-      : { args, receiver: optionalReceiver(recv), target: callee.expression };
-  }
-  if (member === 'call') {
-    const [recv, ...rest] = call.arguments;
-    return {
-      args: { elements: rest, kind: KIND_ELEMENTS },
-      receiver: optionalReceiver(recv),
-      target: callee.expression,
-    };
-  }
-  return {
-    args: { elements: call.arguments, kind: KIND_ELEMENTS },
-    receiver: callee.expression,
-    target: callee,
-  };
-}
-
-function optionalReceiver(recv: Expression | undefined): Expression | undefined {
-  return recv === undefined || isSpreadElement(recv) ? undefined : recv;
-}
-
-function unpackAppliedList(
-  list: Expression | undefined,
-  bindings: WrapperBindings,
-): CallArgumentList | undefined {
-  if (list === undefined) return { elements: [], kind: KIND_ELEMENTS };
-  if (isSpreadElement(list)) return undefined;
-  const actual = unwrapped(list);
-  if (isArrayLiteralExpression(actual)) {
-    return {
-      elements: actual.elements.filter((el) => !isOmittedExpression(el)),
-      kind: KIND_ELEMENTS,
-    };
-  }
-  if (isWholeArgumentsReference(actual, bindings)) return { kind: KIND_WHOLE_ARGS };
-  return { kind: KIND_SPREAD, list: actual };
 }
 
 export function collectCallArgDatedSlots(

@@ -46,14 +46,16 @@ import {
   REDUCE_CALLBACK_ARRAY_SLOT,
 } from './render-tag-date-array-methods.ts';
 import {
+  type CallArgumentList,
+  unpackCallExpression,
+  type UnwrappedCall,
+} from './render-tag-date-call-unpacking.ts';
+import {
   anyCallArgCarriesDated,
   argElementsSlotCarriesDated,
-  type CallArgumentList,
   callArgSlotCarriesDated,
   carriesDatedExpr,
   collectCallArgDatedSlots,
-  unpackCallExpression,
-  type UnwrappedCall,
 } from './render-tag-date-calls.ts';
 
 /** Detects native text coercions and local-time Date reads inside custom template tag bodies. */

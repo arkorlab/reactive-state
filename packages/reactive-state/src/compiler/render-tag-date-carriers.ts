@@ -14,6 +14,7 @@ import {
   isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
+  isExpression,
   isForOfStatement,
   isFunctionExpression,
   isIdentifier,
@@ -44,6 +45,7 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
+  type CalledWith,
   COMPARATOR_METHODS,
   ELEMENT_CALLBACK_ARRAY_SLOT,
   ELEMENT_CALLBACK_METHODS,
@@ -52,6 +54,7 @@ import {
   REDUCE_CALLBACK_ARRAY_SLOT,
   writtenArrayCarriesDated,
 } from './render-tag-date-array-methods.ts';
+import { unpackCallExpression } from './render-tag-date-call-unpacking.ts';
 import {
   type DatedQueries,
   isHandedDate,
@@ -285,9 +288,10 @@ function inlineCallbackSlotDated(
   seen: Set<Node>,
 ): boolean {
   const { at, parent } = useOf(callback);
-  if (!isCallExpression(parent)) return false;
-  const callee = unwrapped(parent.expression);
-  if (globalPathOf(callee)?.join('.') === 'Array.from') {
+  if (
+    isCallExpression(parent) &&
+    globalPathOf(unwrapped(parent.expression))?.join('.') === 'Array.from'
+  ) {
     const [iterable, mapFn] = parent.arguments;
     return (
       paramIndex === 0 &&
@@ -297,14 +301,26 @@ function inlineCallbackSlotDated(
       iterableOrArgumentsDated(iterable, ctx, seen)
     );
   }
-  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
-  if (parent.arguments[0] === undefined || unwrapped(parent.arguments[0]) !== at) return false;
-  const method = frameMemberName(callee);
-  if (method === undefined) return false;
+  const call = isCallExpression(parent) ? parent : appliedCallOf(parent);
+  const unpacked = call === undefined ? undefined : unpackCallExpression(call, ctx.bindings);
+  if (unpacked?.args.kind !== 'elements' || unpacked.receiver === undefined) return false;
+  const target = unwrapped(unpacked.target);
+  const { elements } = unpacked.args;
+  if (!isExpression(at) || elements[0] !== at) return false;
+  if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) return false;
+  const method = frameMemberName(target);
   return (
-    callbackSlotHoldsDated(method, paramIndex, parent.arguments.length) &&
-    carriesDatedSubstitution(callee.expression, ctx.bindings, ctx.datedIndices, seen)
+    method !== undefined &&
+    callbackSlotHoldsDated(method, paramIndex, elements.length) &&
+    iterableOrArgumentsDated(unpacked.receiver, ctx, seen)
   );
+}
+
+/** The call whose list a callback is an element of, where `apply` or `Reflect.apply` is handed it: `values.map.apply(values, [callback])`. */
+function appliedCallOf(list: Node): CallExpression | undefined {
+  if (!isArrayLiteralExpression(list)) return undefined;
+  const { parent } = useOf(list);
+  return isCallExpression(parent) ? parent : undefined;
 }
 
 /**
@@ -404,21 +420,14 @@ function callResultCarriesDated(
       );
     });
   }
-  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
-  const method = frameMemberName(callee);
+  const unpacked = unpackCallExpression(call, ctx.bindings);
+  if (unpacked?.args.kind !== 'elements' || unpacked.receiver === undefined) return false;
+  const target = unwrapped(unpacked.target);
+  if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) return false;
+  const method = frameMemberName(target);
   if (method === undefined) return false;
-  if (
-    method === 'call' &&
-    globalPathOf(unwrapped(callee.expression))?.join('.') === 'Array.prototype.slice'
-  ) {
-    const [target, start, end] = call.arguments;
-    return (
-      target !== undefined &&
-      !isSpreadElement(target) &&
-      sliceCarriesDated(target, start, end, { ctx, seen })
-    );
-  }
-  return arrayMethodResultCarriesDated(call, callee.expression, method, { ctx, seen });
+  const called = { arguments: unpacked.args.elements };
+  return arrayMethodResultCarriesDated(called, unpacked.receiver, method, { ctx, seen });
 }
 
 function datedQueries(ctx: DatedCarrierContext, seen: Set<Node>): DatedQueries {
@@ -447,7 +456,7 @@ function arrayFromCarriesDated(
 }
 
 function arrayMethodResultCarriesDated(
-  call: CallExpression,
+  call: CalledWith,
   receiver: Expression,
   method: string,
   walk: { readonly ctx: DatedCarrierContext; readonly seen: Set<Node> },
@@ -470,7 +479,7 @@ function arrayMethodResultCarriesDated(
 }
 
 function arrayConcatCarriesDated(
-  call: CallExpression,
+  call: CalledWith,
   receiver: Expression,
   ctx: DatedCarrierContext,
   seen: Set<Node>,
