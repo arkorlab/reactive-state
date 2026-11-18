@@ -8,13 +8,15 @@ import {
   isIdentifier,
   isPropertyAccessExpression,
   isSpreadElement,
+  isVariableDeclaration,
   type Node,
+  type SourceFile,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { literalName } from './bounded.ts';
-import { readsOf } from './local-module-reads.ts';
+import { declarationOf } from './framed.ts';
 import { peelPlatform, platformPathsOf } from './platform-uses.ts';
 import { isTypeOnly } from './scope.ts';
 
@@ -43,49 +45,129 @@ const STORING_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
-/** What each declaration was found to have written into it, which the walk over the file need not repeat. */
-const WRITTEN = new WeakMap<VariableDeclaration, readonly WrittenMember[]>();
-
-/**
- * The values written into the container `declaration` holds, by a member assignment, an array method
- * or `Object.assign` anywhere in its file, wherever the write stands and whichever object the binding
- * then held: coarse, which only refuses more. A write through another name for the container is not
- * followed.
- */
-export function writtenMembersOf(declaration: VariableDeclaration): readonly WrittenMember[] {
-  const known = WRITTEN.get(declaration);
-  if (known !== undefined) {
-    return known;
-  }
-  const found = scanWrites(declaration);
-  WRITTEN.set(declaration, found);
-  return found;
+/** What the file writes into the binding of one declaration. */
+export interface MutableWrites {
+  /** The right sides of the assignments to the binding itself. */
+  readonly assigned: readonly Expression[];
+  /** The values stored into the container it holds. */
+  readonly members: readonly WrittenMember[];
 }
 
-/** Walks the file of `declaration` for the writes into its binding. */
-function scanWrites(declaration: VariableDeclaration): readonly WrittenMember[] {
-  if (!isIdentifier(declaration.name)) {
-    return [];
+/** No write at all. */
+const NONE: MutableWrites = { assigned: [], members: [] };
+
+/** The writes of each declaration of a file, which one walk over the file finds for all of them. */
+const INDEXES = new WeakMap<SourceFile, ReadonlyMap<VariableDeclaration, Written>>();
+
+/** The writes of a declaration as the walk collects them. */
+interface Written {
+  readonly assigned: Expression[];
+  readonly members: WrittenMember[];
+}
+
+/**
+ * What the file writes into the binding `declaration` declares and into the container it holds: the
+ * assignments to it, member assignments, array methods and `Object.assign`, wherever the file puts
+ * them and whichever object the binding then held (coarse, which only refuses more). The file is
+ * walked once for every declaration, each write resolved to what declares the name where it stands
+ * (`declarationOf`), so a same-named binding of another function is none of this one's; a write
+ * through another name for the container is not followed.
+ */
+export function writesInto(declaration: VariableDeclaration): MutableWrites {
+  const sourceFile = declaration.getSourceFile();
+  let index = INDEXES.get(sourceFile);
+  if (index === undefined) {
+    index = indexWrites(sourceFile);
+    INDEXES.set(sourceFile, index);
   }
-  const isRead = readsOf(declaration.name, declaration.getSourceFile());
-  const found: WrittenMember[] = [];
+  return index.get(declaration) ?? NONE;
+}
+
+/** Walks `sourceFile` once, filing each write under the declaration of the name it writes into. */
+function indexWrites(sourceFile: SourceFile): ReadonlyMap<VariableDeclaration, Written> {
+  const index = new Map<VariableDeclaration, Written>();
+  const entry = (root: Identifier): Written | undefined => {
+    const declared = declarationOf(root);
+    if (
+      declared === undefined ||
+      !isVariableDeclaration(declared) ||
+      !isIdentifier(declared.name)
+    ) {
+      return undefined;
+    }
+    let found = index.get(declared);
+    if (found === undefined) {
+      found = { assigned: [], members: [] };
+      index.set(declared, found);
+    }
+    return found;
+  };
   const visit = (node: Node): void => {
     if (isTypeOnly(node)) {
       return;
     }
     if (isBinaryExpression(node) && STORING_ASSIGNMENTS.has(node.operatorToken.kind)) {
-      const chain = memberChain(node.left, isRead);
-      if (chain !== undefined && chain.length > 0) {
-        found.push(chain.length === 1 ? member(chain[0], node.right) : deep(node.right));
-      }
+      fileAssignment(node.left, node.right, entry);
     } else if (isCallExpression(node)) {
-      found.push(...callWrites(node, isRead));
+      fileCall(node, entry);
     }
     node.forEachChild(visit);
   };
-  declaration.getSourceFile().forEachChild(visit);
+  sourceFile.forEachChild(visit);
 
-  return found;
+  return index;
+}
+
+/** Files `left = right`: an assignment to the binding itself, or a store into its container. */
+function fileAssignment(
+  left: Expression,
+  right: Expression,
+  entry: (root: Identifier) => Written | undefined,
+): void {
+  const chain = memberChain(left);
+  const written = chain === undefined ? undefined : entry(chain.root);
+  if (chain === undefined || written === undefined) {
+    return;
+  }
+  if (chain.names.length === 0) {
+    written.assigned.push(right);
+  } else {
+    written.members.push(chain.names.length === 1 ? member(chain.names[0], right) : deep(right));
+  }
+}
+
+/** Files what a call stores into a container: array insertions and the sources of `Object.assign`. */
+function fileCall(call: CallExpression, entry: (root: Identifier) => Written | undefined): void {
+  const callee = peelPlatform(call.expression);
+  if (isPropertyAccessExpression(callee) && INSERTING_METHODS.has(callee.name.text)) {
+    const from = INSERTING_METHODS.get(callee.name.text) ?? 0;
+    fileValues(callee.expression, call.arguments.slice(from), entry, (value) =>
+      member(undefined, value),
+    );
+  } else if (platformPathsOf(call.expression).includes('Object.assign')) {
+    const [target, ...sources] = call.arguments;
+    if (target !== undefined) {
+      fileValues(target, sources, entry, (value) => ({ kind: 'merged', value }));
+    }
+  }
+}
+
+/** Files each of `values` as stored by a call into the container `target` names, as `direct` says there. */
+function fileValues(
+  target: Expression,
+  values: readonly Expression[],
+  entry: (root: Identifier) => Written | undefined,
+  direct: (value: Expression) => WrittenMember,
+): void {
+  const chain = isSpreadElement(target) ? undefined : memberChain(target);
+  const written = chain === undefined ? undefined : entry(chain.root);
+  if (chain === undefined || written === undefined) {
+    return;
+  }
+  for (const each of values) {
+    const value = isSpreadElement(each) ? each.expression : each;
+    written.members.push(chain.names.length === 0 ? direct(value) : deep(value));
+  }
 }
 
 /** A value stored at one member of the container. */
@@ -98,54 +180,19 @@ function deep(value: Expression): WrittenMember {
   return { kind: 'deep', value };
 }
 
-/** What a call stores into the container: array insertions and the sources of `Object.assign`. */
-function callWrites(
-  call: CallExpression,
-  isRead: (node: Node) => node is Identifier,
-): WrittenMember[] {
-  const callee = peelPlatform(call.expression);
-  if (isPropertyAccessExpression(callee) && INSERTING_METHODS.has(callee.name.text)) {
-    const chain = memberChain(callee.expression, isRead);
-    const from = INSERTING_METHODS.get(callee.name.text) ?? 0;
-    const values = call.arguments
-      .slice(from)
-      .map((each) => (isSpreadElement(each) ? each.expression : each));
-
-    return chain === undefined
-      ? []
-      : values.map((value) => (chain.length === 0 ? member(undefined, value) : deep(value)));
-  }
-  const [target, ...sources] = call.arguments;
-  if (
-    target === undefined ||
-    isSpreadElement(target) ||
-    !platformPathsOf(call.expression).includes('Object.assign')
-  ) {
-    return [];
-  }
-  const chain = memberChain(target, isRead);
-  if (chain === undefined) {
-    return [];
-  }
-  const values = sources.map((each) => (isSpreadElement(each) ? each.expression : each));
-
-  return values.map((value) => (chain.length === 0 ? { kind: 'merged', value } : deep(value)));
-}
-
 /**
- * The members `expr` reads from the container, outermost from the binding first, where `expr` is the
- * binding (none) or member reads of it; undefined where it is anything else. A name is undefined
- * where the member is computed.
+ * The binding `expr` names and the members it reads from it, outermost from the binding first, where
+ * `expr` is a name or member reads of one; undefined where it is anything else. A member's name is
+ * undefined where computed.
  */
 function memberChain(
   expr: Expression,
-  isRead: (node: Node) => node is Identifier,
-): readonly (string | undefined)[] | undefined {
+): { readonly names: readonly (string | undefined)[]; readonly root: Identifier } | undefined {
   const names: (string | undefined)[] = [];
   let current = peelPlatform(expr);
   while (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
     names.unshift(isPropertyAccessExpression(current) ? current.name.text : literalName(current));
     current = peelPlatform(current.expression);
   }
-  return isIdentifier(current) && isRead(current) ? names : undefined;
+  return isIdentifier(current) ? { names, root: current } : undefined;
 }

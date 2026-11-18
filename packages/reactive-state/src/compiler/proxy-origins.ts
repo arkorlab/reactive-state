@@ -23,7 +23,6 @@ import {
 import { type Answering, answersLater, isAnswering, returnedBy } from './answers.ts';
 import { declarationOf } from './framed.ts';
 import { metadataCallee } from './input-callees.ts';
-import { assignedValuesOf } from './platform-uses.ts';
 import { mutatedArrayOrigins } from './proxy-array-writes.ts';
 import {
   arrayChangedBefore,
@@ -33,7 +32,7 @@ import {
 } from './proxy-arrays.ts';
 import { constructedOrigins, fieldOrigins } from './proxy-constructions.ts';
 import { indirectCall } from './proxy-indirect-calls.ts';
-import { type WrittenMember, writtenMembersOf } from './proxy-mutable-writes.ts';
+import { type WrittenMember, writesInto } from './proxy-mutable-writes.ts';
 import {
   holdsObjectLiteral,
   mutatedObjectOrigins,
@@ -362,9 +361,10 @@ function mutableOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return [];
   }
   const initial = declared.initializer === undefined ? [] : [declared.initializer];
-  const held = [...initial, ...assignedValuesOf(declared)].map((value) => ({ ...at, value }));
+  const writes = writesInto(declared);
+  const held = [...initial, ...writes.assigned].map((value) => ({ ...at, value }));
 
-  return [...held, ...writtenMembersOf(declared).flatMap((written) => writtenOrigins(written, at))];
+  return [...held, ...writes.members.flatMap((written) => writtenOrigins(written, at))];
 }
 
 /** A value written into a mutable container, as a value the read of the container may reach. */

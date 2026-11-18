@@ -479,11 +479,6 @@ function pushIdentifierAliasSteps(
   }
 }
 
-/** The right sides of the assignments to `declaration`'s binding anywhere in its source file. */
-export function assignedValuesOf(declaration: VariableDeclaration): readonly Expression[] {
-  return bindingWrites(declaration).assigned;
-}
-
 /** What `bindingWrites` found of each declaration, which the walk over the file need not repeat. */
 const BINDING_WRITES = new WeakMap<
   VariableDeclaration,
