@@ -177,7 +177,7 @@ export function evaluateAccessor(
       receiver: selfReceiver,
       seenBindings: query.seenBindings,
       seenNodes: query.seenNodes,
-    });
+    }).map((item) => attachReceiver(item, selfReceiver));
   }
   if (query.mode !== 'read') {
     ctx.onActivate(accessor, selfReceiver);
