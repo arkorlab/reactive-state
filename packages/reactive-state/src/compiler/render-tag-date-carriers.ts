@@ -68,6 +68,8 @@ const ELEMENT_CALLBACK_METHODS: ReadonlySet<string> = new Set([
   'some',
 ]);
 const REDUCE_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
+/** Methods whose callback is a comparator, which is handed two elements of the receiver. */
+const COMPARATOR_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
 
 export interface DatedCarrierContext {
   readonly bindings: WrapperBindings;
@@ -308,17 +310,18 @@ function inlineCallbackSlotDated(
   if (parent.arguments[0] === undefined || unwrapped(parent.arguments[0]) !== at) return false;
   const method = frameMemberName(callee);
   if (method === undefined) return false;
-  if (ELEMENT_CALLBACK_METHODS.has(method)) {
-    return (
-      paramIndex === 0 &&
-      carriesDatedSubstitution(callee.expression, ctx.bindings, ctx.datedIndices, seen)
-    );
-  }
-  if (!REDUCE_METHODS.has(method)) return false;
-  const matchesSlot = paramIndex === 1 || (paramIndex === 0 && parent.arguments.length < 2);
   return (
-    matchesSlot && carriesDatedSubstitution(callee.expression, ctx.bindings, ctx.datedIndices, seen)
+    callbackSlotHoldsElement(method, paramIndex, parent.arguments.length) &&
+    carriesDatedSubstitution(callee.expression, ctx.bindings, ctx.datedIndices, seen)
   );
+}
+
+/** Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an element of the receiver. */
+function callbackSlotHoldsElement(method: string, slot: number, count: number): boolean {
+  if (ELEMENT_CALLBACK_METHODS.has(method)) return slot === 0;
+  if (COMPARATOR_METHODS.has(method)) return slot <= 1;
+  if (!REDUCE_METHODS.has(method)) return false;
+  return slot === 1 || (slot === 0 && count < 2);
 }
 
 function iterableOrArgumentsDated(

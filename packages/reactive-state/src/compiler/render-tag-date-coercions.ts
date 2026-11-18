@@ -9,6 +9,7 @@ import {
   isDeleteExpression,
   isElementAccessExpression,
   isFunctionExpression,
+  isIdentifier,
   isNewExpression,
   isObjectBindingPattern,
   isPropertyAccessExpression,
@@ -16,6 +17,7 @@ import {
   isTaggedTemplateExpression,
   isTemplateExpression,
   isTypeOfExpression,
+  isVoidExpression,
   type Node,
   SyntaxKind,
   type TemplateExpression,
@@ -84,6 +86,7 @@ const ELEMENT_MAPPER_METHODS: ReadonlySet<string> = new Set([
   'some',
 ]);
 const REDUCE_MAPPER_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
+const SORT_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
 
 export interface WrapperCoerceContext {
   readonly bindings: WrapperBindings;
@@ -247,6 +250,9 @@ function borrowedGlobalCoerces(
   if (path === 'Array.prototype.join') {
     return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
   }
+  if (path === 'Array.prototype.sort' || path === 'Array.prototype.toSorted') {
+    return recvDated && sortCoerces(unpacked.args, context);
+  }
   if (
     path === 'Array.prototype.toString' ||
     path === 'Array.prototype.toLocaleString' ||
@@ -275,10 +281,28 @@ function memberMethodCallCoerces(
   if (method === 'join') {
     return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
   }
+  if (recvDated && SORT_METHODS.has(method)) return sortCoerces(unpacked.args, context);
   if (recvDated && (ELEMENT_MAPPER_METHODS.has(method) || REDUCE_MAPPER_METHODS.has(method))) {
     return arrayMapperCallbackCoerces(method, unpacked.args, context);
   }
   return stringMethodCoerces(method, unpacked, context, false);
+}
+
+/**
+ * `sort` and `toSorted` compare the text their elements convert to unless they are given a
+ * comparator, which is handed the elements themselves: an inline comparator is read in place,
+ * where its parameters carry what the receiver carries, and another one by what it writes as text.
+ * A comparator the walk cannot see (a spread, `arguments`) is taken to be the default one.
+ */
+function sortCoerces(args: CallArgumentList, context: WrapperCoerceContext): boolean {
+  if (args.kind !== 'elements') return true;
+  const [comparator] = args.elements;
+  if (comparator === undefined || isSpreadElement(comparator)) return true;
+  const actual = unwrapped(comparator);
+  if (isVoidExpression(actual) || (isIdentifier(actual) && actual.text === 'undefined')) {
+    return true;
+  }
+  return externalCallbackCoerces(actual, new Set([0, 1]), 2, context);
 }
 
 function stringMethodCoerces(
