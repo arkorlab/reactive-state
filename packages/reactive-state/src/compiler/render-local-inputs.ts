@@ -11,6 +11,8 @@ import {
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isClassDeclaration,
+  isClassExpression,
   isDeleteExpression,
   isElementAccessExpression,
   isFunctionDeclaration,
@@ -308,7 +310,20 @@ function expandContainerOrBindingTagPath(
     return false;
   }
   if (isNewExpression(value)) return expandNewTagPath(value, suffix, sink);
+  if (isUnfollowedHolder(value)) return true;
   return isIdentifier(value) && pushIdentifierTagPaths(value, suffix, sink);
+}
+
+/**
+ * A class, `this` and `super` hold members the walk does not follow (statics, inherited members,
+ * the object a method is called on): a Date given to a tag read through one is taken for text.
+ */
+function isUnfollowedHolder(value: Expression): boolean {
+  return (
+    isClassExpression(value) ||
+    value.kind === SyntaxKind.ThisKeyword ||
+    value.kind === SyntaxKind.SuperKeyword
+  );
 }
 
 function expandNewTagPath(
@@ -370,7 +385,10 @@ function pushIdentifierTagPaths(
   if (pushArrayIdentifierTagPaths(name, suffix, { env, pending, rootRead })) return true;
   const declared = frameDeclarationOf(name);
   if (declared === undefined) return true;
-  if (!isVariableDeclaration(declared) && !isParameterDeclaration(declared)) return false;
+  if (!isVariableDeclaration(declared) && !isParameterDeclaration(declared)) {
+    // A function is the tag itself, read by `matchesRawWrapperTag`; a class holds its statics.
+    return isClassDeclaration(declared);
+  }
   if (isParameterDeclaration(declared)) {
     const paramOutcome = pushFactoryParameterTagPaths(name, declared, suffix, { env, pending });
     if (paramOutcome.handled) return paramOutcome.opaque;
