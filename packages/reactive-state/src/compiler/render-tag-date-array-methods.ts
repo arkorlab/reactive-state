@@ -1,16 +1,25 @@
 import {
+  type ArrowFunction,
   type CallExpression,
   type Expression,
+  type FunctionExpression,
   type Identifier,
   isArrowFunction,
+  isBinaryExpression,
+  isCallExpression,
+  isElementAccessExpression,
   isFunctionExpression,
+  isIdentifier,
+  isPropertyAccessExpression,
   isSpreadElement,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { literalArrayBinding, writtenArrayElements } from './framed-array-elements.ts';
+import { frameMemberName } from './framed-bindings.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 
 /** What an array method called in a tag's body, or a write to an array, makes of the Date-bearing substitutions it is given. */
@@ -37,9 +46,61 @@ export const PASSTHROUGH_ARRAY_METHODS: ReadonlySet<string> = new Set([
   'with',
 ]);
 
+const ACCUMULATOR_WRITES: ReadonlySet<string> = new Set(['fill', 'push', 'splice', 'unshift']);
+
+/** Whether `node` puts a value `carries` says holds a Date into the array named `name`: `out.push(value)`, `out[index] = value`. */
+function writesCarrierInto(
+  node: Node,
+  name: string,
+  carries: (expression: Expression) => boolean,
+): boolean {
+  if (isCallExpression(node)) {
+    const callee = unwrapped(node.expression);
+    if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
+    const method = frameMemberName(callee);
+    return (
+      method !== undefined &&
+      ACCUMULATOR_WRITES.has(method) &&
+      namesArray(callee.expression, name) &&
+      node.arguments.some((each) => carries(isSpreadElement(each) ? each.expression : each))
+    );
+  }
+  if (!isBinaryExpression(node) || node.operatorToken.kind !== SyntaxKind.EqualsToken) return false;
+  const target = unwrapped(node.left);
+  return (
+    isElementAccessExpression(target) && namesArray(target.expression, name) && carries(node.right)
+  );
+}
+
+function namesArray(expression: Expression, name: string): boolean {
+  const target = unwrapped(expression);
+  return isIdentifier(target) && target.text === name;
+}
+
 /**
- * `reduce` answers its initial value, or what its callback returns; with no initial value (or a
- * callback that is not written there), the one element of a one-element array, or what the callback
+ * Whether a reduction's callback puts a Date into its accumulator, by name: the accumulator is a
+ * parameter, whose writes `writtenArrayElements` does not follow, and the callback is the only
+ * code that has it.
+ */
+function callbackKeepsCarrier(
+  callback: ArrowFunction | FunctionExpression,
+  carries: (expression: Expression) => boolean,
+): boolean {
+  const [accumulator] = callback.parameters;
+  if (accumulator === undefined || !isIdentifier(accumulator.name)) return false;
+  const pending: Node[] = [callback.body];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (writesCarrierInto(node, accumulator.name.text, carries)) return true;
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  return false;
+}
+
+/**
+ * `reduce` answers its initial value, what its callback returns, or what the callback puts into its
+ * accumulator; with no initial value (or a callback that is not written there), the one element of a one-element array, or what the callback
  * makes of its elements. The receiver is asked once, through the callback's element parameter or
  * here, never both: a chain of reductions stays one question per stage.
  */
@@ -58,7 +119,9 @@ function reduceResultCarriesDated(
     fn !== undefined &&
     (isArrowFunction(fn) || isFunctionExpression(fn))
   ) {
-    return returnedBy(fn).some((returned) => carries(returned));
+    return (
+      returnedBy(fn).some((returned) => carries(returned)) || callbackKeepsCarrier(fn, carries)
+    );
   }
   return carries(receiver);
 }

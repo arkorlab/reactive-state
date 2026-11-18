@@ -43,6 +43,7 @@ const SCRIPT = [
 const SPREAD = '.reduce((out,value)=>[...out,value],[])';
 const ELEMENT = '.reduce((_total,value)=>value,null)';
 const BARE = '.reduce((_total,value)=>value)';
+const PUSH = '.reduce((out,value)=>{out.push(value);return out;},[])';
 const TEXT = '.reduce((text,value)=>text+String(value.length),"")';
 const FILTER = '.filter(()=>true)';
 const MAP = '.map((value)=>value)';
@@ -51,6 +52,7 @@ const CASES = [
   { id: 'reductions-building-an-array', stage: SPREAD, verdict: 'refused' },
   { id: 'reductions-returning-the-element', stage: ELEMENT, verdict: 'refused' },
   { id: 'reductions-without-an-initial-value-pin', stage: BARE, verdict: 'refused' },
+  { id: 'reductions-pushing-into-the-accumulator', stage: PUSH, verdict: 'refused' },
   { id: 'reductions-building-text-pin', stage: TEXT, verdict: 'taken' },
   { id: 'filters-pin', stage: FILTER, verdict: 'refused' },
   { id: 'maps-pin', stage: MAP, verdict: 'refused' },
