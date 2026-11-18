@@ -31,8 +31,9 @@ import {
   holdsArrayLiteral,
   spreadElementOrigins,
 } from './proxy-arrays.ts';
-import { constructedOrigins } from './proxy-constructions.ts';
+import { constructedOrigins, fieldOrigins } from './proxy-constructions.ts';
 import { indirectCall } from './proxy-indirect-calls.ts';
+import { type WrittenMember, writtenMembersOf } from './proxy-mutable-writes.ts';
 import {
   holdsObjectLiteral,
   mutatedObjectOrigins,
@@ -361,8 +362,21 @@ function mutableOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return [];
   }
   const initial = declared.initializer === undefined ? [] : [declared.initializer];
+  const held = [...initial, ...assignedValuesOf(declared)].map((value) => ({ ...at, value }));
 
-  return [...initial, ...assignedValuesOf(declared)].map((value) => ({ ...at, value }));
+  return [...held, ...writtenMembersOf(declared).flatMap((written) => writtenOrigins(written, at))];
+}
+
+/** A value written into a mutable container, as a value the read of the container may reach. */
+function writtenOrigins(written: WrittenMember, at: Origin): readonly Origin[] {
+  const { value } = written;
+  if (written.kind === 'merged') {
+    return [{ ...at, value }];
+  }
+  if (written.kind === 'deep') {
+    return [{ ...at, excluded: undefined, keys: [], spread: undefined, value }];
+  }
+  return fieldOrigins(written.name, value, at);
 }
 
 /** A source call's returned expressions, binding ordinary parameters to their actual arguments. */

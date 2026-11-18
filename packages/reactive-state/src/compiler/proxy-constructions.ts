@@ -144,7 +144,11 @@ function fieldName(name: Node): string | undefined {
 }
 
 /** `value` as the field `name` of the instance, projected by the keys the read of the instance has. */
-function fieldOrigins(name: string | undefined, value: Expression, at: Origin): readonly Origin[] {
+export function fieldOrigins(
+  name: string | undefined,
+  value: Expression,
+  at: Origin,
+): readonly Origin[] {
   const [key, ...rest] = at.keys;
   const base = { ...at, excluded: undefined, spread: undefined, value };
   if (key === undefined) {
