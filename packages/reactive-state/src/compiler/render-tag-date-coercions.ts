@@ -46,14 +46,16 @@ import {
   REDUCE_CALLBACK_ARRAY_SLOT,
 } from './render-tag-date-array-methods.ts';
 import {
+  type CallArgumentList,
+  unpackCallExpression,
+  type UnwrappedCall,
+} from './render-tag-date-call-unpacking.ts';
+import {
   anyCallArgCarriesDated,
   argElementsSlotCarriesDated,
-  type CallArgumentList,
   callArgSlotCarriesDated,
   carriesDatedExpr,
   collectCallArgDatedSlots,
-  unpackCallExpression,
-  type UnwrappedCall,
 } from './render-tag-date-calls.ts';
 
 /** Detects native text coercions and local-time Date reads inside custom template tag bodies. */
@@ -315,8 +317,11 @@ function nativeMethodCoerces(
     return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
   }
   if (recvDated && COMPARATOR_METHODS.has(method)) return sortCoerces(unpacked.args, context);
-  if (recvDated && (ELEMENT_CALLBACK_METHODS.has(method) || REDUCE_ARRAY_METHODS.has(method))) {
-    return arrayMapperCallbackCoerces(method, unpacked.args, context);
+  if (recvDated && ELEMENT_CALLBACK_METHODS.has(method)) {
+    return arrayMapperCallbackCoerces(unpacked.args, context);
+  }
+  if (REDUCE_ARRAY_METHODS.has(method)) {
+    return reductionCallbackCoerces(unpacked.args, recvDated, context);
   }
   return stringMethodCoerces(method, unpacked, context, false);
 }
@@ -414,25 +419,39 @@ function arrayFromCallbackCoerces(args: CallArgumentList, context: WrapperCoerce
 }
 
 function arrayMapperCallbackCoerces(
-  method: string,
   args: CallArgumentList,
   context: WrapperCoerceContext,
 ): boolean {
   if (args.kind !== 'elements') return false;
-  const [callback, initial] = args.elements;
+  const [callback] = args.elements;
   if (callback === undefined || isSpreadElement(callback)) return false;
-  if (REDUCE_ARRAY_METHODS.has(method)) {
-    const slots = new Set(
-      initial === undefined ? [0, 1, REDUCE_CALLBACK_ARRAY_SLOT] : [1, REDUCE_CALLBACK_ARRAY_SLOT],
-    );
-    return externalCallbackCoerces(callback, slots, REDUCE_CALLBACK_ARRAY_SLOT + 1, context);
-  }
   return externalCallbackCoerces(
     callback,
     new Set([0, ELEMENT_CALLBACK_ARRAY_SLOT]),
     ELEMENT_CALLBACK_ARRAY_SLOT + 1,
     context,
   );
+}
+
+/**
+ * A named reduction callback reads the elements through the parameters after the accumulator, where
+ * the receiver holds a Date, and the accumulator itself where the initial value does (or, with no
+ * initial value, the receiver: its first element starts it).
+ */
+function reductionCallbackCoerces(
+  args: CallArgumentList,
+  recvDated: boolean,
+  context: WrapperCoerceContext,
+): boolean {
+  if (args.kind !== 'elements') return false;
+  const [callback, initial] = args.elements;
+  if (callback === undefined || isSpreadElement(callback)) return false;
+  const accumulator = initial === undefined ? recvDated : callArgSlotCarriesDated(args, 1, context);
+  if (!recvDated && !accumulator) return false;
+  const slots = new Set<number>();
+  if (accumulator) slots.add(0);
+  if (recvDated) slots.add(1).add(REDUCE_CALLBACK_ARRAY_SLOT);
+  return externalCallbackCoerces(callback, slots, REDUCE_CALLBACK_ARRAY_SLOT + 1, context);
 }
 
 function externalCallbackCoerces(
