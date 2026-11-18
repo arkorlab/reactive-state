@@ -143,7 +143,10 @@ function fieldName(name: Node): string | undefined {
   return isIdentifier(name) || isStringLiteral(name) ? name.text : undefined;
 }
 
-/** `value` as the field `name` of the instance, projected by the keys the read of the instance has. */
+/**
+ * `value` as the field `name` of the instance, projected by the keys the read of the instance has;
+ * none of a field that the object a spread of the instance goes into overwrites by a later key.
+ */
 export function fieldOrigins(
   name: string | undefined,
   value: Expression,
@@ -152,7 +155,8 @@ export function fieldOrigins(
   const [key, ...rest] = at.keys;
   const base = { ...at, excluded: undefined, spread: undefined, value };
   if (key === undefined) {
-    return [{ ...base, keys: [] }];
+    // Spread into an object that a later key overwrites it, the field is not in the result.
+    return name !== undefined && at.excluded?.has(name) === true ? [] : [{ ...base, keys: [] }];
   }
   const selected = name === undefined || key === null || key === name;
 
