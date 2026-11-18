@@ -10,6 +10,7 @@ import {
   isIdentifier,
   isIntersectionTypeNode,
   isNamedTupleMember,
+  isOptionalTypeNode,
   isParameterDeclaration,
   isParenthesizedTypeNode,
   isPropertySignatureDeclaration,
@@ -127,25 +128,67 @@ function isArrayElementFunctionType(type: TypeNode | undefined, slotIndex?: numb
   );
 }
 
+/** The array type a tuple's rest member spreads, `...T[]` or `...name: T[]`; none of a fixed member. */
+function restArrayType(member: TypeNode): TypeNode | undefined {
+  if (isRestTypeNode(member)) {
+    return member.type;
+  }
+  return isNamedTupleMember(member) && member.dotDotDotToken !== undefined
+    ? member.type
+    : undefined;
+}
+
+/** The type a fixed tuple member supplies: `name: T` and `T?` supply `T`. */
+function fixedMemberType(member: TypeNode): TypeNode {
+  return isNamedTupleMember(member) || isOptionalTypeNode(member) ? member.type : member;
+}
+
+/** The element type of the array type `type`: `T` of `T[]`, `Array<T>`, `readonly T[]`. */
+function arrayElementType(type: TypeNode | undefined): TypeNode | undefined {
+  const each = unwrapTypeNode(type);
+  if (each === undefined) {
+    return undefined;
+  }
+  if (isArrayTypeNode(each)) {
+    return each.elementType;
+  }
+  return isTypeReferenceNode(each) &&
+    isIdentifier(each.typeName) &&
+    ARRAY_TYPES.has(each.typeName.text)
+    ? each.typeArguments?.[0]
+    : undefined;
+}
+
 /** Checks whether `tuple` annotates `slotIndex` (or any tuple slot) with a function type. */
 function tupleElementIsFunctionType(tuple: TupleTypeNode, slotIndex?: number): boolean {
   if (
     slotIndex !== undefined &&
     slotIndex >= 0 &&
-    tuple.elements.slice(0, slotIndex + 1).every((member) => !isRestTypeNode(member))
+    tuple.elements.slice(0, slotIndex + 1).every((member) => restArrayType(member) === undefined)
   ) {
     const selected = tuple.elements[slotIndex];
-    if (selected === undefined) {
-      return false;
-    }
-    return isFunctionType(isNamedTupleMember(selected) ? selected.type : selected);
+    return selected !== undefined && isFunctionType(fixedMemberType(selected));
   }
   return tuple.elements.some((member) => {
-    const inner = isNamedTupleMember(member) ? member.type : member;
-    return isRestTypeNode(inner)
-      ? isArrayElementFunctionType(inner.type) || isFunctionType(inner.type)
-      : isFunctionType(inner);
+    const rest = restArrayType(member);
+    return rest === undefined
+      ? isFunctionType(fixedMemberType(member))
+      : isArrayElementFunctionType(rest) || isFunctionType(rest);
   });
+}
+
+/** The type a tuple supplies at `slot`: its member there, or the element of a rest member before it. */
+function tupleSlotType(tuple: TupleTypeNode, slot: number): TypeNode | undefined {
+  for (const [at, member] of tuple.elements.entries()) {
+    const rest = restArrayType(member);
+    if (rest !== undefined) {
+      return arrayElementType(rest);
+    }
+    if (at === slot) {
+      return fixedMemberType(member);
+    }
+  }
+  return undefined;
 }
 
 /** Whether `type` annotates the nested destructuring path `steps` with a function type. */
@@ -207,16 +250,8 @@ function isArrayPatternStepFunctionType(
   if (!isTupleTypeNode(each) || !isArrayBindingPattern(step.parent)) {
     return false;
   }
-  const slot = step.parent.elements.indexOf(step);
-  const member =
-    slot !== -1 && each.elements.slice(0, slot + 1).every((item) => !isRestTypeNode(item))
-      ? each.elements[slot]
-      : undefined;
-  if (member === undefined) {
-    return false;
-  }
   return isPatternStepFunctionType(
-    isNamedTupleMember(member) ? member.type : member,
+    tupleSlotType(each, step.parent.elements.indexOf(step)),
     steps,
     index + 1,
   );
