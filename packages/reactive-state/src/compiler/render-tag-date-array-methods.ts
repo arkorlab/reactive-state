@@ -16,7 +16,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { parametersOf, returnedBy } from './answers.ts';
+import { answersLater, parametersOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { literalArrayBinding, writtenArrayElements } from './framed-array-elements.ts';
 import { frameMemberName } from './framed-bindings.ts';
@@ -120,7 +120,8 @@ function reduceResultCarriesDated(
     (isArrowFunction(fn) || isFunctionExpression(fn))
   ) {
     return (
-      returnedBy(fn).some((returned) => carries(returned)) || callbackKeepsCarrier(fn, carries)
+      !answersLater(fn) &&
+      (returnedBy(fn).some((returned) => carries(returned)) || callbackKeepsCarrier(fn, carries))
     );
   }
   return carries(receiver);

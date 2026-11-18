@@ -15,7 +15,7 @@ import {
   type ParameterDeclaration,
 } from 'typescript/ast';
 
-import { type Answering, overloadsOf, parametersOf, returnedBy } from './answers.ts';
+import { type Answering, answersLater, overloadsOf, parametersOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedAssignedSources } from './framed-writes.ts';
@@ -67,11 +67,13 @@ const FUNCTIONS = new WeakMap<Node, readonly Answering[]>();
  */
 function functionsOf(callee: Expression): readonly Answering[] {
   const target = unwrapped(callee);
-  if (isArrowFunction(target) || isFunctionExpression(target)) return [target];
+  if (isArrowFunction(target) || isFunctionExpression(target)) {
+    return answersLater(target) ? [] : [target];
+  }
   if (!isIdentifier(target)) return [];
   const known = FUNCTIONS.get(target);
   if (known !== undefined) return known;
-  const found = functionsNamedBy(target);
+  const found = functionsNamedBy(target).filter((each) => !answersLater(each));
   FUNCTIONS.set(target, found);
   return found;
 }
@@ -187,7 +189,7 @@ export function mappedResultCarriesDated(
   const target = callback === undefined ? undefined : unwrapped(callback);
   if (target === undefined) return false;
   if (isArrowFunction(target) || isFunctionExpression(target)) {
-    return returnedBy(target).some((returned) => queries.shared(returned));
+    return !answersLater(target) && returnedBy(target).some((returned) => queries.shared(returned));
   }
   const functions = functionsOf(target);
   if (functions.length === 0 || !queries.fresh(receiver)) return false;
