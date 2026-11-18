@@ -53,6 +53,7 @@ import {
   isPatternTarget,
   UPDATING,
 } from './local-write-paths.ts';
+import { isVisiting, whereUnstopped } from './retained-match-memo.ts';
 import { bindingIdentifiers, readsBinding } from './scope.ts';
 
 /**
@@ -374,6 +375,9 @@ function literalInstancePaths(value: Expression): readonly string[] | undefined 
   return undefined;
 }
 
+/** What each expression a name is written as resolves to, where no cycle shaped it. */
+const RESOLVED_SOURCES = new WeakMap<Expression, readonly string[]>();
+
 /** Resolves `Identifier` `id` (through `const`/`let`/`var` initializers, assignments, destructuring). */
 function identifierIntrinsicPaths(
   id: Identifier,
@@ -383,13 +387,16 @@ function identifierIntrinsicPaths(
   const direct = globalPathOf(id)?.join('.');
   if (direct !== undefined) return [direct];
   const selected = frameBindingOf(id);
-  if (selected === undefined || visiting.has(selected.binding)) return [];
+  if (selected === undefined || isVisiting(visiting, selected.binding)) return [];
   const nextVisiting = new Set([...visiting, selected.binding]);
   const initial = selected.binding.initializer === undefined ? [] : [selected.binding.initializer];
   const candidates = [...initial, ...assignedSourcesOf(selected.binding)];
-  const resolved = candidates.flatMap((src) =>
-    projectIntrinsicKeys(intrinsicPathsOf(src, nextVisiting), selected.keys),
-  );
+  const resolved = candidates.flatMap((src) => {
+    const written = whereUnstopped(RESOLVED_SOURCES, src, () =>
+      intrinsicPathsOf(src, nextVisiting),
+    );
+    return projectIntrinsicKeys(written, selected.keys);
+  });
   return [...new Set(resolved)];
 }
 

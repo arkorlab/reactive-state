@@ -49,6 +49,7 @@ import {
   writtenAt,
 } from './local-write-paths.ts';
 import { constantValue } from './numbers.ts';
+import { isVisiting, whereUnstopped } from './retained-match-memo.ts';
 import {
   constBindingOf,
   isMutationTarget,
@@ -258,7 +259,7 @@ function checkStringMember(
   }
   if (!isIdentifier(root)) return false;
   const bound = constBindingOf(root);
-  if (bound !== undefined && !visiting.has(bound.id)) {
+  if (bound !== undefined && !isVisiting(visiting, bound.id)) {
     const target: Target = {
       callsLocal: () => true,
       declared: bound.id,
@@ -335,7 +336,7 @@ function checkStringParameter(
   allowNullish: boolean,
   visiting: ReadonlySet<Node>,
 ): boolean {
-  if (decl.dotDotDotToken !== undefined || decl.type === undefined || visiting.has(decl)) {
+  if (decl.dotDotDotToken !== undefined || decl.type === undefined || isVisiting(visiting, decl)) {
     return false;
   }
   const selected = frameBindingOf(id);
@@ -365,20 +366,35 @@ function checkStringIdentifier(
   const bound = constBindingOf(id);
   if (bound !== undefined) {
     return (
-      !visiting.has(bound.id) &&
+      !isVisiting(visiting, bound.id) &&
       checkString(bound.initializer, allowNullish, new Set([...visiting, bound.id]))
     );
   }
   const decl = frameDeclarationOf(id);
-  if (decl === undefined || visiting.has(decl)) return false;
+  if (decl === undefined || isVisiting(visiting, decl)) return false;
   if (isVariableDeclaration(decl) && isIdentifier(decl.name)) {
     return !isConstList(decl.parent) && checkMutableStringVar(decl, allowNullish, visiting);
   }
   return isParameterDeclaration(decl) && checkStringParameter(id, decl, allowNullish, visiting);
 }
 
+/** What each expression is proved to be, where no cycle shaped it: of text alone, and of text or nullish. */
+const STRING_PROOFS = new WeakMap<Expression, boolean>();
+const NULLISH_PROOFS = new WeakMap<Expression, boolean>();
+
 /** Positive proof that `expr` evaluates to a primitive `string` (or `null` / `undefined` if `allowNullish`). */
 function checkString(
+  expr: Expression,
+  allowNullish: boolean,
+  visiting: ReadonlySet<Node>,
+): boolean {
+  return whereUnstopped(allowNullish ? NULLISH_PROOFS : STRING_PROOFS, expr, () =>
+    proveString(expr, allowNullish, visiting),
+  );
+}
+
+/** The proof `checkString` keeps. */
+function proveString(
   expr: Expression,
   allowNullish: boolean,
   visiting: ReadonlySet<Node>,
