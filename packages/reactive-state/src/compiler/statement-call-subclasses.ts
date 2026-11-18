@@ -169,6 +169,20 @@ export function objectTargetsOf(
 }
 
 /**
+ * What `this` may be in a function that no object literal and no class declares as a member, so that
+ * nothing says what it is installed on (`const box = { make, read() {} }`, `run = make`): any object
+ * literal and any class written in the statement. A member the function reads by name finds it among
+ * them, and one no object has finds nothing.
+ */
+export function anyReceiverWithin(ctx: TargetContext): readonly ResolvedValue[] {
+  return heirsWithin(ctx.scopes.root).map((heir): ResolvedValue => {
+    return isObjectLiteralExpression(heir)
+      ? { kind: 'node', node: heir }
+      : { cls: heir, kind: 'instance' };
+  });
+}
+
+/**
  * What `this` is in `member` when no call of it is being followed: the object literal it is in and
  * every object literal copied from it, or its class and every class extending it, as the call may
  * have been made on any of them. A static field's initializer runs once, on the class that

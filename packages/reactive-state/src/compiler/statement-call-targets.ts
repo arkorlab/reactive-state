@@ -52,7 +52,11 @@ import {
   unwrapExpression,
   type ValueSpec,
 } from './statement-call-scopes.ts';
-import { objectTargetsOf, ownerTargetsOfMember } from './statement-call-subclasses.ts';
+import {
+  anyReceiverWithin,
+  objectTargetsOf,
+  ownerTargetsOfMember,
+} from './statement-call-subclasses.ts';
 import { staticExpressionKey } from './statement-call-writes.ts';
 
 export { EMPTY_NODE_SET, EMPTY_PROJECT_SET } from './statement-call-classes.ts';
@@ -388,7 +392,7 @@ function functionThisFallback(
   ) {
     return objectTargetsOf(fn.parent.parent, ctx, seenBindings);
   }
-  return [];
+  return anyReceiverWithin(ctx);
 }
 
 function enclosingSuperMember(superNode: Node): Node | undefined {
