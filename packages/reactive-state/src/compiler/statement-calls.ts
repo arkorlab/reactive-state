@@ -80,6 +80,8 @@ interface ActiveReceiverEntry {
 interface WalkState {
   readonly activated: Map<Node, Set<string>>;
   readonly activeReceivers: ActiveReceiverEntry[];
+  /** Every binding a collected scope gave a spec to, in order. */
+  readonly appended: Binding[];
   readonly constructed: Map<Node, Set<string>>;
   readonly ctx: TargetContext;
   readonly dirtyBindings: Set<Binding>;
@@ -116,6 +118,7 @@ function createWalkState(root: Node, onCall: (call: CallExpression) => boolean):
   const state: WalkState = {
     activated: new Map(),
     activeReceivers,
+    appended: [],
     constructed: new Map(),
     ctx: {
       activeReceiverFor: (owner) => findActiveReceiver(activeReceivers, owner),
@@ -190,6 +193,7 @@ function runWithReceiver<T>(
 
 function collectScopeWithPropagation(execRoot: Node, state: WalkState): void {
   collectExecutableRoot(execRoot, state.scopes, (binding) => {
+    state.appended.push(binding);
     if (binding.watchers.size > 0) {
       state.dirtyBindings.add(binding);
     }
@@ -233,13 +237,17 @@ function watchResolution(
     return;
   }
   const replay = (): void => {
-    if (state.stopped) {
-      return;
-    }
-    const seenBindings = new Set<Binding>();
-    run(seenBindings);
-    for (const binding of seenBindings) {
-      binding.watchers.set(watcherKey, replay);
+    let again = true;
+    while (again && !state.stopped) {
+      const seenBindings = new Set<Binding>();
+      const logStart = state.appended.length;
+      run(seenBindings);
+      for (const binding of seenBindings) {
+        binding.watchers.set(watcherKey, replay);
+      }
+      // A write recorded while `run` resolved found no watcher on its binding, as this one is
+      // registered only now: resolve again, with what the binding holds by now.
+      again = state.appended.slice(logStart).some((binding) => seenBindings.has(binding));
     }
   };
   replay();
