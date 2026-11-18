@@ -1,5 +1,6 @@
 import {
   type ArrayLiteralExpression,
+  type BinaryExpression,
   type CallExpression,
   type Expression,
   type Identifier,
@@ -48,6 +49,13 @@ import {
 } from './proxy-values.ts';
 
 export type { ProxyReading } from './proxy-values.ts';
+
+/** Logical assignments, whose value is the left operand kept or the right operand assigned. */
+const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
 
 /** Native calls whose result cannot retain the identity of an object they consume. */
 const SCALARS: ReadonlySet<string> = new Set(['Boolean', 'JSON.stringify', 'Number', 'String']);
@@ -204,16 +212,19 @@ function originsOf(at: Origin): readonly Origin[] {
         : [truth ? value.whenTrue : value.whenFalse];
     return values.map((each) => ({ ...at, value: each }));
   }
-  if (isBinaryExpression(value)) {
-    if (
-      value.operatorToken.kind === SyntaxKind.CommaToken ||
-      value.operatorToken.kind === SyntaxKind.EqualsToken
-    ) {
-      return [{ ...at, value: value.right }];
-    }
-    return logicalOrigins(value.left, value.right, value.operatorToken.kind, at);
+  return isBinaryExpression(value) ? binaryOrigins(value, at) : containerOrigins(at);
+}
+
+/** The values a comma, assignment or logical operator can evaluate to. */
+function binaryOrigins(value: BinaryExpression, at: Origin): readonly Origin[] {
+  const kind = value.operatorToken.kind;
+  if (kind === SyntaxKind.CommaToken || kind === SyntaxKind.EqualsToken) {
+    return [{ ...at, value: value.right }];
   }
-  return containerOrigins(at);
+  if (LOGICAL_ASSIGNMENTS.has(kind)) {
+    return [value.left, value.right].map((each) => ({ ...at, value: each }));
+  }
+  return logicalOrigins(value.left, value.right, kind, at);
 }
 
 /** Containers and source calls retain the origins of values they actually return or store. */
