@@ -65,8 +65,8 @@ const CASES = [
   },
   {
     body: "function makeInit(body: BodyInit) { return { body }; } return new Request('https://example.com/', { method: 'POST', body: new FormData(), ...makeInit('text') });",
-    expected: undefined,
-    id: 'spread-of-options-factory-given-text-overwrites-earlier-form-data',
+    expected: MULTIPART_REASON,
+    id: 'spread-of-options-factory-given-text-keeps-earlier-form-data-by-the-coarse-rule-pin',
   },
   {
     body: "function makeInit(body: BodyInit) { return { method: 'POST', body }; } return new Request('https://example.com/', makeInit(JSON.stringify(1)));",

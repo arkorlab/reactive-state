@@ -186,16 +186,19 @@ function callExpressionBodies(
 /**
  * The options a source-written function returns, each read where its `return` writes it, and
  * ambiguous when the call gives it `FormData` or options that carry it: the function may put
- * what it is given into the options it returns.
+ * what it is given into the options it returns. Never an overwrite: a function can return nothing,
+ * by a bare `return`, a path without one, or a `switch` without a default, and the spread of
+ * nothing leaves the earlier body.
  */
 function factoryBodies(call: CallExpression, following: AnalysisState): BodyReading {
   const factory = sourceFactory(call);
   if (factory === undefined) {
     return EMPTY_BODIES;
   }
-  const reading = combineBranchReadings(
-    factory.returned.map((each) => bodiesOf(each, each, following)),
-  );
+  const reading = {
+    ...combineBranchReadings(factory.returned.map((each) => bodiesOf(each, each, following))),
+    overwrites: false,
+  };
   return factory.given.some((each) => givesFormData(each, call, following))
     ? { ...reading, ambiguous: true }
     : reading;
