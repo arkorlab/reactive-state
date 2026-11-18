@@ -21,6 +21,9 @@ import { methodOf, writtenBy } from '../src/compiler/written.ts';
  * `this` bound to the new object: `{ ...base }` of a `base` whose `bump` counts `this.n` writes
  * through `this` when `bump` is called on it. A later property of the same name replaces an earlier one.
  */
+const UNSEEN_SPREAD =
+  'declare const base: { bump(): void }; const counter = { ...base, read() { return 1; } }; export function run() { return counter.read(); }';
+
 const CASES = [
   {
     id: 'spread-of-literal-with-writer',
@@ -84,8 +87,7 @@ const CASES = [
   },
   {
     id: 'spread-of-unseen-value-stays-false-known-limit-pin',
-    source:
-      'declare const base: { bump(): void }; const counter = { ...base, read() { return 1; } }; export function run() { return counter.read(); }',
+    source: UNSEEN_SPREAD,
     writes: false,
   },
 ] as const;
@@ -153,5 +155,13 @@ describe('held objects that spread the methods of another object', () => {
     expect(writesThis(methodsOf(receiver), method, writtenBy, { seen: new Set(), call })).toBe(
       writes,
     );
+  });
+
+  it('holds no method of a spread of a value the code does not show', () => {
+    using parsed = parseModule(api, 'held-spread-methods.ts', UNSEEN_SPREAD);
+    const { receiver } = receiverCallTarget(runCall(parsed.sourceFile));
+
+    expect(methodsOf(receiver).has('bump')).toBe(false);
+    expect(methodsOf(receiver).has('read')).toBe(true);
   });
 });

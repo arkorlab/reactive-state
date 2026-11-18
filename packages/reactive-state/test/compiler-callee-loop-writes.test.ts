@@ -121,5 +121,6 @@ describe('callees of members that a loop reassigns after calling them', () => {
     const callee = metadataCallee(pickCall(parsed.sourceFile).expression);
 
     expect(callee?.getText().startsWith('function quiet') === true).toBe(resolves);
+    expect(callee === undefined).toBe(!resolves);
   });
 });

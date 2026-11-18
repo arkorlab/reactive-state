@@ -79,7 +79,7 @@ const CASES = [
   {
     id: 'super-call-of-a-method-the-base-lacks-stays-false-pin',
     source:
-      'class Base { n = 0; } class Child extends Base { bump() { (super.read as () => void)(); } read() { return 1; } } const counter = new Child(); export function run() { counter.bump(); }',
+      'class Base { n = 0; } class Child extends Base { bump() { (super.read as () => void)(); } read() { this.n++; } } const counter = new Child(); export function run() { counter.bump(); }',
     writes: false,
   },
 ] as const;
