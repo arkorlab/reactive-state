@@ -139,6 +139,30 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
+    id: 'alias-of-the-date-handed-twice',
+    pre: 'const pair=(_first:unknown,second:unknown)=>second;',
+    tag: `${DATED}{const copy=date;return String(pair(copy,copy));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'alias-read-after-a-helper-that-ignores-it',
+    pre: 'const count=(_value:unknown)=>1;',
+    tag: `${DATED}{const copy=date;return String([count(copy),copy]);}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'alias-read-after-a-helper-that-answers-a-string',
+    pre: 'const pair=(_first:unknown,second:unknown)=>second;',
+    tag: `${DATED}{const copy=date;return String([pair(copy,'x'),copy]);}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'alias-read-after-a-mapped-helper-that-ignores-it',
+    pre: 'const count=(_value:unknown)=>1;',
+    tag: `${DATED}{const copy=date;return String([[copy].map(count),copy]);}`,
+    local: DATE_TEXT,
+  },
+  {
     id: 'inline-callback-was-followed-pin',
     pre: '',
     tag: `${REST}values.map((value)=>value).join('')`,

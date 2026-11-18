@@ -74,19 +74,22 @@ function functionsNamedBy(target: Identifier): readonly Answering[] {
     .filter((each) => isArrowFunction(each) || isFunctionExpression(each));
 }
 
-/** Which arguments of a call carry a Date: by position, and from a spread that does, on. */
+/**
+ * Which arguments of a call carry a Date: by position, and from a spread that does, on. Each is
+ * asked of a path of its own, so that what one visits (an alias both read) is not cut from the next.
+ */
 interface Handed {
   readonly at: ReadonlySet<number>;
   readonly from: number;
 }
 
-function handedBy(call: CallExpression, shared: DatedQueries['shared']): Handed {
+function handedBy(call: CallExpression, fresh: DatedQueries['fresh']): Handed {
   const at = new Set<number>();
   let from = Infinity;
   for (const [index, argument] of call.arguments.entries()) {
     if (isSpreadElement(argument)) {
-      if (shared(argument.expression)) from = Math.min(from, index);
-    } else if (shared(argument)) {
+      if (fresh(argument.expression)) from = Math.min(from, index);
+    } else if (fresh(argument)) {
       at.add(index);
     }
   }
@@ -102,7 +105,7 @@ function handedBy(call: CallExpression, shared: DatedQueries['shared']): Handed 
 export function helperResultCarriesDated(call: CallExpression, queries: DatedQueries): boolean {
   const functions = functionsOf(call.expression);
   if (functions.length === 0) return false;
-  const handed = handedBy(call, queries.shared);
+  const handed = handedBy(call, queries.fresh);
   return functions.some((fn) => answersHandedDate(fn, handed, queries.fresh));
 }
 
@@ -139,7 +142,7 @@ export function mappedResultCarriesDated(
     return returnedBy(target).some((returned) => queries.shared(returned));
   }
   const functions = functionsOf(target);
-  if (functions.length === 0 || !queries.shared(receiver)) return false;
+  if (functions.length === 0 || !queries.fresh(receiver)) return false;
   const handed: Handed = { at: new Set([0]), from: Infinity };
   return functions.some((fn) => answersHandedDate(fn, handed, queries.fresh));
 }
