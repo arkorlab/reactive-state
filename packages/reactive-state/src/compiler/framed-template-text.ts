@@ -1,29 +1,14 @@
 import {
   type ConditionalExpression,
   type Expression,
-  type FunctionDeclaration,
   type Identifier,
-  isArrayLiteralExpression,
-  isAsExpression,
   isBinaryExpression,
   isConditionalExpression,
-  isForInStatement,
-  isForOfStatement,
   isFunctionDeclaration,
   isIdentifier,
-  isNonNullExpression,
-  isObjectLiteralExpression,
-  isParenthesizedExpression,
-  isPostfixUnaryExpression,
   isPrefixUnaryExpression,
-  isPropertyAssignment,
-  isSatisfiesExpression,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
-  isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
-  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
   isVoidExpression,
@@ -32,10 +17,11 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, isAnswering, overloadsOf, parametersOf } from './answers.ts';
+import { type Answering, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { constantDeclaration, mentionsAccessibleArguments } from './framed-template-arguments.ts';
+import { singleUnchangedFunctionBody } from './framed-written-error-parameters.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 import { useOf } from './uses.ts';
 
@@ -103,7 +89,8 @@ function namedTagFunctions(name: Identifier, seen: Set<Node>): readonly Answerin
   const declared = frameDeclarationOf(name);
   if (declared === undefined) return undefined;
   if (isFunctionDeclaration(declared)) {
-    return unchangedFunction(declared) ? [declared] : undefined;
+    const body = singleUnchangedFunctionBody(declared);
+    return body === undefined ? undefined : [body];
   }
   if (
     !isVariableDeclaration(declared) ||
@@ -113,31 +100,6 @@ function namedTagFunctions(name: Identifier, seen: Set<Node>): readonly Answerin
     return undefined;
   }
   return resolvedTagFunctions(declared.initializer, seen);
-}
-
-/** Named function declarations keep their body when neither redeclared nor reassigned. */
-function unchangedFunction(declared: FunctionDeclaration): boolean {
-  if (declared.body === undefined || declared.name === undefined) return false;
-  const name = declared.name.text;
-  if (overloadsOf(declared).some((each) => each !== declared && each.body !== undefined)) {
-    return false;
-  }
-  const pending: Node[] = [declared.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      node.text === name &&
-      reassignedIdentifier(node) &&
-      frameDeclarationOf(node) === declared
-    ) {
-      return false;
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return true;
 }
 
 /** Every error-carrying substitution slot must remain unread or strictly tested without escaping. */
@@ -195,48 +157,5 @@ function nonCoercingTestUse(node: Identifier): boolean {
     isVoidExpression(parent) ||
     (isPrefixUnaryExpression(parent) && parent.operator === SyntaxKind.ExclamationToken) ||
     (isBinaryExpression(parent) && STRICT_EQUALITY.has(parent.operatorToken.kind))
-  );
-}
-
-/** Direct, destructuring, loop and update assignments replace the lexical binding. */
-function reassignedIdentifier(name: Identifier): boolean {
-  let target: Node = name;
-  while (assignmentWrapper(target)) target = target.parent;
-  const parent = target.parent;
-  if (isBinaryExpression(parent) && parent.left === target) {
-    const kind = parent.operatorToken.kind;
-    return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
-  }
-  if (isForInStatement(parent) || isForOfStatement(parent)) return parent.initializer === target;
-  return (
-    (isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) &&
-    (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)
-  );
-}
-
-/** Transparent expressions and assignment patterns propagate writes to their bound target. */
-function assignmentWrapper(target: Node): boolean {
-  const parent = target.parent;
-  return (
-    (transparentExpression(parent) && parent.expression === target) ||
-    isArrayLiteralExpression(parent) ||
-    isObjectLiteralExpression(parent) ||
-    isSpreadElement(parent) ||
-    isSpreadAssignment(parent) ||
-    (isPropertyAssignment(parent) && parent.initializer === target) ||
-    (isShorthandPropertyAssignment(parent) && parent.name === target)
-  );
-}
-
-/** Parentheses, type assertions, non-null markers and satisfies preserve the target reference. */
-function transparentExpression(
-  node: Node,
-): node is Expression & { readonly expression: Expression } {
-  return (
-    isParenthesizedExpression(node) ||
-    isAsExpression(node) ||
-    isTypeAssertion(node) ||
-    isNonNullExpression(node) ||
-    isSatisfiesExpression(node)
   );
 }
