@@ -28,6 +28,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { borrowedReturnTargets } from './statement-call-borrowed.ts';
 import {
   EMPTY_NODE_SET,
   EMPTY_PROJECT_SET,
@@ -270,6 +271,7 @@ function resolveCallReturnTargets(
   ) {
     results.push(...resolveBindCallTargets(call, callee.expression, ctx, trace));
   }
+  results.push(...borrowedReturnTargets(call, ctx, trace));
   const calleeValues = resolveTargetsWithTrace(call.expression, ctx, trace);
   for (const calleeVal of calleeValues) {
     if (calleeVal.kind === 'node' && isCallableNode(calleeVal.node)) {
