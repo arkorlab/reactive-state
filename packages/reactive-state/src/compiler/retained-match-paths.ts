@@ -43,6 +43,7 @@ import {
 import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { isVisiting, whereUnstopped } from './cycle-memo.ts';
 import { literalKey } from './exported-values.ts';
 import { type FrameBinding, frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { readsOf } from './local-module-reads.ts';
@@ -53,7 +54,6 @@ import {
   isPatternTarget,
   UPDATING,
 } from './local-write-paths.ts';
-import { isVisiting, whereUnstopped } from './retained-match-memo.ts';
 import { bindingIdentifiers, readsBinding } from './scope.ts';
 
 /**

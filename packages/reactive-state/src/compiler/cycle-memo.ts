@@ -1,9 +1,9 @@
 /**
- * The proofs of `retained-match-paths.ts` and `retained-match-receivers.ts` follow each name a
- * value is written as, and stop at a name they are already following, a cycle, where they answer
- * as the conservative reading does. An answer that no such stop shaped is the same however the
- * name is reached, so it is kept: a chain of names that each branch names twice
- * (`const s1 = flag ? s0 : s0.trim()`) then costs a proof of each name, not one of each path
+ * The proofs that follow each name or callback a value is written as — `retained-match-paths.ts`,
+ * `retained-match-receivers.ts`, `local-writes.ts` — stop at one they are already following, a
+ * cycle, where they answer as the conservative reading does. An answer that no such stop shaped is
+ * the same however the name is reached, so it is kept: a chain of names that each branch names
+ * twice (`const s1 = flag ? s0 : s0.trim()`) then costs a proof of each name, not one of each path
  * through the chain, which doubles with each name.
  */
 

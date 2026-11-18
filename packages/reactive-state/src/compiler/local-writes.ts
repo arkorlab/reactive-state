@@ -33,6 +33,7 @@ import {
 
 import { type Answering, givenAt, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { whereUnstopped, isVisiting } from './cycle-memo.ts';
 import { frameBindingOf } from './framed-bindings.ts';
 import { globalPath } from './global-answers.ts';
 import { followedOf, type JsonReading } from './json-reading.ts';
@@ -202,7 +203,7 @@ function writesInto(declaration: VariableDeclaration, calls: Calls, resolve: Res
  * writes where the code says: each read of it that changes it, or hands it on (`writesAt`).
  */
 export function writesOf(declared: Identifier, held: Expression | undefined, walk: Walk): Writes {
-  if (walk.visiting.has(declared)) {
+  if (isVisiting(walk.visiting, declared)) {
     return NONE;
   }
   const inner: Walk = { ...walk, visiting: new Set([...walk.visiting, declared]) };
@@ -390,6 +391,23 @@ function changesHanded(call: CallExpression | NewExpression, walk: Walk): boolea
   });
 }
 
+/** What each parameter of a function is written, where no cycle shaped it, by the calls it is read with. */
+const PARAMETER_WRITES = new WeakMap<Calls, WeakMap<Identifier, Writes>>();
+
+/**
+ * What the code of `fn` writes into the parameter `each` of it binds, once where no cycle shaped
+ * it: callbacks that hand it to the same earlier callback twice cost a read of each, not of each
+ * path.
+ */
+function parameterWrites(each: Identifier, inner: Walk): Writes {
+  if (inner.reads !== undefined) {
+    return writesOf(each, undefined, inner);
+  }
+  const known = PARAMETER_WRITES.get(inner.calls) ?? new WeakMap<Identifier, Writes>();
+  PARAMETER_WRITES.set(inner.calls, known);
+  return whereUnstopped(known, each, () => writesOf(each, undefined, inner));
+}
+
 /** Whether the code of `fn` writes into what a parameter of it `at` says of binds. */
 function writesParameters(fn: Answering, walk: Walk, at: (index: number) => boolean): boolean {
   const inner: Walk = { ...walk, owner: fn };
@@ -397,7 +415,7 @@ function writesParameters(fn: Answering, walk: Walk, at: (index: number) => bool
     return (
       at(index) &&
       bindingIdentifiers(parameter.name).some((each) => {
-        const found = writesOf(each, undefined, inner);
+        const found = parameterWrites(each, inner);
         return found.changes || found.values.length > 0;
       })
     );

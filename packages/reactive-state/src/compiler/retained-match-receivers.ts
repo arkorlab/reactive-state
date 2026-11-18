@@ -37,6 +37,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { isVisiting, whereUnstopped } from './cycle-memo.ts';
 import { literalKey } from './exported-values.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { readsOf } from './local-module-reads.ts';
@@ -49,7 +50,6 @@ import {
   writtenAt,
 } from './local-write-paths.ts';
 import { constantValue } from './numbers.ts';
-import { isVisiting, whereUnstopped } from './retained-match-memo.ts';
 import {
   constBindingOf,
   isMutationTarget,
