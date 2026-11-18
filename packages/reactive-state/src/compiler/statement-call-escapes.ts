@@ -290,6 +290,7 @@ function activateWholeObjectProperty(
     (includeSetters && isSetAccessorDeclaration(property))
   ) {
     driver.activateCallable(property, selfReceiver);
+    activateReturnedValues(property, selfReceiver, driver);
   } else if (isPropertyAssignment(property)) {
     activateEscapedExpression(property.initializer, driver);
   } else if (isShorthandPropertyAssignment(property)) {
@@ -373,6 +374,7 @@ function activateWholeClassMember(
     : receivers.instanceReceiver;
   if (isDeferredMember(member)) {
     driver.activateCallable(member, memberReceiver);
+    activateReturnedValues(member, memberReceiver, driver);
     if (isGetAccessorDeclaration(member)) {
       const returnedValues = returnedTargetsOf(member, driver.ctx, {
         receiver: memberReceiver,
