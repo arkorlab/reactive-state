@@ -18,7 +18,8 @@ import { methodOf, writtenBy } from '../src/compiler/written.ts';
 
 /**
  * Own members of an instance are made in the order the classes run: each class's fields, then its
- * constructor, base first; an assignment on a path that may not run keeps what the name held.
+ * constructor, base first; what a constructor installs is one more body beside what the name held,
+ * and never takes one away, whatever precedes it (a branch, an early return, a wrapped original).
  */
 const CASES = [
   {
@@ -64,15 +65,45 @@ const CASES = [
     writes: true,
   },
   {
-    id: 'straight-line-install-replaces-an-earlier-one-pin',
+    id: 'straight-line-installs-keep-the-earlier-writer',
     source:
       'class Counter { n = 0; bump: () => void; constructor() { this.bump = () => { this.n++; }; this.bump = () => 0; } } const counter = new Counter(); export function run() { counter.bump(); }',
-    writes: false,
+    writes: true,
   },
   {
-    id: 'unconditional-install-replaces-a-writing-method-pin',
+    id: 'unconditional-install-keeps-the-writing-method',
     source:
       'class Counter { n = 0; bump() { this.n++; } constructor() { this.bump = () => 0; } } const counter = new Counter(); export function run() { counter.bump(); }',
+    writes: true,
+  },
+  {
+    id: 'install-after-an-early-return-keeps-the-writing-method',
+    source:
+      'class Counter { n = 0; bump() { this.n++; } constructor(keep: boolean) { if (keep) return; this.bump = () => 0; } } const counter = new Counter(true); export function run() { counter.bump(); }',
+    writes: true,
+  },
+  {
+    id: 'install-after-an-early-return-in-a-nested-block-keeps-the-writing-method',
+    source:
+      'class Counter { n = 0; bump() { this.n++; } constructor(keep: boolean) { { if (keep) { return; } } this.bump = () => 0; } } const counter = new Counter(true); export function run() { counter.bump(); }',
+    writes: true,
+  },
+  {
+    id: 'wrapper-keeps-the-writing-method-it-captured',
+    source:
+      'class Counter { n = 0; bump() { this.n++; } constructor() { const original = this.bump.bind(this); this.bump = () => original(); } } const counter = new Counter(); export function run() { counter.bump(); }',
+    writes: true,
+  },
+  {
+    id: 'install-over-a-field-keeps-the-writing-field',
+    source:
+      'class Counter { n = 0; bump = () => { this.n++; }; constructor() { this.bump = () => 0; } } const counter = new Counter(); export function run() { counter.bump(); }',
+    writes: true,
+  },
+  {
+    id: 'constructor-without-installs-keeps-the-pure-method-pin',
+    source:
+      'class Counter { n = 0; bump() { return this.n; } constructor() { this.n = 1; } } const counter = new Counter(); export function run() { counter.bump(); }',
     writes: false,
   },
 ] as const;

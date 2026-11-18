@@ -5,10 +5,8 @@ import {
   type GetAccessorDeclaration,
   type Identifier,
   isArrowFunction,
-  isBlock,
   isPropertyAccessExpression,
   isElementAccessExpression,
-  isExpressionStatement,
   isBinaryExpression,
   isClassDeclaration,
   isClassExpression,
@@ -24,7 +22,6 @@ import {
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
   isObjectLiteralExpression,
-  isParenthesizedExpression,
   isPrivateIdentifier,
   isPropertyAssignment,
   isPropertyDeclaration,
@@ -79,7 +76,7 @@ export function instanceMethods(
 
 /**
  * The surviving methods of a class or its instances, including source-written bases: each name holds
- * every body that may run, more than one only where a constructor installs on a path that may not run.
+ * every body that may run, more than one only where a constructor installs a function beside it.
  */
 export function memberMethods(
   declared: ClassLikeDeclaration,
@@ -113,10 +110,10 @@ function prototypeMethods(declared: ClassLikeDeclaration): ReadonlyMap<string, r
 
 /**
  * The functions a constructor installs on the instance, `this.bump = () => { … }` or `this['bump'] =
- * function () { … }`, in the order it runs them: one the constructor always runs replaces the method
- * or field of the name, one on a path that may not run (a branch, a loop, an operand, a `try`) is one
- * more body the name may hold; a value that is no function written there leaves what the name held,
- * and the functions the constructor defines, which run later, install nothing.
+ * function () { … }`, each one more body the name may hold, beside what it held: the constructor may
+ * return before the assignment, wrap the method it replaces, or assign on a path that does not run, so
+ * an install never takes a body away. A value that is no function written there leaves what the name
+ * held, and the functions the constructor defines, which run later, install nothing.
  */
 function constructorCallables(
   declared: ClassLikeDeclaration,
@@ -126,7 +123,6 @@ function constructorCallables(
     (member): member is ConstructorDeclaration =>
       isConstructorDeclaration(member) && member.body !== undefined,
   );
-  const body = constructor?.body;
   const visit = (node: Node): void => {
     if (isArrowFunction(node) || ownsThis(node)) {
       return;
@@ -135,26 +131,12 @@ function constructorCallables(
       const key = installedKey(unwrapped(node.left));
       const value = unwrapped(node.right);
       if (key !== undefined && (isArrowFunction(value) || isFunctionExpression(value))) {
-        const held = methods.get(key) ?? [];
-        methods.set(key, alwaysRuns(node, body) ? [value] : [...held, value]);
+        methods.set(key, [...(methods.get(key) ?? []), value]);
       }
     }
     node.forEachChild(visit);
   };
-  body?.forEachChild(visit);
-}
-
-/** Whether `node` runs whenever the constructor does: only statements and plain braces lie between. */
-function alwaysRuns(node: Node, body: Node | undefined): boolean {
-  for (let at: Node = node.parent; at !== body; at = at.parent) {
-    if (!isExpressionStatement(at) && !isBlock(at) && !isParenthesizedExpression(at)) {
-      return false;
-    }
-    if (isBlock(at) && at.parent !== body && !isBlock(at.parent)) {
-      return false;
-    }
-  }
-  return true;
+  constructor?.body?.forEachChild(visit);
 }
 
 /** The member `this.name` or `this['name']` names, as text. */

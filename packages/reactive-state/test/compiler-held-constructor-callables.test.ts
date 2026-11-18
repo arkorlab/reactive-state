@@ -18,8 +18,8 @@ import { methodOf, writtenBy } from '../src/compiler/written.ts';
 
 /**
  * A constructor that assigns a function or an arrow to a member of `this` installs a method of the
- * instance, as a field initializer does, and replaces a prototype method of the same name; a value
- * that is no function written there leaves the prototype method as it was.
+ * instance, as a field initializer does, beside the prototype method of the same name, which stays a
+ * candidate; a value that is no function written there leaves the prototype method as it was.
  */
 const CASES = [
   {
@@ -65,10 +65,10 @@ const CASES = [
     writes: true,
   },
   {
-    id: 'constructor-arrow-replaces-a-writing-prototype-method',
+    id: 'constructor-arrow-over-a-writing-prototype-method-keeps-it',
     source:
       'class Counter { n = 0; bump() { this.n++; } constructor() { this.bump = () => 0; } } const counter = new Counter(); export function run() { counter.bump(); }',
-    writes: false,
+    writes: true,
   },
   {
     id: 'constructor-bound-copy-keeps-the-writing-prototype-method',
