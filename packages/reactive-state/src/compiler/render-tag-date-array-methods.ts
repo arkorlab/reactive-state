@@ -56,6 +56,20 @@ export const ELEMENT_CALLBACK_ARRAY_SLOT = 2;
 export const REDUCE_CALLBACK_ARRAY_SLOT = 3;
 
 /**
+ * Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an
+ * element of the receiver or the receiver itself (the array after the index of an element
+ * callback, and after the index of a reduction).
+ */
+export function callbackSlotHoldsDated(method: string, slot: number, count: number): boolean {
+  if (ELEMENT_CALLBACK_METHODS.has(method)) {
+    return slot === 0 || slot === ELEMENT_CALLBACK_ARRAY_SLOT;
+  }
+  if (COMPARATOR_METHODS.has(method)) return slot <= 1;
+  if (!REDUCE_ARRAY_METHODS.has(method)) return false;
+  return slot === 1 || slot === REDUCE_CALLBACK_ARRAY_SLOT || (slot === 0 && count < 2);
+}
+
+/**
  * Array methods that answer an element, an array of elements, or an iterator that yields them or
  * pairs that hold them (`entries`), of their receiver. A pair's index is a number, which the walk
  * does not tell from the element: it refuses the index written as text, where `values.map` does not.
@@ -144,21 +158,37 @@ function reduceResultCarriesDated(
   carries: (expression: Expression) => boolean,
 ): boolean {
   const [callback, initial] = call.arguments;
-  if (initial !== undefined && carries(isSpreadElement(initial) ? initial.expression : initial)) {
-    return true;
-  }
   const fn = callback === undefined ? undefined : unwrapped(callback);
   if (
     initial !== undefined &&
     fn !== undefined &&
     (isArrowFunction(fn) || isFunctionExpression(fn))
   ) {
-    return (
-      !answersLater(fn) &&
-      (returnedBy(fn).some((returned) => carries(returned)) || callbackKeepsCarrier(fn, carries))
-    );
+    return accumulatorCarriesDated(fn, initial, carries);
+  }
+  if (initial !== undefined && carries(isSpreadElement(initial) ? initial.expression : initial)) {
+    return true;
   }
   return carries(receiver);
+}
+
+/**
+ * Whether the accumulator a reduction's callback is handed holds a Date, where an initial value is
+ * given: what it was started from, what the callback answers for the next call, or what the callback
+ * puts into it. The elements of the receiver reach it only through those, so a sum or a count of them
+ * holds none.
+ */
+export function accumulatorCarriesDated(
+  callback: ArrowFunction | FunctionExpression,
+  initial: Expression,
+  carries: (expression: Expression) => boolean,
+): boolean {
+  if (carries(isSpreadElement(initial) ? initial.expression : initial)) return true;
+  return (
+    !answersLater(callback) &&
+    (returnedBy(callback).some((returned) => carries(returned)) ||
+      callbackKeepsCarrier(callback, carries))
+  );
 }
 
 /** The methods whose answer is a copy of the receiver that holds an argument. */

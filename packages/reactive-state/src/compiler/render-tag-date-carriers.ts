@@ -14,7 +14,6 @@ import {
   isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
-  isExpression,
   isForOfStatement,
   isFunctionExpression,
   isIdentifier,
@@ -45,16 +44,14 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
+  accumulatorCarriesDated,
   type CalledWith,
-  COMPARATOR_METHODS,
-  ELEMENT_CALLBACK_ARRAY_SLOT,
-  ELEMENT_CALLBACK_METHODS,
+  callbackSlotHoldsDated,
   elementMethodCarriesDated,
   REDUCE_ARRAY_METHODS,
-  REDUCE_CALLBACK_ARRAY_SLOT,
   writtenArrayCarriesDated,
 } from './render-tag-date-array-methods.ts';
-import { unpackCallExpression } from './render-tag-date-call-unpacking.ts';
+import { methodHandedCallback, unpackCallExpression } from './render-tag-date-call-unpacking.ts';
 import {
   type DatedQueries,
   isHandedDate,
@@ -301,39 +298,19 @@ function inlineCallbackSlotDated(
       iterableOrArgumentsDated(iterable, ctx, seen)
     );
   }
-  const call = isCallExpression(parent) ? parent : appliedCallOf(parent);
-  const unpacked = call === undefined ? undefined : unpackCallExpression(call, ctx.bindings);
-  if (unpacked?.args.kind !== 'elements' || unpacked.receiver === undefined) return false;
-  const target = unwrapped(unpacked.target);
-  const { elements } = unpacked.args;
-  if (!isExpression(at) || elements[0] !== at) return false;
-  if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) return false;
-  const method = frameMemberName(target);
+  const handed = methodHandedCallback(at, parent, ctx.bindings);
+  if (handed === undefined) return false;
+  const { elements, method, receiver } = handed;
+  const [, initial] = elements;
+  if (paramIndex === 0 && initial !== undefined && REDUCE_ARRAY_METHODS.has(method)) {
+    return accumulatorCarriesDated(callback, initial, (each) =>
+      carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
+    );
+  }
   return (
-    method !== undefined &&
     callbackSlotHoldsDated(method, paramIndex, elements.length) &&
-    iterableOrArgumentsDated(unpacked.receiver, ctx, seen)
+    iterableOrArgumentsDated(receiver, ctx, seen)
   );
-}
-
-/** The call whose list a callback is an element of, where `apply` or `Reflect.apply` is handed it: `values.map.apply(values, [callback])`. */
-function appliedCallOf(list: Node): CallExpression | undefined {
-  if (!isArrayLiteralExpression(list)) return undefined;
-  const { parent } = useOf(list);
-  return isCallExpression(parent) ? parent : undefined;
-}
-
-/**
- * Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an
- * element of the receiver or the receiver itself (the array after the index of an element
- * callback, and after the index of a reduction).
- */
-function callbackSlotHoldsDated(method: string, slot: number, count: number): boolean {
-  if (ELEMENT_CALLBACK_METHODS.has(method))
-    return slot === 0 || slot === ELEMENT_CALLBACK_ARRAY_SLOT;
-  if (COMPARATOR_METHODS.has(method)) return slot <= 1;
-  if (!REDUCE_ARRAY_METHODS.has(method)) return false;
-  return slot === 1 || slot === REDUCE_CALLBACK_ARRAY_SLOT || (slot === 0 && count < 2);
 }
 
 function iterableOrArgumentsDated(

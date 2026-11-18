@@ -2,14 +2,17 @@ import {
   type CallExpression,
   type Expression,
   isArrayLiteralExpression,
+  isCallExpression,
   isElementAccessExpression,
+  isExpression,
   isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
+  type Node,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf } from './code-globals.ts';
+import { globalPathOf, useOf } from './code-globals.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { isWholeArgumentsReference, type WrapperBindings } from './render-raw-wrapper-bindings.ts';
 
@@ -106,4 +109,37 @@ function unpackAppliedList(
   }
   if (isWholeArgumentsReference(actual, bindings)) return { kind: KIND_WHOLE_ARGS };
   return { kind: KIND_SPREAD, list: actual };
+}
+
+export interface HandedCallback {
+  readonly elements: readonly Expression[];
+  readonly method: string;
+  readonly receiver: Expression;
+}
+
+/**
+ * The method a callback is handed to, and the receiver and arguments it runs with: of a direct call,
+ * of `call`, and of the list `apply` and `Reflect.apply` are handed, the callback being the first.
+ */
+export function methodHandedCallback(
+  at: Node,
+  parent: Node,
+  bindings: WrapperBindings,
+): HandedCallback | undefined {
+  const call = isCallExpression(parent) ? parent : appliedCallOf(parent);
+  const unpacked = call === undefined ? undefined : unpackCallExpression(call, bindings);
+  if (unpacked?.args.kind !== 'elements' || unpacked.receiver === undefined) return undefined;
+  const target = unwrapped(unpacked.target);
+  const { elements } = unpacked.args;
+  if (!isExpression(at) || elements[0] !== at) return undefined;
+  if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) return undefined;
+  const method = frameMemberName(target);
+  return method === undefined ? undefined : { elements, method, receiver: unpacked.receiver };
+}
+
+/** The call whose list a callback is an element of, where `apply` or `Reflect.apply` is handed it: `values.map.apply(values, [callback])`. */
+function appliedCallOf(list: Node): CallExpression | undefined {
+  if (!isArrayLiteralExpression(list)) return undefined;
+  const { parent } = useOf(list);
+  return isCallExpression(parent) ? parent : undefined;
 }
