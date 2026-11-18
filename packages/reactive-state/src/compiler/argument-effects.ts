@@ -1,55 +1,48 @@
 import {
+  type BindingName,
   type ClassLikeDeclaration,
-  type CallExpression,
   type ConstructorDeclaration,
   type Expression,
-  isArrayLiteralExpression,
+  isBindingElement,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
   isComputedPropertyName,
   isConstructorDeclaration,
-  isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
   isNewExpression,
-  isNumericLiteral,
-  isPropertyAccessExpression,
   isPropertyDeclaration,
   isSetAccessorDeclaration,
-  isStringLiteral,
+  isSpreadElement,
   isTaggedTemplateExpression,
-  isTemplateExpression,
-  isVariableDeclaration,
-  type NewExpression,
   type Node,
-  type ParameterDeclaration,
-  type TaggedTemplateExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
+import { allWrittenTargets, localArrayCall, localWrite } from './argument-local-arrays.ts';
+import {
+  type CalleeLookup,
+  classifyNativeInvocation,
+  type NativeInvocation,
+  tagArguments,
+} from './argument-native-calls.ts';
 import { BUILT_INS, PLATFORM_ALIKE } from './built-ins.ts';
 import { globalPathOf } from './code-globals.ts';
-import { declarationOf } from './framed.ts';
-import { rootOf } from './kept.ts';
 import { writtenBy } from './written.ts';
 
 interface Execution {
   readonly root: Node;
   readonly fn: Node | undefined;
   readonly trail: ReadonlySet<Node>;
-  readonly calleeOf: CalleeOf;
+  readonly calleeOf: CalleeLookup;
 }
-type CalleeOf = (node: Expression) => Node | undefined;
-type Invocation = CallExpression | NewExpression | TaggedTemplateExpression;
 type Callable = Answering | ConstructorDeclaration;
-const LOCAL_ARRAY_CALLS = new Set(['pop', 'push', 'shift', 'unshift']);
 const DEFINED: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.ArrayLiteralExpression,
   SyntaxKind.ArrowFunction,
@@ -69,7 +62,7 @@ const DEFINED: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /** Executing an argument can invalidate values another argument selected before the callee runs. */
-export function argumentChanges(argument: Expression, calleeOf: CalleeOf): boolean {
+export function argumentChanges(argument: Expression, calleeOf: CalleeLookup): boolean {
   const pending: Execution[] = [{ root: argument, fn: undefined, trail: new Set(), calleeOf }];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     if (current.trail.has(current.root)) {
@@ -86,9 +79,11 @@ export function argumentChanges(argument: Expression, calleeOf: CalleeOf): boole
         definedClass(node, visit);
         return;
       }
-      const written = writtenBy(node);
-      status.changed = written !== undefined && !localWrite(written, node, context.fn);
+      status.changed = allWrittenTargets(node).some(
+        (target) => !localWrite(target, node, context.fn),
+      );
       if (!status.changed && invoked(node)) {
+        const written = writtenBy(node);
         const local = written !== undefined && localArrayCall(node, written, context.fn);
         status.changed = !local && !queueInvocation(node, { ...context, trail }, pending);
       }
@@ -105,26 +100,50 @@ export function argumentChanges(argument: Expression, calleeOf: CalleeOf): boole
 }
 
 /** Calls, constructions and tags execute source code; a function merely passed as a value does not. */
-function invoked(node: Node): node is Invocation {
+function invoked(node: Node): node is NativeInvocation {
   return isCallExpression(node) || isNewExpression(node) || isTaggedTemplateExpression(node);
 }
 
 /** Source invocation roots, preserving generator suspension and native call handling. */
-function queueInvocation(node: Invocation, current: Execution, pending: Execution[]): boolean {
+function queueInvocation(
+  node: NativeInvocation,
+  current: Execution,
+  pending: Execution[],
+): boolean {
   const callee = current.calleeOf(isTaggedTemplateExpression(node) ? node.tag : node.expression);
   if (callee === undefined) {
     return false;
   }
   const path = globalPathOf(callee);
   if (path !== undefined && (BUILT_INS.has(path[0] ?? '') || PLATFORM_ALIKE.has(path[0] ?? ''))) {
-    return true;
+    return queueNative(node, path, current, pending);
   }
   return queueSource(node, callee, current, pending);
 }
 
+/** Known globals with no synchronous hook, or whose callback body can be queued directly. */
+function queueNative(
+  node: NativeInvocation,
+  path: readonly string[],
+  current: Execution,
+  pending: Execution[],
+): boolean {
+  const decision = classifyNativeInvocation(node, path, current.calleeOf);
+  if (decision.kind === 'rejected') {
+    return false;
+  }
+  if (decision.kind === 'callback') {
+    queueDefaults(decision.fn, [], current, pending);
+    if (!generator(decision.fn)) {
+      pending.push({ ...current, root: decision.body, fn: decision.fn });
+    }
+  }
+  return true;
+}
+
 /** A known source function's immediate defaults, body and instance fields. */
 function queueSource(
-  node: Invocation,
+  node: NativeInvocation,
   callee: Node,
   current: Execution,
   pending: Execution[],
@@ -156,7 +175,7 @@ function queueFields(callee: ClassLikeDeclaration, current: Execution, pending: 
   }
 }
 
-/** Omitted, undefined or unproven actual values may execute a parameter default. */
+/** Omitted, undefined, spread-shifted or unproven actual values may execute a parameter default. */
 function queueDefaults(
   fn: Callable,
   given: readonly Expression[],
@@ -164,36 +183,73 @@ function queueDefaults(
   pending: Execution[],
 ): void {
   let index = 0;
-  const parameters = (fn.parameters as readonly ParameterDeclaration[] | undefined) ?? [];
-  for (const parameter of parameters) {
+  let shifted = false;
+  for (const parameter of fn.parameters) {
     if (isIdentifier(parameter.name) && parameter.name.text === 'this') {
       continue;
     }
-    if (parameter.initializer !== undefined && mayBeUndefined(given[index], current.calleeOf)) {
+    const actual = given[index];
+    shifted ||= actual !== undefined && isSpreadElement(actual);
+    if (
+      parameter.initializer !== undefined &&
+      (shifted || mayBeUndefined(actual, current.calleeOf))
+    ) {
       pending.push({ ...current, root: parameter.initializer, fn });
+    }
+    if (!isIdentifier(parameter.name)) {
+      queuePattern(parameter.name, fn, current, pending);
     }
     index += 1;
   }
 }
 
+/** Binding-element defaults and computed keys inside a destructured parameter pattern. */
+function queuePattern(
+  root: BindingName,
+  fn: Callable,
+  current: Execution,
+  pending: Execution[],
+): void {
+  const stack: BindingName[] = [root];
+  for (let name = stack.pop(); name !== undefined; name = stack.pop()) {
+    if (isIdentifier(name)) {
+      continue;
+    }
+    for (const element of name.elements) {
+      const nested = queuePatternElement(element, fn, current, pending);
+      if (nested !== undefined) {
+        stack.push(nested);
+      }
+    }
+  }
+}
+
+/** Queues one binding element's computed key and default, returning any nested binding pattern. */
+function queuePatternElement(
+  element: Node,
+  fn: Callable,
+  current: Execution,
+  pending: Execution[],
+): BindingName | undefined {
+  if (!isBindingElement(element)) {
+    return undefined;
+  }
+  if (element.propertyName !== undefined && isComputedPropertyName(element.propertyName)) {
+    pending.push({ ...current, root: element.propertyName.expression, fn });
+  }
+  if (element.initializer !== undefined) {
+    pending.push({ ...current, root: element.initializer, fn });
+  }
+  return element.name === undefined || isIdentifier(element.name) ? undefined : element.name;
+}
+
 /** A source-proven present value skips a default; other actuals retain its possible effects. */
-function mayBeUndefined(value: Expression | undefined, calleeOf: CalleeOf): boolean {
+function mayBeUndefined(value: Expression | undefined, calleeOf: CalleeLookup): boolean {
   const held = value === undefined ? undefined : calleeOf(value);
   return (
     held === undefined ||
     (!DEFINED.has(held.kind) && !isAnswering(held) && !isClassDeclaration(held))
   );
-}
-
-/** Native tag strings are present before any substitutions. */
-function tagArguments(node: Node): readonly Expression[] {
-  if (!isTaggedTemplateExpression(node)) {
-    return [];
-  }
-  const substitutions = isTemplateExpression(node.template)
-    ? node.template.templateSpans.map((span) => span.expression)
-    : [];
-  return [node.template, ...substitutions];
 }
 
 /** A source constructor or an ordinary function called with new. */
@@ -209,89 +265,6 @@ function generator(node: Node): boolean {
     (isFunctionDeclaration(node) || isFunctionExpression(node) || isMethodDeclaration(node)) &&
     node.asteriskToken !== undefined
   );
-}
-
-/** Rebinding a local or changing a fresh local array does not reach an earlier argument. */
-function localWrite(target: Node, operation: Node, fn: Node | undefined): boolean {
-  const root = rootOf(target);
-  if (fn === undefined || root === undefined) {
-    return false;
-  }
-  const declared = declarationOf(root);
-  if (declared === undefined || !within(declared, fn)) {
-    return false;
-  }
-  if (isIdentifier(target) && !isCallExpression(operation)) {
-    return true;
-  }
-  return (
-    isVariableDeclaration(declared) &&
-    declared.initializer !== undefined &&
-    isArrayLiteralExpression(unwrapped(declared.initializer))
-  );
-}
-
-/** Array insertion/removal has no callback; assignments of own methods invalidate that proof. */
-function localArrayCall(node: Node, target: Node, fn: Node | undefined): boolean {
-  if (fn === undefined || !isCallExpression(node) || !localWrite(target, node, fn)) {
-    return false;
-  }
-  const member = unwrapped(node.expression);
-  if (!isPropertyAccessExpression(member) || !LOCAL_ARRAY_CALLS.has(member.name.text)) {
-    return false;
-  }
-  const root = rootOf(target);
-  const declared = root === undefined ? undefined : declarationOf(root);
-  const status = { changed: false };
-  const visit = (each: Node): void => {
-    status.changed ||= replacesArrayMethod(each, declared);
-    if (!status.changed) {
-      each.forEachChild(visit);
-    }
-  };
-  visit(fn);
-  return !status.changed;
-}
-
-/** Named own writes and calls on another receiver can replace an array's native methods. */
-function replacesArrayMethod(node: Node, declared: Node | undefined): boolean {
-  const written = writtenBy(node);
-  const root = written === undefined ? undefined : rootOf(written);
-  if (written === undefined || root === undefined || declarationOf(root) !== declared) {
-    return false;
-  }
-  if (isCallExpression(node)) {
-    const member = unwrapped(node.expression);
-    const receiver = isPropertyAccessExpression(member) ? rootOf(member.expression) : undefined;
-    return receiver === undefined || declarationOf(receiver) !== declared;
-  }
-  if (isPropertyAccessExpression(written)) {
-    return written.name.text !== 'length';
-  }
-  if (isElementAccessExpression(written)) {
-    const key = unwrapped(written.argumentExpression);
-    return !(
-      (isNumericLiteral(key) || isStringLiteral(key)) &&
-      Number.isSafeInteger(Number(key.text)) &&
-      Number(key.text) >= 0
-    );
-  }
-  return false;
-}
-
-/** A declaration owned by this invocation rather than captured from a caller. */
-function within(node: Node, owner: Node): boolean {
-  for (let at: Node = node; !isSourceFileNode(at); at = at.parent) {
-    if (at === owner) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/** SourceFile is the outer boundary of lexical ownership. */
-function isSourceFileNode(node: Node): boolean {
-  return node.kind === SyntaxKind.SourceFile;
 }
 
 /** Class definition evaluates names and static members while deferring instance bodies. */

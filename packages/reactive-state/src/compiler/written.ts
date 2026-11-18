@@ -1,7 +1,6 @@
 import {
   type CallExpression,
   type Expression,
-  isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isDeleteExpression,
@@ -10,32 +9,30 @@ import {
   isForOfStatement,
   isIdentifier,
   isNewExpression,
-  isObjectLiteralExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
-  isComputedPropertyName,
-  isSpreadAssignment,
-  isSpreadElement,
   isVariableDeclarationList,
   type Node,
-  type ObjectLiteralElementLike,
-  type SpreadAssignment,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { literalName, unwrapped } from './bounded.ts';
+import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { initializerOf, takenApartOf } from './framed.ts';
-import { constantValue } from './numbers.ts';
+import { isStickyPattern, keepsPatternIndex, symbolPatternChanges } from './pattern-writes.ts';
 import {
-  isStickyPattern,
-  keepsPatternIndex,
-  patternSymbolName,
-  symbolPatternChanges,
-} from './pattern-writes.ts';
+  appliedArguments,
+  argumentAt,
+  asCallArguments,
+  type CallArgument,
+  followedValue,
+  globalCallOf,
+  memberNameOf,
+  reflectSetReceivers,
+  slotArguments,
+} from './written-arguments.ts';
+import { transferredBy } from './written-transfers.ts';
 
 /**
  * What of a shared module's code writes into what it is given, where it writes it (`settled.ts`):
@@ -212,7 +209,7 @@ const STREAM_PARTS: ReadonlySet<string> = new Set(['getReader', 'getWriter', 'pi
 
 /** The name of the method `call` calls, by its name or by text in brackets; none of another call. */
 export function methodOf(call: CallExpression): string | undefined {
-  return nameOf(call.expression);
+  return memberNameOf(call.expression);
 }
 
 /** What `node` writes into, where it writes: what it assigns, counts up, deletes, changes in place. */
@@ -243,132 +240,37 @@ export function writtenBy(node: Node): Node | undefined {
  * What a call writes beside its receiver: the event `dispatchEvent` is given, whose target and
  * cancellation flags a dispatch changes, or the buffers a structured clone's transfer list detaches.
  */
+/** The argument expressions supplied to `call`, including prebound and applied arguments. */
+export function writtenCallValues(call: CallExpression): readonly Expression[] {
+  const globalCall = globalCallOf(call);
+  if (globalCall !== undefined) {
+    return globalCall.given.map((each) => each.expression);
+  }
+  const lent = borrowedOf(call) ?? boundOf(call);
+  if (lent !== undefined) {
+    return lent.given.map((each) => each.expression);
+  }
+  return asCallArguments(call.arguments).map((each) => each.expression);
+}
+
 export function writtenArgumentBy(node: Node): readonly Node[] {
   if (!isCallExpression(node)) {
     return [];
   }
-  if (globalPathOf(unwrapped(node.expression))?.join('.') === 'structuredClone') {
-    return transferredBy(node.arguments[1]);
+  const globalCall = globalCallOf(node);
+  if (globalCall?.path === 'structuredClone') {
+    return transferredBy(globalCall.given);
+  }
+  if (globalCall?.path === 'Reflect.set') {
+    return reflectSetReceivers(globalCall.given);
   }
   const invoked = borrowedOf(node) ?? boundOf(node);
   if ((invoked?.method ?? methodOf(node)) !== 'dispatchEvent') {
     return [];
   }
-  const [argument] = invoked?.given ?? node.arguments;
-  if (argument === undefined) {
-    return [];
-  }
-  return [isSpreadElement(argument) ? argument.expression : argument];
-}
-
-/** The transfer list structuredClone detaches, where the code writes its options and their aliases. */
-function transferredBy(options: Expression | undefined): readonly Node[] {
-  const value = options === undefined ? undefined : patternValue(options);
-  if (value === undefined || !isObjectLiteralExpression(value)) {
-    return [];
-  }
-  const pending = [...value.properties];
-  const seen = new Set<Expression>([value]);
-  for (let property = pending.pop(); property !== undefined; property = pending.pop()) {
-    if (isSpreadAssignment(property)) {
-      const targets = spreadTransfers(property.expression, pending, seen);
-      if (targets !== undefined) {
-        return targets;
-      }
-      continue;
-    }
-    const targets = propertyTransfers(property, value);
-    if (targets !== undefined) {
-      return targets;
-    }
-  }
-  return [];
-}
-
-/** The transfer targets one options property writes, or none where it names another option. */
-function propertyTransfers(
-  property: Exclude<ObjectLiteralElementLike, SpreadAssignment>,
-  options: Expression,
-): readonly Node[] | undefined {
-  const { name } = property;
-  const key = isComputedPropertyName(name)
-    ? constantValue(name.expression, initializerOf)
-    : name.text;
-  if (key === undefined) {
-    return transferTargets(options);
-  }
-  if (key !== 'transfer') {
-    return undefined;
-  }
-  if (isPropertyAssignment(property)) {
-    return transferTargets(property.initializer);
-  }
-  return isShorthandPropertyAssignment(property) && isIdentifier(property.name)
-    ? transferTargets(property.name)
-    : [];
-}
-
-/** Adds a known options spread's properties, or reads an unknown spread as what may be transferred. */
-function spreadTransfers(
-  expression: Expression,
-  pending: ObjectLiteralElementLike[],
-  seen: Set<Expression>,
-): readonly Node[] | undefined {
-  const spread = patternValue(expression);
-  if (!isObjectLiteralExpression(spread)) {
-    return transferTargets(expression);
-  }
-  if (seen.has(spread)) {
-    return [];
-  }
-  seen.add(spread);
-  pending.push(...spread.properties);
-  return undefined;
-}
-
-/** The buffers a transfer list holds, through list and entry aliases, without following their constructions. */
-function transferTargets(list: Expression): readonly Node[] {
-  const pending = [list];
-  const seen = new Set<Expression>();
-  const targets: Node[] = [];
-  while (pending.length > 0) {
-    const expression = pending.pop();
-    if (expression === undefined) {
-      break;
-    }
-    const value = unwrapped(expression);
-    if (seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    if (isArrayLiteralExpression(value)) {
-      pending.push(...value.elements);
-      continue;
-    }
-    if (isSpreadElement(value)) {
-      pending.push(value.expression);
-      continue;
-    }
-    const declared = transferAlias(value);
-    if (declared === undefined) {
-      targets.push(value);
-    } else {
-      pending.push(declared);
-    }
-  }
-  return targets;
-}
-
-/** The alias or container a transfer entry is declared of; none of the construction that makes it. */
-function transferAlias(value: Expression): Expression | undefined {
-  const initial = isIdentifier(value) ? initializerOf(value) : undefined;
-  const declared = initial === undefined ? undefined : unwrapped(initial);
-  return declared !== undefined &&
-    (isIdentifier(declared) ||
-      isArrayLiteralExpression(declared) ||
-      isObjectLiteralExpression(declared))
-    ? declared
-    : undefined;
+  return slotArguments(invoked?.given ?? asCallArguments(node.arguments), 0).map(
+    (each) => each.expression,
+  );
 }
 
 /**
@@ -379,8 +281,9 @@ function calledWrite(call: CallExpression): Node | undefined {
   const callee = unwrapped(call.expression);
   // `Atomics.add(counts, …)`, `Reflect.set(target, …)`: what a global's function is given, not the
   // global, though its name is a method's that changes what it is called on.
-  if (CHANGING_FUNCTIONS.has(globalPathOf(callee)?.join('.') ?? '')) {
-    return call.arguments[0];
+  const globalCall = globalCallOf(call);
+  if (globalCall !== undefined && CHANGING_FUNCTIONS.has(globalCall.path)) {
+    return argumentAt(globalCall.given, 0);
   }
   const borrowed = borrowedOf(call) ?? boundOf(call);
   if (borrowed !== undefined) {
@@ -469,7 +372,7 @@ function borrowedOf(call: CallExpression): LentMethod | undefined {
   const callee = unwrapped(call.expression);
   const [first, second] = call.arguments;
   if (globalPathOf(callee)?.join('.') === 'Reflect.apply') {
-    return lentOf(first, second, appliedValues(call.arguments[2]));
+    return lentOf(first, second, appliedArguments(call.arguments[2]));
   }
   if (
     !isPropertyAccessExpression(callee) ||
@@ -477,85 +380,55 @@ function borrowedOf(call: CallExpression): LentMethod | undefined {
   ) {
     return undefined;
   }
-  const given = callee.name.text === 'apply' ? appliedValues(second) : call.arguments.slice(1);
+  const given =
+    callee.name.text === 'apply'
+      ? appliedArguments(second)
+      : asCallArguments(call.arguments.slice(1));
   return lentOf(callee.expression, first, given);
 }
 
-/** The arguments written for `apply`, or their holder where the code does not write them apart. */
-function appliedValues(node: Expression | undefined): readonly Expression[] {
-  if (node === undefined) {
-    return [];
-  }
-  const value = patternValue(node);
-  return isArrayLiteralExpression(value) ? value.elements : [value];
-}
-
 /**
- * The method a name `call` calls holds bound, and what it is bound to — `push` of `const push =
- * items.push.bind(items)`, of `Array.prototype.push.bind(items)` — none of another call.
+ * The method `call` holds bound through `.bind(...)`, and what its first bind bound `this` to —
+ * `push` of `const push = items.push.bind(items)` or `Array.prototype.push.bind(items)`.
  */
 function boundOf(call: CallExpression): LentMethod | undefined {
-  const callee = unwrapped(call.expression);
-  const declared = isIdentifier(callee) ? initializerOf(callee) : undefined;
-  const binding = declared === undefined ? undefined : unwrapped(declared);
-  if (binding === undefined || !isCallExpression(binding)) {
-    return undefined;
+  const segments: (readonly CallArgument[])[] = [asCallArguments(call.arguments)];
+  const seen = new Set<Expression>();
+  let current = followedValue(call.expression);
+  let receiver: Expression | undefined;
+  while (isCallExpression(current) && !seen.has(current)) {
+    seen.add(current);
+    const binder = unwrapped(current.expression);
+    if (
+      (!isPropertyAccessExpression(binder) && !isElementAccessExpression(binder)) ||
+      memberNameOf(binder) !== 'bind'
+    ) {
+      return undefined;
+    }
+    receiver = current.arguments[0];
+    segments.push(asCallArguments(current.arguments.slice(1)));
+    current = followedValue(binder.expression);
   }
-  const binder = unwrapped(binding.expression);
-  const named =
-    isPropertyAccessExpression(binder) || isElementAccessExpression(binder)
-      ? nameOf(binder)
-      : undefined;
-  return named === 'bind' &&
-    (isPropertyAccessExpression(binder) || isElementAccessExpression(binder))
-    ? lentOf(binder.expression, binding.arguments[0], [
-        ...binding.arguments.slice(1),
-        ...call.arguments,
-      ])
-    : undefined;
+  return segments.length === 1
+    ? undefined
+    : lentOf(current, receiver, segments.toReversed().flat());
 }
 
 /** A borrowed or bound method's name, receiver and arguments, in the order it is given them. */
 interface LentMethod {
+  readonly given: readonly CallArgument[];
   readonly method: string;
   readonly receiver: Expression;
-  readonly given: readonly Expression[];
 }
 
 /** The name of the method `method` reads, lent to `receiver`; none of a method the compile cannot name. */
 function lentOf(
   method: Expression | undefined,
   receiver: Expression | undefined,
-  given: readonly Expression[],
+  given: readonly CallArgument[],
 ): LentMethod | undefined {
-  const name = nameOf(method);
+  const name = memberNameOf(method);
   return name === undefined || receiver === undefined
     ? undefined
     : { given, method: name, receiver };
-}
-
-/** The name `node` reads of what it reads it of, by its name or by text in brackets; none of another. */
-function nameOf(node: Expression | undefined): string | undefined {
-  const value = node === undefined ? undefined : unwrapped(node);
-  if (value !== undefined && isPropertyAccessExpression(value)) {
-    return value.name.text;
-  }
-  return value !== undefined && isElementAccessExpression(value)
-    ? (literalName(value) ?? patternSymbolName(value.argumentExpression))
-    : undefined;
-}
-
-/** What a pattern's name is declared of, through other names; itself where it shows none. */
-function patternValue(node: Expression): Expression {
-  let value = unwrapped(node);
-  const seen = new Set<Expression>();
-  while (isIdentifier(value) && !seen.has(value)) {
-    seen.add(value);
-    const declared = initializerOf(value);
-    if (declared === undefined) {
-      break;
-    }
-    value = unwrapped(declared);
-  }
-  return value;
 }
