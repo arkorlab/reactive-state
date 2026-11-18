@@ -1,4 +1,5 @@
 import {
+  type BinaryExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -172,7 +173,7 @@ function defaultMayBeArray(name: Identifier): boolean {
  * on every path. A name, a member, an element and a call may hold an array, and are none of these.
  */
 export function isNoArray(value: Expression): boolean {
-  return endsAtKinds(value, NO_ARRAY_KINDS, unwrapped);
+  return endsAtKinds(value, NO_ARRAY_KINDS, { strip: unwrapped, typed: false });
 }
 
 /** The written values whose type is a text, a number, a boolean or a bigint, whatever their operands are. */
@@ -199,7 +200,7 @@ const SCALAR_KINDS: ReadonlySet<SyntaxKind> = new Set([
  * something else than what it starts as, and is read as no scalar: only parentheses are looked through.
  */
 export function isScalarValue(value: Expression): boolean {
-  return endsAtKinds(value, SCALAR_KINDS, withoutParentheses);
+  return endsAtKinds(value, SCALAR_KINDS, { strip: withoutParentheses, typed: true });
 }
 
 /** `node` within the parentheses that wrap it. */
@@ -213,17 +214,27 @@ function withoutParentheses(node: Expression): Expression {
 function endsAtKinds(
   value: Expression,
   kinds: ReadonlySet<SyntaxKind>,
-  strip: (node: Expression) => Expression,
+  reading: { readonly strip: (node: Expression) => Expression; readonly typed: boolean },
 ): boolean {
   const pending = [value];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const written = strip(each);
+    const written = reading.strip(each);
     if (kinds.has(written.kind)) continue;
-    const ends = endsOf(written);
+    const ends =
+      reading.typed && isAddition(written) ? [written.left, written.right] : endsOf(written);
     if (ends === undefined) return false;
     pending.push(...ends);
   }
   return true;
+}
+
+/**
+ * An addition is typed by its operands where the type matters: a name that starts as `JSON.parse('0')
+ * + 1` is typed any, not number, and TypeScript lets an array be assigned to it. Both operands are
+ * read, so that only an addition of scalars is a scalar.
+ */
+function isAddition(value: Expression): value is BinaryExpression {
+  return isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.PlusToken;
 }
 
 /** The expressions a choice or a sequence may end at, and none for an operator that makes a scalar; undefined where it is neither. */

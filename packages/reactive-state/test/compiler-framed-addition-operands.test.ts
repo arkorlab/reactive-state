@@ -231,6 +231,36 @@ const CASES = [
   },
   {
     framed: true,
+    id: 'error-pushed-into-a-list-initialized-by-assignment',
+    source:
+      "export function p(error: Error): string { let list: unknown[]; list = []; list.push(error); return '' + list; }",
+  },
+  {
+    framed: true,
+    id: 'name-given-an-error-array-by-a-loop-head',
+    source:
+      "export function p(lists: Error[][]): string { let list; for (list of lists) { break; } return '' + list; }",
+  },
+  {
+    framed: true,
+    id: 'name-given-an-error-array-by-a-pattern',
+    source:
+      "export function p(error: Error): string { let list; [list] = [[error]]; return '' + list; }",
+  },
+  {
+    framed: true,
+    id: 'name-started-as-an-any-addition-given-an-error-array',
+    source:
+      "export function p(error: Error): string { let value = JSON.parse('0') + 1; value = [error]; return '' + value; }",
+  },
+  {
+    framed: false,
+    id: 'name-started-as-an-addition-of-scalars',
+    source:
+      "export function p(): string { let total = 1 + 2; total = total + 3; return '' + total; }",
+  },
+  {
+    framed: true,
     id: 'error-pushed-into-a-list-a-native-mutator-writes',
     source:
       "export function p(error: Error): string { const list: unknown[] = []; Object.assign(list, { label: 'items' }); list.push(error); return '' + list; }",
@@ -248,18 +278,18 @@ const CASES = [
       "export function p(error: Error): string { let value = 'x' as unknown; value = [error]; return '' + value; }",
   },
   {
-    framed: false,
+    framed: true,
     id: 'array-of-text-pushed-after-a-whole-reassignment',
     source:
       "export function p(): string { let list: unknown[] = []; list = []; list.push('a'); return '' + list; }",
   },
   {
-    framed: false,
+    framed: true,
     id: 'name-given-an-array-of-text',
     source: "export function p(): string { let list = ['a']; list = ['b']; return '' + list; }",
   },
   {
-    framed: false,
+    framed: true,
     id: 'name-given-an-alias-of-an-array-of-text',
     source:
       "export function p(): string { const base = ['a']; let list = ['b']; list = base; return '' + list; }",

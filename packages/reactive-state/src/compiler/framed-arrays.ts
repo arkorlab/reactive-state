@@ -303,26 +303,21 @@ function bindingArrayWords(
   if (binding === undefined) return false;
   if (reading === 'refused' && rewrittenArray(binding)) return true;
   if (writtenElementErrors(value, call, words, { pending, reading })) return true;
-  if (reading === 'followed' && !followedGivens(binding, pending)) return true;
+  if (reading === 'followed' && !followedGivens(binding)) return true;
   if (binding.initializer !== undefined) pending.push(binding.initializer);
   return false;
 }
 
 /**
- * What a name written as a whole elsewhere is given where it is assigned, as far as it is followed:
- * an array literal or a name is read in turn, a scalar is no array. Any other value, a call, a
- * member, a choice that ends at an array, may be one, a copy of an array of errors included, and the
- * name is refused, but for a name the code writes as a scalar. A value a pattern or a loop head gives is not read, and is left as it was.
+ * Whether a name written as a whole elsewhere may be read as it is shown to hold. A name the code
+ * writes as a scalar is no array. Any other name is refused unless everything it is given where it
+ * is assigned is no array (a literal, an operator's result, a function): an array literal, a name, a
+ * call, a member, a choice that ends at one, and a value a pattern or a loop head gives, may be a
+ * list that holds an error, and the name is refused as the reading that refuses every list does.
  */
-function followedGivens(binding: FrameBinding, pending: Expression[]): boolean {
+function followedGivens(binding: FrameBinding): boolean {
   if (writtenScalar(binding)) return true;
-  for (const given of givenValues(binding)) {
-    if (given === undefined) continue;
-    const written = unwrapped(given);
-    if (isArrayLiteralExpression(written) || isIdentifier(written)) pending.push(written);
-    else if (!isNoArray(written)) return false;
-  }
-  return true;
+  return givenValues(binding).every((given) => given !== undefined && isNoArray(given));
 }
 
 const SCALAR_TYPES: ReadonlySet<SyntaxKind> = new Set([
