@@ -14,7 +14,7 @@ import { unwrapped } from '../src/compiler/bounded.ts';
 import { frameDeclarationOf } from '../src/compiler/framed-bindings.ts';
 import {
   type DatedQueries,
-  handedNameCarries,
+  isHandedDate,
   helperResultCarriesDated,
 } from '../src/compiler/render-tag-date-helper-results.ts';
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
@@ -81,11 +81,7 @@ describe('the answers of a chain of helpers that branch into the next helper', (
       if (isNewExpression(value)) return true;
       if (!isIdentifier(value)) return false;
       const declared = frameDeclarationOf(value);
-      return (
-        declared !== undefined &&
-        isParameterDeclaration(declared) &&
-        handedNameCarries(value, declared) === true
-      );
+      return declared !== undefined && isParameterDeclaration(declared) && isHandedDate(declared);
     }
 
     expect(helperResultCarriesDated(call, queries)).toBe(answer);

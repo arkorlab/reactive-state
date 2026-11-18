@@ -84,10 +84,22 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
-    id: 'rest-parameter',
+    id: 'rest-parameter-selecting-another-element-than-the-date',
+    pre: 'const pick=(...items:unknown[])=>items[1];',
+    tag: `${DATED}String(pick(date,'ok'))`,
+    local: undefined,
+  },
+  {
+    id: 'rest-parameter-is-not-followed',
     pre: 'const head=(...items:unknown[])=>items[0];',
     tag: `${DATED}String(head(date))`,
-    local: DATE_TEXT,
+    local: undefined,
+  },
+  {
+    id: 'rest-parameter-given-a-spread-is-not-followed',
+    pre: 'const head=(...items:unknown[])=>items[0];',
+    tag: `${REST}String(head(...values))`,
+    local: undefined,
   },
   {
     id: 'two-helpers-in-a-row',
@@ -181,15 +193,33 @@ const CASES = [
     local: undefined,
   },
   {
-    id: 'array-pattern-parameter-answers-an-element',
+    id: 'array-pattern-parameter-is-not-followed',
     pre: 'const first=([head]:unknown[])=>head;',
     tag: `${DATED}String(first([date]))`,
+    local: undefined,
+  },
+  {
+    id: 'array-pattern-with-a-rest-is-not-followed',
+    pre: 'const rest=([_head,...tail]:unknown[])=>tail;',
+    tag: `${DATED}String(rest([1,date]))`,
+    local: undefined,
+  },
+  {
+    id: 'plain-parameter-given-a-spread-of-the-substitutions',
+    pre: IDENTITY,
+    tag: `${REST}String(identity(...values))`,
     local: DATE_TEXT,
   },
   {
-    id: 'array-pattern-with-a-rest',
-    pre: 'const rest=([_head,...tail]:unknown[])=>tail;',
-    tag: `${DATED}String(rest([1,date]))`,
+    id: 'plain-parameter-after-a-spread-of-the-substitutions',
+    pre: 'const second=(_first:unknown,value:unknown)=>value;',
+    tag: `${REST}String(second(...values))`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'plain-parameter-with-a-default',
+    pre: "const orNone=(value:unknown='-')=>value;",
+    tag: `${DATED}String(orNone(date))`,
     local: DATE_TEXT,
   },
   {

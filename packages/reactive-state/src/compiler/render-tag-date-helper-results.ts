@@ -1,10 +1,7 @@
 import {
-  type BindingElement,
   type Expression,
   type Identifier,
-  isArrayBindingPattern,
   isArrowFunction,
-  isBindingElement,
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
@@ -19,7 +16,6 @@ import { type Answering, answersLater, overloadsOf, parametersOf, returnedBy } f
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedAssignedSources } from './framed-writes.ts';
-import { bindingIdentifiers } from './scope.ts';
 
 /** What a function of the file answers of the Date a tag hands it: in a call, or as a callback. */
 
@@ -37,27 +33,13 @@ const ASSUMED = new Set<Node>();
 const ASKED = new Set<Node>();
 
 /**
- * Whether a name a parameter of a function the answers of which are being asked binds holds a Date:
- * none where the parameter is not handed one, the parameter itself, and what array patterns take
- * of it, not what an object pattern takes (`({ length }) => length`).
+ * Whether a parameter of a function the answers of which are being asked is handed a Date. Only a
+ * parameter that is a plain name is: what a helper makes of a position (`...items`, `arguments`), a
+ * member (`({ length })`) or an element a pattern takes of what it is handed is not read as the Date
+ * itself, so the helper's answer is the Date only where it returns the parameter, as it is handed.
  */
-export function handedNameCarries(
-  name: Identifier,
-  parameter: ParameterDeclaration,
-): boolean | undefined {
-  if (!ASSUMED.has(parameter)) return undefined;
-  if (isIdentifier(parameter.name)) return true;
-  const bound = bindingIdentifiers(parameter.name).find((each) => each.text === name.text)?.parent;
-  return bound !== undefined && isBindingElement(bound) && boundThroughArrays(bound, parameter);
-}
-
-function boundThroughArrays(element: BindingElement, parameter: ParameterDeclaration): boolean {
-  let node: Node = element;
-  while (node !== parameter) {
-    if (isBindingElement(node) && !isArrayBindingPattern(node.parent)) return false;
-    node = node.parent;
-  }
-  return true;
+export function isHandedDate(parameter: ParameterDeclaration): boolean {
+  return ASSUMED.has(parameter);
 }
 
 /** The functions an expression may be, found once for each: a walk of the scope each. */
@@ -148,8 +130,11 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
     return false;
   }
   const parameters = parametersOf(fn).filter((parameter, index) => {
-    if (parameter.dotDotDotToken === undefined) return handed.at.has(index) || index >= handed.from;
-    return handed.from !== Infinity || [...handed.at].some((slot) => slot >= index);
+    return (
+      isIdentifier(parameter.name) &&
+      parameter.dotDotDotToken === undefined &&
+      (handed.at.has(index) || index >= handed.from)
+    );
   });
   if (parameters.length === 0) return false;
   const key = `${String(fn.pos)}:${parameters.map((each) => String(each.pos)).join(',')}|${[...ASSUMED].map((each) => String(each.pos)).join(',')}`;
