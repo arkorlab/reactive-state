@@ -61,6 +61,8 @@ export type ResolvedValue =
   | {
       readonly kind: 'node';
       readonly node: Node;
+      /** Set by `bind`: the receiver is fixed, and a later copy of the function keeps it. */
+      readonly bound?: boolean | undefined;
       readonly receiver?: ResolvedValue | undefined;
     };
 
@@ -143,10 +145,15 @@ export function valueIdentityKey(value: ResolvedValue, table: ScopeTable): strin
   }
 }
 
+/**
+ * The value an object or a class holds under a key. A function that was read off another object
+ * runs against the object it is now called on, so the receiver the read gave it is replaced; only
+ * a function `bind` fixed keeps its own.
+ */
 export function attachReceiver(value: ResolvedValue, selfReceiver: ResolvedValue): ResolvedValue {
   if (
     value.kind === 'node' &&
-    value.receiver === undefined &&
+    value.bound !== true &&
     isCallableNode(value.node) &&
     !isArrowFunction(value.node)
   ) {

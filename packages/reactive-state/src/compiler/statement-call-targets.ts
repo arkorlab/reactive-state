@@ -309,7 +309,7 @@ function resolveBindCallTargets(
       continue;
     }
     for (const receiver of thisTargets) {
-      results.push({ kind: 'node', node: boundTarget.node, receiver });
+      results.push({ bound: true, kind: 'node', node: boundTarget.node, receiver });
     }
   }
   return results;
