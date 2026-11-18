@@ -425,7 +425,7 @@ function callResultCarriesDated(
 
 function datedQueries(ctx: DatedCarrierContext, seen: Set<Node>): DatedQueries {
   return {
-    fresh: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, new Set()),
+    fresh: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, new Set(seen)),
     shared: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
   };
 }
