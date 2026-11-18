@@ -37,6 +37,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { literalKey } from './exported-values.ts';
+import { isSymbolKey } from './framed-mutator-keys.ts';
 import { globalPath } from './global-answers.ts';
 import { readsOf } from './local-module-reads.ts';
 import { constantValue, type Resolve } from './numbers.ts';
@@ -50,6 +51,8 @@ import { bindingIdentifiers } from './scope.ts';
 /** Where a member of a constant is written: the constant's binding, initializer, owner, and keys. */
 export interface Target {
   readonly declared: Identifier;
+  /** Whether the last key is a symbol the code writes. */
+  readonly endsInSymbol?: boolean | undefined;
   readonly initializer: Expression | undefined;
   readonly inside?: Expression | undefined;
   readonly keys: readonly (string | undefined)[];
@@ -152,29 +155,35 @@ export function memberKey(node: Expression, resolve: Resolve | undefined): strin
   return undefined;
 }
 
-/** The member a read of `name` reads and its keys in turn (`undefined` where unread). */
+/**
+ * The member a read of `name` reads and its keys in turn (`undefined` where unread), and whether
+ * the last key is a symbol the code writes, which no text and no index names.
+ */
 export function memberChain(
   name: Identifier,
   resolve?: Resolve,
 ): {
+  readonly endsInSymbol: boolean;
   readonly keys: readonly (string | undefined)[];
   readonly top: Expression;
 } {
   const keys: (string | undefined)[] = [];
   let top: Expression = name;
+  let endsInSymbol = false;
   for (;;) {
     const { parent } = top;
     if (
       (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
       parent.expression === top
     ) {
+      endsInSymbol = isElementAccessExpression(parent) && isSymbolKey(parent.argumentExpression);
       keys.push(
         isPropertyAccessExpression(parent)
           ? parent.name.text
           : memberKey(unwrapped(parent.argumentExpression), resolve),
       );
     } else if (!isWrapping(parent, top)) {
-      return { keys, top };
+      return { endsInSymbol, keys, top };
     }
     top = parent as Expression;
   }

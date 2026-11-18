@@ -251,10 +251,11 @@ function writesAt(
   initializer: Expression | undefined,
   walk: Walk,
 ): Writes {
-  const { keys, top } = memberChain(name, walk.resolve);
+  const { endsInSymbol, keys, top } = memberChain(name, walk.resolve);
   const target: Target = {
     callsLocal: (callee) => functionsOf(callee, walk.calls, walk.resolve).length > 0,
     declared,
+    endsInSymbol,
     initializer,
     inside: receiverOf(top),
     keys,

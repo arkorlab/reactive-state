@@ -154,7 +154,8 @@ export function slotEntryKind(
 export function checkedSlotOf(target: Target): SlotKind {
   const { keys } = target;
   const last = keys.at(-1);
-  if (last === 'length' || keys.length === 0 || keys.includes('__proto__')) return 'changed';
+  if (last === 'length' || target.endsInSymbol === true || keys.length === 0) return 'changed';
+  if (keys.includes('__proto__')) return 'changed';
   const container = containerAt(target, keys.slice(0, -1));
   return slotEntryKind(container, last, target);
 }
