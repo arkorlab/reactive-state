@@ -98,7 +98,9 @@ function projectMemberWithSelf(
     return projectObjectRestMembers(target, selfReceiver, query, ctx);
   }
   if (target.kind === ARRAY_SLICE_KIND) {
-    return query.mode === 'write' ? [] : projectArraySliceMembers(target, query, ctx);
+    return query.mode === 'write'
+      ? []
+      : asElementsOf(projectArraySliceMembers(target, query, ctx), selfReceiver);
   }
   if (target.kind === 'instance') {
     return projectClassMembers(
@@ -115,7 +117,9 @@ function projectMemberWithSelf(
       : projectKeyedObjectMembers(node, selfReceiver, query, ctx);
   }
   if (isArrayLiteralExpression(node)) {
-    return query.mode === 'write' ? [] : projectArrayMembers(node, 0, query, ctx);
+    return query.mode === 'write'
+      ? []
+      : asElementsOf(projectArrayMembers(node, 0, query, ctx), selfReceiver);
   }
   if (isClassDeclaration(node) || isClassExpression(node)) {
     return projectClassMembers(
@@ -126,6 +130,14 @@ function projectMemberWithSelf(
     );
   }
   return [];
+}
+
+/** A function an array holds runs against that array (`steps[0]()` reads `this[1]`), as an object's does. */
+function asElementsOf(
+  elements: readonly ResolvedValue[],
+  array: ResolvedValue,
+): readonly ResolvedValue[] {
+  return elements.map((element) => attachReceiver(element, array));
 }
 
 function projectObjectRestMembers(
