@@ -52,6 +52,8 @@ const VALUE_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 interface ParameterMutationCheck {
   readonly argExpr: Expression;
   readonly callee: LocalInvocable;
+  /** Reads of a rest parameter's own name: that array is made fresh by each call. */
+  readonly container?: ((node: Node) => node is Identifier) | undefined;
   readonly isTracked: (node: Node) => node is Identifier;
   readonly seenParams: Set<ParameterDeclaration>;
 }
@@ -215,7 +217,17 @@ function parameterMutatedIn(
   }
   const nextSeen = new Set([...seenParams, param]);
   const isTracked = buildTrackedParameterPredicate(callee, param);
-  const check: ParameterMutationCheck = { argExpr, callee, isTracked, seenParams: nextSeen };
+  const container =
+    param.dotDotDotToken !== undefined && isIdentifier(param.name)
+      ? readsOf(param.name, callee)
+      : undefined;
+  const check: ParameterMutationCheck = {
+    argExpr,
+    callee,
+    container,
+    isTracked,
+    seenParams: nextSeen,
+  };
   return (
     callee.parameters.some((each) => subtreeMutatesTracked(each, check)) ||
     (callee.body !== undefined && subtreeMutatesTracked(callee.body, check))
@@ -342,13 +354,13 @@ function subtreeMutatesTracked(root: Node, check: ParameterMutationCheck): boole
 /** Tests a single AST `node` for any mutation of a tracked parameter binding. */
 function nodeMutatesTracked(node: Node, check: ParameterMutationCheck): boolean {
   const written = writtenBy(node);
-  if (written !== undefined && writtenTargetsTracked(node, written, check.isTracked)) {
+  if (written !== undefined && writtenTargetsTracked(node, written, check)) {
     return true;
   }
   for (const arg of writtenArgumentBy(node)) {
     const hasTrackedTarget = keptTargetsOf(arg).some((target) => {
       const root = keptRootOf(target);
-      return root !== undefined && check.isTracked(root);
+      return root !== undefined && check.isTracked(root) && !changesRestArray(target, check, true);
     });
     if (hasTrackedTarget) {
       return true;
@@ -358,19 +370,39 @@ function nodeMutatesTracked(node: Node, check: ParameterMutationCheck): boolean 
 }
 
 /** Whether `written` mutates an object reachable from `isTracked` rather than reassigning a local variable. */
-function writtenTargetsTracked(
-  node: Node,
-  written: Node,
-  isTracked: (node: Node) => node is Identifier,
-): boolean {
+function writtenTargetsTracked(node: Node, written: Node, check: ParameterMutationCheck): boolean {
   const mutatesObjectInPlace = isCallExpression(node) || isNewExpression(node);
   return keptTargetsOf(written).some((target) => {
+    if (changesRestArray(target, check, mutatesObjectInPlace)) {
+      return false;
+    }
     if (mutatesObjectInPlace) {
       const root = keptRootOf(target);
-      return root !== undefined && isTracked(root);
+      return root !== undefined && check.isTracked(root);
     }
-    return hasMemberProjectionOf(target, isTracked);
+    return hasMemberProjectionOf(target, check.isTracked);
   });
+}
+
+/**
+ * Whether a write is of a rest parameter's own array, not of an argument held in it: the array
+ * itself when `inPlace` (the receiver of `items.push(0)`, an argument of `Object.assign`), else
+ * one of its slots (`items[0] = 1`, `items.length = 0`). Each call makes that array afresh and the
+ * arguments are only its elements, so `items[0].n++`, `items[0].push(1)` and an alias of an element
+ * are not this, and stay writes to the argument.
+ */
+function changesRestArray(target: Node, check: ParameterMutationCheck, inPlace: boolean): boolean {
+  if (check.container === undefined) {
+    return false;
+  }
+  let clean = peelPlatform(target as Expression);
+  if (!inPlace) {
+    if (!isPropertyAccessExpression(clean) && !isElementAccessExpression(clean)) {
+      return false;
+    }
+    clean = peelPlatform(clean.expression);
+  }
+  return isIdentifier(clean) && check.container(clean);
 }
 
 /** Whether `target` accesses at least one property or element on a binding matched by `isTracked`. */
