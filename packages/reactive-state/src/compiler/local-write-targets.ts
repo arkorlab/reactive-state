@@ -2,6 +2,7 @@ import {
   type ArrayLiteralExpression,
   type Expression,
   isArrayLiteralExpression,
+  isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
   isNewExpression,
@@ -12,7 +13,19 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPath } from './global-answers.ts';
-import { isIndex, isShrunkAt, type Target, unreplacedAt } from './local-write-paths.ts';
+import {
+  anyAliasRead,
+  ASSIGNING,
+  checkPrefixRead,
+  isConstIdentifier,
+  isIndex,
+  isShrunkAt,
+  memberChain,
+  pathsOverlap,
+  type Target,
+  unreplacedAt,
+  writtenAt,
+} from './local-write-paths.ts';
 
 /**
  * Target slot classification, deletions, `Object.assign` sources, and direct assignments on local
@@ -69,6 +82,48 @@ function arraySlotKind(array: ArrayLiteralExpression, last: string, target: Targ
 }
 
 /**
+ * The container at `containerKeys`: what `unreplacedAt` answers of it, or, where the code assigns
+ * it, the object it assigns — `target.user = {}` — if what its initializer writes there and every
+ * assignment of the whole path are objects the code writes, which no write of a key beside them
+ * can leave a hole in. An assignment of an array, a call or a choice of values, a write of a part
+ * of the path, and a hand-off the compile cannot follow leave it unknown.
+ */
+function containerAt(
+  target: Target,
+  containerKeys: readonly (string | undefined)[],
+): Expression | undefined {
+  const unreplaced = unreplacedAt(target, containerKeys);
+  if (
+    unreplaced !== undefined ||
+    containerKeys.length === 0 ||
+    !isConstIdentifier(target.declared)
+  ) {
+    return unreplaced;
+  }
+  const initial = writtenAt(target.initializer, containerKeys, target.resolve);
+  const given: Expression[] = initial === undefined ? [] : [unwrapped(initial)];
+  const isHazard = anyAliasRead(target, containerKeys, (node, suffix, at, queue) => {
+    const { keys, top } = memberChain(node, at.resolve);
+    const { parent } = top;
+    if (
+      keys.length === suffix.length &&
+      pathsOverlap(keys, suffix) &&
+      isBinaryExpression(parent) &&
+      parent.left === top &&
+      ASSIGNING.has(parent.operatorToken.kind)
+    ) {
+      given.push(unwrapped(parent.right));
+      return false;
+    }
+    return checkPrefixRead(node, suffix, at, queue);
+  });
+  const [first] = given;
+  return !isHazard && first !== undefined && given.every((each) => isObjectLiteralExpression(each))
+    ? first
+    : undefined;
+}
+
+/**
  * Classifies whether `last` is a valid hole-free write on `container`. An entry of an object the
  * code writes is one under any key it reads from a page's values: which key that is, is not
  * something the compile tells (`last` is `undefined`). Of an array's it is refused: a key the code
@@ -94,14 +149,14 @@ export function checkedSlotOf(target: Target): SlotKind {
   const { keys } = target;
   const last = keys.at(-1);
   if (last === 'length' || keys.length === 0 || keys.includes('__proto__')) return 'changed';
-  const container = unreplacedAt(target, keys.slice(0, -1));
+  const container = containerAt(target, keys.slice(0, -1));
   return slotEntryKind(container, last, target);
 }
 
 /** `delete target.prop`: safe only when the container at `keys.slice(0, -1)` is a plain object literal. */
 export function deletedAt(target: Target): Writes {
   if (target.keys.length === 0) return NONE;
-  const container = unreplacedAt(target, target.keys.slice(0, -1));
+  const container = containerAt(target, target.keys.slice(0, -1));
   return container !== undefined && isObjectLiteralExpression(unwrapped(container))
     ? NONE
     : CHANGED;
@@ -109,7 +164,7 @@ export function deletedAt(target: Target): Writes {
 
 /** `Reflect.deleteProperty(target, key)`: safe only on an unreplaced plain object literal. */
 export function deletedByReflect(target: Target): Writes {
-  const container = unreplacedAt(target, target.keys);
+  const container = containerAt(target, target.keys);
   return container !== undefined && isObjectLiteralExpression(unwrapped(container))
     ? NONE
     : CHANGED;
@@ -117,7 +172,7 @@ export function deletedByReflect(target: Target): Writes {
 
 /** `Object.assign(target, ...sources)`: safe only on an unreplaced plain object literal without spreads. */
 export function assignedFrom(sources: readonly Expression[], target: Target): Writes {
-  const at = unreplacedAt(target, target.keys);
+  const at = containerAt(target, target.keys);
   const isSpread = sources.some((each) => isSpreadElement(each));
   if (isSpread || at === undefined || !isObjectLiteralExpression(unwrapped(at))) return CHANGED;
   return {

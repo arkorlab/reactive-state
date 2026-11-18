@@ -381,7 +381,7 @@ export function aliasStep(
 }
 
 /** Whether a single read of `holder` may overwrite `suffix` or enqueue another alias frame. */
-function checkPrefixRead(
+export function checkPrefixRead(
   node: Identifier,
   suffix: readonly (string | undefined)[],
   target: Target,
