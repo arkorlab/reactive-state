@@ -262,6 +262,93 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: 'const target: { meta: Meta }[] = [{ meta: {} }]; target.push({ meta: [] }); for (const row of target) { Object.assign(row.meta, { extra: 1 }); } return target;',
+    changed: true,
+    id: 'element-pushed-before-the-loop',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }]);
+      target.push({ meta: [] });
+      for (const row of target) {
+        Object.assign(row.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: Meta }[] = [{ meta: {} }]; target[0] = { meta: [] }; for (const row of target) { Object.assign(row.meta, { extra: 1 }); } return target;',
+    changed: true,
+    id: 'element-replaced-before-the-loop',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }]);
+      target[0] = { meta: [] };
+      for (const row of target) {
+        Object.assign(row.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: Meta }[] = [{ meta: {} }]; target[0].meta = []; for (const row of target) { Object.assign(row.meta, { extra: 1 }); } return target;',
+    changed: true,
+    id: 'pin-member-replaced-before-the-loop',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }]);
+      const [first] = target;
+      if (first !== undefined) {
+        first.meta = [];
+      }
+      for (const row of target) {
+        Object.assign(row.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { x: Meta }[] = [{ x: {} }]; target[0].x = []; const [first] = target; Object.assign(first.x, { extra: 1 }); return target;',
+    changed: true,
+    id: 'pin-member-replaced-before-the-destructuring',
+    run: () => {
+      const target = box<{ x: Meta }[]>([{ x: {} }]);
+      const [only] = target;
+      if (only !== undefined) {
+        only.x = [];
+      }
+      const [first] = target;
+      if (first !== undefined) {
+        Object.assign(first.x, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target = [{ done: false }]; for (const item of target) { item.done = true; } for (const item of target) { item.done = false; } return target;',
+    changed: false,
+    id: 'two-loops-over-the-same-array',
+    run: () => {
+      const target = box([{ done: false }]);
+      for (const item of target) {
+        item.done = true;
+      }
+      for (const item of target) {
+        item.done = false;
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target = [{ done: false }]; const count = target.length; for (const item of target) { item.done = count > 0; } return target;',
+    changed: false,
+    id: 'loop-beside-reads-of-the-array',
+    run: () => {
+      const target = box([{ done: false }]);
+      const count = target.length;
+      for (const item of target) {
+        item.done = count > 0;
+      }
+      return target;
+    },
+  },
 ];
 
 describe('local writes through names a loop or a destructuring binds', () => {

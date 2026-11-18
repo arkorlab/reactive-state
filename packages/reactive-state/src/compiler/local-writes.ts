@@ -38,7 +38,7 @@ import { globalPath } from './global-answers.ts';
 import { followedOf, type JsonReading } from './json-reading.ts';
 import { readsOf } from './local-module-reads.ts';
 import { aliasedDeclaration, followedAlias, readsUntouchedMember } from './local-reading.ts';
-import { assignedBinary, updatedAt } from './local-write-arithmetic.ts';
+import { assignedBinary, isUnchangedBut, updatedAt } from './local-write-arithmetic.ts';
 import { functionsOf, handedArguments, type ResolvedCallable } from './local-write-callbacks.ts';
 import {
   ASSIGNING,
@@ -406,21 +406,33 @@ function writesParameters(fn: Answering, walk: Walk, at: (index: number) => bool
 
 /**
  * What a `const` name bound to a member of `target` holds: the value the constant writes there
- * when nothing replaces it, or shrinks it, if an array. A name a pattern binds holds a part
- * `within` of it, as the pattern selects it; the pattern's own read of the member is not a write.
+ * when nothing replaces it, or shrinks it, if an array.
  */
-function aliasedHeldOf(target: Target, within: readonly string[] = []): Expression | undefined {
+function aliasedHeldOf(target: Target): Expression | undefined {
   const found = unreplacedAt(target, target.keys);
   if (found === undefined) {
     return undefined;
-  }
-  if (within.length > 0) {
-    return writtenAt(found, within);
   }
   if (isArrayLiteralExpression(found) && isShrunkAt(target, target.keys)) {
     return undefined;
   }
   return found;
+}
+
+/**
+ * What a name a pattern binds holds, which is the part `within` of the member of `target` that
+ * `reader` takes apart: of what the constant writes there, when nothing but `reader` writes into
+ * it or adds to it (`isUnchangedBut`). The pattern's own read is not a write.
+ */
+function partHeldOf(
+  target: Target,
+  reader: Expression,
+  within: readonly string[],
+): Expression | undefined {
+  const found = unreplacedAt(target, target.keys);
+  return found !== undefined && isUnchangedBut(reader, target)
+    ? writtenAt(found, within)
+    : undefined;
 }
 
 /** Whether `element` is an element of an array the code writes, which is an object it writes. */
@@ -462,11 +474,12 @@ function heldBy(node: Expression, target: Target, walk: Walk): Writes {
     if (isIdentifier(parent.name)) {
       return writesOf(parent.name, aliasedHeldOf(target), walk);
     }
-    return boundBy(parent.parent, parent.name, walk, (within) => aliasedHeldOf(target, within));
+    return boundBy(parent.parent, parent.name, walk, (within) => partHeldOf(target, node, within));
   }
   if (isForOfStatement(parent) && parent.expression === node) {
     const { initializer } = parent;
-    const elements = elementsHeldOf(unreplacedAt(target, target.keys)) ?? [undefined];
+    const found = isUnchangedBut(node, target) ? unreplacedAt(target, target.keys) : undefined;
+    const elements = elementsHeldOf(found) ?? [undefined];
     return isVariableDeclarationList(initializer)
       ? merged(elements.flatMap((element) => loopBoundBy(initializer, element, walk)))
       : CHANGED;

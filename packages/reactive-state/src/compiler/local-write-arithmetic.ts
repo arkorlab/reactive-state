@@ -204,6 +204,23 @@ function isSoleSlotWrite(soleTop: Expression, target: Target): boolean {
   );
 }
 
+/**
+ * Whether nothing but `reader`, a read that takes the container at `target.keys` apart — a loop
+ * over it, a pattern — writes into it or adds to it in `target.owner`: not an element, nor a
+ * member of one, nor a method that changes it, nor a name it is handed to. A loop over it is no
+ * write, however many there are.
+ */
+export function isUnchangedBut(reader: Expression, target: Target): boolean {
+  return !anyAliasRead(target, target.keys, (node, suffix, current, queue) => {
+    const { keys, top } = memberChain(node, current.resolve);
+    const isLoop =
+      keys.length === suffix.length &&
+      isForOfStatement(top.parent) &&
+      top.parent.expression === top;
+    return !isLoop && checkCompetingWrite(reader, node, suffix, { queue, target: current });
+  });
+}
+
 /** What a compound or an update write puts of `value` into the slot, which it does not change. */
 function putOf(value: Expression, target: Target): Writes {
   return { changes: false, values: [{ entry: false, inside: target.inside, value }] };
