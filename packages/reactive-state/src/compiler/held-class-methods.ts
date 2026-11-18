@@ -102,6 +102,15 @@ export function memberMethods(
   return methods;
 }
 
+/** The methods of the prototype of a class, source-written bases included: what `super.name` finds. */
+function prototypeMethods(declared: ClassLikeDeclaration): ReadonlyMap<string, readonly Node[]> {
+  const methods = new Map<string, readonly Node[]>();
+  for (const each of baseClasses(declared)) {
+    memberEntries(each, methods, { statics: false, fields: false });
+  }
+  return methods;
+}
+
 /**
  * The functions a constructor installs on the instance, `this.bump = () => { … }` or `this['bump'] =
  * function () { … }`, in the order it runs them: one the constructor always runs replaces the method
@@ -259,8 +268,9 @@ function isNamedMember(
 }
 
 /**
- * The methods `super.key` may run where `at` stands: those the base class of the class around it keeps,
- * its statics for a `static` member, past its own bases; every public one when `key` is not text.
+ * The methods `super.key` may run where `at` stands: those the prototype of the base class of the class
+ * around it keeps (its statics for a `static` member), past its own bases, which no own member of an
+ * instance shadows; every public one when `key` is not text.
  */
 export function superMethods(at: Node, key: string | undefined): readonly Node[] {
   const around = memberAround(at);
@@ -268,7 +278,7 @@ export function superMethods(at: Node, key: string | undefined): readonly Node[]
   if (around === undefined || base === undefined) {
     return [];
   }
-  const methods = memberMethods(base, around.isStatic);
+  const methods = around.isStatic ? memberMethods(base, true) : prototypeMethods(base);
   if (key !== undefined) {
     return methods.get(key) ?? [];
   }
