@@ -205,20 +205,27 @@ export function returnedTargetsOf(
     if (!isBlock(body)) {
       return ctx.resolve(body, nextSeen, options.seenBindings);
     }
-    const returns: Node[] = [];
-    const collectReturns = (node: Node): void => {
-      if (node !== body && (isPassiveDeferredFunction(node) || isDeferredMember(node))) {
-        return;
-      }
-      if (isReturnStatement(node) && node.expression !== undefined) {
-        returns.push(node.expression);
-        return;
-      }
-      node.forEachChild(collectReturns);
-    };
-    collectReturns(body);
-    return returns.flatMap((expr) => ctx.resolve(expr, nextSeen, options.seenBindings));
+    return returnExpressionsOf(body).flatMap((expr) =>
+      ctx.resolve(expr, nextSeen, options.seenBindings),
+    );
   });
+}
+
+/** The expressions the `return` statements of a function body give, not those of functions within it. */
+export function returnExpressionsOf(body: Node): readonly Node[] {
+  const returns: Node[] = [];
+  const collectReturns = (node: Node): void => {
+    if (node !== body && (isPassiveDeferredFunction(node) || isDeferredMember(node))) {
+      return;
+    }
+    if (isReturnStatement(node) && node.expression !== undefined) {
+      returns.push(node.expression);
+      return;
+    }
+    node.forEachChild(collectReturns);
+  };
+  collectReturns(body);
+  return returns;
 }
 
 export function projectClassMembers(

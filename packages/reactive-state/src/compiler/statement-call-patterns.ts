@@ -51,6 +51,18 @@ interface SourceProjectionSpec {
   readonly ownOnly: boolean;
 }
 
+const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/** Whether an operator stores its right operand in its left one. */
+export function isValueAssignment(operator: SyntaxKind): boolean {
+  return VALUE_ASSIGNMENTS.has(operator);
+}
+
 export function observeMemberAccess(
   access: ElementAccessExpression | PropertyAccessExpression,
   driver: EscapeDriver,

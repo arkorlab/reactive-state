@@ -37,11 +37,13 @@ import {
 } from './statement-call-classes.ts';
 import {
   activateArrayReceiver,
+  activateConstructorReturns,
   activateEscapedExpression,
   type EscapeDriver,
 } from './statement-call-escapes.ts';
 import { projectMemberFromValue } from './statement-call-members.ts';
 import {
+  isValueAssignment,
   observeAssignmentDestructuring,
   observeDeclarationDestructuring,
   observeForOfDestructuring,
@@ -71,14 +73,6 @@ import {
   superConstructorTargets,
 } from './statement-call-targets.ts';
 import { collectExecutableRoot } from './statement-call-writes.ts';
-
-/** The operators that store their right operand in the left one. */
-const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 interface ActiveReceiverEntry {
   readonly owner: Node;
@@ -318,7 +312,7 @@ function observeNodeOperations(node: Node, state: WalkState): void {
     observeObjectSpread(node.expression, state.driver);
   } else if (isVariableDeclaration(node) || isParameterDeclaration(node)) {
     observeDeclarationDestructuring(node, state.driver);
-  } else if (isBinaryExpression(node) && VALUE_ASSIGNMENTS.has(node.operatorToken.kind)) {
+  } else if (isBinaryExpression(node) && isValueAssignment(node.operatorToken.kind)) {
     observeAssignmentDestructuring(node.left, node.right, state.driver);
   } else if (isForOfStatement(node)) {
     observeForOfDestructuring(node, state.driver);
@@ -409,6 +403,7 @@ function invokeSuperConstructor(superNode: Node, state: WalkState): void {
           constructClass(base.node, state, self);
         } else if (isFunctionDeclaration(base.node) || isFunctionExpression(base.node)) {
           activateCallable(base.node, state, self);
+          activateConstructorReturns(base.node, state.driver);
         }
       }
     }
@@ -462,6 +457,7 @@ function constructExpression(expr: Node, state: WalkState, instanceReceiver?: Re
         constructClass(target.node, state, instanceReceiver);
       } else if (isFunctionDeclaration(target.node) || isFunctionExpression(target.node)) {
         activateCallable(target.node, state, instanceReceiver);
+        activateConstructorReturns(target.node, state.driver);
       }
     }
   });
@@ -496,6 +492,7 @@ function constructClass(
       });
     } else if (isConstructorDeclaration(member)) {
       activateCallable(member, state, effectiveReceiver);
+      activateConstructorReturns(member, state.driver);
     }
   }
 }

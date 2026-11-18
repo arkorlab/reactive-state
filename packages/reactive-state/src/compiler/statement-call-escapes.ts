@@ -3,6 +3,7 @@ import {
   type ClassDeclaration,
   type ClassExpression,
   isArrayLiteralExpression,
+  isBlock,
   isClassDeclaration,
   isClassExpression,
   isElementAccessExpression,
@@ -27,6 +28,7 @@ import {
   EMPTY_NODE_SET,
   type ResolvedValue,
   returnedTargetsOf,
+  returnExpressionsOf,
   type TargetContext,
   valueIdentityKey,
 } from './statement-call-classes.ts';
@@ -101,6 +103,19 @@ export function activateArrayReceiver(call: CallExpression, driver: EscapeDriver
       }
     }
   });
+}
+
+/**
+ * A constructor that returns an object makes `new` evaluate to that object in place of the instance,
+ * which is not followed, so what it returns escapes, as an argument of a call does.
+ */
+export function activateConstructorReturns(callable: CallableNode, driver: EscapeDriver): void {
+  if (callable.body === undefined || !isBlock(callable.body)) {
+    return;
+  }
+  for (const expr of returnExpressionsOf(callable.body)) {
+    activateEscapedExpression(expr, driver);
+  }
 }
 
 export function activateWholeValue(value: ResolvedValue, driver: EscapeDriver): void {
