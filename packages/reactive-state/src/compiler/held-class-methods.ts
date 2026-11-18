@@ -24,10 +24,12 @@ import {
   isPropertyDeclaration,
   isReturnStatement,
   isSetAccessorDeclaration,
+  isSourceFile,
   isSpreadAssignment,
   isStringLiteral,
   type MethodDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type PrivateIdentifier,
   type PropertyDeclaration,
@@ -185,6 +187,40 @@ function isNamedMember(
   );
 }
 
+/**
+ * The methods `super.key` may run where `at` stands: those the base class of the class around it keeps,
+ * its statics for a `static` member, past its own bases; every public one when `key` is not text.
+ */
+export function superMethods(at: Node, key: string | undefined): readonly Node[] {
+  const around = memberAround(at);
+  const base = around === undefined ? undefined : baseClass(around.home);
+  if (around === undefined || base === undefined) {
+    return [];
+  }
+  const methods = memberMethods(base, around.isStatic);
+  if (key !== undefined) {
+    const method = methods.get(key);
+    return method === undefined ? [] : [method];
+  }
+  return [...methods].filter(([name]) => !name.startsWith('#')).map(([, method]) => method);
+}
+
+/** The class `at` stands in, and whether the member of it that holds `at` is `static`. */
+function memberAround(
+  at: Node,
+): { readonly home: ClassLikeDeclaration; readonly isStatic: boolean } | undefined {
+  for (let member: Node = at; !isSourceFile(member.parent); member = member.parent) {
+    const home = member.parent;
+    if (isClassDeclaration(home) || isClassExpression(home)) {
+      const isStatic =
+        isNamedMember(member) &&
+        member.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true;
+      return { home, isStatic };
+    }
+  }
+  return undefined;
+}
+
 /** A constructor's sole unconditional returned literal replaces the instance and its methods. */
 function returnedObject(declared: ClassLikeDeclaration): ObjectLiteralExpression | undefined {
   const constructor = declared.members.find(
@@ -267,22 +303,77 @@ function constructorOf(name: Identifier): ClassLikeDeclaration | undefined {
   return undefined;
 }
 
-/** The methods an object the code writes holds of its own, by their names: none of an arrow's. */
+/**
+ * The methods an object the code writes holds of its own, by their names: none of an arrow's; those
+ * of an object it spreads, which a later property of the same name replaces.
+ */
 function objectMethods(value: ObjectLiteralExpression): ReadonlyMap<string, Node> {
   const methods = new Map<string, Node>();
-  for (const property of value.properties) {
-    const key = 'name' in property ? keyOf(property.name) : undefined;
-    if (key !== undefined && isMethodDeclaration(property)) {
-      methods.set(key, property);
-    } else if (
-      key !== undefined &&
-      isPropertyAssignment(property) &&
-      isFunctionExpression(unwrapped(property.initializer))
-    ) {
-      methods.set(key, unwrapped(property.initializer));
+  const entries = objectEntries(value, new Set());
+  for (const [key, method] of entries) {
+    if (method !== undefined) {
+      methods.set(key, method);
     }
   }
   return methods;
+}
+
+/**
+ * What each named property of an object the code writes holds, in property order: the method it is,
+ * or none where it is any other value, a function the code does not write there, or an accessor,
+ * which replaces what a property of the name before it, or a spread before it, held.
+ */
+function objectEntries(
+  value: ObjectLiteralExpression,
+  spreading: ReadonlySet<Node>,
+): ReadonlyMap<string, Node | undefined> {
+  const entries = new Map<string, Node | undefined>();
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) {
+      for (const [key, method] of spreadEntries(property.expression, spreading)) {
+        entries.set(key, method);
+      }
+      continue;
+    }
+    const key = 'name' in property ? keyOf(property.name) : undefined;
+    if (key !== undefined) {
+      entries.set(key, propertyMethod(property));
+    }
+  }
+  return entries;
+}
+
+/** The method a property of an object literal is: a method, or a function the property is given. */
+function propertyMethod(property: ObjectLiteralElementLike): Node | undefined {
+  if (isMethodDeclaration(property)) {
+    return property;
+  }
+  if (!isPropertyAssignment(property)) {
+    return undefined;
+  }
+  const given = unwrapped(property.initializer);
+  return isFunctionExpression(given) ? given : undefined;
+}
+
+/** The entries of the object literal `source` is, through constant aliases; none of another value. */
+function spreadEntries(
+  source: Expression,
+  spreading: ReadonlySet<Node>,
+): ReadonlyMap<string, Node | undefined> {
+  let value = unwrapped(source);
+  const seen = new Set<Node>(spreading);
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const initializer = initializerOf(value);
+    if (initializer === undefined) {
+      return new Map();
+    }
+    value = unwrapped(initializer);
+  }
+  if (!isObjectLiteralExpression(value) || seen.has(value)) {
+    return new Map();
+  }
+  return objectEntries(value, new Set([...seen, value]));
 }
 
 /** Known source-written bases, first, with alias and heritage cycles ending the walk. */
