@@ -322,21 +322,6 @@ const CASES: readonly Case[] = [
     },
   },
   {
-    body: 'const target = [{ done: false }]; for (const item of target) { item.done = true; } for (const item of target) { item.done = false; } return target;',
-    changed: false,
-    id: 'two-loops-over-the-same-array',
-    run: () => {
-      const target = box([{ done: false }]);
-      for (const item of target) {
-        item.done = true;
-      }
-      for (const item of target) {
-        item.done = false;
-      }
-      return target;
-    },
-  },
-  {
     body: 'const target = [{ done: false }]; const count = target.length; for (const item of target) { item.done = count > 0; } return target;',
     changed: false,
     id: 'loop-beside-reads-of-the-array',
@@ -345,6 +330,52 @@ const CASES: readonly Case[] = [
       const count = target.length;
       for (const item of target) {
         item.done = count > 0;
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: Meta }[] = [{ meta: {} }]; for (const first of target) { first.meta = []; } for (const second of target) { Object.assign(second.meta, { extra: 1 }); } return target;',
+    changed: true,
+    id: 'member-replaced-by-an-earlier-loop',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }]);
+      for (const first of target) {
+        first.meta = [];
+      }
+      for (const second of target) {
+        Object.assign(second.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: Meta }[] = [{ meta: {} }]; for (const first of target) { Object.assign(first, { meta: [] }); } for (const second of target) { Object.assign(second.meta, { extra: 1 }); } return target;',
+    changed: true,
+    id: 'element-assigned-into-by-an-earlier-loop',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }]);
+      for (const first of target) {
+        Object.assign(first, { meta: [] });
+      }
+      for (const second of target) {
+        Object.assign(second.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target = [{ done: false, n: 1 }]; let total = 0; for (const item of target) { total += item.n; } for (const item of target) { item.done = total > 0; } return target;',
+    changed: false,
+    id: 'loop-after-a-loop-that-only-reads',
+    run: () => {
+      const target = box([{ done: false, n: 1 }]);
+      let total = 0;
+      for (const item of target) {
+        total += item.n;
+      }
+      for (const item of target) {
+        item.done = total > 0;
       }
       return target;
     },

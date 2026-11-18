@@ -22,6 +22,7 @@ import {
   isShorthandPropertyAssignment,
   isSourceFile,
   isVariableDeclaration,
+  isVariableDeclarationList,
   isWhileStatement,
   type Node,
   SyntaxKind,
@@ -35,6 +36,7 @@ import {
   handedTo,
   handsToMutator,
   isConstIdentifier,
+  isConstList,
   isWrapping,
   memberChain,
   pathsOverlap,
@@ -46,6 +48,7 @@ import {
 } from './local-write-paths.ts';
 import { assignedValue, CHANGED, checkedSlotOf, NONE, type Writes } from './local-write-targets.ts';
 import { constantValue, setsTime } from './numbers.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /**
  * Compound arithmetic (`+=`, `-=`, `*=`, `/=`, `%=`, `**=`), bitwise compound assignments, and
@@ -205,20 +208,36 @@ function isSoleSlotWrite(soleTop: Expression, target: Target): boolean {
   );
 }
 
+/** The names a loop over `top` binds in its head, where it declares them of `const`. */
+function loopNamesOf(top: Expression): readonly Identifier[] {
+  const loop: Node = top.parent;
+  if (!isForOfStatement(loop) || loop.expression !== top) {
+    return [];
+  }
+  const { initializer } = loop;
+  return isVariableDeclarationList(initializer) && isConstList(initializer)
+    ? initializer.declarations.flatMap((each) => bindingIdentifiers(each.name))
+    : [];
+}
+
 /**
  * Whether nothing but `reader`, a read that takes the container at `target.keys` apart — a loop
- * over it, a pattern — writes into it or adds to it in `target.owner`: not an element, nor a
- * member of one, nor a method that changes it, nor a name it is handed to. A loop over it is no
- * write, however many there are.
+ * over it, a pattern — writes into it or adds to it in `target.owner`: not an element or a member
+ * of one, nor a method that changes it, nor a name it is handed to. Another loop over it is no
+ * write itself, but what its variables write is: they are read as the container's elements, and
+ * a loop that writes through its variable makes the others' elements unknown.
  */
 export function isUnchangedBut(reader: Expression, target: Target): boolean {
   return !anyAliasRead(target, target.keys, (node, suffix, current, queue) => {
     const { keys, top } = memberChain(node, current.resolve);
-    const isLoop =
-      keys.length === suffix.length &&
-      isForOfStatement(top.parent) &&
-      top.parent.expression === top;
-    return !isLoop && checkCompetingWrite(reader, node, suffix, { queue, target: current });
+    const names = loopNamesOf(top);
+    if (keys.length === suffix.length && names.length > 0) {
+      if (top !== reader) {
+        queue.push(...names.map((holder) => ({ holder, suffix: [] })));
+      }
+      return false;
+    }
+    return checkCompetingWrite(reader, node, suffix, { queue, target: current });
   });
 }
 
