@@ -4,7 +4,6 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isStringLiteral,
   isCallExpression,
   isElementAccessExpression,
   isExpression,
@@ -15,6 +14,7 @@ import {
   isPropertyAssignment,
   isShorthandPropertyAssignment,
   isSpreadElement,
+  isStringLiteral,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -37,11 +37,18 @@ import {
   middlewareDefaultArrayMutation,
   quietDefinitionPrefix,
 } from './middleware-array-conversions.ts';
+import { middlewareWrapperTail } from './middleware-array-copy-arguments.ts';
 import { middlewareCopyOrigins } from './middleware-array-copy-origins.ts';
+import {
+  middlewarePossibleSelectorCollection,
+  middlewareReplacedReceiverSelector,
+  middlewareStableSelectorCall,
+} from './middleware-array-selector-guards.ts';
 import {
   middlewareArraySplice,
   middlewareCopySlotIndex,
   middlewareSliceProjection,
+  type SliceProjection,
 } from './middleware-array-splices.ts';
 import { constantValue } from './numbers.ts';
 import { isTypeOnly } from './scope.ts';
@@ -53,15 +60,8 @@ interface SelectionCall {
   readonly method: string;
   readonly receiver: Expression;
   readonly given: readonly Expression[] | undefined;
-  readonly applied?: Expression;
+  readonly applied?: Expression | undefined;
   readonly borrowed: boolean;
-}
-
-interface SliceProjection {
-  readonly of: Expression;
-  readonly keys: readonly string[];
-  readonly tail: readonly string[];
-  readonly slot?: string;
 }
 
 interface SliceSource {
@@ -127,7 +127,7 @@ export function middlewareArrayElement(expression: Expression): Selection | unde
   return selected === undefined ||
     ARRAY_COPIES.has(selected.method) ||
     RETAINED_COPIES.has(selected.method) ||
-    replacedNativeSelection(call, selected.method)
+    replacedSelection(call, selected)
     ? undefined
     : elementProjection(call, selected, keys);
 }
@@ -137,12 +137,13 @@ export function middlewareArrayCopiedOrigins(
   call: CallExpression,
   keys: readonly string[],
   relative: boolean,
+  stableLength?: (length: number) => boolean,
 ): ReturnType<typeof middlewareArraySplice> {
   const selected = nativeSelectionCall(call);
   if (
     selected === undefined ||
     !RETAINED_COPIES.has(selected.method) ||
-    replacedNativeSelection(call, selected.method)
+    replacedSelection(call, selected)
   )
     return [];
   const source = literalSource(selected.receiver);
@@ -154,10 +155,10 @@ export function middlewareArrayCopiedOrigins(
     return [];
   return selected.method === 'toSpliced'
     ? middlewareArraySplice(
-        { call, keys, ...selected, length: source.elements.length, relative },
+        { call, keys, ...selected, length: source.elements.length, relative, stableLength },
         { start: sliceBound, count: nativeIndex },
       )
-    : middlewareCopyOrigins(call, keys, selected, relative);
+    : middlewareCopyOrigins(call, keys, { ...selected, stableLength }, relative);
 }
 
 /** A selected shallow-copy payload retains its original collection, never the fresh wrapper. */
@@ -165,13 +166,14 @@ export function middlewareArraySlice(
   call: CallExpression,
   keys: readonly string[],
   relative = false,
+  stableLength?: (length: number) => boolean,
 ): SliceProjection | undefined {
   const index = middlewareCopySlotIndex(keys[0], relative);
   if (index === undefined) return undefined;
   const original = sliceSource(call);
   if (original === undefined) return undefined;
   return middlewareSliceProjection(
-    { call, keys, ...original.selected, source: original.source, index, relative },
+    { call, keys, ...original.selected, source: original.source, index, relative, stableLength },
     { start: sliceBound, count: nativeIndex },
   );
 }
@@ -179,29 +181,28 @@ export function middlewareArraySlice(
 /** A quiet native at selects one copied slot without changing the wrapper before that read. */
 export function middlewareCopyAt(
   call: CallExpression,
-): { readonly of: Expression; readonly key: string } | undefined {
+): { readonly borrowed: boolean; readonly key: string; readonly of: Expression } | undefined {
   const selected = nativeSelectionCall(call);
-  if (selected?.method !== 'at' || replacedNativeSelection(call, 'at')) return undefined;
+  if (selected?.method !== 'at' || replacedSelection(call, selected)) return undefined;
   const prefix =
     selected.given === undefined ? undefined : framedArgumentPrefix(call, selected.given, Infinity);
   if (
     prefix === undefined ||
     prefix.unknown ||
     prefix.alternatives !== undefined ||
-    prefix.values.some((value) => !framedQuietPrimitive(value))
+    [...prefix.values, ...middlewareWrapperTail(call)].some((value) => !framedQuietPrimitive(value))
   )
     return undefined;
   const index = nativeIndex(prefix.values[0]);
   return index !== undefined && Number.isFinite(index)
-    ? { of: selected.receiver, key: String(index) }
+    ? { borrowed: selected.borrowed, key: String(index), of: selected.receiver }
     : undefined;
 }
 
 /** An opaque default comparison may run an original payload's conversion hooks. */
 export function middlewareArrayComparison(call: CallExpression): Expression | undefined {
   const selected = nativeSelectionCall(call);
-  if (selected?.method !== 'toSorted' || replacedNativeSelection(call, selected.method))
-    return undefined;
+  if (selected?.method !== 'toSorted' || replacedSelection(call, selected)) return undefined;
   const source = literalSource(selected.receiver);
   return middlewareDefaultArrayMutation(call, selected.receiver, selected.given, source)
     ? selected.receiver
@@ -214,7 +215,7 @@ function sliceSource(call: CallExpression): SliceSource | undefined {
   if (
     selected === undefined ||
     !ARRAY_COPIES.has(selected.method) ||
-    replacedNativeSelection(call, selected.method)
+    replacedSelection(call, selected)
   )
     return undefined;
   const source = literalSource(selected.receiver);
@@ -258,10 +259,15 @@ function elementProjection(
 ): Selection | undefined {
   const source = literalSource(selected.receiver);
   if (source === undefined || !isArrayLiteralExpression(source)) return undefined;
-  const exact = !source.elements.some((element) => isSpreadElement(element));
-  if (!exact) return undefined;
+  if (source.elements.some((element) => isSpreadElement(element))) return undefined;
+  const stable = middlewareStableSelectorCall(call, selected.receiver, {
+    memberOf: literalMember,
+    replacedGlobal: replacedNativeSelection,
+    selectors: ARRAY_SELECTORS,
+    sourceOf: literalSource,
+  });
   if (selected.method !== 'at')
-    return possibleCollection(source.elements, [])
+    return !stable || middlewarePossibleSelectorCollection(source.elements, [])
       ? { of: selected.receiver, keys: [], quiet: false }
       : undefined;
   const args =
@@ -270,29 +276,15 @@ function elementProjection(
     args === undefined || args.unknown || args.alternatives !== undefined
       ? undefined
       : nativeIndex(args.values[0]);
+  if (index !== undefined && !Number.isFinite(index)) return undefined;
+  if (!stable) return { of: selected.receiver, keys: [], quiet: false };
   if (index === undefined)
-    return possibleCollection(source.elements, keys)
+    return middlewarePossibleSelectorCollection(source.elements, keys)
       ? { of: selected.receiver, keys: [], quiet: false }
       : undefined;
   const position = index < 0 ? source.elements.length + index : index;
-  if (!Number.isFinite(position) || position < 0 || position >= source.elements.length)
-    return undefined;
+  if (position < 0 || position >= source.elements.length) return undefined;
   return { of: selected.receiver, keys: [String(position), ...keys], quiet: false };
-}
-
-/** Unknown bounds retain only possible literal collection payloads, never known scalar-only slots. */
-function possibleCollection(elements: readonly Expression[], keys: readonly string[]): boolean {
-  return elements.some((element) => {
-    let value = literalSource(element);
-    for (const key of keys) {
-      if (value === undefined) return false;
-      const selected = literalMember(value, key);
-      value = selected === undefined ? undefined : literalSource(selected);
-    }
-    return (
-      value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
-    );
-  });
 }
 
 /** Explicit native borrowing bypasses receiver-owned methods; ordinary own methods stay opaque. */
@@ -349,20 +341,23 @@ function nativeIndex(expression: Expression | undefined): number | undefined {
   return known === undefined ? undefined : Math.trunc(Number(known)) || 0;
 }
 
-/** Whole constant bindings retain their original values without assuming mutable aliases away. */
+/** Whole constant bindings retain their original values without assuming mutable reassignments. */
 function constantInitializer(name: Identifier): Expression | undefined {
   const selected = frameBindingOf(name);
   const binding = selected?.binding;
-  return binding !== undefined &&
-    selected?.keys.length === 0 &&
-    isVariableDeclaration(binding) &&
-    isVariableDeclarationList(binding.parent) &&
-    /^const\b/u.test(binding.parent.getText(binding.getSourceFile()))
-    ? binding.initializer
-    : undefined;
+  if (
+    binding === undefined ||
+    selected?.keys.length !== 0 ||
+    !isVariableDeclaration(binding) ||
+    !isVariableDeclarationList(binding.parent) ||
+    !/^const\b/u.test(binding.parent.getText(binding.getSourceFile())) ||
+    binding.initializer === undefined
+  )
+    return undefined;
+  return binding.initializer;
 }
 
-/** Original own literal data supplies array length; calls, getters and unresolved fields do not. */
+/** Original literals and constant own data members resolve; calls, getters and unresolved fields do not. */
 function literalSource(expression: Expression): Expression | undefined {
   let value = unwrapped(expression);
   const keys: string[] = [];
@@ -413,8 +408,20 @@ function objectMember(value: ObjectLiteralExpression, name: string): Expression 
   return undefined;
 }
 
+/** Checks global Array/prototype writes and, on non-borrowed calls, receiver-owned replacements. */
+function replacedSelection(call: CallExpression, selected: SelectionCall): boolean {
+  if (replacedNativeSelection(call, selected.method)) return true;
+  return (
+    !selected.borrowed &&
+    middlewareReplacedReceiverSelector(call, selected.receiver, selected.method, {
+      memberOf: literalMember,
+      sourceOf: literalSource,
+    })
+  );
+}
+
 /** A source-written native Array or prototype replacement adds no selector identity proof. */
-function replacedNativeSelection(call: CallExpression, method: string): boolean {
+function replacedNativeSelection(call: Node, method: string): boolean {
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
@@ -465,4 +472,9 @@ function nativeArrayTarget(target: Node, method: string): boolean {
   }
 }
 
-export { literalSource as middlewareArraySource };
+export {
+  ARRAY_SELECTORS as MIDDLEWARE_ARRAY_SELECTORS,
+  literalSource as middlewareArraySource,
+  literalMember as middlewareLiteralMember,
+  replacedNativeSelection as middlewareReplacedNativeSelection,
+};

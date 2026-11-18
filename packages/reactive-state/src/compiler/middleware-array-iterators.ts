@@ -51,6 +51,7 @@ export function middlewareArrayIteratorOrigin(
       readonly of: Expression;
       readonly keys: readonly string[];
       readonly tail: readonly string[];
+      readonly whole?: boolean | undefined;
       readonly references: readonly Identifier[];
     }
   | undefined {
@@ -70,7 +71,7 @@ export function middlewareArrayIteratorOrigin(
   const receiver = middlewareArrayIteratorCollection(source.call);
   return receiver === undefined
     ? undefined
-    : { of: receiver, keys: [], tail: keys.slice(consumed), references: [] };
+    : { of: receiver, keys: [], tail: keys.slice(consumed), whole: true, references: [] };
 }
 
 /** Whole constant iterator aliases retain their acquisition without asserting a first cursor. */

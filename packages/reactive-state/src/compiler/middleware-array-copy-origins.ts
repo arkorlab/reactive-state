@@ -30,7 +30,14 @@ interface CopyCall {
   readonly receiver: Expression;
   readonly method: string;
   readonly given: readonly Expression[] | undefined;
-  readonly applied?: Expression;
+  readonly applied?: Expression | undefined;
+  readonly stableLength?: ((length: number) => boolean) | undefined;
+}
+
+interface SlotSelection {
+  readonly slot: string | undefined;
+  readonly viewIndex: number | undefined;
+  readonly wrapperLength: number | undefined;
 }
 
 interface Segment {
@@ -68,13 +75,18 @@ export function middlewareCopyOrigins(
     selected.method === 'concat'
       ? concatenatedViews(call, selected, index, keys.length > 1)
       : undefined;
+  const selection =
+    copied === undefined
+      ? copySlotSelection(selected, index, stable)
+      : { slot: copied.slot, viewIndex: index, wrapperLength: copied.wrapperLength };
   const views =
     copied?.views ??
-    arrayProjectedViews(call, index, stable) ??
-    arrayCopyViews(call, index, stable);
-  const slot = copied === undefined ? fixedCopySlot(selected, index, stable) : copied.slot;
+    arrayProjectedViews(call, selection.viewIndex, stable) ??
+    arrayCopyViews(call, selection.viewIndex, stable);
   if (views === undefined) return [];
-  return views.flatMap((view) => projectedViewOrigins(view, keys.slice(1), slot));
+  return views.flatMap((view) =>
+    projectedViewOrigins(view, keys.slice(1), selection.slot, selection.wrapperLength),
+  );
 }
 
 /** Annotation-only or sliced views add no runtime proof; valid views keep literal collection owners. */
@@ -82,6 +94,7 @@ function projectedViewOrigins(
   view: ArrayElementView,
   tail: readonly string[],
   slot: string | undefined,
+  wrapperLength: number | undefined,
 ): readonly MiddlewareCopyOrigin[] {
   if (
     view.typeOnly === true ||
@@ -90,13 +103,18 @@ function projectedViewOrigins(
     view.end !== undefined
   )
     return [];
-  const origin: MiddlewareCopyOrigin = {
-    of: view.value,
-    keys: originKeys(view, tail),
-    tail,
-    references: middlewareLiteralOwners(view.value),
-  };
-  return slot === undefined ? [origin] : [{ ...origin, slot }];
+  const whole = view.element !== true && (view.index === undefined || view.index < 0);
+  return [
+    {
+      of: view.value,
+      keys: originKeys(view, tail),
+      tail,
+      slot,
+      whole,
+      wrapperLength,
+      references: middlewareLiteralOwners(view.value),
+    },
+  ];
 }
 
 /** Exact runtime elements keep their own keys; unknown array positions retain their whole source. */
@@ -107,23 +125,33 @@ function originKeys(view: ArrayElementView, tail: readonly string[]): readonly s
     : [String(view.index), ...(view.keys ?? []), ...tail];
 }
 
-/** Length-preserving native copies retain the normalized fresh-wrapper slot for negative at. */
-function fixedCopySlot(
+/** Length-preserving native copies normalize negative at only while the wrapper length stays fixed. */
+function copySlotSelection(
   selected: CopyCall,
   index: number,
   stable: (value: Expression) => boolean,
-): string | undefined {
-  if (index >= 0) return String(index);
+): SlotSelection {
+  if (index >= 0) return { slot: String(index), viewIndex: index, wrapperLength: undefined };
+  const length = knownCopyLength(selected, stable);
+  if (selected.stableLength !== undefined && !selected.stableLength(length ?? 0))
+    return { slot: undefined, viewIndex: undefined, wrapperLength: undefined };
+  if (length === undefined || length + index < 0)
+    return { slot: undefined, viewIndex: index, wrapperLength: undefined };
+  return { slot: String(length + index), viewIndex: index, wrapperLength: length };
+}
+
+/** Spread-free literal receivers give map and with a known creation-time wrapper length. */
+function knownCopyLength(
+  selected: CopyCall,
+  stable: (value: Expression) => boolean,
+): number | undefined {
   if (selected.method !== 'map' && selected.method !== 'with') return undefined;
   const source = concatSource(selected.receiver, stable);
-  if (
-    source === undefined ||
+  return source === undefined ||
     !isArrayLiteralExpression(source) ||
     source.elements.some((value) => isSpreadElement(value))
-  )
-    return undefined;
-  const position = source.elements.length + index;
-  return position < 0 ? undefined : String(position);
+    ? undefined
+    : source.elements.length;
 }
 
 /** Unresolved spreads or borrowed apply tuples on Array.with retain the receiver and replacements. */
@@ -172,7 +200,11 @@ function concatenatedViews(
   selected: CopyCall,
   index: number,
   hasTail: boolean,
-): { readonly views: readonly ArrayElementView[]; readonly slot: string | undefined } {
+): {
+  readonly views: readonly ArrayElementView[];
+  readonly slot: string | undefined;
+  readonly wrapperLength: number | undefined;
+} {
   const { entries, exact } = concatEntries(call, selected);
   const quiet =
     exact &&
@@ -184,10 +216,12 @@ function concatenatedViews(
   const lengths = entries.map(
     (entry) => concatSegment(entry, undefined, { call, hasTail, stable }).length,
   );
-  const total = totalLength(lengths);
+  const total = stableConcatLength(totalLength(lengths), index, selected.stableLength);
   let position = copiedPosition(index, total);
-  if (position !== undefined && position < 0) return { views: [], slot: undefined };
+  if (position !== undefined && position < 0)
+    return { views: [], slot: undefined, wrapperLength: undefined };
   const slot = position === undefined ? undefined : String(position);
+  const wrapperLength = index < 0 ? total : undefined;
   const views: ArrayElementView[] = [];
   for (const entry of entries) {
     const segment = concatSegment(entry, position, { call, hasTail, stable });
@@ -199,7 +233,17 @@ function concatenatedViews(
     if (position !== undefined && segment.length !== undefined) break;
     position = undefined;
   }
-  return { views, slot };
+  return { views, slot, wrapperLength };
+}
+
+/** Drops concat total-length normalization when negative indexing observes a grown wrapper. */
+function stableConcatLength(
+  total: number | undefined,
+  index: number,
+  stableLength: ((length: number) => boolean) | undefined,
+): number | undefined {
+  if (total === undefined || stableLength === undefined || index >= 0) return total;
+  return stableLength(total) ? total : undefined;
 }
 
 /** Expands known concat argument spreads while keeping opaque spread containers and apply tuples. */
@@ -243,10 +287,12 @@ function mixedConcatEntries(
 
 /** Literal spread elements become concat arguments; opaque spread sources stay whole containers. */
 function spreadConcatEntries(expression: Expression): readonly ConcatEntry[] {
-  return middlewareSpreadCandidates(expression).map((candidate) => ({
-    value: candidate.value,
-    kind: candidate.element ? 'argument' : 'spread',
-  }));
+  return middlewareSpreadCandidates(expression).map((candidate) => {
+    return {
+      value: candidate.value,
+      kind: candidate.element ? 'argument' : 'spread',
+    };
+  });
 }
 
 /** Only wholly known original segment lengths establish the final native negative position. */

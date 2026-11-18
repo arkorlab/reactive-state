@@ -195,6 +195,18 @@ const CASES: readonly {
     source:
       'function run(visit: (item: { a: number }) => void, extra: readonly object[]) { const items = [{ a: 1 }]; return /*call*/ items.forEach(visit, ...(extra as [object?])); }',
   },
+  {
+    expected: {
+      arraySlot: 2,
+      callback: 'visit',
+      primitiveItems: false,
+      slots: [0, 2],
+      unknown: true,
+    },
+    id: 'foreach-thisarg-push-grows-empty-receiver',
+    source:
+      'function run(visit: (item: { a: number }) => void) { const items: Array<{ a: number }> = []; return /*call*/ items.forEach(visit, items.push({ a: 1 })); }',
+  },
 ];
 
 /** Follows lexical initializers to a written receiver literal while leaving parameters unresolved. */

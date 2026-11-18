@@ -1,9 +1,11 @@
 import {
   type CallExpression,
+  type ElementAccessExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
   isCallExpression,
+  isDeleteExpression,
   isElementAccessExpression,
   isExpression,
   isIdentifier,
@@ -16,6 +18,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
+  type PropertyAccessExpression,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -35,6 +38,9 @@ import {
   middlewareCopyAt,
 } from './middleware-array-elements.ts';
 import { middlewareArrayIteratorOrigin } from './middleware-array-iterators.ts';
+import { canonicalArrayIndex } from './middleware-array-selector-guards.ts';
+import { middlewareExpressionReplaced } from './middleware-assignment-targets.ts';
+import { nestedCopiedAtEnumeration, nestedCopiedAtOrigins } from './middleware-nested-copy-at.ts';
 import { isTypeOnly } from './scope.ts';
 import { writtenBy } from './written.ts';
 
@@ -55,7 +61,9 @@ interface Entry {
 }
 
 interface Projection {
-  readonly slot?: string;
+  readonly slot?: string | undefined;
+  readonly whole?: boolean | undefined;
+  readonly wrapperLength?: number | undefined;
   readonly of: Expression;
   readonly keys: readonly string[];
   readonly tail: readonly string[];
@@ -69,20 +77,34 @@ interface CopyReading {
 }
 
 /** A fixed native values slot or entries payload retains its source collection, never its wrapper. */
-export function middlewareEnumeration(
-  expression: Expression,
-):
-  | { readonly of: Expression; readonly keys: readonly string[]; readonly quiet: boolean }
+export function middlewareEnumeration(expression: Expression):
+  | {
+      readonly of: Expression;
+      readonly keys: readonly string[];
+      readonly quiet: boolean;
+      readonly tail?: readonly string[] | undefined;
+      readonly whole?: boolean | undefined;
+    }
   | undefined {
   const reading = copiedReading(expression);
-  if (reading === undefined) return undefined;
+  if (reading === undefined) {
+    return nestedCopiedAtEnumeration(expression, {
+      projectCall: projectNestedCopyCall,
+      resolveEnumeration: middlewareEnumeration,
+    });
+  }
   const { value, keys, captures, relative } = reading;
+  const stableLength = relative
+    ? (length: number): boolean => wrapperLengthUnchanged(captures, keys.length - 1, length)
+    : undefined;
   const projected = relative
-    ? middlewareArraySlice(value, keys, true)
+    ? middlewareArraySlice(value, keys, true, stableLength)
     : (enumerationProjection(value, keys) ?? middlewareArraySlice(value, keys));
-  return projected === undefined || !projectionUnchanged(captures, projected, relative)
-    ? undefined
-    : { of: projected.of, keys: projected.keys, quiet: false };
+  if (projected === undefined || !projectionUnchanged(captures, projected, relative)) {
+    return undefined;
+  }
+  const base = { of: projected.of, keys: projected.keys, quiet: false };
+  return projected.whole === true ? { ...base, tail: projected.tail, whole: true } : base;
 }
 
 /** Every retained native-copy origin passes the same original wrapper capture and write boundary. */
@@ -93,11 +115,20 @@ export function middlewareCopiedCollections(
   | NonNullable<ReturnType<typeof middlewareArrayIteratorOrigin>>
 )[] {
   const reading = copiedReading(expression);
-  if (reading === undefined) return [];
+  if (reading === undefined) {
+    return nestedCopiedAtOrigins(expression, {
+      projectCall: projectNestedCopyCall,
+      resolveEnumeration: middlewareEnumeration,
+      resolveOrigins: middlewareCopiedCollections,
+    });
+  }
   const { value, keys, captures, relative } = reading;
+  const stableLength = relative
+    ? (length: number): boolean => wrapperLengthUnchanged(captures, keys.length - 1, length)
+    : undefined;
   const iterator = relative ? undefined : middlewareArrayIteratorOrigin(value, keys);
   const origins = [
-    ...middlewareArrayCopiedOrigins(value, keys, relative),
+    ...middlewareArrayCopiedOrigins(value, keys, relative, stableLength),
     ...(iterator === undefined ? [] : [iterator]),
   ];
   return origins.filter((projected) => projectionUnchanged(captures, projected, relative));
@@ -111,7 +142,10 @@ function copiedReading(expression: Expression): CopyReading | undefined {
   let value = unwrapped(expression);
   let relative = false;
   for (;;) {
-    const source = copiedSource(value, keys, captures, seen);
+    const source =
+      relative && (isPropertyAccessExpression(value) || isElementAccessExpression(value))
+        ? undefined
+        : copiedSource(value, keys, captures, seen);
     if (source !== undefined) {
       value = source;
       continue;
@@ -329,6 +363,35 @@ function quietMemberName(expression: Expression): string | undefined {
   return frameMemberName(expression);
 }
 
+/** Checks that no wrapper alias exposure or index write can change the creation-time copy length. */
+function wrapperLengthUnchanged(
+  captures: readonly AliasCapture[],
+  tailLength: number,
+  initialLength: number,
+): boolean {
+  for (const capture of captures) {
+    if (capture.keys.length <= tailLength) continue;
+    if (
+      argumentArrayExposed(
+        capture.reference,
+        capture.aliases,
+        (reference) => preservesWrapperLength(reference, initialLength),
+        true,
+      )
+    )
+      return false;
+  }
+  return true;
+}
+
+/** Quiet in-bounds index writes and deletions preserve array length; growing writes do not. */
+function preservesWrapperLength(reference: Identifier, initialLength: number): boolean {
+  const parent = memberUseOn(reference);
+  if (parent === undefined) return false;
+  const key = quietMemberName(parent);
+  return key !== undefined && otherWrapperSlotUnchanged(parent, key, initialLength);
+}
+
 /** Unresolved negative selection retains a possible payload across opaque wrapper updates. */
 function projectionUnchanged(
   captures: readonly AliasCapture[],
@@ -337,7 +400,7 @@ function projectionUnchanged(
 ): boolean {
   return (
     (relative && projected.slot === undefined) ||
-    unchangedWrappers(captures, projected.tail, projected.slot)
+    unchangedWrappers(captures, projected.tail, projected.slot, projected.wrapperLength)
   );
 }
 
@@ -346,6 +409,7 @@ function unchangedWrappers(
   captures: readonly AliasCapture[],
   tail: readonly string[],
   slot?: string,
+  wrapperLength?: number,
 ): boolean {
   for (const capture of captures) {
     const wrapperKeys = capture.keys.length - tail.length;
@@ -354,7 +418,7 @@ function unchangedWrappers(
     if (slot !== undefined) keys[0] = slot;
     if (
       argumentArrayExposed(capture.reference, capture.aliases, (reference) =>
-        wrapperRead(reference, keys),
+        wrapperRead(reference, keys, wrapperLength),
       )
     )
       return false;
@@ -362,32 +426,68 @@ function unchangedWrappers(
   return true;
 }
 
-/** Other fresh slots are independent; replacing the selected slot or array length loses its proof. */
-function wrapperRead(reference: Identifier, keys: readonly string[]): boolean {
+/** Other fresh slots are independent unless a write changes length or grows a relative wrapper. */
+function wrapperRead(
+  reference: Identifier,
+  keys: readonly string[],
+  wrapperLength?: number,
+): boolean {
   let current: Expression = reference;
-  for (const expected of keys) {
-    const parent = useOf(current).parent;
-    if (
-      (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
-      unwrapped(parent.expression) !== unwrapped(current)
-    )
-      return false;
+  for (const [depth, expected] of keys.entries()) {
+    const parent = memberUseOn(current);
+    if (parent === undefined) return false;
     const key = quietMemberName(parent);
     if (key === undefined) return false;
-    if (key !== expected) {
-      if (isCallExpression(useOf(parent).parent)) return false;
-      return key !== 'length' || !replacesValue(parent);
-    }
+    if (key !== expected)
+      return otherWrapperSlotUnchanged(parent, key, depth === 0 ? wrapperLength : undefined);
     current = parent;
   }
   return !replacesValue(current);
 }
 
-/** A direct assignment, count or deletion changes a selected fresh wrapper value. */
+/** Direct member access on the tracked wrapper expression, excluding detached uses. */
+function memberUseOn(
+  expression: Expression,
+): PropertyAccessExpression | ElementAccessExpression | undefined {
+  const { parent } = useOf(expression);
+  return (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
+    unwrapped(parent.expression) === unwrapped(expression)
+    ? parent
+    : undefined;
+}
+
+/** Unselected slot accesses stay harmless unless called or written in a length-changing way. */
+function otherWrapperSlotUnchanged(
+  member: Expression,
+  key: string,
+  wrapperLength: number | undefined,
+): boolean {
+  const { parent } = useOf(member);
+  if (isCallExpression(parent)) return false;
+  if (!replacesValue(member) || isDeleteExpression(parent)) return true;
+  if (key === 'length') return false;
+  if (wrapperLength === undefined) return true;
+  const index = canonicalArrayIndex(key);
+  return index !== undefined && index < wrapperLength;
+}
+
+/** Direct, destructured, update, loop, or delete writes change a selected fresh wrapper value. */
 function replacesValue(expression: Expression): boolean {
-  const write = writtenBy(useOf(expression).parent);
-  return (
-    write !== undefined &&
-    targetsOf(write).some((target) => unwrapped(target as Expression) === unwrapped(expression))
-  );
+  return middlewareExpressionReplaced(expression);
+}
+
+/** Projects a single-origin native collection copy call for inner-array stability tracing. */
+function projectNestedCopyCall(
+  call: CallExpression,
+  keys: readonly string[],
+): { readonly keys: readonly string[]; readonly of: Expression } | undefined {
+  const direct = enumerationProjection(call, keys) ?? middlewareArraySlice(call, keys);
+  if (direct !== undefined) {
+    return direct.whole === true ? undefined : { keys: direct.keys, of: direct.of };
+  }
+  const copied = middlewareArrayCopiedOrigins(call, keys, false);
+  const single = copied.length === 1 ? copied[0] : undefined;
+  return single === undefined || single.whole === true
+    ? undefined
+    : { keys: single.keys, of: single.of };
 }
