@@ -34,7 +34,7 @@ import {
   memberMethods,
   ownsThis,
 } from './held-class-methods.ts';
-import { answersOf } from './kept.ts';
+import { answersOf, targetsOf } from './kept.ts';
 import { receiverOf, receiverWrite } from './this-aliases.ts';
 
 /**
@@ -198,7 +198,7 @@ function candidateWritesThis(
     const called =
       invocation === undefined ? [] : thisCalledKeys(unwrapped(invocation.expression), methods);
     found =
-      (written !== undefined && receiverWrite(written, node)) ||
+      (written !== undefined && targetsOf(written).some((each) => receiverWrite(each, node))) ||
       (invocation !== undefined &&
         called.some((target) =>
           writesThis(methods, target, writtenBy, { seen, call: invocation }),
