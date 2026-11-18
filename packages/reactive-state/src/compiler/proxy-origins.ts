@@ -31,6 +31,7 @@ import {
   holdsArrayLiteral,
   spreadElementOrigins,
 } from './proxy-arrays.ts';
+import { constructedOrigins } from './proxy-constructions.ts';
 import { indirectCall } from './proxy-indirect-calls.ts';
 import {
   holdsObjectLiteral,
@@ -239,6 +240,9 @@ function containerOrigins(at: Origin): readonly Origin[] {
   }
   if (isObjectLiteralExpression(value)) {
     return objectOrigins(value, at);
+  }
+  if (isNewExpression(value)) {
+    return constructedOrigins(value, at);
   }
   return isArrayLiteralExpression(value) ? arrayOrigins(value, at) : [];
 }

@@ -471,7 +471,7 @@ export function resolveLocalClass(expr: Expression): ClassLikeDeclaration | unde
 }
 
 /** Returns base-to-derived class declarations in `declared`'s `extends` chain. */
-function declaredLineage(declared: ClassLikeDeclaration): readonly ClassLikeDeclaration[] {
+export function declaredLineage(declared: ClassLikeDeclaration): readonly ClassLikeDeclaration[] {
   const lineage: ClassLikeDeclaration[] = [];
   const seen = new Set<ClassLikeDeclaration>();
   let current: ClassLikeDeclaration | undefined = declared;
