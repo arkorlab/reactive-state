@@ -82,6 +82,14 @@ const BRANCH_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionToken,
 ]);
 
+/** Assignments that can leave their right operand in the binding they write. */
+const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.EqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
 /** Source ranges of nodes in one syntax tree preserve ancestry for the loop's work. */
 export function contains(outer: Node, inner: Node): boolean {
   return (
@@ -483,7 +491,7 @@ function bindingWrites(declaration: VariableDeclaration): {
       reassigned = true;
       if (
         isBinaryExpression(node) &&
-        node.operatorToken.kind === SyntaxKind.EqualsToken &&
+        VALUE_ASSIGNMENTS.has(node.operatorToken.kind) &&
         isIdentifier(peelPlatform(node.left)) &&
         isRead(peelPlatform(node.left))
       ) {
