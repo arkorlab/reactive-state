@@ -500,6 +500,7 @@ function activateCallable(
   collectScopeWithPropagation(callable, state);
   state.ctx.withActiveReceiver(callable, effectiveReceiver, () => {
     for (const parameter of callable.parameters) {
+      observeDeclarationDestructuring(parameter, state.driver);
       parameter.forEachChild((child) => {
         if (!isDecorator(child)) {
           visitNode(child, state);
