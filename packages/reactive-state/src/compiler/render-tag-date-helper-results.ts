@@ -132,20 +132,45 @@ export function helperResultCarriesDated(call: CallExpression, queries: DatedQue
   return functions.some((fn) => answersHandedDate(fn, handed, queries.fresh));
 }
 
+/** Answers found for a function and the parameters it is handed, while one outermost question runs. */
+const ANSWERED = new Map<string, boolean>();
+const ASKING = { asked: 0, cut: 0, depth: 0 };
+const BUDGET = { asks: 512 } as const;
+
 function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['fresh']): boolean {
-  if (ASKED.has(fn)) return false;
+  if (ASKED.has(fn)) {
+    ASKING.cut += 1;
+    return false;
+  }
   const parameters = fn.parameters.filter((parameter, index) => {
     if (parameter.dotDotDotToken === undefined) return handed.at.has(index) || index >= handed.from;
     return handed.from !== Infinity || [...handed.at].some((slot) => slot >= index);
   });
   if (parameters.length === 0) return false;
+  const key = `${String(fn.pos)}:${parameters.map((each) => String(each.pos)).join(',')}|${[...ASSUMED].map((each) => String(each.pos)).join(',')}`;
+  const known = ANSWERED.get(key);
+  if (known !== undefined) return known;
+  // A question that asks more than any plausible helper's answers is taken to be answered yes.
+  if (ASKING.asked >= BUDGET.asks) return true;
+  ASKING.asked += 1;
+  const cutBefore = ASKING.cut;
+  ASKING.depth += 1;
   ASKED.add(fn);
   for (const parameter of parameters) ASSUMED.add(parameter);
   try {
-    return returnedBy(fn).some((returned) => fresh(returned));
+    const answer = returnedBy(fn).some((returned) => fresh(returned));
+    // An answer found while a function that is asked again was cut is not final: it is not kept.
+    if (ASKING.cut === cutBefore) ANSWERED.set(key, answer);
+    return answer;
   } finally {
     ASKED.delete(fn);
     for (const parameter of parameters) ASSUMED.delete(parameter);
+    ASKING.depth -= 1;
+    if (ASKING.depth === 0) {
+      ANSWERED.clear();
+      ASKING.asked = 0;
+      ASKING.cut = 0;
+    }
   }
 }
 
