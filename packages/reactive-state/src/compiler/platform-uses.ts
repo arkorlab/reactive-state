@@ -38,6 +38,7 @@ import {
 import { type Answering, answersLater, isAnswering } from './answers.ts';
 import { literalName, unwrapped } from './bounded.ts';
 import { GLOBAL_OBJECTS, globalPathOf } from './code-globals.ts';
+import { extendedOf } from './extended-classes.ts';
 import { declarationOf, takenApartOf } from './framed.ts';
 import { metadataCallee } from './input-callees.ts';
 import { readsOf } from './local-module-reads.ts';
@@ -418,6 +419,11 @@ function pushAliasSteps(
   }
   if (isBinaryExpression(value)) {
     pushBinaryAliasSteps(value, suffix, immutableOnly, pending);
+    return;
+  }
+  const bases = extendedOf(value);
+  if (bases !== undefined) {
+    pending.push(...bases.map((expr) => ({ expr, suffix })));
     return;
   }
   if (isIdentifier(value)) {
