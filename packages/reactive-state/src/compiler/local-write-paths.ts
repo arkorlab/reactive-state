@@ -51,6 +51,8 @@ import { bindingIdentifiers } from './scope.ts';
 /** Where a member of a constant is written: the constant's binding, initializer, owner, and keys. */
 export interface Target {
   readonly declared: Identifier;
+  /** Whether the last key is a symbol the code writes. */
+  readonly endsInSymbol?: boolean | undefined;
   readonly initializer: Expression | undefined;
   readonly inside?: Expression | undefined;
   readonly keys: readonly (string | undefined)[];
@@ -137,13 +139,7 @@ export function isWrapping(parent: Node, node: Node): boolean {
   );
 }
 
-/** The key a symbol the code writes stands for: no text names it, and no index. */
-export const SYMBOL_KEY = '@@symbol';
-
-/**
- * Resolves a bracket key from a literal or folded constant text/number (`-0` becomes `'0'`), or
- * from a symbol the code writes (`SYMBOL_KEY`).
- */
+/** Resolves a bracket key from a literal or folded constant text/number (`-0` becomes `'0'`). */
 export function memberKey(node: Expression, resolve: Resolve | undefined): string | undefined {
   const direct = literalKey(node);
   if (direct !== undefined) {
@@ -156,32 +152,38 @@ export function memberKey(node: Expression, resolve: Resolve | undefined): strin
   if (typeof folded === 'number') {
     return Object.is(folded, -0) ? '0' : String(folded);
   }
-  return isSymbolKey(node) ? SYMBOL_KEY : undefined;
+  return undefined;
 }
 
-/** The member a read of `name` reads and its keys in turn (`undefined` where unread). */
+/**
+ * The member a read of `name` reads and its keys in turn (`undefined` where unread), and whether
+ * the last key is a symbol the code writes, which no text and no index names.
+ */
 export function memberChain(
   name: Identifier,
   resolve?: Resolve,
 ): {
+  readonly endsInSymbol: boolean;
   readonly keys: readonly (string | undefined)[];
   readonly top: Expression;
 } {
   const keys: (string | undefined)[] = [];
   let top: Expression = name;
+  let endsInSymbol = false;
   for (;;) {
     const { parent } = top;
     if (
       (isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
       parent.expression === top
     ) {
+      endsInSymbol = isElementAccessExpression(parent) && isSymbolKey(parent.argumentExpression);
       keys.push(
         isPropertyAccessExpression(parent)
           ? parent.name.text
           : memberKey(unwrapped(parent.argumentExpression), resolve),
       );
     } else if (!isWrapping(parent, top)) {
-      return { keys, top };
+      return { endsInSymbol, keys, top };
     }
     top = parent as Expression;
   }

@@ -207,6 +207,29 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: "const target: Record<string, number> = {}; target['@@symbol'] = 1; return target;",
+    changed: false,
+    id: 'string-key-spelled-like-a-symbol',
+    run: () => {
+      const target = box<Record<string, number>>({});
+      target['@@symbol'] = 1;
+      return target;
+    },
+  },
+  {
+    body: 'const target = [{ value: 0 }]; const first = target[Symbol.iterator]().next(); if (first.done !== true) { first.value.value = NaN; } return target;',
+    changed: true,
+    id: 'element-reached-by-a-call-under-a-symbol-key',
+    run: () => {
+      const target = box([{ value: 0 }]);
+      const first = target[Symbol.iterator]().next();
+      if (first.done !== true) {
+        first.value.value = NaN;
+      }
+      return target;
+    },
+  },
 ];
 
 describe('local writes under keys read from a page’s values', () => {
