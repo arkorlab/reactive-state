@@ -33,6 +33,8 @@ interface Extra {
   extra?: number;
 }
 
+type Meta = Record<string, unknown> | unknown[];
+
 const CASES: readonly Case[] = [
   {
     body: 'const target = [{ done: false }, { done: false }]; for (const item of target) { item.done = true; } return target;',
@@ -206,6 +208,57 @@ const CASES: readonly Case[] = [
       const target = box<{ a: { n: number } }>({ a: {} as { n: number } });
       const { a } = target;
       a.n += 1;
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: object }[] = [{ meta: {} }, { meta: [] }]; for (const row of target) { Object.assign(row.meta, { extra: 1 }); } return target;',
+    changed: true,
+    id: 'assigned-into-a-member-of-elements-of-different-shapes',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }, { meta: [] }]);
+      for (const row of target) {
+        Object.assign(row.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: object }[] = [{ meta: {} }, { meta: [] }]; for (const row of target) { (row.meta as { extra?: number }).extra = 1; } return target;',
+    changed: true,
+    id: 'key-written-into-a-member-of-elements-of-different-shapes',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }, { meta: [] }]);
+      for (const row of target) {
+        (row.meta as Extra).extra = 1;
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target: { meta: object }[] = [{ meta: {} }, { meta: {} }]; for (const row of target) { Object.assign(row.meta, { extra: 1 }); } return target;',
+    changed: false,
+    id: 'assigned-into-a-member-of-elements-of-one-shape',
+    run: () => {
+      const target = box<{ meta: Meta }[]>([{ meta: {} }, { meta: {} }]);
+      for (const row of target) {
+        Object.assign(row.meta, { extra: 1 });
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target = [{ meta: { a: 1 } as { a?: number; b?: number; c?: number } }, { meta: { b: 2 } }]; for (const row of target) { row.meta.c = 3; } return target;',
+    changed: false,
+    id: 'key-written-into-members-of-elements-that-differ-in-keys-only',
+    run: () => {
+      const target = box<{ meta: { a?: number; b?: number; c?: number } }[]>([
+        { meta: { a: 1 } },
+        { meta: { b: 2 } },
+      ]);
+      for (const row of target) {
+        row.meta.c = 3;
+      }
       return target;
     },
   },

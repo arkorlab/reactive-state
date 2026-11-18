@@ -27,6 +27,7 @@ import {
   type NewExpression,
   type Node,
   type TaggedTemplateExpression,
+  type VariableDeclarationList,
   type VariableDeclaration,
 } from 'typescript/ast';
 
@@ -431,15 +432,24 @@ function isObjectElement(element: Expression): boolean {
   );
 }
 
-/** What each element of `array` is, where it is an array the code writes of objects it writes. */
-function elementHeldOf(array: Expression | undefined): Expression | undefined {
+/** Each element of `array`, where it is an array the code writes of objects it writes. */
+function elementsHeldOf(array: Expression | undefined): readonly Expression[] | undefined {
   const value = array === undefined ? undefined : unwrapped(array);
-  if (value === undefined || !isArrayLiteralExpression(value)) {
+  if (value === undefined || !isArrayLiteralExpression(value) || value.elements.length === 0) {
     return undefined;
   }
-  return value.elements.every((element) => isObjectElement(element))
-    ? value.elements[0]
-    : undefined;
+  return value.elements.every((element) => isObjectElement(element)) ? value.elements : undefined;
+}
+
+/** What is written of the names the head `list` of a loop binds, each held as `element` is. */
+function loopBoundBy(
+  list: VariableDeclarationList,
+  element: Expression | undefined,
+  walk: Walk,
+): Writes[] {
+  return list.declarations.map((each) =>
+    boundBy(list, each.name, walk, (within) => writtenAt(element, within)),
+  );
 }
 
 /** What a name of the code's that holds a constant, or a member of it, writes into it. */
@@ -456,13 +466,9 @@ function heldBy(node: Expression, target: Target, walk: Walk): Writes {
   }
   if (isForOfStatement(parent) && parent.expression === node) {
     const { initializer } = parent;
-    const element = elementHeldOf(unreplacedAt(target, target.keys));
+    const elements = elementsHeldOf(unreplacedAt(target, target.keys)) ?? [undefined];
     return isVariableDeclarationList(initializer)
-      ? merged(
-          initializer.declarations.map((each) =>
-            boundBy(initializer, each.name, walk, (within) => writtenAt(element, within)),
-          ),
-        )
+      ? merged(elements.flatMap((element) => loopBoundBy(initializer, element, walk)))
       : CHANGED;
   }
   const isAssigned =
