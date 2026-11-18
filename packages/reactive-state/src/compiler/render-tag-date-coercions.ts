@@ -37,6 +37,10 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
+  ELEMENT_CALLBACK_ARRAY_SLOT,
+  REDUCE_CALLBACK_ARRAY_SLOT,
+} from './render-tag-date-array-methods.ts';
+import {
   anyCallArgCarriesDated,
   argElementsSlotCarriesDated,
   type CallArgumentList,
@@ -403,10 +407,17 @@ function arrayMapperCallbackCoerces(
   const [callback, initial] = args.elements;
   if (callback === undefined || isSpreadElement(callback)) return false;
   if (REDUCE_MAPPER_METHODS.has(method)) {
-    const slots = new Set(initial === undefined ? [0, 1] : [1]);
-    return externalCallbackCoerces(callback, slots, 2, context);
+    const slots = new Set(
+      initial === undefined ? [0, 1, REDUCE_CALLBACK_ARRAY_SLOT] : [1, REDUCE_CALLBACK_ARRAY_SLOT],
+    );
+    return externalCallbackCoerces(callback, slots, REDUCE_CALLBACK_ARRAY_SLOT + 1, context);
   }
-  return externalCallbackCoerces(callback, new Set([0]), 1, context);
+  return externalCallbackCoerces(
+    callback,
+    new Set([0, ELEMENT_CALLBACK_ARRAY_SLOT]),
+    ELEMENT_CALLBACK_ARRAY_SLOT + 1,
+    context,
+  );
 }
 
 function externalCallbackCoerces(

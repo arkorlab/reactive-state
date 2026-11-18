@@ -44,7 +44,9 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
+  ELEMENT_CALLBACK_ARRAY_SLOT,
   elementMethodCarriesDated,
+  REDUCE_CALLBACK_ARRAY_SLOT,
   writtenArrayCarriesDated,
 } from './render-tag-date-array-methods.ts';
 import {
@@ -311,17 +313,22 @@ function inlineCallbackSlotDated(
   const method = frameMemberName(callee);
   if (method === undefined) return false;
   return (
-    callbackSlotHoldsElement(method, paramIndex, parent.arguments.length) &&
+    callbackSlotHoldsDated(method, paramIndex, parent.arguments.length) &&
     carriesDatedSubstitution(callee.expression, ctx.bindings, ctx.datedIndices, seen)
   );
 }
 
-/** Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an element of the receiver. */
-function callbackSlotHoldsElement(method: string, slot: number, count: number): boolean {
-  if (ELEMENT_CALLBACK_METHODS.has(method)) return slot === 0;
+/**
+ * Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an
+ * element of the receiver or the receiver itself (the array after the index of an element
+ * callback, and after the index of a reduction).
+ */
+function callbackSlotHoldsDated(method: string, slot: number, count: number): boolean {
+  if (ELEMENT_CALLBACK_METHODS.has(method))
+    return slot === 0 || slot === ELEMENT_CALLBACK_ARRAY_SLOT;
   if (COMPARATOR_METHODS.has(method)) return slot <= 1;
   if (!REDUCE_METHODS.has(method)) return false;
-  return slot === 1 || (slot === 0 && count < 2);
+  return slot === 1 || slot === REDUCE_CALLBACK_ARRAY_SLOT || (slot === 0 && count < 2);
 }
 
 function iterableOrArgumentsDated(

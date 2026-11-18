@@ -26,6 +26,11 @@ import { UnfollowableError } from './framed-getter-writes.ts';
 
 const REDUCE_ARRAY_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
 
+/** The parameter an element callback (`map`, `filter`, ...) is handed the array in: after the element and the index. */
+export const ELEMENT_CALLBACK_ARRAY_SLOT = 2;
+/** The parameter a reduction's callback is handed the array in: after the accumulator, the element and the index. */
+export const REDUCE_CALLBACK_ARRAY_SLOT = 3;
+
 /**
  * Array methods that answer an element, an array of elements, or an iterator that yields them or
  * pairs that hold them (`entries`), of their receiver. A pair's index is a number, which the walk
