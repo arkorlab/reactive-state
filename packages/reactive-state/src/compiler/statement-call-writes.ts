@@ -130,12 +130,12 @@ export function staticExpressionKey(
     if (isNumericLiteral(current)) {
       return String(Number(current.text));
     }
-    if (!isIdentifier(current)) {
+    if (seenBindings === undefined || !isIdentifier(current)) {
       return undefined;
     }
     const binding = resolveLexicalBinding(current, table);
     if (binding !== undefined) {
-      seenBindings?.add(binding);
+      seenBindings.add(binding);
     }
     const onlySpec = binding?.specs.length === 1 ? binding.specs[0] : undefined;
     if (binding === undefined || onlySpec?.kind !== 'value' || seen.has(binding)) {
