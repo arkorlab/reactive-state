@@ -332,6 +332,38 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: 'const target = { n: undefined as unknown as number }; target.n += 1; return target;',
+    changed: true,
+    id: 'undefined-slot-added-to',
+    run: () => {
+      const target = box({ n: undefined as unknown as number });
+      target.n += 1;
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: undefined as unknown as number }; for (const item of items) { target.n += item.price; } return target;',
+    changed: true,
+    id: 'undefined-slot-summed-in-loop',
+    run: ({ items }) => {
+      const target = box({ n: undefined as unknown as number });
+      for (const item of items) {
+        target.n += item.price;
+      }
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: null as unknown as number }; target.n += 1; return target;',
+    changed: false,
+    id: 'null-slot-added-to',
+    run: () => {
+      const target = box({ n: null as unknown as number });
+      target.n += 1;
+      return target;
+    },
+  },
 ];
 
 describe('local counters and sums of a page’s values', () => {

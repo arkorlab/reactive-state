@@ -255,6 +255,11 @@ function isByZero(operator: SyntaxKind, right: number | string | undefined): boo
   return right === 0 && BY_ZERO.has(operator);
 }
 
+/** Whether `value` is the global `undefined`, which a `+`, a `-`, `++` and `--` make `NaN` of. */
+function isUndefinedValue(value: Expression): boolean {
+  return globalPath(unwrapped(value))?.join('.') === 'undefined';
+}
+
 /**
  * Whether the slot `initial` initializes shows it holds no number: text, an object, an array, a
  * function, a class, a pattern, a construction, or `undefined`, which a `-`, `++` or `--` makes
@@ -273,7 +278,7 @@ function holdsNoNumber(initial: Expression, left: number | string | undefined): 
     isRegularExpressionLiteral(value) ||
     isNewExpression(value) ||
     isTemplateExpression(value) ||
-    globalPath(value)?.join('.') === 'undefined'
+    isUndefinedValue(value)
   );
 }
 
@@ -319,6 +324,9 @@ function arithmeticWrite(
     return put;
   }
   if (isAdditive && !isPlus && holdsNoNumber(initial, left)) {
+    return CHANGED;
+  }
+  if (isPlus && typeof right !== 'string' && isUndefinedValue(initial)) {
     return CHANGED;
   }
   if (!isSoleSlotWrite(top, target)) {
