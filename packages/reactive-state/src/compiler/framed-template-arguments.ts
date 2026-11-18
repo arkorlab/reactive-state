@@ -1,75 +1,93 @@
 import {
   type Identifier,
-  isClassStaticBlockDeclaration,
-  isComputedPropertyName,
+  isBindingElement,
+  isClassDeclaration,
+  isClassExpression,
   isConstructorDeclaration,
-  isDecorator,
   isForInStatement,
   isForOfStatement,
   isFunctionDeclaration,
   isFunctionExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isMethodDeclaration,
+  isObjectLiteralExpression,
   isParameterDeclaration,
-  isPropertyDeclaration,
-  isSetAccessorDeclaration,
-  isSourceFile,
   isVariableDeclaration,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, parametersOf } from './answers.ts';
-import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
+import {
+  bindsOwnArguments,
+  enclosingArgumentsCallable,
+  hasClassDecorators,
+  thisKeyOfNode,
+} from './framed-template-argument-classes.ts';
 import {
   callableParametersInInitializer,
+  hasParameterProperty,
   immutablePrimitiveConst,
-  type NodeSinks,
-  sinksForNode,
-} from './framed-template-argument-sinks.ts';
+  resolveDirectBaseClass,
+  type TaintKey,
+} from './framed-template-argument-receivers.ts';
+import { type NodeSinks, sinksForNode } from './framed-template-argument-sinks.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 export { constantDeclaration } from './framed-template-argument-sinks.ts';
 
 /**
  * Own and inherited `arguments` reachability for source-written template tags, including outer
- * bindings tainted by indexed, destructured, spread, iterated, reassigned, or container-mutated
- * `arguments` reads in enclosing non-arrow callables.
+ * bindings and receivers tainted by indexed, destructured, spread, iterated, reassigned, helper,
+ * constructor, or container-mutated `arguments` reads in enclosing non-arrow callables.
  */
 
 interface OwnerArgumentsTaint {
-  readonly tainted: ReadonlySet<FrameDeclaration>;
+  readonly tainted: ReadonlySet<TaintKey>;
   readonly unsafe: boolean;
 }
 
-const EMPTY_TAINT: ReadonlySet<FrameDeclaration> = new Set();
+const EMPTY_TAINT: ReadonlySet<TaintKey> = new Set();
 const EMPTY_OWNER_TAINT: OwnerArgumentsTaint = { tainted: EMPTY_TAINT, unsafe: false };
 const OWNER_ARGUMENTS_TAINT = new WeakMap<Node, OwnerArgumentsTaint>();
 
 interface TaintGraph {
-  readonly dependents: Map<FrameDeclaration, Set<FrameDeclaration>>;
-  readonly holders: Map<FrameDeclaration, Set<FrameDeclaration>>;
-  readonly mutatedDependents: Map<FrameDeclaration, Set<FrameDeclaration>>;
-  readonly mutatedSeed: Set<FrameDeclaration>;
+  readonly dependents: Map<TaintKey, Set<TaintKey>>;
+  readonly holders: Map<TaintKey, Set<TaintKey>>;
+  readonly mutatedDependents: Map<TaintKey, Set<TaintKey>>;
+  readonly mutatedSeed: Set<TaintKey>;
   readonly owner: Node;
-  readonly valueSeed: Set<FrameDeclaration>;
+  readonly valueSeed: Set<TaintKey>;
 }
 
 interface ActiveSinks {
-  readonly mutated: Map<FrameDeclaration, number>;
-  readonly value: Map<FrameDeclaration, number>;
+  readonly mutated: Map<TaintKey, number>;
+  readonly value: Map<TaintKey, number>;
 }
 
 interface TaintStep {
-  readonly exit?: NodeSinks;
+  readonly enterValue?: readonly TaintKey[];
+  readonly exitMutated?: readonly TaintKey[];
+  readonly exitValue?: readonly TaintKey[];
   readonly node?: Node;
 }
 
+interface WalkState {
+  readonly active: ActiveSinks;
+  readonly externalQueue: Node[];
+  readonly graph: TaintGraph;
+  readonly owner: Node;
+  readonly scopedByNode: Map<Node, TaintKey[]>;
+  readonly stack: TaintStep[];
+  readonly unsafeCandidates: Node[];
+  readonly visitedExternal: Set<Node>;
+}
+
 interface PropagationState {
-  readonly mutated: Set<FrameDeclaration>;
-  readonly mutatedQueue: FrameDeclaration[];
-  readonly tainted: Set<FrameDeclaration>;
-  readonly taintedQueue: FrameDeclaration[];
+  readonly mutated: Set<TaintKey>;
+  readonly mutatedQueue: TaintKey[];
+  readonly tainted: Set<TaintKey>;
+  readonly taintedQueue: TaintKey[];
 }
 
 /** Own or inherited `arguments` reads (including tainted outer bindings) can expose error values. */
@@ -82,18 +100,29 @@ export function mentionsAccessibleArguments(fn: Answering): boolean {
   const pending: Node[] = [...parametersOf(fn), fn.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      readsBinding(node) &&
-      readsOwnerOrTainted(node, owners, tainted, ownParams)
-    ) {
-      return true;
-    }
+    if (readsTagNodeTaint(node, owners, tainted, ownParams)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
   }
   return false;
+}
+
+function readsTagNodeTaint(
+  node: Node,
+  owners: ReadonlySet<Node>,
+  tainted: ReadonlySet<TaintKey>,
+  ownParams: ReadonlySet<Node>,
+): boolean {
+  if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) {
+    const key = thisKeyOfNode(node);
+    return key !== undefined && tainted.has(key);
+  }
+  return (
+    isIdentifier(node) &&
+    readsBinding(node) &&
+    readsOwnerOrTainted(node, owners, tainted, ownParams)
+  );
 }
 
 function accessibleArgumentsOwners(fn: Answering): ReadonlySet<Node> {
@@ -111,7 +140,7 @@ function accessibleArgumentsOwners(fn: Answering): ReadonlySet<Node> {
 
 function collectOwnersTaint(owners: ReadonlySet<Node>): OwnerArgumentsTaint {
   if (owners.size === 0) return EMPTY_OWNER_TAINT;
-  const combined = new Set<FrameDeclaration>();
+  const combined = new Set<TaintKey>();
   for (const owner of owners) {
     const result = taintedBindingsOfOwner(owner);
     if (result.unsafe) return { tainted: EMPTY_TAINT, unsafe: true };
@@ -123,7 +152,7 @@ function collectOwnersTaint(owners: ReadonlySet<Node>): OwnerArgumentsTaint {
 function readsOwnerOrTainted(
   node: Identifier,
   owners: ReadonlySet<Node>,
-  tainted: ReadonlySet<FrameDeclaration>,
+  tainted: ReadonlySet<TaintKey>,
   ownParams: ReadonlySet<Node>,
 ): boolean {
   if (isAccessibleImplicitArguments(node, owners)) return true;
@@ -171,49 +200,155 @@ function readsSingleOwnerArguments(node: Identifier, owner: Node): boolean {
 }
 
 function computeOwnerArgumentsTaint(owner: Node): OwnerArgumentsTaint {
-  const graph: TaintGraph = {
-    dependents: new Map(),
-    holders: new Map(),
-    mutatedDependents: new Map(),
-    mutatedSeed: new Set(),
+  const state: WalkState = {
+    active: { mutated: new Map(), value: new Map() },
+    externalQueue: [],
+    graph: {
+      dependents: new Map(),
+      holders: new Map(),
+      mutatedDependents: new Map(),
+      mutatedSeed: new Set(),
+      owner,
+      valueSeed: new Set(),
+    },
     owner,
-    valueSeed: new Set(),
+    scopedByNode: new Map(),
+    stack: [{ node: owner }],
+    unsafeCandidates: [],
+    visitedExternal: new Set(),
   };
-  const unsafeCandidates: Node[] = [];
-  const active: ActiveSinks = { mutated: new Map(), value: new Map() };
-  const stack: TaintStep[] = [{ node: owner }];
-  for (let step = stack.pop(); step !== undefined; step = stack.pop()) {
-    if (step.exit !== undefined) {
-      popNodeSinks(active, step.exit);
-      continue;
-    }
-    const current = step.node;
-    if (current === undefined || isTypeOnly(current)) continue;
-    linkCallableParameters(current, graph);
-    const sinks = sinksForNode(current, owner);
-    if (sinks.unresolvable) unsafeCandidates.push(current);
-    if (sinks.mutated.length > 0 || sinks.value.length > 0) {
-      pushNodeSinks(active, sinks);
-      stack.push({ exit: sinks });
-    }
-    if (isIdentifier(current) && readsBinding(current)) {
-      recordIdentifierTaint(current, active, graph);
-    }
-    current.forEachChild((child) => {
-      stack.push({ node: child });
-    });
-  }
-  const tainted = propagateTaint(graph);
-  const unsafe = unsafeCandidates.some((candidate) =>
+  drainWalkState(state);
+  const tainted = propagateTaint(state.graph);
+  const unsafe = state.unsafeCandidates.some((candidate) =>
     nodeCarriesOwnerTaint(candidate, owner, tainted),
   );
   return { tainted, unsafe };
 }
 
+function drainWalkState(state: WalkState): void {
+  for (;;) {
+    for (let step = state.stack.pop(); step !== undefined; step = state.stack.pop()) {
+      processWalkStep(step, state);
+    }
+    const nextExt = state.externalQueue.pop();
+    if (nextExt === undefined) return;
+    state.stack.push({ node: nextExt });
+  }
+}
+
+function processWalkStep(step: TaintStep, state: WalkState): void {
+  if (step.enterValue !== undefined) {
+    incrementSinks(state.active.value, step.enterValue);
+    return;
+  }
+  if (step.exitMutated !== undefined || step.exitValue !== undefined) {
+    if (step.exitMutated !== undefined) decrementSinks(state.active.mutated, step.exitMutated);
+    if (step.exitValue !== undefined) decrementSinks(state.active.value, step.exitValue);
+    return;
+  }
+  const current = step.node;
+  if (current === undefined || isTypeOnly(current)) return;
+  visitWalkNode(current, state);
+}
+
+function visitWalkNode(current: Node, state: WalkState): void {
+  linkDeclarationEdges(current, state.graph);
+  const scoped = state.scopedByNode.get(current);
+  const sinks = sinksForNode(current, state.owner);
+  if (sinks.unresolvable) state.unsafeCandidates.push(current);
+  applyNodeMetaEdges(sinks, state);
+  const combinedValue = mergeValueLists(scoped, sinks.value);
+  if (sinks.mutated.length > 0 || combinedValue.length > 0) {
+    incrementSinks(state.active.mutated, sinks.mutated);
+    incrementSinks(state.active.value, combinedValue);
+    state.stack.push({ exitMutated: sinks.mutated, exitValue: combinedValue });
+  }
+  recordNodeValueTaint(current, state.active, state.graph);
+  pushUnfoldedTasks(sinks, state.stack);
+  current.forEachChild((child) => {
+    state.stack.push({ node: child });
+  });
+}
+
+function mergeValueLists(
+  first: readonly TaintKey[] | undefined,
+  second: readonly TaintKey[],
+): readonly TaintKey[] {
+  if (first === undefined || first.length === 0) return second;
+  if (second.length === 0) return first;
+  return [...first, ...second];
+}
+
+function applyNodeMetaEdges(sinks: NodeSinks, state: WalkState): void {
+  for (const [node, keys] of sinks.scopedValue) {
+    const existing = state.scopedByNode.get(node);
+    if (existing === undefined) state.scopedByNode.set(node, [...keys]);
+    else existing.push(...keys);
+  }
+  for (const [fromKey, toKey] of sinks.receiverLinks) {
+    addEdge(state.graph.dependents, fromKey, toKey);
+  }
+  for (const retKey of sinks.returnedFrom) {
+    applyReturnedKeyEdges(retKey, state.active, state.graph);
+  }
+  for (const ext of sinks.externalBodies) {
+    if (!state.visitedExternal.has(ext)) {
+      state.visitedExternal.add(ext);
+      state.externalQueue.push(ext);
+    }
+  }
+}
+
+function applyReturnedKeyEdges(retKey: TaintKey, active: ActiveSinks, graph: TaintGraph): void {
+  for (const sink of active.value.keys()) {
+    if (sink !== retKey) addEdge(graph.dependents, retKey, sink);
+  }
+  for (const sink of active.mutated.keys()) {
+    if (sink !== retKey) addEdge(graph.mutatedDependents, retKey, sink);
+  }
+}
+
+function pushUnfoldedTasks(sinks: NodeSinks, stack: TaintStep[]): void {
+  for (const task of sinks.unfoldedTasks) {
+    stack.push({ exitValue: task.value }, { node: task.node }, { enterValue: task.value });
+  }
+}
+
+function recordNodeValueTaint(current: Node, active: ActiveSinks, graph: TaintGraph): void {
+  if (isIdentifier(current) && readsBinding(current)) {
+    recordIdentifierTaint(current, active, graph);
+    return;
+  }
+  if (current.kind === SyntaxKind.ThisKeyword || current.kind === SyntaxKind.SuperKeyword) {
+    recordThisKeywordTaint(current, active, graph);
+    return;
+  }
+  if (isObjectLiteralExpression(current)) {
+    for (const sink of active.value.keys()) {
+      if (sink !== current) {
+        addEdge(graph.dependents, current, sink);
+        addEdge(graph.holders, sink, current);
+      }
+    }
+  }
+}
+
+function recordThisKeywordTaint(node: Node, active: ActiveSinks, graph: TaintGraph): void {
+  if (active.mutated.size === 0 && active.value.size === 0) return;
+  const thisKey = thisKeyOfNode(node);
+  if (thisKey === undefined) return;
+  for (const sink of active.value.keys()) {
+    if (sink !== thisKey) addEdge(graph.dependents, thisKey, sink);
+  }
+  for (const sink of active.mutated.keys()) {
+    if (sink !== thisKey) addEdge(graph.mutatedDependents, thisKey, sink);
+  }
+}
+
 function nodeCarriesOwnerTaint(
   candidate: Node,
   owner: Node,
-  tainted: ReadonlySet<FrameDeclaration>,
+  tainted: ReadonlySet<TaintKey>,
 ): boolean {
   const pending: Node[] =
     isForOfStatement(candidate) || isForInStatement(candidate)
@@ -221,13 +356,7 @@ function nodeCarriesOwnerTaint(
       : [candidate];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      readsBinding(node) &&
-      identifierCarriesOwnerTaint(node, owner, tainted)
-    ) {
-      return true;
-    }
+    if (singleNodeCarriesOwnerTaint(node, owner, tainted)) return true;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -235,10 +364,24 @@ function nodeCarriesOwnerTaint(
   return false;
 }
 
+function singleNodeCarriesOwnerTaint(
+  node: Node,
+  owner: Node,
+  tainted: ReadonlySet<TaintKey>,
+): boolean {
+  if (node.kind === SyntaxKind.ThisKeyword || node.kind === SyntaxKind.SuperKeyword) {
+    const key = thisKeyOfNode(node);
+    return key !== undefined && tainted.has(key);
+  }
+  return (
+    isIdentifier(node) && readsBinding(node) && identifierCarriesOwnerTaint(node, owner, tainted)
+  );
+}
+
 function identifierCarriesOwnerTaint(
   node: Identifier,
   owner: Node,
-  tainted: ReadonlySet<FrameDeclaration>,
+  tainted: ReadonlySet<TaintKey>,
 ): boolean {
   if (readsSingleOwnerArguments(node, owner)) return true;
   if (tainted.size === 0) return false;
@@ -246,20 +389,11 @@ function identifierCarriesOwnerTaint(
   return declared !== undefined && tainted.has(declared);
 }
 
-function pushNodeSinks(active: ActiveSinks, sinks: NodeSinks): void {
-  for (const decl of sinks.mutated) active.mutated.set(decl, (active.mutated.get(decl) ?? 0) + 1);
-  for (const decl of sinks.value) active.value.set(decl, (active.value.get(decl) ?? 0) + 1);
+function incrementSinks(counts: Map<TaintKey, number>, list: readonly TaintKey[]): void {
+  for (const decl of list) counts.set(decl, (counts.get(decl) ?? 0) + 1);
 }
 
-function popNodeSinks(active: ActiveSinks, sinks: NodeSinks): void {
-  decrementSinks(active.mutated, sinks.mutated);
-  decrementSinks(active.value, sinks.value);
-}
-
-function decrementSinks(
-  counts: Map<FrameDeclaration, number>,
-  list: readonly FrameDeclaration[],
-): void {
+function decrementSinks(counts: Map<TaintKey, number>, list: readonly TaintKey[]): void {
   for (const decl of list) {
     const next = (counts.get(decl) ?? 1) - 1;
     if (next <= 0) counts.delete(decl);
@@ -267,9 +401,21 @@ function decrementSinks(
   }
 }
 
-function linkCallableParameters(node: Node, graph: TaintGraph): void {
+function linkDeclarationEdges(node: Node, graph: TaintGraph): void {
   if (isFunctionDeclaration(node) && node.body !== undefined) {
     for (const param of parametersOf(node)) addEdge(graph.dependents, node, param);
+    return;
+  }
+  if (isClassDeclaration(node) || isClassExpression(node)) {
+    const base = resolveDirectBaseClass(node);
+    if (base !== undefined) {
+      addEdge(graph.dependents, base, node);
+      addEdge(graph.dependents, node, base);
+    }
+    return;
+  }
+  if (isConstructorDeclaration(node)) {
+    linkConstructorParameterProperties(node, graph);
     return;
   }
   if (!isVariableDeclaration(node) || node.initializer === undefined) return;
@@ -278,11 +424,18 @@ function linkCallableParameters(node: Node, graph: TaintGraph): void {
   }
 }
 
-function addEdge(
-  table: Map<FrameDeclaration, Set<FrameDeclaration>>,
-  from: FrameDeclaration,
-  to: FrameDeclaration,
-): void {
+function linkConstructorParameterProperties(node: Node, graph: TaintGraph): void {
+  if (!isConstructorDeclaration(node)) return;
+  const { parent } = node;
+  if ((!isClassDeclaration(parent) && !isClassExpression(parent)) || hasClassDecorators(parent)) {
+    return;
+  }
+  for (const param of node.parameters) {
+    if (hasParameterProperty(param)) addEdge(graph.mutatedDependents, param, parent);
+  }
+}
+
+function addEdge(table: Map<TaintKey, Set<TaintKey>>, from: TaintKey, to: TaintKey): void {
   let edges = table.get(from);
   if (edges === undefined) {
     edges = new Set();
@@ -291,8 +444,23 @@ function addEdge(
   edges.add(to);
 }
 
+function isDeclarationBindingIdentifier(node: Identifier): boolean {
+  const { parent } = node;
+  return (
+    (isVariableDeclaration(parent) ||
+      isParameterDeclaration(parent) ||
+      isBindingElement(parent) ||
+      isFunctionDeclaration(parent) ||
+      isFunctionExpression(parent) ||
+      isClassDeclaration(parent) ||
+      isClassExpression(parent)) &&
+    parent.name === node
+  );
+}
+
 function recordIdentifierTaint(node: Identifier, active: ActiveSinks, graph: TaintGraph): void {
   if (active.mutated.size === 0 && active.value.size === 0) return;
+  if (isDeclarationBindingIdentifier(node)) return;
   if (readsSingleOwnerArguments(node, graph.owner)) {
     for (const sink of active.mutated.keys()) graph.mutatedSeed.add(sink);
     for (const sink of active.value.keys()) graph.valueSeed.add(sink);
@@ -310,10 +478,10 @@ function recordIdentifierTaint(node: Identifier, active: ActiveSinks, graph: Tai
   }
 }
 
-function propagateTaint(graph: TaintGraph): ReadonlySet<FrameDeclaration> {
-  const tainted = new Set<FrameDeclaration>([...graph.valueSeed, ...graph.mutatedSeed]);
+function propagateTaint(graph: TaintGraph): ReadonlySet<TaintKey> {
+  const tainted = new Set<TaintKey>([...graph.valueSeed, ...graph.mutatedSeed]);
   const state: PropagationState = {
-    mutated: new Set<FrameDeclaration>(graph.mutatedSeed),
+    mutated: new Set<TaintKey>(graph.mutatedSeed),
     mutatedQueue: [...graph.mutatedSeed],
     tainted,
     taintedQueue: [...tainted],
@@ -327,7 +495,7 @@ function propagateTaint(graph: TaintGraph): ReadonlySet<FrameDeclaration> {
 
 function drainMutatedQueue(
   state: PropagationState,
-  holders: ReadonlyMap<FrameDeclaration, ReadonlySet<FrameDeclaration>>,
+  holders: ReadonlyMap<TaintKey, ReadonlySet<TaintKey>>,
 ): void {
   for (
     let current = state.mutatedQueue.pop();
@@ -336,7 +504,10 @@ function drainMutatedQueue(
   ) {
     const heldSet = holders.get(current);
     if (heldSet === undefined) continue;
-    for (const held of heldSet) markMutatedAndTainted(state, held);
+    for (const holder of heldSet) {
+      markMutated(state, holder);
+      markTainted(state, holder);
+    }
   }
 }
 
@@ -346,57 +517,28 @@ function drainTaintedQueue(state: PropagationState, graph: TaintGraph): void {
     current !== undefined;
     current = state.taintedQueue.pop()
   ) {
-    const dependents = graph.dependents.get(current);
-    if (dependents !== undefined) {
-      for (const next of dependents) markTainted(state, next);
+    const direct = graph.dependents.get(current);
+    if (direct !== undefined) {
+      for (const dep of direct) markTainted(state, dep);
     }
-    const mutatedTargets = graph.mutatedDependents.get(current);
-    if (mutatedTargets !== undefined) {
-      for (const target of mutatedTargets) markMutatedAndTainted(state, target);
+    const mutDeps = graph.mutatedDependents.get(current);
+    if (mutDeps !== undefined) {
+      for (const sink of mutDeps) {
+        markMutated(state, sink);
+        markTainted(state, sink);
+      }
     }
   }
 }
 
-function markTainted(state: PropagationState, decl: FrameDeclaration): void {
+function markTainted(state: PropagationState, decl: TaintKey): void {
   if (state.tainted.has(decl)) return;
   state.tainted.add(decl);
   state.taintedQueue.push(decl);
 }
 
-function markMutatedAndTainted(state: PropagationState, decl: FrameDeclaration): void {
-  if (!state.mutated.has(decl)) {
-    state.mutated.add(decl);
-    state.mutatedQueue.push(decl);
-  }
-  markTainted(state, decl);
-}
-
-/** Finds the nearest enclosing non-arrow callable whose body or parameter list owns `node`. */
-function enclosingArgumentsCallable(node: Node): Node | undefined {
-  let within: Node = node;
-  let fromParamDecorator = false;
-  for (let at: Node = node.parent; !isSourceFile(at); within = at, at = at.parent) {
-    const inHeader =
-      isDecorator(within) ||
-      (isParameterDeclaration(within) && fromParamDecorator) ||
-      isComputedPropertyName(within);
-    fromParamDecorator = isDecorator(within) && isParameterDeclaration(at);
-    if (inHeader || !bindsOwnArguments(at)) continue;
-    return isClassStaticBlockDeclaration(at) || isPropertyDeclaration(at) ? undefined : at;
-  }
-  return undefined;
-}
-
-/** Nested non-arrow functions and class initializers do not inherit `fn`'s `arguments`. */
-function bindsOwnArguments(node: Node): boolean {
-  return (
-    isFunctionDeclaration(node) ||
-    isFunctionExpression(node) ||
-    isMethodDeclaration(node) ||
-    isGetAccessorDeclaration(node) ||
-    isSetAccessorDeclaration(node) ||
-    isConstructorDeclaration(node) ||
-    isPropertyDeclaration(node) ||
-    isClassStaticBlockDeclaration(node)
-  );
+function markMutated(state: PropagationState, decl: TaintKey): void {
+  if (state.mutated.has(decl)) return;
+  state.mutated.add(decl);
+  state.mutatedQueue.push(decl);
 }

@@ -372,6 +372,86 @@ const CASES = [
     id: 'arrow-tag-after-diverging-branch-spread-into-apply-unresolvable-slot-one',
     source: `function run(flag: boolean, error: Error) { let saved = 'fixed'; const makeArgs = () => [arguments, (item: unknown) => { saved = String(item); return 0; }] as const; Array.from.apply(...(flag ? ([null, [['ok']]] as const) : ([null, makeArgs()] as const))); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
   },
+  {
+    framed: true,
+    id: 'arrow-tag-after-named-local-object-method-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; const o = { f(item: unknown) { saved = String(item); } }; function run(error: Error) { o.f(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-named-local-object-arrow-property-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; const o = { f: (item: unknown) => { saved = String(item); } }; function run(error: Error) { o.f(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-nested-object-spread-method-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; const base = { f(_ignored: unknown, item: unknown) { saved = String(item); } }; const outer = { inner: { ...base } }; function run(error: Error) { outer.inner.f('safe', arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-class-this-helper-method-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; class Runner { helper(item: unknown) { saved = String(item); } format(error: Error) { this.helper(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; } }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-reading-this-field-after-class-this-helper-mutates-this-with-arguments',
+    source: `class Runner { saved = 'fixed'; helper(item: unknown) { this.saved = String(item); } format(error: Error) { this.helper(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => this.saved; return tag\`\${error}\`; } }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-subclass-override-of-this-helper-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; class Base { helper(_item: unknown) {} format(error: Error) { this.helper(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; } } class Sub extends Base { override helper(item: unknown) { saved = String(item); } } new Sub();`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-new-class-constructor-captures-arguments-into-closure',
+    source: `function run(error: Error) { let saved = 'fixed'; class Box { constructor(item: unknown) { saved = String(item); } } new Box(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-new-subclass-inherited-constructor-captures-arguments-into-closure',
+    source: `function run(error: Error) { let saved = 'fixed'; class Base { constructor(item: unknown) { saved = String(item); } } class Sub extends Base {} new Sub(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-new-local-constructor-function-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; function Box(this: unknown, item: unknown) { saved = String(item); } function run(error: Error) { new (Box as unknown as new (item: unknown) => object)(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-class-instance-method-and-spread-rest-captures-arguments-into-closure',
+    source: `let saved = 'fixed'; class Box { capture(_prefix: string, ...items: unknown[]) { saved = String(items[0]); } } function run(error: Error) { const box = new Box(); const args = ['ok', arguments[0]] as const; box.capture(...args); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-unresolvable-parameter-callee-receives-arguments',
+    source: `function run(sink: (item: unknown) => void, error: Error) { const saved = 'fixed'; sink(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-unresolvable-external-new-constructor-receives-arguments',
+    source: `function run(ExternalBox: new (item: unknown) => object, error: Error) { const saved = 'fixed'; new ExternalBox(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-benign-local-object-method-ignoring-arguments-slot-preserved',
+    source: `function run(error: Error) { let saved = 'fixed'; const o = { update(_ignored: unknown, next: string) { saved = next; } }; o.update(arguments[0], 'clean'); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-benign-new-class-and-instance-method-ignoring-arguments-slot-preserved',
+    source: `function run(error: Error) { class Box { label = 'fixed'; constructor(_ignored: unknown) {} update(_ignored: unknown, next: string) { this.label = next; } } const box = new Box(arguments[0]); const clean = new Box('ok'); clean.update(arguments[0], 'still-clean'); void box; const tag = (_s: TemplateStringsArray, _v: unknown) => clean.label; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-reading-this-field-with-benign-class-this-helper-ignoring-arguments-preserved',
+    source: `class Runner { saved = 'fixed'; helper(_ignored: unknown) { return 0; } format(error: Error) { this.helper(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => this.saved; return tag\`\${error}\`; } }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-untainted-unresolvable-callee-beside-unused-arguments-preserved',
+    source: `function run(sink: (item: string) => void, ExternalBox: new (item: string) => object, error: Error) { const _unused = arguments[0]; sink('clean'); new ExternalBox('clean'); const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`; }`,
+  },
 ] as const;
 
 const DIAMOND_CASES = [

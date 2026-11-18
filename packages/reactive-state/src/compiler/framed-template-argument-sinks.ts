@@ -3,10 +3,13 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
-  isBigIntLiteral,
+  isArrowFunction,
   isBinaryExpression,
+  isBlock,
   isCallExpression,
   isClassDeclaration,
+  isClassStaticBlockDeclaration,
+  isConstructorDeclaration,
   isElementAccessExpression,
   isExpression,
   isForInStatement,
@@ -14,33 +17,49 @@ import {
   isFunctionDeclaration,
   isIdentifier,
   isNewExpression,
-  isNoSubstitutionTemplateLiteral,
-  isNumericLiteral,
   isObjectLiteralExpression,
   isOmittedExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isPropertyDeclaration,
+  isReturnStatement,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
+  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
-  isStringLiteral,
   isVariableDeclaration,
   isVariableDeclarationList,
   type NewExpression,
   type Node,
   type ObjectLiteralElementLike,
+  type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { isAnswering, overloadsOf, parametersOf } from './answers.ts';
-import { globalOf, literalName } from './bounded.ts';
-import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
+import { type Answering, isAnswering, parametersOf } from './answers.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
 import {
-  constantDeclaration,
+  isDirectMutatingMethod,
+  knownMutatedTargetArguments,
+} from './framed-template-argument-builtins.ts';
+import { resolveCallbackTargets, resolveCallTargets } from './framed-template-argument-callees.ts';
+import {
+  type TargetCallable,
+  type TargetResolution,
+  thisKeyOfNode,
+} from './framed-template-argument-classes.ts';
+import {
+  immutablePrimitiveConst,
+  isPrimitiveExpression,
+  propertyWriteMayInvokeSetter,
+  type TaintKey,
+} from './framed-template-argument-receivers.ts';
+import {
   isAssignmentOperator,
   queueBranchExpressions,
-  unfoldApplyOperand,
+  type SpreadUnfold,
   unfoldCallArguments,
 } from './framed-template-argument-spreads.ts';
 import { peeled } from './framed-written-targets.ts';
@@ -48,82 +67,55 @@ import { peeled } from './framed-written-targets.ts';
 export { constantDeclaration } from './framed-template-argument-spreads.ts';
 
 /**
- * Value and container-mutation sink extraction for `arguments` taint analysis, resolving local
- * holder bindings inside literal and branched receiver roots and flagging unresolvable sinks.
+ * Value, per-slot parameter, receiver-link, and container-mutation sink extraction for
+ * `arguments` taint analysis across resolved local callables, constructors, and built-ins.
  */
 
-const PRIMITIVE_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.FalseKeyword,
-  SyntaxKind.NullKeyword,
-  SyntaxKind.TrueKeyword,
-]);
-
-const MUTATING_METHODS: ReadonlySet<string> = new Set([
-  'add',
-  'copyWithin',
-  'fill',
-  'push',
-  'reverse',
-  'set',
-  'sort',
-  'splice',
-  'unshift',
-]);
-
-const OBJECT_MUTATORS: ReadonlySet<string> = new Set([
-  'assign',
-  'defineProperties',
-  'defineProperty',
-]);
-
-const REFLECT_MUTATORS: ReadonlySet<string> = new Set(['defineProperty', 'set']);
-const NO_EXPRESSIONS: readonly Expression[] = [];
+export interface UnfoldedArgumentTask {
+  readonly node: Expression;
+  readonly value: readonly TaintKey[];
+}
 
 export interface NodeSinks {
-  readonly mutated: readonly FrameDeclaration[];
+  readonly externalBodies: readonly Node[];
+  readonly mutated: readonly TaintKey[];
+  readonly receiverLinks: readonly (readonly [TaintKey, TaintKey])[];
+  readonly returnedFrom: readonly TaintKey[];
+  readonly scopedValue: ReadonlyMap<Node, readonly TaintKey[]>;
+  readonly unfoldedTasks: readonly UnfoldedArgumentTask[];
   readonly unresolvable: boolean;
-  readonly value: readonly FrameDeclaration[];
+  readonly value: readonly TaintKey[];
 }
 
-const NO_SINKS: NodeSinks = { mutated: [], unresolvable: false, value: [] };
-
-/** `const` bindings initialized to a primitive literal cannot hold mutable container properties. */
-export function immutablePrimitiveConst(decl: FrameDeclaration): boolean {
-  if (
-    !isVariableDeclaration(decl) ||
-    !constantDeclaration(decl) ||
-    decl.initializer === undefined
-  ) {
-    return false;
-  }
-  return isPrimitiveExpression(peeled(decl.initializer));
-}
-
-/** Parameters of any inline callable reachable as the value of a variable initializer. */
-export function callableParametersInInitializer(expr: Expression): readonly FrameDeclaration[] {
-  const found: FrameDeclaration[] = [];
-  const pending: Expression[] = [expr];
-  const visited = new Set<Expression>();
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const current = peeled(next);
-    if (visited.has(current)) continue;
-    visited.add(current);
-    if (isAnswering(current)) {
-      found.push(...parametersOf(current));
-      continue;
-    }
-    queueBranchExpressions(current, pending);
-  }
-  return found;
-}
+const NO_SINKS: NodeSinks = {
+  externalBodies: [],
+  mutated: [],
+  receiverLinks: [],
+  returnedFrom: [],
+  scopedValue: new Map(),
+  unfoldedTasks: [],
+  unresolvable: false,
+  value: [],
+};
 
 /** Extracts value and container-mutation sinks introduced at `node` within `owner`. */
 export function sinksForNode(node: Node, owner: Node): NodeSinks {
   if (isVariableDeclaration(node) || isParameterDeclaration(node)) {
-    return { mutated: [], unresolvable: false, value: [node] };
+    return { ...NO_SINKS, value: [node] };
   }
-  if (node !== owner && (isFunctionDeclaration(node) || isClassDeclaration(node))) {
-    return { mutated: [], unresolvable: false, value: [node] };
+  if (
+    node.pos > owner.pos &&
+    node.end <= owner.end &&
+    (isFunctionDeclaration(node) || isClassDeclaration(node))
+  ) {
+    return { ...NO_SINKS, value: [node] };
+  }
+  if (isArrowFunction(node) && !isBlock(node.body)) {
+    return { ...NO_SINKS, scopedValue: new Map([[node.body, [node]]]) };
+  }
+  if (isReturnStatement(node) && node.expression !== undefined) {
+    const fn = enclosingAnswering(node);
+    return fn === undefined ? NO_SINKS : { ...NO_SINKS, value: [fn] };
   }
   if (isBinaryExpression(node) && isAssignmentOperator(node.operatorToken.kind)) {
     return assignmentTargetSinks(node.left);
@@ -137,16 +129,31 @@ export function sinksForNode(node: Node, owner: Node): NodeSinks {
   return NO_SINKS;
 }
 
+function enclosingAnswering(node: Node): Answering | undefined {
+  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
+    if (isAnswering(at)) return at;
+    if (
+      isConstructorDeclaration(at) ||
+      isSetAccessorDeclaration(at) ||
+      isPropertyDeclaration(at) ||
+      isClassStaticBlockDeclaration(at)
+    ) {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function loopTargetSinks(initializer: Node): NodeSinks {
   if (isVariableDeclarationList(initializer)) {
-    return { mutated: [], unresolvable: false, value: initializer.declarations };
+    return { ...NO_SINKS, value: initializer.declarations };
   }
   return assignmentTargetSinks(initializer);
 }
 
 function assignmentTargetSinks(lhs: Node): NodeSinks {
-  const mutated: FrameDeclaration[] = [];
-  const value: FrameDeclaration[] = [];
+  const mutated: TaintKey[] = [];
+  const value: TaintKey[] = [];
   let unresolvable = false;
   const pending: Node[] = [lhs];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
@@ -158,62 +165,117 @@ function assignmentTargetSinks(lhs: Node): NodeSinks {
       continue;
     }
     if (isPropertyAccessExpression(target) || isElementAccessExpression(target)) {
-      if (!collectReceiverHolders(target.expression, mutated)) unresolvable = true;
+      if (
+        !collectReceiverHolders(target.expression, mutated) ||
+        propertyWriteMayInvokeSetter(target)
+      ) {
+        unresolvable = true;
+      }
       continue;
     }
     queueAssignmentPatternChildren(target, pending);
   }
-  return { mutated, unresolvable, value };
+  return { ...NO_SINKS, mutated, unresolvable, value };
 }
 
 function queueAssignmentPatternChildren(target: Node, pending: Node[]): void {
   if (isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken) {
     pending.push(target.left);
-    return;
-  }
-  if (isSpreadElement(target) || isSpreadAssignment(target)) {
+  } else if (isSpreadElement(target) || isSpreadAssignment(target)) {
     pending.push(target.expression);
-    return;
-  }
-  if (isPropertyAssignment(target)) {
+  } else if (isPropertyAssignment(target)) {
     pending.push(target.initializer);
-    return;
-  }
-  if (isShorthandPropertyAssignment(target)) {
+  } else if (isShorthandPropertyAssignment(target)) {
     pending.push(target.name);
-    return;
-  }
-  if (isArrayLiteralExpression(target)) {
+  } else if (isArrayLiteralExpression(target)) {
     for (const element of target.elements) pending.push(element);
-    return;
-  }
-  if (isObjectLiteralExpression(target)) {
+  } else if (isObjectLiteralExpression(target)) {
     for (const prop of target.properties) pending.push(prop);
   }
 }
 
-function callTargetSinks(call: CallExpression | NewExpression, owner: Node): NodeSinks {
-  const mutated: FrameDeclaration[] = [];
-  const value: FrameDeclaration[] = [];
-  const callee = peeled(call.expression);
-  const argsUnfold = unfoldCallArguments(call.arguments, owner);
-  let unresolvable = collectCalleeSinks(callee, mutated, value) || !argsUnfold.resolved;
-  for (const applyOperand of applyArgumentsOperands(call, callee, argsUnfold.slots)) {
-    const applied = unfoldApplyOperand(applyOperand, owner);
-    if (!applied.resolved) unresolvable = true;
-    collectArgumentListSinks(applied.elements, mutated, value);
-  }
-  collectArgumentListSinks(argsUnfold.elements, mutated, value);
-  for (const mutatedTarget of knownMutatedTargetArguments(call, callee, argsUnfold.slots)) {
-    if (!collectReceiverHolders(mutatedTarget, mutated)) unresolvable = true;
-  }
-  return { mutated, unresolvable, value };
+interface CallSinkAccumulator {
+  readonly call: CallExpression | NewExpression;
+  readonly externalBodies: Node[];
+  readonly externalTasks: Map<Expression, Set<TaintKey>>;
+  readonly mutated: TaintKey[];
+  readonly owner: Node;
+  readonly receiverLinks: [TaintKey, TaintKey][];
+  readonly returnedFrom: TaintKey[];
+  readonly scopedValue: Map<Node, Set<TaintKey>>;
+  unresolvable: boolean;
+  readonly value: TaintKey[];
 }
 
-function collectArgumentListSinks(
+function callTargetSinks(call: CallExpression | NewExpression, owner: Node): NodeSinks {
+  const callee = peeled(call.expression);
+  const argsUnfold = unfoldCallArguments(call.arguments, owner);
+  const resolution = resolveCallTargets(call, argsUnfold, owner);
+  const acc: CallSinkAccumulator = {
+    call,
+    externalBodies: [],
+    externalTasks: new Map(),
+    mutated: [],
+    owner,
+    receiverLinks: [],
+    returnedFrom: [],
+    scopedValue: new Map(),
+    unresolvable: resolution.unresolvable || !argsUnfold.resolved,
+    value: [],
+  };
+  for (const mutatedTarget of knownMutatedTargetArguments(call, callee, argsUnfold.slots)) {
+    if (!collectReceiverHolders(mutatedTarget, acc.mutated)) acc.unresolvable = true;
+  }
+  if (resolution.targets.length === 0) {
+    populateBuiltInCallSinks(callee, argsUnfold, resolution, acc);
+  } else {
+    populateResolvedTargetSinks(argsUnfold, resolution, acc);
+  }
+  return finalizeCallSinks(acc);
+}
+
+function finalizeCallSinks(acc: CallSinkAccumulator): NodeSinks {
+  const scopedValue = new Map<Node, readonly TaintKey[]>();
+  for (const [node, set] of acc.scopedValue) scopedValue.set(node, [...set]);
+  const unfoldedTasks: UnfoldedArgumentTask[] = [];
+  for (const [node, set] of acc.externalTasks) unfoldedTasks.push({ node, value: [...set] });
+  return {
+    externalBodies: acc.externalBodies,
+    mutated: acc.mutated,
+    receiverLinks: acc.receiverLinks,
+    returnedFrom: acc.returnedFrom,
+    scopedValue,
+    unfoldedTasks,
+    unresolvable: acc.unresolvable,
+    value: acc.value,
+  };
+}
+
+function populateBuiltInCallSinks(
+  callee: Expression,
+  argsUnfold: SpreadUnfold,
+  resolution: TargetResolution,
+  acc: CallSinkAccumulator,
+): void {
+  if (
+    !resolution.unresolvable &&
+    (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) &&
+    isDirectMutatingMethod(callee) &&
+    !collectReceiverHolders(callee.expression, acc.mutated)
+  ) {
+    acc.unresolvable = true;
+  }
+  collectCallbackSinksFromItems(argsUnfold.elements, acc);
+  if (resolution.effectiveSlots !== undefined) {
+    for (const exprs of resolution.effectiveSlots.values()) {
+      collectCallbackSinksFromItems(exprs, acc);
+    }
+  }
+}
+
+function collectCallbackSinksFromItems(
   items: readonly Expression[],
-  mutated: FrameDeclaration[],
-  value: FrameDeclaration[],
+  acc: CallSinkAccumulator,
 ): void {
   const pending: Expression[] = [...items];
   const visited = new Set<Expression>();
@@ -221,26 +283,25 @@ function collectArgumentListSinks(
     const current = peeled(next);
     if (visited.has(current)) continue;
     visited.add(current);
-    stepArgumentExpressionSink(current, pending, mutated, value);
+    stepBuiltInArgumentSink(current, pending, acc);
   }
 }
 
-function stepArgumentExpressionSink(
+function stepBuiltInArgumentSink(
   current: Expression,
   pending: Expression[],
-  mutated: FrameDeclaration[],
-  value: FrameDeclaration[],
+  acc: CallSinkAccumulator,
 ): void {
   if (isAnswering(current)) {
-    value.push(...parametersOf(current));
+    acc.value.push(...parametersOf(current));
     return;
   }
   if (isIdentifier(current)) {
-    pushLocalCallableParameters(current, value);
-    pushMutableIdentifier(current, mutated);
+    recordCallbackTarget(current, acc);
     return;
   }
   if (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
+    recordCallbackTarget(current, acc);
     pending.push(current.expression);
     return;
   }
@@ -248,52 +309,128 @@ function stepArgumentExpressionSink(
   queueLiteralContainerValues(current, pending);
 }
 
-function collectCalleeSinks(
-  callee: Expression,
-  mutated: FrameDeclaration[],
-  value: FrameDeclaration[],
-): boolean {
-  let unresolvable = false;
-  if (isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) {
-    const exhaustive = collectReceiverHolders(callee.expression, mutated);
-    if (!exhaustive && isDirectMutatingMethod(callee)) unresolvable = true;
-  }
-  collectCalleeParameters(callee, value);
-  return unresolvable;
-}
-
-function collectCalleeParameters(callee: Expression, value: FrameDeclaration[]): void {
-  const pending: Expression[] = [callee];
-  const visited = new Set<Expression>();
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const current = peeled(next);
-    if (visited.has(current)) continue;
-    visited.add(current);
-    if (isAnswering(current)) {
-      value.push(...parametersOf(current));
-      continue;
-    }
-    if (isIdentifier(current)) {
-      pushLocalCallableParameters(current, value);
-      continue;
-    }
-    if (queueBranchExpressions(current, pending)) continue;
-    queueCalleeContainerTarget(current, pending);
+function recordCallbackTarget(expr: Expression, acc: CallSinkAccumulator): void {
+  const cbRes = resolveCallbackTargets(expr, acc.owner);
+  if (cbRes.unresolvable) return;
+  for (const target of cbRes.targets) {
+    acc.value.push(...target.parameters);
+    for (const bodyNode of target.bodyNodes) queueExternalBody(bodyNode, acc);
   }
 }
 
-function queueCalleeContainerTarget(current: Expression, pending: Expression[]): void {
-  if (!isPropertyAccessExpression(current) && !isElementAccessExpression(current)) return;
-  const method = memberNameOf(current);
-  const target = peeled(current.expression);
-  if (
-    method === 'apply' ||
-    method === 'bind' ||
-    method === 'call' ||
-    isArrayLiteralExpression(target) ||
-    isObjectLiteralExpression(target)
-  ) {
-    pending.push(target);
+function populateResolvedTargetSinks(
+  argsUnfold: SpreadUnfold,
+  resolution: TargetResolution,
+  acc: CallSinkAccumulator,
+): void {
+  const slotMap = resolution.effectiveSlots ?? argsUnfold.slots;
+  const hasSuppliedArgs = slotMap.size > 0 || !argsUnfold.resolved;
+  for (const target of resolution.targets) {
+    if (hasSuppliedArgs && target.readsOwnArguments) acc.unresolvable = true;
+    for (const bodyNode of target.bodyNodes) queueExternalBody(bodyNode, acc);
+    recordTargetReturnKey(target, acc);
+  }
+  for (const [slotIndex, exprs] of slotMap) {
+    const params = collectSlotParameters(resolution.targets, slotIndex);
+    if (params.length === 0) continue;
+    for (const expr of exprs) attachExpressionSinks(expr, params, acc);
+  }
+  linkResolvedReceivers(resolution, acc);
+}
+
+function queueExternalBody(bodyNode: Node, acc: CallSinkAccumulator): void {
+  if (bodyNode.pos < acc.owner.pos || bodyNode.end > acc.owner.end) {
+    acc.externalBodies.push(bodyNode);
+  }
+}
+
+function recordTargetReturnKey(target: TargetCallable, acc: CallSinkAccumulator): void {
+  if (isNewExpression(acc.call)) {
+    if (target.thisKey !== undefined) acc.returnedFrom.push(target.thisKey);
+    return;
+  }
+  if (target.callableNode !== undefined && isAnswering(target.callableNode)) {
+    acc.returnedFrom.push(target.callableNode);
+  }
+}
+
+function collectSlotParameters(
+  targets: readonly TargetCallable[],
+  slotIndex: number,
+): readonly ParameterDeclaration[] {
+  const matched: ParameterDeclaration[] = [];
+  for (const target of targets) {
+    const param = matchSingleTargetParameter(target, slotIndex);
+    if (param !== undefined) matched.push(param);
+  }
+  return matched;
+}
+
+function matchSingleTargetParameter(
+  target: TargetCallable,
+  callSlot: number,
+): ParameterDeclaration | undefined {
+  if (callSlot < target.callSlotSkip) return undefined;
+  const paramIndex = callSlot - target.callSlotSkip + target.paramOffset;
+  const { parameters } = target;
+  if (paramIndex < parameters.length) return parameters[paramIndex];
+  const last = parameters.at(-1);
+  return last?.dotDotDotToken === undefined ? undefined : last;
+}
+
+function attachExpressionSinks(
+  expr: Expression,
+  keys: readonly TaintKey[],
+  acc: CallSinkAccumulator,
+): void {
+  if (expr.pos >= acc.call.pos && expr.end <= acc.call.end) {
+    addSinkSetEntries(acc.scopedValue, expr, keys);
+  } else {
+    addSinkSetEntries(acc.externalTasks, expr, keys);
+  }
+}
+
+function addSinkSetEntries<K>(
+  table: Map<K, Set<TaintKey>>,
+  mapKey: K,
+  values: readonly TaintKey[],
+): void {
+  let set = table.get(mapKey);
+  if (set === undefined) {
+    set = new Set();
+    table.set(mapKey, set);
+  }
+  for (const val of values) set.add(val);
+}
+
+function linkResolvedReceivers(resolution: TargetResolution, acc: CallSinkAccumulator): void {
+  const thisKeys = collectActiveThisKeys(resolution.targets);
+  if (thisKeys.length === 0 || resolution.receiverExprs.length === 0) return;
+  for (const recvExpr of resolution.receiverExprs) {
+    attachExpressionSinks(recvExpr, thisKeys, acc);
+    const holders: TaintKey[] = [];
+    if (!collectReceiverHolders(recvExpr, holders)) acc.unresolvable = true;
+    emitHolderReceiverLinks(thisKeys, holders, acc.receiverLinks);
+  }
+}
+
+function collectActiveThisKeys(targets: readonly TargetCallable[]): readonly TaintKey[] {
+  const thisKeys: TaintKey[] = [];
+  for (const target of targets) {
+    if (target.mentionsThis && target.thisKey !== undefined) thisKeys.push(target.thisKey);
+  }
+  return thisKeys;
+}
+
+function emitHolderReceiverLinks(
+  thisKeys: readonly TaintKey[],
+  holders: readonly TaintKey[],
+  links: [TaintKey, TaintKey][],
+): void {
+  for (const thisKey of thisKeys) {
+    for (const holder of holders) {
+      if (thisKey !== holder) links.push([thisKey, holder]);
+    }
   }
 }
 
@@ -318,7 +455,7 @@ function queueObjectPropertyValue(prop: ObjectLiteralElementLike, pending: Expre
   else if (isSpreadAssignment(prop)) pending.push(prop.expression);
 }
 
-function collectReceiverHolders(expr: Expression, mutated: FrameDeclaration[]): boolean {
+function collectReceiverHolders(expr: Expression, mutated: TaintKey[]): boolean {
   const pending: Expression[] = [expr];
   const visited = new Set<Expression>();
   let exhaustive = true;
@@ -334,13 +471,19 @@ function collectReceiverHolders(expr: Expression, mutated: FrameDeclaration[]): 
 function stepReceiverHolder(
   current: Expression,
   pending: Expression[],
-  mutated: FrameDeclaration[],
+  mutated: TaintKey[],
 ): boolean {
   if (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
     pending.push(current.expression);
     return true;
   }
   if (isPrimitiveExpression(current)) return true;
+  if (current.kind === SyntaxKind.ThisKeyword || current.kind === SyntaxKind.SuperKeyword) {
+    const key = thisKeyOfNode(current);
+    if (key === undefined) return false;
+    mutated.push(key);
+    return true;
+  }
   if (isIdentifier(current)) return recordReceiverIdentifier(current, mutated);
   if (queueBranchExpressions(current, pending)) return true;
   if (isArrayLiteralExpression(current)) {
@@ -353,7 +496,7 @@ function stepReceiverHolder(
   return false;
 }
 
-function recordReceiverIdentifier(id: Identifier, mutated: FrameDeclaration[]): boolean {
+function recordReceiverIdentifier(id: Identifier, mutated: TaintKey[]): boolean {
   const decl = frameDeclarationOf(id);
   if (decl === undefined) return false;
   if (!immutablePrimitiveConst(decl)) mutated.push(decl);
@@ -380,111 +523,4 @@ function queueObjectReceiverProperties(
     }
   }
   return plain;
-}
-
-function applyArgumentsOperands(
-  call: CallExpression | NewExpression,
-  callee: Expression,
-  slots: ReadonlyMap<number, readonly Expression[]>,
-): readonly Expression[] {
-  if (
-    !isCallExpression(call) ||
-    (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee))
-  ) {
-    return NO_EXPRESSIONS;
-  }
-  const method = memberNameOf(callee);
-  const receiverGlobal = globalOf(peeled(callee.expression));
-  if (receiverGlobal === 'Reflect') {
-    if (method === 'apply') return slots.get(2) ?? NO_EXPRESSIONS;
-    if (method === 'construct') return slots.get(1) ?? NO_EXPRESSIONS;
-    return NO_EXPRESSIONS;
-  }
-  return method === 'apply' ? (slots.get(1) ?? NO_EXPRESSIONS) : NO_EXPRESSIONS;
-}
-
-function knownMutatedTargetArguments(
-  call: CallExpression | NewExpression,
-  callee: Expression,
-  slots: ReadonlyMap<number, readonly Expression[]>,
-): readonly Expression[] {
-  if (
-    !isCallExpression(call) ||
-    (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee))
-  ) {
-    return NO_EXPRESSIONS;
-  }
-  const method = memberNameOf(callee);
-  if (method === undefined) return NO_EXPRESSIONS;
-  const receiver = peeled(callee.expression);
-  if (isStaticMutator(receiver, method)) return slots.get(0) ?? NO_EXPRESSIONS;
-  if (method !== 'call' && method !== 'apply') return NO_EXPRESSIONS;
-  if (!isPropertyAccessExpression(receiver) && !isElementAccessExpression(receiver)) {
-    return NO_EXPRESSIONS;
-  }
-  const innerMethod = memberNameOf(receiver);
-  if (innerMethod === undefined) return NO_EXPRESSIONS;
-  if (method === 'call' && isStaticMutator(peeled(receiver.expression), innerMethod)) {
-    return slots.get(1) ?? NO_EXPRESSIONS;
-  }
-  return MUTATING_METHODS.has(innerMethod) ? (slots.get(0) ?? NO_EXPRESSIONS) : NO_EXPRESSIONS;
-}
-
-function isDirectMutatingMethod(callee: Expression): boolean {
-  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
-  const method = memberNameOf(callee);
-  return (
-    method !== undefined &&
-    MUTATING_METHODS.has(method) &&
-    globalOf(peeled(callee.expression)) === undefined
-  );
-}
-
-function isStaticMutator(receiver: Expression, method: string): boolean {
-  const globalName = globalOf(receiver);
-  return (
-    (globalName === 'Object' && OBJECT_MUTATORS.has(method)) ||
-    (globalName === 'Reflect' && REFLECT_MUTATORS.has(method))
-  );
-}
-
-function memberNameOf(expr: Expression): string | undefined {
-  if (isPropertyAccessExpression(expr)) return expr.name.text;
-  if (isElementAccessExpression(expr)) return literalName(expr);
-  return undefined;
-}
-
-function pushMutableIdentifier(id: Identifier, found: FrameDeclaration[]): void {
-  const decl = frameDeclarationOf(id);
-  if (decl !== undefined && !immutablePrimitiveConst(decl)) found.push(decl);
-}
-
-function pushLocalCallableParameters(callee: Identifier, found: FrameDeclaration[]): void {
-  const decl = frameDeclarationOf(callee);
-  if (decl === undefined) return;
-  if (isFunctionDeclaration(decl)) {
-    for (const each of overloadsOf(decl)) {
-      if (each.body !== undefined) found.push(...parametersOf(each));
-    }
-    return;
-  }
-  if (
-    !isVariableDeclaration(decl) ||
-    !constantDeclaration(decl) ||
-    decl.initializer === undefined
-  ) {
-    return;
-  }
-  found.push(...callableParametersInInitializer(decl.initializer));
-}
-
-function isPrimitiveExpression(expr: Expression): boolean {
-  return (
-    isStringLiteral(expr) ||
-    isNumericLiteral(expr) ||
-    isBigIntLiteral(expr) ||
-    isNoSubstitutionTemplateLiteral(expr) ||
-    PRIMITIVE_KEYWORDS.has(expr.kind) ||
-    (isIdentifier(expr) && expr.text === 'undefined' && frameDeclarationOf(expr) === undefined)
-  );
 }

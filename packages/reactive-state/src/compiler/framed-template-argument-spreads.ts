@@ -56,18 +56,21 @@ const EMPTY_SLOT_SETS: ReadonlyMap<number, ReadonlySet<Expression>> = new Map();
 
 export interface SpreadUnfold {
   readonly elements: readonly Expression[];
+  readonly lengths: ReadonlySet<number>;
   readonly resolved: boolean;
   readonly slots: ReadonlyMap<number, readonly Expression[]>;
 }
 
 const EMPTY_UNFOLD: SpreadUnfold = {
   elements: EMPTY_EXPRESSIONS,
+  lengths: EMPTY_LENGTHS,
   resolved: true,
   slots: EMPTY_SLOTS,
 };
 
 const UNRESOLVED_UNFOLD: SpreadUnfold = {
   elements: EMPTY_EXPRESSIONS,
+  lengths: EMPTY_LENGTHS,
   resolved: false,
   slots: EMPTY_SLOTS,
 };
@@ -196,12 +199,15 @@ function createUnfoldContext(owner: Node, allowNullish: boolean): UnfoldContext 
 function directCallArguments(args: readonly Expression[]): SpreadUnfold {
   const slots = new Map<number, readonly Expression[]>();
   for (const [index, arg] of args.entries()) slots.set(index, [arg]);
-  return { elements: args, resolved: true, slots };
+  return { elements: args, lengths: new Set([args.length]), resolved: true, slots };
 }
 
 function finalizeSequence(shape: SequenceShape): SpreadUnfold {
+  if (!shape.resolved) return UNRESOLVED_UNFOLD;
   if (shape.slots.size === 0) {
-    return shape.resolved ? EMPTY_UNFOLD : UNRESOLVED_UNFOLD;
+    return shape.lengths.size === 1 && shape.lengths.has(0)
+      ? EMPTY_UNFOLD
+      : { elements: EMPTY_EXPRESSIONS, lengths: shape.lengths, resolved: true, slots: EMPTY_SLOTS };
   }
   const slots = new Map<number, readonly Expression[]>();
   const unique = new Set<Expression>();
@@ -210,7 +216,7 @@ function finalizeSequence(shape: SequenceShape): SpreadUnfold {
     slots.set(index, list);
     for (const expr of list) unique.add(expr);
   }
-  return { elements: [...unique], resolved: shape.resolved, slots };
+  return { elements: [...unique], lengths: shape.lengths, resolved: shape.resolved, slots };
 }
 
 function consumeStep(budget: UnfoldBudget): boolean {
