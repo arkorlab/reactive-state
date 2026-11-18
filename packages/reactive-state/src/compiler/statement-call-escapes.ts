@@ -256,6 +256,11 @@ function activateWholeClass(
   instanceReceiver: ResolvedValue,
   driver: EscapeDriver,
 ): void {
+  const heritageKey = `heritage:${nodeIdOf(cls, driver.scopes)}:${isPrototype ? '1' : '0'}:${valueIdentityKey(instanceReceiver, driver.scopes)}`;
+  if (driver.wholeEscaped.has(heritageKey)) {
+    return;
+  }
+  driver.wholeEscaped.add(heritageKey);
   if (!isPrototype) {
     driver.constructClass(cls, instanceReceiver);
   }
