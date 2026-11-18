@@ -176,6 +176,37 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: 'const target: Record<PropertyKey, number> = {}; target[Symbol.iterator] = 1; return target;',
+    changed: true,
+    id: 'symbol-key-well-known',
+    run: () => {
+      const target = box<Record<PropertyKey, number>>({});
+      target[Symbol.iterator] = 1;
+      return target;
+    },
+  },
+  {
+    body: "const target: Record<PropertyKey, number> = {}; target[Symbol('x')] = 1; return target;",
+    changed: true,
+    id: 'symbol-key-made-by-the-code',
+    run: () => {
+      const target = box<Record<PropertyKey, number>>({});
+      target[Symbol('x')] = 1;
+      return target;
+    },
+  },
+  {
+    body: "const key = Symbol.for('k'); const target: Record<PropertyKey, number> = {}; target[key] = 1; return target;",
+    changed: true,
+    id: 'symbol-key-held-by-a-constant',
+    run: () => {
+      const key = Symbol.for('k');
+      const target = box<Record<PropertyKey, number>>({});
+      target[key] = 1;
+      return target;
+    },
+  },
 ];
 
 describe('local writes under keys read from a page’s values', () => {

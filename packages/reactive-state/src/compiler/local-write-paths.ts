@@ -37,6 +37,7 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { literalKey } from './exported-values.ts';
+import { isSymbolKey } from './framed-mutator-keys.ts';
 import { globalPath } from './global-answers.ts';
 import { readsOf } from './local-module-reads.ts';
 import { constantValue, type Resolve } from './numbers.ts';
@@ -136,7 +137,13 @@ export function isWrapping(parent: Node, node: Node): boolean {
   );
 }
 
-/** Resolves a bracket key from a literal or folded constant text/number (`-0` becomes `'0'`). */
+/** The key a symbol the code writes stands for: no text names it, and no index. */
+export const SYMBOL_KEY = '@@symbol';
+
+/**
+ * Resolves a bracket key from a literal or folded constant text/number (`-0` becomes `'0'`), or
+ * from a symbol the code writes (`SYMBOL_KEY`).
+ */
 export function memberKey(node: Expression, resolve: Resolve | undefined): string | undefined {
   const direct = literalKey(node);
   if (direct !== undefined) {
@@ -149,7 +156,7 @@ export function memberKey(node: Expression, resolve: Resolve | undefined): strin
   if (typeof folded === 'number') {
     return Object.is(folded, -0) ? '0' : String(folded);
   }
-  return undefined;
+  return isSymbolKey(node) ? SYMBOL_KEY : undefined;
 }
 
 /** The member a read of `name` reads and its keys in turn (`undefined` where unread). */
