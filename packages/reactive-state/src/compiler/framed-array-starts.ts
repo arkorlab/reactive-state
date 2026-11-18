@@ -9,6 +9,7 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isParenthesizedExpression,
   isPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
@@ -171,7 +172,7 @@ function defaultMayBeArray(name: Identifier): boolean {
  * on every path. A name, a member, an element and a call may hold an array, and are none of these.
  */
 export function isNoArray(value: Expression): boolean {
-  return endsAtKinds(value, NO_ARRAY_KINDS);
+  return endsAtKinds(value, NO_ARRAY_KINDS, unwrapped);
 }
 
 /** The written values whose type is a text, a number, a boolean or a bigint, whatever their operands are. */
@@ -194,17 +195,29 @@ const SCALAR_KINDS: ReadonlySet<SyntaxKind> = new Set([
  * an operator makes of its operands, or a choice or a sequence that ends at such a value on every
  * path. The empty object, `null`, `undefined`, a function and a regular expression are no array, but
  * a name that starts as one is typed by it as any, or as `{}`, and TypeScript lets an array be
- * assigned to it later: they are not scalars.
+ * assigned to it later: they are not scalars. A cast (`'x' as unknown`) says the name is typed as
+ * something else than what it starts as, and is read as no scalar: only parentheses are looked through.
  */
 export function isScalarValue(value: Expression): boolean {
-  return endsAtKinds(value, SCALAR_KINDS);
+  return endsAtKinds(value, SCALAR_KINDS, withoutParentheses);
+}
+
+/** `node` within the parentheses that wrap it. */
+function withoutParentheses(node: Expression): Expression {
+  let each = node;
+  while (isParenthesizedExpression(each)) each = each.expression;
+  return each;
 }
 
 /** Whether every path of a choice or a sequence ends at a value of one of these kinds or at a scalar operator. */
-function endsAtKinds(value: Expression, kinds: ReadonlySet<SyntaxKind>): boolean {
+function endsAtKinds(
+  value: Expression,
+  kinds: ReadonlySet<SyntaxKind>,
+  strip: (node: Expression) => Expression,
+): boolean {
   const pending = [value];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const written = unwrapped(each);
+    const written = strip(each);
     if (kinds.has(written.kind)) continue;
     const ends = endsOf(written);
     if (ends === undefined) return false;

@@ -230,6 +230,24 @@ const CASES = [
       "export function p(error: Error): string { let value: unknown = () => 1; value = [error]; return '' + value; }",
   },
   {
+    framed: true,
+    id: 'error-pushed-into-a-list-a-native-mutator-writes',
+    source:
+      "export function p(error: Error): string { const list: unknown[] = []; Object.assign(list, { label: 'items' }); list.push(error); return '' + list; }",
+  },
+  {
+    framed: true,
+    id: 'error-array-written-to-a-member-then-destructured',
+    source:
+      "export function p(error: Error): string { const box: { value: unknown } = { value: 'pending' }; box.value = [error]; const { value } = box; return '' + value; }",
+  },
+  {
+    framed: true,
+    id: 'cast-text-name-given-an-error-array',
+    source:
+      "export function p(error: Error): string { let value = 'x' as unknown; value = [error]; return '' + value; }",
+  },
+  {
     framed: false,
     id: 'array-of-text-pushed-after-a-whole-reassignment',
     source:

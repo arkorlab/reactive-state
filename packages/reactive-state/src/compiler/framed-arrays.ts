@@ -180,12 +180,7 @@ export function arrayError(
         destructuredList(
           each,
           (element, keys) => words.error(element, keys),
-          (source) => {
-            return (
-              reading === 'refused' &&
-              sourceChanged(source, call, (element, keys) => words.error(element, keys))
-            );
-          },
+          (source) => sourceChanged(source, call, (element, keys) => words.error(element, keys)),
         )) ||
       bindingArrayWords(each, { call, words, pending, seen, reading })
     )
@@ -207,6 +202,7 @@ function writtenElementErrors(
   );
   if (unfollowed && reading === 'refused') return true;
   const sources = unfollowed ? explicitWrites(value, call) : writtenArrayElements(value, call);
+  if (sources === undefined) return true;
   for (const source of sources) {
     if (source.array === true) {
       pending.push(source.value);
@@ -222,13 +218,14 @@ function writtenElementErrors(
 /**
  * What the program writes into an array it does not follow the identity of, an insertion and an
  * element assignment on its name: read by an operand all the same, so that an error pushed into a
- * list the code also gives another list is still one. A native object mutator it cannot read.
+ * list the code also gives another list is still one. Where a native object mutator may write the
+ * array nothing here can be read, and none is returned.
  */
-function explicitWrites(value: Expression, call: Node): readonly WrittenArrayElement[] {
+function explicitWrites(value: Expression, call: Node): readonly WrittenArrayElement[] | undefined {
   try {
     return writtenArrayElements(value, call);
   } catch (error) {
-    if (error instanceof UnfollowableError) return [];
+    if (error instanceof UnfollowableError) return undefined;
     throw error;
   }
 }
