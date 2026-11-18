@@ -21,6 +21,7 @@ import {
   isPropertyAssignment,
   isPropertyDeclaration,
   isSpreadElement,
+  isTaggedTemplateExpression,
   type NewExpression,
   type Node,
   type ObjectLiteralExpression,
@@ -28,7 +29,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { borrowedReturnTargets } from './statement-call-borrowed.ts';
+import { borrowedReturnTargets, taggedTemplateReturnTargets } from './statement-call-borrowed.ts';
 import {
   EMPTY_NODE_SET,
   EMPTY_PROJECT_SET,
@@ -234,6 +235,9 @@ function resolveStructuredTargets(
   }
   if (isNewExpression(clean)) {
     return resolveNewTargets(clean, ctx, trace);
+  }
+  if (isTaggedTemplateExpression(clean)) {
+    return taggedTemplateReturnTargets(clean, ctx, trace);
   }
   return [{ kind: 'node', node: clean }];
 }

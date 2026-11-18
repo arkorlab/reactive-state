@@ -6,6 +6,7 @@ import {
   isPropertyAccessExpression,
   isSpreadElement,
   type Node,
+  type TaggedTemplateExpression,
 } from 'typescript/ast';
 
 import {
@@ -94,4 +95,17 @@ export function borrowedReturnTargets(
     }
   }
   return results;
+}
+
+/** What a tagged template evaluates to: what its tag returns, as a call of the tag does. */
+export function taggedTemplateReturnTargets(
+  node: TaggedTemplateExpression,
+  ctx: TargetContext,
+  resolving: Resolving,
+): readonly ResolvedValue[] {
+  return ctx.resolve(node.tag, resolving.seenNodes, resolving.seenBindings).flatMap((target) => {
+    return target.kind === 'node' && isCallableNode(target.node)
+      ? returnedTargetsOf(target.node, ctx, { ...resolving, receiver: target.receiver })
+      : [];
+  });
 }
