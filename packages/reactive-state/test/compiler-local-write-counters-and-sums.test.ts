@@ -232,6 +232,54 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: "const target = { n: 'bad' as unknown as number }; for (const item of items) { target.n++; } return target;",
+    changed: true,
+    id: 'text-slot-incremented-in-loop',
+    run: ({ items }) => {
+      const target = box({ n: 'bad' as unknown as number });
+      each(items, () => {
+        target.n -= -1;
+      });
+      return target;
+    },
+  },
+  {
+    body: "const target = { n: 'bad' as unknown as number }; for (const item of items) { target.n -= 1; } return target;",
+    changed: true,
+    id: 'text-slot-subtracted-from-in-loop',
+    run: ({ items }) => {
+      const target = box({ n: 'bad' as unknown as number });
+      each(items, () => {
+        target.n -= 1;
+      });
+      return target;
+    },
+  },
+  {
+    body: "const target = { n: 'bad' as unknown as number }; items.forEach(() => { --target.n; }); return target;",
+    changed: true,
+    id: 'text-slot-decremented-in-callback',
+    run: ({ items }) => {
+      const target = box({ n: 'bad' as unknown as number });
+      each(items, () => {
+        target.n -= 1;
+      });
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: {} as unknown as number }; for (const item of items) { target.n++; } return target;',
+    changed: true,
+    id: 'object-slot-incremented-in-loop',
+    run: ({ items }) => {
+      const target = box({ n: {} as unknown as number });
+      each(items, () => {
+        target.n -= -1;
+      });
+      return target;
+    },
+  },
 ];
 
 describe('local counters and sums of a page’s values', () => {

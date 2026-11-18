@@ -27,6 +27,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import {
   type AliasFrame,
   aliasStep,
@@ -231,6 +232,14 @@ function isByZero(operator: SyntaxKind, right: number | string | undefined): boo
   return right === 0 && BY_ZERO.has(operator);
 }
 
+/** Whether the slot `initial` initializes shows it holds no number — text or an object the code writes. */
+function holdsNoNumber(initial: Expression, left: number | string | undefined): boolean {
+  const value = unwrapped(initial);
+  return (
+    typeof left === 'string' || isObjectLiteralExpression(value) || isArrayLiteralExpression(value)
+  );
+}
+
 /** Whether a write that is the only one of its slot leaves a finite number, as far as it shows. */
 function showsFinite(
   compute: (left: number, right: number) => number,
@@ -272,6 +281,9 @@ function arithmeticWrite(
   if (typeof left === 'string' && isPlus) {
     return put;
   }
+  if (isAdditive && !isPlus && holdsNoNumber(initial, left)) {
+    return CHANGED;
+  }
   if (!isSoleSlotWrite(top, target)) {
     return isAdditive ? put : CHANGED;
   }
@@ -308,15 +320,18 @@ export function updatedAt(operator: SyntaxKind, top: Expression, target: Target)
   if (initial === undefined) {
     return CHANGED;
   }
+  const left = constantValue(initial, target.resolve);
+  if (holdsNoNumber(initial, left)) {
+    return CHANGED;
+  }
   if (!isSoleSlotWrite(top, target)) {
     return NONE;
   }
-  const left = constantValue(initial, target.resolve);
   const delta = operator === SyntaxKind.PlusPlusToken ? 1 : -1;
   if (typeof left === 'number') {
     return Number.isFinite(left + delta) ? putOf(initial, target) : CHANGED;
   }
-  return typeof left === 'string' ? CHANGED : NONE;
+  return NONE;
 }
 
 /** Evaluates any binary assignment (`=`, logical, bitwise, or compound arithmetic) onto `target`. */
