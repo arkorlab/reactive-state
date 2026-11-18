@@ -28,6 +28,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { declarationOf, type Declared, initializerOf } from './framed.ts';
 import {
+  definedExpressions,
   instanceMethods,
   keyOf,
   literalKey,
@@ -190,7 +191,13 @@ function candidateWritesThis(
   const deferred = deferredBody(method, call);
   let found = false;
   const visit = (node: Node): void => {
-    if (found || node === deferred || (node !== method && ownsThis(node))) {
+    if (found || node === deferred) {
+      return;
+    }
+    if (node !== method && ownsThis(node)) {
+      for (const each of definedExpressions(node)) {
+        visit(each);
+      }
       return;
     }
     const written = writtenBy(node);
