@@ -214,11 +214,32 @@ function checkConstructedRegExp(
   return typeof foldedFlags === 'string' && hasValidGlobalFlags(foldedFlags);
 }
 
+/**
+ * Evaluates the obligation of a name: its binding is a `const` no read mutates, and what it is
+ * written as is global. A binding is proved once, however many ways reach it, so names that
+ * converge cost no more than a chain; a binding reached while it is being proved is a cycle.
+ */
+function stepNamedRegExp(
+  { visiting, expr }: RegExpObligation,
+  { proved, stack }: { readonly proved: Set<Identifier>; readonly stack: RegExpObligation[] },
+): boolean {
+  const bound = isIdentifier(expr) ? constBindingOf(expr) : undefined;
+  if (bound === undefined || visiting.has(bound.id)) return false;
+  if (proved.has(bound.id)) return true;
+  if (isRegExpMutated(bound.id, new Set())) return false;
+  proved.add(bound.id);
+  stack.push({ expr: bound.initializer, visiting: new Set([...visiting, bound.id]) });
+  return true;
+}
+
 /** Evaluates a single `RegExp` obligation item on `stack`. */
-function stepGlobalRegExp(item: RegExpObligation, stack: RegExpObligation[]): boolean {
+function stepGlobalRegExp(
+  item: RegExpObligation,
+  state: { readonly proved: Set<Identifier>; readonly stack: RegExpObligation[] },
+): boolean {
   const value = unwrapped(item.expr);
   if (isConditionalExpression(value)) {
-    stack.push(
+    state.stack.push(
       { expr: value.whenTrue, visiting: item.visiting },
       { expr: value.whenFalse, visiting: item.visiting },
     );
@@ -229,28 +250,22 @@ function stepGlobalRegExp(item: RegExpObligation, stack: RegExpObligation[]): bo
     return slash > 0 && value.text.slice(slash + 1).includes('g');
   }
   if (isCallExpression(value) || isNewExpression(value)) {
-    return checkConstructedRegExp(value, item.visiting, stack);
+    return checkConstructedRegExp(value, item.visiting, state.stack);
   }
   if (isIdentifier(value) && globalPathOf(value) === undefined) {
-    const bound = constBindingOf(value);
-    if (
-      bound === undefined ||
-      item.visiting.has(bound.id) ||
-      isRegExpMutated(bound.id, new Set())
-    ) {
-      return false;
-    }
-    stack.push({ expr: bound.initializer, visiting: new Set([...item.visiting, bound.id]) });
-    return true;
+    return stepNamedRegExp({ expr: value, visiting: item.visiting }, state);
   }
   return false;
 }
 
 /** Proves `root` evaluates to an unmutated native `RegExp` carrying the `'g'` flag. */
 function isGlobalRegExp(root: Expression): boolean {
-  const stack: RegExpObligation[] = [{ expr: root, visiting: new Set() }];
-  for (let item = stack.pop(); item !== undefined; item = stack.pop()) {
-    if (!stepGlobalRegExp(item, stack)) return false;
+  const state = {
+    proved: new Set<Identifier>(),
+    stack: [{ expr: root, visiting: new Set<Identifier>() }] as RegExpObligation[],
+  };
+  for (let item = state.stack.pop(); item !== undefined; item = state.stack.pop()) {
+    if (!stepGlobalRegExp(item, state)) return false;
   }
   return true;
 }
