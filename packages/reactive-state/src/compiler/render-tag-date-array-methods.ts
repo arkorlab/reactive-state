@@ -26,9 +26,14 @@ import { UnfollowableError } from './framed-getter-writes.ts';
 
 const REDUCE_ARRAY_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
 
-/** Array methods that answer an element, or an array of elements, of their receiver. */
+/**
+ * Array methods that answer an element, an array of elements, or an iterator that yields them or
+ * pairs that hold them (`entries`), of their receiver. A pair's index is a number, which the walk
+ * does not tell from the element: it refuses the index written as text, where `values.map` does not.
+ */
 export const PASSTHROUGH_ARRAY_METHODS: ReadonlySet<string> = new Set([
   'copyWithin',
+  'entries',
   'fill',
   'filter',
   'find',
