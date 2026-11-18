@@ -33,6 +33,7 @@ import {
   singleDescriptorBodyWrite,
   type RecordedDescriptorBodyWrite,
 } from './multipart-descriptors.ts';
+import { sourceFactory } from './multipart-factories.ts';
 import { peeledMemberHolder, selectedValues, uniqueExpressions } from './multipart-held-paths.ts';
 import { parameterBodies } from './multipart-parameters.ts';
 import {
@@ -177,7 +178,41 @@ function callExpressionBodies(
           mapDescriptorBodyWrite(descriptors),
         );
   }
-  return path === 'Object.create' ? objectCreateBodies(call, point, following) : EMPTY_BODIES;
+  return path === 'Object.create'
+    ? objectCreateBodies(call, point, following)
+    : factoryBodies(call, following);
+}
+
+/**
+ * The options a source-written function returns, each read where its `return` writes it, and
+ * ambiguous when the call gives it `FormData` or options that carry it: the function may put
+ * what it is given into the options it returns. Never an overwrite: a function can return nothing,
+ * by a bare `return`, a path without one, or a `switch` without a default, and the spread of
+ * nothing leaves the earlier body.
+ */
+function factoryBodies(call: CallExpression, following: AnalysisState): BodyReading {
+  const factory = sourceFactory(call);
+  if (factory === undefined) {
+    return EMPTY_BODIES;
+  }
+  const reading = {
+    ...combineBranchReadings(factory.returned.map((each) => bodiesOf(each, each, following))),
+    overwrites: false,
+  };
+  return factory.given.some((each) => givesFormData(each, call, following))
+    ? { ...reading, ambiguous: true }
+    : reading;
+}
+
+/** Whether an argument is `FormData`, or options whose body may be. */
+function givesFormData(argument: Expression, point: Node, state: AnalysisState): boolean {
+  const fresh: AnalysisState = { ...state, seen: new Set() };
+  const reading = bodiesOf(argument, point, state);
+  return (
+    isFormData(argument, fresh) ||
+    reading.ambiguous === true ||
+    reading.bodies.some((body) => isFormData(body, fresh))
+  );
 }
 
 /** Evaluates `Object.create(proto, descriptors?)`, keeping prototype `body` reads non-enumerable. */

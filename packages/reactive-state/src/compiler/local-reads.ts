@@ -1,10 +1,14 @@
 import {
+  type ClassDeclaration,
+  type ClassExpression,
   type Expression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isClassDeclaration,
   isComputedPropertyName,
   isElementAccessExpression,
+  isExpressionWithTypeArguments,
   isIdentifier,
   isNewExpression,
   isNoSubstitutionTemplateLiteral,
@@ -18,6 +22,7 @@ import {
   isTemplateExpression,
   isVariableDeclaration,
   type Node,
+  type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -25,6 +30,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf, isTakenApart, patternKey } from './code-globals.ts';
 import { framedKeyNames, framedMemberNames } from './framed-keys.ts';
 import { declarationOf, namesType, parameterOf } from './framed.ts';
+import { heritageReference } from './local-type-class-bases.ts';
 
 /**
  * What of a shared module's code answers of the time zone or the locale where it runs (`settled.ts`):
@@ -233,32 +239,97 @@ function toStringReceiver(node: Node): Expression | undefined {
 /** The type a date is said to be of. */
 const DATED: ReadonlySet<string> = new Set(['Date']);
 
+/** The names of each file's classes that extend `Date`, found once. */
+const DATED_CLASSES = new WeakMap<SourceFile, ReadonlySet<string>>();
+
 /**
- * Whether `node` is a date: one the code makes there, `new Date(0)`, `Date.prototype`; a parameter
- * or a variable said to be one, `(date: Date)`; or what a variable around it is declared of
- * (`declarationOf`), in turn.
+ * Whether `node` is a date: one the code makes there, `new Date(0)`, `new Day(0)` of a class that
+ * extends `Date`, `Date.prototype`; a parameter or a variable said to be one, `(date: Date)`; or
+ * what a variable around it is declared of (`declarationOf`), in turn.
  */
 function isDate(node: Expression, seen: Set<string>): boolean {
   const path = globalPathOf(node)?.join('.');
-  if (path === 'Date.prototype' || (isNewExpression(node) && isDateClass(node.expression))) {
+  if (
+    path === 'Date.prototype' ||
+    (isNewExpression(node) && isDateClass(node.expression)) ||
+    (isPropertyAccessExpression(node) &&
+      node.name.text === 'prototype' &&
+      isDateClass(node.expression))
+  ) {
     return true;
   }
   if (!isIdentifier(node) || seen.has(node.text)) {
     return false;
   }
   seen.add(node.text);
+  const dated = datedTypes(node.getSourceFile());
   const declared = declarationOf(node);
   if (declared === undefined) {
-    return namesType(parameterOf(node)?.type, DATED);
+    return namesType(parameterOf(node)?.type, dated);
   }
   return (
     isVariableDeclaration(declared) &&
-    (namesType(declared.type, DATED) ||
+    (namesType(declared.type, dated) ||
       (declared.initializer !== undefined && isDate(unwrapped(declared.initializer), seen)))
   );
 }
 
-/** Whether `node` names the global `Date`. */
+/**
+ * Whether `node` names the global `Date`, or a class the source writes that extends it, through
+ * other classes of the source and constants that alias them: its instances answer as dates do,
+ * with the `toString` they inherit.
+ */
 function isDateClass(node: Expression): boolean {
-  return globalPathOf(unwrapped(node))?.join('.') === 'Date';
+  if (globalPathOf(unwrapped(node))?.join('.') === 'Date') {
+    return true;
+  }
+  const seen = new Set<Node>();
+  let expression = node;
+  for (;;) {
+    const reference = heritageReference(expression);
+    if (reference.builtin !== undefined) {
+      return reference.builtin === 'Date';
+    }
+    const declared = reference.binding;
+    if (declared === undefined || declared === null || seen.has(declared)) {
+      return false;
+    }
+    seen.add(declared);
+    const base = extendedBase(declared);
+    if (base === undefined) {
+      return false;
+    }
+    expression = base;
+  }
+}
+
+/** The class a written `extends` clause names. */
+function extendedBase(declared: ClassDeclaration | ClassExpression): Expression | undefined {
+  const base = declared.heritageClauses?.find(
+    (clause) => clause.token === SyntaxKind.ExtendsKeyword,
+  )?.types[0];
+  return base !== undefined && isExpressionWithTypeArguments(base) ? base.expression : undefined;
+}
+
+/** `Date`, and the names of the classes of a file that extend it, by name alone. */
+function datedTypes(file: SourceFile): ReadonlySet<string> {
+  const known = DATED_CLASSES.get(file);
+  if (known !== undefined) {
+    return known;
+  }
+  const names = new Set(DATED);
+  const pending: Node[] = [file];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isClassDeclaration(node) && node.name !== undefined) {
+      const base = extendedBase(node);
+      if (base !== undefined && isDateClass(base)) {
+        names.add(node.name.text);
+      }
+    }
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  DATED_CLASSES.set(file, names);
+  return names;
 }
