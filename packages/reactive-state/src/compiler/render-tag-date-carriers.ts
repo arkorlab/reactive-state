@@ -425,9 +425,16 @@ function callResultCarriesDated(
 
 function datedQueries(ctx: DatedCarrierContext, seen: Set<Node>): DatedQueries {
   return {
-    fresh: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, new Set(seen)),
+    fresh: (each, ownArguments) => {
+      const bindings = ownArguments === true ? ownBindings(ctx.bindings) : ctx.bindings;
+      return carriesDatedSubstitution(each, bindings, ctx.datedIndices, new Set(seen));
+    },
     shared: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
   };
+}
+
+function ownBindings(bindings: WrapperBindings): WrapperBindings {
+  return { ...bindings, hasImplicitArguments: false };
 }
 
 function arrayFromCarriesDated(

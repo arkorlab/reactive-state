@@ -23,10 +23,13 @@ import { bindingIdentifiers } from './scope.ts';
 
 /** What a function of the file answers of the Date a tag hands it: in a call, or as a callback. */
 
-/** Whether an expression carries a Date, asked of the path in hand (`shared`) or of a fresh one (`fresh`). */
+/**
+ * Whether an expression carries a Date, asked of the path in hand (`shared`) or of a fresh one
+ * (`fresh`), where a function that is not an arrow has an `arguments` of its own (`ownArguments`).
+ */
 export interface DatedQueries {
   readonly shared: (expression: Expression) => boolean;
-  readonly fresh: (expression: Expression) => boolean;
+  readonly fresh: (expression: Expression, ownArguments?: boolean) => boolean;
 }
 
 /** The parameters a call hands a Date, while the answers of the function are asked, and the functions asked. */
@@ -160,7 +163,7 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
   ASKED.add(fn);
   for (const parameter of parameters) ASSUMED.add(parameter);
   try {
-    const answer = returnedBy(fn).some((returned) => fresh(returned));
+    const answer = returnedBy(fn).some((returned) => fresh(returned, !isArrowFunction(fn)));
     // An answer found while a function that is asked again was cut is not final: it is not kept.
     if (ASKING.cut === cutBefore) ANSWERED.set(key, answer);
     return answer;

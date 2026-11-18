@@ -319,6 +319,30 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
+    id: 'helper-reading-its-own-arguments-in-a-function-tag',
+    pre: 'function label(_value:unknown,_text:string){return arguments[1];}',
+    tag: `function(_s:TemplateStringsArray,date:Date){return String(label(date,'ok'));}`,
+    local: undefined,
+  },
+  {
+    id: 'helper-reading-its-own-arguments-in-an-arrow-tag-pin',
+    pre: 'function label(_value:unknown,_text:string){return arguments[1];}',
+    tag: `${DATED}String(label(date,'ok'))`,
+    local: undefined,
+  },
+  {
+    id: 'arrow-helper-reading-the-arguments-of-its-function-tag-was-followed-pin',
+    pre: '',
+    tag: `function(_s:TemplateStringsArray,date:Date){const label=(_value:unknown)=>arguments[1];return String(label(date));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'helper-passing-the-date-on-in-a-function-tag-pin',
+    pre: IDENTITY,
+    tag: `function(_s:TemplateStringsArray,date:Date){return String(identity(date));}`,
+    local: DATE_TEXT,
+  },
+  {
     id: 'inline-callback-was-followed-pin',
     pre: '',
     tag: `${REST}values.map((value)=>value).join('')`,
