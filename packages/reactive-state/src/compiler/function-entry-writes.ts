@@ -16,24 +16,29 @@ import {
   type Node,
   type ObjectLiteralExpression,
   type SourceFile,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { initializerOf } from './framed.ts';
+import { declaredBindingTarget } from './function-binding-types.ts';
+import {
+  candidateObjects,
+  literalElementKey,
+  staticArgumentKey,
+  type VariableWriteMap,
+} from './function-candidate-objects.ts';
 import {
   type AssignedCallable,
   callableWritesOnObject,
-  candidateObjects,
   type FileCallableIndex,
-  literalElementKey,
-  staticArgumentKey,
 } from './function-spread-callables.ts';
 import {
+  type CallableWrites,
   EMPTY_WRITES,
   isDeclaredIdentifier,
+  isDirectValueAssignment,
   isSafeDirectUse,
   isSafeLockCall,
   isSkippedSyntax,
@@ -54,16 +59,63 @@ interface RawFileMutations {
     readonly key: string | undefined;
     readonly receiver: Expression;
   }[];
-  readonly variableWrites: Map<VariableDeclaration, Expression[]>;
+  readonly variableWrites: Map<Node, Expression[]>;
+}
+
+/** Combined post-declaration write flags together with visible member and `Object.assign` values. */
+export interface ObjectPostWrites {
+  readonly assignSources: readonly Expression[];
+  readonly memberValues: readonly AssignedCallable[];
+  readonly writes: ObjectWrites;
+}
+
+interface DirectWriteBuckets {
+  readonly keys: Set<string>;
+  readonly untrackedKeys: Set<string>;
 }
 
 const DIRECT_WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
 const FILE_INDEX = new WeakMap<SourceFile, FileCallableIndex>();
+const POST_WRITES = new WeakMap<ObjectLiteralExpression, ObjectPostWrites>();
 const WRITES = new WeakMap<ObjectLiteralExpression, ObjectWrites>();
 
 /** Static key of an element access expression, including string, template and numeric literals. */
 export function elementEntryKey(node: ElementAccessExpression): string | undefined {
   return staticElementKey(node);
+}
+
+/** Returns cached post-declaration variable assignment expressions indexed across `file`. */
+export function fileVariableWrites(file: SourceFile): VariableWriteMap {
+  return fileCallableIndex(file).variableWrites;
+}
+
+/** Computes `this`-receiver writes from data callables on `object` retained past `excludedKeys`. */
+export function retainedCallableWrites(
+  object: ObjectLiteralExpression,
+  excludedKeys: ReadonlySet<string>,
+): CallableWrites {
+  return callableWritesOnObject(object, fileCallableIndex(object.getSourceFile()), excludedKeys);
+}
+
+/** Returns cached post-declaration writes, member assignments, and `Object.assign` sources for `object`. */
+export function objectPostWrites(object: ObjectLiteralExpression): ObjectPostWrites {
+  const cached = POST_WRITES.get(object);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const index = fileCallableIndex(object.getSourceFile());
+  const viaThis = callableWritesOnObject(object, index);
+  const writes = mergeObjectWrites(directObjectWrites(object), viaThis);
+  const directMembers = index.memberCallables.get(object) ?? [];
+  const memberValues: AssignedCallable[] = [
+    ...directMembers,
+    ...viaThis.assignments.map((each) => ({ callable: each.value, key: each.key })),
+  ];
+  const assignSources = index.assignedSpreads.get(object) ?? [];
+  const result: ObjectPostWrites = { assignSources, memberValues, writes };
+  POST_WRITES.set(object, result);
+  WRITES.set(object, writes);
+  return result;
 }
 
 /** Computes and caches post-declaration and `this`-receiver writes affecting `object`. */
@@ -87,7 +139,7 @@ export function objectWrites(object: ObjectLiteralExpression): ObjectWrites {
 /** Combines direct reference writes and callable `this` writes into a single `ObjectWrites`. */
 function mergeObjectWrites(left: ObjectWrites, right: ObjectWrites): ObjectWrites {
   if (left.all || right.all) {
-    return { all: true, keys: EMPTY_WRITES.keys };
+    return { all: true, keys: EMPTY_WRITES.keys, untrackedKeys: EMPTY_WRITES.untrackedKeys };
   }
   if (right.keys.size === 0) {
     return left;
@@ -95,7 +147,11 @@ function mergeObjectWrites(left: ObjectWrites, right: ObjectWrites): ObjectWrite
   if (left.keys.size === 0) {
     return right;
   }
-  return { all: false, keys: new Set([...left.keys, ...right.keys]) };
+  return {
+    all: false,
+    keys: new Set([...left.keys, ...right.keys]),
+    untrackedKeys: new Set([...left.untrackedKeys, ...right.untrackedKeys]),
+  };
 }
 
 /** Builds and caches the per-file assignment index for `file` in a single AST pass. */
@@ -130,9 +186,10 @@ function collectRawMutation(node: Node, raw: RawFileMutations): void {
     if (isIdentifier(target)) {
       const declared = frameDeclarationOf(target);
       if (declared !== undefined && isVariableDeclaration(declared)) {
-        const list = raw.variableWrites.get(declared) ?? [];
+        const binding = declaredBindingTarget(target, declared);
+        const list = raw.variableWrites.get(binding) ?? [];
         list.push(rhs);
-        raw.variableWrites.set(declared, list);
+        raw.variableWrites.set(binding, list);
       }
       return;
     }
@@ -155,16 +212,13 @@ function collectCallMutation(call: CallExpression, raw: RawFileMutations): void 
     return;
   }
   if (path === 'Object.assign' && call.arguments.length > 1) {
-    const sources: Expression[] = [];
-    for (const arg of call.arguments.slice(1)) {
-      sources.push(unwrapped(arg));
-    }
+    const sources = call.arguments.slice(1).map((arg) => unwrapped(arg));
     raw.assignCalls.push({ sources, target: unwrapped(first) });
     return;
   }
   if (
-    (path === 'Object.defineProperty' || path === 'Reflect.defineProperty') &&
-    descArg !== undefined
+    descArg !== undefined &&
+    (path === 'Object.defineProperty' || path === 'Reflect.defineProperty')
   ) {
     const valueNode = descriptorValueNode(unwrapped(descArg));
     if (valueNode !== undefined) {
@@ -200,7 +254,8 @@ function descriptorValueNode(descriptor: Expression): Node | Expression | undefi
 function finalizeFileCallableIndex(raw: RawFileMutations): FileCallableIndex {
   const memberMap = new Map<ObjectLiteralExpression, AssignedCallable[]>();
   for (const write of raw.memberWrites) {
-    for (const obj of candidateObjects(write.receiver, raw.variableWrites, new Set())) {
+    const receivers = candidateObjects(write.receiver, raw.variableWrites, new Set());
+    for (const obj of receivers) {
       const list = memberMap.get(obj) ?? [];
       list.push({ callable: write.callable, key: write.key });
       memberMap.set(obj, list);
@@ -208,7 +263,8 @@ function finalizeFileCallableIndex(raw: RawFileMutations): FileCallableIndex {
   }
   const assignedSpreads = new Map<ObjectLiteralExpression, Expression[]>();
   for (const assign of raw.assignCalls) {
-    for (const obj of candidateObjects(assign.target, raw.variableWrites, new Set())) {
+    const targets = candidateObjects(assign.target, raw.variableWrites, new Set());
+    for (const obj of targets) {
       const list = assignedSpreads.get(obj) ?? [];
       list.push(...assign.sources);
       assignedSpreads.set(obj, list);
@@ -227,20 +283,24 @@ function directObjectWrites(object: ObjectLiteralExpression): ObjectWrites {
     DIRECT_WRITES.set(object, EMPTY_WRITES);
     return EMPTY_WRITES;
   }
-  const keys = new Set<string>();
+  const buckets: DirectWriteBuckets = { keys: new Set(), untrackedKeys: new Set() };
   const state = { all: false };
   const visit = (node: Node): void => {
     if (state.all || isSkippedSyntax(node)) {
       return;
     }
-    if (recordsDirectAllWrites(node, object, keys)) {
+    if (recordsDirectAllWrites(node, object, buckets)) {
       state.all = true;
       return;
     }
     node.forEachChild(visit);
   };
   visit(object.getSourceFile());
-  const result: ObjectWrites = { all: state.all, keys };
+  const result: ObjectWrites = {
+    all: state.all,
+    keys: buckets.keys,
+    untrackedKeys: buckets.untrackedKeys,
+  };
   DIRECT_WRITES.set(object, result);
   return result;
 }
@@ -258,38 +318,44 @@ function isInlineMemberReceiver(object: ObjectLiteralExpression): boolean {
 function recordsDirectAllWrites(
   node: Node,
   object: ObjectLiteralExpression,
-  keys: Set<string>,
+  buckets: DirectWriteBuckets,
 ): boolean {
   if (isCallExpression(node) && isSafeLockCall(node)) {
     return false;
   }
   const written = writtenBy(node);
-  if (written !== undefined && writesUnknownDirectKey(written, object, keys)) {
+  if (written !== undefined && writesUnknownDirectKey(node, written, object, buckets)) {
     return true;
   }
   return isDirectLiteralReference(node, object) && !isSafeDirectUse(node);
 }
 
-/** Updates `keys` for direct assignment/mutation targets on `object`; answers `true` for whole/dynamic writes. */
+/** Updates `buckets` for direct assignment/mutation targets on `object`; answers `true` for whole/dynamic writes. */
 function writesUnknownDirectKey(
+  writer: Node,
   written: Node,
   object: ObjectLiteralExpression,
-  keys: Set<string>,
+  buckets: DirectWriteBuckets,
 ): boolean {
-  for (const rawTarget of targetsOf(written)) {
+  const targets = targetsOf(written);
+  for (const rawTarget of targets) {
     const target = unwrapTarget(rawTarget);
     if (refersToLiteralNode(target, object)) {
       return true;
     }
     if (
-      (isPropertyAccessExpression(target) || isElementAccessExpression(target)) &&
-      refersToLiteral(target.expression, object)
+      !(isPropertyAccessExpression(target) || isElementAccessExpression(target)) ||
+      !refersToLiteral(target.expression, object)
     ) {
-      const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
-      if (key === undefined) {
-        return true;
-      }
-      keys.add(key);
+      continue;
+    }
+    const key = isPropertyAccessExpression(target) ? target.name.text : staticElementKey(target);
+    if (key === undefined) {
+      return true;
+    }
+    buckets.keys.add(key);
+    if (!isDirectValueAssignment(writer, target)) {
+      buckets.untrackedKeys.add(key);
     }
   }
   return false;

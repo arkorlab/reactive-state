@@ -39,7 +39,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { initializerOf } from './framed.ts';
 import { runsPerCall } from './kept.ts';
-import { freeReads } from './scope.ts';
+import { changedThroughReads } from './receiver-changes.ts';
 import {
   advanceRestStep,
   bindingSteps,
@@ -77,7 +77,7 @@ export function freshReceiverDefault(
   path: readonly (string | undefined)[],
 ): boolean {
   const steps = bindingSteps(name);
-  if (steps.every((step) => step.initializer === undefined)) {
+  if (steps.every((step) => step.initializer === undefined) || changedThroughReads(name)) {
     return false;
   }
   const walk: DefaultWalk = {
@@ -301,53 +301,19 @@ function functionOf(node: Node): Node | undefined {
   return undefined;
 }
 
-/** Passing a receiver to application code leaves its later member set unproven. */
+/** Handing a receiver on, or assigning into its members, anywhere leaves its later member set unproven. */
 function escapes(object: ObjectLiteralExpression): boolean {
   const cached = ESCAPED.get(object);
   if (cached !== undefined) {
     return cached;
   }
-  if (!isVariableDeclaration(object.parent)) {
-    return true;
-  }
-  let found = false;
-  const visit = (node: Node): void => {
-    if (found) {
-      return;
-    }
-    const given = isCallExpression(node) || isNewExpression(node) ? node.arguments : undefined;
-    if (given !== undefined) {
-      found = given.some((argument) => referencesObject(argument, object));
-    } else if (isTaggedTemplateExpression(node)) {
-      found = referencesObject(node.template, object);
-    }
-    if (!found) {
-      node.forEachChild(visit);
-    }
-  };
-  visit(object.getSourceFile());
+  const declared = object.parent;
+  const found =
+    !isVariableDeclaration(declared) ||
+    !isIdentifier(declared.name) ||
+    changedThroughReads(declared.name);
   ESCAPED.set(object, found);
   return found;
-}
-
-/** A direct or constant-aliased reference to the receiver in an application's argument. */
-function referencesObject(node: Node, object: ObjectLiteralExpression): boolean {
-  for (const read of freeReads(node)) {
-    const seen = new Set<Expression>();
-    let value: Expression = read;
-    while (isIdentifier(value) && !seen.has(value)) {
-      seen.add(value);
-      const held = initializerOf(value);
-      if (held === undefined) {
-        break;
-      }
-      value = unwrapped(held);
-    }
-    if (value === object) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Module-load application code can add a receiver member before any later method call. */

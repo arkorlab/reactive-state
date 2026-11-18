@@ -2,6 +2,7 @@ import {
   type ClassLikeDeclaration,
   type ConstructorDeclaration,
   type Expression,
+  type GetAccessorDeclaration,
   type Identifier,
   isArrowFunction,
   isClassDeclaration,
@@ -31,6 +32,7 @@ import {
   type PrivateIdentifier,
   type PropertyDeclaration,
   type PropertyName,
+  type SetAccessorDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -119,6 +121,67 @@ export function ownsThis(node: Node): boolean {
     isConstructorDeclaration(node) ||
     isClassDeclaration(node) ||
     isClassExpression(node)
+  );
+}
+
+/**
+ * What `node`, code of a `this` of its own, runs where it is defined, with the `this` around it: a
+ * class's `extends` expression and its computed member names, a function's or method's computed
+ * name — `class extends this.base() {}`, `{ [this.next()]() {} }`.
+ */
+export function definedExpressions(node: Node): readonly Expression[] {
+  if (isClassDeclaration(node) || isClassExpression(node)) {
+    return heritageExpressions(node);
+  }
+  const name =
+    isMethodDeclaration(node) || isGetAccessorDeclaration(node) || isSetAccessorDeclaration(node)
+      ? node.name
+      : undefined;
+  return name !== undefined && isComputedPropertyName(name) ? [name.expression] : [];
+}
+
+/** A class's `extends` expression, then the computed names of its members. */
+function heritageExpressions(declared: ClassLikeDeclaration): readonly Expression[] {
+  const found: Expression[] = [];
+  const clauses = declared.heritageClauses;
+  if (clauses !== undefined) {
+    for (const clause of clauses) {
+      const types = clause.token === SyntaxKind.ExtendsKeyword ? clause.types : [];
+      for (const type of types) {
+        if (isExpressionWithTypeArguments(type)) {
+          found.push(type.expression);
+        }
+      }
+    }
+  }
+  return [...found, ...memberNameExpressions(declared)];
+}
+
+/** The expressions of the computed names of a class's methods, fields and accessors. */
+function memberNameExpressions(declared: ClassLikeDeclaration): readonly Expression[] {
+  const found: Expression[] = [];
+  for (const member of declared.members) {
+    const name = isNamedMember(member) ? member.name : undefined;
+    if (name !== undefined && isComputedPropertyName(name)) {
+      found.push(name.expression);
+    }
+  }
+  return found;
+}
+
+/** Whether `member` is a method, a field or an accessor, which a computed name may name. */
+function isNamedMember(
+  member: Node,
+): member is
+  | GetAccessorDeclaration
+  | MethodDeclaration
+  | PropertyDeclaration
+  | SetAccessorDeclaration {
+  return (
+    isMethodDeclaration(member) ||
+    isPropertyDeclaration(member) ||
+    isGetAccessorDeclaration(member) ||
+    isSetAccessorDeclaration(member)
   );
 }
 

@@ -28,13 +28,14 @@ import {
 import { unwrapped } from './bounded.ts';
 import { declarationOf, type Declared, initializerOf } from './framed.ts';
 import {
+  definedExpressions,
   instanceMethods,
   keyOf,
   literalKey,
   memberMethods,
   ownsThis,
 } from './held-class-methods.ts';
-import { answersOf } from './kept.ts';
+import { answersOf, targetsOf } from './kept.ts';
 import { receiverOf, receiverWrite } from './this-aliases.ts';
 
 /**
@@ -190,7 +191,13 @@ function candidateWritesThis(
   const deferred = deferredBody(method, call);
   let found = false;
   const visit = (node: Node): void => {
-    if (found || node === deferred || (node !== method && ownsThis(node))) {
+    if (found || node === deferred) {
+      return;
+    }
+    if (node !== method && ownsThis(node)) {
+      for (const each of definedExpressions(node)) {
+        visit(each);
+      }
       return;
     }
     const written = writtenBy(node);
@@ -198,7 +205,7 @@ function candidateWritesThis(
     const called =
       invocation === undefined ? [] : thisCalledKeys(unwrapped(invocation.expression), methods);
     found =
-      (written !== undefined && receiverWrite(written, node)) ||
+      (written !== undefined && targetsOf(written).some((each) => receiverWrite(each, node))) ||
       (invocation !== undefined &&
         called.some((target) =>
           writesThis(methods, target, writtenBy, { seen, call: invocation }),

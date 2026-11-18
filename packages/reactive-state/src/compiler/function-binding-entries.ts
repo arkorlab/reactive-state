@@ -1,80 +1,58 @@
 import {
-  type ArrayLiteralExpression,
   type BindingElement,
   type BindingName,
   type Expression,
   type Identifier,
   isArrayBindingPattern,
-  isArrayLiteralExpression,
-  isBindingElement,
-  isConstructorTypeNode,
   isDecorator,
-  isFunctionTypeNode,
   isIdentifier,
   isObjectBindingPattern,
-  isOmittedExpression,
   isParameterDeclaration,
-  isSpreadElement,
   isVariableDeclaration,
   isVoidExpression,
   type Node,
   type ParameterDeclaration,
-  type TypeNode,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, useOf } from './code-globals.ts';
+import { globalPathOf } from './code-globals.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
-import { namesType } from './framed.ts';
+import {
+  declaredBindingTarget,
+  isFunctionType,
+  isPatternStepFunctionType,
+} from './function-binding-types.ts';
+import { bindingElementSteps } from './function-candidate-objects.ts';
+import {
+  arraySlotEntryKind,
+  containerDynamicEntryKind,
+  containerMemberEntryKind,
+  reassignedBindingEntryKind,
+  selectInlineArrayElement,
+} from './function-reassigned-bindings.ts';
 import {
   combineBranchKinds,
   type EntryKind,
-  type FunctionKind,
-  hasScanKind,
-  holderObject,
   isConstDeclaration,
   keyOf,
-  memberEntryKind,
-  type ResolvedObject,
   type ResolvedProperty,
   resolvePropertyValue,
   type ScanContext,
-  scanResolvedObject,
   withBranch,
 } from './function-table-entries.ts';
 import { bindingIdentifiers } from './scope.ts';
 
-/** The types a parameter is said to be a function of by their names: `Function`, and its kin. */
-const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  'CallableFunction',
-  'Function',
-  'NewableFunction',
-]);
+export {
+  arraySlotEntryKind,
+  containerDynamicEntryKind,
+  containerMemberEntryKind,
+  mutableSpreadReachesFunction,
+} from './function-reassigned-bindings.ts';
 
-/** Classifies a dynamic lookup across all entries of a written object literal. */
-export function dynamicObjectEntryKind(holder: Expression, context: ScanContext): EntryKind {
-  const resolved = holderObject(holder, context);
-  if (resolved === undefined) {
-    return 'unknown';
-  }
-  return tableFunctionKind(resolved, context) ?? 'unknown';
-}
-
-/** Classifies a dynamic lookup across all entries of `resolved`. */
-function tableFunctionKind(
-  resolved: ResolvedObject,
-  context: ScanContext,
-): FunctionKind | undefined {
-  const scan = scanResolvedObject(resolved, context);
-  if (scan.stickyRenamed || hasScanKind(scan.entries, 'renamed')) {
-    return 'renamed';
-  }
-  if (scan.dynamicEntry || hasScanKind(scan.entries, 'entry')) {
-    return scan.unverified || hasScanKind(scan.entries, 'unknown') ? 'renamed' : 'entry';
-  }
-  return undefined;
-}
+const MISSING_CLEAN = 'missing-clean';
+const NON_FUNCTION: EntryKind = 'non-function';
+const BINDING_ENTRY_KINDS = new WeakMap<Node, EntryKind>();
 
 /** Resolves an identifier through declarations, destructuring patterns, and function parameters. */
 export function identifierEntryKind(node: Identifier, context: ScanContext): EntryKind {
@@ -82,16 +60,38 @@ export function identifierEntryKind(node: Identifier, context: ScanContext): Ent
   if (declared === undefined) {
     return 'unknown';
   }
-  if (isParameterDeclaration(declared)) {
-    return isOutsideParameterScope(node, declared)
-      ? 'unknown'
-      : parameterEntryKind(node, declared, context);
+  if (isParameterDeclaration(declared) && isOutsideParameterScope(node, declared)) {
+    return 'unknown';
   }
-  if (context.seen.has(declared)) {
+  const target = declaredBindingTarget(node, declared);
+  const cached = BINDING_ENTRY_KINDS.get(target);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (context.seen.has(target)) {
     context.hitCycle = true;
     return 'unknown';
   }
-  context.seen.add(declared);
+  return withBranch(context, (branch) => {
+    branch.seen.add(target);
+    const kind = computeDeclaredEntryKind(node, declared, target, branch);
+    if (!branch.hitCycle) {
+      BINDING_ENTRY_KINDS.set(target, kind);
+    }
+    return kind;
+  });
+}
+
+/** Computes the uncached `EntryKind` of `declared` inside `context` (with `target` already in `seen`). */
+function computeDeclaredEntryKind(
+  node: Identifier,
+  declared: NonNullable<ReturnType<typeof frameDeclarationOf>>,
+  target: Node,
+  context: ScanContext,
+): EntryKind {
+  if (isParameterDeclaration(declared)) {
+    return parameterEntryKind(node, declared, target, context);
+  }
   return isVariableDeclaration(declared) ? variableEntryKind(node, declared, context) : 'renamed';
 }
 
@@ -126,11 +126,25 @@ function variableEntryKind(
     declared.initializer === undefined
       ? { kind: 'unknown' }
       : { kind: 'expr', value: unwrapped(declared.initializer) };
-  const resolved = patternEntryKind(node.text, declared.name, source, context);
-  return constant ? resolved : degradeMutableKind(resolved);
+  const bound = bindingIdentifiers(declared.name).find((each) => each.text === node.text);
+  const steps = bound === undefined ? [] : bindingElementSteps(bound);
+  const resolved =
+    bound === undefined ? 'unknown' : evaluateBindingSteps(source, steps, 0, context);
+  if (constant) {
+    return resolved === 'unknown' && isPatternStepFunctionType(declared.type, steps, 0)
+      ? 'renamed'
+      : resolved;
+  }
+  if (
+    degradeMutableKind(resolved) === 'renamed' ||
+    isPatternStepFunctionType(declared.type, steps, 0)
+  ) {
+    return 'renamed';
+  }
+  return reassignedBindingEntryKind(declaredBindingTarget(node, declared), context);
 }
 
-/** Preserves `'entry'` and `'non-function'` across `const` aliases while degrading `let`/`var`. */
+/** Preserves `'entry'` and `NON_FUNCTION` across `const` aliases while checking mutable types/writes. */
 function simpleVariableEntryKind(
   declared: VariableDeclaration,
   constant: boolean,
@@ -140,48 +154,69 @@ function simpleVariableEntryKind(
     declared.initializer === undefined
       ? 'unknown'
       : context.classifyExpression(unwrapped(declared.initializer), context);
-  if (fromInit === 'unknown' && isFunctionType(declared.type)) {
+  if (constant) {
+    return fromInit === 'unknown' && isFunctionType(declared.type) ? 'renamed' : fromInit;
+  }
+  if (degradeMutableKind(fromInit) === 'renamed' || isFunctionType(declared.type)) {
     return 'renamed';
   }
-  return constant ? fromInit : degradeMutableKind(fromInit);
+  return reassignedBindingEntryKind(declared.name, context);
 }
 
 /** Classifies simple or destructured parameter bindings, combining caller input with defaults. */
 function parameterEntryKind(
   node: Identifier,
   parameter: ParameterDeclaration,
+  target: Node,
   context: ScanContext,
 ): EntryKind {
-  if (context.seen.has(parameter)) {
-    context.hitCycle = true;
-    return 'unknown';
-  }
-  context.seen.add(parameter);
+  const fromDeclaration = isIdentifier(parameter.name)
+    ? simpleParameterEntryKind(parameter, context)
+    : destructuredParameterEntryKind(node, parameter, context);
+  return fromDeclaration === 'renamed' ? 'renamed' : reassignedBindingEntryKind(target, context);
+}
+
+/** Classifies a simple identifier parameter binding from its annotation and default initializer. */
+function simpleParameterEntryKind(
+  parameter: ParameterDeclaration,
+  context: ScanContext,
+): EntryKind {
+  const callerKind: EntryKind = isFunctionType(parameter.type) ? 'renamed' : 'unknown';
   const { initializer } = parameter;
-  if (isIdentifier(parameter.name)) {
-    const callerKind: EntryKind = isFunctionType(parameter.type) ? 'renamed' : 'unknown';
-    if (initializer === undefined) {
-      return callerKind;
-    }
-    const defaultKind = withBranch(context, (branch) =>
-      branch.classifyExpression(unwrapped(initializer), branch),
-    );
-    return degradeMutableKind(combineBranchKinds(callerKind, defaultKind));
+  if (initializer === undefined) {
+    return callerKind;
+  }
+  const defaultKind = withBranch(context, (branch) =>
+    branch.classifyExpression(unwrapped(initializer), branch),
+  );
+  return degradeMutableKind(combineBranchKinds(callerKind, defaultKind));
+}
+
+/** Classifies a destructured parameter binding from caller input, annotations, and defaults. */
+function destructuredParameterEntryKind(
+  node: Identifier,
+  parameter: ParameterDeclaration,
+  context: ScanContext,
+): EntryKind {
+  const bound = bindingIdentifiers(parameter.name).find((each) => each.text === node.text);
+  const steps = bound === undefined ? [] : bindingElementSteps(bound);
+  if (isPatternStepFunctionType(parameter.type, steps, 0)) {
+    return 'renamed';
   }
   const callerKind = withBranch(context, (branch) =>
     patternEntryKind(node.text, parameter.name, { kind: 'unknown' }, branch),
   );
-  if (initializer === undefined) {
+  if (parameter.initializer === undefined) {
     return degradeMutableKind(callerKind);
   }
-  const defaultSource: ResolvedProperty = { kind: 'expr', value: unwrapped(initializer) };
+  const defaultSource: ResolvedProperty = { kind: 'expr', value: unwrapped(parameter.initializer) };
   const defaultKind = withBranch(context, (branch) =>
     patternEntryKind(node.text, parameter.name, defaultSource, branch),
   );
   return degradeMutableKind(combineBranchKinds(callerKind, defaultKind));
 }
 
-/** Degrades `'entry'` to `'renamed'` and `'non-function'` to `'unknown'` on mutable/caller bindings. */
+/** Degrades `'entry'` to `'renamed'` and `NON_FUNCTION` to `'unknown'` on mutable/caller bindings. */
 function degradeMutableKind(kind: EntryKind): EntryKind {
   return kind === 'entry' || kind === 'renamed' ? 'renamed' : 'unknown';
 }
@@ -196,22 +231,7 @@ function patternEntryKind(
   const bound = bindingIdentifiers(pattern).find((each) => each.text === targetName);
   return bound === undefined
     ? 'unknown'
-    : evaluateBindingSteps(source, patternSteps(bound), 0, context);
-}
-
-/** Collects enclosing `BindingElement`s from outermost pattern to innermost binding `bound`. */
-function patternSteps(bound: Identifier): readonly BindingElement[] {
-  const steps: BindingElement[] = [];
-  for (
-    let at: Node = bound.parent;
-    !isVariableDeclaration(at) && !isParameterDeclaration(at);
-    at = at.parent
-  ) {
-    if (isBindingElement(at)) {
-      steps.unshift(at);
-    }
-  }
-  return steps;
+    : evaluateBindingSteps(source, bindingElementSteps(bound), 0, context);
 }
 
 /** Steps through destructuring elements, combining source slots with pattern defaults at each level. */
@@ -266,7 +286,7 @@ function intermediateStepEntryKind(
   const selected = selectIntermediateSlot(source, step, context);
   const { initializer } = step;
   if (initializer === undefined) {
-    return selected.kind === 'missing-clean'
+    return selected.kind === MISSING_CLEAN
       ? 'unknown'
       : evaluateBindingSteps(selected, steps, index + 1, context);
   }
@@ -274,7 +294,7 @@ function intermediateStepEntryKind(
     evaluateBindingSteps({ kind: 'expr', value: unwrapped(initializer) }, steps, index + 1, branch),
   );
   if (
-    selected.kind === 'missing-clean' ||
+    selected.kind === MISSING_CLEAN ||
     (selected.kind === 'expr' && isGuaranteedUndefined(selected.value))
   ) {
     return defaultBranch;
@@ -291,8 +311,8 @@ function slotEntryKind(
   step: BindingElement,
   context: ScanContext,
 ): EntryKind {
-  if (source.kind === 'missing-clean') {
-    return 'non-function';
+  if (source.kind === MISSING_CLEAN) {
+    return NON_FUNCTION;
   }
   if (source.kind === 'unknown') {
     return 'unknown';
@@ -300,8 +320,8 @@ function slotEntryKind(
   if (isObjectBindingPattern(step.parent)) {
     const key = bindingElementKey(step);
     return key === undefined
-      ? dynamicObjectEntryKind(source.value, context)
-      : memberEntryKind(source.value, key, context);
+      ? containerDynamicEntryKind(source.value, context)
+      : containerMemberEntryKind(source.value, key, context);
   }
   return isArrayBindingPattern(step.parent)
     ? arraySlotEntryKind(source.value, step.parent.elements.indexOf(step), context)
@@ -328,113 +348,10 @@ function selectIntermediateSlot(
     : { kind: 'unknown' };
 }
 
-/** Selects element `index` of an inline destructured array literal without prior spread elements. */
-function selectInlineArrayElement(holder: Expression, index: number): ResolvedProperty {
-  if (
-    index < 0 ||
-    !isArrayLiteralExpression(holder) ||
-    !isInlinePatternSource(holder) ||
-    holder.elements.slice(0, index + 1).some((each) => isSpreadElement(each))
-  ) {
-    return { kind: 'unknown' };
-  }
-  const element = holder.elements[index];
-  if (element === undefined || isOmittedExpression(element)) {
-    return { kind: 'missing-clean' };
-  }
-  return { kind: 'expr', value: unwrapped(element) };
-}
-
-/** Classifies element `index` of an inline or variable-bound array literal in array destructuring. */
-function arraySlotEntryKind(holder: Expression, index: number, context: ScanContext): EntryKind {
-  const inline = selectInlineArrayElement(holder, index);
-  if (inline.kind === 'missing-clean') {
-    return 'non-function';
-  }
-  if (inline.kind === 'expr') {
-    return context.classifyExpression(inline.value, context);
-  }
-  return unverifiedArraySlotKind(holder, index, context);
-}
-
-/** Detects functions inside non-inline array literals without proving mutating slots non-callable. */
-function unverifiedArraySlotKind(
-  holder: Expression,
-  index: number,
-  context: ScanContext,
-): EntryKind {
-  const array = resolveArrayLiteral(holder, context);
-  if (array === undefined || index < 0) {
-    return 'unknown';
-  }
-  if (!array.elements.slice(0, index + 1).some((each) => isSpreadElement(each))) {
-    const element = array.elements[index];
-    return element === undefined || isOmittedExpression(element)
-      ? 'unknown'
-      : degradeMutableKind(context.classifyExpression(unwrapped(element), context));
-  }
-  for (const element of array.elements) {
-    if (!isOmittedExpression(element) && !isSpreadElement(element)) {
-      const each = withBranch(context, (branch) =>
-        branch.classifyExpression(unwrapped(element), branch),
-      );
-      if (each === 'entry' || each === 'renamed') {
-        return 'renamed';
-      }
-    }
-  }
-  return 'unknown';
-}
-
-/** Follows an identifier chain to an `ArrayLiteralExpression`, if any. */
-function resolveArrayLiteral(
-  holder: Expression,
-  context: ScanContext,
-): ArrayLiteralExpression | undefined {
-  if (isArrayLiteralExpression(holder)) {
-    return holder;
-  }
-  const declared = isIdentifier(holder) ? frameDeclarationOf(holder) : undefined;
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    declared.initializer === undefined
-  ) {
-    return undefined;
-  }
-  if (context.seen.has(declared)) {
-    context.hitCycle = true;
-    return undefined;
-  }
-  context.seen.add(declared);
-  return resolveArrayLiteral(unwrapped(declared.initializer), context);
-}
-
-/** Whether `node` stands directly as a destructuring initializer with no identifier alias to mutate it. */
-function isInlinePatternSource(node: ArrayLiteralExpression): boolean {
-  const { at, parent } = useOf(node);
-  return (
-    (isVariableDeclaration(parent) || isBindingElement(parent)) &&
-    parent.initializer === at &&
-    !isIdentifier(parent.name)
-  );
-}
-
 /** Static object key selected by `step` (`{ pick }`, `{ pick: p }`, `{ ['pick']: p }`, `{ [0]: p }`). */
 function bindingElementKey(step: BindingElement): string | undefined {
   if (step.propertyName !== undefined) {
     return keyOf(step.propertyName);
   }
   return step.name !== undefined && isIdentifier(step.name) ? step.name.text : undefined;
-}
-
-/**
- * Whether `type`, written, says a function: a function's type, `() => string`, a class's,
- * `new () => object`, or `Function`'s and its kin's (`FUNCTION_TYPES`), in a union too.
- */
-function isFunctionType(type: TypeNode | undefined): boolean {
-  return (
-    type !== undefined &&
-    (isFunctionTypeNode(type) || isConstructorTypeNode(type) || namesType(type, FUNCTION_TYPES))
-  );
 }

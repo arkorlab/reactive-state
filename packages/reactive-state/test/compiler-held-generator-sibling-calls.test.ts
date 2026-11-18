@@ -3,6 +3,7 @@ import {
   isCallExpression,
   isElementAccessExpression,
   isFunctionDeclaration,
+  type Identifier,
   isIdentifier,
   isPropertyAccessExpression,
   type Node,
@@ -100,6 +101,22 @@ function readCall(root: Node): CallExpression {
   throw new Error('Expected a method call in read().');
 }
 
+function receiverCallTarget(call: CallExpression): {
+  readonly method: string;
+  readonly receiver: Identifier;
+} {
+  const method = methodOf(call);
+  const callee = unwrapped(call.expression);
+  const receiver =
+    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
+      ? unwrapped(callee.expression)
+      : undefined;
+  if (method === undefined || receiver === undefined || !isIdentifier(receiver)) {
+    throw new Error('Expected a receiver identifier call.');
+  }
+  return { method, receiver };
+}
+
 describe('held generator methods called across discarded and resumed sibling sites', () => {
   let api: API;
 
@@ -114,15 +131,7 @@ describe('held generator methods called across discarded and resumed sibling sit
   it.each(CASES)('$id', ({ source, writes }) => {
     using parsed = parseModule(api, 'held-generator-sibling-calls.ts', source);
     const call = readCall(parsed.sourceFile);
-    const method = methodOf(call);
-    const callee = unwrapped(call.expression);
-    const receiver =
-      isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
-        ? unwrapped(callee.expression)
-        : undefined;
-    if (method === undefined || receiver === undefined || !isIdentifier(receiver)) {
-      throw new Error('Expected a receiver identifier call.');
-    }
+    const { method, receiver } = receiverCallTarget(call);
 
     expect(writesThis(methodsOf(receiver), method, writtenBy, { seen: new Set(), call })).toBe(
       writes,
