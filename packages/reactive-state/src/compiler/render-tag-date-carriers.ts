@@ -29,7 +29,6 @@ import {
   type VariableDeclaration,
 } from 'typescript/ast';
 
-import { returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
@@ -48,6 +47,12 @@ import {
   elementMethodCarriesDated,
   writtenArrayCarriesDated,
 } from './render-tag-date-array-methods.ts';
+import {
+  type DatedQueries,
+  helperResultCarriesDated,
+  isHandedDate,
+  mappedResultCarriesDated,
+} from './render-tag-date-helper-results.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** Tracks expressions inside a tag or helper body that carry Date-bearing substitution values. */
@@ -180,6 +185,7 @@ function parameterCarriesDated(
   seen: Set<Node>,
 ): boolean {
   const { bindings, datedIndices } = ctx;
+  if (isHandedDate(declared)) return true;
   const positional = bindings.positionalSubs.get(declared);
   if (positional !== undefined) {
     return bindings.wildcardSubs ? datedIndices.size > 0 : datedIndices.has(positional);
@@ -385,6 +391,7 @@ function callResultCarriesDated(
   ctx: DatedCarrierContext,
   seen: Set<Node>,
 ): boolean {
+  if (helperResultCarriesDated(call, datedQueries(ctx, seen))) return true;
   const callee = unwrapped(call.expression);
   const path = globalPathOf(callee)?.join('.');
   if (path === 'Array.from') return arrayFromCarriesDated(call, ctx, seen);
@@ -415,6 +422,13 @@ function callResultCarriesDated(
   return arrayMethodResultCarriesDated(call, callee.expression, method, { ctx, seen });
 }
 
+function datedQueries(ctx: DatedCarrierContext, seen: Set<Node>): DatedQueries {
+  return {
+    fresh: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, new Set()),
+    shared: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
+  };
+}
+
 function arrayFromCarriesDated(
   call: CallExpression,
   ctx: DatedCarrierContext,
@@ -423,13 +437,7 @@ function arrayFromCarriesDated(
   const [iterable, mapFn] = call.arguments;
   if (iterable === undefined || isSpreadElement(iterable)) return false;
   if (mapFn === undefined) return iterableOrArgumentsDated(iterable, ctx, seen);
-  const fn = unwrapped(mapFn);
-  return (
-    (isArrowFunction(fn) || isFunctionExpression(fn)) &&
-    returnedBy(fn).some((ret) =>
-      carriesDatedSubstitution(ret, ctx.bindings, ctx.datedIndices, seen),
-    )
-  );
+  return mappedResultCarriesDated(mapFn, iterable, datedQueries(ctx, seen));
 }
 
 function arrayMethodResultCarriesDated(
@@ -448,15 +456,7 @@ function arrayMethodResultCarriesDated(
   }
   if (method === 'concat') return arrayConcatCarriesDated(call, receiver, ctx, seen);
   if (method === 'map' || method === 'flatMap') {
-    const first = call.arguments[0];
-    const fn = first === undefined ? undefined : unwrapped(first);
-    return (
-      fn !== undefined &&
-      (isArrowFunction(fn) || isFunctionExpression(fn)) &&
-      returnedBy(fn).some((ret) =>
-        carriesDatedSubstitution(ret, ctx.bindings, ctx.datedIndices, seen),
-      )
-    );
+    return mappedResultCarriesDated(call.arguments[0], receiver, datedQueries(ctx, seen));
   }
   return elementMethodCarriesDated(call, receiver, method, (each) =>
     carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
