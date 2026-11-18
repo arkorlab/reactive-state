@@ -302,12 +302,22 @@ function constructorOf(name: Identifier): ClassLikeDeclaration | undefined {
   return undefined;
 }
 
-/** The methods an object the code writes holds of its own, by their names: none of an arrow's. */
-function objectMethods(value: ObjectLiteralExpression): ReadonlyMap<string, Node> {
+/**
+ * The methods an object the code writes holds of its own, by their names: none of an arrow's; those
+ * of an object it spreads, which a later property of the same name replaces.
+ */
+function objectMethods(
+  value: ObjectLiteralExpression,
+  spreading: ReadonlySet<Node> = new Set(),
+): ReadonlyMap<string, Node> {
   const methods = new Map<string, Node>();
   for (const property of value.properties) {
     const key = 'name' in property ? keyOf(property.name) : undefined;
-    if (key !== undefined && isMethodDeclaration(property)) {
+    if (isSpreadAssignment(property)) {
+      for (const [spread, method] of spreadMethods(property.expression, spreading)) {
+        methods.set(spread, method);
+      }
+    } else if (key !== undefined && isMethodDeclaration(property)) {
       methods.set(key, property);
     } else if (
       key !== undefined &&
@@ -318,6 +328,27 @@ function objectMethods(value: ObjectLiteralExpression): ReadonlyMap<string, Node
     }
   }
   return methods;
+}
+
+/** The own methods of the object literal `source` is, through constant aliases; none of another value. */
+function spreadMethods(
+  source: Expression,
+  spreading: ReadonlySet<Node>,
+): ReadonlyMap<string, Node> {
+  let value = unwrapped(source);
+  const seen = new Set<Node>(spreading);
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const initializer = initializerOf(value);
+    if (initializer === undefined) {
+      return new Map();
+    }
+    value = unwrapped(initializer);
+  }
+  if (!isObjectLiteralExpression(value) || seen.has(value)) {
+    return new Map();
+  }
+  return objectMethods(value, new Set([...seen, value]));
 }
 
 /** Known source-written bases, first, with alias and heritage cycles ending the walk. */
