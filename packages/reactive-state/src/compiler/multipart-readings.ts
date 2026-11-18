@@ -32,6 +32,7 @@ import { framedValueShape } from './framed-values.ts';
 import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
 import { leafMayBeOpaqueFormData } from './multipart-dynamic-sources.ts';
+import { factoryReturns } from './multipart-factories.ts';
 import {
   bindingDefaultsOf,
   type HeldResolution,
@@ -383,6 +384,9 @@ function computeFormData(value: Expression, following: AnalysisState): boolean {
   const peeled = peeledMemberHolder(value);
   if (peeled !== undefined) {
     return heldFormData(peeled, following, value);
+  }
+  if (isCallExpression(value)) {
+    return factoryReturns(value)?.some((each) => isFormData(each, following)) ?? false;
   }
   return (
     isNewExpression(value) && globalPathOf(unwrapped(value.expression))?.join('.') === 'FormData'

@@ -33,6 +33,7 @@ import {
   singleDescriptorBodyWrite,
   type RecordedDescriptorBodyWrite,
 } from './multipart-descriptors.ts';
+import { factoryReturns } from './multipart-factories.ts';
 import { peeledMemberHolder, selectedValues, uniqueExpressions } from './multipart-held-paths.ts';
 import { parameterBodies } from './multipart-parameters.ts';
 import {
@@ -177,7 +178,17 @@ function callExpressionBodies(
           mapDescriptorBodyWrite(descriptors),
         );
   }
-  return path === 'Object.create' ? objectCreateBodies(call, point, following) : EMPTY_BODIES;
+  return path === 'Object.create'
+    ? objectCreateBodies(call, point, following)
+    : factoryBodies(call, following);
+}
+
+/** The options a source-written function returns, each read where its `return` writes it. */
+function factoryBodies(call: CallExpression, following: AnalysisState): BodyReading {
+  const returned = factoryReturns(call);
+  return returned === undefined
+    ? EMPTY_BODIES
+    : combineBranchReadings(returned.map((each) => bodiesOf(each, each, following)));
 }
 
 /** Evaluates `Object.create(proto, descriptors?)`, keeping prototype `body` reads non-enumerable. */
