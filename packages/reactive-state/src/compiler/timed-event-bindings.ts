@@ -21,12 +21,13 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
+  isVariableDeclarationList,
+  isVariableStatement,
   type Node,
   type ObjectBindingPattern,
   type ParameterDeclaration,
   type SourceFile,
   SyntaxKind,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering, parametersOf } from './answers.ts';
@@ -189,18 +190,10 @@ function findPatternBindingInNode(node: Node, text: string): Identifier | undefi
 
 /** Searches variable declarations in `statement` for a destructured binding matching `text`. */
 function findIdentifierInStatement(statement: Node, text: string): Identifier | undefined {
-  if (!('declarationList' in statement)) {
+  if (!isVariableStatement(statement)) {
     return undefined;
   }
-  const declarations = (
-    statement as {
-      readonly declarationList?: { readonly declarations: readonly VariableDeclaration[] };
-    }
-  ).declarationList?.declarations;
-  if (declarations === undefined) {
-    return undefined;
-  }
-  for (const decl of declarations) {
+  for (const decl of statement.declarationList.declarations) {
     if (!isIdentifier(decl.name)) {
       const hit = findIdentifierInBindingName(decl.name, text);
       if (hit !== undefined) {
@@ -234,11 +227,10 @@ function findIdentifierInBindingName(name: Node | undefined, text: string): Iden
 
 /** Finds a `VariableDeclaration` binding matching `text` in a `for..of` initializer. */
 function findIdentifierInNode(initializer: Node, text: string): Identifier | undefined {
-  if (!('declarations' in initializer)) {
+  if (!isVariableDeclarationList(initializer)) {
     return undefined;
   }
-  for (const decl of (initializer as { readonly declarations: readonly VariableDeclaration[] })
-    .declarations) {
+  for (const decl of initializer.declarations) {
     const hit = findIdentifierInBindingName(decl.name, text);
     if (hit !== undefined) {
       return hit;
