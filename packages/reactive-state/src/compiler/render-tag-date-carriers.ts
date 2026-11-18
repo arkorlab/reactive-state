@@ -45,8 +45,8 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
-  PASSTHROUGH_ARRAY_METHODS,
-  reduceResultCarriesDated,
+  elementMethodCarriesDated,
+  writtenArrayCarriesDated,
 } from './render-tag-date-array-methods.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -165,7 +165,12 @@ function identifierCarriesDated(
   const declared = frameDeclarationOf(name);
   if (declared === undefined) return false;
   if (isParameterDeclaration(declared)) return parameterCarriesDated(name, declared, ctx, seen);
-  return isVariableDeclaration(declared) && variableCarriesDated(name, declared, ctx, seen);
+  return (
+    (isVariableDeclaration(declared) && variableCarriesDated(name, declared, ctx, seen)) ||
+    writtenArrayCarriesDated(name, (each) =>
+      carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
+    )
+  );
 }
 
 function parameterCarriesDated(
@@ -453,14 +458,8 @@ function arrayMethodResultCarriesDated(
       )
     );
   }
-  if (REDUCE_METHODS.has(method)) {
-    return reduceResultCarriesDated(call, receiver, (each) =>
-      carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
-    );
-  }
-  return (
-    PASSTHROUGH_ARRAY_METHODS.has(method) &&
-    carriesDatedSubstitution(receiver, ctx.bindings, ctx.datedIndices, seen)
+  return elementMethodCarriesDated(call, receiver, method, (each) =>
+    carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
   );
 }
 
