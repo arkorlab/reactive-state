@@ -7,7 +7,6 @@ import {
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
-  isClassStaticBlockDeclaration,
   isComputedPropertyName,
   isConstructorDeclaration,
   isDecorator,
@@ -294,9 +293,7 @@ function visitNode(node: Node, state: WalkState): void {
 }
 
 function observeNodeOperations(node: Node, state: WalkState): void {
-  if (isClassStaticBlockDeclaration(node)) {
-    collectScopeWithPropagation(node, state);
-  } else if (isDecorator(node)) {
+  if (isDecorator(node)) {
     invokeExpression(node.expression, state);
   } else if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
     observeMemberAccess(node, state.driver);
