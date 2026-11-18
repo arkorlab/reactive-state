@@ -93,6 +93,8 @@ export interface TargetContext {
     seenBindings?: Set<Binding>,
   ) => readonly ResolvedValue[];
   readonly scopes: ScopeTable;
+  /** Counts one step of resolving a value, and throws `WalkBudgetError` past the walk's budget. */
+  readonly spend: () => void;
   readonly withActiveReceiver: <T>(
     owner: Node,
     receiver: ResolvedValue | undefined,

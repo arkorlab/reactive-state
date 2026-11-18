@@ -71,6 +71,7 @@ export function projectMemberFromValue(
   query: MemberQuery,
   ctx: TargetContext,
 ): readonly ResolvedValue[] {
+  ctx.spend();
   const cacheKey = projectionCacheKey(receiver, query, ctx.scopes);
   if (query.seenProjections.has(cacheKey)) {
     return [];

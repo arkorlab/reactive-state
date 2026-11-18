@@ -29,6 +29,7 @@ import {
   type TaggedTemplateExpression,
 } from 'typescript/ast';
 
+import { createStepCounter, forEachCallWithin, WalkBudgetError } from './statement-call-budget.ts';
 import {
   type ResolvedValue,
   type TargetContext,
@@ -100,14 +101,21 @@ export function forEachSynchronousCall(
   onCall: (call: CallExpression) => boolean,
 ): void {
   const state = createWalkState(root, onCall);
-  collectScopeWithPropagation(root, state);
-  if (isCallExpression(root)) {
-    visitNode(root, state);
-    return;
+  try {
+    collectScopeWithPropagation(root, state);
+    if (isCallExpression(root)) {
+      visitNode(root, state);
+      return;
+    }
+    root.forEachChild((child) => {
+      visitNode(child, state);
+    });
+  } catch (error) {
+    if (!(error instanceof WalkBudgetError)) {
+      throw error;
+    }
+    forEachCallWithin(root, onCall);
   }
-  root.forEachChild((child) => {
-    visitNode(child, state);
-  });
 }
 
 function createWalkState(root: Node, onCall: (call: CallExpression) => boolean): WalkState {
@@ -131,6 +139,7 @@ function createWalkState(root: Node, onCall: (call: CallExpression) => boolean):
       resolve: (expr, seenNodes, seenBindings) =>
         resolveTargets(expr, state.ctx, seenNodes, seenBindings),
       scopes,
+      spend: createStepCounter(),
       withActiveReceiver: (owner, receiver, run) =>
         runWithReceiver(activeReceivers, owner, receiver, run),
     },

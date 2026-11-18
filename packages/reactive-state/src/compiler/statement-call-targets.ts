@@ -91,6 +91,7 @@ function resolveTargetsWithTrace(
   ctx: TargetContext,
   trace: ResolutionTrace,
 ): readonly ResolvedValue[] {
+  ctx.spend();
   const clean = unwrapExpression(expr);
   if (trace.seenNodes.has(clean)) {
     return [];
