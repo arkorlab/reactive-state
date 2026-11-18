@@ -31,35 +31,28 @@ export const PASSTHROUGH_ARRAY_METHODS: ReadonlySet<string> = new Set([
   'with',
 ]);
 
-/** Whether an expression carries a Date, asked of a fresh path (`fresh`) or the one in hand (`shared`). */
-export interface DatedQuery {
-  readonly shared: (expression: Expression) => boolean;
-  readonly fresh: (expression: Expression) => boolean;
-}
-
 /**
- * `reduce` answers its initial value, or what its callback returns; with no initial value, the one
- * element of a one-element array, which no callback is called on. A callback that is not written
- * there is taken to return the element.
+ * `reduce` answers its initial value, or what its callback returns; with no initial value (or a
+ * callback that is not written there), the one element of a one-element array, or what the callback
+ * makes of its elements. The receiver is asked once, through the callback's element parameter or
+ * here, never both: a chain of reductions stays one question per stage.
  */
 export function reduceResultCarriesDated(
   call: CallExpression,
   receiver: Expression,
-  carries: DatedQuery,
+  carries: (expression: Expression) => boolean,
 ): boolean {
   const [callback, initial] = call.arguments;
-  if (
-    initial !== undefined &&
-    carries.shared(isSpreadElement(initial) ? initial.expression : initial)
-  )
+  if (initial !== undefined && carries(isSpreadElement(initial) ? initial.expression : initial)) {
     return true;
-  if (!carries.fresh(receiver)) return false;
+  }
   const fn = callback === undefined ? undefined : unwrapped(callback);
   if (
-    initial === undefined ||
-    fn === undefined ||
-    !(isArrowFunction(fn) || isFunctionExpression(fn))
-  )
-    return true;
-  return returnedBy(fn).some((returned) => carries.shared(returned));
+    initial !== undefined &&
+    fn !== undefined &&
+    (isArrowFunction(fn) || isFunctionExpression(fn))
+  ) {
+    return returnedBy(fn).some((returned) => carries(returned));
+  }
+  return carries(receiver);
 }

@@ -454,11 +454,9 @@ function arrayMethodResultCarriesDated(
     );
   }
   if (REDUCE_METHODS.has(method)) {
-    return reduceResultCarriesDated(call, receiver, {
-      fresh: (each) =>
-        carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, new Set(seen)),
-      shared: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
-    });
+    return reduceResultCarriesDated(call, receiver, (each) =>
+      carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
+    );
   }
   return (
     PASSTHROUGH_ARRAY_METHODS.has(method) &&
