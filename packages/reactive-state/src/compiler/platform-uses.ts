@@ -340,7 +340,18 @@ export function targetNames(target: Node): ReadonlySet<string> {
   return names;
 }
 
-/** Global paths reachable through `node`, following local aliases and static member projections. */
+/**
+ * Members a global path may project past the global an alias leads to. A binding assigned from its
+ * own member (`current = current.next`) adds one member to the path on each turn, so without a bound
+ * the walk never ends; no global the checks name has a path near this long.
+ */
+const ALIAS_PATH_MEMBERS = 8;
+
+/**
+ * Global paths reachable through `node`, following local aliases and static member projections. A
+ * projection longer than `ALIAS_PATH_MEMBERS` members names no global the checks look for, and is
+ * not followed further.
+ */
 export function platformPathsOf(node: Expression, immutableOnly = false): readonly string[] {
   const found = new Set<string>();
   const seen = new Set<string>();
@@ -348,6 +359,9 @@ export function platformPathsOf(node: Expression, immutableOnly = false): readon
     { expr: node, suffix: [] },
   ];
   for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
+    if (item.suffix.length > ALIAS_PATH_MEMBERS) {
+      continue;
+    }
     const value = peelPlatform(item.expr);
     const key = `${value.pos}:${value.end}:${item.suffix.join('.')}`;
     if (seen.has(key)) {
