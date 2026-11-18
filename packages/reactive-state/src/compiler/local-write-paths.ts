@@ -2,9 +2,11 @@ import {
   type CallExpression,
   type Expression,
   type Identifier,
+  isArrayBindingPattern,
   isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
+  isBindingElement,
   isCallExpression,
   isComputedPropertyName,
   isDeleteExpression,
@@ -14,6 +16,7 @@ import {
   isIdentifier,
   isNewExpression,
   isNonNullExpression,
+  isObjectBindingPattern,
   isObjectLiteralExpression,
   isOmittedExpression,
   isParenthesizedExpression,
@@ -37,6 +40,7 @@ import { literalKey } from './exported-values.ts';
 import { globalPath } from './global-answers.ts';
 import { readsOf } from './local-module-reads.ts';
 import { constantValue, type Resolve } from './numbers.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /**
  * Member chains, literal container lookup, prefix-replacement checks, and array-shrinking checks
@@ -108,10 +112,17 @@ export function isConstList(list: Node): boolean {
   return isVariableDeclarationList(list) && /^const\s/u.test(list.getText());
 }
 
-/** Whether `declared` is bound by a `const` variable declaration. */
+/** Whether `declared` is bound by a `const` variable declaration, or by a pattern of one. */
 export function isConstIdentifier(declared: Identifier): boolean {
-  const { parent } = declared;
-  return isVariableDeclaration(parent) && parent.name === declared && isConstList(parent.parent);
+  let at: Node = declared.parent;
+  while (isBindingElement(at) || isObjectBindingPattern(at) || isArrayBindingPattern(at)) {
+    at = at.parent;
+  }
+  return (
+    isVariableDeclaration(at) &&
+    isConstList(at.parent) &&
+    bindingIdentifiers(at.name).includes(declared)
+  );
 }
 
 /** Whether `parent` wraps `node` as what answers of it alike: parentheses, a cast, a `!`. */

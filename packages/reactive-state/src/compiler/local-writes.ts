@@ -13,6 +13,7 @@ import {
   isFunctionExpression,
   isIdentifier,
   isObjectLiteralExpression,
+  isOmittedExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
@@ -31,6 +32,7 @@ import {
 
 import { type Answering, givenAt, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { frameBindingOf } from './framed-bindings.ts';
 import { globalPath } from './global-answers.ts';
 import { followedOf, type JsonReading } from './json-reading.ts';
 import { readsOf } from './local-module-reads.ts';
@@ -49,6 +51,7 @@ import {
   type Target,
   unreplacedAt,
   UPDATING,
+  writtenAt,
 } from './local-write-paths.ts';
 import {
   assignedFrom,
@@ -400,16 +403,43 @@ function writesParameters(fn: Answering, walk: Walk, at: (index: number) => bool
   });
 }
 
-/** Container initializer propagated to a plain `const alias = member` binding when unreplaced. */
-function aliasedHeldOf(target: Target): Expression | undefined {
+/**
+ * What a `const` name bound to a member of `target` holds: the value the constant writes there
+ * when nothing replaces it, or shrinks it, if an array. A name a pattern binds holds a part
+ * `within` of it, as the pattern selects it; the pattern's own read of the member is not a write.
+ */
+function aliasedHeldOf(target: Target, within: readonly string[] = []): Expression | undefined {
   const found = unreplacedAt(target, target.keys);
   if (found === undefined) {
     return undefined;
+  }
+  if (within.length > 0) {
+    return writtenAt(found, within);
   }
   if (isArrayLiteralExpression(found) && isShrunkAt(target, target.keys)) {
     return undefined;
   }
   return found;
+}
+
+/** Whether `element` is an element of an array the code writes, which is an object it writes. */
+function isObjectElement(element: Expression): boolean {
+  return (
+    !isSpreadElement(element) &&
+    !isOmittedExpression(element) &&
+    isObjectLiteralExpression(unwrapped(element))
+  );
+}
+
+/** What each element of `array` is, where it is an array the code writes of objects it writes. */
+function elementHeldOf(array: Expression | undefined): Expression | undefined {
+  const value = array === undefined ? undefined : unwrapped(array);
+  if (value === undefined || !isArrayLiteralExpression(value)) {
+    return undefined;
+  }
+  return value.elements.every((element) => isObjectElement(element))
+    ? value.elements[0]
+    : undefined;
 }
 
 /** What a name of the code's that holds a constant, or a member of it, writes into it. */
@@ -422,12 +452,17 @@ function heldBy(node: Expression, target: Target, walk: Walk): Writes {
     if (isIdentifier(parent.name)) {
       return writesOf(parent.name, aliasedHeldOf(target), walk);
     }
-    return boundBy(parent.parent, parent.name, walk);
+    return boundBy(parent.parent, parent.name, walk, (within) => aliasedHeldOf(target, within));
   }
   if (isForOfStatement(parent) && parent.expression === node) {
     const { initializer } = parent;
+    const element = elementHeldOf(unreplacedAt(target, target.keys));
     return isVariableDeclarationList(initializer)
-      ? merged(initializer.declarations.map((each) => boundBy(initializer, each.name, walk)))
+      ? merged(
+          initializer.declarations.map((each) =>
+            boundBy(initializer, each.name, walk, (within) => writtenAt(element, within)),
+          ),
+        )
       : CHANGED;
   }
   const isAssigned =
@@ -439,12 +474,25 @@ function heldBy(node: Expression, target: Target, walk: Walk): Writes {
   return isAssigned ? CHANGED : NONE;
 }
 
-/** What is written of each name `name` binds, declared of `list` — anything of a variable. */
-function boundBy(list: Node, name: VariableDeclaration['name'], walk: Walk): Writes {
+/**
+ * What is written of each name `name` binds, declared of `list` — anything of a variable. A name
+ * holds what `held` shows of the part of the value it takes apart that it selects.
+ */
+function boundBy(
+  list: Node,
+  name: VariableDeclaration['name'],
+  walk: Walk,
+  held: (within: readonly string[]) => Expression | undefined,
+): Writes {
   if (!isConstList(list)) {
     return CHANGED;
   }
-  return merged(bindingIdentifiers(name).map((each) => writesOf(each, undefined, walk)));
+  return merged(
+    bindingIdentifiers(name).map((each) => {
+      const selected = frameBindingOf(each);
+      return writesOf(each, selected === undefined ? undefined : held(selected.keys), walk);
+    }),
+  );
 }
 
 /** The writes of `each`, together. */
