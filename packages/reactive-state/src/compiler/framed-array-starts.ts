@@ -171,10 +171,41 @@ function defaultMayBeArray(name: Identifier): boolean {
  * on every path. A name, a member, an element and a call may hold an array, and are none of these.
  */
 export function isNoArray(value: Expression): boolean {
+  return endsAtKinds(value, NO_ARRAY_KINDS);
+}
+
+/** The written values whose type is a text, a number, a boolean or a bigint, whatever their operands are. */
+const SCALAR_KINDS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.DeleteExpression,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.PostfixUnaryExpression,
+  SyntaxKind.PrefixUnaryExpression,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.TemplateExpression,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.TypeOfExpression,
+]);
+
+/**
+ * Whether an expression is written as a text, a number, a boolean or a bigint: a literal of one, what
+ * an operator makes of its operands, or a choice or a sequence that ends at such a value on every
+ * path. The empty object, `null`, `undefined`, a function and a regular expression are no array, but
+ * a name that starts as one is typed by it as any, or as `{}`, and TypeScript lets an array be
+ * assigned to it later: they are not scalars.
+ */
+export function isScalarValue(value: Expression): boolean {
+  return endsAtKinds(value, SCALAR_KINDS);
+}
+
+/** Whether every path of a choice or a sequence ends at a value of one of these kinds or at a scalar operator. */
+function endsAtKinds(value: Expression, kinds: ReadonlySet<SyntaxKind>): boolean {
   const pending = [value];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
     const written = unwrapped(each);
-    if (NO_ARRAY_KINDS.has(written.kind)) continue;
+    if (kinds.has(written.kind)) continue;
     const ends = endsOf(written);
     if (ends === undefined) return false;
     pending.push(...ends);

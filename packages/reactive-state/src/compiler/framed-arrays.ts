@@ -14,13 +14,23 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
-import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
+import {
+  arrayWritesUnfollowed,
+  type WrittenArrayElement,
+  writtenArrayElements,
+} from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { givenValues, writtenAsWhole } from './framed-array-identity.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
-import { isNoArray, mayBecomeArray, mayStartAsArray } from './framed-array-starts.ts';
+import {
+  isNoArray,
+  isScalarValue,
+  mayBecomeArray,
+  mayStartAsArray,
+} from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { UnfollowableError } from './framed-getter-writes.ts';
 import { mutatorInvocation } from './framed-mutator-calls.ts';
 import { destructuredList } from './framed-nested-lists.ts';
 import { methodMayBeOverridden } from './framed-overridden-methods.ts';
@@ -192,9 +202,12 @@ function writtenElementErrors(
   context: { readonly pending: Expression[]; readonly reading: Reading },
 ): boolean {
   const { pending, reading } = context;
-  if (arrayWritesUnfollowed(value, call, (element, keys) => words.error(element, keys)))
-    return reading === 'refused';
-  for (const source of writtenArrayElements(value, call)) {
+  const unfollowed = arrayWritesUnfollowed(value, call, (element, keys) =>
+    words.error(element, keys),
+  );
+  if (unfollowed && reading === 'refused') return true;
+  const sources = unfollowed ? explicitWrites(value, call) : writtenArrayElements(value, call);
+  for (const source of sources) {
     if (source.array === true) {
       pending.push(source.value);
       continue;
@@ -204,6 +217,20 @@ function writtenElementErrors(
     } else if (elementErrors([source.value], words, pending)) return true;
   }
   return false;
+}
+
+/**
+ * What the program writes into an array it does not follow the identity of, an insertion and an
+ * element assignment on its name: read by an operand all the same, so that an error pushed into a
+ * list the code also gives another list is still one. A native object mutator it cannot read.
+ */
+function explicitWrites(value: Expression, call: Node): readonly WrittenArrayElement[] {
+  try {
+    return writtenArrayElements(value, call);
+  } catch (error) {
+    if (error instanceof UnfollowableError) return [];
+    throw error;
+  }
 }
 
 /** A whole lexical binding not already followed while reading this array's elements. */
@@ -316,5 +343,5 @@ const SCALAR_TYPES: ReadonlySet<SyntaxKind> = new Set([
  */
 function writtenScalar(binding: FrameBinding): boolean {
   if (binding.type !== undefined) return SCALAR_TYPES.has(binding.type.kind);
-  return binding.initializer !== undefined && isNoArray(binding.initializer);
+  return binding.initializer !== undefined && isScalarValue(binding.initializer);
 }

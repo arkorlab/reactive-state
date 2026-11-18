@@ -196,6 +196,46 @@ const CASES = [
       "export function p(errors: Error[]): string { let value: unknown = 'x'; value = errors.slice(); return '' + value; }",
   },
   {
+    framed: true,
+    id: 'error-pushed-after-a-whole-reassignment-in-template',
+    source: `export function p(error: Error): string { let list: unknown[] = []; list = []; list.push(error); return \`\${list}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'error-pushed-after-a-whole-reassignment-added',
+    source:
+      "export function p(error: Error): string { let list: unknown[] = []; list = []; list.push(error); return '' + list; }",
+  },
+  {
+    framed: true,
+    id: 'error-assigned-to-an-element-after-a-whole-reassignment',
+    source:
+      "export function p(error: Error): string { let list: unknown[] = [1]; list = [2]; list[0] = error; return '' + list; }",
+  },
+  {
+    framed: true,
+    id: 'empty-object-name-given-an-error-array',
+    source: `export function p(error: Error): string { let value = {}; value = [error]; return \`\${value}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'null-name-given-an-error-array',
+    source:
+      "export function p(error: Error): string { let value = null; value = [error]; return '' + value; }",
+  },
+  {
+    framed: true,
+    id: 'function-name-given-an-error-array',
+    source:
+      "export function p(error: Error): string { let value: unknown = () => 1; value = [error]; return '' + value; }",
+  },
+  {
+    framed: false,
+    id: 'array-of-text-pushed-after-a-whole-reassignment',
+    source:
+      "export function p(): string { let list: unknown[] = []; list = []; list.push('a'); return '' + list; }",
+  },
+  {
     framed: false,
     id: 'name-given-an-array-of-text',
     source: "export function p(): string { let list = ['a']; list = ['b']; return '' + list; }",
