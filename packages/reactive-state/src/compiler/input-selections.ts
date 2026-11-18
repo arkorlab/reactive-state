@@ -1,6 +1,10 @@
 import {
+  type BindingName,
   type Expression,
+  isArrayBindingPattern,
   isArrayLiteralExpression,
+  isBinaryExpression,
+  isBindingElement,
   isIdentifier,
   isNumericLiteral,
   isObjectLiteralExpression,
@@ -29,6 +33,16 @@ export interface LiteralSelection {
   readonly unknown: boolean;
   readonly assigned?: boolean;
   readonly fresh?: boolean;
+}
+
+export interface ProjectionStep {
+  readonly fallback: Expression | undefined;
+  readonly key: string | undefined;
+}
+
+export interface BindingProjection {
+  readonly fresh: boolean;
+  readonly steps: readonly ProjectionStep[];
 }
 
 export const UNKNOWN_SELECTION: LiteralSelection = { unknown: true, value: undefined };
@@ -66,6 +80,81 @@ export function literalPropertyName(node: Node): string | undefined {
     return String(Number(node.text));
   }
   return isIdentifier(node) || isStringLiteral(node) ? node.text : undefined;
+}
+
+/** The members a parameter pattern selects, and the fresh copy one of its rest bindings makes. */
+export function bindingProjection(
+  binding: BindingName,
+  name: string,
+  steps: readonly ProjectionStep[],
+): BindingProjection | undefined {
+  if (isIdentifier(binding)) {
+    return binding.text === name ? { fresh: false, steps } : undefined;
+  }
+  for (const [index, element] of binding.elements.entries()) {
+    if (!isBindingElement(element) || element.name === undefined) {
+      continue;
+    }
+    const named = element.propertyName ?? element.name;
+    let key = isIdentifier(named) || isStringLiteral(named) ? named.text : undefined;
+    if (isArrayBindingPattern(binding)) {
+      key = String(index);
+    }
+    const found = bindingProjection(element.name, name, [
+      ...steps,
+      { fallback: element.initializer, key },
+    ]);
+    if (found === undefined) {
+      continue;
+    }
+    if (element.dotDotDotToken !== undefined && !isIdentifier(element.name)) {
+      return undefined;
+    }
+    return { ...found, fresh: found.fresh || element.dotDotDotToken !== undefined };
+  }
+  return undefined;
+}
+
+/** Literal array/object selections leading to one assignment target, including its defaults. */
+export function assignmentProjection(target: Node, root: Node): BindingProjection | undefined {
+  const steps: ProjectionStep[] = [];
+  let fallback: Expression | undefined;
+  for (let at = target; at !== root;) {
+    const parent = at.parent;
+    if (at === target && (isSpreadElement(parent) || isSpreadAssignment(parent))) {
+      return { fresh: true, steps: [] };
+    }
+    if (
+      isBinaryExpression(parent) &&
+      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+      parent.left === at
+    ) {
+      fallback = parent.right;
+      at = parent;
+      continue;
+    }
+    if (isArrayLiteralExpression(parent)) {
+      steps.push({ fallback, key: String(parent.elements.indexOf(at as Expression)) });
+      fallback = undefined;
+      at = parent;
+      continue;
+    }
+    if (
+      (!isPropertyAssignment(parent) && !isShorthandPropertyAssignment(parent)) ||
+      !isObjectLiteralExpression(parent.parent)
+    ) {
+      return undefined;
+    }
+    steps.push({
+      fallback: isShorthandPropertyAssignment(parent)
+        ? parent.objectAssignmentInitializer
+        : fallback,
+      key: literalPropertyName(parent.name),
+    });
+    fallback = undefined;
+    at = parent.parent;
+  }
+  return { fresh: false, steps: steps.toReversed() };
 }
 
 /** A value followed through constants without evaluating a conversion or application call. */

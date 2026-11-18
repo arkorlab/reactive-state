@@ -147,7 +147,7 @@ function staticText(node: Expression): string | undefined {
   if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.PlusToken) {
     const left = staticText(value.left);
     const right = staticText(value.right);
-    return left !== undefined && right !== undefined ? `${left}${right}` : undefined;
+    return left === undefined || right === undefined ? undefined : `${left}${right}`;
   }
   if (!isTemplateExpression(value)) {
     return undefined;

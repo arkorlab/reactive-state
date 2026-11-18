@@ -7,12 +7,14 @@ import {
   type Expression,
   isAsExpression,
   isBinaryExpression,
+  isBlock,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isClassStaticBlockDeclaration,
   isConstructorDeclaration,
   isElementAccessExpression,
+  isExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isGetAccessorDeclaration,
@@ -131,7 +133,7 @@ function enclosingReceiverSlot(
   const parent = ref.parent;
   if (isPropertyDeclaration(parent) && !isStaticMember(parent) && parent.initializer === ref) {
     const cls = baseClassOf(parent.parent);
-    const key = classMemberKey(parent.name);
+    const key = memberElementKey(parent.name);
     return cls === undefined || key === undefined || key === PROTO_KEY ? undefined : { cls, key };
   }
   if (
@@ -205,12 +207,12 @@ function classifySlotReceiverRef(
   }
   const key = memberAccessKey(parent);
   if (writtenMembers.has(unwrapped(parent))) {
-    return key !== undefined &&
+    const safeWrite =
+      key !== undefined &&
       key !== PROTO_KEY &&
       !hasInstanceAccessor(cls, key) &&
-      directAssignmentValue(outer) !== undefined
-      ? undefined
-      : null;
+      directAssignmentValue(outer) !== undefined;
+    return safeWrite ? undefined : null;
   }
   return key === undefined || key === slotKey ? outer : undefined;
 }
@@ -221,19 +223,19 @@ function hasPlainInstanceMembers(cls: BaseClass, key: string): boolean {
     if (isStaticMember(member) || isConstructorDeclaration(member)) {
       continue;
     }
-    const memberName = member.name === undefined ? undefined : classMemberKey(member.name);
     if (
       isGetAccessorDeclaration(member) ||
       isSetAccessorDeclaration(member) ||
       isMethodDeclaration(member)
     ) {
+      const memberName = memberElementKey(member.name);
       if (memberName === undefined || memberName === key) {
         return false;
       }
     } else if (
       isPropertyDeclaration(member) &&
-      memberName === undefined &&
-      member.initializer !== undefined
+      member.initializer !== undefined &&
+      memberElementKey(member.name) === undefined
     ) {
       return false;
     }
@@ -256,7 +258,7 @@ function declaredReceiverSources(
       isPropertyDeclaration(member) &&
       !isStaticMember(member) &&
       member.initializer !== undefined &&
-      classMemberKey(member.name) === key
+      memberElementKey(member.name) === key
     ) {
       found.push({ bindings: source.bindings, value: member.initializer });
     }
@@ -361,7 +363,7 @@ function hasInstanceAccessor(cls: BaseClass, key: string): boolean {
     ) {
       return false;
     }
-    const memberName = member.name === undefined ? undefined : classMemberKey(member.name);
+    const memberName = memberElementKey(member.name);
     return memberName === undefined || memberName === key;
   });
 }
@@ -422,10 +424,15 @@ function enclosingFreshBaseClass(thisNode: Expression): BaseClass | undefined {
     !isSourceFile(at);
     within = at, at = at.parent
   ) {
-    if (isConstructorDeclaration(at) && within === at.body) {
+    if (isConstructorDeclaration(at) && isBlock(within) && within === at.body) {
       return baseClassOf(at.parent);
     }
-    if (isPropertyDeclaration(at) && !isStaticMember(at) && within === at.initializer) {
+    if (
+      isPropertyDeclaration(at) &&
+      !isStaticMember(at) &&
+      isExpression(within) &&
+      within === at.initializer
+    ) {
       return baseClassOf(at.parent);
     }
     if (bindsOwnReceiver(at, within)) {
@@ -446,9 +453,9 @@ function bindsOwnReceiver(node: Node, child: Node): boolean {
     isConstructorDeclaration(node) ||
     isClassStaticBlockDeclaration(node)
   ) {
-    return child === node.body;
+    return isBlock(child) && child === node.body;
   }
-  return isPropertyDeclaration(node) && child === node.initializer;
+  return isPropertyDeclaration(node) && isExpression(child) && child === node.initializer;
 }
 
 /** Returns `node` when it is a class declaration or expression with no `extends` heritage clause. */
@@ -459,11 +466,19 @@ function baseClassOf(node: Node): BaseClass | undefined {
 }
 
 /** Static member key or `#private` field key on a class element name. */
-function classMemberKey(name: Node): string | undefined {
+function memberElementKey(name: Node): string | undefined {
   return isPrivateIdentifier(name) ? name.text : literalPropertyName(name);
 }
 
 /** Whether a class element carries the `static` modifier. */
 function isStaticMember(member: ClassElement): boolean {
+  if (
+    !isPropertyDeclaration(member) &&
+    !isMethodDeclaration(member) &&
+    !isGetAccessorDeclaration(member) &&
+    !isSetAccessorDeclaration(member)
+  ) {
+    return false;
+  }
   return member.modifiers?.some((modifier) => modifier.kind === SyntaxKind.StaticKeyword) === true;
 }

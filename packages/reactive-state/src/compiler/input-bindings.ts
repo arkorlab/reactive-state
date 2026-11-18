@@ -1,26 +1,16 @@
 import {
   type BinaryExpression,
-  type BindingName,
   type Expression,
   type Identifier,
-  isArrayBindingPattern,
-  isArrayLiteralExpression,
   isBinaryExpression,
-  isBindingElement,
   isBlock,
   isCallExpression,
   isConditionalExpression,
   isExpressionStatement,
   isIdentifier,
   isNewExpression,
-  isObjectLiteralExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
   isSignatureDeclaration,
   isSourceFile,
-  isSpreadAssignment,
-  isSpreadElement,
-  isStringLiteral,
   isVoidExpression,
   type Node,
   type ParameterDeclaration,
@@ -32,7 +22,9 @@ import { globalPathOf } from './code-globals.ts';
 import { declarationOf } from './framed.ts';
 import { metadataInitializer } from './input-callees.ts';
 import {
-  literalPropertyName,
+  assignmentProjection,
+  type BindingProjection,
+  bindingProjection,
   type LiteralSelection,
   selected,
   UNKNOWN_SELECTION,
@@ -57,10 +49,19 @@ export interface PresentParameterArray {
   readonly template?: boolean;
 }
 
+interface DefinedState {
+  readonly bindings: MetadataSource['bindings'];
+  readonly cache: Map<Expression, boolean>;
+  readonly cuts: { count: number };
+  readonly seen: ReadonlySet<Expression>;
+}
+
 const PRESENT_ARRAYS = new WeakMap<
   MetadataSource['bindings'],
   ReadonlyMap<ParameterDeclaration, PresentParameterArray>
 >();
+
+const DEFINED_PROOFS = new WeakMap<MetadataSource['bindings'], Map<Expression, boolean>>();
 
 const DEFINING = new Set<Identifier>();
 
@@ -100,15 +101,6 @@ export function recordParameterArrays(
   PRESENT_ARRAYS.set(bindings, arrays);
 }
 
-interface Step {
-  readonly key: string | undefined;
-  readonly fallback: Expression | undefined;
-}
-interface Projection {
-  readonly steps: readonly Step[];
-  readonly fresh: boolean;
-}
-
 /**
  * A function's parameters as a call binds them: a leading `this` declaration, which TypeScript
  * erases, aside.
@@ -131,12 +123,12 @@ export function metadataArguments(
   const arrays = new Map(PRESENT_ARRAYS.get(outer));
   const parameters = metadataParameters(fn);
   for (const [index, parameter] of parameters.entries()) {
-    const argument = given[index];
     if (parameter.dotDotDotToken !== undefined) {
       bindings.set(parameter, undefined);
       arrays.set(parameter, { entries: given.slice(index) });
       continue;
     }
+    const argument = given[index];
     arrays.delete(parameter);
     bindings.set(parameter, omittedArgument(argument, outer) ? parameter.initializer : argument);
   }
@@ -144,52 +136,80 @@ export function metadataArguments(
   return bindings;
 }
 
-/** Whether an expression is source-proven not to evaluate to undefined. */
+/** Whether an expression is source-proven not to evaluate to undefined, memoized per binding map. */
 export function definedArgument(
   argument: Expression | undefined,
   bindings: MetadataSource['bindings'],
   seen: ReadonlySet<Expression> = new Set(),
 ): boolean {
-  if (argument === undefined || omittedArgument(argument, bindings)) {
+  const cache = definedCache(bindings);
+  return definedWithState(argument, { bindings, cache, cuts: { count: 0 }, seen });
+}
+
+/** Looks up or initializes the completed defined-argument proof table for `bindings`. */
+function definedCache(bindings: MetadataSource['bindings']): Map<Expression, boolean> {
+  let cache = DEFINED_PROOFS.get(bindings);
+  if (cache === undefined) {
+    cache = new Map();
+    DEFINED_PROOFS.set(bindings, cache);
+  }
+  return cache;
+}
+
+/** Evaluates `definedArgument` while reusing cycle-free subproofs within `state.cache`. */
+function definedWithState(argument: Expression | undefined, state: DefinedState): boolean {
+  if (argument === undefined) {
     return false;
   }
   const value = unwrapped(argument);
-  if (seen.has(value)) {
+  if (state.seen.has(value)) {
+    state.cuts.count += 1;
     return false;
   }
-  const nextSeen = new Set([...seen, value]);
+  const cached = state.cache.get(value);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const cutsBefore = state.cuts.count;
+  const following: DefinedState = { ...state, seen: new Set([...state.seen, value]) };
+  const result = evaluateDefined(value, following);
+  if (state.cuts.count === cutsBefore) {
+    state.cache.set(value, result);
+  }
+  return result;
+}
+
+/** Computes whether an unwrapped expression is proven defined without consulting `state.cache`. */
+function evaluateDefined(value: Expression, state: DefinedState): boolean {
+  if (omittedArgument(value, state.bindings)) {
+    return false;
+  }
   if (isIdentifier(value)) {
-    return definedIdentifier(value, bindings, nextSeen);
+    return definedIdentifier(value, state);
   }
   if (isConditionalExpression(value)) {
-    return (
-      definedArgument(value.whenTrue, bindings, nextSeen) &&
-      definedArgument(value.whenFalse, bindings, nextSeen)
-    );
+    return definedWithState(value.whenTrue, state) && definedWithState(value.whenFalse, state);
   }
   return DEFINED_KINDS.has(value.kind) || constantValue(value, metadataInitializer) !== undefined;
 }
 
 /** Whether a constant or bound parameter identifier is proven non-undefined at its read. */
-function definedIdentifier(
-  name: Identifier,
-  bindings: MetadataSource['bindings'],
-  seen: ReadonlySet<Expression>,
-): boolean {
+function definedIdentifier(name: Identifier, state: DefinedState): boolean {
   if (DEFINING.has(name)) {
+    state.cuts.count += 1;
     return false;
   }
   DEFINING.add(name);
   try {
-    const parameter = parameterSources(name, { bindings, value: name });
+    const parameter = parameterSources(name, { bindings: state.bindings, value: name });
     if (parameter !== undefined) {
       if (parameter.present === true) {
         return true;
       }
       const only = parameter.sources?.length === 1 ? parameter.sources[0]?.value : undefined;
-      return only === undefined ? false : definedArgument(only, bindings, seen);
+      return only !== undefined && definedWithState(only, state);
     }
-    return definedArgument(metadataInitializer(name), bindings, seen);
+    return definedWithState(metadataInitializer(name), state);
   } finally {
     DEFINING.delete(name);
   }
@@ -319,7 +339,7 @@ function boundParameterSources(
 
 /** A binding's literal projections and defaults after its actual argument has been selected. */
 function projectedSources(
-  projection: Projection,
+  projection: BindingProjection,
   source: MetadataSource,
   parameter: ParameterDeclaration,
 ): readonly MetadataSource[] | undefined {
@@ -348,39 +368,6 @@ function projectedSources(
     return undefined;
   }
   return value.value === undefined ? [] : [{ ...source, value: value.value }];
-}
-
-/** The members a parameter pattern selects, and the fresh copy one of its rest bindings makes. */
-function bindingProjection(
-  binding: BindingName,
-  name: string,
-  steps: readonly Step[],
-): Projection | undefined {
-  if (isIdentifier(binding)) {
-    return binding.text === name ? { fresh: false, steps } : undefined;
-  }
-  for (const [index, element] of binding.elements.entries()) {
-    if (!isBindingElement(element) || element.name === undefined) {
-      continue;
-    }
-    const named = element.propertyName ?? element.name;
-    let key = isIdentifier(named) || isStringLiteral(named) ? named.text : undefined;
-    if (isArrayBindingPattern(binding)) {
-      key = String(index);
-    }
-    const found = bindingProjection(element.name, name, [
-      ...steps,
-      { fallback: element.initializer, key },
-    ]);
-    if (found === undefined) {
-      continue;
-    }
-    if (element.dotDotDotToken !== undefined && !isIdentifier(element.name)) {
-      return undefined;
-    }
-    return { ...found, fresh: found.fresh || element.dotDotDotToken !== undefined };
-  }
-  return undefined;
 }
 
 /** An unconditional preceding assignment, unless later branches or calls can change the binding. */
@@ -484,46 +471,4 @@ function assignedParameter(
     }
   }
   return { ...value, assigned: true };
-}
-
-/** Literal array/object selections leading to one assignment target, including its defaults. */
-function assignmentProjection(target: Node, root: Node): Projection | undefined {
-  const steps: Step[] = [];
-  let fallback: Expression | undefined;
-  for (let at = target; at !== root;) {
-    const parent = at.parent;
-    if (at === target && (isSpreadElement(parent) || isSpreadAssignment(parent))) {
-      return { fresh: true, steps: [] };
-    }
-    if (
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === at
-    ) {
-      fallback = parent.right;
-      at = parent;
-      continue;
-    }
-    if (isArrayLiteralExpression(parent)) {
-      steps.push({ fallback, key: String(parent.elements.indexOf(at as Expression)) });
-      fallback = undefined;
-      at = parent;
-      continue;
-    }
-    if (
-      (!isPropertyAssignment(parent) && !isShorthandPropertyAssignment(parent)) ||
-      !isObjectLiteralExpression(parent.parent)
-    ) {
-      return undefined;
-    }
-    steps.push({
-      fallback: isShorthandPropertyAssignment(parent)
-        ? parent.objectAssignmentInitializer
-        : fallback,
-      key: literalPropertyName(parent.name),
-    });
-    fallback = undefined;
-    at = parent.parent;
-  }
-  return { fresh: false, steps: steps.toReversed() };
 }

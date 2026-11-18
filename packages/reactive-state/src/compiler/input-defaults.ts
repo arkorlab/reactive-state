@@ -70,10 +70,11 @@ function parameterSelection(
 ): Selection {
   const array = presentParameterArray(bindings, parameter);
   if (array !== undefined) {
+    const { entries: items, template } = array;
     return {
-      entries: array.entries,
+      entries: items,
       present: true,
-      template: array.template === true,
+      template: template === true,
       unknown: false,
       value: undefined,
     };
@@ -200,7 +201,7 @@ function arraySelection(actual: Selection, array: readonly Expression[], key: st
   if (array.some((entry) => isSpreadElement(entry))) {
     return UNKNOWN;
   }
-  if (actual.template === true && key === 'raw') {
+  if (key === 'raw' && actual.template === true) {
     return { entries: array, present: true, unknown: false, value: undefined };
   }
   if (
