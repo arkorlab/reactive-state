@@ -14,6 +14,39 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * `String(name)` keeps reading every array, and refuses such a name as it did.
  */
 
+/**
+ * A name that is given a value where it is assigned, other than one the compile reads to a literal
+ * or a scalar, may hold an array by then: a call result, a copy of an array of errors, is refused.
+ */
+const ASSIGNED_ARRAY_ROUTES = [
+  {
+    id: 'slice-given-after-a-literal',
+    start: 'let list = [1];',
+    assign: 'list = errors.slice() as never;',
+  },
+  {
+    id: 'slice-given-to-a-typed-name',
+    start: 'let list: unknown[] = [1];',
+    assign: 'list = errors.slice();',
+  },
+  { id: 'slice-given-to-an-evolving-name', start: 'let list;', assign: 'list = errors.slice();' },
+  {
+    id: 'concat-given-to-a-typed-name',
+    start: 'let list: unknown[] = [];',
+    assign: 'list = list.concat(errors);',
+  },
+  {
+    id: 'array-from-given-to-a-typed-name',
+    start: 'let list: unknown[] = [];',
+    assign: 'list = Array.from(errors);',
+  },
+  {
+    id: 'spread-given-after-a-literal',
+    start: 'let list = [1];',
+    assign: 'list = [...errors] as never;',
+  },
+] as const;
+
 const CASES = [
   {
     framed: false,
@@ -103,6 +136,47 @@ const CASES = [
     id: 'typed-error-array-copied-then-added',
     source:
       "export function p(errors: Error[]): string { const copy = [...errors]; return '' + copy; }",
+  },
+  ...ASSIGNED_ARRAY_ROUTES.flatMap(({ assign, id, start }) => {
+    return [
+      {
+        framed: true,
+        id: `${id}-added`,
+        source: `export function p(errors: Error[]): string { ${start} ${assign} return '' + list; }`,
+      },
+      {
+        framed: true,
+        id: `${id}-in-template`,
+        source: `export function p(errors: Error[]): string { ${start} ${assign} return \`\${list}\`; }`,
+      },
+    ];
+  }),
+  {
+    framed: false,
+    id: 'name-given-a-number',
+    source: "export function p(): string { let n = 1; n = 2; return '' + n; }",
+  },
+  {
+    framed: false,
+    id: 'name-given-its-own-text-and-more',
+    source: "export function p(text: string): string { text = text + 'a'; return text; }",
+  },
+  {
+    framed: false,
+    id: 'name-given-a-scalar-choice',
+    source:
+      "export function p(flag: boolean): string { let n = 1; n = flag ? 2 : 3; return '' + n; }",
+  },
+  {
+    framed: false,
+    id: 'name-given-an-array-of-text',
+    source: "export function p(): string { let list = ['a']; list = ['b']; return '' + list; }",
+  },
+  {
+    framed: false,
+    id: 'name-given-an-alias-of-an-array-of-text',
+    source:
+      "export function p(): string { const base = ['a']; let list = ['b']; list = base; return '' + list; }",
   },
 ] as const;
 

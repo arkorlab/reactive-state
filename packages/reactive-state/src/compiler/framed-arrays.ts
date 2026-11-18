@@ -17,7 +17,7 @@ import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elem
 import { sourceArrayFunction } from './framed-array-functions.ts';
 import { givenValues, writtenAsWhole } from './framed-array-identity.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
-import { mayBecomeArray, mayStartAsArray } from './framed-array-starts.ts';
+import { isNoArray, mayBecomeArray, mayStartAsArray } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { mutatorInvocation } from './framed-mutator-calls.ts';
@@ -77,10 +77,11 @@ export function framedArrayString(
 /**
  * An implicit conversion, a `+` or `+=` operand or a template span, reads the elements of an array it
  * can follow: a literal, its constant aliases, a written type that says it holds errors, what the
- * program writes into it, what a name is given where it is assigned. A name it cannot follow, a
- * parameter assigned as a whole (`count += 1`), a name a swap or a loop writes, an array written
- * through an element, is taken as the program shows it: an operand is far oftener text or a number
- * than a list, and `String(name)` alone refuses such a name.
+ * program writes into it, and what a name is given where it is assigned, where that is a literal, a
+ * name or a scalar; a call, a member or a choice of arrays may hand an array on, and is refused. A
+ * name it cannot follow, a parameter assigned as a whole (`count += 1`), a name a swap or a loop
+ * writes, an array written through an element, is taken as the program shows it: an operand is far
+ * oftener text or a number than a list, and `String(name)` alone refuses such a name.
  */
 export function framedArrayOperand(
   value: Expression | undefined,
@@ -277,8 +278,23 @@ function bindingArrayWords(
   if (binding === undefined) return false;
   if (reading === 'refused' && rewrittenArray(binding)) return true;
   if (writtenElementErrors(value, call, words, { pending, reading })) return true;
-  if (reading === 'followed')
-    for (const given of givenValues(binding)) if (given !== undefined) pending.push(given);
+  if (reading === 'followed' && !followedGivens(binding, pending)) return true;
   if (binding.initializer !== undefined) pending.push(binding.initializer);
   return false;
+}
+
+/**
+ * What a name written as a whole elsewhere is given where it is assigned, as far as it is followed:
+ * an array literal or a name is read in turn, a scalar is no array. Any other value, a call, a
+ * member, a choice that ends at an array, may be one, a copy of an array of errors included, and the
+ * name is refused. A value a pattern or a loop head gives is not read, and is left as it was.
+ */
+function followedGivens(binding: FrameBinding, pending: Expression[]): boolean {
+  for (const given of givenValues(binding)) {
+    if (given === undefined) continue;
+    const written = unwrapped(given);
+    if (isArrayLiteralExpression(written) || isIdentifier(written)) pending.push(written);
+    else if (!isNoArray(written)) return false;
+  }
+  return true;
 }
