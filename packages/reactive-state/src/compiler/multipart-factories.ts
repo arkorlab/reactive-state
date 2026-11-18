@@ -5,7 +5,7 @@ import {
   isSpreadElement,
 } from 'typescript/ast';
 
-import { type Answering, answersLater, isAnswering, returnedBy } from './answers.ts';
+import { type Answering, answersLater, isAnswering, overloadsOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { parameterOf } from './framed.ts';
 import { metadataCallee } from './input-callees.ts';
@@ -18,12 +18,17 @@ import { metadataCallee } from './input-callees.ts';
 /**
  * The expressions a call of a source-written synchronous function can return: each `return` of its
  * body, whatever the control flow, and the argument written at the call for a parameter it returns
- * as it is. None for a callee the source does not show, an `async` function, which answers a
- * promise, or a generator, which answers an iterator.
+ * as it is; of a function declared over overloads, those of the implementation. None for a callee
+ * the source does not show, one without a body, an `async` function, which answers a promise, or a
+ * generator, which answers an iterator.
  */
 export function factoryReturns(call: CallExpression): readonly Expression[] | undefined {
-  const callee = metadataCallee(call.expression);
-  if (callee === undefined || !isAnswering(callee) || answersLater(callee)) {
+  const resolved = metadataCallee(call.expression);
+  const callee =
+    resolved !== undefined && isAnswering(resolved)
+      ? overloadsOf(resolved).find((each) => each.body !== undefined)
+      : undefined;
+  if (callee === undefined || answersLater(callee)) {
     return undefined;
   }
   const returned: Expression[] = [];
