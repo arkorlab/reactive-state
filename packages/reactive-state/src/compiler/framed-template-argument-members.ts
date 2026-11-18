@@ -1,14 +1,12 @@
 import {
   type Expression,
   type Identifier,
-  isArrowFunction,
   isBinaryExpression,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
   isConditionalExpression,
   isElementAccessExpression,
-  isFunctionDeclaration,
   isGetAccessorDeclaration,
   isIdentifier,
   isMethodDeclaration,
@@ -20,14 +18,12 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSuperExpression,
-  isVariableDeclaration,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, overloadsOf, returnedBy } from './answers.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { isBenignBuiltInMemberCall } from './framed-template-argument-builtins.ts';
 import {
@@ -48,16 +44,18 @@ import {
   withReceivers,
   withSeen,
 } from './framed-template-argument-classes.ts';
+import { resolveConstructedClasses } from './framed-template-argument-instances.ts';
 import {
   type ClassLike,
+  declarationValueExpressions,
   declaredMemberKey,
+  isNullishExpression,
   isStableMember,
   isUnreassignedDeclaration,
   memberNameOf,
-  resolveIdentifierClassLike,
   unwrapCalleeExpression,
 } from './framed-template-argument-receivers.ts';
-import { isAssignmentOperator, LOGICAL_OPERATORS } from './framed-template-argument-spreads.ts';
+import { LOGICAL_OPERATORS } from './framed-template-argument-spreads.ts';
 
 /**
  * Receiver member (`o.f`, `this.f`, `super.f`, spreads, nested objects, and constructed instances)
@@ -104,6 +102,7 @@ function resolveReceiverMemberInner(
   const nextCtx = withSeen(ctx, current);
   if (current.kind === SyntaxKind.ThisKeyword) return resolveThisMember(current, method, nextCtx);
   if (isSuperExpression(current)) return resolveSuperMember(current, method, nextCtx);
+  if (isNullishExpression(current)) return EMPTY_RESOLUTION;
   if (isBenignBuiltInMemberCall(current, method, builtInCheckOf(nextCtx))) return EMPTY_RESOLUTION;
   const ownerDecl = isIdentifier(current) ? frameDeclarationOf(current) : undefined;
   if (!isStableMember(current.getSourceFile(), method, ownerDecl)) return UNRESOLVED_RESOLUTION;
@@ -112,7 +111,7 @@ function resolveReceiverMemberInner(
   }
   if (isClassExpression(current)) return resolveClassMember(current, method, true, nextCtx);
   if (isNewExpression(current) || isCallExpression(current)) {
-    return resolveConstructedInstanceMember(current, method, nextCtx);
+    return resolveConstructedInstanceMember(current, method, ctx);
   }
   if (isIdentifier(current)) return resolveIdentifierReceiverMember(current, method, nextCtx);
   if (isPropertyAccessExpression(current) || isElementAccessExpression(current)) {
@@ -129,7 +128,7 @@ function resolveConstructedInstanceMember(
   const classes = resolveConstructedClasses(expr, ctx);
   return classes === undefined || classes.length === 0
     ? UNRESOLVED_RESOLUTION
-    : resolveClassListMember(classes, method, ctx);
+    : resolveClassListMember(classes, method, withSeen(ctx, expr));
 }
 
 function resolveIdentifierReceiverMember(
@@ -138,19 +137,34 @@ function resolveIdentifierReceiverMember(
   ctx: CalleeContext,
 ): TargetResolution {
   const decl = frameDeclarationOf(id);
-  if (decl === undefined || ctx.seen.has(decl) || !isUnreassignedDeclaration(decl)) {
-    return UNRESOLVED_RESOLUTION;
-  }
+  if (decl === undefined || ctx.seen.has(decl)) return UNRESOLVED_RESOLUTION;
   const seenCtx = withSeen(ctx, decl);
-  if (isClassDeclaration(decl)) return resolveClassMember(decl, method, true, seenCtx);
-  if (!isVariableDeclaration(decl) || decl.initializer === undefined) return UNRESOLVED_RESOLUTION;
-  const init = unwrapCalleeExpression(decl.initializer);
-  if (isClassExpression(init)) return resolveClassMember(init, method, true, seenCtx);
-  const classes = resolveConstructedClasses(init, seenCtx);
-  if (classes !== undefined && classes.length > 0) {
-    return resolveClassListMember(classes, method, seenCtx);
+  if (isClassDeclaration(decl)) {
+    return isUnreassignedDeclaration(decl)
+      ? resolveClassMember(decl, method, true, seenCtx)
+      : UNRESOLVED_RESOLUTION;
   }
-  return resolveReceiverMemberInner(init, method, seenCtx);
+  const values = declarationValueExpressions(decl);
+  if (values === undefined || values.length === 0) return UNRESOLVED_RESOLUTION;
+  let combined = EMPTY_RESOLUTION;
+  for (const val of values) {
+    combined = mergeResolutions(combined, resolveCandidateReceiverMember(val, method, seenCtx));
+    if (combined.unresolvable) return UNRESOLVED_RESOLUTION;
+  }
+  return combined;
+}
+
+function resolveCandidateReceiverMember(
+  rawInit: Expression,
+  method: string,
+  ctx: CalleeContext,
+): TargetResolution {
+  const init = unwrapCalleeExpression(rawInit);
+  if (isClassExpression(init)) return resolveClassMember(init, method, true, ctx);
+  const classes = resolveConstructedClasses(init, ctx);
+  return classes !== undefined && classes.length > 0
+    ? resolveClassListMember(classes, method, ctx)
+    : resolveReceiverMemberInner(init, method, ctx);
 }
 
 function resolveClassListMember(
@@ -199,7 +213,7 @@ function resolveBranchReceiverMember(
   }
   if (!isBinaryExpression(expr)) return UNRESOLVED_RESOLUTION;
   const op = expr.operatorToken.kind;
-  if (op === SyntaxKind.CommaToken || isAssignmentOperator(op)) {
+  if (op === SyntaxKind.CommaToken || op === SyntaxKind.EqualsToken) {
     return resolveReceiverMemberInner(expr.right, method, ctx);
   }
   if (LOGICAL_OPERATORS.has(op)) {
@@ -222,6 +236,7 @@ export function resolveObjectPropertyExpressions(
     const stepped = preparePropertyLookupStep(curExpr, key, curCtx);
     if (stepped === undefined) return undefined;
     const { current, nextCtx } = stepped;
+    if (isNullishExpression(current)) return [];
     if (isObjectLiteralExpression(current)) return findObjectLiteralValues(current, key, nextCtx);
     const forwarded = forwardLinearExpression(current, nextCtx);
     if (forwarded !== undefined) {
@@ -250,10 +265,10 @@ function forwardLinearExpression(
   current: Expression,
   nextCtx: CalleeContext,
 ): { readonly ctx: CalleeContext; readonly expr: Expression } | undefined {
-  if (isIdentifier(current)) return stepConstObjectBinding(current, nextCtx);
+  if (isIdentifier(current)) return stepSingleBindingValue(current, nextCtx);
   if (isBinaryExpression(current)) {
     const op = current.operatorToken.kind;
-    if (op === SyntaxKind.CommaToken || isAssignmentOperator(op)) {
+    if (op === SyntaxKind.CommaToken || op === SyntaxKind.EqualsToken) {
       return { ctx: nextCtx, expr: current.right };
     }
   }
@@ -265,6 +280,11 @@ function resolveBranchObjectPropertyExpressions(
   key: string,
   nextCtx: CalleeContext,
 ): readonly Expression[] | undefined {
+  if (isIdentifier(current)) {
+    return resolveMultiBindingList(current, nextCtx, (val, seenCtx) =>
+      resolveObjectPropertyExpressions(val, key, seenCtx),
+    );
+  }
   if (isConditionalExpression(current)) {
     return mergeOptionalLists(
       resolveObjectPropertyExpressions(current.whenTrue, key, nextCtx),
@@ -280,21 +300,34 @@ function resolveBranchObjectPropertyExpressions(
   return undefined;
 }
 
-function stepConstObjectBinding(
+function stepSingleBindingValue(
   id: Identifier,
   ctx: CalleeContext,
 ): { readonly ctx: CalleeContext; readonly expr: Expression } | undefined {
   const decl = frameDeclarationOf(id);
-  if (
-    decl === undefined ||
-    ctx.seen.has(decl) ||
-    !isUnreassignedDeclaration(decl) ||
-    !isVariableDeclaration(decl) ||
-    decl.initializer === undefined
-  ) {
-    return undefined;
+  if (decl === undefined || ctx.seen.has(decl)) return undefined;
+  const values = declarationValueExpressions(decl);
+  if (values?.length !== 1 || values[0] === undefined) return undefined;
+  return { ctx: withSeen(ctx, decl), expr: values[0] };
+}
+
+function resolveMultiBindingList<T>(
+  id: Identifier,
+  ctx: CalleeContext,
+  step: (expr: Expression, nextCtx: CalleeContext) => readonly T[] | undefined,
+): readonly T[] | undefined {
+  const decl = frameDeclarationOf(id);
+  if (decl === undefined || ctx.seen.has(decl)) return undefined;
+  const values = declarationValueExpressions(decl);
+  if (values === undefined || values.length === 0) return undefined;
+  const seenCtx = withSeen(ctx, decl);
+  let all: readonly T[] = [];
+  for (const val of values) {
+    const resolved = step(val, seenCtx);
+    if (resolved === undefined) return undefined;
+    all = [...all, ...resolved];
   }
-  return { ctx: withSeen(ctx, decl), expr: decl.initializer };
+  return all;
 }
 
 function mergeOptionalLists<T>(
@@ -389,101 +422,6 @@ function objectElementName(prop: ObjectLiteralElementLike): PropertyName | undef
     isSetAccessorDeclaration(prop)
   ) {
     return prop.name;
-  }
-  return undefined;
-}
-
-function resolveConstructedClasses(
-  rawExpr: Expression,
-  ctx: CalleeContext,
-): readonly ClassLike[] | undefined {
-  let curExpr = rawExpr;
-  let curCtx = ctx;
-  for (;;) {
-    if (!consumeCalleeStep(curCtx)) return undefined;
-    const current = unwrapCalleeExpression(curExpr);
-    if (curCtx.seen.has(current)) return undefined;
-    const nextCtx = withSeen(curCtx, current);
-    if (isNewExpression(current)) return resolveClassCalleeTargets(current.expression, nextCtx);
-    const forwarded = forwardLinearExpression(current, nextCtx);
-    if (forwarded !== undefined) {
-      curExpr = forwarded.expr;
-      curCtx = forwarded.ctx;
-      continue;
-    }
-    return resolveCompoundConstructedClasses(current, nextCtx);
-  }
-}
-
-function resolveCompoundConstructedClasses(
-  current: Expression,
-  nextCtx: CalleeContext,
-): readonly ClassLike[] | undefined {
-  if (isCallExpression(current)) return resolveFactoryConstructedClasses(current, nextCtx);
-  if (isConditionalExpression(current)) {
-    return mergeOptionalLists(
-      resolveConstructedClasses(current.whenTrue, nextCtx),
-      resolveConstructedClasses(current.whenFalse, nextCtx),
-    );
-  }
-  if (isBinaryExpression(current) && LOGICAL_OPERATORS.has(current.operatorToken.kind)) {
-    return mergeOptionalLists(
-      resolveConstructedClasses(current.left, nextCtx),
-      resolveConstructedClasses(current.right, nextCtx),
-    );
-  }
-  return undefined;
-}
-
-function resolveFactoryConstructedClasses(
-  call: Expression,
-  ctx: CalleeContext,
-): readonly ClassLike[] | undefined {
-  if (!isCallExpression(call)) return undefined;
-  const fn = resolveSimpleFactoryFunction(unwrapCalleeExpression(call.expression));
-  if (fn === undefined || ctx.seen.has(fn)) return undefined;
-  const returns = returnedBy(fn);
-  if (returns.length === 0) return undefined;
-  let all: readonly ClassLike[] = [];
-  for (const ret of returns) {
-    const next = resolveConstructedClasses(ret, withSeen(ctx, fn));
-    if (next === undefined) return undefined;
-    all = [...all, ...next];
-  }
-  return all;
-}
-
-function resolveSimpleFactoryFunction(callee: Expression): Answering | undefined {
-  if (isArrowFunction(callee)) return callee;
-  if (!isIdentifier(callee)) return undefined;
-  const decl = frameDeclarationOf(callee);
-  if (decl === undefined || !isUnreassignedDeclaration(decl)) return undefined;
-  if (isFunctionDeclaration(decl)) {
-    const impls = overloadsOf(decl).filter((each) => each.body !== undefined);
-    return impls.length === 1 ? impls[0] : undefined;
-  }
-  if (isVariableDeclaration(decl) && decl.initializer !== undefined) {
-    const init = unwrapCalleeExpression(decl.initializer);
-    return isArrowFunction(init) ? init : undefined;
-  }
-  return undefined;
-}
-
-function resolveClassCalleeTargets(
-  rawCallee: Expression,
-  ctx: CalleeContext,
-): readonly ClassLike[] | undefined {
-  const current = unwrapCalleeExpression(rawCallee);
-  if (isClassExpression(current)) return [current];
-  if (isIdentifier(current)) {
-    const cls = resolveIdentifierClassLike(current);
-    return cls === undefined ? undefined : [cls];
-  }
-  if (isConditionalExpression(current)) {
-    return mergeOptionalLists(
-      resolveClassCalleeTargets(current.whenTrue, ctx),
-      resolveClassCalleeTargets(current.whenFalse, ctx),
-    );
   }
   return undefined;
 }

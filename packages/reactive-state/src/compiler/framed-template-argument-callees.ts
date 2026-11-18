@@ -14,7 +14,6 @@ import {
   isNewExpression,
   isPropertyAccessExpression,
   isSuperExpression,
-  isVariableDeclaration,
   type NewExpression,
   type Node,
   SyntaxKind,
@@ -22,7 +21,7 @@ import {
 
 import { isAnswering, overloadsOf } from './answers.ts';
 import { globalOf } from './bounded.ts';
-import { frameDeclarationOf } from './framed-bindings.ts';
+import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
 import {
   isBenignBuiltInMemberCall,
   isBenignGlobalCallable,
@@ -51,13 +50,14 @@ import {
   resolveReceiverMember,
 } from './framed-template-argument-members.ts';
 import {
+  declarationValueExpressions,
+  isNullishExpression,
   isStableMember,
   isUnreassignedDeclaration,
   memberNameOf,
   unwrapCalleeExpression,
 } from './framed-template-argument-receivers.ts';
 import {
-  isAssignmentOperator,
   LOGICAL_OPERATORS,
   type SpreadUnfold,
   unfoldApplyOperand,
@@ -127,6 +127,7 @@ function resolveExpressionTargets(rawExpr: Expression, ctx: CalleeContext): Targ
 }
 
 function resolveConstructTarget(current: Expression, ctx: CalleeContext): TargetResolution {
+  if (isNullishExpression(current)) return EMPTY_RESOLUTION;
   if (isClassExpression(current)) return resolveClassConstructor(current, ctx);
   if (isFunctionExpression(current)) return singleTarget(targetFromCallable(current, [current]));
   if (isIdentifier(current)) return resolveConstructIdentifier(current, ctx);
@@ -139,15 +140,18 @@ function resolveConstructTarget(current: Expression, ctx: CalleeContext): Target
 function resolveConstructIdentifier(id: Identifier, ctx: CalleeContext): TargetResolution {
   if (isBenignGlobalCallable(id, builtInCheckOf(ctx))) return EMPTY_RESOLUTION;
   const decl = frameDeclarationOf(id);
-  if (decl === undefined || ctx.seen.has(decl) || !isUnreassignedDeclaration(decl)) {
-    return UNRESOLVED_RESOLUTION;
+  if (decl === undefined || ctx.seen.has(decl)) return UNRESOLVED_RESOLUTION;
+  if (isClassDeclaration(decl)) {
+    return isUnreassignedDeclaration(decl)
+      ? resolveClassConstructor(decl, ctx)
+      : UNRESOLVED_RESOLUTION;
   }
-  if (isClassDeclaration(decl)) return resolveClassConstructor(decl, ctx);
-  if (isFunctionDeclaration(decl)) return resolveFunctionOverloadTargets(decl);
-  if (isVariableDeclaration(decl) && decl.initializer !== undefined) {
-    return resolveExpressionTargets(decl.initializer, withSeen(ctx, decl));
+  if (isFunctionDeclaration(decl)) {
+    return isUnreassignedDeclaration(decl)
+      ? resolveFunctionOverloadTargets(decl)
+      : UNRESOLVED_RESOLUTION;
   }
-  return UNRESOLVED_RESOLUTION;
+  return resolveDeclarationCandidateTargets(decl, ctx);
 }
 
 function resolveConstructMember(access: Expression, ctx: CalleeContext): TargetResolution {
@@ -169,6 +173,7 @@ function resolveConstructMember(access: Expression, ctx: CalleeContext): TargetR
 }
 
 function resolveCallModeTarget(current: Expression, ctx: CalleeContext): TargetResolution {
+  if (isNullishExpression(current)) return EMPTY_RESOLUTION;
   if (isSuperExpression(current)) return resolveSuperConstructor(current, ctx);
   if (isAnswering(current)) return singleTarget(targetFromCallable(current, [current]));
   if (isIdentifier(current)) return resolveCallIdentifier(current, ctx);
@@ -182,14 +187,28 @@ function resolveCallModeTarget(current: Expression, ctx: CalleeContext): TargetR
 function resolveCallIdentifier(id: Identifier, ctx: CalleeContext): TargetResolution {
   if (isBenignGlobalCallable(id, builtInCheckOf(ctx))) return EMPTY_RESOLUTION;
   const decl = frameDeclarationOf(id);
-  if (decl === undefined || ctx.seen.has(decl) || !isUnreassignedDeclaration(decl)) {
-    return UNRESOLVED_RESOLUTION;
+  if (decl === undefined || ctx.seen.has(decl)) return UNRESOLVED_RESOLUTION;
+  if (isFunctionDeclaration(decl)) {
+    return isUnreassignedDeclaration(decl)
+      ? resolveFunctionOverloadTargets(decl)
+      : UNRESOLVED_RESOLUTION;
   }
-  if (isFunctionDeclaration(decl)) return resolveFunctionOverloadTargets(decl);
-  if (isVariableDeclaration(decl) && decl.initializer !== undefined) {
-    return resolveExpressionTargets(decl.initializer, withSeen(ctx, decl));
+  return resolveDeclarationCandidateTargets(decl, ctx);
+}
+
+function resolveDeclarationCandidateTargets(
+  decl: FrameDeclaration,
+  ctx: CalleeContext,
+): TargetResolution {
+  const values = declarationValueExpressions(decl);
+  if (values === undefined || values.length === 0) return UNRESOLVED_RESOLUTION;
+  const seenCtx = withSeen(ctx, decl);
+  let combined = EMPTY_RESOLUTION;
+  for (const candidate of values) {
+    combined = mergeResolutions(combined, resolveExpressionTargets(candidate, seenCtx));
+    if (combined.unresolvable) return UNRESOLVED_RESOLUTION;
   }
-  return UNRESOLVED_RESOLUTION;
+  return combined;
 }
 
 function resolveFunctionOverloadTargets(decl: Node): TargetResolution {
@@ -288,23 +307,51 @@ function resolveMemberCallExpression(access: Expression, ctx: CalleeContext): Ta
   return resolveReceiverMember(access.expression, method, ctx);
 }
 
-function isCallableDispatchReceiver(receiver: Expression): boolean {
-  if (isAnswering(receiver)) return true;
+function isCallableDispatchReceiver(
+  rawReceiver: Expression,
+  seen: ReadonlySet<Node> = EMPTY_SEEN_NODES,
+): boolean {
+  const receiver = unwrapCalleeExpression(rawReceiver);
+  if (seen.has(receiver)) return false;
+  if (isAnswering(receiver) || isNullishExpression(receiver)) return true;
   if (isPropertyAccessExpression(receiver) || isElementAccessExpression(receiver)) {
     const inner = unwrapCalleeExpression(receiver.expression);
-    if (isPropertyAccessExpression(inner) || isElementAccessExpression(inner)) {
-      return memberNameOf(inner) === 'prototype';
-    }
-    return false;
+    return (
+      (isPropertyAccessExpression(inner) || isElementAccessExpression(inner)) &&
+      memberNameOf(inner) === 'prototype'
+    );
   }
-  if (!isIdentifier(receiver)) return false;
-  const decl = frameDeclarationOf(receiver);
-  if (decl === undefined || !isUnreassignedDeclaration(decl)) return false;
-  if (isFunctionDeclaration(decl)) return true;
+  const nextSeen = new Set([...seen, receiver]);
+  if (isIdentifier(receiver)) return isCallableIdentifierReceiver(receiver, nextSeen);
+  if (isConditionalExpression(receiver)) {
+    return (
+      isCallableDispatchReceiver(receiver.whenTrue, nextSeen) &&
+      isCallableDispatchReceiver(receiver.whenFalse, nextSeen)
+    );
+  }
+  return isCallableBinaryReceiver(receiver, nextSeen);
+}
+
+function isCallableIdentifierReceiver(id: Identifier, seen: ReadonlySet<Node>): boolean {
+  const decl = frameDeclarationOf(id);
+  if (decl === undefined || seen.has(decl)) return false;
+  if (isFunctionDeclaration(decl)) return isUnreassignedDeclaration(decl);
+  const values = declarationValueExpressions(decl);
+  if (values === undefined || values.length === 0) return false;
+  const nextSeen = new Set([...seen, decl]);
+  return values.every((val) => isCallableDispatchReceiver(val, nextSeen));
+}
+
+function isCallableBinaryReceiver(expr: Expression, seen: ReadonlySet<Node>): boolean {
+  if (!isBinaryExpression(expr)) return false;
+  const op = expr.operatorToken.kind;
+  if (op === SyntaxKind.CommaToken || op === SyntaxKind.EqualsToken) {
+    return isCallableDispatchReceiver(expr.right, seen);
+  }
   return (
-    isVariableDeclaration(decl) &&
-    decl.initializer !== undefined &&
-    isAnswering(unwrapCalleeExpression(decl.initializer))
+    LOGICAL_OPERATORS.has(op) &&
+    isCallableDispatchReceiver(expr.left, seen) &&
+    isCallableDispatchReceiver(expr.right, seen)
   );
 }
 
@@ -460,7 +507,7 @@ function resolveBranchTargets(expr: Expression, ctx: CalleeContext): TargetResol
   }
   if (!isBinaryExpression(expr)) return UNRESOLVED_RESOLUTION;
   const op = expr.operatorToken.kind;
-  if (op === SyntaxKind.CommaToken || isAssignmentOperator(op)) {
+  if (op === SyntaxKind.CommaToken || op === SyntaxKind.EqualsToken) {
     return resolveExpressionTargets(expr.right, ctx);
   }
   if (LOGICAL_OPERATORS.has(op)) {

@@ -14,7 +14,6 @@ import {
   isPropertyAccessExpression,
   isRegularExpressionLiteral,
   isTemplateExpression,
-  isVariableDeclaration,
   type NewExpression,
   SyntaxKind,
 } from 'typescript/ast';
@@ -22,14 +21,14 @@ import {
 import { globalOf } from './bounded.ts';
 import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
 import {
+  declarationValueExpressions,
   isNullishExpression,
   isPrimitiveExpression,
   isStableMember,
-  isUnreassignedDeclaration,
   memberNameOf,
   unwrapCalleeExpression,
 } from './framed-template-argument-receivers.ts';
-import { isAssignmentOperator, LOGICAL_OPERATORS } from './framed-template-argument-spreads.ts';
+import { LOGICAL_OPERATORS } from './framed-template-argument-spreads.ts';
 import { peeled } from './framed-written-targets.ts';
 
 /**
@@ -356,17 +355,18 @@ function classifyIdentifierReceiver(
   depth: number,
 ): BuiltInReceiverKind | undefined {
   const decl = frameDeclarationOf(id);
-  if (
-    decl === undefined ||
-    seen.has(decl) ||
-    !isUnreassignedDeclaration(decl) ||
-    !isVariableDeclaration(decl) ||
-    decl.initializer === undefined
-  ) {
-    return undefined;
-  }
+  if (decl === undefined || seen.has(decl)) return undefined;
+  const values = declarationValueExpressions(decl);
+  if (values === undefined) return undefined;
+  const [first, ...rest] = values;
+  if (first === undefined) return undefined;
   const nextSeen = new Set([...seen, decl]);
-  return classifyBuiltInReceiver(decl.initializer, nextSeen, depth + 1);
+  let merged = classifyBuiltInReceiver(first, nextSeen, depth + 1);
+  for (const item of rest) {
+    if (merged === undefined) return undefined;
+    merged = mergeReceiverKinds(merged, classifyBuiltInReceiver(item, nextSeen, depth + 1));
+  }
+  return merged;
 }
 
 function classifyCompoundReceiver(
@@ -382,7 +382,7 @@ function classifyCompoundReceiver(
   }
   if (!isBinaryExpression(expr)) return undefined;
   const op = expr.operatorToken.kind;
-  if (op === SyntaxKind.CommaToken || isAssignmentOperator(op)) {
+  if (op === SyntaxKind.CommaToken || op === SyntaxKind.EqualsToken) {
     return classifyBuiltInReceiver(expr.right, seen, depth + 1);
   }
   if (LOGICAL_OPERATORS.has(op)) {

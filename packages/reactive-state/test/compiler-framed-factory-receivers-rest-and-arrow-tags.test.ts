@@ -452,6 +452,51 @@ const CASES = [
     id: 'arrow-tag-with-untainted-unresolvable-callee-beside-unused-arguments-preserved',
     source: `function run(sink: (item: string) => void, ExternalBox: new (item: string) => object, error: Error) { const _unused = arguments[0]; sink('clean'); new ExternalBox('clean'); const tag = (strings: TemplateStringsArray, _v: unknown) => strings[0] ?? ''; return tag\`\${error}\`; }`,
   },
+  {
+    framed: true,
+    id: 'arrow-tag-after-logical-or-assigned-callee-captures-arguments-on-lhs',
+    source: `let saved = 'fixed'; function run(error: Error) { let fn = (item: unknown) => { saved = String(item); }; const noop = (_item: unknown) => {}; (fn ||= noop)(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-logical-and-assigned-callee-captures-arguments-on-lhs',
+    source: `let saved = 'fixed'; function run(error: Error) { let fn = (item: unknown) => { saved = String(item); }; const noop = (_item: unknown) => {}; (fn &&= noop)(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-nullish-assigned-object-receiver-method-captures-arguments-on-lhs',
+    source: `let saved = 'fixed'; function run(error: Error) { let holder = { save(item: unknown) { saved = String(item); } }; const benign = { save(_item: unknown) {} }; (holder ??= benign).save(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-nullish-assigned-nested-receiver-method-captures-arguments-on-lhs',
+    source: `let saved = 'fixed'; function run(error: Error) { let box = { inner: { save(item: unknown) { saved = String(item); } } }; const benign = { inner: { save(_item: unknown) {} } }; (box ??= benign).inner.save(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-nullish-assigned-new-constructor-captures-arguments-on-lhs',
+    source: `let saved = 'fixed'; class CapturingBox { constructor(item: unknown) { saved = String(item); } } class BenignBox { constructor(_item: unknown) {} } function run(error: Error) { let Ctor: typeof CapturingBox | undefined = CapturingBox; new (Ctor ??= BenignBox)(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-logical-or-assigned-non-string-receiver-slice-captures-arguments-on-lhs',
+    source: `let saved = 'fixed'; function run(error: Error) { let recv: { slice(item: unknown): void } | string = { slice(item: unknown) { saved = String(item); } }; (recv ||= 'ok').slice(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: true,
+    id: 'arrow-tag-after-reassigned-local-callee-captures-arguments',
+    source: `let saved = 'fixed'; function run(error: Error) { let fn = (_item: unknown) => {}; fn = (item: unknown) => { saved = String(item); }; fn(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-benign-logical-or-assigned-callee-ignoring-arguments-preserved',
+    source: `function run(error: Error) { let saved = 'fixed'; let noop = (_item: unknown) => {}; const alsoNoop = (_item: unknown) => {}; (noop ||= alsoNoop)(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
+  {
+    framed: false,
+    id: 'arrow-tag-with-benign-nullish-assigned-receiver-and-constructor-ignoring-arguments-preserved',
+    source: `function run(error: Error) { let saved = 'fixed'; class BoxA { constructor(_item: unknown) {} save(_item: unknown) {} } class BoxB { constructor(_item: unknown) {} save(_item: unknown) {} } let holder: { save(item: unknown): void } | null = null; const fallback = { save(_item: unknown) {} }; (holder ??= fallback).save(arguments[0]); let Ctor: typeof BoxA | undefined = BoxA; (new (Ctor ??= BoxB)(arguments[0])).save(arguments[0]); const tag = (_s: TemplateStringsArray, _v: unknown) => saved; return tag\`\${error}\`; }`,
+  },
 ] as const;
 
 const DIAMOND_CASES = [
