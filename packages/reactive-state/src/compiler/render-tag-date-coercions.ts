@@ -37,7 +37,10 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
+  COMPARATOR_METHODS,
   ELEMENT_CALLBACK_ARRAY_SLOT,
+  ELEMENT_CALLBACK_METHODS,
+  REDUCE_ARRAY_METHODS,
   REDUCE_CALLBACK_ARRAY_SLOT,
 } from './render-tag-date-array-methods.ts';
 import {
@@ -79,18 +82,6 @@ const SAFE_GLOBAL_CALLS: ReadonlySet<string> = new Set([
   'String.fromCharCode',
   'String.fromCodePoint',
 ]);
-const ELEMENT_MAPPER_METHODS: ReadonlySet<string> = new Set([
-  'every',
-  'filter',
-  'find',
-  'findLast',
-  'flatMap',
-  'forEach',
-  'map',
-  'some',
-]);
-const REDUCE_MAPPER_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
-const SORT_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
 /** String methods that convert their first argument, the text they search for or split by, to text. */
 const SEARCH_METHODS: ReadonlySet<string> = new Set([
   'endsWith',
@@ -299,8 +290,8 @@ function memberMethodCallCoerces(
   if (method === 'join') {
     return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
   }
-  if (recvDated && SORT_METHODS.has(method)) return sortCoerces(unpacked.args, context);
-  if (recvDated && (ELEMENT_MAPPER_METHODS.has(method) || REDUCE_MAPPER_METHODS.has(method))) {
+  if (recvDated && COMPARATOR_METHODS.has(method)) return sortCoerces(unpacked.args, context);
+  if (recvDated && (ELEMENT_CALLBACK_METHODS.has(method) || REDUCE_ARRAY_METHODS.has(method))) {
     return arrayMapperCallbackCoerces(method, unpacked.args, context);
   }
   return stringMethodCoerces(method, unpacked, context, false);
@@ -406,7 +397,7 @@ function arrayMapperCallbackCoerces(
   if (args.kind !== 'elements') return false;
   const [callback, initial] = args.elements;
   if (callback === undefined || isSpreadElement(callback)) return false;
-  if (REDUCE_MAPPER_METHODS.has(method)) {
+  if (REDUCE_ARRAY_METHODS.has(method)) {
     const slots = new Set(
       initial === undefined ? [0, 1, REDUCE_CALLBACK_ARRAY_SLOT] : [1, REDUCE_CALLBACK_ARRAY_SLOT],
     );
