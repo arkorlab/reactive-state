@@ -48,6 +48,7 @@ const OBJECT_CALLABLES = new WeakMap<ObjectLiteralExpression, ObjectCallables>()
 export function callableWritesOnObject(
   object: ObjectLiteralExpression,
   index: FileCallableIndex,
+  excludedKeys?: ReadonlySet<string>,
 ): CallableWrites {
   const rootTraversal: CallableTraversal = {
     activeObjects: new Set(),
@@ -58,7 +59,7 @@ export function callableWritesOnObject(
   const callables = objectCallables(object, rootTraversal);
   const uncertain =
     callables.allWritesUncertain === true || rootTraversal.truncatedRestObjects === true;
-  const candidates = collectAllCallables(callables);
+  const candidates = collectAllCallables(callables, excludedKeys);
   if (!uncertain && candidates.length === 0) {
     return EMPTY_CALLABLE_WRITES;
   }
@@ -93,16 +94,22 @@ export function callableWritesOnObject(
     : { all, assignments, keys, untrackedKeys };
 }
 
-/** Flattens named data callables, dynamic data callables, and own accessors of `callables`. */
-function collectAllCallables(callables: ObjectCallables): readonly Node[] {
+/** Flattens named data callables, dynamic data callables, and (when unfiltered) own accessors. */
+function collectAllCallables(
+  callables: ObjectCallables,
+  excludedKeys?: ReadonlySet<string>,
+): readonly Node[] {
   const list = new Set<Node>(callables.dynamic);
-  for (const accessor of callables.ownAccessors) {
-    list.add(accessor);
+  if (excludedKeys === undefined) {
+    for (const accessor of callables.ownAccessors) {
+      list.add(accessor);
+    }
   }
-  const groups = callables.named.values();
-  for (const group of groups) {
-    for (const callable of group) {
-      list.add(callable);
+  for (const [key, group] of callables.named) {
+    if (excludedKeys?.has(key) !== true) {
+      for (const callable of group) {
+        list.add(callable);
+      }
     }
   }
   return [...list];

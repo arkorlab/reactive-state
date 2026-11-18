@@ -2,7 +2,7 @@ import { type Expression, type Node, type ObjectLiteralExpression } from 'typesc
 
 import { type CycleSeenState } from './function-assignment-patterns.ts';
 import { candidateObjectsWithCycle, type VariableWriteMap } from './function-candidate-objects.ts';
-import { fileVariableWrites } from './function-entry-writes.ts';
+import { fileVariableWrites, retainedCallableWrites } from './function-entry-writes.ts';
 import {
   EMPTY_EXCLUDED_KEYS,
   MAX_REST_COPY_CANDIDATES,
@@ -16,6 +16,7 @@ import {
   withBranch,
 } from './function-property-resolution.ts';
 import { restTargetSafety } from './function-rest-target-writes.ts';
+import { type CallableWrites } from './function-this-writes.ts';
 
 /** Surviving static-key classifications and spread/dynamic uncertainty across a table scan. */
 export interface RestTableScan {
@@ -189,9 +190,7 @@ function joinRestCopyCandidateScans(
   context: ScanContext,
   callbacks: RestTableCallbacks,
 ): RestTableScan {
-  const scans = copies.map((copy) =>
-    projectRestCopyCandidate(callbacks.scanObjectLiteral(copy.object, context), copy.excludedKeys),
-  );
+  const scans = copies.map((copy) => projectRestCopyCandidate(copy, context, callbacks));
   const allKeys = new Set<string>();
   let dynamicEntry = false;
   let stickyRenamed = false;
@@ -227,11 +226,14 @@ function joinRestCopyCandidateScans(
   return { dynamicEntry, entries, optionalKeys, stickyRenamed, unverified };
 }
 
-/** Filters statically excluded sibling keys out of a source object literal's `RestTableScan`. */
+/** Filters excluded sibling keys from `copy.object`'s scan and re-applies retained `this` writes. */
 function projectRestCopyCandidate(
-  raw: RestTableScan,
-  excludedKeys: ReadonlySet<string>,
+  copy: ObjectRestCopy,
+  context: ScanContext,
+  callbacks: RestTableCallbacks,
 ): RestTableScan {
+  const raw = callbacks.scanObjectLiteral(copy.object, context);
+  const { excludedKeys } = copy;
   if (excludedKeys.size === 0) {
     return raw;
   }
@@ -247,11 +249,76 @@ function projectRestCopyCandidate(
       optionalKeys.add(key);
     }
   }
-  return {
+  const projected: RestTableScan = {
     dynamicEntry: raw.dynamicEntry,
     entries,
     optionalKeys,
     stickyRenamed: raw.stickyRenamed,
     unverified: raw.unverified,
   };
+  applyRetainedCallableWrites(
+    retainedCallableWrites(copy.object, excludedKeys),
+    projected,
+    context,
+    callbacks,
+  );
+  return projected;
+}
+
+interface RetainedPostState {
+  readonly allWrites: boolean;
+  readonly callbacks: RestTableCallbacks;
+  readonly postEntries: Map<string, EntryKind>;
+  readonly scan: RestTableScan;
+}
+
+/** Re-applies `this` writes from retained callables onto `scan` after `excludedKeys` projection. */
+function applyRetainedCallableWrites(
+  viaThis: CallableWrites,
+  scan: RestTableScan,
+  context: ScanContext,
+  callbacks: RestTableCallbacks,
+): void {
+  const state: RetainedPostState = {
+    allWrites: viaThis.all,
+    callbacks,
+    postEntries: new Map(),
+    scan,
+  };
+  let dynamicFunctionWrite = false;
+  if (viaThis.all) {
+    scan.unverified = true;
+    callbacks.degradeExistingEntries(scan.entries, 'unknown');
+  } else {
+    for (const key of viaThis.untrackedKeys) {
+      joinRetainedPostKey(key, 'unknown', state);
+    }
+  }
+  for (const write of viaThis.assignments) {
+    const each = callbacks.classifyAssignedNode(write.value, context);
+    if (write.key === undefined) {
+      if (each === 'entry' || each === 'renamed') {
+        dynamicFunctionWrite = true;
+      }
+    } else {
+      joinRetainedPostKey(write.key, each, state);
+    }
+  }
+  for (const [key, combined] of state.postEntries) {
+    scan.optionalKeys.add(key);
+    scan.entries.set(key, combined === NON_FUNCTION ? 'unknown' : combined);
+  }
+  if (dynamicFunctionWrite) {
+    scan.stickyRenamed = true;
+    callbacks.degradeExistingEntries(scan.entries, 'renamed');
+  }
+}
+
+function joinRetainedPostKey(key: string, added: EntryKind, state: RetainedPostState): void {
+  let base = state.postEntries.get(key);
+  if (base === undefined) {
+    const rawBase = state.scan.entries.get(key) ?? state.callbacks.omittedKeyKind(key, state.scan);
+    base = state.allWrites ? combineBranchKinds(rawBase, 'unknown') : rawBase;
+  }
+  state.postEntries.set(key, combineBranchKinds(base, added));
 }

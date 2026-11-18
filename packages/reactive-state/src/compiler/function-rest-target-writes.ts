@@ -14,9 +14,11 @@ import {
   isMethodDeclaration,
   isObjectBindingPattern,
   isObjectLiteralExpression,
+  isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isSourceFile,
   isSpreadAssignment,
   isSpreadElement,
   isTypeOfExpression,
@@ -25,6 +27,7 @@ import {
   isVariableStatement,
   isVoidExpression,
   type Node,
+  type ParameterDeclaration,
   type SourceFile,
   SyntaxKind,
   type VariableDeclaration,
@@ -222,7 +225,10 @@ function forwardedTargetsOf(expr: Expression): readonly Node[] {
   const walk = (current: Expression): void => {
     if (isIdentifier(current)) {
       const declared = frameDeclarationOf(current);
-      if (declared !== undefined && isVariableDeclaration(declared)) {
+      if (
+        declared !== undefined &&
+        (isVariableDeclaration(declared) || isParameterDeclaration(declared))
+      ) {
         bucket.add(declaredBindingTarget(current, declared));
       }
       return;
@@ -244,7 +250,10 @@ function forwardedTargetsOf(expr: Expression): readonly Node[] {
 /** Classifies a single identifier read `node` as clean, alias-forwarded, or escaped. */
 function recordIdentifierRestUse(node: Identifier, state: MutableSafetyState): void {
   const declared = frameDeclarationOf(node);
-  if (declared === undefined || !isVariableDeclaration(declared)) {
+  if (
+    declared === undefined ||
+    (!isVariableDeclaration(declared) && !isParameterDeclaration(declared))
+  ) {
     return;
   }
   const binding = declaredBindingTarget(node, declared);
@@ -325,6 +334,20 @@ function recordsAliasOrDestructureConsumer(
   if ((isVariableDeclaration(parent) || isBindingElement(parent)) && parent.initializer === at) {
     return recordsInitializerConsumer(parent, binding, reverseAliases);
   }
+  if (isParameterDeclaration(parent) && parent.initializer === at) {
+    if (isIdentifier(parent.name)) {
+      addReverseEdge(reverseAliases, declaredBindingTarget(parent.name, parent), binding);
+    }
+    return false;
+  }
+  if (
+    isShorthandPropertyAssignment(parent) &&
+    parent.objectAssignmentInitializer === at &&
+    isIdentifier(parent.name) &&
+    isTakenApart(parent.parent)
+  ) {
+    return recordsAssignmentConsumer(parent.name, binding, reverseAliases);
+  }
   if (
     isBinaryExpression(parent) &&
     VALUE_ASSIGNING.has(parent.operatorToken.kind) &&
@@ -343,15 +366,30 @@ function recordsInitializerConsumer(
   if (parent.name !== undefined && isObjectBindingPattern(parent.name)) {
     return true;
   }
-  if (
-    isVariableDeclaration(parent) &&
-    isIdentifier(parent.name) &&
-    !isExportedVariableDeclaration(parent)
-  ) {
-    addReverseEdge(reverseAliases, parent, binding);
-    return true;
+  if (isVariableDeclaration(parent) && isIdentifier(parent.name)) {
+    addReverseEdge(reverseAliases, declaredBindingTarget(parent.name, parent), binding);
+    return !isExportedVariableDeclaration(parent);
+  }
+  if (isBindingElement(parent) && parent.name !== undefined && isIdentifier(parent.name)) {
+    const decl = enclosingBindingDeclaration(parent);
+    const target = decl === undefined ? parent.name : declaredBindingTarget(parent.name, decl);
+    addReverseEdge(reverseAliases, target, binding);
+    return (
+      decl !== undefined && isVariableDeclaration(decl) && !isExportedVariableDeclaration(decl)
+    );
   }
   return false;
+}
+
+function enclosingBindingDeclaration(
+  element: BindingElement,
+): VariableDeclaration | ParameterDeclaration | undefined {
+  for (let current: Node = element.parent; !isSourceFile(current); current = current.parent) {
+    if (isVariableDeclaration(current) || isParameterDeclaration(current)) {
+      return current;
+    }
+  }
+  return undefined;
 }
 
 function recordsAssignmentConsumer(
@@ -369,13 +407,12 @@ function recordsAssignmentConsumer(
   const lhsDecl = frameDeclarationOf(lhs);
   if (
     lhsDecl === undefined ||
-    !isVariableDeclaration(lhsDecl) ||
-    isExportedVariableDeclaration(lhsDecl)
+    (!isVariableDeclaration(lhsDecl) && !isParameterDeclaration(lhsDecl))
   ) {
     return false;
   }
   addReverseEdge(reverseAliases, declaredBindingTarget(lhs, lhsDecl), binding);
-  return true;
+  return isVariableDeclaration(lhsDecl) && !isExportedVariableDeclaration(lhsDecl);
 }
 
 function appendMapItem<T>(map: Map<Node, T[]>, key: Node, value: T): void {

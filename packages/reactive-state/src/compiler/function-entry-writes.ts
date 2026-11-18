@@ -35,6 +35,7 @@ import {
   type FileCallableIndex,
 } from './function-spread-callables.ts';
 import {
+  type CallableWrites,
   EMPTY_WRITES,
   isDeclaredIdentifier,
   isDirectValueAssignment,
@@ -86,6 +87,14 @@ export function elementEntryKey(node: ElementAccessExpression): string | undefin
 /** Returns cached post-declaration variable assignment expressions indexed across `file`. */
 export function fileVariableWrites(file: SourceFile): VariableWriteMap {
   return fileCallableIndex(file).variableWrites;
+}
+
+/** Computes `this`-receiver writes from data callables on `object` retained past `excludedKeys`. */
+export function retainedCallableWrites(
+  object: ObjectLiteralExpression,
+  excludedKeys: ReadonlySet<string>,
+): CallableWrites {
+  return callableWritesOnObject(object, fileCallableIndex(object.getSourceFile()), excludedKeys);
 }
 
 /** Returns cached post-declaration writes, member assignments, and `Object.assign` sources for `object`. */

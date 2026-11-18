@@ -50,14 +50,26 @@ export {
   type ObjectRestCopyResolution,
 } from './function-rest-copy-builder.ts';
 
+const MAX_CLOSURE_CHECK_STEPS = 512;
+
+interface ClosureCheckState {
+  hitCycle: boolean;
+  overflowed: boolean;
+  readonly seen: Set<Node>;
+  steps: number;
+}
+
+const CLOSED_HOLDER_MEMO = new WeakMap<VariableWriteMap, Map<Node, boolean>>();
 const REST_COPY_MEMO = new WeakMap<VariableWriteMap, Map<Node, ObjectRestCopyResolution>>();
 
-/** Returns the per-`VariableWriteMap` cache of cycle-free `ObjectRestCopyResolution` evaluations. */
-function restCopyMemo(variableWrites: VariableWriteMap): Map<Node, ObjectRestCopyResolution> {
-  let memo = REST_COPY_MEMO.get(variableWrites);
+function perWriteMapMemo<T>(
+  store: WeakMap<VariableWriteMap, Map<Node, T>>,
+  variableWrites: VariableWriteMap,
+): Map<Node, T> {
+  let memo = store.get(variableWrites);
   if (memo === undefined) {
     memo = new Map();
-    REST_COPY_MEMO.set(variableWrites, memo);
+    store.set(variableWrites, memo);
   }
   return memo;
 }
@@ -69,7 +81,7 @@ function memoizedRestCopies(
   state: CycleSeenState,
   run: (branch: CycleSeenState) => ObjectRestCopyResolution,
 ): ObjectRestCopyResolution {
-  const memo = restCopyMemo(variableWrites);
+  const memo = perWriteMapMemo(REST_COPY_MEMO, variableWrites);
   const cached = memo.get(keyNode);
   if (cached !== undefined) {
     return cached;
@@ -133,52 +145,19 @@ function baseRestCopies(
   if (isIdentifier(node)) {
     return identifierRestCopies(node, variableWrites, state);
   }
-  if (
-    !isConditionalExpression(node) &&
-    !(isBinaryExpression(node) && LOGICAL_FORWARDING.has(node.operatorToken.kind))
-  ) {
+  const arms = forwardedBranchArms(node);
+  if (arms === undefined) {
     return EMPTY_UNCLOSED_REST_COPIES;
   }
-  return memoizedRestCopies(node, variableWrites, state, (branch) =>
-    branchRestCopies(node, variableWrites, branch),
-  );
-}
-
-/** Evaluates conditional and logical branch `ObjectRestCopyResolution` sources for `node`. */
-function branchRestCopies(
-  node: Expression,
-  variableWrites: VariableWriteMap,
-  state: CycleSeenState,
-): ObjectRestCopyResolution {
-  if (isConditionalExpression(node)) {
+  return memoizedRestCopies(node, variableWrites, state, (branch) => {
     const builder = new RestCopyBuilder(true);
-    builder.addResolution(
-      withCandidateBranch(state, (branch) =>
-        baseRestCopies(unwrapped(node.whenTrue), variableWrites, branch),
-      ),
-    );
-    builder.addResolution(
-      withCandidateBranch(state, (branch) =>
-        baseRestCopies(unwrapped(node.whenFalse), variableWrites, branch),
-      ),
-    );
+    for (const arm of arms) {
+      builder.addResolution(
+        withCandidateBranch(branch, (inner) => baseRestCopies(arm, variableWrites, inner)),
+      );
+    }
     return builder.finish();
-  }
-  if (isBinaryExpression(node) && LOGICAL_FORWARDING.has(node.operatorToken.kind)) {
-    const builder = new RestCopyBuilder(true);
-    builder.addResolution(
-      withCandidateBranch(state, (branch) =>
-        baseRestCopies(unwrapped(node.left), variableWrites, branch),
-      ),
-    );
-    builder.addResolution(
-      withCandidateBranch(state, (branch) =>
-        baseRestCopies(unwrapped(node.right), variableWrites, branch),
-      ),
-    );
-    return builder.finish();
-  }
-  return EMPTY_UNCLOSED_REST_COPIES;
+  });
 }
 
 /** Collects object-rest copy sources bound to `node` via destructuring declarations or reassignments. */
@@ -192,7 +171,7 @@ function identifierRestCopies(
     return EMPTY_UNCLOSED_REST_COPIES;
   }
   const target = declaredBindingTarget(node, declared);
-  const cached = restCopyMemo(variableWrites).get(target);
+  const cached = perWriteMapMemo(REST_COPY_MEMO, variableWrites).get(target);
   if (cached !== undefined) {
     return cached;
   }
@@ -353,51 +332,148 @@ function emitRestCopiesFromHolders(
     if (expanded.copies.length > 0 || expanded.overflowed) {
       builder.addResolution(expanded);
     }
-    if (
-      builder.closed &&
-      !isClosedRestSourceHolder(holder, chained, env.variableWrites, new Set())
-    ) {
+    if (builder.closed && !isClosedRestSourceHolder(holder, env.variableWrites)) {
       builder.closed = false;
     }
   }
   return builder.finish();
 }
 
-/** Whether every runtime branch of `holder` is accounted for by closed direct objects or `chained`. */
-function isClosedRestSourceHolder(
-  initialHolder: Expression,
-  initialChained: ObjectRestCopyResolution,
+/** Whether every runtime branch of `holder` resolves to closed direct objects or closed rest copies. */
+function isClosedRestSourceHolder(holder: Expression, variableWrites: VariableWriteMap): boolean {
+  return checkClosedHolder(holder, variableWrites, {
+    hitCycle: false,
+    overflowed: false,
+    seen: new Set(),
+    steps: 0,
+  });
+}
+
+function checkClosedHolder(
+  rawHolder: Expression,
   variableWrites: VariableWriteMap,
-  seen: Set<Node>,
+  state: ClosureCheckState,
 ): boolean {
-  let holder = initialHolder;
-  let chained = initialChained;
-  while (isIdentifier(holder)) {
-    if (chained.closed && chained.copies.length > 0) {
-      return true;
-    }
-    const next = stepClosedIdentifierHolder(holder, seen);
-    if (next === undefined) {
-      return false;
-    }
-    holder = next;
-    chained = baseRestCopies(next, variableWrites, { hitCycle: false, seen: new Set() });
-  }
-  if (isObjectLiteralExpression(holder) || (chained.closed && chained.copies.length > 0)) {
-    return true;
-  }
-  const branches = forwardedBranchArms(holder);
-  if (branches === undefined) {
+  state.steps += 1;
+  if (state.steps > MAX_CLOSURE_CHECK_STEPS) {
+    state.overflowed = true;
     return false;
   }
-  return branches.every((arm) => {
-    return isClosedRestSourceHolder(
-      arm,
-      baseRestCopies(arm, variableWrites, { hitCycle: false, seen: new Set() }),
-      variableWrites,
-      new Set(seen),
-    );
-  });
+  const holder = unwrapped(rawHolder);
+  if (isObjectLiteralExpression(holder)) {
+    return true;
+  }
+  if (isIdentifier(holder)) {
+    return checkClosedIdentifierHolder(holder, variableWrites, state);
+  }
+  const branches = forwardedBranchArms(holder);
+  return branches !== undefined && checkClosedBranchHolder(holder, branches, variableWrites, state);
+}
+
+function checkClosedBranchHolder(
+  holder: Expression,
+  branches: readonly [Expression, Expression],
+  variableWrites: VariableWriteMap,
+  state: ClosureCheckState,
+): boolean {
+  const memo = perWriteMapMemo(CLOSED_HOLDER_MEMO, variableWrites);
+  const cached = memo.get(holder);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const left = runClosureBranch(state, undefined, (branch) =>
+    checkClosedHolder(branches[0], variableWrites, branch),
+  );
+  if (!left.closed) {
+    if (left.cacheable) {
+      memo.set(holder, false);
+    }
+    return false;
+  }
+  const right = runClosureBranch(state, undefined, (branch) =>
+    checkClosedHolder(branches[1], variableWrites, branch),
+  );
+  if (left.cacheable && right.cacheable) {
+    memo.set(holder, right.closed);
+  }
+  return right.closed;
+}
+
+function checkClosedIdentifierHolder(
+  holder: Identifier,
+  variableWrites: VariableWriteMap,
+  state: ClosureCheckState,
+): boolean {
+  const declared = frameDeclarationOf(holder);
+  if (declared === undefined || !isVariableDeclaration(declared)) {
+    return false;
+  }
+  const target = declaredBindingTarget(holder, declared);
+  const memo = perWriteMapMemo(CLOSED_HOLDER_MEMO, variableWrites);
+  const cached = memo.get(target);
+  if (cached !== undefined) {
+    return cached;
+  }
+  if (state.seen.has(target)) {
+    state.hitCycle = true;
+    return false;
+  }
+  const chainedCycle: CycleSeenState = { hitCycle: false, seen: new Set(state.seen) };
+  const chained = baseRestCopies(holder, variableWrites, chainedCycle);
+  if (chainedCycle.hitCycle) {
+    state.hitCycle = true;
+  }
+  if (chained.closed && chained.copies.length > 0) {
+    if (!chainedCycle.hitCycle) {
+      memo.set(target, true);
+    }
+    return true;
+  }
+  const rawInit = declared.initializer;
+  if (
+    rawInit === undefined ||
+    !isIdentifier(declared.name) ||
+    !isConstVariable(declared) ||
+    restTargetSafety(holder.getSourceFile()).escaped.has(target)
+  ) {
+    if (!chainedCycle.hitCycle) {
+      memo.set(target, false);
+    }
+    return false;
+  }
+  const outcome = runClosureBranch(state, target, (branch) =>
+    checkClosedHolder(rawInit, variableWrites, branch),
+  );
+  if (!chainedCycle.hitCycle && outcome.cacheable) {
+    memo.set(target, outcome.closed);
+  }
+  return outcome.closed;
+}
+
+function runClosureBranch(
+  state: ClosureCheckState,
+  extraSeen: Node | undefined,
+  run: (branch: ClosureCheckState) => boolean,
+): { readonly cacheable: boolean; readonly closed: boolean } {
+  const seen = new Set(state.seen);
+  if (extraSeen !== undefined) {
+    seen.add(extraSeen);
+  }
+  const branch: ClosureCheckState = {
+    hitCycle: false,
+    overflowed: false,
+    seen,
+    steps: state.steps,
+  };
+  const closed = run(branch);
+  state.steps = branch.steps;
+  if (branch.hitCycle) {
+    state.hitCycle = true;
+  }
+  if (branch.overflowed) {
+    state.overflowed = true;
+  }
+  return { cacheable: !branch.hitCycle && !branch.overflowed, closed };
 }
 
 function forwardedBranchArms(holder: Expression): readonly [Expression, Expression] | undefined {
@@ -408,26 +484,6 @@ function forwardedBranchArms(holder: Expression): readonly [Expression, Expressi
     return [unwrapped(holder.left), unwrapped(holder.right)];
   }
   return undefined;
-}
-
-function stepClosedIdentifierHolder(holder: Identifier, seen: Set<Node>): Expression | undefined {
-  const declared = frameDeclarationOf(holder);
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    !isIdentifier(declared.name) ||
-    !isConstVariable(declared) ||
-    seen.has(declared) ||
-    restTargetSafety(holder.getSourceFile()).escaped.has(declared)
-  ) {
-    return undefined;
-  }
-  const rawInit = declared.initializer;
-  if (rawInit === undefined) {
-    return undefined;
-  }
-  seen.add(declared);
-  return unwrapped(rawInit);
 }
 
 /** Static sibling keys preceding an object binding rest element `...rest`, plus computed-key flag. */

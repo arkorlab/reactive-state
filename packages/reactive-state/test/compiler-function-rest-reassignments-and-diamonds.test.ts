@@ -352,6 +352,98 @@ const CASES = [
     source:
       'function named() {} export function run() { const { ...m0 } = { pick() {} }; (m0 as { pick: () => void }).pick = named; const helpers = { ...m0 }; return helpers.pick.name; }',
   },
+  {
+    id: 'rest-source-closure-diamond-24-direct-rest-source-read',
+    maxElapsedMs: 50,
+    maxInitReads: LINEAR_READ_LIMIT,
+    reason: SOURCE_REASON,
+    source: buildConditionalChain(
+      '',
+      '{ pick() {} }',
+      (prev) => `flag ? ${prev} : ${prev}`,
+      `const { ...rest } = m${DIAMOND_LEVELS}; return String(rest.pick);`,
+    ),
+  },
+  {
+    id: 'rest-source-closure-diamond-24-excluded-this-writer-preserves-destination-entry',
+    maxElapsedMs: 50,
+    maxInitReads: 12,
+    reason: undefined,
+    source: buildConditionalChain(
+      'function named() {} ',
+      '{ swap() { (this as { pick?: () => void }).pick = named; }, keep: 1 }',
+      (prev) => `flag ? ${prev} : ${prev}`,
+      `const { swap: _s, ...rest } = m${DIAMOND_LEVELS}; void _s; const helpers = { ...rest, pick() {} }; return helpers.pick.name;`,
+    ),
+  },
+  {
+    id: 'rest-source-closure-logical-or-diamond-24-direct-rest-source-read',
+    maxElapsedMs: 50,
+    maxInitReads: LINEAR_READ_LIMIT,
+    reason: SOURCE_REASON,
+    source: buildConditionalChain(
+      '',
+      '{ pick() {} }',
+      (prev) => `${prev} || ${prev}`,
+      `const { ...rest } = m${DIAMOND_LEVELS}; return String(rest.pick);`,
+    ),
+  },
+  {
+    id: 'const-alias-of-rest-target-mutation-propagates-to-spread-destination',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: SOURCE_REASON,
+    source:
+      "function named() {} export function run() { const { ...rest } = { pick: '' as string | (() => void) }; const alias = rest; alias.pick = named; const helpers = { pick: named, ...rest }; return String(helpers.pick); }",
+  },
+  {
+    id: 'const-alias-of-empty-rest-target-mutation-propagates-to-untyped-read',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: SOURCE_REASON,
+    source:
+      'function named() {} export function run() { const { ...rest } = {} as Record<string, unknown>; const alias = rest; alias.pick = named; return String(rest.pick); }',
+  },
+  {
+    id: 'destructured-default-alias-of-rest-target-mutation-propagates',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: SOURCE_REASON,
+    source:
+      'function named() {} export function run(outer: { alias?: Record<string, unknown> }) { const { ...rest } = {} as Record<string, unknown>; const { alias = rest } = outer; alias.pick = named; return String(rest.pick); }',
+  },
+  {
+    id: 'const-alias-of-rest-source-escape-invalidates-rest-closure',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: NAME_REASON,
+    source:
+      'function named() {} function taint(x: { pick: () => void }) { x.pick = named; } export function run() { const src = { pick() {} }; const alias = src; taint(alias); const { ...rest } = src; return rest.pick.name; }',
+  },
+  {
+    id: 'retained-method-this-write-to-excluded-key-refuses-direct-source-read',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: SOURCE_REASON,
+    source:
+      'function named() {} export function run() { const { pick: removed, ...rest } = { pick() {}, swap() { (this as { pick?: () => void }).pick = named; } }; void removed; rest.swap(); return String((rest as { pick?: () => void }).pick); }',
+  },
+  {
+    id: 'retained-method-this-write-to-excluded-key-refuses-untyped-record-read',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: SOURCE_REASON,
+    source:
+      'function named() {} export function run() { const { pick: removed, ...rest } = { pick: 0, swap() { (this as Record<string, unknown>).pick = named; } }; void removed; rest.swap(); return String((rest as Record<string, unknown>).pick); }',
+  },
+  {
+    id: 'retained-method-this-write-to-excluded-key-propagates-through-spread',
+    maxElapsedMs: 50,
+    maxInitReads: READ_CUTOFF,
+    reason: SOURCE_REASON,
+    source:
+      'function named() {} export function run() { const { pick: removed, ...rest } = { pick: 0, swap() { (this as Record<string, unknown>).pick = named; } }; void removed; rest.swap(); const helpers = { ...rest }; return String((helpers as Record<string, unknown>).pick); }',
+  },
 ] as const;
 
 /** Finds `const m0 = ...` inside `root` when measuring diamond scaling. */
