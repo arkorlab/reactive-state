@@ -16,7 +16,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { returnedBy } from './answers.ts';
+import { parametersOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { literalArrayBinding, writtenArrayElements } from './framed-array-elements.ts';
 import { frameMemberName } from './framed-bindings.ts';
@@ -86,7 +86,7 @@ function callbackKeepsCarrier(
   callback: ArrowFunction | FunctionExpression,
   carries: (expression: Expression) => boolean,
 ): boolean {
-  const [accumulator] = callback.parameters;
+  const [accumulator] = parametersOf(callback);
   if (accumulator === undefined || !isIdentifier(accumulator.name)) return false;
   const pending: Node[] = [callback.body];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {

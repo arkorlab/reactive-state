@@ -259,6 +259,18 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
+    id: 'helper-with-a-this-parameter-that-answers-the-first-pin',
+    pre: 'function label(this:void,text:string,_value:Date){return text;}',
+    tag: `${DATED}String(label('ok',date))`,
+    local: undefined,
+  },
+  {
+    id: 'helper-with-a-this-parameter-that-answers-the-date',
+    pre: 'function label(this:void,_text:string,value:Date){return value;}',
+    tag: `${DATED}String(label('ok',date))`,
+    local: DATE_TEXT,
+  },
+  {
     id: 'inline-callback-was-followed-pin',
     pre: '',
     tag: `${REST}values.map((value)=>value).join('')`,

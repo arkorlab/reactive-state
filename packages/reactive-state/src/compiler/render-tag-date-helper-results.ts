@@ -15,7 +15,7 @@ import {
   type ParameterDeclaration,
 } from 'typescript/ast';
 
-import { type Answering, overloadsOf, returnedBy } from './answers.ts';
+import { type Answering, overloadsOf, parametersOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedAssignedSources } from './framed-writes.ts';
@@ -142,7 +142,7 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
     ASKING.cut += 1;
     return false;
   }
-  const parameters = fn.parameters.filter((parameter, index) => {
+  const parameters = parametersOf(fn).filter((parameter, index) => {
     if (parameter.dotDotDotToken === undefined) return handed.at.has(index) || index >= handed.from;
     return handed.from !== Infinity || [...handed.at].some((slot) => slot >= index);
   });
