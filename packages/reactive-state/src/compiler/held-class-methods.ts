@@ -24,6 +24,7 @@ import {
   isPropertyDeclaration,
   isReturnStatement,
   isSetAccessorDeclaration,
+  isSourceFile,
   isSpreadAssignment,
   isStringLiteral,
   type MethodDeclaration,
@@ -183,6 +184,40 @@ function isNamedMember(
     isGetAccessorDeclaration(member) ||
     isSetAccessorDeclaration(member)
   );
+}
+
+/**
+ * The methods `super.key` may run where `at` stands: those the base class of the class around it keeps,
+ * its statics for a `static` member, past its own bases; every public one when `key` is not text.
+ */
+export function superMethods(at: Node, key: string | undefined): readonly Node[] {
+  const around = memberAround(at);
+  const base = around === undefined ? undefined : baseClass(around.home);
+  if (around === undefined || base === undefined) {
+    return [];
+  }
+  const methods = memberMethods(base, around.isStatic);
+  if (key !== undefined) {
+    const method = methods.get(key);
+    return method === undefined ? [] : [method];
+  }
+  return [...methods].filter(([name]) => !name.startsWith('#')).map(([, method]) => method);
+}
+
+/** The class `at` stands in, and whether the member of it that holds `at` is `static`. */
+function memberAround(
+  at: Node,
+): { readonly home: ClassLikeDeclaration; readonly isStatic: boolean } | undefined {
+  for (let member: Node = at; !isSourceFile(member.parent); member = member.parent) {
+    const home = member.parent;
+    if (isClassDeclaration(home) || isClassExpression(home)) {
+      const isStatic =
+        isNamedMember(member) &&
+        member.modifiers?.some((each) => each.kind === SyntaxKind.StaticKeyword) === true;
+      return { home, isStatic };
+    }
+  }
+  return undefined;
 }
 
 /** A constructor's sole unconditional returned literal replaces the instance and its methods. */

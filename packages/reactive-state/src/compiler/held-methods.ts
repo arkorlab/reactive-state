@@ -34,6 +34,7 @@ import {
   literalKey,
   memberMethods,
   ownsThis,
+  superMethods,
 } from './held-class-methods.ts';
 import { answersOf, targetsOf } from './kept.ts';
 import { receiverOf, receiverWrite } from './this-aliases.ts';
@@ -202,20 +203,37 @@ function candidateWritesThis(
     }
     const written = writtenBy(node);
     const invocation = isCallExpression(node) ? node : undefined;
-    const called =
-      invocation === undefined ? [] : thisCalledKeys(unwrapped(invocation.expression), methods);
     found =
       (written !== undefined && targetsOf(written).some((each) => receiverWrite(each, node))) ||
-      (invocation !== undefined &&
-        called.some((target) =>
-          writesThis(methods, target, writtenBy, { seen, call: invocation }),
-        ));
+      (invocation !== undefined && callWritesThis(invocation, methods, writtenBy, seen));
     if (!found) {
       node.forEachChild(visit);
     }
   };
   visit(method);
   return found;
+}
+
+/**
+ * Whether `invocation` calls a method of `this` that writes through it, `this.add(1)`, or a method
+ * of the base class through `super`, `super.add(1)`, which runs with the same `this`.
+ */
+function callWritesThis(
+  invocation: CallExpression,
+  methods: ReadonlyMap<string, readonly Node[]>,
+  writtenBy: (node: Node) => Node | undefined,
+  seen: Set<string>,
+): boolean {
+  const callee = unwrapped(invocation.expression);
+  const context = { seen, call: invocation };
+  return (
+    thisCalledKeys(callee, methods).some((target) =>
+      writesThis(methods, target, writtenBy, context),
+    ) ||
+    superCalledMethods(callee).some((base) =>
+      candidateWritesThis(base, methods, writtenBy, context),
+    )
+  );
 }
 
 /** Calling a generator acquires an iterator; its body starts only when that iterator is resumed. */
@@ -271,4 +289,18 @@ function thisCalledKeys(
   }
   const key = literalKey(unwrapped(callee.argumentExpression));
   return key === undefined ? [...methods.keys()].filter((each) => !each.startsWith('#')) : [key];
+}
+
+/** The base-class methods that `callee` invokes as `super.name` or `super['name']`. */
+function superCalledMethods(callee: Node): readonly Node[] {
+  if (
+    !(isPropertyAccessExpression(callee) || isElementAccessExpression(callee)) ||
+    callee.expression.kind !== SyntaxKind.SuperKeyword
+  ) {
+    return [];
+  }
+  const key = isPropertyAccessExpression(callee)
+    ? keyOf(callee.name)
+    : literalKey(unwrapped(callee.argumentExpression));
+  return superMethods(callee, key);
 }
