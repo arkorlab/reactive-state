@@ -50,26 +50,24 @@ import { unwrapped } from './bounded.ts';
 import { ownerKeyFirst } from './class-key-order.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import {
+  type AssignmentSite,
+  DIRECT_ASSIGNMENT_TOKENS,
+  framedAssignmentSites,
+  hasOtherBindingRead,
+} from './framed-assignment-index.ts';
+import {
   type AssignedFrameSource,
   assignmentPatternDefault,
   assignmentPatternSources,
   iteratedAssignmentSources,
 } from './framed-assignment-patterns.ts';
-import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
+import { type FrameDeclaration, frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedPossibleBranch } from './framed-branches.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { madeWithin, runsItself } from './framed-recursion.ts';
 import { framedCondition } from './framed-sources.ts';
-import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Source-visible assignments that can supply a local receiver at its lexical read. */
-
-const DIRECT_WRITES: ReadonlySet<SyntaxKind> = new Set([
-  SyntaxKind.AmpersandAmpersandEqualsToken,
-  SyntaxKind.BarBarEqualsToken,
-  SyntaxKind.EqualsToken,
-  SyntaxKind.QuestionQuestionEqualsToken,
-]);
 
 /** Earlier same-owner writes and possible cross-owner writes, retaining lexical binding identity. */
 export function framedAssignedValues(name: Identifier): readonly Expression[] {
@@ -80,27 +78,21 @@ export function framedAssignedValues(name: Identifier): readonly Expression[] {
 export function framedAssignedSources(name: Identifier): readonly AssignedFrameSource[] {
   const declared = frameDeclarationOf(name);
   if (declared === undefined) return [];
+  const sites = framedAssignmentSites(name.getSourceFile(), declared);
+  if (sites.length === 0) return [];
   const values: AssignedFrameSource[] = [];
   const owner = executionOwner(name);
-  const cutoff = dataOverwrite(name, owner, declared);
-  const pending: Node[] = [name.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (
-      (isBinaryExpression(node) || isForOfStatement(node)) &&
-      !overwrittenSource(node, cutoff, owner) &&
-      framedPossibleBranch(node)
-    )
+  const cutoff = dataOverwrite(name, owner, declared, sites);
+  for (const node of sites) {
+    if (!overwrittenSource(node, cutoff, owner) && framedPossibleBranch(node))
       values.push(...assignedAt(node, name, declared, { owner, cutoff }));
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
   }
   return values;
 }
 
 /** Direct and iteration assignments supply the same lexical pattern targets. */
 function assignedAt(
-  node: Node,
+  node: AssignmentSite,
   name: Identifier,
   declared: NonNullable<ReturnType<typeof frameDeclarationOf>>,
   context: { readonly owner: Node; readonly cutoff: Node | undefined },
@@ -108,7 +100,7 @@ function assignedAt(
   if (!possibleWriteBefore(node, name, declared, context)) return [];
   if (
     isBinaryExpression(node) &&
-    DIRECT_WRITES.has(node.operatorToken.kind) &&
+    DIRECT_ASSIGNMENT_TOKENS.has(node.operatorToken.kind) &&
     !assignmentPatternDefault(node)
   )
     return assignmentPatternSources(node.left, node.right, name, declared);
@@ -506,28 +498,60 @@ function executionOwner(node: Node): Node {
 function dataOverwrite(
   name: Identifier,
   owner: Node,
-  declared: NonNullable<ReturnType<typeof frameDeclarationOf>>,
+  declared: FrameDeclaration,
+  sites: readonly AssignmentSite[],
 ): Node | undefined {
   for (let at: Node = name; at !== owner; at = at.parent)
     if (loopBody(at) !== undefined) return undefined;
   let at: Node = name;
   while (!isBlock(at.parent) && !isSourceFile(at.parent)) at = at.parent;
+  const query = { beforePos: at.pos, container: at.parent, declared, name, owner };
   let last: Node | undefined;
-  for (const statement of at.parent.statements) {
-    if (statement === at) break;
-    if (!isExpressionStatement(statement)) continue;
-    const value = unwrapped(statement.expression);
+  let lastPos = -1;
+  for (const site of sites) {
+    const statementPos = directBlockOverwritePos(site, query);
     if (
-      isBinaryExpression(value) &&
-      value.operatorToken.kind === SyntaxKind.EqualsToken &&
-      isIdentifier(value.left) &&
-      frameDeclarationOf(value.left) === declared &&
-      executionOwner(value) === owner &&
-      closedData(value.right)
-    )
-      last = value;
+      statementPos !== undefined &&
+      statementPos > lastPos &&
+      isBinaryExpression(site) &&
+      closedData(site.right)
+    ) {
+      last = site;
+      lastPos = statementPos;
+    }
   }
   return last;
+}
+
+/** Position of an earlier plain `id = rhs` statement for `query.name` in `query.container`, if any. */
+function directBlockOverwritePos(
+  site: AssignmentSite,
+  query: {
+    readonly beforePos: number;
+    readonly container: Node;
+    readonly declared: FrameDeclaration;
+    readonly name: Identifier;
+    readonly owner: Node;
+  },
+): number | undefined {
+  if (!isBinaryExpression(site) || site.operatorToken.kind !== SyntaxKind.EqualsToken)
+    return undefined;
+  const left = unwrapped(site.left);
+  if (
+    !isIdentifier(left) ||
+    left.text !== query.name.text ||
+    frameDeclarationOf(left) !== query.declared ||
+    executionOwner(site) !== query.owner
+  )
+    return undefined;
+  let current: Node = site;
+  while (current.parent !== query.container && !isSourceFile(current)) current = current.parent;
+  return current.parent === query.container &&
+    current.pos < query.beforePos &&
+    isExpressionStatement(current) &&
+    unwrapped(current.expression) === site
+    ? current.pos
+    : undefined;
 }
 
 /** A possible closure write remains independent of a same-owner overwrite. */
@@ -593,22 +617,7 @@ function primitiveData(value: Expression): boolean {
 
 /** Another value reference can mutate or expose an object alias, so it removes a closed-data proof. */
 function otherUse(name: Identifier, binding: VariableDeclaration): boolean {
-  const pending: Node[] = [name.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      node !== name &&
-      node !== binding.name &&
-      isIdentifier(node) &&
-      readsBinding(node) &&
-      frameDeclarationOf(node) === binding
-    )
-      return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
+  return hasOtherBindingRead(name, binding);
 }
 
 export { framedPossibleBranch } from './framed-branches.ts';
