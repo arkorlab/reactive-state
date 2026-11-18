@@ -44,6 +44,10 @@ import {
   rangeHasDated,
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
+import {
+  elementMethodCarriesDated,
+  writtenArrayCarriesDated,
+} from './render-tag-date-array-methods.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** Tracks expressions inside a tag or helper body that carry Date-bearing substitution values. */
@@ -59,15 +63,6 @@ const ELEMENT_CALLBACK_METHODS: ReadonlySet<string> = new Set([
   'some',
 ]);
 const REDUCE_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
-const PASSTHROUGH_ARRAY_METHODS: ReadonlySet<string> = new Set([
-  'filter',
-  'flat',
-  'reverse',
-  'sort',
-  'toReversed',
-  'toSorted',
-  'values',
-]);
 
 export interface DatedCarrierContext {
   readonly bindings: WrapperBindings;
@@ -170,7 +165,12 @@ function identifierCarriesDated(
   const declared = frameDeclarationOf(name);
   if (declared === undefined) return false;
   if (isParameterDeclaration(declared)) return parameterCarriesDated(name, declared, ctx, seen);
-  return isVariableDeclaration(declared) && variableCarriesDated(name, declared, ctx, seen);
+  return (
+    (isVariableDeclaration(declared) && variableCarriesDated(name, declared, ctx, seen)) ||
+    writtenArrayCarriesDated(name, (each) =>
+      carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
+    )
+  );
 }
 
 function parameterCarriesDated(
@@ -458,9 +458,8 @@ function arrayMethodResultCarriesDated(
       )
     );
   }
-  return (
-    PASSTHROUGH_ARRAY_METHODS.has(method) &&
-    carriesDatedSubstitution(receiver, ctx.bindings, ctx.datedIndices, seen)
+  return elementMethodCarriesDated(call, receiver, method, (each) =>
+    carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
   );
 }
 
