@@ -29,6 +29,7 @@ import {
   isStringLiteral,
   type MethodDeclaration,
   type Node,
+  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type PrivateIdentifier,
   type PropertyDeclaration,
@@ -306,35 +307,59 @@ function constructorOf(name: Identifier): ClassLikeDeclaration | undefined {
  * The methods an object the code writes holds of its own, by their names: none of an arrow's; those
  * of an object it spreads, which a later property of the same name replaces.
  */
-function objectMethods(
-  value: ObjectLiteralExpression,
-  spreading: ReadonlySet<Node> = new Set(),
-): ReadonlyMap<string, Node> {
+function objectMethods(value: ObjectLiteralExpression): ReadonlyMap<string, Node> {
   const methods = new Map<string, Node>();
-  for (const property of value.properties) {
-    const key = 'name' in property ? keyOf(property.name) : undefined;
-    if (isSpreadAssignment(property)) {
-      for (const [spread, method] of spreadMethods(property.expression, spreading)) {
-        methods.set(spread, method);
-      }
-    } else if (key !== undefined && isMethodDeclaration(property)) {
-      methods.set(key, property);
-    } else if (
-      key !== undefined &&
-      isPropertyAssignment(property) &&
-      isFunctionExpression(unwrapped(property.initializer))
-    ) {
-      methods.set(key, unwrapped(property.initializer));
+  const entries = objectEntries(value, new Set());
+  for (const [key, method] of entries) {
+    if (method !== undefined) {
+      methods.set(key, method);
     }
   }
   return methods;
 }
 
-/** The own methods of the object literal `source` is, through constant aliases; none of another value. */
-function spreadMethods(
+/**
+ * What each named property of an object the code writes holds, in property order: the method it is,
+ * or none where it is any other value, a function the code does not write there, or an accessor,
+ * which replaces what a property of the name before it, or a spread before it, held.
+ */
+function objectEntries(
+  value: ObjectLiteralExpression,
+  spreading: ReadonlySet<Node>,
+): ReadonlyMap<string, Node | undefined> {
+  const entries = new Map<string, Node | undefined>();
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) {
+      for (const [key, method] of spreadEntries(property.expression, spreading)) {
+        entries.set(key, method);
+      }
+      continue;
+    }
+    const key = 'name' in property ? keyOf(property.name) : undefined;
+    if (key !== undefined) {
+      entries.set(key, propertyMethod(property));
+    }
+  }
+  return entries;
+}
+
+/** The method a property of an object literal is: a method, or a function the property is given. */
+function propertyMethod(property: ObjectLiteralElementLike): Node | undefined {
+  if (isMethodDeclaration(property)) {
+    return property;
+  }
+  if (!isPropertyAssignment(property)) {
+    return undefined;
+  }
+  const given = unwrapped(property.initializer);
+  return isFunctionExpression(given) ? given : undefined;
+}
+
+/** The entries of the object literal `source` is, through constant aliases; none of another value. */
+function spreadEntries(
   source: Expression,
   spreading: ReadonlySet<Node>,
-): ReadonlyMap<string, Node> {
+): ReadonlyMap<string, Node | undefined> {
   let value = unwrapped(source);
   const seen = new Set<Node>(spreading);
   while (isIdentifier(value) && !seen.has(value)) {
@@ -348,7 +373,7 @@ function spreadMethods(
   if (!isObjectLiteralExpression(value) || seen.has(value)) {
     return new Map();
   }
-  return objectMethods(value, new Set([...seen, value]));
+  return objectEntries(value, new Set([...seen, value]));
 }
 
 /** Known source-written bases, first, with alias and heritage cycles ending the walk. */
