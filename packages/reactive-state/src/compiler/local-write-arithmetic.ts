@@ -72,6 +72,12 @@ const ARITHMETIC_ASSIGNING: ReadonlyMap<SyntaxKind, (left: number, right: number
     [SyntaxKind.SlashEqualsToken, (left, right) => left / right],
   ]);
 
+/** The operators of `ARITHMETIC_ASSIGNING` that make no finite number of a zero on their right. */
+const BY_ZERO: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.PercentEqualsToken,
+  SyntaxKind.SlashEqualsToken,
+]);
+
 const CONTAINER_MUTATING_METHODS: ReadonlySet<string> = new Set([
   'clear',
   'copyWithin',
@@ -198,6 +204,64 @@ function isSoleSlotWrite(soleTop: Expression, target: Target): boolean {
   );
 }
 
+/** What a compound or an update write puts of `value` into the slot, which it does not change. */
+function putOf(value: Expression, target: Target): Writes {
+  return { changes: false, values: [{ entry: false, inside: target.inside, value }] };
+}
+
+/** Whether the operator on the right of which `right` stands makes no finite number of anything. */
+function isByZero(operator: SyntaxKind, right: number | string | undefined): boolean {
+  return right === 0 && BY_ZERO.has(operator);
+}
+
+/** Whether a write that is the only one of its slot leaves a finite number, as far as it shows. */
+function showsFinite(
+  compute: (left: number, right: number) => number,
+  { isAdditive, left, right }: { isAdditive: boolean; left: unknown; right: unknown },
+): boolean {
+  if (typeof left === 'number' && typeof right === 'number') {
+    return Number.isFinite(compute(left, right));
+  }
+  return isAdditive && typeof left !== 'string';
+}
+
+/**
+ * What a compound arithmetic write (`ARITHMETIC_ASSIGNING`) shows of its result. Of a number the
+ * code shows, it is refused where it is not finite: the slot's initial value and the operand are
+ * folded, where this write is the only one of the slot (`isSoleSlotWrite`). A slot that nothing
+ * initializes, or that holds text a `-` reads, is `NaN` there. Division by zero and the remainder
+ * of it are not finite whatever they divide. A sum or a count that a loop, a callback or another
+ * write repeats, or that adds a page's value, is left to the authority, which refuses a number
+ * that is not finite where it meets it: `+=` and `-=` of finite numbers reach no infinity but by a
+ * loop of 1e308 steps. A product, a power or a quotient it repeats, or of an operand it cannot
+ * read, is refused: a few steps overflow.
+ */
+function arithmeticWrite(
+  operator: SyntaxKind,
+  top: Expression,
+  value: Expression,
+  target: Target,
+): Writes {
+  const compute = ARITHMETIC_ASSIGNING.get(operator);
+  const right = constantValue(value, target.resolve);
+  const initial = writtenAt(target.initializer, target.keys, target.resolve);
+  if (compute === undefined || initial === undefined || isByZero(operator, right)) {
+    return CHANGED;
+  }
+  const left = constantValue(initial, target.resolve);
+  const isPlus = operator === SyntaxKind.PlusEqualsToken;
+  const isAdditive = isPlus || operator === SyntaxKind.MinusEqualsToken;
+  const put = putOf(value, target);
+  if (typeof left === 'string' && isPlus) {
+    return put;
+  }
+  if (!isSoleSlotWrite(top, target)) {
+    return isAdditive ? put : CHANGED;
+  }
+  const operand = typeof right === 'string' && !isPlus ? Number(right) : right;
+  return showsFinite(compute, { isAdditive, left, right: operand }) ? put : CHANGED;
+}
+
 /** Evaluates a compound write (`BITWISE_ASSIGNING` or `ARITHMETIC_ASSIGNING`). */
 export function computedWrite(
   operator: SyntaxKind,
@@ -205,27 +269,17 @@ export function computedWrite(
   value: Expression,
   target: Target,
 ): Writes {
-  if (BITWISE_ASSIGNING.has(operator)) {
-    return { changes: false, values: [{ entry: false, inside: target.inside, value }] };
-  }
-  const compute = ARITHMETIC_ASSIGNING.get(operator);
-  if (compute === undefined || !isSoleSlotWrite(top, target)) {
-    return CHANGED;
-  }
-  const initial = writtenAt(target.initializer, target.keys, target.resolve);
-  const left = initial === undefined ? undefined : constantValue(initial, target.resolve);
-  if (typeof left === 'string' && operator === SyntaxKind.PlusEqualsToken) {
-    return { changes: false, values: [{ entry: false, inside: target.inside, value }] };
-  }
-  const right = constantValue(value, target.resolve);
-  const isFiniteResult =
-    typeof left === 'number' && typeof right === 'number' && Number.isFinite(compute(left, right));
-  return isFiniteResult
-    ? { changes: false, values: [{ entry: false, inside: target.inside, value }] }
-    : CHANGED;
+  return BITWISE_ASSIGNING.has(operator)
+    ? putOf(value, target)
+    : arithmeticWrite(operator, top, value, target);
 }
 
-/** Evaluates `++target.member` / `target.member++` / `--target.member` / `target.member--`. */
+/**
+ * Evaluates `++target.member` / `target.member++` / `--target.member` / `target.member--`: a
+ * counter reaches no infinity but by 1e308 steps, so it is refused only where the code shows it
+ * does not stay a finite number — a slot nothing initializes, text, a number at the edge — as
+ * `arithmeticWrite` reads a sum.
+ */
 export function updatedAt(operator: SyntaxKind, top: Expression, target: Target): Writes {
   if (target.keys.length === 0) {
     return NONE;
@@ -233,15 +287,19 @@ export function updatedAt(operator: SyntaxKind, top: Expression, target: Target)
   if (checkedSlotOf(target) === 'changed') {
     return CHANGED;
   }
-  if (!isSoleSlotWrite(top, target)) {
+  const initial = writtenAt(target.initializer, target.keys, target.resolve);
+  if (initial === undefined) {
     return CHANGED;
   }
-  const initial = writtenAt(target.initializer, target.keys, target.resolve);
-  const left = initial === undefined ? undefined : constantValue(initial, target.resolve);
+  if (!isSoleSlotWrite(top, target)) {
+    return NONE;
+  }
+  const left = constantValue(initial, target.resolve);
   const delta = operator === SyntaxKind.PlusPlusToken ? 1 : -1;
-  return initial !== undefined && typeof left === 'number' && Number.isFinite(left + delta)
-    ? { changes: false, values: [{ entry: false, inside: target.inside, value: initial }] }
-    : CHANGED;
+  if (typeof left === 'number') {
+    return Number.isFinite(left + delta) ? putOf(initial, target) : CHANGED;
+  }
+  return typeof left === 'string' ? CHANGED : NONE;
 }
 
 /** Evaluates any binary assignment (`=`, logical, bitwise, or compound arithmetic) onto `target`. */
