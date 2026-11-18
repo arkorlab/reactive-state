@@ -27,6 +27,7 @@ import {
   isPropertyDeclaration,
   isReturnStatement,
   isSetAccessorDeclaration,
+  isShorthandPropertyAssignment,
   isSourceFile,
   isSpreadAssignment,
   isStringLiteral,
@@ -405,16 +406,45 @@ function objectEntries(
   return entries;
 }
 
-/** The method a property of an object literal is: a method, or a function the property is given. */
+/**
+ * The method a property of an object literal is: a method, a function the property is given, or a
+ * function the module declares that the property names, `{ bump }` and `{ bump: increase }`.
+ */
 function propertyMethod(property: ObjectLiteralElementLike): Node | undefined {
   if (isMethodDeclaration(property)) {
     return property;
+  }
+  if (isShorthandPropertyAssignment(property)) {
+    return isIdentifier(property.name) ? declaredFunction(property.name) : undefined;
   }
   if (!isPropertyAssignment(property)) {
     return undefined;
   }
   const given = unwrapped(property.initializer);
+  if (isIdentifier(given)) {
+    return declaredFunction(given);
+  }
   return isFunctionExpression(given) ? given : undefined;
+}
+
+/**
+ * The function `name` is, through constant aliases, where the module declares it: a function
+ * declaration or a function expression, whose `this` is the object that calls it; none of an arrow,
+ * which keeps its own, nor of a name the module does not declare.
+ */
+function declaredFunction(name: Identifier): Node | undefined {
+  const seen = new Set<Node>();
+  let value: Expression | undefined = name;
+  while (value !== undefined && isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const declared = declarationOf(value);
+    if (declared !== undefined && isFunctionDeclaration(declared)) {
+      return declared;
+    }
+    const initializer = initializerOf(value);
+    value = initializer === undefined ? undefined : unwrapped(initializer);
+  }
+  return value !== undefined && isFunctionExpression(value) ? value : undefined;
 }
 
 /** The entries of the object literal `source` is, through constant aliases; none of another value. */
