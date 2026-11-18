@@ -44,6 +44,10 @@ import {
   rangeHasDated,
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
+import {
+  PASSTHROUGH_ARRAY_METHODS,
+  reduceResultCarriesDated,
+} from './render-tag-date-array-methods.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** Tracks expressions inside a tag or helper body that carry Date-bearing substitution values. */
@@ -59,15 +63,6 @@ const ELEMENT_CALLBACK_METHODS: ReadonlySet<string> = new Set([
   'some',
 ]);
 const REDUCE_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
-const PASSTHROUGH_ARRAY_METHODS: ReadonlySet<string> = new Set([
-  'filter',
-  'flat',
-  'reverse',
-  'sort',
-  'toReversed',
-  'toSorted',
-  'values',
-]);
 
 export interface DatedCarrierContext {
   readonly bindings: WrapperBindings;
@@ -457,6 +452,13 @@ function arrayMethodResultCarriesDated(
         carriesDatedSubstitution(ret, ctx.bindings, ctx.datedIndices, seen),
       )
     );
+  }
+  if (REDUCE_METHODS.has(method)) {
+    return reduceResultCarriesDated(call, receiver, {
+      fresh: (each) =>
+        carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, new Set(seen)),
+      shared: (each) => carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),
+    });
   }
   return (
     PASSTHROUGH_ARRAY_METHODS.has(method) &&
