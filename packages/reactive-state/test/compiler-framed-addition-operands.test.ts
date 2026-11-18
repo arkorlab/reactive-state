@@ -169,6 +169,34 @@ const CASES = [
   },
   {
     framed: false,
+    id: 'text-name-given-a-call-result',
+    source:
+      "export function p(value: unknown): string { let text = ''; text = JSON.stringify(value); return text + '!'; }",
+  },
+  {
+    framed: false,
+    id: 'text-name-given-a-joined-array-in-template',
+    source: `export function p(names: string[]): string { let label = ''; label = names.join(', '); return \`\${label}!\`; }`,
+  },
+  {
+    framed: false,
+    id: 'text-parameter-given-a-call-result',
+    source: "export function p(text: string): string { text = text.trim(); return text + '!'; }",
+  },
+  {
+    framed: false,
+    id: 'number-name-given-a-call-result',
+    source:
+      "export function p(values: string[]): string { let count = 0; count = values.length; return '' + count; }",
+  },
+  {
+    framed: true,
+    id: 'unknown-typed-name-given-an-error-array-copy',
+    source:
+      "export function p(errors: Error[]): string { let value: unknown = 'x'; value = errors.slice(); return '' + value; }",
+  },
+  {
+    framed: false,
     id: 'name-given-an-array-of-text',
     source: "export function p(): string { let list = ['a']; list = ['b']; return '' + list; }",
   },

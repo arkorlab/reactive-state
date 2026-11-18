@@ -9,6 +9,7 @@ import {
   isPropertyAccessExpression,
   isSpreadElement,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -287,9 +288,10 @@ function bindingArrayWords(
  * What a name written as a whole elsewhere is given where it is assigned, as far as it is followed:
  * an array literal or a name is read in turn, a scalar is no array. Any other value, a call, a
  * member, a choice that ends at an array, may be one, a copy of an array of errors included, and the
- * name is refused. A value a pattern or a loop head gives is not read, and is left as it was.
+ * name is refused, but for a name the code writes as a scalar. A value a pattern or a loop head gives is not read, and is left as it was.
  */
 function followedGivens(binding: FrameBinding, pending: Expression[]): boolean {
+  if (writtenScalar(binding)) return true;
   for (const given of givenValues(binding)) {
     if (given === undefined) continue;
     const written = unwrapped(given);
@@ -297,4 +299,22 @@ function followedGivens(binding: FrameBinding, pending: Expression[]): boolean {
     else if (!isNoArray(written)) return false;
   }
   return true;
+}
+
+const SCALAR_TYPES: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.BigIntKeyword,
+  SyntaxKind.BooleanKeyword,
+  SyntaxKind.NumberKeyword,
+  SyntaxKind.StringKeyword,
+]);
+
+/**
+ * Whether the code writes a name as a text, a number, a boolean or a bigint: its annotation says so,
+ * or, with none, it starts as a literal or an operator's scalar. TypeScript refuses to give such a
+ * name an array, as the compile trusts a written type that excludes an error, so what it is given
+ * is no array, a call result included (`text = JSON.stringify(value)`).
+ */
+function writtenScalar(binding: FrameBinding): boolean {
+  if (binding.type !== undefined) return SCALAR_TYPES.has(binding.type.kind);
+  return binding.initializer !== undefined && isNoArray(binding.initializer);
 }
