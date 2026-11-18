@@ -19,7 +19,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
-import { answersLater, isAnswering, returnedBy } from './answers.ts';
+import { type Answering, answersLater, isAnswering, returnedBy } from './answers.ts';
 import { metadataCallee } from './input-callees.ts';
 import { mutatedArrayOrigins } from './proxy-array-writes.ts';
 import {
@@ -28,6 +28,7 @@ import {
   holdsArrayLiteral,
   spreadElementOrigins,
 } from './proxy-arrays.ts';
+import { indirectCall } from './proxy-indirect-calls.ts';
 import {
   holdsObjectLiteral,
   mutatedObjectOrigins,
@@ -353,10 +354,24 @@ function callOrigins(call: CallExpression, at: Origin): readonly Origin[] {
     return [];
   }
   const target = at.context.functionOf?.(call.expression) ?? metadataCallee(call.expression);
-  if (target === undefined || !isAnswering(target) || answersLater(target)) {
-    return [];
+  if (target !== undefined && isAnswering(target) && !answersLater(target)) {
+    return returnsOf(call, target, call.arguments, at);
   }
-  const expanded = callArgumentOrigins(call.arguments.map((value) => asSlotOrigin(value, at)));
+  const indirect = indirectCall(call, at.context);
+  return indirect === undefined ? [] : returnsOf(call, indirect.fn, indirect.given, at);
+}
+
+/** The returned expressions of `target` run by `call` with `given`, none shown when undefined. */
+function returnsOf(
+  call: CallExpression,
+  target: Answering,
+  given: readonly Expression[] | undefined,
+  at: Origin,
+): readonly Origin[] {
+  const expanded =
+    given === undefined
+      ? { given: [], openTail: true }
+      : callArgumentOrigins(given.map((value) => asSlotOrigin(value, at)));
   const context: Context = {
     ...at.context,
     calls: new Set([...at.context.calls, call]),
