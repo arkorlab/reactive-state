@@ -306,10 +306,17 @@ function projectKeyedClassMembers(
     }
   }
 
-  if (!definitelyDefined && !query.ownOnly) {
+  // A private name belongs to the class that declares it: a subclass's `#read` does not override
+  // its base's, and the access that is written in the base reaches the base's. The lookup of one
+  // goes on to the bases whether or not this class declares it.
+  if ((!definitelyDefined || isPrivateName(targetKey)) && !query.ownOnly) {
     found.push(...projectInheritedMembers(receiver, selfReceiver, query, ctx));
   }
   return found;
+}
+
+function isPrivateName(key: string): boolean {
+  return key.startsWith('#');
 }
 
 function stepKeyedClassMember(
