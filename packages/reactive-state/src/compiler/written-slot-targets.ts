@@ -29,6 +29,7 @@ import {
 import { holderWritesOf } from './written-array-elements.ts';
 import {
   applyHolderWrites,
+  offsetBelow,
   projectMemberKeys,
   selectedInitialExpressions,
   type SpreadWork,
@@ -294,7 +295,7 @@ function stepNestedArraySpread(
     queues.pending.push({
       expression,
       held: cursor.work.held,
-      maxOffset: cursor.work.maxOffset - cursor.index,
+      maxOffset: offsetBelow(cursor.work.maxOffset, cursor.index),
       minOffset: subMin,
       reordered: false,
     });

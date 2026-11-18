@@ -270,7 +270,7 @@ function stepSinglePushSpread(
     queues.sink.pending.push({
       expression,
       held: true,
-      maxOffset: cursor.work.maxOffset - startMin,
+      maxOffset: offsetBelow(cursor.work.maxOffset, startMin),
       minOffset: subMin,
       reordered: false,
     });
@@ -424,6 +424,16 @@ function hasOnlyPlainBlockAncestors(statement: Node, owner: Node): boolean {
     }
   }
   return true;
+}
+
+/**
+ * The end of a range of positions, `by` of them nearer: `Number.MAX_SAFE_INTEGER` stands for a range
+ * with no end (`Object.assign(target, ...sources)` takes every source) and stays one, so a list that
+ * prepends to itself comes back to the state it left instead of asking for one position fewer each
+ * time round for about 9e15 rounds.
+ */
+export function offsetBelow(max: number, by: number): number {
+  return max >= Number.MAX_SAFE_INTEGER ? max : max - by;
 }
 
 /** Saturating non-negative integer addition capped at `Number.MAX_SAFE_INTEGER`. */

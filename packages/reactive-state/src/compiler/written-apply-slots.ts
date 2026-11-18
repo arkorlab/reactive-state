@@ -31,6 +31,7 @@ import {
 } from './written-array-aliases.ts';
 import {
   applyHolderWrites,
+  offsetBelow,
   projectMemberKeys,
   selectedInitialExpressions,
   type SpreadWork,
@@ -280,7 +281,7 @@ function stepOrderedRangeSpread(
   state.pending.push({
     expression: expr,
     held: true,
-    maxOffset: cursor.work.maxOffset - cursor.idx,
+    maxOffset: offsetBelow(cursor.work.maxOffset, cursor.idx),
     minOffset: subMin,
     reordered: false,
   });
