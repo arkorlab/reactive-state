@@ -261,6 +261,12 @@ const CASES = [
   },
   {
     framed: true,
+    id: 'typed-error-list-given-to-a-helper-that-pushes',
+    source:
+      "function add(out: Error[], error: Error): void { out.push(error); } export function p(error: Error): string { const list: Error[] = []; add(list, error); return '' + list; }",
+  },
+  {
+    framed: true,
     id: 'error-pushed-into-a-list-a-native-mutator-writes',
     source:
       "export function p(error: Error): string { const list: unknown[] = []; Object.assign(list, { label: 'items' }); list.push(error); return '' + list; }",
