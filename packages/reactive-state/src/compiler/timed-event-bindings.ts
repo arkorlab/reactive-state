@@ -6,7 +6,6 @@ import {
   type ForOfStatement,
   type Identifier,
   isArrayBindingPattern,
-  isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
@@ -15,12 +14,8 @@ import {
   isForOfStatement,
   isIdentifier,
   isObjectBindingPattern,
-  isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
@@ -41,6 +36,7 @@ import { constantValue } from './numbers.ts';
 import { platformInitializer } from './platform-inputs.ts';
 import { bindsTarget, peelPlatform, platformPathsOf, sourceFunction } from './platform-uses.ts';
 import { isTypeOnly } from './scope.ts';
+import { pushDestructuringWriteQueries } from './timed-event-targets.ts';
 
 /** Assignment operators whose right-hand expression can populate the target binding or member. */
 const VALUE_ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
@@ -63,10 +59,13 @@ export interface EventQuery {
 }
 
 /** Shared binding predicate and projection state while scanning write sites. */
-interface BindingWriteContext {
+export interface BindingWriteContext {
   readonly isRead: (node: Node) => node is Identifier;
+  /** The keys the read of the binding has, which the value it is given is read by. */
   readonly keys: readonly (string | null)[];
   readonly pending: EventQuery[];
+  /** The keys from the outermost pattern in to the element being matched, source side. */
+  readonly path: readonly (string | null)[];
 }
 
 /** Resolves a static string key from `expr[key]`, including constant identifiers. */
@@ -371,7 +370,12 @@ function pushIdentifierWriteSites(
   pending: EventQuery[],
 ): void {
   const sourceFile = declName.getSourceFile();
-  const ctx: BindingWriteContext = { isRead: readsOf(declName, sourceFile), keys, pending };
+  const ctx: BindingWriteContext = {
+    isRead: readsOf(declName, sourceFile),
+    keys,
+    path: [],
+    pending,
+  };
   const visit = (node: Node): void => {
     if (isTypeOnly(node)) {
       return;
@@ -435,65 +439,6 @@ function inspectAssignmentToBinding(
   }
   if (bindsTarget(target, isRead, false)) {
     pushDestructuringWriteQueries(target, right, ctx);
-  }
-}
-
-/** Projects `right` down to each destructured write site targeting `ctx.isRead`. */
-function pushDestructuringWriteQueries(
-  pattern: Expression,
-  right: Expression,
-  ctx: BindingWriteContext,
-): void {
-  const { isRead, keys, pending } = ctx;
-  const clean = peelPlatform(pattern);
-  if (isIdentifier(clean) && isRead(clean)) {
-    pending.push({ expr: right, keys });
-    return;
-  }
-  if (isBinaryExpression(clean) && clean.operatorToken.kind === SyntaxKind.EqualsToken) {
-    pushDestructuringWriteQueries(clean.left, right, ctx);
-    pushDestructuringWriteQueries(clean.left, clean.right, ctx);
-    return;
-  }
-  if (isObjectLiteralExpression(clean)) {
-    pushObjectDestructuringWrite(clean, right, ctx);
-  } else if (isArrayLiteralExpression(clean)) {
-    for (const [index, el] of clean.elements.entries()) {
-      const next = isSpreadElement(el) ? restElementKeys(keys) : [String(index), ...keys];
-      pushDestructuringWriteQueries(isSpreadElement(el) ? el.expression : el, right, {
-        ...ctx,
-        keys: next,
-      });
-    }
-  }
-}
-
-/** Computes element projection keys through an array rest target. */
-function restElementKeys(keys: readonly (string | null)[]): readonly (string | null)[] {
-  return keys.length > 0 ? [null, ...keys.slice(1)] : [];
-}
-
-/** Projects `right` through an object assignment pattern toward `ctx.isRead`. */
-function pushObjectDestructuringWrite(
-  clean: Expression & { readonly properties: readonly Node[] },
-  right: Expression,
-  ctx: BindingWriteContext,
-): void {
-  const { isRead, keys, pending } = ctx;
-  for (const prop of clean.properties) {
-    if (isShorthandPropertyAssignment(prop) && isRead(prop.name)) {
-      pending.push({ expr: right, keys: [prop.name.text, ...keys] });
-      if (prop.objectAssignmentInitializer !== undefined) {
-        pending.push({ expr: prop.objectAssignmentInitializer, keys });
-      }
-    } else if (isPropertyAssignment(prop)) {
-      pushDestructuringWriteQueries(prop.initializer, right, {
-        ...ctx,
-        keys: [patternKey(prop) ?? null, ...keys],
-      });
-    } else if (isSpreadAssignment(prop)) {
-      pushDestructuringWriteQueries(prop.expression, right, ctx);
-    }
   }
 }
 

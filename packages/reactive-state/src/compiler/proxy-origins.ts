@@ -15,11 +15,13 @@ import {
   isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
+  isVariableDeclaration,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, isAnswering, returnedBy } from './answers.ts';
+import { declarationOf } from './framed.ts';
 import { metadataCallee } from './input-callees.ts';
 import { mutatedArrayOrigins } from './proxy-array-writes.ts';
 import {
@@ -28,7 +30,9 @@ import {
   holdsArrayLiteral,
   spreadElementOrigins,
 } from './proxy-arrays.ts';
+import { constructedOrigins, fieldOrigins } from './proxy-constructions.ts';
 import { indirectCall } from './proxy-indirect-calls.ts';
+import { type WrittenMember, writesInto } from './proxy-mutable-writes.ts';
 import {
   holdsObjectLiteral,
   mutatedObjectOrigins,
@@ -237,6 +241,9 @@ function containerOrigins(at: Origin): readonly Origin[] {
   if (isObjectLiteralExpression(value)) {
     return objectOrigins(value, at);
   }
+  if (isNewExpression(value)) {
+    return constructedOrigins(value, at);
+  }
   return isArrayLiteralExpression(value) ? arrayOrigins(value, at) : [];
 }
 
@@ -333,7 +340,7 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
   }
   const held = heldConstant(name, at.context);
   if (held === undefined) {
-    return [];
+    return mutableOrigins(name, at);
   }
   if (holdsObjectLiteral(held) && objectChangedBefore(name, at.context)) {
     return mutatedObjectOrigins(name, held, at);
@@ -342,6 +349,34 @@ function namedOrigins(name: Identifier, at: Origin): readonly Origin[] {
     return mutatedArrayOrigins(name, held, at);
   }
   return [{ ...at, value: held }];
+}
+
+/**
+ * What a `let` or `var` binding can hold: its initializer and the right side of every assignment to
+ * it, wherever the file writes it. A name that is neither is followed no further.
+ */
+function mutableOrigins(name: Identifier, at: Origin): readonly Origin[] {
+  const declared = declarationOf(name);
+  if (declared === undefined || !isVariableDeclaration(declared) || !isIdentifier(declared.name)) {
+    return [];
+  }
+  const initial = declared.initializer === undefined ? [] : [declared.initializer];
+  const writes = writesInto(declared);
+  const held = [...initial, ...writes.assigned].map((value) => ({ ...at, value }));
+
+  return [...held, ...writes.members.flatMap((written) => writtenOrigins(written, at))];
+}
+
+/** A value written into a mutable container, as a value the read of the container may reach. */
+function writtenOrigins(written: WrittenMember, at: Origin): readonly Origin[] {
+  const { value } = written;
+  if (written.kind === 'merged') {
+    return [{ ...at, value }];
+  }
+  if (written.kind === 'deep') {
+    return [{ ...at, excluded: undefined, keys: [], spread: undefined, value }];
+  }
+  return fieldOrigins(written.name, value, at);
 }
 
 /** A source call's returned expressions, binding ordinary parameters to their actual arguments. */
