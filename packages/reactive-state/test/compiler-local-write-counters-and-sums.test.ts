@@ -280,6 +280,58 @@ const CASES: readonly Case[] = [
       return target;
     },
   },
+  {
+    body: 'const target = { n: undefined as unknown as number }; target.n++; return target;',
+    changed: true,
+    id: 'undefined-slot-incremented',
+    run: () => {
+      const target = box({ n: undefined as unknown as number });
+      target.n -= -1;
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: undefined as unknown as number }; target.n -= 1; return target;',
+    changed: true,
+    id: 'undefined-slot-subtracted-from',
+    run: () => {
+      const target = box({ n: undefined as unknown as number });
+      target.n -= 1;
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: undefined as unknown as number }; for (const item of items) { target.n++; } return target;',
+    changed: true,
+    id: 'undefined-slot-incremented-in-loop',
+    run: ({ items }) => {
+      const target = box({ n: undefined as unknown as number });
+      each(items, () => {
+        target.n -= -1;
+      });
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: (() => 1) as unknown as number }; target.n++; return target;',
+    changed: true,
+    id: 'function-slot-incremented',
+    run: () => {
+      const target = box({ n: (() => 1) as unknown as number });
+      target.n -= -1;
+      return target;
+    },
+  },
+  {
+    body: 'const target = { n: null as unknown as number }; target.n++; return target;',
+    changed: false,
+    id: 'null-slot-incremented',
+    run: () => {
+      const target = box({ n: null as unknown as number });
+      target.n += 1;
+      return target;
+    },
+  },
 ];
 
 describe('local counters and sums of a page’s values', () => {

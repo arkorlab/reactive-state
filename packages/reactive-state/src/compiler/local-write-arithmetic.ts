@@ -15,12 +15,15 @@ import {
   isFunctionExpression,
   isGetAccessorDeclaration,
   isMethodDeclaration,
+  isNewExpression,
   isObjectLiteralExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
+  isRegularExpressionLiteral,
   isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSourceFile,
+  isTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isWhileStatement,
@@ -29,6 +32,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { globalPath } from './global-answers.ts';
 import {
   type AliasFrame,
   aliasStep,
@@ -251,11 +255,25 @@ function isByZero(operator: SyntaxKind, right: number | string | undefined): boo
   return right === 0 && BY_ZERO.has(operator);
 }
 
-/** Whether the slot `initial` initializes shows it holds no number — text or an object the code writes. */
+/**
+ * Whether the slot `initial` initializes shows it holds no number: text, an object, an array, a
+ * function, a class, a pattern, a construction, or `undefined`, which a `-`, `++` or `--` makes
+ * `NaN` of. What the code does not show — a call, a name, a page's value — is left to the
+ * authority.
+ */
 function holdsNoNumber(initial: Expression, left: number | string | undefined): boolean {
   const value = unwrapped(initial);
   return (
-    typeof left === 'string' || isObjectLiteralExpression(value) || isArrayLiteralExpression(value)
+    typeof left === 'string' ||
+    isObjectLiteralExpression(value) ||
+    isArrayLiteralExpression(value) ||
+    isArrowFunction(value) ||
+    isFunctionExpression(value) ||
+    isClassExpression(value) ||
+    isRegularExpressionLiteral(value) ||
+    isNewExpression(value) ||
+    isTemplateExpression(value) ||
+    globalPath(value)?.join('.') === 'undefined'
   );
 }
 
