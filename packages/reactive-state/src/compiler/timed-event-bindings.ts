@@ -3,6 +3,7 @@ import {
   type BindingElement,
   type CallExpression,
   type Expression,
+  type ForOfStatement,
   type Identifier,
   isArrayBindingPattern,
   isArrayLiteralExpression,
@@ -10,6 +11,7 @@ import {
   isBindingElement,
   isCallExpression,
   isElementAccessExpression,
+  isExpression,
   isForOfStatement,
   isIdentifier,
   isObjectBindingPattern,
@@ -376,12 +378,33 @@ function pushIdentifierWriteSites(
     }
     if (isBinaryExpression(node) && VALUE_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind)) {
       inspectAssignmentToBinding(node.left, node.right, ctx);
+    } else if (isForOfStatement(node) && isExpression(node.initializer)) {
+      inspectLoopTarget(node, node.initializer, ctx);
     } else if (isCallExpression(node) && keys.length > 0) {
       inspectMutatingCallOnBinding(node, ctx);
     }
     node.forEachChild(visit);
   };
   sourceFile.forEachChild(visit);
+}
+
+/**
+ * Checks a `for…of` header that assigns (`for (e of items)`, `for ({ stamp } of items)`): it writes
+ * each element of the iterable as `=` writes its right side, so what it contributes is the
+ * iterable's, one element key further in. A default in the target is not an element of it.
+ */
+function inspectLoopTarget(
+  loop: ForOfStatement,
+  target: Expression,
+  ctx: BindingWriteContext,
+): void {
+  const found: EventQuery[] = [];
+  inspectAssignmentToBinding(target, loop.expression, { ...ctx, pending: found });
+  for (const query of found) {
+    ctx.pending.push(
+      query.expr === loop.expression ? { expr: query.expr, keys: [null, ...query.keys] } : query,
+    );
+  }
 }
 
 /** Checks direct, member, and destructuring `=` writes for contributions to `ctx`. */

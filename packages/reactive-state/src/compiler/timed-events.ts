@@ -9,6 +9,7 @@ import {
   isComputedPropertyName,
   isConditionalExpression,
   isElementAccessExpression,
+  isForOfStatement,
   isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
@@ -124,7 +125,21 @@ function isAssignmentTarget(node: Expression): boolean {
   );
 }
 
-/** Resolves RHS queries for an assignment destructuring pattern `({ ... } = rhs)`. */
+/** What a destructuring target is assigned from: the right side of `=`, or an element of a loop's iterable. */
+function targetSource(parent: Node, target: Node): EventQuery | undefined {
+  if (
+    isBinaryExpression(parent) &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+    parent.left === target
+  ) {
+    return { expr: parent.right, keys: [] };
+  }
+  return isForOfStatement(parent) && parent.initializer === target
+    ? { expr: parent.expression, keys: [null] }
+    : undefined;
+}
+
+/** Resolves the source queries of a destructuring target: `({ ... } = rhs)` or `for ({ ... } of items)`. */
 function assignmentPatternQueries(
   pattern: Expression,
   initialKeys: readonly (string | null)[],
@@ -136,12 +151,9 @@ function assignmentPatternQueries(
       current = current.parent;
     }
     const parent = current.parent;
-    if (
-      isBinaryExpression(parent) &&
-      parent.operatorToken.kind === SyntaxKind.EqualsToken &&
-      parent.left === current
-    ) {
-      return [{ expr: parent.right, keys: [...steps.toReversed(), ...initialKeys] }];
+    const source = targetSource(parent, current);
+    if (source !== undefined) {
+      return [{ expr: source.expr, keys: [...source.keys, ...steps.toReversed(), ...initialKeys] }];
     }
     if (isPropertyAssignment(parent) && isTakenApart(parent.parent)) {
       steps.push(patternKey(parent) ?? null);
