@@ -24,7 +24,32 @@ import { UnfollowableError } from './framed-getter-writes.ts';
 
 /** What an array method called in a tag's body, or a write to an array, makes of the Date-bearing substitutions it is given. */
 
-const REDUCE_ARRAY_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
+/**
+ * The array methods that call a callback with the elements of their receiver, which a tag's body
+ * reads in place or by a name: the one list of them, for the callback's parameters and for what a
+ * named callback writes as text. A method left out of it is taken whatever its callback writes.
+ */
+export const ELEMENT_CALLBACK_METHODS: ReadonlySet<string> = new Set([
+  'every',
+  'filter',
+  'find',
+  'findIndex',
+  'findLast',
+  'findLastIndex',
+  'flatMap',
+  'forEach',
+  'map',
+  'some',
+]);
+/** The reductions, whose callback is handed an accumulator, an element, an index and the array. */
+export const REDUCE_ARRAY_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
+/** The sorts, whose callback is a comparator handed two elements of the receiver. */
+export const COMPARATOR_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
+
+/** The parameter an element callback (`map`, `filter`, ...) is handed the array in: after the element and the index. */
+export const ELEMENT_CALLBACK_ARRAY_SLOT = 2;
+/** The parameter a reduction's callback is handed the array in: after the accumulator, the element and the index. */
+export const REDUCE_CALLBACK_ARRAY_SLOT = 3;
 
 /**
  * Array methods that answer an element, an array of elements, or an iterator that yields them or

@@ -44,7 +44,12 @@ import {
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
 import {
+  COMPARATOR_METHODS,
+  ELEMENT_CALLBACK_ARRAY_SLOT,
+  ELEMENT_CALLBACK_METHODS,
   elementMethodCarriesDated,
+  REDUCE_ARRAY_METHODS,
+  REDUCE_CALLBACK_ARRAY_SLOT,
   writtenArrayCarriesDated,
 } from './render-tag-date-array-methods.ts';
 import {
@@ -56,20 +61,6 @@ import {
 import { bindingIdentifiers } from './scope.ts';
 
 /** Tracks expressions inside a tag or helper body that carry Date-bearing substitution values. */
-
-const ELEMENT_CALLBACK_METHODS: ReadonlySet<string> = new Set([
-  'every',
-  'filter',
-  'find',
-  'findLast',
-  'flatMap',
-  'forEach',
-  'map',
-  'some',
-]);
-const REDUCE_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
-/** Methods whose callback is a comparator, which is handed two elements of the receiver. */
-const COMPARATOR_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
 
 export interface DatedCarrierContext {
   readonly bindings: WrapperBindings;
@@ -311,17 +302,22 @@ function inlineCallbackSlotDated(
   const method = frameMemberName(callee);
   if (method === undefined) return false;
   return (
-    callbackSlotHoldsElement(method, paramIndex, parent.arguments.length) &&
+    callbackSlotHoldsDated(method, paramIndex, parent.arguments.length) &&
     carriesDatedSubstitution(callee.expression, ctx.bindings, ctx.datedIndices, seen)
   );
 }
 
-/** Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an element of the receiver. */
-function callbackSlotHoldsElement(method: string, slot: number, count: number): boolean {
-  if (ELEMENT_CALLBACK_METHODS.has(method)) return slot === 0;
+/**
+ * Whether parameter `slot` of the callback of `method`, given `count` arguments, is handed an
+ * element of the receiver or the receiver itself (the array after the index of an element
+ * callback, and after the index of a reduction).
+ */
+function callbackSlotHoldsDated(method: string, slot: number, count: number): boolean {
+  if (ELEMENT_CALLBACK_METHODS.has(method))
+    return slot === 0 || slot === ELEMENT_CALLBACK_ARRAY_SLOT;
   if (COMPARATOR_METHODS.has(method)) return slot <= 1;
-  if (!REDUCE_METHODS.has(method)) return false;
-  return slot === 1 || (slot === 0 && count < 2);
+  if (!REDUCE_ARRAY_METHODS.has(method)) return false;
+  return slot === 1 || slot === REDUCE_CALLBACK_ARRAY_SLOT || (slot === 0 && count < 2);
 }
 
 function iterableOrArgumentsDated(

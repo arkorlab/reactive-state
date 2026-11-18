@@ -25,9 +25,11 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, useOf } from './code-globals.ts';
+import { sourceArrayFunction } from './framed-array-functions.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { computedBindingContainer, framedMemberNames } from './framed-keys.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
+import { methodsOf } from './held-methods.ts';
 import { LOCAL_METHODS } from './local-reads.ts';
 import { constantValue } from './numbers.ts';
 import {
@@ -36,6 +38,13 @@ import {
   type RawWrapperQuery,
   type WrapperBindings,
 } from './render-raw-wrapper-bindings.ts';
+import {
+  COMPARATOR_METHODS,
+  ELEMENT_CALLBACK_ARRAY_SLOT,
+  ELEMENT_CALLBACK_METHODS,
+  REDUCE_ARRAY_METHODS,
+  REDUCE_CALLBACK_ARRAY_SLOT,
+} from './render-tag-date-array-methods.ts';
 import {
   anyCallArgCarriesDated,
   argElementsSlotCarriesDated,
@@ -75,18 +84,20 @@ const SAFE_GLOBAL_CALLS: ReadonlySet<string> = new Set([
   'String.fromCharCode',
   'String.fromCodePoint',
 ]);
-const ELEMENT_MAPPER_METHODS: ReadonlySet<string> = new Set([
-  'every',
-  'filter',
-  'find',
-  'findLast',
-  'flatMap',
-  'forEach',
-  'map',
-  'some',
+/** String methods that convert their first argument, the text they search for or split by, to text. */
+const SEARCH_METHODS: ReadonlySet<string> = new Set([
+  'endsWith',
+  'includes',
+  'indexOf',
+  'lastIndexOf',
+  'match',
+  'matchAll',
+  'search',
+  'split',
+  'startsWith',
 ]);
-const REDUCE_MAPPER_METHODS: ReadonlySet<string> = new Set(['reduce', 'reduceRight']);
-const SORT_METHODS: ReadonlySet<string> = new Set(['sort', 'toSorted']);
+/** The search methods an array has too, which compares by identity and converts nothing. */
+const ARRAY_SEARCH_METHODS: ReadonlySet<string> = new Set(['includes', 'indexOf', 'lastIndexOf']);
 
 export interface WrapperCoerceContext {
   readonly bindings: WrapperBindings;
@@ -271,7 +282,29 @@ function borrowedGlobalCoerces(
   return false;
 }
 
+/**
+ * A method called by name converts what it is handed as the language's method of that name does,
+ * unless the code shows that the method is one it writes: its own body is read as a helper's.
+ */
 function memberMethodCallCoerces(
+  method: string,
+  unpacked: UnwrappedCall,
+  context: WrapperCoerceContext,
+): boolean {
+  return nativeMethodCoerces(method, unpacked, context) && !sourceOwnMethod(method, unpacked);
+}
+
+/**
+ * Whether the code shows the method called to be a function it writes: one an unmodified object
+ * literal holds, or a method of a class of the module that the receiver is made of or is.
+ */
+function sourceOwnMethod(method: string, unpacked: UnwrappedCall): boolean {
+  if (sourceArrayFunction(unwrapped(unpacked.target))) return true;
+  const holder = unpacked.receiver === undefined ? undefined : unwrapped(unpacked.receiver);
+  return holder !== undefined && isIdentifier(holder) && methodsOf(holder).has(method);
+}
+
+function nativeMethodCoerces(
   method: string,
   unpacked: UnwrappedCall,
   context: WrapperCoerceContext,
@@ -281,8 +314,8 @@ function memberMethodCallCoerces(
   if (method === 'join') {
     return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
   }
-  if (recvDated && SORT_METHODS.has(method)) return sortCoerces(unpacked.args, context);
-  if (recvDated && (ELEMENT_MAPPER_METHODS.has(method) || REDUCE_MAPPER_METHODS.has(method))) {
+  if (recvDated && COMPARATOR_METHODS.has(method)) return sortCoerces(unpacked.args, context);
+  if (recvDated && (ELEMENT_CALLBACK_METHODS.has(method) || REDUCE_ARRAY_METHODS.has(method))) {
     return arrayMapperCallbackCoerces(method, unpacked.args, context);
   }
   return stringMethodCoerces(method, unpacked, context, false);
@@ -305,6 +338,29 @@ function sortCoerces(args: CallArgumentList, context: WrapperCoerceContext): boo
   return externalCallbackCoerces(actual, new Set([0, 1]), 2, context);
 }
 
+/**
+ * A search method converts the text it searches for, and so does `String.prototype` called on
+ * another receiver, which converts that too. The methods an array has as well compare by identity,
+ * so a receiver that holds the Date, or an array literal, is that array.
+ */
+function searchCoerces(
+  method: string,
+  unpacked: UnwrappedCall,
+  context: WrapperCoerceContext,
+  borrowedStringProto: boolean,
+): boolean {
+  const recv = unpacked.receiver;
+  const recvDated = recv !== undefined && carriesDatedExpr(recv, context);
+  if (borrowedStringProto) {
+    return recvDated || callArgSlotCarriesDated(unpacked.args, 0, context);
+  }
+  const isArray =
+    ARRAY_SEARCH_METHODS.has(method) &&
+    recv !== undefined &&
+    (recvDated || isArrayLiteralExpression(unwrapped(recv)));
+  return !isArray && callArgSlotCarriesDated(unpacked.args, 0, context);
+}
+
 function stringMethodCoerces(
   method: string,
   unpacked: UnwrappedCall,
@@ -323,6 +379,8 @@ function stringMethodCoerces(
     }
     return recvDated || anyCallArgCarriesDated(unpacked.args, context);
   }
+  if (SEARCH_METHODS.has(method))
+    return searchCoerces(method, unpacked, context, borrowedStringProto);
   if (method === 'padStart' || method === 'padEnd') {
     return recvDated || callArgSlotCarriesDated(unpacked.args, 1, context);
   }
@@ -363,11 +421,18 @@ function arrayMapperCallbackCoerces(
   if (args.kind !== 'elements') return false;
   const [callback, initial] = args.elements;
   if (callback === undefined || isSpreadElement(callback)) return false;
-  if (REDUCE_MAPPER_METHODS.has(method)) {
-    const slots = new Set(initial === undefined ? [0, 1] : [1]);
-    return externalCallbackCoerces(callback, slots, 2, context);
+  if (REDUCE_ARRAY_METHODS.has(method)) {
+    const slots = new Set(
+      initial === undefined ? [0, 1, REDUCE_CALLBACK_ARRAY_SLOT] : [1, REDUCE_CALLBACK_ARRAY_SLOT],
+    );
+    return externalCallbackCoerces(callback, slots, REDUCE_CALLBACK_ARRAY_SLOT + 1, context);
   }
-  return externalCallbackCoerces(callback, new Set([0]), 1, context);
+  return externalCallbackCoerces(
+    callback,
+    new Set([0, ELEMENT_CALLBACK_ARRAY_SLOT]),
+    ELEMENT_CALLBACK_ARRAY_SLOT + 1,
+    context,
+  );
 }
 
 function externalCallbackCoerces(
