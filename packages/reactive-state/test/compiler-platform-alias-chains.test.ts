@@ -140,6 +140,22 @@ const CASES = [
   },
 ] as const;
 
+/** Finds the first `timedMaking` or `platformOtherwise` refusal in `root`. */
+function firstPlatformRefusal(root: Node): string | undefined {
+  let found: string | undefined;
+  const visit = (node: Node): void => {
+    if (found !== undefined) {
+      return;
+    }
+    found = timedMaking(node) ?? platformOtherwise(node);
+    if (found === undefined) {
+      node.forEachChild(visit);
+    }
+  };
+  root.forEachChild(visit);
+  return found;
+}
+
 describe('memoized and cycle-safe platform initializer and mutability checks', () => {
   let api: API;
 
@@ -156,22 +172,6 @@ describe('memoized and cycle-safe platform initializer and mutability checks', (
   afterAll(() => {
     api[Symbol.dispose]();
   });
-
-  /** Finds the first `timedMaking` or `platformOtherwise` refusal in `root`. */
-  function firstPlatformRefusal(root: Node): string | undefined {
-    let found: string | undefined;
-    const visit = (node: Node): void => {
-      if (found !== undefined) {
-        return;
-      }
-      found = timedMaking(node) ?? platformOtherwise(node);
-      if (found === undefined) {
-        node.forEachChild(visit);
-      }
-    };
-    root.forEachChild(visit);
-    return found;
-  }
 
   /** Measures cold-cache platform analysis time and verifies `unsettledIn` end-to-end. */
   function measureRefusal(source: string): {
@@ -192,6 +192,7 @@ describe('memoized and cycle-safe platform initializer and mutability checks', (
 
   it.each(CASES)('$id', ({ expected, source }) => {
     const measured = measureRefusal(source);
+
     expect(measured.platformRefusal).toBe(expected);
     expect(measured.settledRefusal).toBe(expected);
     expect(measured.elapsedMs).toBeLessThan(CHAIN.maxElapsedMs);

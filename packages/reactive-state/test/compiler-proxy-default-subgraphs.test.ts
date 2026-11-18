@@ -233,11 +233,12 @@ describe('memoized argument presence across shared default and conditional subgr
     );
     const emptyNode = variables
       .flatMap((statement) => statement.declarationList.declarations)
-      .find(
-        (declaration) =>
+      .find((declaration) => {
+        return (
           declaration.initializer !== undefined &&
-          isObjectLiteralExpression(declaration.initializer),
-      )?.initializer;
+          isObjectLiteralExpression(declaration.initializer)
+        );
+      })?.initializer;
     const missingNode = variables
       .flatMap((statement) => statement.declarationList.declarations)
       .find(
@@ -253,7 +254,7 @@ describe('memoized argument presence across shared default and conditional subgr
     const origin = proxyOrigin([rootNode], {
       follow: (name) => {
         if (name.text !== 'seed') {
-          return undefined;
+          return;
         }
         visits += 1;
         if (visits > SUBGRAPH.visitBudget) {
@@ -293,6 +294,7 @@ describe('memoized argument presence across shared default and conditional subgr
 
   it.each(CASES)('$id', (entry) => {
     const measured = evaluateCase(entry);
+
     expect(measured.found).toBe(entry.expectedFound);
     expect(measured.visits).toBeLessThanOrEqual(entry.maxVisits ?? SUBGRAPH.maxVisits);
     expect(measured.elapsedMs).toBeLessThan(SUBGRAPH.maxElapsedMs);

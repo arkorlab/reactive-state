@@ -8,6 +8,7 @@ import {
   isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
+  isExpression,
   isForInStatement,
   isForOfStatement,
   isIdentifier,
@@ -17,17 +18,32 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
-  isVariableDeclarationList,
   type Node,
   type ObjectBindingPattern,
   type ObjectLiteralExpression,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { unwrapped } from './bounded.ts';
-import { arrayIndex } from './proxy-arrays.ts';
-import { type Origin, propertyKey, type ProxyReading } from './proxy-values.ts';
+import {
+  finishPatternLeaf,
+  patternObjectRestOrigins,
+  type PatternSource,
+  type PresenceStatus,
+  slicePatternRest,
+  stepPatternSource,
+} from './proxy-rest-slices.ts';
+import { type Origin, peeled, propertyKey, type ProxyReading } from './proxy-values.ts';
 import { hoistedIn } from './scope.ts';
+
+/** Query describing a `BindingName` destructuring read and optional definedness hook. */
+export interface PatternBindingQuery {
+  readonly checkPresence?: ((source: Origin) => PresenceStatus) | undefined;
+  readonly defaultAt?: Origin | undefined;
+  readonly pattern: BindingName;
+  readonly readAt: Origin;
+  readonly source: Origin | undefined;
+  readonly targetText: string;
+}
 
 /** Assignment operators whose right-hand expression can become the target binding's value. */
 const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
@@ -37,8 +53,11 @@ const VALUE_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
-/** Whether a hoisted `var` binding name (identifier or pattern) declares `targetText`. */
-export function bindsHoistedName(name: BindingName, targetText: string): boolean {
+/** Whether a hoisted `var` or parameter `BindingName` declares `targetText`. */
+export function bindsHoistedName(name: BindingName | undefined, targetText: string): boolean {
+  if (name === undefined) {
+    return false;
+  }
   if (isIdentifier(name)) {
     return name.text === targetText;
   }
@@ -69,7 +88,14 @@ export function hoistedParameterOrigins(
         spread: undefined,
         value: declaration.initializer,
       };
-      found.push(...bindingNameOrigins(declaration.name, source, at, targetText));
+      found.push(
+        ...destructuredBindingOrigins({
+          pattern: declaration.name,
+          readAt: at,
+          source,
+          targetText,
+        }),
+      );
       continue;
     }
     const loop = declaration.parent.parent;
@@ -81,9 +107,23 @@ export function hoistedParameterOrigins(
         spread: undefined,
         value: loop.expression,
       };
-      found.push(...bindingNameOrigins(declaration.name, source, at, targetText));
+      found.push(
+        ...destructuredBindingOrigins({
+          pattern: declaration.name,
+          readAt: at,
+          source,
+          targetText,
+        }),
+      );
     } else if (isForInStatement(loop)) {
-      found.push(...bindingNameOrigins(declaration.name, undefined, at, targetText));
+      found.push(
+        ...destructuredBindingOrigins({
+          pattern: declaration.name,
+          readAt: at,
+          source: undefined,
+          targetText,
+        }),
+      );
     }
   }
   return found;
@@ -95,9 +135,10 @@ export function nodeAssignedOrigins(
   isRead: (candidate: Node) => candidate is Identifier,
   at: Origin,
 ): readonly Origin[] {
+  const matchesLeaf = (candidate: Expression): boolean => isRead(candidate);
   if (isBinaryExpression(node) && VALUE_ASSIGNMENTS.has(node.operatorToken.kind)) {
     if (node.operatorToken.kind !== SyntaxKind.EqualsToken) {
-      return isRead(unwrapped(node.left)) ? [{ ...at, value: node.right }] : [];
+      return isRead(peeled(node.left)) ? [{ ...at, value: node.right }] : [];
     }
     const source: Origin = {
       ...at,
@@ -106,9 +147,9 @@ export function nodeAssignedOrigins(
       spread: undefined,
       value: node.right,
     };
-    return patternTargetOrigins(node.left, source, at, isRead);
+    return patternTargetOrigins(node.left, source, at, matchesLeaf);
   }
-  if (isForOfStatement(node) && !isVariableDeclarationList(node.initializer)) {
+  if (isForOfStatement(node) && isExpression(node.initializer)) {
     const source: Origin = {
       ...at,
       excluded: undefined,
@@ -116,120 +157,160 @@ export function nodeAssignedOrigins(
       spread: undefined,
       value: node.expression,
     };
-    return patternTargetOrigins(node.initializer, source, at, isRead);
+    return patternTargetOrigins(node.initializer, source, at, matchesLeaf);
   }
-  if (isForInStatement(node) && !isVariableDeclarationList(node.initializer)) {
-    return patternTargetOrigins(node.initializer, undefined, at, isRead);
+  if (isForInStatement(node) && isExpression(node.initializer)) {
+    return patternTargetOrigins(node.initializer, undefined, at, matchesLeaf);
   }
   return [];
 }
 
-/** Projects a `BindingName` (`var` identifier or destructuring pattern) against `source`. */
-function bindingNameOrigins(
-  pattern: BindingName,
-  source: Origin | undefined,
-  readAt: Origin,
-  targetText: string,
-): readonly Origin[] {
-  if (isIdentifier(pattern)) {
-    return pattern.text === targetText && source !== undefined
-      ? [projectReadOrigin(source, readAt)]
-      : [];
-  }
-  if (isArrayBindingPattern(pattern)) {
-    return arrayBindingOrigins(pattern, source, readAt, targetText);
-  }
-  return objectBindingOrigins(pattern, source, readAt, targetText);
+/** Internal `BindingName` query carrying a rest-slice-aware `PatternSource`. */
+interface SlicedBindingQuery {
+  readonly checkPresence?: ((source: Origin) => PresenceStatus) | undefined;
+  readonly defaultAt?: Origin | undefined;
+  readonly pattern: BindingName;
+  readonly readAt: Origin;
+  readonly source: PatternSource | undefined;
+  readonly targetText: string;
 }
 
-/** Projects elements and defaults of an `ArrayBindingPattern` for `targetText`. */
+/** Projects a `BindingName` (identifier or destructuring pattern) against `query.source`. */
+export function destructuredBindingOrigins(query: PatternBindingQuery): readonly Origin[] {
+  const source: PatternSource | undefined =
+    query.source === undefined ? undefined : { origin: query.source };
+  return bindingOriginsFromSource({ ...query, source });
+}
+
+/** Projects `query.pattern` against a direct or rest-sliced `PatternSource`. */
+function bindingOriginsFromSource(query: SlicedBindingQuery): readonly Origin[] {
+  const { pattern, readAt, source, targetText } = query;
+  if (isIdentifier(pattern)) {
+    return pattern.text === targetText ? finishPatternLeaf(source, readAt) : [];
+  }
+  if (isArrayBindingPattern(pattern)) {
+    return arrayBindingOrigins(pattern, query);
+  }
+  return objectBindingOrigins(pattern, query);
+}
+
+/** Projects elements, nested rest slices, and defaults of an `ArrayBindingPattern`. */
 function arrayBindingOrigins(
   pattern: ArrayBindingPattern,
-  source: Origin | undefined,
-  readAt: Origin,
-  targetText: string,
+  query: SlicedBindingQuery,
 ): readonly Origin[] {
+  const { source, targetText } = query;
   const found: Origin[] = [];
   for (const [index, element] of pattern.elements.entries()) {
     if (isOmittedExpression(element) || !bindsHoistedName(element.name, targetText)) {
       continue;
     }
-    if (element.dotDotDotToken !== undefined) {
-      found.push(...restSliceOrigins(source, readAt));
-      continue;
-    }
     const nextSource =
-      source === undefined ? undefined : { ...source, keys: [...source.keys, String(index)] };
-    found.push(...bindingElementOrigins(element, nextSource, readAt, targetText));
+      element.dotDotDotToken === undefined
+        ? stepPatternSource(source, String(index))
+        : slicePatternRest(source, index);
+    found.push(...bindingElementOrigins(element, { ...query, source: nextSource }));
   }
   return found;
 }
 
-/** Projects properties and defaults of an `ObjectBindingPattern` for `targetText`. */
+/** Projects properties, object-rest exclusions, and defaults of an `ObjectBindingPattern`. */
 function objectBindingOrigins(
   pattern: ObjectBindingPattern,
-  source: Origin | undefined,
-  readAt: Origin,
-  targetText: string,
+  query: SlicedBindingQuery,
 ): readonly Origin[] {
+  const { readAt, source, targetText } = query;
   const found: Origin[] = [];
+  const omittedKeys = new Set<string>();
   for (const element of pattern.elements) {
-    if (!bindsHoistedName(element.name, targetText)) {
-      continue;
-    }
     if (element.dotDotDotToken !== undefined) {
-      if (source !== undefined) {
-        found.push(objectRestOrigin(source, readAt));
+      if (bindsHoistedName(element.name, targetText)) {
+        found.push(...patternObjectRestOrigins(source, readAt, omittedKeys));
       }
       continue;
     }
     const key = bindingPropertyKey(element, readAt.context);
-    const nextSource =
-      source === undefined ? undefined : { ...source, keys: [...source.keys, key] };
-    found.push(...bindingElementOrigins(element, nextSource, readAt, targetText));
+    if (bindsHoistedName(element.name, targetText)) {
+      const nextSource = stepPatternSource(source, key);
+      found.push(...bindingElementOrigins(element, { ...query, source: nextSource }));
+    }
+    if (key !== null) {
+      omittedKeys.add(key);
+    }
   }
   return found;
 }
 
 /** Resolves the static property key read by an object `BindingElement`, or `null` when dynamic. */
-function bindingPropertyKey(element: BindingElement, reading: ProxyReading): string | null {
+export function bindingPropertyKey(element: BindingElement, reading: ProxyReading): string | null {
   if (element.propertyName !== undefined) {
     return propertyKey(element.propertyName, reading) ?? null;
   }
-  return isIdentifier(element.name) ? element.name.text : null;
+  return element.name !== undefined && isIdentifier(element.name) ? element.name.text : null;
 }
 
 /** Combines projected `source` origins with an optional `BindingElement` default initializer. */
 function bindingElementOrigins(
   element: BindingElement,
-  source: Origin | undefined,
-  readAt: Origin,
-  targetText: string,
+  query: SlicedBindingQuery,
 ): readonly Origin[] {
-  const fromSource = bindingNameOrigins(element.name, source, readAt, targetText);
+  if (element.name === undefined) {
+    return [];
+  }
+  const nextQuery: SlicedBindingQuery = { ...query, pattern: element.name };
+  const fromSource = bindingOriginsFromSource(nextQuery);
   if (element.initializer === undefined) {
     return fromSource;
   }
+  const presence = patternSourcePresence(query.source, query.checkPresence);
+  if (presence === 'defined') {
+    return fromSource;
+  }
+  const baseAt = query.defaultAt ?? query.readAt;
   const fallback: Origin = {
-    ...readAt,
+    ...baseAt,
     excluded: undefined,
     keys: [],
     spread: undefined,
     value: element.initializer,
   };
-  return [...fromSource, ...bindingNameOrigins(element.name, fallback, readAt, targetText)];
+  const fromDefault = bindingOriginsFromSource({ ...nextQuery, source: { origin: fallback } });
+  return presence === 'undefined' ? fromDefault : [...fromSource, ...fromDefault];
 }
 
-/** Projects an expression assignment target (identifier or destructuring literal) against `source`. */
-function patternTargetOrigins(
+/** Evaluates optional `checkPresence` when `source` points to a direct unsliced `Origin`. */
+function patternSourcePresence(
+  source: PatternSource | undefined,
+  checkPresence: ((origin: Origin) => PresenceStatus) | undefined,
+): PresenceStatus {
+  if (source === undefined || checkPresence === undefined || source.sliceStart !== undefined) {
+    return 'possible';
+  }
+  return checkPresence(source.origin);
+}
+
+/** Projects an expression assignment target (identifier, member, or pattern) against `source`. */
+export function patternTargetOrigins(
   target: Expression,
   source: Origin | undefined,
   readAt: Origin,
-  isRead: (candidate: Node) => candidate is Identifier,
+  matchesLeaf: (candidate: Expression) => boolean,
 ): readonly Origin[] {
-  const current = unwrapped(target);
-  if (isIdentifier(current)) {
-    return isRead(current) && source !== undefined ? [projectReadOrigin(source, readAt)] : [];
+  const rootSource: PatternSource | undefined =
+    source === undefined ? undefined : { origin: source };
+  return targetOriginsFromSource(target, rootSource, readAt, matchesLeaf);
+}
+
+/** Projects an assignment target expression against a direct or rest-sliced `PatternSource`. */
+function targetOriginsFromSource(
+  target: Expression,
+  source: PatternSource | undefined,
+  readAt: Origin,
+  matchesLeaf: (candidate: Expression) => boolean,
+): readonly Origin[] {
+  const current = peeled(target);
+  if (matchesLeaf(current)) {
+    return finishPatternLeaf(source, readAt);
   }
   if (isBinaryExpression(current) && current.operatorToken.kind === SyntaxKind.EqualsToken) {
     const fallback: Origin = {
@@ -240,39 +321,41 @@ function patternTargetOrigins(
       value: current.right,
     };
     return [
-      ...patternTargetOrigins(current.left, source, readAt, isRead),
-      ...patternTargetOrigins(current.left, fallback, readAt, isRead),
+      ...targetOriginsFromSource(current.left, source, readAt, matchesLeaf),
+      ...targetOriginsFromSource(current.left, { origin: fallback }, readAt, matchesLeaf),
     ];
   }
   if (isArrayLiteralExpression(current)) {
-    return arrayPatternTargetOrigins(current, source, readAt, isRead);
+    return arrayPatternTargetOrigins(current, source, readAt, matchesLeaf);
   }
   return isObjectLiteralExpression(current)
-    ? objectPatternTargetOrigins(current, source, readAt, isRead)
+    ? objectPatternTargetOrigins(current, source, readAt, matchesLeaf)
     : [];
 }
 
-/** Projects elements of an array-destructuring assignment literal against `source`. */
+/** Projects elements and nested rest slices of an array-destructuring assignment literal. */
 function arrayPatternTargetOrigins(
   pattern: ArrayLiteralExpression,
-  source: Origin | undefined,
+  source: PatternSource | undefined,
   readAt: Origin,
-  isRead: (candidate: Node) => candidate is Identifier,
+  matchesLeaf: (candidate: Expression) => boolean,
 ): readonly Origin[] {
   const found: Origin[] = [];
+  let spreadSeen = false;
   for (const [index, element] of pattern.elements.entries()) {
     if (isOmittedExpression(element)) {
       continue;
     }
     if (isSpreadElement(element)) {
-      if (isRead(unwrapped(element.expression))) {
-        found.push(...restSliceOrigins(source, readAt));
-      }
+      const offset = spreadSeen ? null : index;
+      spreadSeen = true;
+      const nextRest = slicePatternRest(source, offset);
+      found.push(...targetOriginsFromSource(element.expression, nextRest, readAt, matchesLeaf));
       continue;
     }
-    const nextSource =
-      source === undefined ? undefined : { ...source, keys: [...source.keys, String(index)] };
-    found.push(...patternTargetOrigins(element, nextSource, readAt, isRead));
+    const key = spreadSeen ? null : String(index);
+    const nextSource = stepPatternSource(source, key);
+    found.push(...targetOriginsFromSource(element, nextSource, readAt, matchesLeaf));
   }
   return found;
 }
@@ -280,80 +363,58 @@ function arrayPatternTargetOrigins(
 /** Projects properties of an object-destructuring assignment literal against `source`. */
 function objectPatternTargetOrigins(
   pattern: ObjectLiteralExpression,
-  source: Origin | undefined,
+  source: PatternSource | undefined,
   readAt: Origin,
-  isRead: (candidate: Node) => candidate is Identifier,
+  matchesLeaf: (candidate: Expression) => boolean,
 ): readonly Origin[] {
   const found: Origin[] = [];
+  const omittedKeys = new Set<string>();
   for (const property of pattern.properties) {
-    if (isShorthandPropertyAssignment(property)) {
-      if (!isRead(property.name)) {
-        continue;
-      }
-      if (source !== undefined) {
-        const propSource = { ...source, keys: [...source.keys, property.name.text] };
-        found.push(projectReadOrigin(propSource, readAt));
-      }
-      if (property.objectAssignmentInitializer !== undefined) {
-        found.push({ ...readAt, value: property.objectAssignmentInitializer });
-      }
-      continue;
-    }
-    if (isPropertyAssignment(property)) {
-      const key = propertyKey(property.name, readAt.context) ?? null;
-      const nextSource =
-        source === undefined ? undefined : { ...source, keys: [...source.keys, key] };
-      found.push(...patternTargetOrigins(property.initializer, nextSource, readAt, isRead));
-      continue;
-    }
-    if (
-      isSpreadAssignment(property) &&
-      isRead(unwrapped(property.expression)) &&
-      source !== undefined
-    ) {
-      found.push(objectRestOrigin(source, readAt));
-    }
+    found.push(
+      ...objectPatternPropertyOrigins(property, source, readAt, { matchesLeaf, omittedKeys }),
+    );
   }
   return found;
 }
 
-/** Combines `source`'s accumulated member path with the outer read's `keys` and spread state. */
-function projectReadOrigin(source: Origin, readAt: Origin): Origin {
-  return {
-    ...source,
-    excluded: readAt.excluded,
-    keys: [...source.keys, ...readAt.keys],
-    spread: readAt.spread,
-  };
-}
-
-/** Projects an array rest slice `[...target]` for whole-array or indexed reads at `readAt`. */
-function restSliceOrigins(source: Origin | undefined, readAt: Origin): readonly Origin[] {
-  if (source === undefined) {
-    return [];
+/** Projects one object-destructuring property or rest spread against `source`. */
+function objectPatternPropertyOrigins(
+  property: ObjectLiteralExpression['properties'][number],
+  source: PatternSource | undefined,
+  readAt: Origin,
+  state: {
+    readonly matchesLeaf: (candidate: Expression) => boolean;
+    readonly omittedKeys: Set<string>;
+  },
+): readonly Origin[] {
+  if (isShorthandPropertyAssignment(property) && isIdentifier(property.name)) {
+    const key = property.name.text;
+    state.omittedKeys.add(key);
+    if (!state.matchesLeaf(property.name)) {
+      return [];
+    }
+    const fromSource = finishPatternLeaf(stepPatternSource(source, key), readAt);
+    const fromInit =
+      property.objectAssignmentInitializer === undefined
+        ? []
+        : [{ ...readAt, value: property.objectAssignmentInitializer }];
+    return [...fromSource, ...fromInit];
   }
-  if (readAt.keys.length === 0) {
-    return [{ ...source, excluded: undefined, keys: [...source.keys, null], spread: undefined }];
+  if (isPropertyAssignment(property)) {
+    const key = propertyKey(property.name, readAt.context) ?? null;
+    const nextSource = stepPatternSource(source, key);
+    const nested = targetOriginsFromSource(
+      property.initializer,
+      nextSource,
+      readAt,
+      state.matchesLeaf,
+    );
+    if (key !== null) {
+      state.omittedKeys.add(key);
+    }
+    return nested;
   }
-  const [firstKey, ...rest] = readAt.keys;
-  return firstKey === null || (firstKey !== undefined && arrayIndex(firstKey) !== undefined)
-    ? [
-        {
-          ...source,
-          excluded: readAt.excluded,
-          keys: [...source.keys, null, ...rest],
-          spread: readAt.spread,
-        },
-      ]
+  return isSpreadAssignment(property) && state.matchesLeaf(peeled(property.expression))
+    ? patternObjectRestOrigins(source, readAt, state.omittedKeys)
     : [];
-}
-
-/** Projects an object rest copy `{ ...target }` across `readAt`. */
-function objectRestOrigin(source: Origin, readAt: Origin): Origin {
-  return {
-    ...source,
-    excluded: readAt.excluded,
-    keys: [...source.keys, ...readAt.keys],
-    spread: readAt.keys.length === 0 ? true : readAt.spread,
-  };
 }

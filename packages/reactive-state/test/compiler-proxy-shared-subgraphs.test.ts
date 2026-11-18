@@ -35,18 +35,17 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
   /** Counts leaf constant resolutions performed while scanning `root`'s initializer. */
   function countLeafVisits(source: string): { readonly found: boolean; readonly visits: number } {
     using parsed = parseModule(api, 'proxy-dag.ts', source);
-    let visits = 0;
     const exported = parsed.sourceFile.statements.findLast(isVariableStatement);
     const root = exported?.declarationList.declarations[0]?.initializer;
     if (root === undefined) {
       throw new Error('Missing exported root initializer.');
     }
+    let visits = 0;
     const origin = proxyOrigin([root], {
-      follow: (name) => {
+      follow: (name): undefined => {
         if (name.text === 'leaf') {
           visits += 1;
         }
-        return undefined;
       },
     });
     return { found: origin !== undefined, visits };
@@ -57,6 +56,7 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
       'const n0 = { value: leaf };',
       (prev, next) => `const ${next} = { left: ${prev}, right: ${prev} };`,
     );
+
     expect(countLeafVisits(source)).toStrictEqual({ found: false, visits: 1 });
   });
 
@@ -65,6 +65,7 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
       'const n0 = [leaf];',
       (prev, next) => `const ${next} = [${prev}, ${prev}];`,
     );
+
     expect(countLeafVisits(source)).toStrictEqual({ found: false, visits: 1 });
   });
 
@@ -73,6 +74,7 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
       'const n0 = { value: leaf };',
       (prev, next) => `const ${next} = flag ? ${prev} : ${prev};`,
     );
+
     expect(countLeafVisits(source)).toStrictEqual({ found: false, visits: 1 });
   });
 
@@ -81,6 +83,7 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
       'const n0 = { nested: { value: leaf } };',
       (prev, next) => `const ${next} = { nested: flag ? ${prev}.nested : ${prev}.nested };`,
     );
+
     expect(countLeafVisits(source)).toStrictEqual({ found: false, visits: 1 });
   });
 
@@ -89,6 +92,7 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
       'const n0 = { first: leaf, second: new Proxy({}, {}) };',
       (prev, next) => `const ${next} = { left: ${prev}, right: ${prev} };`,
     );
+
     expect(countLeafVisits(source).found).toBe(true);
   });
 
@@ -98,12 +102,14 @@ describe('memoized proxy origin traversal on shared constant subgraphs', () => {
       'export const out = { first: shared.safe, second: shared.trapped };',
     ].join('\n');
     using parsed = parseModule(api, 'proxy-distinct-keys.ts', source);
+
     expect(sharedProxyOrigin(parsed.sourceFile)).toBeDefined();
   });
 
   it('terminates cleanly on cyclic constant member projections (pin)', () => {
     const source = 'const cycle: any = cycle.next; export const out = cycle;';
     using parsed = parseModule(api, 'proxy-cycle.ts', source);
+
     expect(sharedProxyOrigin(parsed.sourceFile)).toBeUndefined();
   });
 });

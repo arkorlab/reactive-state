@@ -1,20 +1,12 @@
 import {
-  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
   type Identifier,
-  isArrayLiteralExpression,
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
   isForOfStatement,
-  isIdentifier,
-  isObjectLiteralExpression,
-  isOmittedExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
   isVariableDeclarationList,
   type Node,
@@ -22,11 +14,8 @@ import {
 } from 'typescript/ast';
 
 import type { Answering } from './answers.ts';
-import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { metadataInitializer } from './input-callees.ts';
 import { targetsOf } from './kept.ts';
-import { readsOf } from './local-module-reads.ts';
 import {
   arrayIndex,
   type ArrayScope,
@@ -34,13 +23,9 @@ import {
   mayRunBefore,
   restArrayScope,
 } from './proxy-arrays.ts';
-import {
-  type Context,
-  type Origin,
-  type OriginKey,
-  originKey,
-  propertyKey,
-} from './proxy-values.ts';
+import { resolvesToContainerAlias } from './proxy-containers.ts';
+import { helperCallScopes } from './proxy-helper-calls.ts';
+import { type Origin, type OriginKey, peeled } from './proxy-values.ts';
 import { isTypeOnly } from './scope.ts';
 import { methodOf } from './written.ts';
 
@@ -50,6 +35,13 @@ export interface RestArrayTarget {
   readonly fn: Answering;
   readonly given: readonly Origin[] | undefined;
   readonly name: Identifier;
+}
+
+interface ArrayWriteQuery {
+  readonly elemTail: Origin;
+  readonly firstKey: OriginKey | undefined;
+  readonly matchesArray: (candidate: Expression) => boolean;
+  readonly seenCalls: ReadonlySet<CallExpression>;
 }
 
 /** Assignment operators whose right-hand expression can become the target slot's value. */
@@ -67,7 +59,7 @@ export function mutatedArrayOrigins(
   at: Origin,
 ): readonly Origin[] {
   const scope = constArrayScope(name);
-  const written = scope === undefined ? [] : writtenArrayOrigins(scope, at);
+  const written = scope === undefined ? [] : writtenArrayOrigins(scope, at, new Set());
   if (at.keys.length === 0) {
     return [{ ...at, excluded: undefined, value: held }, ...written];
   }
@@ -82,7 +74,7 @@ export function mutatedArrayOrigins(
 export function mutatedRestOrigins(target: RestArrayTarget, at: Origin): readonly Origin[] {
   const { declared, fn, given, name } = target;
   const scope = restArrayScope(fn, declared, name);
-  const written = scope === undefined ? [] : writtenArrayOrigins(scope, at);
+  const written = scope === undefined ? [] : writtenArrayOrigins(scope, at, new Set());
   if (given === undefined) {
     return written;
   }
@@ -92,19 +84,26 @@ export function mutatedRestOrigins(target: RestArrayTarget, at: Origin): readonl
   }
   const [firstKey, ...rest] = at.keys;
   if (firstKey === null || (firstKey !== undefined && arrayIndex(firstKey) !== undefined)) {
-    const initial = given.map((each) => ({
-      ...each,
-      excluded: at.excluded,
-      keys: [...each.keys, ...rest],
-      spread: at.spread,
-    }));
+    const initial = given.map((each) => {
+      return {
+        ...each,
+        excluded: at.excluded,
+        keys: [...each.keys, ...rest],
+        spread: at.spread,
+      };
+    });
     return [...initial, ...written];
   }
   return written;
 }
 
-/** Collects element/property expressions written into the array before `scope.readSite`. */
-function writtenArrayOrigins(scope: ArrayScope, at: Origin): readonly Origin[] {
+/** Collects element/property expressions written into `scope` before `scope.readSite`. */
+function writtenArrayOrigins(
+  scope: ArrayScope,
+  at: Origin,
+  seenCalls: ReadonlySet<CallExpression>,
+  restContainers?: ReadonlySet<Identifier>,
+): readonly Origin[] {
   const firstKey = at.keys[0];
   if (firstKey === 'length') {
     return [];
@@ -113,15 +112,20 @@ function writtenArrayOrigins(scope: ArrayScope, at: Origin): readonly Origin[] {
     at.keys.length === 0
       ? { ...at, excluded: undefined, keys: [], spread: undefined }
       : { ...at, keys: at.keys.slice(1) };
-  const matchesArray = (candidate: Expression): boolean =>
-    resolvesToArrayAlias(candidate, scope, at.context);
+  const query: ArrayWriteQuery = {
+    elemTail,
+    firstKey,
+    matchesArray: (candidate) =>
+      resolvesToContainerAlias(candidate, scope, at.context, restContainers),
+    seenCalls,
+  };
   const found: Origin[] = [];
   const visit = (node: Node): void => {
     if (isTypeOnly(node)) {
       return;
     }
     if (mayRunBefore(node, scope)) {
-      found.push(...nodeArrayWriteOrigins(node, matchesArray, elemTail, firstKey));
+      found.push(...nodeArrayWriteOrigins(node, query, at));
     }
     node.forEachChild(visit);
   };
@@ -129,13 +133,9 @@ function writtenArrayOrigins(scope: ArrayScope, at: Origin): readonly Origin[] {
   return found;
 }
 
-/** Extracts origins written into `matchesArray` by a single assignment, loop, or mutator call. */
-function nodeArrayWriteOrigins(
-  node: Node,
-  matchesArray: (candidate: Expression) => boolean,
-  elemTail: Origin,
-  firstKey: OriginKey | undefined,
-): readonly Origin[] {
+/** Extracts origins written into `query.matchesArray` by an assignment, loop, or call. */
+function nodeArrayWriteOrigins(node: Node, query: ArrayWriteQuery, at: Origin): readonly Origin[] {
+  const { elemTail, firstKey, matchesArray } = query;
   if (isBinaryExpression(node) && VALUE_ASSIGNMENTS.has(node.operatorToken.kind)) {
     return binaryArrayWriteOrigins(node.left, node.right, matchesArray, elemTail);
   }
@@ -151,7 +151,31 @@ function nodeArrayWriteOrigins(
   }
   const namedProperty =
     firstKey !== undefined && firstKey !== null && arrayIndex(firstKey) === undefined;
-  return callArrayWriteOrigins(node, matchesArray, elemTail, namedProperty);
+  return [
+    ...callArrayWriteOrigins(node, matchesArray, elemTail, namedProperty),
+    ...helperParameterArrayWrites(node, query, at),
+  ];
+}
+
+/** Propagates element writes performed through helper-call formal parameters onto `at`. */
+function helperParameterArrayWrites(
+  call: CallExpression,
+  query: ArrayWriteQuery,
+  at: Origin,
+): readonly Origin[] {
+  const boundScopes = helperCallScopes(call, query.matchesArray, query.elemTail, query.seenCalls);
+  if (boundScopes.length === 0) {
+    return [];
+  }
+  const nextSeenCalls = new Set([...query.seenCalls, call]);
+  return boundScopes.flatMap((bound) => {
+    return writtenArrayOrigins(
+      bound.scope,
+      { ...at, context: bound.childContext },
+      nextSeenCalls,
+      bound.restContainers,
+    );
+  });
 }
 
 /** Extracts element origins from direct or destructured member assignments onto `matchesArray`. */
@@ -161,7 +185,7 @@ function binaryArrayWriteOrigins(
   matchesArray: (candidate: Expression) => boolean,
   elemTail: Origin,
 ): readonly Origin[] {
-  const target = unwrapped(left);
+  const target = peeled(left);
   if (
     (isElementAccessExpression(target) || isPropertyAccessExpression(target)) &&
     matchesArray(target.expression)
@@ -180,11 +204,12 @@ function targetsArrayElement(
   pattern: Node,
   matchesArray: (candidate: Expression) => boolean,
 ): boolean {
-  return targetsOf(pattern).some(
-    (each) =>
+  return targetsOf(pattern).some((each) => {
+    return (
       (isElementAccessExpression(each) || isPropertyAccessExpression(each)) &&
-      matchesArray(each.expression),
-  );
+      matchesArray(each.expression)
+    );
+  });
 }
 
 /** Extracts inserted element origins from array mutator methods and `Object.assign`/`Reflect.set`. */
@@ -194,7 +219,7 @@ function callArrayWriteOrigins(
   elemTail: Origin,
   namedProperty: boolean,
 ): readonly Origin[] {
-  const globalPath = globalPathOf(unwrapped(call.expression))?.join('.');
+  const globalPath = globalPathOf(peeled(call.expression))?.join('.');
   const [firstArg, , thirdArg] = call.arguments;
   if (
     globalPath === 'Object.assign' &&
@@ -202,11 +227,13 @@ function callArrayWriteOrigins(
     !isSpreadElement(firstArg) &&
     matchesArray(firstArg)
   ) {
-    return call.arguments.slice(1).map((arg) => ({
-      ...elemTail,
-      keys: [null, ...elemTail.keys],
-      value: isSpreadElement(arg) ? arg.expression : arg,
-    }));
+    return call.arguments.slice(1).map((arg) => {
+      return {
+        ...elemTail,
+        keys: [null, ...elemTail.keys],
+        value: isSpreadElement(arg) ? arg.expression : arg,
+      };
+    });
   }
   if (
     globalPath === 'Reflect.set' &&
@@ -225,7 +252,7 @@ function methodArrayWriteOrigins(
   matchesArray: (candidate: Expression) => boolean,
   elemTail: Origin,
 ): readonly Origin[] {
-  const callee = unwrapped(call.expression);
+  const callee = peeled(call.expression);
   if (
     (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) ||
     !matchesArray(callee.expression)
@@ -254,104 +281,4 @@ function argumentElementOrigin(arg: Expression, elemTail: Origin): Origin {
   return isSpreadElement(arg)
     ? { ...elemTail, keys: [null, ...elemTail.keys], value: arg.expression }
     : { ...elemTail, value: arg };
-}
-
-/** Checks whether `candidate` resolves directly or through `const` containers to `scope.aliases`. */
-function resolvesToArrayAlias(candidate: Expression, scope: ArrayScope, context: Context): boolean {
-  const keys: string[] = [];
-  let current = unwrapped(candidate);
-  for (;;) {
-    if (isPropertyAccessExpression(current)) {
-      keys.unshift(current.name.text);
-      current = unwrapped(current.expression);
-      continue;
-    }
-    if (isElementAccessExpression(current)) {
-      const key = originKey(current.argumentExpression, context);
-      if (key === undefined) {
-        return false;
-      }
-      keys.unshift(key);
-      current = unwrapped(current.expression);
-      continue;
-    }
-    break;
-  }
-  return matchesAliasAtKeys(current, keys, scope, context);
-}
-
-/** Follows `keys` through `const` object/array containers to test whether the leaf is aliased. */
-function matchesAliasAtKeys(
-  root: Expression,
-  keys: readonly string[],
-  scope: ArrayScope,
-  context: Context,
-): boolean {
-  let current: Expression | undefined = root;
-  const seen = new Set<Expression>();
-  for (const key of keys) {
-    const resolved = unwrapConstContainer(current, seen);
-    if (resolved === undefined) {
-      return false;
-    }
-    current = selectContainerEntry(resolved, key, context);
-    if (current === undefined) {
-      return false;
-    }
-  }
-  const leaf = unwrapped(current);
-  return (
-    isIdentifier(leaf) && [...scope.aliases].some((alias) => readsOf(alias, scope.owner)(leaf))
-  );
-}
-
-/** Resolves `node` across local `const` identifiers without calling external `follow` hooks. */
-function unwrapConstContainer(
-  node: Expression | undefined,
-  seen: Set<Expression>,
-): Expression | undefined {
-  let current = node === undefined ? undefined : unwrapped(node);
-  while (current !== undefined && isIdentifier(current)) {
-    if (seen.has(current)) {
-      return undefined;
-    }
-    seen.add(current);
-    const held = metadataInitializer(current);
-    if (held === undefined) {
-      return undefined;
-    }
-    current = unwrapped(held);
-  }
-  return current;
-}
-
-/** Selects a static property or array element `key` from an object or array literal container. */
-function selectContainerEntry(
-  container: ArrayLiteralExpression | Expression,
-  key: string,
-  context: Context,
-): Expression | undefined {
-  if (isArrayLiteralExpression(container)) {
-    const index = arrayIndex(key);
-    const element = index === undefined ? undefined : container.elements[index];
-    return element === undefined || isOmittedExpression(element) || isSpreadElement(element)
-      ? undefined
-      : element;
-  }
-  if (!isObjectLiteralExpression(container)) {
-    return undefined;
-  }
-  for (const property of container.properties.toReversed()) {
-    if (isSpreadAssignment(property)) {
-      return undefined;
-    }
-    if (propertyKey(property.name, context) !== key) {
-      continue;
-    }
-    if (isPropertyAssignment(property)) {
-      return property.initializer;
-    }
-    return isShorthandPropertyAssignment(property) ? property.name : undefined;
-  }
-  return undefined;
 }
