@@ -1,72 +1,73 @@
 import {
   type BindingElement,
-  type Block,
   type CallExpression,
   type ElementAccessExpression,
   type Expression,
-  type GetAccessorDeclaration,
+  type FunctionDeclaration,
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
+  isAwaitExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
-  isComputedPropertyName,
   isDeleteExpression,
   isElementAccessExpression,
   isFunctionDeclaration,
   isFunctionExpression,
-  isFunctionLikeDeclaration,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isMethodDeclaration,
   isNewExpression,
   isObjectBindingPattern,
   isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
   isPropertyAssignment,
-  isReturnStatement,
-  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isTaggedTemplateExpression,
   isTemplateExpression,
   isVariableDeclaration,
   type MethodDeclaration,
   type Node,
-  type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
   type ParameterDeclaration,
   type PropertyAccessExpression,
-  type PropertyAssignment,
   SyntaxKind,
   type VariableDeclaration,
 } from 'typescript/ast';
 
+import { overloadsOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { GLOBAL_OBJECTS, globalPathOf, isTakenApart, useOf } from './code-globals.ts';
+import { globalPathOf, isTakenApart, useOf } from './code-globals.ts';
 import { sourceArrayFunction, sourceArrayMethod } from './framed-array-functions.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
 import { computedBindingContainer, framedKeyNames, framedMemberNames } from './framed-keys.ts';
-import { framedNativeConstructor, framedSourceValues } from './framed-sources.ts';
+import { framedSourceValues } from './framed-sources.ts';
 import { framedAssignedSources } from './framed-writes.ts';
 import { assignedNames, localDateOwnData, localDateOwnMethod } from './local-date-inputs.ts';
 import { dateText, localNamed } from './local-reads.ts';
 import { renderDateText } from './render-date-text.ts';
 import { renderIntlInput } from './render-intl-inputs.ts';
 import { reflectedRead } from './render-intl-reflections.ts';
-import { pushBoundTagPaths, tagPathKey, type TagPath } from './render-raw-tag-calls.ts';
 import {
+  type BoundArgCount,
+  pushBoundTagPaths,
+  tagPathKey,
+  type TagParameterEnv,
+  type TagPath,
+} from './render-raw-tag-calls.ts';
+import { pushFactoryParameterTagPaths } from './render-raw-tag-envs.ts';
+import { expandFactoryCallTagPaths, expandTaggedFactoryPaths } from './render-raw-tag-factories.ts';
+import {
+  type ObjectTagSink,
   pushArrayCallTagPaths,
   pushArrayIdentifierTagPaths,
   pushArrayLiteralTagPaths,
+  pushObjectTagPaths,
 } from './render-raw-tag-paths.ts';
-import {
-  datedTemplateSpanIndices,
-  type RawWrapperSearch,
-  wrapperForwardsRawDate,
-} from './render-raw-tag-wrappers.ts';
+import { datedTemplateSpanIndices, wrapperForwardsRawDate } from './render-raw-tag-wrappers.ts';
+import type { RawWrapperSearch } from './render-raw-wrapper-bindings.ts';
+import { inheritBoundArgCount, matchesDirectRawOrStringTag } from './render-tag-date-calls.ts';
+import { isOuterTemplateConsumedAsText } from './render-tag-date-coercions.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** What a read takes a method of, where the code shows it: the value, and the keys selected within it. */
@@ -81,8 +82,6 @@ interface Taken {
   readonly receiver: Receiver | undefined;
 }
 
-type ObjectStep = 'keep' | 'masked' | 'stop';
-
 /** Locale-sensitive native render reads, with source-proven own functions and local date data retained. */
 const LOCALE_MEMBERS: ReadonlySet<string> = new Set([
   'localeCompare',
@@ -90,7 +89,6 @@ const LOCALE_MEMBERS: ReadonlySet<string> = new Set([
   'toLocaleString',
   'toLocaleUpperCase',
 ]);
-const RAW_TAGS: ReadonlySet<string> = new Set(['String.raw']);
 const TAG_SEARCH = { limit: 64 } as const;
 
 /**
@@ -115,9 +113,12 @@ interface TagExpandSink {
   readonly rootRead: Expression;
   readonly pending: TagPath[];
   readonly methods: MethodDeclaration[];
+  readonly env: TagParameterEnv | undefined;
+  readonly boundArgs: BoundArgCount | undefined;
+  readonly depth: number;
 }
 
-/** Tagged templates pass Date substitutions raw unless a tag path can select native String.raw. */
+/** Tagged templates pass Date substitutions raw unless a tag path can coerce them to local-time text. */
 function localDateText(node: Node): string | undefined {
   const text = dateText(node);
   if (
@@ -127,6 +128,7 @@ function localDateText(node: Node): string | undefined {
     node.parent.template === node &&
     !maySelectNativeRaw(node.parent.tag, {
       datedIndices: datedTemplateSpanIndices(node),
+      outerConsumedAsText: isOuterTemplateConsumedAsText(node),
       seenWrappers: new Set(),
       spanCount: node.templateSpans.length,
     })
@@ -135,25 +137,41 @@ function localDateText(node: Node): string | undefined {
   return text;
 }
 
-/** Constant, multi-branch, reflected, bound, array and wrapper tag paths reaching native String.raw. */
+/** Constant, multi-branch, reflected, bound, array, factory and custom tag paths coercing Date values. */
 function maySelectNativeRaw(tag: Expression, search: RawWrapperSearch): boolean {
-  const pending: TagPath[] = [{ node: tag, suffix: [] }];
+  const pending: TagPath[] = [
+    { boundArgs: search.boundArgs, env: search.env, node: tag, suffix: [] },
+  ];
   const methods: MethodDeclaration[] = [];
-  const sink: TagExpandSink = { methods, pending, rootRead: tag };
   const seen = new Set<string>();
   let steps = 0;
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
     steps += 1;
     if (steps > TAG_SEARCH.limit) return true;
     const value = unwrapped(current.node);
-    const key = tagPathKey(value, current.suffix);
+    const key = tagPathKey(value, current.suffix, current.env, current.boundArgs);
     if (seen.has(key)) continue;
     seen.add(key);
-    if (matchesDirectRawTag(value, current.suffix)) return true;
-    if (current.suffix.length === 0 && matchesRawWrapperTag(value, search)) return true;
+    const stepSearch: RawWrapperSearch = {
+      ...search,
+      boundArgs: current.boundArgs,
+      env: current.env,
+    };
+    if (matchesDirectRawOrStringTag(value, current.suffix, stepSearch)) return true;
+    if (current.suffix.length === 0 && matchesRawWrapperTag(value, stepSearch)) return true;
+    const prevLength = pending.length;
+    const sink: TagExpandSink = {
+      boundArgs: current.boundArgs,
+      depth: 0,
+      env: current.env,
+      methods,
+      pending,
+      rootRead: tag,
+    };
     if (globalPathOf(value) === undefined && expandTagPath(value, current.suffix, sink))
       return true;
-    if (drainWrapperMethods(methods, search)) return true;
+    inheritBoundArgCount(pending, prevLength, current.boundArgs);
+    if (drainWrapperMethods(methods, stepSearch)) return true;
   }
   return false;
 }
@@ -173,58 +191,35 @@ function matchesRawWrapperTag(value: Expression, search: RawWrapperSearch): bool
   }
   if (!isIdentifier(value)) return false;
   const declared = frameDeclarationOf(value);
-  return (
-    declared !== undefined &&
-    isFunctionDeclaration(declared) &&
-    wrapperForwardsRawDate(declared, query)
+  if (declared === undefined || !isFunctionDeclaration(declared)) return false;
+  const impl = overloadsOf(declared).find(
+    (candidate): candidate is FunctionDeclaration =>
+      isFunctionDeclaration(candidate) && candidate.body !== undefined,
   );
+  return impl === undefined || wrapperForwardsRawDate(impl, query);
 }
 
-/** Direct native String.raw references and global holders followed by remaining member segments. */
-function matchesDirectRawTag(value: Expression, suffix: readonly (string | undefined)[]): boolean {
-  if (suffix.length === 0 && framedNativeConstructor(value, RAW_TAGS)) return true;
-  const direct = globalPathOf(value);
-  return direct !== undefined && matchesNativeRawPath([...direct, ...suffix]);
-}
-
-/** Leading global-object segments collapse before checking the String.raw member pair. */
-function matchesNativeRawPath(parts: readonly (string | undefined)[]): boolean {
-  let index = 0;
-  while (parts.length - index > 2 && isPossibleGlobalHolder(parts[index])) index += 1;
-  while (parts.length - index > 1 && isKnownGlobalHolder(parts[index])) index += 1;
-  if (parts.length - index !== 2) return false;
-  const holder = parts[index];
-  const member = parts[index + 1];
-  return (
-    (holder === undefined || holder === 'String') && (member === undefined || member === 'raw')
-  );
-}
-
-function isKnownGlobalHolder(name: string | undefined): boolean {
-  return name !== undefined && GLOBAL_OBJECTS.has(name);
-}
-
-function isPossibleGlobalHolder(name: string | undefined): boolean {
-  return name === undefined || GLOBAL_OBJECTS.has(name);
-}
-
-/** Expands one non-global tag expression into the receiver, bound, array or binding sources it may read. */
+/** Expands one non-global tag expression into the receiver, bound, array, factory or binding sources it may read. */
 function expandTagPath(
   value: Expression,
   suffix: readonly (string | undefined)[],
   sink: TagExpandSink,
 ): boolean {
-  if (
-    isCallExpression(value) &&
-    suffix.length === 0 &&
-    pushBoundTagPaths(
+  if (isCallExpression(value) && suffix.length === 0) {
+    const bound = pushBoundTagPaths(
       value,
-      (inner, innerSuffix, nextPending) =>
-        expandNonBoundTagPath(inner, innerSuffix, { ...sink, pending: nextPending }),
+      (inner, innerSuffix, nextPending, innerEnv) => {
+        return expandNonBoundTagPath(inner, innerSuffix, {
+          ...sink,
+          env: innerEnv,
+          pending: nextPending,
+        });
+      },
       sink.pending,
-    )
-  ) {
-    return true;
+      { boundArgs: sink.boundArgs, env: sink.env },
+    );
+    if (bound.exhausted) return true;
+    if (bound.handled) return false;
   }
   return expandNonBoundTagPath(value, suffix, sink);
 }
@@ -234,220 +229,177 @@ function expandNonBoundTagPath(
   suffix: readonly (string | undefined)[],
   sink: TagExpandSink,
 ): boolean {
-  const { pending, rootRead } = sink;
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
-    pushMemberTagPaths(value.expression, framedMemberNames(value), suffix, pending);
+    pushMemberTagPaths(value.expression, framedMemberNames(value), suffix, sink);
     return false;
-  }
-  if (isCallExpression(value)) {
-    pushReflectedTagPaths(value, suffix, pending);
-    if (pushArrayCallTagPaths(value, suffix, pending)) return true;
   }
   const sources = framedSourceValues(value);
   if (sources !== undefined) {
-    for (const source of sources) pending.push({ node: source, suffix });
+    for (const source of sources) sink.pending.push({ env: sink.env, node: source, suffix });
     return false;
   }
+  if (isCallExpression(value)) return expandCallTagPath(value, suffix, sink);
+  if (isTaggedTemplateExpression(value)) return expandTaggedCallTagPath(value.tag, suffix, sink);
+  if (isAwaitExpression(value)) {
+    sink.pending.push({ env: sink.env, node: value.expression, suffix });
+    return false;
+  }
+  return expandContainerOrBindingTagPath(value, suffix, sink);
+}
+
+function expandCallTagPath(
+  call: CallExpression,
+  suffix: readonly (string | undefined)[],
+  sink: TagExpandSink,
+): boolean {
+  if (pushReflectedTagPaths(call, suffix, sink)) return false;
+  const arrayOutcome = pushArrayCallTagPaths(call, suffix, sink.pending, sink.env);
+  if (arrayOutcome === 'exhausted') return true;
+  if (arrayOutcome === 'matched') return false;
+  return expandFactoryCallTagPaths(call, suffix, sink.env, {
+    depth: sink.depth,
+    pending: sink.pending,
+    step: (inner, innerSuffix, objectSink) =>
+      stepFactoryInnerPath(inner, innerSuffix, objectSink, sink),
+  });
+}
+
+function expandTaggedCallTagPath(
+  calleeTag: Expression,
+  suffix: readonly (string | undefined)[],
+  sink: TagExpandSink,
+): boolean {
+  return expandTaggedFactoryPaths(calleeTag, suffix, {
+    depth: sink.depth,
+    env: sink.env,
+    pending: sink.pending,
+    step: (inner, innerSuffix, objectSink) =>
+      stepFactoryInnerPath(inner, innerSuffix, objectSink, sink),
+  });
+}
+
+function stepFactoryInnerPath(
+  inner: Expression,
+  innerSuffix: readonly (string | undefined)[],
+  objectSink: ObjectTagSink,
+  outerSink: TagExpandSink,
+): boolean {
+  return expandNonBoundTagPath(inner, innerSuffix, {
+    boundArgs: outerSink.boundArgs,
+    depth: outerSink.depth + 1,
+    env: objectSink.env,
+    methods: objectSink.methods,
+    pending: objectSink.pending,
+    rootRead: outerSink.rootRead,
+  });
+}
+
+function expandContainerOrBindingTagPath(
+  value: Expression,
+  suffix: readonly (string | undefined)[],
+  sink: TagExpandSink,
+): boolean {
   if (isArrayLiteralExpression(value) && suffix.length > 0) {
-    pushArrayLiteralTagPaths(value, suffix, pending);
+    pushArrayLiteralTagPaths(value, suffix, sink.pending, sink.env);
     return false;
   }
   if (isObjectLiteralExpression(value) && suffix.length > 0) {
     pushObjectTagPaths(value, suffix, sink);
     return false;
   }
+  if (isNewExpression(value)) return expandNewTagPath(value, suffix, sink);
+  return isIdentifier(value) && pushIdentifierTagPaths(value, suffix, sink);
+}
+
+function expandNewTagPath(
+  value: Expression & {
+    readonly expression: Expression;
+    readonly arguments?: readonly Expression[];
+  },
+  suffix: readonly (string | undefined)[],
+  sink: TagExpandSink,
+): boolean {
   if (
-    isNewExpression(value) &&
     suffix.length > 0 &&
     suffix[0] === undefined &&
     globalPathOf(unwrapped(value.expression))?.join('.') === 'Set' &&
     value.arguments?.[0] !== undefined
   ) {
-    pending.push({ node: value.arguments[0], suffix });
+    sink.pending.push({ env: sink.env, node: value.arguments[0], suffix });
     return false;
   }
-  return isIdentifier(value) && pushIdentifierTagPaths(value, suffix, rootRead, pending);
+  return true;
 }
 
 function pushReflectedTagPaths(
   call: CallExpression,
   suffix: readonly (string | undefined)[],
-  pending: TagPath[],
-): void {
+  sink: TagExpandSink,
+): boolean {
   const read = reflectedRead(call);
-  if (read === undefined) return;
+  if (read === undefined) return false;
   const names = read.key === undefined ? undefined : framedKeyNames(read.key);
-  pushMemberTagPaths(read.target, names, suffix, pending);
+  pushMemberTagPaths(read.target, names, suffix, sink);
+  return true;
 }
 
 function pushMemberTagPaths(
   receiver: Expression,
   names: readonly string[] | undefined,
   suffix: readonly (string | undefined)[],
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): void {
   if (names === undefined) {
-    pending.push({ node: receiver, suffix: [undefined, ...suffix] });
+    sink.pending.push({ env: sink.env, node: receiver, suffix: [undefined, ...suffix] });
     return;
   }
-  for (const name of names) pending.push({ node: receiver, suffix: [name, ...suffix] });
-}
-
-/** Right-to-left own-property scan so unconditional later entries override earlier entries and spreads. */
-function pushObjectTagPaths(
-  literal: ObjectLiteralExpression,
-  suffix: readonly (string | undefined)[],
-  sink: TagExpandSink,
-): void {
-  let setterMasked = false;
-  let prototype: Expression | undefined;
-  for (const property of literal.properties.toReversed()) {
-    if (isPropertyAssignment(property) && isPrototypeProperty(property)) {
-      prototype ??= property.initializer;
-      continue;
-    }
-    const outcome = stepObjectTagProperty(property, suffix, setterMasked, sink);
-    if (outcome === 'stop') return;
-    if (outcome === 'masked') setterMasked = true;
+  for (const name of names) {
+    sink.pending.push({ env: sink.env, node: receiver, suffix: [name, ...suffix] });
   }
-  if (!setterMasked && prototype !== undefined) {
-    sink.pending.push({ node: prototype, suffix: prototypeSuffix(suffix) });
-  }
-}
-
-function prototypeSuffix(suffix: readonly (string | undefined)[]): readonly (string | undefined)[] {
-  return suffix[0] === '__proto__' ? suffix.slice(1) : suffix;
-}
-
-function isPrototypeProperty(property: PropertyAssignment): boolean {
-  return (
-    !isComputedPropertyName(property.name) && assignedNames(property.name)?.[0] === '__proto__'
-  );
-}
-
-function stepObjectTagProperty(
-  property: ObjectLiteralElementLike,
-  suffix: readonly (string | undefined)[],
-  setterMasked: boolean,
-  sink: TagExpandSink,
-): ObjectStep {
-  const [head] = suffix;
-  if (isSpreadAssignment(property)) {
-    if (!setterMasked) sink.pending.push({ node: property.expression, suffix });
-    return 'keep';
-  }
-  if (isGetAccessorDeclaration(property)) return stepGetterProperty(property, suffix, sink.pending);
-  if (isSetAccessorDeclaration(property)) {
-    return exactObjectKey(assignedNames(property.name), head) ? 'masked' : 'keep';
-  }
-  return stepDataProperty(property, suffix, setterMasked, sink);
-}
-
-function stepGetterProperty(
-  getter: GetAccessorDeclaration,
-  suffix: readonly (string | undefined)[],
-  pending: TagPath[],
-): ObjectStep {
-  const [head, ...rest] = suffix;
-  const names = assignedNames(getter.name);
-  if (matchesObjectKey(names, head) && getter.body !== undefined) {
-    for (const expression of returnedExpressions(getter.body)) {
-      pending.push({ node: expression, suffix: rest });
-    }
-  }
-  return exactObjectKey(names, head) ? 'stop' : 'keep';
-}
-
-function returnedExpressions(body: Block): readonly Expression[] {
-  const expressions: Expression[] = [];
-  const pending: Node[] = [...body.statements];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isFunctionLikeDeclaration(node)) continue;
-    if (isReturnStatement(node)) {
-      if (node.expression !== undefined) expressions.push(node.expression);
-      continue;
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return expressions;
-}
-
-function stepDataProperty(
-  property: ObjectLiteralElementLike,
-  suffix: readonly (string | undefined)[],
-  setterMasked: boolean,
-  sink: TagExpandSink,
-): ObjectStep {
-  const [head, ...rest] = suffix;
-  if (isShorthandPropertyAssignment(property)) {
-    return isIdentifier(property.name)
-      ? stepShorthandProperty(property.name, suffix, setterMasked, sink.pending)
-      : 'keep';
-  }
-  if (isMethodDeclaration(property)) {
-    const names = assignedNames(property.name);
-    if (!setterMasked && rest.length === 0 && matchesObjectKey(names, head)) {
-      sink.methods.push(property);
-    }
-    return exactObjectKey(names, head) ? 'stop' : 'keep';
-  }
-  if (!isPropertyAssignment(property)) return 'keep';
-  const names = assignedNames(property.name);
-  if (!setterMasked && matchesObjectKey(names, head)) {
-    sink.pending.push({ node: property.initializer, suffix: rest });
-  }
-  return exactObjectKey(names, head) ? 'stop' : 'keep';
-}
-
-function stepShorthandProperty(
-  name: Identifier,
-  suffix: readonly (string | undefined)[],
-  setterMasked: boolean,
-  pending: TagPath[],
-): ObjectStep {
-  const [head, ...rest] = suffix;
-  if (!setterMasked && (head === undefined || head === name.text)) {
-    pending.push({ node: name, suffix: rest });
-  }
-  return head === name.text ? 'stop' : 'keep';
-}
-
-function matchesObjectKey(names: readonly string[] | undefined, head: string | undefined): boolean {
-  return head === undefined || names === undefined || names.includes(head);
-}
-
-function exactObjectKey(names: readonly string[] | undefined, head: string | undefined): boolean {
-  return head !== undefined && names?.length === 1 && names[0] === head;
 }
 
 function pushIdentifierTagPaths(
   name: Identifier,
   suffix: readonly (string | undefined)[],
-  rootRead: Expression,
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): boolean {
+  const { env, pending, rootRead } = sink;
   for (const source of framedAssignedSources(name)) {
-    pending.push({ node: source.value, suffix: [...source.keys, ...suffix] });
+    pending.push({ env, node: source.value, suffix: [...source.keys, ...suffix] });
   }
-  if (pushArrayIdentifierTagPaths(name, suffix, rootRead, pending)) return true;
+  if (pushArrayIdentifierTagPaths(name, suffix, { env, pending, rootRead })) return true;
   const declared = frameDeclarationOf(name);
-  if (
-    declared === undefined ||
-    (!isVariableDeclaration(declared) && !isParameterDeclaration(declared))
-  )
-    return false;
+  if (declared === undefined) return true;
+  if (!isVariableDeclaration(declared) && !isParameterDeclaration(declared)) return false;
+  if (isParameterDeclaration(declared)) {
+    const paramOutcome = pushFactoryParameterTagPaths(name, declared, suffix, { env, pending });
+    if (paramOutcome.handled) return paramOutcome.opaque;
+  }
+  pushDeclaredBindingTagPaths(name, declared, suffix, sink);
+  return false;
+}
+
+function pushDeclaredBindingTagPaths(
+  name: Identifier,
+  declared: ParameterDeclaration | VariableDeclaration,
+  suffix: readonly (string | undefined)[],
+  sink: TagExpandSink,
+): void {
+  const { env, pending } = sink;
   const bound = bindingElementOf(declared, name.text);
-  if (bound?.initializer !== undefined) pending.push({ node: bound.initializer, suffix });
+  if (bound?.initializer !== undefined) pending.push({ env, node: bound.initializer, suffix });
   const selected = frameBindingOf(name);
   if (selected !== undefined) {
-    if (selected.binding.initializer !== undefined)
-      pending.push({ node: selected.binding.initializer, suffix: [...selected.keys, ...suffix] });
-    return false;
+    if (selected.binding.initializer !== undefined) {
+      pending.push({
+        env,
+        node: selected.binding.initializer,
+        suffix: [...selected.keys, ...suffix],
+      });
+    }
+    return;
   }
-  if (bound !== undefined) pushComputedBindingTagPaths(bound, suffix, pending);
-  return false;
+  if (bound !== undefined) pushComputedBindingTagPaths(bound, suffix, sink);
 }
 
 function bindingElementOf(
@@ -461,18 +413,26 @@ function bindingElementOf(
 function pushComputedBindingTagPaths(
   bound: BindingElement,
   suffix: readonly (string | undefined)[],
-  pending: TagPath[],
+  sink: TagExpandSink,
 ): void {
   const container = computedBindingContainer(bound);
   if (container?.binding.initializer === undefined) return;
   const source = container.binding.initializer;
   const names = framedMemberNames(bound);
   if (names === undefined) {
-    pending.push({ node: source, suffix: [...container.keys, undefined, ...suffix] });
+    sink.pending.push({
+      env: sink.env,
+      node: source,
+      suffix: [...container.keys, undefined, ...suffix],
+    });
     return;
   }
   for (const name of names) {
-    pending.push({ node: source, suffix: [...container.keys, name, ...suffix] });
+    sink.pending.push({
+      env: sink.env,
+      node: source,
+      suffix: [...container.keys, name, ...suffix],
+    });
   }
 }
 

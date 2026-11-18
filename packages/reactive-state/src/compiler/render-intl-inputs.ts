@@ -40,7 +40,12 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { sourceArrayMethod } from './framed-array-functions.ts';
 import { executionOwner } from './framed-array-mutations.ts';
-import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
+import {
+  frameBindingOf,
+  type FrameDeclaration,
+  frameDeclarationOf,
+  frameMemberName,
+} from './framed-bindings.ts';
 import { framedArgumentPrefix, framedMemberNames } from './framed-keys.ts';
 import { framedNativeConstructor, framedSourceValues } from './framed-sources.ts';
 import { framedAssignedValues } from './framed-writes.ts';
@@ -147,8 +152,8 @@ function reflectedFormatter(
   node: Node,
 ): string | undefined {
   for (const [suffix, accessor] of ACCESSOR_SUFFIXES) {
-    const kind = `Intl.${suffix}`;
     if (names !== undefined && !names.includes(accessor)) continue;
+    const kind = `Intl.${suffix}`;
     if (!maySelectAccessor(target, kind, accessor, node)) continue;
     const found = implicitFormatter(receiver, [accessor], node, kind);
     if (found !== undefined) return found;
@@ -205,7 +210,11 @@ function provenCustomTargetMethod(value: Expression, accessor: string, read: Nod
 }
 
 /** Checks whether another argument in the same call references `binding` before `Reflect.get` runs. */
-function otherBindingUseInNode(scope: Node, binding: Node, allowed: Identifier): boolean {
+function otherBindingUseInNode(
+  scope: Node,
+  binding: FrameDeclaration,
+  allowed: Identifier,
+): boolean {
   const pending: Node[] = [scope];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
@@ -232,12 +241,16 @@ function unexposedTargetInitializer(name: Identifier, read: Node): Expression | 
     executionOwner(binding) !== executionOwner(read)
   )
     return undefined;
-  const allowed = new Set<Node>([name, binding.name]);
+  const allowed = new Set<Node>([binding.name, name]);
   return unexposedBeforeEnd(read, binding, allowed) ? binding.initializer : undefined;
 }
 
 /** Rejects any other reference to `binding` before the reflective call finishes evaluating inputs. */
-function unexposedBeforeEnd(read: Node, binding: Node, allowed: ReadonlySet<Node>): boolean {
+function unexposedBeforeEnd(
+  read: Node,
+  binding: FrameDeclaration,
+  allowed: ReadonlySet<Node>,
+): boolean {
   const owner = executionOwner(read);
   const pending: Node[] = [read.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
@@ -289,7 +302,8 @@ function matchingGetter(entry: ObjectLiteralElementLike, accessor: string): bool
 
 /** Own data or method entries shadow prototype accessors without invoking a supplied receiver. */
 function ownDataPropertyNamed(entry: ObjectLiteralElementLike, accessor: string): boolean {
-  if (isShorthandPropertyAssignment(entry)) return entry.name.text === accessor;
+  if (isShorthandPropertyAssignment(entry))
+    return isIdentifier(entry.name) && entry.name.text === accessor;
   if (isMethodDeclaration(entry)) return optionName(entry.name) === accessor;
   if (!isPropertyAssignment(entry) || prototypeSetter(entry)) return false;
   return optionName(entry.name) === accessor;

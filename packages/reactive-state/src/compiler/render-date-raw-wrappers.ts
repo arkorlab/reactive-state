@@ -1,87 +1,83 @@
 import {
-  type ArrayLiteralExpression,
   type CallExpression,
   type Expression,
-  type Identifier,
-  isArrayLiteralExpression,
-  isArrowFunction,
   isBinaryExpression,
-  isBlock,
   isCallExpression,
   isElementAccessExpression,
-  isFunctionDeclaration,
-  isFunctionExpression,
-  isIdentifier,
-  isMethodDeclaration,
-  isObjectBindingPattern,
+  isNewExpression,
   isObjectLiteralExpression,
-  isOmittedExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isReturnStatement,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
   isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
-  isVariableDeclaration,
-  isVariableDeclarationList,
-  isVariableStatement,
   type Node,
-  type ObjectLiteralExpression,
-  type ParameterDeclaration,
-  type PropertyName,
   SyntaxKind,
   type TemplateExpression,
 } from 'typescript/ast';
 
 import { answersLater } from './answers.ts';
 import { unwrapped } from './bounded.ts';
-import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
-import { framedQuietPrimitive, framedQuietSource } from './framed-native-evaluation.ts';
+import { frameMemberName } from './framed-bindings.ts';
+import { framedQuietPrimitive } from './framed-native-evaluation.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
-import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
-import { framedAssignedSources } from './framed-writes.ts';
-import { assignedNames } from './local-date-inputs.ts';
-import { canonicalArrayTagIndex } from './render-raw-tag-paths.ts';
 import {
-  forwardsCallSiteRaw,
-  type ForwardedSlotsResult,
-  ownRawPropertyInitializer,
-  type RawWrapperSearch,
-} from './render-raw-tag-wrappers.ts';
+  createQuietRawWalkState,
+  forkQuietRawWalkState,
+  quietFactoryBodyReturn,
+  type QuietRawProof,
+  type QuietRawWalkState,
+  resolveQuietCallableWithState,
+} from './render-date-raw-factories.ts';
+import { forwardsCallSiteRaw, ownRawPropertyInitializer } from './render-raw-tag-wrappers.ts';
 import {
   collectWrapperBindings,
-  findRawBindingLocalName,
+  directPositionalParamIndex,
+  type ForwardedSlotsResult,
   isIdentifierForParam,
+  isQuietDatedArrayCarrier,
+  isQuietDatedCarrier,
+  isQuietDatedPositional,
+  isQuietOperand,
+  quietWrapperParameters,
+  type RawWrapperSearch,
   type WrapperBindings,
-  type WrapperFunction,
 } from './render-raw-wrapper-bindings.ts';
+import { isCoercingDateMethodName } from './render-tag-date-coercions.ts';
 
-/** Quiet synchronous String.raw wrapper verification for projected Date template substitutions. */
+/** Quiet synchronous tag and helper verification for projected Date template substitutions. */
 
 const RAW_DATE_FIELDS: ReadonlySet<string> = new Set(['Date', 'String', 'String.raw']);
+const ARRAY_TEXT_METHODS: ReadonlySet<string> = new Set(['join', 'toLocaleString', 'toString']);
+
+export type QuietTargetProofFn = (
+  target: Expression,
+  consumer: Expression,
+  walk?: QuietRawWalkState,
+) => QuietRawProof | undefined;
 
 export interface QuietRawWrapperState extends RawWrapperSearch {
-  readonly rawFieldsOf: (
-    target: Expression,
-    consumer: Expression,
-  ) => ReadonlySet<Expression> | undefined;
+  readonly rawProofOf: QuietTargetProofFn;
+  readonly stringProofOf?: QuietTargetProofFn | undefined;
+  readonly parentWalk?: QuietRawWalkState | undefined;
 }
 
 interface QuietSpineContext {
   readonly bindings: WrapperBindings;
-  readonly nextSeen: ReadonlySet<Node>;
+  readonly nextSeen: ReadonlySet<string>;
+  readonly outerConsumer: Expression;
+  readonly proof: QuietRawProof;
   readonly state: QuietRawWrapperState;
+  readonly walk: QuietRawWalkState;
 }
 
 interface InnerTargetCheck {
   readonly datedIndices: ReadonlySet<number>;
   readonly spanCount: number;
-  readonly nextSeen: ReadonlySet<Node>;
+  readonly nextSeen: ReadonlySet<string>;
   readonly state: QuietRawWrapperState;
-  readonly fields: Set<Expression>;
+  readonly proof: QuietRawProof;
+  readonly walk: QuietRawWalkState;
 }
 
 interface QuietCallArgContext {
@@ -90,46 +86,48 @@ interface QuietCallArgContext {
   readonly forwardedSlots: Set<number>;
 }
 
-interface QuietWrapperStep {
-  readonly fn?: WrapperFunction;
-  readonly next?: Expression;
-}
-
-/** Resolves quiet synchronous wrapper tags on projected-Date templates and returns read prefix fields. */
-export function wrappedRawTagFields(
+/** Resolves quiet synchronous wrapper or coercing tags on projected-Date templates. */
+export function wrappedRawTagProof(
   tag: Expression,
   outerConsumer: Expression,
   state: QuietRawWrapperState,
-): ReadonlySet<Expression> | undefined {
+): QuietRawProof | undefined {
   if (state.datedIndices.size === 0) return undefined;
-  const resolved = resolveQuietWrapperFunction(tag, outerConsumer);
-  if (resolved === undefined || state.seenWrappers.has(resolved.fn)) return undefined;
-  const { fields, fn } = resolved;
-  if (answersLater(fn) || !quietWrapperParameters(fn)) return undefined;
-  const returned = singleReturnedExpression(fn);
+  const paramOffset = state.paramOffset ?? 1;
+  const walk =
+    state.parentWalk === undefined
+      ? createQuietRawWalkState(outerConsumer)
+      : forkQuietRawWalkState(outerConsumer, state.parentWalk);
+  const fn = resolveQuietCallableWithState(tag, walk);
+  if (fn === undefined || answersLater(fn) || !quietWrapperParameters(fn, paramOffset)) {
+    return undefined;
+  }
+  const wrapperKey = `${String(fn.pos)}:${String(fn.end)}:${String(paramOffset)}@${String(walk.callScope)}`;
+  if (state.seenWrappers.has(wrapperKey) || fn.body === undefined) return undefined;
+  const bodyWalk = forkQuietRawWalkState(outerConsumer, walk);
+  bodyWalk.allowedOwners.add(fn);
+  const returned = quietFactoryBodyReturn(fn.body, bodyWalk);
   if (returned === undefined) return undefined;
-  const bindings = collectWrapperBindings(fn);
-  const nextSeen = new Set([...state.seenWrappers, fn]);
-  return verifyLeftmostRawSpine(returned, outerConsumer, fields, {
+  const bindings = collectWrapperBindings(fn, paramOffset);
+  const nextSeen = new Set([...state.seenWrappers, wrapperKey]);
+  return verifyLeftmostRawSpine(returned, {
     bindings,
     nextSeen,
+    outerConsumer,
+    proof: walk.proof,
     state,
+    walk,
   })
-    ? fields
+    ? walk.proof
     : undefined;
 }
 
-function verifyLeftmostRawSpine(
-  returned: Expression,
-  outerConsumer: Expression,
-  fields: Set<Expression>,
-  context: QuietSpineContext,
-): boolean {
+function verifyLeftmostRawSpine(returned: Expression, context: QuietSpineContext): boolean {
   let current: Expression = returned;
   const seen = new Set<Node>();
   while (!seen.has(current)) {
     seen.add(current);
-    if (matchesQuietWrappedNode(current, outerConsumer, fields, context)) return true;
+    if (matchesQuietWrappedNode(current, context)) return true;
     if (!isCallExpression(current)) return false;
     const callee = unwrapped(current.expression);
     if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
@@ -138,13 +136,8 @@ function verifyLeftmostRawSpine(
   return false;
 }
 
-function matchesQuietWrappedNode(
-  candidate: Expression,
-  outerConsumer: Expression,
-  fields: Set<Expression>,
-  context: QuietSpineContext,
-): boolean {
-  const { bindings, nextSeen, state } = context;
+function matchesQuietWrappedNode(candidate: Expression, context: QuietSpineContext): boolean {
+  const { bindings, nextSeen, outerConsumer, proof, state, walk } = context;
   if (isTaggedTemplateExpression(candidate) && isTemplateExpression(candidate.template)) {
     const innerDated = quietTemplateForwardedIndices(
       candidate.template,
@@ -156,25 +149,182 @@ function matchesQuietWrappedNode(
       innerDated.size > 0 &&
       verifyInnerRawTarget(candidate.tag, candidate.template, outerConsumer, {
         datedIndices: innerDated,
-        fields,
         nextSeen,
+        proof,
         spanCount: candidate.template.templateSpans.length,
         state,
+        walk,
       })
     );
   }
-  if (!isCallExpression(candidate)) return false;
-  const forwarded = quietCallForwardedSlots(candidate, bindings, state);
+  if (isTemplateExpression(candidate)) {
+    return (
+      quietUntaggedTemplateCoerces(candidate, bindings, state.datedIndices) &&
+      verifyLocalQuietPrefix(candidate)
+    );
+  }
+  if (isBinaryExpression(candidate) && candidate.operatorToken.kind === SyntaxKind.PlusToken) {
+    return (
+      quietBinaryPlusCoerces(candidate.left, candidate.right, bindings, state.datedIndices) &&
+      verifyLocalQuietPrefix(candidate)
+    );
+  }
+  if (isNewExpression(candidate)) {
+    return verifyQuietStringTarget(
+      candidate.expression,
+      candidate.arguments ?? [],
+      candidate,
+      context,
+    );
+  }
+  return isCallExpression(candidate) && matchesQuietCallNode(candidate, context);
+}
+
+function matchesQuietCallNode(call: CallExpression, context: QuietSpineContext): boolean {
+  const { bindings, nextSeen, outerConsumer, proof, state, walk } = context;
+  if ((state.paramOffset ?? 1) === 1) {
+    const forwarded = quietCallForwardedSlots(call, bindings, state);
+    if (
+      forwarded !== undefined &&
+      forwarded.forwardedSlots.size > 0 &&
+      verifyInnerRawTarget(call.expression, call, outerConsumer, {
+        datedIndices: forwarded.forwardedSlots,
+        nextSeen,
+        proof,
+        spanCount: forwarded.effectiveSpanCount,
+        state,
+        walk,
+      })
+    ) {
+      return true;
+    }
+  }
+  if (verifyQuietStringTarget(call.expression, call.arguments, call, context)) return true;
+  if (
+    quietDirectMethodCoerces(call, bindings, state.datedIndices) &&
+    verifyLocalQuietPrefix(call)
+  ) {
+    return true;
+  }
+  return verifyQuietHelperCall(call, context);
+}
+
+function verifyLocalQuietPrefix(consumer: Expression): boolean {
+  return framedQuietTextPrefix(consumer, RAW_DATE_FIELDS);
+}
+
+function verifyQuietStringTarget(
+  target: Expression,
+  args: readonly Expression[],
+  consumer: Expression,
+  context: QuietSpineContext,
+): boolean {
+  const { bindings, outerConsumer, proof, state, walk } = context;
+  const [first, ...rest] = args;
+  if (
+    first === undefined ||
+    state.stringProofOf === undefined ||
+    !isQuietDatedCarrier(unwrapped(first), bindings, state.datedIndices) ||
+    rest.some((arg) => !isQuietOperand(arg, bindings))
+  ) {
+    return false;
+  }
+  const innerWalk = forkQuietRawWalkState(consumer, walk);
+  const innerProof = state.stringProofOf(target, consumer, innerWalk);
+  if (
+    innerProof === undefined ||
+    !framedQuietTextPrefix(
+      consumer,
+      RAW_DATE_FIELDS,
+      (c) => innerProof.calls.has(c),
+      innerProof.fields,
+    )
+  ) {
+    return false;
+  }
+  mergeSameOwnerProof(innerProof, outerConsumer, proof);
+  return true;
+}
+
+function verifyQuietHelperCall(call: CallExpression, context: QuietSpineContext): boolean {
+  const { bindings, nextSeen, outerConsumer, proof, state, walk } = context;
+  const forwarded = collectQuietCallSlots(call.arguments, bindings, state);
+  if (forwarded === undefined || forwarded.forwardedSlots.size === 0) return false;
+  const innerWalk = forkQuietRawWalkState(call, walk);
+  const nested = wrappedRawTagProof(call.expression, call, {
+    datedIndices: forwarded.forwardedSlots,
+    paramOffset: 0,
+    parentWalk: innerWalk,
+    rawProofOf: state.rawProofOf,
+    seenWrappers: nextSeen,
+    spanCount: forwarded.effectiveSpanCount,
+    stringProofOf: state.stringProofOf,
+  });
+  if (
+    nested === undefined ||
+    !framedQuietTextPrefix(call, RAW_DATE_FIELDS, (c) => nested.calls.has(c), nested.fields)
+  ) {
+    return false;
+  }
+  mergeSameOwnerProof(nested, outerConsumer, proof);
+  return true;
+}
+
+function quietDirectMethodCoerces(
+  call: CallExpression,
+  bindings: WrapperBindings,
+  datedIndices: ReadonlySet<number>,
+): boolean {
+  const callee = unwrapped(call.expression);
+  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return false;
+  const method = frameMemberName(callee);
+  if (method === undefined) return false;
+  const recv = unwrapped(callee.expression);
+  const quietArgs = call.arguments.every((arg) => isQuietOperand(arg, bindings));
+  if (isQuietDatedPositional(recv, bindings, datedIndices)) {
+    return quietArgs && isCoercingDateMethodName(method);
+  }
+  if (isQuietDatedArrayCarrier(recv, bindings, datedIndices)) {
+    return quietArgs && ARRAY_TEXT_METHODS.has(method);
+  }
+  if (method === 'concat' && framedQuietPrimitive(recv)) {
+    return (
+      call.arguments.every((arg) => {
+        return (
+          isQuietOperand(arg, bindings) ||
+          isQuietDatedCarrier(unwrapped(arg), bindings, datedIndices)
+        );
+      }) &&
+      call.arguments.some((arg) => isQuietDatedCarrier(unwrapped(arg), bindings, datedIndices))
+    );
+  }
+  return false;
+}
+
+function quietUntaggedTemplateCoerces(
+  template: TemplateExpression,
+  bindings: WrapperBindings,
+  datedIndices: ReadonlySet<number>,
+): boolean {
+  for (const span of template.templateSpans) {
+    const expr = unwrapped(span.expression);
+    if (isQuietDatedCarrier(expr, bindings, datedIndices)) return true;
+    if (!isQuietOperand(span.expression, bindings)) return false;
+  }
+  return false;
+}
+
+function quietBinaryPlusCoerces(
+  left: Expression,
+  right: Expression,
+  bindings: WrapperBindings,
+  datedIndices: ReadonlySet<number>,
+): boolean {
   return (
-    forwarded !== undefined &&
-    forwarded.forwardedSlots.size > 0 &&
-    verifyInnerRawTarget(candidate.expression, candidate, outerConsumer, {
-      datedIndices: forwarded.forwardedSlots,
-      fields,
-      nextSeen,
-      spanCount: forwarded.effectiveSpanCount,
-      state,
-    })
+    (isQuietDatedCarrier(unwrapped(left), bindings, datedIndices) &&
+      isQuietOperand(right, bindings)) ||
+    (isQuietOperand(left, bindings) &&
+      isQuietDatedCarrier(unwrapped(right), bindings, datedIndices))
   );
 }
 
@@ -184,34 +334,53 @@ function verifyInnerRawTarget(
   outerConsumer: Expression,
   check: InnerTargetCheck,
 ): boolean {
-  if (framedOriginCoowned(innerTarget, outerConsumer)) {
-    const innerFields = check.state.rawFieldsOf(innerTarget, innerConsumer);
-    if (
-      innerFields !== undefined &&
-      framedQuietTextPrefix(innerConsumer, RAW_DATE_FIELDS, undefined, innerFields)
-    ) {
-      addSameOwnerFields(innerFields, outerConsumer, check.fields);
-      return true;
-    }
+  const innerWalk = forkQuietRawWalkState(innerConsumer, check.walk);
+  const innerProof = check.state.rawProofOf(innerTarget, innerConsumer, innerWalk);
+  if (
+    innerProof !== undefined &&
+    framedQuietTextPrefix(
+      innerConsumer,
+      RAW_DATE_FIELDS,
+      (call) => innerProof.calls.has(call),
+      innerProof.fields,
+    )
+  ) {
+    mergeSameOwnerProof(innerProof, outerConsumer, check.proof);
+    return true;
   }
-  const nested = wrappedRawTagFields(innerTarget, outerConsumer, {
+  const nested = wrappedRawTagProof(innerTarget, innerConsumer, {
     datedIndices: check.datedIndices,
-    rawFieldsOf: check.state.rawFieldsOf,
+    parentWalk: innerWalk,
+    rawProofOf: check.state.rawProofOf,
     seenWrappers: check.nextSeen,
     spanCount: check.spanCount,
+    stringProofOf: check.state.stringProofOf,
   });
-  if (nested === undefined || !framedQuietTextPrefix(innerConsumer, RAW_DATE_FIELDS)) return false;
-  addSameOwnerFields(nested, outerConsumer, check.fields);
+  if (
+    nested === undefined ||
+    !framedQuietTextPrefix(
+      innerConsumer,
+      RAW_DATE_FIELDS,
+      (call) => nested.calls.has(call),
+      nested.fields,
+    )
+  ) {
+    return false;
+  }
+  mergeSameOwnerProof(nested, outerConsumer, check.proof);
   return true;
 }
 
-function addSameOwnerFields(
-  source: ReadonlySet<Expression>,
+function mergeSameOwnerProof(
+  source: QuietRawProof,
   outerConsumer: Expression,
-  target: Set<Expression>,
+  target: QuietRawProof,
 ): void {
-  for (const field of source) {
-    if (framedPrefixSameOwner(field, outerConsumer)) target.add(field);
+  for (const field of source.fields) {
+    if (framedPrefixSameOwner(field, outerConsumer)) target.fields.add(field);
+  }
+  for (const call of source.calls) {
+    if (framedPrefixSameOwner(call, outerConsumer)) target.calls.add(call);
   }
 }
 
@@ -262,7 +431,8 @@ function collectQuietCallSlots(
     if (nextSlot === undefined) return undefined;
     slot = nextSlot;
   }
-  return { effectiveSpanCount: state.spanCount, forwardedSlots };
+  const highest = forwardedSlots.size === 0 ? 0 : Math.max(...forwardedSlots) + 1;
+  return { effectiveSpanCount: Math.max(state.spanCount, slot, highest), forwardedSlots };
 }
 
 function stepQuietCallArg(
@@ -274,7 +444,7 @@ function stepQuietCallArg(
   const { bindings, forwardedSlots, state } = context;
   const paramIndex = directPositionalParamIndex(unwrapped(arg), bindings);
   if (paramIndex !== undefined) {
-    if (slot < state.spanCount && state.datedIndices.has(paramIndex)) forwardedSlots.add(slot);
+    if (state.datedIndices.has(paramIndex)) forwardedSlots.add(slot);
     return slot + 1;
   }
   return framedQuietPrimitive(arg) ? slot + 1 : undefined;
@@ -298,15 +468,6 @@ function stepSpreadQuietCallArg(
   return slot + Math.max(0, state.spanCount - restSubs.startIndex);
 }
 
-function directPositionalParamIndex(
-  expr: Expression,
-  bindings: WrapperBindings,
-): number | undefined {
-  if (!isIdentifier(expr)) return undefined;
-  const declared = frameDeclarationOf(expr);
-  return declared === undefined ? undefined : bindings.positionalSubs.get(declared);
-}
-
 function quietCallSiteForwardsTemplate(
   callSiteExpr: Expression,
   bindings: WrapperBindings,
@@ -316,196 +477,4 @@ function quietCallSiteForwardsTemplate(
   if (!isObjectLiteralExpression(value) || value.properties.length !== 1) return false;
   const rawValue = ownRawPropertyInitializer(value);
   return rawValue !== undefined && forwardsCallSiteRaw(rawValue, bindings);
-}
-
-function quietWrapperParameters(fn: WrapperFunction): boolean {
-  for (const [index, param] of fn.parameters.entries()) {
-    if (param.initializer !== undefined) return false;
-    if (isIdentifier(param.name)) continue;
-    if (index === 0 && param.dotDotDotToken === undefined && isQuietRawPattern(param)) continue;
-    return false;
-  }
-  return true;
-}
-
-function isQuietRawPattern(param: ParameterDeclaration): boolean {
-  if (!isObjectBindingPattern(param.name) || param.name.elements.length !== 1) return false;
-  const [element] = param.name.elements;
-  return (
-    element !== undefined &&
-    element.initializer === undefined &&
-    findRawBindingLocalName(param) !== undefined
-  );
-}
-
-function singleReturnedExpression(fn: WrapperFunction): Expression | undefined {
-  if (fn.body === undefined) return undefined;
-  if (!isBlock(fn.body)) return unwrapped(fn.body);
-  const [first] = fn.body.statements;
-  return first !== undefined &&
-    fn.body.statements.length === 1 &&
-    isReturnStatement(first) &&
-    first.expression !== undefined
-    ? unwrapped(first.expression)
-    : undefined;
-}
-
-function resolveQuietWrapperFunction(
-  tag: Expression,
-  outerConsumer: Expression,
-): { readonly fn: WrapperFunction; readonly fields: Set<Expression> } | undefined {
-  const fields = new Set<Expression>();
-  const tail: string[] = [];
-  const seen = new Set<Node>();
-  let current: Expression | undefined = unwrapped(tag);
-  while (current !== undefined && !seen.has(current)) {
-    seen.add(current);
-    const step = stepQuietWrapperTarget(current, outerConsumer, tail, fields);
-    if (step === undefined) return undefined;
-    if (step.fn !== undefined) return { fields, fn: step.fn };
-    current = step.next === undefined ? undefined : unwrapped(step.next);
-  }
-  return undefined;
-}
-
-function stepQuietWrapperTarget(
-  value: Expression,
-  outerConsumer: Expression,
-  tail: string[],
-  fields: Set<Expression>,
-): QuietWrapperStep | undefined {
-  if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
-    const name = frameMemberName(value);
-    if (name === undefined || !framedPrefixSameOwner(value, outerConsumer)) return undefined;
-    fields.add(value);
-    tail.unshift(name);
-    return { next: value.expression };
-  }
-  if (isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.CommaToken) {
-    return framedQuietPrimitive(value.left) ? { next: value.right } : undefined;
-  }
-  if (tail.length > 0 && isArrayLiteralExpression(value)) {
-    return stepQuietArrayElement(value, tail);
-  }
-  if (tail.length > 0 && isObjectLiteralExpression(value)) {
-    return stepQuietObjectMember(value, tail);
-  }
-  return stepQuietIdentifierOrFunction(value, outerConsumer, tail.length);
-}
-
-function stepQuietArrayElement(
-  array: ArrayLiteralExpression,
-  tail: string[],
-): QuietWrapperStep | undefined {
-  const index = canonicalArrayTagIndex(tail[0]);
-  if (index === undefined || index >= array.elements.length) return undefined;
-  for (let slot = 0; slot < index; slot += 1) {
-    const before = array.elements[slot];
-    if (before !== undefined && isSpreadElement(before)) return undefined;
-  }
-  const element = array.elements[index];
-  if (element === undefined || isOmittedExpression(element) || isSpreadElement(element)) {
-    return undefined;
-  }
-  tail.shift();
-  return { next: element };
-}
-
-function stepQuietObjectMember(
-  object: ObjectLiteralExpression,
-  tail: string[],
-): QuietWrapperStep | undefined {
-  const [head] = tail;
-  if (head === undefined || head === '__proto__') return undefined;
-  for (const property of object.properties.toReversed()) {
-    const matched = matchQuietObjectProperty(property, head, tail.length);
-    if (matched === undefined) continue;
-    if (matched.fn === undefined && matched.next === undefined) return undefined;
-    tail.shift();
-    return matched;
-  }
-  return undefined;
-}
-
-function matchQuietObjectProperty(
-  property: ObjectLiteralExpression['properties'][number],
-  head: string,
-  tailLength: number,
-): QuietWrapperStep | undefined {
-  if (isSpreadAssignment(property)) return {};
-  if (isShorthandPropertyAssignment(property)) {
-    if (!isIdentifier(property.name)) return {};
-    return property.name.text === head ? { next: property.name } : undefined;
-  }
-  if (isMethodDeclaration(property)) {
-    const hit = matchQuietPropertyName(property.name, head);
-    if (hit === undefined) return undefined;
-    return tailLength === 1 && hit.sole ? { fn: property } : {};
-  }
-  if (!isPropertyAssignment(property)) return {};
-  const hit = matchQuietPropertyName(property.name, head);
-  if (hit === undefined) return undefined;
-  return hit.sole ? { next: property.initializer } : {};
-}
-
-function matchQuietPropertyName(
-  name: PropertyName,
-  head: string,
-): { readonly sole: boolean } | undefined {
-  const names = assignedNames(name);
-  if (names === undefined) return { sole: false };
-  return names.includes(head) ? { sole: names.length === 1 } : undefined;
-}
-
-function stepQuietIdentifierOrFunction(
-  value: Expression,
-  outerConsumer: Expression,
-  tailLength: number,
-): QuietWrapperStep | undefined {
-  if (isArrowFunction(value) || isFunctionExpression(value)) {
-    return tailLength === 0 ? { fn: value } : undefined;
-  }
-  if (!isIdentifier(value)) return undefined;
-  const declared = frameDeclarationOf(value);
-  if (declared !== undefined && isFunctionDeclaration(declared)) {
-    return tailLength === 0 &&
-      framedPrefixSameOwner(declared, outerConsumer) &&
-      framedAssignedSources(value).length === 0
-      ? { fn: declared }
-      : undefined;
-  }
-  const next = sameOwnerConstInitializer(value, outerConsumer);
-  return next === undefined ? undefined : { next };
-}
-
-function sameOwnerConstInitializer(
-  name: Identifier,
-  outerConsumer: Expression,
-): Expression | undefined {
-  const selected = frameBindingOf(name);
-  if (selected === undefined || selected.keys.length > 0) return undefined;
-  const { binding } = selected;
-  if (
-    !framedPrefixSameOwner(binding, outerConsumer) ||
-    !isVariableDeclaration(binding) ||
-    !isVariableDeclarationList(binding.parent) ||
-    binding.initializer === undefined
-  ) {
-    return undefined;
-  }
-  const statement = binding.parent.parent;
-  if (
-    !isVariableStatement(statement) ||
-    !/^const\b/u.test(binding.parent.getText(binding.getSourceFile()))
-  ) {
-    return undefined;
-  }
-  const initial = unwrapped(binding.initializer);
-  if (
-    (isArrayLiteralExpression(initial) || isObjectLiteralExpression(initial)) &&
-    framedQuietSource(name) === undefined
-  ) {
-    return undefined;
-  }
-  return binding.initializer;
 }
