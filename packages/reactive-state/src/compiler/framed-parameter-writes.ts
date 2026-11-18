@@ -46,7 +46,11 @@ const CONTAINERS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TypeAssertionExpression,
 ]);
 
-/** Every write of a function's parameter in its own code, nested functions included. */
+/**
+ * Every write of a function's parameter in its own code, nested functions included: the code of its
+ * parameters (their initializers, and the defaults and computed keys of their patterns) as well as
+ * its body.
+ */
 export function framedParameterWrites(
   fn: Answering,
   parameter: ParameterDeclaration,
@@ -55,7 +59,8 @@ export function framedParameterWrites(
   const values: Expression[] = [];
   const writes: Node[] = [];
   let unknown = false;
-  const pending: Node[] = fn.body === undefined ? [] : [fn.body];
+  const pending: Node[] = [...fn.parameters];
+  if (fn.body !== undefined) pending.push(fn.body);
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     node.forEachChild((child) => {
       pending.push(child);
@@ -83,7 +88,7 @@ function writeOf(
   if (isBinaryExpression(parent) && parent.left === target) {
     const kind = parent.operatorToken.kind;
     if (kind < SyntaxKind.FirstAssignment || kind > SyntaxKind.LastAssignment) return undefined;
-    const direct = target === name && kind === SyntaxKind.EqualsToken;
+    const direct = target === name && kind === SyntaxKind.EqualsToken && !patternDefault(parent);
     return { node: parent, value: direct ? parent.right : undefined };
   }
   if (
@@ -94,6 +99,21 @@ function writeOf(
   return (isForInStatement(parent) || isForOfStatement(parent)) && parent.initializer === target
     ? { node: parent, value: undefined }
     : undefined;
+}
+
+/**
+ * Whether an assignment is a default of a pattern that assigns (`[target = {}] = source`, `({ key:
+ * target = {} } = source)`, a loop head's): the pattern gives the target what its source holds, and
+ * the default only where that is `undefined`, so what it writes is not the one value the target takes.
+ */
+function patternDefault(assignment: Node): boolean {
+  let outer = assignment;
+  while (container(outer)) outer = outer.parent;
+  const { parent } = outer;
+  if (outer === assignment) return false;
+  return isBinaryExpression(parent)
+    ? parent.left === outer && parent.operatorToken.kind === SyntaxKind.EqualsToken
+    : (isForInStatement(parent) || isForOfStatement(parent)) && parent.initializer === outer;
 }
 
 /** Whether a written target stands inside an expression or pattern that still assigns it. */

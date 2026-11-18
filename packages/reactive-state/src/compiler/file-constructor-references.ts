@@ -9,11 +9,11 @@ import {
   isQualifiedName,
   isSourceFile,
   type Node,
-  NodeFlags,
   type VariableDeclaration,
 } from 'typescript/ast';
 
 import { isTypeOnly, readsBinding } from './scope.ts';
+import { isAmbient } from './type-syntax.ts';
 
 /** Runtime references to a local File constructor, excluding erased declarations and public labels. */
 
@@ -76,10 +76,4 @@ function ignoredTree(node: Node): boolean {
     (isExportDeclaration(node) && (node.isTypeOnly || node.moduleSpecifier !== undefined)) ||
     (isExportSpecifier(node) && node.isTypeOnly)
   );
-}
-
-/** Whether a declaration is erased by `declare`. */
-function isAmbient(node: Node): boolean {
-  // eslint-disable-next-line no-bitwise -- TypeScript exposes ambient declarations through this flag.
-  return (node.flags & NodeFlags.Ambient) !== 0;
 }

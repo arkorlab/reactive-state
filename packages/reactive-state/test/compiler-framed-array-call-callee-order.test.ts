@@ -528,9 +528,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'named-iife-loop-exit-element-write-pin',
+    id: 'named-iife-loop-exit-element-write-refused',
     source: `function frames(error: Error) { const values: unknown[] = ['fixed']; (function read(pass: number): number { while (String(values)) { values[0] = error; return 1; } return 0; })(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'loop-exit-with-unreachable-self-call',
@@ -538,9 +538,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'loop-exit-with-shadowed-name',
+    id: 'loop-exit-with-shadowed-name-refused',
     source: `function frames(error: Error) { const values: unknown[] = ['fixed']; (function read(read = () => 0): number { while (String(values)) { values[0] = error; return read(); } return 0; })(); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-declaration-between-proof-and-read',
@@ -568,9 +568,9 @@ const CASES = [
     converts: true,
   },
   {
-    id: 'declaration-loop-exit-element-write-pin',
+    id: 'declaration-loop-exit-element-write-refused',
     source: `function frames(error: Error) { const values: unknown[] = ['fixed']; function read(pass: number): number { while (String(values)) { values[0] = error; return 1; } return 0; } read(0); }`,
-    converts: false,
+    converts: true,
   },
   {
     id: 'recursion-through-variable-of-another-name',

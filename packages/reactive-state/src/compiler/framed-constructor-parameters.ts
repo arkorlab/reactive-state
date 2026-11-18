@@ -2,11 +2,13 @@ import {
   type Expression,
   type Identifier,
   isArrayBindingPattern,
+  isArrayLiteralExpression,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
   isElementAccessExpression,
   isIdentifier,
+  isObjectLiteralExpression,
   isParameterDeclaration,
   isPropertyAccessExpression,
   isTypeOfExpression,
@@ -23,9 +25,8 @@ import {
   frameDeclarationOf,
   frameMemberName,
 } from './framed-bindings.ts';
-import { framedConstructorDefaultEvaluation } from './framed-constructor-default-evaluation.ts';
 import { framedDefaultTaken } from './framed-constructor-defaults.ts';
-import { bindingIdentifiers, readsBinding } from './scope.ts';
+import { bindingIdentifiers, isTypeOnly, readsBinding } from './scope.ts';
 
 /** What a constructor's `super` arguments read of its parameters, by a construction's arguments. */
 
@@ -38,6 +39,10 @@ export interface ForwardedValue {
   readonly keys: readonly string[];
   readonly any?: boolean;
   readonly continued?: boolean;
+  /** The compile could not follow where the value goes: any member of it, at any depth, may be it. */
+  readonly unfollowed?: boolean;
+  /** No constructor is written as the program is: an `Error` may be among what it supplies. */
+  readonly refused?: boolean;
 }
 
 /** The values each argument position may hold. */
@@ -45,13 +50,28 @@ export type Slots = readonly (readonly ForwardedValue[])[];
 
 /** What a parameter read was given, and the defaults it may take instead. */
 interface DefaultValue extends ForwardedValue {
+  /** Whether the default is the value in use: the argument it stands for is left `undefined`. */
   readonly selected: boolean;
 }
 
-/** The inputs and defaults for one parameter read. */
-interface ParameterRead {
+/** A default, and the defaults the reads that led to it passed through, outermost first. */
+interface EnteredValue extends DefaultValue {
+  readonly entered: readonly string[];
+}
+
+/** The inputs and defaults of the parameter reads of an expression. */
+interface Reads {
   readonly values: readonly ForwardedValue[];
   readonly defaults: readonly DefaultValue[];
+}
+
+/**
+ * The inputs and defaults for one parameter read, and `whole`: what the member the read selects is
+ * a member of, each given value read up to the key before the last, or up to the keys read where a
+ * later one is not.
+ */
+interface ParameterRead extends Reads {
+  readonly whole: readonly ForwardedValue[];
 }
 
 /** The member path a read selects, and whether a key after it is one the compile cannot read. */
@@ -82,42 +102,105 @@ const NULLISH_COMPARISONS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
+ * How many values one `super` argument forwards at most. A chain of constructors passes each
+ * layer's values on to the next, and a path that adds keys at each layer makes more of them than
+ * the layers are many: a chain deeper than the limit allows is not followed.
+ */
+const LIMITS = { forwarded: 512 } as const;
+
+/**
  * A written `super` argument, what the parameters it reads were given, and the defaults they may
  * take instead, whose own parameter reads count whole. `undefined` where `arguments` or a pattern
- * the compile cannot follow hides which argument a read takes.
+ * the compile cannot follow hides which argument a read takes. The member path a read selects is
+ * followed through each default the construction leaves taken, whatever else the constructor's
+ * code holds: a call, an operator or a member read there does not show that the path selects
+ * nothing the native base converts. What a default selects the path of is forwarded whole beside
+ * it, for the path may stop at a value the compile cannot read into, and so is what a read of a
+ * parameter selects a member of, up to the key before the last (`receivers`): the `message` of an
+ * `Error` the construction gives is the words each engine writes, as a direct read of it is.
+ *
+ * Defaults that read one another in a circle (`a = b.x, b = a.y`, a read of a parameter before it
+ * is initialized, which throws where it runs) make a path that grows without end where each
+ * default is taken: a taken default entered again, in a state not scanned yet, is such a circle.
+ * A circle that adds no key, or of defaults the construction replaces (which drop the path),
+ * meets a state it scanned and ends of itself.
+ *
+ * A value is forwarded once, whichever way it is reached (the same written value read up to the
+ * same key), so that the layers of a chain of constructors, each of which passes on what it was
+ * given beside what it reads of it, forward as many values as there are different ones.
+ *
+ * A circle, and more than `LIMITS.forwarded` values, are programs no constructor is written as: the
+ * answer is a value that is refused (`refused`), whatever the construction supplies, for what it
+ * supplies, or a default holds, is not followed to the message.
  */
 export function framedSlotValues(
   argument: Expression,
   parameters: readonly ParameterDeclaration[],
   slots: Slots,
-  evaluated: readonly Expression[] = [argument],
 ): readonly ForwardedValue[] | undefined {
   const values: ForwardedValue[] = [];
+  const forwarded = new Set<string>();
   const scanned = new Set<string>();
-  const pending: DefaultValue[] = [
-    {
-      keys: [],
-      value: argument,
-      selected: framedConstructorDefaultEvaluation(parameters, evaluated),
-    },
-  ];
+  const pending: EnteredValue[] = [{ entered: [], keys: [], value: argument, selected: true }];
   for (let scan = pending.pop(); scan !== undefined; scan = pending.pop()) {
-    const seen = JSON.stringify([
-      scan.value.pos,
-      scan.keys,
-      scan.any === true,
-      scan.selected,
-      scan.continued === true,
-    ]);
+    const seen = scanState(scan);
     if (scanned.has(seen)) continue;
     scanned.add(seen);
-    values.push(scan);
     const reads = parameterReads(scan, parameters, slots);
     if (reads === undefined) return undefined;
-    values.push(...reads.values);
-    pending.push(...reads.defaults);
+    addForwarded(values, forwarded, [scan, ...reads.values]);
+    if (values.length > LIMITS.forwarded) return refusal(argument);
+    for (const each of reads.defaults) {
+      const at = `${each.value.pos}:${each.value.end}`;
+      if (each.selected && scan.entered.includes(at) && !scanned.has(scanState(each)))
+        return refusal(argument);
+      pending.push({ ...each, entered: [...scan.entered, at] });
+    }
   }
   return values;
+}
+
+/** The one value of an answer that is refused, whatever the construction supplies. */
+function refusal(argument: Expression): readonly ForwardedValue[] {
+  return [{ keys: [], refused: true, value: argument }];
+}
+
+/** Adds the values of `added` that `values` does not hold: a value is forwarded once. */
+function addForwarded(
+  values: ForwardedValue[],
+  forwarded: Set<string>,
+  added: readonly ForwardedValue[],
+): void {
+  for (const each of added) {
+    const key = forwardedState(each);
+    if (forwarded.has(key)) continue;
+    forwarded.add(key);
+    values.push(each);
+  }
+}
+
+/** What a forwarded value stands for to the reader: the written value, read up to its keys. */
+function forwardedState(each: ForwardedValue): string {
+  return JSON.stringify([
+    each.value.pos,
+    each.value.end,
+    each.keys,
+    each.any === true,
+    each.continued === true,
+    each.refused === true,
+    each.unfollowed === true,
+  ]);
+}
+
+/** What a scan of a default stands for: the same state is scanned once. */
+function scanState(scan: DefaultValue): string {
+  return JSON.stringify([
+    scan.value.pos,
+    scan.keys,
+    scan.any === true,
+    scan.selected,
+    scan.continued === true,
+  ]);
 }
 
 /** The position of the rest parameter a spread passes on whole. */
@@ -138,13 +221,15 @@ function parameterReads(
   root: DefaultValue,
   parameters: readonly ParameterDeclaration[],
   slots: Slots,
-): ParameterRead | undefined {
+): Reads | undefined {
   const values: ForwardedValue[] = [];
   const defaults: DefaultValue[] = [];
   const source = forwardedRoot(root.value);
   const pending: Node[] = [root.value];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    // A bare typeof operand is inspected without copying its words into the native argument.
+    // A bare typeof operand is inspected without copying its words into the native argument, and a
+    // type is erased: the name of a member in `fallback as { inner: unknown }` reads nothing.
+    if (isTypeOnly(node)) continue;
     if (isTypeOfExpression(node) && isIdentifier(unwrapped(node.expression))) continue;
     node.forEachChild((child) => {
       pending.push(child);
@@ -152,16 +237,11 @@ function parameterReads(
     if (!isIdentifier(node) || !readsBinding(node) || noncoercingComparison(node)) continue;
     const read = parameterValues(node, parameters, slots);
     if (read === undefined) return undefined;
+    values.push(...read.whole);
     if (node === source && root.selected) {
-      values.push(...read.values.map((each) => continuedValue(each, root)));
-      defaults.push(
-        ...read.defaults.map((each) => {
-          return {
-            ...continuedValue(each, root),
-            selected: each.selected,
-          };
-        }),
-      );
+      const selected = selectedRead(root, read);
+      values.push(...selected.values);
+      defaults.push(...selected.defaults);
     } else {
       values.push(...read.values);
       defaults.push(
@@ -170,6 +250,28 @@ function parameterReads(
     }
   }
   return { defaults, values };
+}
+
+/**
+ * What one parameter read inside a selected default passes on, read along the path the default is
+ * selected by: its values and defaults continued along that path and, where the path has a key,
+ * as they stand (what the default selects the path of) and, where it has two or more, read up to
+ * the key before the last (what it selects the last member of). The path may stop at a value the
+ * compile cannot read into, an Error's own `message`, or meet a member another default writes.
+ */
+function selectedRead(root: DefaultValue, read: ParameterRead): Reads {
+  const values = read.values.map((each) => continuedValue(each, root));
+  const defaults = read.defaults.map((each) => {
+    return {
+      ...continuedValue(each, root),
+      selected: each.selected,
+    };
+  });
+  if (root.keys.length === 0 && root.any !== true) return { defaults, values };
+  return {
+    defaults: [...defaults, ...read.defaults.map((each) => ({ ...each, selected: false }))],
+    values: [...values, ...read.values, ...heldBy(read.values, root)],
+  };
 }
 
 /** Bare noncoercing comparison operands supply only their boolean result to the message. */
@@ -207,9 +309,11 @@ function parameterValues(
   const keys = [...selected.keys, ...path.keys];
   const declared = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
   if (parameter.dotDotDotToken !== undefined) {
+    const rest = slots.slice(index);
     return {
       defaults: declared === undefined ? [] : restDefaults(declared),
-      values: restValues(slots.slice(index), keys, path.any),
+      values: restValues(rest, keys, path.any),
+      whole: restReceivers(rest, keys, path.any),
     };
   }
   const given = slots[index] ?? [];
@@ -222,7 +326,11 @@ function parameterValues(
     declared === undefined ? [] : elementDefaults(declared, selected.keys, path, effective);
   if (parameter.initializer !== undefined)
     defaults.push({ any: path.any, keys, value: parameter.initializer, selected: takesDefault });
-  return { defaults, values: given.map((each) => selectedValue(each, keys, path.any)) };
+  return {
+    defaults,
+    values: given.map((each) => selectedValue(each, keys, path.any)),
+    whole: receivers(given, keys, path.any),
+  };
 }
 
 /**
@@ -239,7 +347,7 @@ function restRead(
   const index = parameterIndex(declared, parameters);
   const parameter = parameters[index];
   if (parameter === undefined)
-    return name.text === 'arguments' ? undefined : { defaults: [], values: [] };
+    return name.text === 'arguments' ? undefined : { defaults: [], values: [], whole: [] };
   const element = bindingIdentifiers(parameter.name).find((each) => each.text === name.text);
   const rest = element?.parent;
   if (rest === undefined || !isBindingElement(rest) || rest.dotDotDotToken === undefined)
@@ -256,8 +364,20 @@ function restRead(
   const defaults =
     parameter.initializer === undefined
       ? []
-      : [{ any: true, keys: outer, value: parameter.initializer, selected: false }];
-  return { defaults, values: given.map((each) => selectedValue(each, keys, selection.any)) };
+      : [
+          {
+            any: true,
+            keys: outer,
+            selected: false,
+            unfollowed: true,
+            value: parameter.initializer,
+          },
+        ];
+  return {
+    defaults,
+    values: given.map((each) => selectedValue(each, keys, selection.any)),
+    whole: receivers(given, keys, selection.any),
+  };
 }
 
 /** An array rest's written index, counted from the rest's position; another read, any element. */
@@ -317,7 +437,13 @@ function restDefaults(name: Identifier): DefaultValue[] {
   const defaults: DefaultValue[] = [];
   for (let at: Node = name.parent; isBindingElement(at); at = at.parent.parent) {
     if (at.initializer !== undefined)
-      defaults.push({ any: true, keys: [], value: at.initializer, selected: false });
+      defaults.push({
+        any: true,
+        keys: [],
+        selected: false,
+        unfollowed: true,
+        value: at.initializer,
+      });
   }
   return defaults;
 }
@@ -358,6 +484,48 @@ function restValues(rest: Slots, keys: readonly string[], any: boolean): readonl
   if (position === undefined) return rest.flat().map((each) => selectedValue(each, [], any));
   const given = rest[position] ?? [];
   return given.map((each) => selectedValue(each, remaining, any));
+}
+
+/**
+ * What a read selects a member of: each given value read up to the key before the last, or up to
+ * the keys read where a later one is not. A member of a value the compile cannot read into, an
+ * `Error`'s own `message`, is the words each engine writes, which the path alone does not show. A
+ * literal read by one key is read into by the path, which resolves the member it holds.
+ */
+function receivers(
+  given: readonly ForwardedValue[],
+  keys: readonly string[],
+  any: boolean,
+): readonly ForwardedValue[] {
+  if (!any && keys.length === 0) return [];
+  const read = any ? keys : keys.slice(0, -1);
+  return given
+    .filter((each) => any || keys.length > 1 || each.keys.length > 0 || !isLiteral(each.value))
+    .map((each) => selectedValue(each, read, false));
+}
+
+/** What the path a default is read along selects a member of, where it has a key before the last. */
+function heldBy(given: readonly ForwardedValue[], root: DefaultValue): readonly ForwardedValue[] {
+  const read = root.any === true ? root.keys : root.keys.slice(0, -1);
+  return read.length === 0 ? [] : given.map((each) => selectedValue(each, read, false));
+}
+
+/** What a read of a rest parameter selects a member of: the argument at a position, as `receivers`. */
+function restReceivers(
+  rest: Slots,
+  keys: readonly string[],
+  any: boolean,
+): readonly ForwardedValue[] {
+  if (keys.length < 2 && !(any && keys.length === 1)) return [];
+  return restValues(rest, any ? keys : keys.slice(0, -1), false).filter(
+    (each) => any || keys.length > 2 || each.keys.length > 0 || !isLiteral(each.value),
+  );
+}
+
+/** An object or an array written as a literal, which a path of one key is resolved in. */
+function isLiteral(value: Expression): boolean {
+  const written = unwrapped(value);
+  return isObjectLiteralExpression(written) || isArrayLiteralExpression(written);
 }
 
 /** A canonical array index, as a written key spells it. */

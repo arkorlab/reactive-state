@@ -88,20 +88,40 @@ export function framedArrayFromResult(
   const literal = framedQuietSource(source);
   if (literal === undefined || !isArrayLiteralExpression(literal)) return false;
   const values = framedAppliedArguments(call, literal);
-  const value = values?.[selected.index];
-  if (value === undefined) return false;
+  const slots = values === undefined ? [] : mappedSlots(values, selected.index);
+  if (slots.length === 0) return false;
   if (
     !framedQuietTextPrefix(call, NATIVES) ||
     !framedQuietTextPrefix(node, NATIVES, (prior) => prior === call)
   )
     return false;
-  const result = inputReturn(fn, returned) ? value : returned;
-  return (
-    !isOmittedExpression(unwrapped(result)) &&
-    sparseConstructionQuiet(value, call, node) &&
-    originalError(result, node) &&
-    error(result, selected.keys)
-  );
+  const given = inputReturn(fn, returned);
+  return slots.some((value) => {
+    if (given && isSpreadElement(value)) return true;
+    const result = given ? value : returned;
+    return (
+      !isOmittedExpression(unwrapped(result)) &&
+      sparseConstructionQuiet(value, call, node) &&
+      originalError(result, node) &&
+      error(result, selected.keys)
+    );
+  });
+}
+
+/**
+ * The written elements the mapped slot may come from: its own, up to the first spread; from there
+ * on a spread supplies a length the compile does not read, so every element written after it and
+ * the spread itself may be the one at the slot. A spread that may supply the input is taken for an
+ * error (the caller refuses more, never less), where counting past it would take another element
+ * for the slot's.
+ */
+function mappedSlots(values: readonly Expression[], index: number): readonly Expression[] {
+  const spread = values.findIndex((each) => isSpreadElement(each));
+  if (spread === -1 || index < spread) {
+    const value = values[index];
+    return value === undefined ? [] : [value];
+  }
+  return values.slice(spread);
 }
 
 /** The added sparse mapper proof cannot pass a construction of native nonconstructible Array.from. */

@@ -80,7 +80,7 @@ import {
 } from 'typescript/ast';
 
 import type { Fail } from './errors.ts';
-import { isTypeSyntax } from './type-syntax.ts';
+import { isAmbient, isTypeSyntax } from './type-syntax.ts';
 
 /**
  * Names, followed lexically through a part of the component — the code before the state, the
@@ -529,14 +529,14 @@ function enter(node: ScopeNode, names: ReadonlySet<string>): ReadonlySet<string>
   return declare(declarationsOf(node), inner);
 }
 
-/** `scope` with what `declarations` declare added to it. */
+/** `scope` with what `declarations` declare added to it: none an ambient one (`isAmbient`) gives. */
 function declare(
   declarations: readonly Declaration[],
   scope: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const inner = new Set(scope);
   for (const declaration of declarations) {
-    if (declaration.name !== undefined) {
+    if (declaration.name !== undefined && !isAmbient(declaration)) {
       for (const name of bindingIdentifiers(declaration.name)) {
         inner.add(name.text);
       }
