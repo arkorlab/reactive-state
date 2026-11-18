@@ -1,7 +1,10 @@
 import {
+  type BindingElement,
   type Expression,
   type Identifier,
+  isArrayBindingPattern,
   isArrowFunction,
+  isBindingElement,
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
@@ -16,6 +19,7 @@ import { type Answering, overloadsOf, returnedBy } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedAssignedSources } from './framed-writes.ts';
+import { bindingIdentifiers } from './scope.ts';
 
 /** What a function of the file answers of the Date a tag hands it: in a call, or as a callback. */
 
@@ -29,9 +33,28 @@ export interface DatedQueries {
 const ASSUMED = new Set<Node>();
 const ASKED = new Set<Node>();
 
-/** Whether a parameter of a function the answers of which are being asked is handed a Date. */
-export function isHandedDate(parameter: ParameterDeclaration): boolean {
-  return ASSUMED.has(parameter);
+/**
+ * Whether a name a parameter of a function the answers of which are being asked binds holds a Date:
+ * none where the parameter is not handed one, the parameter itself, and what array patterns take
+ * of it, not what an object pattern takes (`({ length }) => length`).
+ */
+export function handedNameCarries(
+  name: Identifier,
+  parameter: ParameterDeclaration,
+): boolean | undefined {
+  if (!ASSUMED.has(parameter)) return undefined;
+  if (isIdentifier(parameter.name)) return true;
+  const bound = bindingIdentifiers(parameter.name).find((each) => each.text === name.text)?.parent;
+  return bound !== undefined && isBindingElement(bound) && boundThroughArrays(bound, parameter);
+}
+
+function boundThroughArrays(element: BindingElement, parameter: ParameterDeclaration): boolean {
+  let node: Node = element;
+  while (node !== parameter) {
+    if (isBindingElement(node) && !isArrayBindingPattern(node.parent)) return false;
+    node = node.parent;
+  }
+  return true;
 }
 
 /** The functions an expression may be, found once for each: a walk of the scope each. */

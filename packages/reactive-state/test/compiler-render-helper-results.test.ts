@@ -163,6 +163,42 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
+    id: 'destructured-length-of-an-array-pin',
+    pre: 'const count=({length}:unknown[])=>length;',
+    tag: `${DATED}String(count([date]))`,
+    local: undefined,
+  },
+  {
+    id: 'destructured-length-under-another-name-pin',
+    pre: 'const count=({length:total}:unknown[])=>total;',
+    tag: `${DATED}String(count([date]))`,
+    local: undefined,
+  },
+  {
+    id: 'destructured-member-of-an-object-pin',
+    pre: 'const label=({name}:{name:string;when:unknown})=>name;',
+    tag: `${DATED}String(label({name:'x',when:date}))`,
+    local: undefined,
+  },
+  {
+    id: 'array-pattern-parameter-answers-an-element',
+    pre: 'const first=([head]:unknown[])=>head;',
+    tag: `${DATED}String(first([date]))`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'array-pattern-with-a-rest',
+    pre: 'const rest=([_head,...tail]:unknown[])=>tail;',
+    tag: `${DATED}String(rest([1,date]))`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'array-pattern-nested-in-an-object-pattern-pin',
+    pre: 'const inner=({items:[head]}:{items:unknown[]})=>head;',
+    tag: `${DATED}String(inner({items:[date]}))`,
+    local: undefined,
+  },
+  {
     id: 'inline-callback-was-followed-pin',
     pre: '',
     tag: `${REST}values.map((value)=>value).join('')`,

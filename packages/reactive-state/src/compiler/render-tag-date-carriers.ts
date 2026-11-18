@@ -49,8 +49,8 @@ import {
 } from './render-tag-date-array-methods.ts';
 import {
   type DatedQueries,
+  handedNameCarries,
   helperResultCarriesDated,
-  isHandedDate,
   mappedResultCarriesDated,
 } from './render-tag-date-helper-results.ts';
 import { bindingIdentifiers } from './scope.ts';
@@ -185,7 +185,8 @@ function parameterCarriesDated(
   seen: Set<Node>,
 ): boolean {
   const { bindings, datedIndices } = ctx;
-  if (isHandedDate(declared)) return true;
+  const handed = handedNameCarries(name, declared);
+  if (handed !== undefined) return handed;
   const positional = bindings.positionalSubs.get(declared);
   if (positional !== undefined) {
     return bindings.wildcardSubs ? datedIndices.size > 0 : datedIndices.has(positional);
