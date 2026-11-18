@@ -6,6 +6,7 @@ import {
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
+  isConstructorDeclaration,
   isElementAccessExpression,
   isIdentifier,
   isNewExpression,
@@ -19,6 +20,7 @@ import {
   SyntaxKind,
 } from 'typescript/ast';
 
+import { parametersOf } from './answers.ts';
 import { declarationOf } from './framed.ts';
 import { writesThis } from './held-methods.ts';
 import { isKept, runsPerCall } from './kept.ts';
@@ -189,7 +191,7 @@ function matchingParameters(
   args: readonly CallArgumentSlot[],
   argIndex: number,
 ): readonly ParameterDeclaration[] {
-  const params = callee.parameters;
+  const params = isConstructorDeclaration(callee) ? callee.parameters : parametersOf(callee);
   const slot = args[argIndex];
   const prefix = args.slice(0, argIndex);
   const hasPriorSpread = prefix.some((each) => each.spread);
