@@ -68,14 +68,20 @@ function arraySlotKind(array: ArrayLiteralExpression, last: string, target: Targ
   return Number(last) <= dense ? 'element' : 'changed';
 }
 
-/** Classifies whether `last` is a valid hole-free write on `container`. */
+/**
+ * Classifies whether `last` is a valid hole-free write on `container`. An entry of an object the
+ * code writes is one under any key it reads from a page's values: which key that is, is not
+ * something the compile tells (`last` is `undefined`). Of an array's it is refused: a key the code
+ * does not name may leave a hole.
+ */
 export function slotEntryKind(
   container: Expression | undefined,
-  last: string,
+  last: string | undefined,
   target: Target,
 ): SlotKind {
   const value = container === undefined ? undefined : unwrapped(container);
   if (value !== undefined && isObjectLiteralExpression(value)) return 'entry';
+  if (last === undefined) return 'changed';
   if (value !== undefined && isArrayLiteralExpression(value)) {
     return arraySlotKind(value, last, target);
   }
@@ -87,7 +93,7 @@ export function slotEntryKind(
 export function checkedSlotOf(target: Target): SlotKind {
   const { keys } = target;
   const last = keys.at(-1);
-  if (last === undefined || last === 'length' || keys.includes('__proto__')) return 'changed';
+  if (last === 'length' || keys.length === 0 || keys.includes('__proto__')) return 'changed';
   const container = unreplacedAt(target, keys.slice(0, -1));
   return slotEntryKind(container, last, target);
 }
