@@ -195,13 +195,11 @@ function hookAlone(name: string): string {
 }
 
 /** Whether a statement declares with `const`. */
-export function isConstant(
-  statement: VariableStatement,
-  sourceFile?: SourceFile | undefined,
-): boolean;
+export function isConstant(statement: VariableStatement, sourceFile?: SourceFile): boolean;
 export function isConstant(statement: VariableStatement): boolean {
+  const { flags } = statement.declarationList;
   // eslint-disable-next-line no-bitwise -- TypeScript says `const` in these flags (`AwaitUsing` sets `Const | Using`).
-  return (statement.declarationList.flags & NodeFlags.BlockScoped) === NodeFlags.Const;
+  return (flags & NodeFlags.Const) !== 0 && (flags & NodeFlags.Using) === 0;
 }
 
 function pairOf(

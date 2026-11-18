@@ -269,6 +269,7 @@ describe('bounded export lookups in cyclic barrel graphs', () => {
 
   it.each(CASES)('$id', (entry) => {
     const { maxParses, parses, resolved } = resolveBounded(entry);
+
     expect(resolved).toStrictEqual(entry.expected);
     expect(parses).toBeLessThanOrEqual(maxParses);
   });
