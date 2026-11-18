@@ -51,7 +51,7 @@ import {
   unwrapExpression,
   type ValueSpec,
 } from './statement-call-scopes.ts';
-import { ownerTargetsOfMember } from './statement-call-subclasses.ts';
+import { objectTargetsOf, ownerTargetsOfMember } from './statement-call-subclasses.ts';
 import { staticExpressionKey } from './statement-call-writes.ts';
 
 export { EMPTY_NODE_SET, EMPTY_PROJECT_SET } from './statement-call-classes.ts';
@@ -364,12 +364,16 @@ function thisTargetsAtBoundary(
     return active === undefined ? ownerTargetsOfMember(current, ctx, seenBindings) : [active];
   }
   if (isFunctionDeclaration(current) || isFunctionExpression(current)) {
-    return functionThisFallback(current, ctx);
+    return functionThisFallback(current, ctx, seenBindings);
   }
   return current.kind === SyntaxKind.SourceFile ? [] : undefined;
 }
 
-function functionThisFallback(fn: Node, ctx: TargetContext): readonly ResolvedValue[] {
+function functionThisFallback(
+  fn: Node,
+  ctx: TargetContext,
+  seenBindings?: Set<Binding>,
+): readonly ResolvedValue[] {
   const active = ctx.activeReceiverFor(fn);
   if (active !== undefined) {
     return [active];
@@ -379,7 +383,7 @@ function functionThisFallback(fn: Node, ctx: TargetContext): readonly ResolvedVa
     isPropertyAssignment(fn.parent) &&
     isObjectLiteralExpression(fn.parent.parent)
   ) {
-    return [{ kind: 'node', node: fn.parent.parent }];
+    return objectTargetsOf(fn.parent.parent, ctx, seenBindings);
   }
   return [];
 }
