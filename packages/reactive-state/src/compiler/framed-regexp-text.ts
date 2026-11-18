@@ -35,9 +35,9 @@ const BORROWED = { callSlots: 3 } as const;
 
 interface PatternArguments {
   readonly applied: Expression | undefined;
-  readonly constructed?: boolean;
+  readonly constructed?: boolean | undefined;
+  readonly constructorTarget?: Expression | null | undefined;
   readonly given: readonly Expression[];
-  readonly newTarget?: Expression | null;
 }
 
 interface PatternWords {
@@ -76,7 +76,7 @@ export function framedRegExpText(
       applied: borrowed.applied,
       args,
       constructed: borrowed.constructed === true,
-      newTarget: borrowed.newTarget,
+      constructorTarget: borrowed.constructorTarget,
     },
     words,
   );
@@ -89,7 +89,7 @@ function evaluateConstructorArguments(
     readonly applied: Expression | undefined;
     readonly args: readonly Expression[] | undefined;
     readonly constructed: boolean;
-    readonly newTarget?: Expression | null;
+    readonly constructorTarget?: Expression | null | undefined;
   },
   words: PatternWords,
 ): boolean {
@@ -147,7 +147,7 @@ function reflectedApplyArguments(call: CallExpression): PatternArguments | undef
   const [target, receiver, applied] = values ?? [];
   if (target === undefined || receiver === undefined) return undefined;
   if (framedNativeConstructor(target, PATTERN)) return { applied, constructed: false, given: [] };
-  if (!nativeCallable(target, REFLECT_CONSTRUCT) || applied === undefined) return undefined;
+  if (applied === undefined || !nativeCallable(target, REFLECT_CONSTRUCT)) return undefined;
   const list = framedAppliedArguments(call, applied);
   return list === undefined ? undefined : constructListArguments(call, list);
 }
@@ -185,9 +185,9 @@ function borrowedConstructMemberArguments(
   }
   const values = knownPrefix(call, 2);
   const list =
-    values?.[0] !== undefined && values[1] !== undefined
-      ? framedAppliedArguments(call, values[1])
-      : undefined;
+    values?.[0] === undefined || values[1] === undefined
+      ? undefined
+      : framedAppliedArguments(call, values[1]);
   return list === undefined ? undefined : constructListArguments(call, list);
 }
 
@@ -218,8 +218,9 @@ function constructListArguments(
     return undefined;
   }
   const full = framedArgumentPrefix(call, list, Infinity);
-  const newTarget = full.unknown || (full.alternatives?.length ?? 0) > 0 ? null : full.values[2];
-  return { applied, constructed: true, given: [], newTarget };
+  const constructorTarget =
+    full.unknown || (full.alternatives?.length ?? 0) > 0 ? null : full.values[2];
+  return { applied, constructed: true, constructorTarget, given: [] };
 }
 
 /** Matches a native global path through whole `const` aliases and `const` object destructuring. */
@@ -231,8 +232,8 @@ function nativeCallable(node: Expression, expected: string): boolean {
   const binding = selected?.binding;
   if (
     selected === undefined ||
-    selected.keys.length === 0 ||
     binding === undefined ||
+    selected.keys.length === 0 ||
     !isVariableDeclaration(binding) ||
     binding.initializer === undefined ||
     !isVariableDeclarationList(binding.parent) ||

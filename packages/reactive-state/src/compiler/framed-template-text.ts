@@ -1,51 +1,27 @@
 import {
   type ConditionalExpression,
   type Expression,
-  type FunctionDeclaration,
   type Identifier,
-  isArrayLiteralExpression,
-  isArrowFunction,
-  isAsExpression,
   isBinaryExpression,
-  isClassStaticBlockDeclaration,
-  isComputedPropertyName,
   isConditionalExpression,
-  isConstructorDeclaration,
-  isDecorator,
-  isForInStatement,
-  isForOfStatement,
   isFunctionDeclaration,
-  isFunctionExpression,
-  isGetAccessorDeclaration,
   isIdentifier,
-  isMethodDeclaration,
-  isNonNullExpression,
-  isObjectLiteralExpression,
-  isParenthesizedExpression,
-  isPostfixUnaryExpression,
   isPrefixUnaryExpression,
-  isPropertyAssignment,
-  isSatisfiesExpression,
-  isSetAccessorDeclaration,
-  isShorthandPropertyAssignment,
-  isSpreadAssignment,
-  isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
-  isTypeAssertion,
   isTypeOfExpression,
   isVariableDeclaration,
-  isVariableDeclarationList,
   isVoidExpression,
   type Node,
   type ParameterDeclaration,
   SyntaxKind,
-  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { type Answering, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
+import { constantDeclaration, mentionsAccessibleArguments } from './framed-template-arguments.ts';
+import { singleUnchangedFunctionBody } from './framed-written-error-parameters.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 import { useOf } from './uses.ts';
 
@@ -83,7 +59,7 @@ export function framedTemplateText(
   return (
     functions === undefined ||
     functions.length === 0 ||
-    !functions.every((fn) => ignoresErrorSlots(fn, slots))
+    functions.some((fn) => !ignoresErrorSlots(fn, slots))
   );
 }
 
@@ -113,7 +89,8 @@ function namedTagFunctions(name: Identifier, seen: Set<Node>): readonly Answerin
   const declared = frameDeclarationOf(name);
   if (declared === undefined) return undefined;
   if (isFunctionDeclaration(declared)) {
-    return unchangedFunction(declared) ? [declared] : undefined;
+    const body = singleUnchangedFunctionBody(declared);
+    return body === undefined ? undefined : [body];
   }
   if (
     !isVariableDeclaration(declared) ||
@@ -125,53 +102,9 @@ function namedTagFunctions(name: Identifier, seen: Set<Node>): readonly Answerin
   return resolvedTagFunctions(declared.initializer, seen);
 }
 
-/** Whole `const` bindings keep their initializer value throughout their scope. */
-function constantDeclaration(declared: VariableDeclaration): boolean {
-  return (
-    isIdentifier(declared.name) &&
-    isVariableDeclarationList(declared.parent) &&
-    /^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
-  );
-}
-
-/** Named function declarations keep their body when neither redeclared nor reassigned. */
-function unchangedFunction(declared: FunctionDeclaration): boolean {
-  if (declared.body === undefined || declared.name === undefined) return false;
-  const name = declared.name.text;
-  const siblings = 'statements' in declared.parent ? declared.parent.statements : undefined;
-  if (
-    siblings?.some(
-      (each) =>
-        each !== declared &&
-        isFunctionDeclaration(each) &&
-        each.body !== undefined &&
-        each.name?.text === name,
-    ) === true
-  ) {
-    return false;
-  }
-  const pending: Node[] = [declared.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      node.text === name &&
-      reassignedIdentifier(node) &&
-      frameDeclarationOf(node) === declared
-    ) {
-      return false;
-    }
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return true;
-}
-
 /** Every error-carrying substitution slot must remain unread or strictly tested without escaping. */
 function ignoresErrorSlots(fn: Answering, slots: readonly number[]): boolean {
-  if (fn.body === undefined) return false;
-  if (!isArrowFunction(fn) && mentionsOwnArguments(fn)) return false;
+  if (fn.body === undefined || mentionsAccessibleArguments(fn)) return false;
   return slots.every((slot) => ignoresSlot(fn, slot));
 }
 
@@ -224,118 +157,5 @@ function nonCoercingTestUse(node: Identifier): boolean {
     isVoidExpression(parent) ||
     (isPrefixUnaryExpression(parent) && parent.operator === SyntaxKind.ExclamationToken) ||
     (isBinaryExpression(parent) && STRICT_EQUALITY.has(parent.operatorToken.kind))
-  );
-}
-
-/** Non-arrow functions expose unnamed arguments when `arguments` is read in the same binding scope. */
-function mentionsOwnArguments(fn: Answering): boolean {
-  if (fn.body === undefined) return false;
-  const pending: Node[] = [...parametersOf(fn), fn.body];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (node !== fn && bindsOwnArguments(node)) {
-      pushOuterScopeHeader(node, pending);
-      continue;
-    }
-    if (readsOwnArgumentsIdentifier(node)) return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
-  }
-  return false;
-}
-
-/** Matches an unshadowed `arguments` value read within the current callable scope. */
-function readsOwnArgumentsIdentifier(node: Node): boolean {
-  return (
-    isIdentifier(node) &&
-    node.text === 'arguments' &&
-    readsBinding(node) &&
-    frameDeclarationOf(node) === undefined
-  );
-}
-
-/** Computed member names and decorators evaluate in the enclosing callable's `arguments` scope. */
-function pushOuterScopeHeader(node: Node, pending: Node[]): void {
-  if (
-    (isMethodDeclaration(node) ||
-      isGetAccessorDeclaration(node) ||
-      isSetAccessorDeclaration(node)) &&
-    isComputedPropertyName(node.name)
-  ) {
-    pending.push(node.name.expression);
-  }
-  if (
-    isMethodDeclaration(node) ||
-    isGetAccessorDeclaration(node) ||
-    isSetAccessorDeclaration(node) ||
-    isConstructorDeclaration(node)
-  ) {
-    pushDecorators(node.modifiers, pending);
-    for (const parameter of node.parameters) pushDecorators(parameter.modifiers, pending);
-  }
-}
-
-/** Queues decorator expressions from a modifier list for outer-scope traversal. */
-function pushDecorators(modifiers: readonly Node[] | undefined, pending: Node[]): void {
-  if (modifiers === undefined) return;
-  for (const modifier of modifiers) {
-    if (isDecorator(modifier)) pending.push(modifier.expression);
-  }
-}
-
-/** Nested non-arrow functions and class blocks bind their own `arguments` rather than `fn`'s. */
-function bindsOwnArguments(node: Node): boolean {
-  return (
-    isFunctionDeclaration(node) ||
-    isFunctionExpression(node) ||
-    isMethodDeclaration(node) ||
-    isGetAccessorDeclaration(node) ||
-    isSetAccessorDeclaration(node) ||
-    isConstructorDeclaration(node) ||
-    isClassStaticBlockDeclaration(node)
-  );
-}
-
-/** Direct, destructuring, loop and update assignments replace the lexical binding. */
-function reassignedIdentifier(name: Identifier): boolean {
-  let target: Node = name;
-  while (assignmentWrapper(target)) target = target.parent;
-  const parent = target.parent;
-  if (isBinaryExpression(parent) && parent.left === target) {
-    const kind = parent.operatorToken.kind;
-    return kind >= SyntaxKind.FirstAssignment && kind <= SyntaxKind.LastAssignment;
-  }
-  if (isForInStatement(parent) || isForOfStatement(parent)) return parent.initializer === target;
-  return (
-    (isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) &&
-    (parent.operator === SyntaxKind.PlusPlusToken || parent.operator === SyntaxKind.MinusMinusToken)
-  );
-}
-
-/** Transparent expressions and assignment patterns propagate writes to their bound target. */
-function assignmentWrapper(target: Node): boolean {
-  const parent = target.parent;
-  return (
-    (transparentExpression(parent) && parent.expression === target) ||
-    isArrayLiteralExpression(parent) ||
-    isObjectLiteralExpression(parent) ||
-    isSpreadElement(parent) ||
-    isSpreadAssignment(parent) ||
-    (isPropertyAssignment(parent) && parent.initializer === target) ||
-    (isShorthandPropertyAssignment(parent) && parent.name === target)
-  );
-}
-
-/** Parentheses, type assertions, non-null markers and satisfies preserve the target reference. */
-function transparentExpression(
-  node: Node,
-): node is Expression & { readonly expression: Expression } {
-  return (
-    isParenthesizedExpression(node) ||
-    isAsExpression(node) ||
-    isTypeAssertion(node) ||
-    isNonNullExpression(node) ||
-    isSatisfiesExpression(node)
   );
 }

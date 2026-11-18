@@ -32,10 +32,16 @@ import {
   framedSubclassConstructor,
   framedSubclassOwnWords,
 } from './framed-constructors.ts';
-import { framedFactoryCall } from './framed-factory-calls.ts';
 import { framedNativeErrorCreation } from './framed-receivers.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { framedValueShape } from './framed-values.ts';
+import {
+  factoryMentionsThis,
+  framedWrittenFactoryCall,
+  sideEffectFreeExpression,
+  sideEffectFreeFactoryParameters,
+  sideEffectFreeVariableStatement,
+} from './framed-written-error-calls.ts';
 import {
   constantStatement,
   quietFactoryCall,
@@ -135,7 +141,8 @@ function assignedId(node: Node, ids: Map<Node, number>): number {
 /** Evaluates branches, unmutated lexical bindings, local constructions, and local factories. */
 function computeWrittenError(node: Expression, state: ProofState, frame: FactoryFrame): boolean {
   const { value } = framedValueShape(node);
-  const branches = reachableValueBranches(value);
+  const inFactory = inFactoryFrame(frame);
+  const branches = reachableValueBranches(value, inFactory);
   if (branches !== undefined) {
     return (
       branches.length > 0 && branches.every((each) => evaluateWrittenError(each, state, frame))
@@ -156,6 +163,7 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
   const inner = nonInterceptingWrappedTarget(value);
   if (inner !== undefined) {
     return (
+      (!inFactory || sideEffectFreeExpression(value, inner)) &&
       !state.check(node, false) &&
       state.check(node, true) &&
       evaluateWrittenError(inner, state, frame)
@@ -165,53 +173,83 @@ function computeWrittenError(node: Expression, state: ProofState, frame: Factory
 }
 
 /** Conditional, comma, and logical expressions yield their reachable value branches. */
-function reachableValueBranches(value: Expression): readonly Expression[] | undefined {
+function reachableValueBranches(
+  value: Expression,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
   if (isConditionalExpression(value)) {
+    if (inFactory && !sideEffectFreeExpression(value.condition)) return undefined;
     const branch = framedCondition(value.condition);
     if (branch === undefined) return [value.whenTrue, value.whenFalse];
-    return branch ? [value.whenTrue] : [value.whenFalse];
+    return [branch ? value.whenTrue : value.whenFalse];
   }
-  return isBinaryExpression(value) ? binaryValueBranches(value) : undefined;
+  return isBinaryExpression(value) ? binaryValueBranches(value, inFactory) : undefined;
 }
 
 /** Comma and short-circuiting binary operators retain every runtime-reachable operand. */
-function binaryValueBranches(node: BinaryExpression): readonly Expression[] | undefined {
+function binaryValueBranches(
+  node: BinaryExpression,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
   const kind = node.operatorToken.kind;
-  if (kind === SyntaxKind.CommaToken) return [node.right];
+  if (kind === SyntaxKind.CommaToken) {
+    return allowedDroppedPrefix(node.left, inFactory) ? [node.right] : undefined;
+  }
   if (kind === SyntaxKind.BarBarToken) {
-    const branch = framedCondition(node.left);
-    if (branch === undefined) return [node.left, node.right];
-    return branch ? [node.left] : [node.right];
+    return logicalBranches(node.left, node.right, false, inFactory);
   }
   if (kind === SyntaxKind.AmpersandAmpersandToken) {
-    const branch = framedCondition(node.left);
-    if (branch === true) return [node.right];
-    return branch === false ? [node.left] : [node.left, node.right];
+    return logicalBranches(node.left, node.right, true, inFactory);
   }
   return kind === SyntaxKind.QuestionQuestionToken
-    ? nullishBranches(node.left, node.right)
+    ? nullishBranches(node.left, node.right, inFactory)
     : undefined;
 }
 
+/** Prunes constant `||` / `&&` branches only when a discarded left operand is side-effect-free. */
+function logicalBranches(
+  left: Expression,
+  right: Expression,
+  dropWhenTruthy: boolean,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
+  const branch = framedCondition(left);
+  if (branch === undefined) return [left, right];
+  if (branch !== dropWhenTruthy) return [left];
+  return allowedDroppedPrefix(left, inFactory) ? [right] : undefined;
+}
+
 /** Selects the fallback for literal nullish left operands and keeps known non-nullish values. */
-function nullishBranches(left: Expression, right: Expression): readonly Expression[] {
+function nullishBranches(
+  left: Expression,
+  right: Expression,
+  inFactory: boolean,
+): readonly Expression[] | undefined {
   const inner = unwrapped(left);
   if (
     inner.kind === SyntaxKind.NullKeyword ||
     isVoidExpression(inner) ||
     globalPathOf(inner)?.join('.') === 'undefined'
   ) {
-    return [right];
+    return allowedDroppedPrefix(left, inFactory) ? [right] : undefined;
   }
   if (
     inner.kind === SyntaxKind.TrueKeyword ||
     inner.kind === SyntaxKind.FalseKeyword ||
     isNewExpression(inner) ||
-    constantValue(inner, () => undefined) !== undefined
+    constantValue(inner) !== undefined
   ) {
     return [left];
   }
   return [left, right];
+}
+
+function allowedDroppedPrefix(prefix: Expression, inFactory: boolean): boolean {
+  return !inFactory || sideEffectFreeExpression(prefix);
+}
+
+function inFactoryFrame(frame: FactoryFrame): boolean {
+  return frame.returnScope !== undefined || frame.unquietScopes.length > 0;
 }
 
 /** Native Error creations and local own-word Error subclasses construct fresh local errors. */
@@ -221,11 +259,12 @@ function directLocalErrorConstruction(value: Expression): boolean {
   return (
     targets !== undefined &&
     targets.length > 0 &&
-    targets.every(
-      (target) =>
+    targets.every((target) => {
+      return (
         framedNativeConstructor(target, ERRORS) ||
-        (framedSubclassConstructor(target, ERRORS) && framedSubclassOwnWords(target, ERRORS)),
-    )
+        (framedSubclassConstructor(target, ERRORS) && framedSubclassOwnWords(target, ERRORS))
+      );
+    })
   );
 }
 
@@ -248,18 +287,11 @@ function evaluateFactoryCall(
   state: ProofState,
   frame: FactoryFrame,
 ): boolean {
-  const invocation = framedFactoryCall(call, (callee) => localFactory(callee), frameDeclarationOf);
-  if (invocation === undefined) return false;
-  const { fn, given } = invocation;
-  if (
-    answersLater(fn) ||
-    fn.body === undefined ||
-    given === null ||
-    state.activeFactories.has(fn)
-  ) {
+  const invocation = framedWrittenFactoryCall(call, (callee) => localFactory(callee));
+  if (invocation === undefined || !validFactoryInvocation(invocation, state, frame)) {
     return false;
   }
-  if (given.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
+  const { fn, given } = invocation;
   const returns = completeFactoryReturns(fn);
   if (returns === undefined || returns.length === 0) return false;
   const unquietScopes = quietFactoryCall(fn, given)
@@ -272,6 +304,28 @@ function evaluateFactoryCall(
   } finally {
     state.activeFactories.delete(fn);
   }
+}
+
+/** Verifies factory body eligibility, parameter purity, and call-argument side effects. */
+function validFactoryInvocation(
+  invocation: NonNullable<ReturnType<typeof framedWrittenFactoryCall>>,
+  state: ProofState,
+  frame: FactoryFrame,
+): boolean {
+  const { extra, fn, given, receiver } = invocation;
+  if (
+    fn.body === undefined ||
+    answersLater(fn) ||
+    state.activeFactories.has(fn) ||
+    factoryMentionsThis(fn) ||
+    !sideEffectFreeFactoryParameters(fn, given)
+  ) {
+    return false;
+  }
+  const inputs = receiver === undefined ? [...given, ...extra] : [receiver, ...given, ...extra];
+  if (inputs.some((arg) => isSpreadElement(arg) || state.check(arg, false))) return false;
+  const checked = inFactoryFrame(frame) ? inputs : extra;
+  return checked.every((arg) => sideEffectFreeExpression(arg));
 }
 
 /** Retains enclosing unquiet factory scopes while adding `fn` once when its call is unquiet. */
@@ -305,7 +359,7 @@ function completeFactoryReturns(fn: Answering): readonly Expression[] | undefine
   if (fn.body === undefined) return undefined;
   if (!isBlock(fn.body)) return [fn.body];
   const flow = blockFlow(fn.body.statements);
-  return flow !== undefined && !flow.mayFallThrough ? flow.returns : undefined;
+  return flow === undefined || flow.mayFallThrough ? undefined : flow.returns;
 }
 
 /** Evaluates sequential statements in a block until every remaining path has returned. */
@@ -336,7 +390,9 @@ function statementFlow(statement: Statement): StatementFlow | undefined {
 function ifStatementFlow(
   statement: Statement & { readonly expression: Expression },
 ): StatementFlow | undefined {
-  if (!isIfStatement(statement)) return undefined;
+  if (!isIfStatement(statement) || !sideEffectFreeExpression(statement.expression)) {
+    return undefined;
+  }
   const condition = framedCondition(statement.expression);
   if (condition === true) return statementFlow(statement.thenStatement);
   if (condition === false) {
@@ -363,6 +419,6 @@ function transparentDeclaration(statement: Statement): boolean {
     isFunctionDeclaration(statement) ||
     isTypeAliasDeclaration(statement) ||
     isInterfaceDeclaration(statement) ||
-    (isVariableStatement(statement) && constantStatement(statement))
+    (isVariableStatement(statement) && sideEffectFreeVariableStatement(statement))
   );
 }

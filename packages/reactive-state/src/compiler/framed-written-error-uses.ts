@@ -1,4 +1,6 @@
 import {
+  type BinaryExpression,
+  type ConditionalExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -59,7 +61,6 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
-import { useOf } from './uses.ts';
 
 /**
  * Classifies references to a local `Error` variable into whole block-scoped lexical aliases and
@@ -89,7 +90,7 @@ const RETURN_BINARY_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 /** Matches `const alias = error` and `let alias = error` without `using` disposal hooks. */
 export function lexicalErrorAlias(reference: Identifier): VariableDeclaration | undefined {
   if (reassignedTarget(reference)) return undefined;
-  const { at, parent } = useOf(reference);
+  const { at, parent } = expressionUse(reference);
   if (
     !isVariableDeclaration(parent) ||
     parent.initializer !== at ||
@@ -105,7 +106,7 @@ export function lexicalErrorAlias(reference: Identifier): VariableDeclaration | 
 /** Whitelists direct text conversions, non-coercing tests, scalar reads, and inline array joins. */
 export function nonEscapingErrorRead(reference: Identifier): boolean {
   if (reassignedTarget(reference)) return false;
-  const { at, parent } = useOf(reference);
+  const { at, parent } = expressionUse(reference);
   return (
     directTextOrTestUse(at, parent) ||
     scalarMemberRead(at, parent) ||
@@ -115,7 +116,7 @@ export function nonEscapingErrorRead(reference: Identifier): boolean {
 }
 
 /** Direct `String(error)`, untagged templates, strict/boolean guards, and `+` / `+=` conversions. */
-function directTextOrTestUse(at: Node, parent: Node): boolean {
+function directTextOrTestUse(at: Expression, parent: Node): boolean {
   return (
     directStringConversion(at, parent) ||
     untaggedTemplateSpan(at, parent) ||
@@ -127,11 +128,11 @@ function directTextOrTestUse(at: Node, parent: Node): boolean {
 }
 
 /** Truthiness tests consume `ToBoolean` directly without retaining or exposing the reference. */
-function pureBooleanTestUse(at: Node, parent: Node): boolean {
-  let current = at;
+function pureBooleanTestUse(at: Expression, parent: Node): boolean {
+  let current: Expression = at;
   let container = parent;
   while (booleanBranchOperand(current, container)) {
-    const outer = useOf(container);
+    const outer = expressionUse(container);
     current = outer.at;
     container = outer.parent;
   }
@@ -139,7 +140,10 @@ function pureBooleanTestUse(at: Node, parent: Node): boolean {
 }
 
 /** Logical and conditional branch slots forward a value only when enclosed in a boolean test. */
-function booleanBranchOperand(at: Node, parent: Node): boolean {
+function booleanBranchOperand(
+  at: Expression,
+  parent: Node,
+): parent is BinaryExpression | ConditionalExpression {
   if (isConditionalExpression(parent)) {
     return parent.whenTrue === at || parent.whenFalse === at;
   }
@@ -151,7 +155,7 @@ function booleanBranchOperand(at: Node, parent: Node): boolean {
 }
 
 /** Control-flow conditions, `!`, `?:` conditions, and unshadowed `Boolean(value)` calls. */
-function immediateBooleanTest(at: Node, parent: Node): boolean {
+function immediateBooleanTest(at: Expression, parent: Node): boolean {
   if (
     (isIfStatement(parent) || isWhileStatement(parent) || isDoStatement(parent)) &&
     parent.expression === at
@@ -172,7 +176,7 @@ function immediateBooleanTest(at: Node, parent: Node): boolean {
 }
 
 /** Unshadowed single-argument `Boolean(value)` call converting to a primitive boolean. */
-function directBooleanConversion(at: Node, parent: Node): boolean {
+function directBooleanConversion(at: Expression, parent: Node): boolean {
   if (!isCallExpression(parent) || parent.arguments.length !== 1 || parent.arguments[0] !== at) {
     return false;
   }
@@ -181,7 +185,7 @@ function directBooleanConversion(at: Node, parent: Node): boolean {
 }
 
 /** Unshadowed single-argument `String(value)` or `new String(value)` conversion. */
-function directStringConversion(at: Node, parent: Node): boolean {
+function directStringConversion(at: Expression, parent: Node): boolean {
   if (!isCallExpression(parent) && !isNewExpression(parent)) return false;
   if (parent.arguments?.length !== 1 || parent.arguments[0] !== at) return false;
   const callee = unwrapped(parent.expression);
@@ -189,7 +193,7 @@ function directStringConversion(at: Node, parent: Node): boolean {
 }
 
 /** Untagged template literal span converting `at` directly through `ToString`. */
-function untaggedTemplateSpan(at: Node, parent: Node): boolean {
+function untaggedTemplateSpan(at: Expression, parent: Node): boolean {
   return (
     isTemplateSpan(parent) &&
     parent.expression === at &&
@@ -199,7 +203,7 @@ function untaggedTemplateSpan(at: Node, parent: Node): boolean {
 }
 
 /** Primitive-producing `+`, `+=` (right-hand side only), and `===` / `!==` comparisons. */
-function safeBinaryUse(at: Node, parent: Node): boolean {
+function safeBinaryUse(at: Expression, parent: Node): boolean {
   if (!isBinaryExpression(parent)) return false;
   const kind = parent.operatorToken.kind;
   if (SAFE_BINARY_OPERATORS.has(kind)) return parent.left === at || parent.right === at;
@@ -207,14 +211,14 @@ function safeBinaryUse(at: Node, parent: Node): boolean {
 }
 
 /** Scalar `.message` / `.name` / `.stack` reads and zero-argument `.toString()` calls. */
-function scalarMemberRead(at: Node, parent: Node): boolean {
+function scalarMemberRead(at: Expression, parent: Node): boolean {
   if (
     (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
     parent.expression !== at
   ) {
     return false;
   }
-  const outer = useOf(parent);
+  const outer = expressionUse(parent);
   if (isDeleteExpression(outer.parent) || reassignedTarget(parent)) return false;
   const key = staticMemberKey(parent);
   if (key !== undefined && SCALAR_ERROR_KEYS.has(key)) {
@@ -229,7 +233,7 @@ function scalarMemberRead(at: Node, parent: Node): boolean {
 }
 
 /** Checks whether `at` sits in the callee or tag slot of an invocation expression. */
-function invokesTarget(at: Node, parent: Node): boolean {
+function invokesTarget(at: Expression, parent: Node): boolean {
   return (
     ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
     (isTaggedTemplateExpression(parent) && parent.tag === at)
@@ -237,7 +241,7 @@ function invokesTarget(at: Node, parent: Node): boolean {
 }
 
 /** Object destructuring limited to static scalar `Error` properties without defaults or rest. */
-function scalarDestructuringRead(at: Node, parent: Node): boolean {
+function scalarDestructuringRead(at: Expression, parent: Node): boolean {
   return (
     isVariableDeclaration(parent) &&
     parent.initializer === at &&
@@ -253,6 +257,7 @@ function scalarBindingElement(element: Node): boolean {
     !isBindingElement(element) ||
     element.dotDotDotToken !== undefined ||
     element.initializer !== undefined ||
+    element.name === undefined ||
     !isIdentifier(element.name)
   ) {
     return false;
@@ -265,7 +270,7 @@ function scalarBindingElement(element: Node): boolean {
 }
 
 /** Inline `[error].join(',')` / `[error].toString()` / `String([error])` without array escape. */
-function inlineArrayTextRead(at: Node, parent: Node): boolean {
+function inlineArrayTextRead(at: Expression, parent: Node): boolean {
   if (!isArrayLiteralExpression(parent)) return false;
   if (
     !parent.elements.every(
@@ -274,7 +279,7 @@ function inlineArrayTextRead(at: Node, parent: Node): boolean {
   ) {
     return false;
   }
-  const outer = useOf(parent);
+  const outer = expressionUse(parent);
   if (
     directStringConversion(outer.at, outer.parent) ||
     untaggedTemplateSpan(outer.at, outer.parent) ||
@@ -290,7 +295,7 @@ function inlineArrayTextRead(at: Node, parent: Node): boolean {
 }
 
 /** Direct `.join(primitive?)` or `.toString()` on an unescaped array literal. */
-function inlineArrayMethodCall(array: Node, at: Node, parent: Node): boolean {
+function inlineArrayMethodCall(array: Node, at: Expression, parent: Node): boolean {
   if (
     (!isPropertyAccessExpression(parent) && !isElementAccessExpression(parent)) ||
     parent.expression !== at
@@ -298,7 +303,7 @@ function inlineArrayMethodCall(array: Node, at: Node, parent: Node): boolean {
     return false;
   }
   const method = staticMemberKey(parent);
-  const call = useOf(parent);
+  const call = expressionUse(parent);
   if (!isCallExpression(call.parent) || call.parent.expression !== call.at) return false;
   if (method === 'toString') {
     return call.parent.arguments.length === 0 && !arrayMethodMayBeOverridden(array, 'toString');
@@ -409,10 +414,17 @@ export function enclosingValueScope(node: Node): Node | undefined {
 }
 
 /** Whether `reference` flows exclusively out as a returned value of `scope`. */
+/** Climbs transparent expression wrappers while preserving `Expression` typing on `at`. */
+function expressionUse(node: Expression): { readonly at: Expression; readonly parent: Node } {
+  let at: Expression = node;
+  while (transparentExpression(at.parent)) at = at.parent;
+  return { at, parent: at.parent };
+}
+
 export function returnedFromScope(reference: Identifier, scope: Answering): boolean {
   if (reassignedTarget(reference)) return false;
-  let current: Node = reference;
-  while (returnResultWrapper(current)) current = current.parent;
+  let current: Expression = reference;
+  while (returnResultWrapper(current, current.parent)) current = current.parent;
   const parent = current.parent;
   if (isArrowFunction(parent)) return parent === scope && parent.body === current;
   return (
@@ -423,8 +435,13 @@ export function returnedFromScope(reference: Identifier, scope: Answering): bool
 }
 
 /** Value-forwarding wrappers and branch operands that preserve a returned expression slot. */
-function returnResultWrapper(node: Node): boolean {
-  const parent = node.parent;
+function returnResultWrapper(
+  node: Expression,
+  parent: Node,
+): parent is
+  | BinaryExpression
+  | ConditionalExpression
+  | (Expression & { readonly expression: Expression }) {
   if (transparentExpression(parent) && parent.expression === node) return true;
   if (isConditionalExpression(parent)) {
     return parent.whenTrue === node || parent.whenFalse === node;
