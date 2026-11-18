@@ -346,6 +346,90 @@ const KEPT_APPLY_CASES: readonly KeptApplyCase[] = [
     id: 'symbol-call-const-alias-property-write-does-not-truncate-pin',
     keptRoot: undefined,
   },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); let args: Event[] = [new Event('local')]; [args] = [[]]; args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'array-destructuring-reassignment-resets-push-bounds',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); let args: Event[] = [new Event('local')]; ({ a: args } = { a: [] }); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'object-destructuring-reassignment-resets-push-bounds',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); let args: Event[] = [new Event('local')]; [...args] = [sharedEvent]; emitter.dispatchEvent.apply(emitter, args);",
+    id: 'array-rest-destructuring-reassignment-spreads-rhs-elements',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); let args: Event[] = [new Event('local')]; for (args of [[]]) {} args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'for-of-reassignment-resets-push-bounds',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; let alias: Event[] = []; [alias] = [args]; alias.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'destructuring-assignment-links-array-alias-push',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['args1'],
+    body: "const emitter = new EventTarget(); const args1: Event[] = [new Event('local')]; const args2: Event[] = []; const { first, second } = { first: args1, second: args2 }; void first; second.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args1);",
+    id: 'sibling-destructured-array-aliases-stay-isolated-pin',
+    keptRoot: undefined,
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: unknown[] = []; const list: unknown[] = [{}, '0', sharedEvent]; list.push(args); Reflect.set.apply(Reflect, list as [object, PropertyKey, unknown, object]); emitter.dispatchEvent.apply(emitter, args as [Event]);",
+    id: 'reflect-set-apply-mutated-list-pushed-fourth-receiver-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = []; Object.defineProperties(args, { '0': { value: sharedEvent } }); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'object-define-properties-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; Object.defineProperties(args, { 0: { get: () => sharedEvent } }); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'object-define-properties-getter-descriptor-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const list = [args, 0, { value: sharedEvent }] as const; Object.defineProperty.apply(Object, list as unknown as [object, PropertyKey, PropertyDescriptor]); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'object-define-property-apply-const-list-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const list: unknown[] = [args, 0]; list.push({ value: sharedEvent }); Reflect.defineProperty.apply(Reflect, list as [object, PropertyKey, PropertyDescriptor]); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'reflect-define-property-apply-pushed-descriptor-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; Object.assign(args, { 0: sharedEvent }); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'object-assign-numeric-property-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['sharedEvent', 'args'],
+    body: 'const emitter = new EventTarget(); const args: Event[] = []; const list: unknown[] = [args]; list.push({ 0: sharedEvent }); Object.assign.apply(Object, list as [object, ...object[]]); emitter.dispatchEvent.apply(emitter, args);',
+    id: 'object-assign-apply-list-numeric-property-slot-zero-shared-event',
+    keptRoot: 'sharedEvent',
+  },
+  {
+    argumentRoots: ['args'],
+    body: "const emitter = new EventTarget(); const args: Event[] = [new Event('local')]; Object.assign(args, { extra: 1 }); args.push(sharedEvent); emitter.dispatchEvent.apply(emitter, args);",
+    id: 'object-assign-non-index-property-does-not-truncate-pin',
+    keptRoot: undefined,
+  },
 ];
 
 const ARGUMENT_EFFECT_CASES = [

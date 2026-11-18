@@ -43,7 +43,7 @@ import {
   type HolderArrayWrites,
   type HolderPushCall,
   type IndexedElementWrite,
-} from './written-array-elements.ts';
+} from './written-array-aliases.ts';
 
 /**
  * Destructured array-holder initializers, positional `[min, max]` slot-interval push tracking, and

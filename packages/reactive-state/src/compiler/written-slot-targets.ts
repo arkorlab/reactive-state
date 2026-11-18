@@ -26,7 +26,7 @@ import {
   type CallArgument,
   slotArguments,
 } from './written-arguments.ts';
-import { moduleArrayWrites } from './written-array-elements.ts';
+import { holderWritesOf } from './written-array-elements.ts';
 import {
   applyHolderWrites,
   projectMemberKeys,
@@ -177,7 +177,9 @@ function stepHeldSpread(work: SpreadWork, pending: SpreadWork[], state: SlotTarg
   }
   if (isIdentifier(work.expression) && readsBinding(work.expression)) {
     stepHeldIdentifier(work.expression, work, pending, state);
+    return;
   }
+  recordTarget(work.expression, state);
 }
 
 /** Follows a held array identifier's initializer, reassignments and indexed/pushed writes. */
@@ -189,8 +191,7 @@ function stepHeldIdentifier(
 ): void {
   const owner = frameDeclarationOf(ident);
   const selected = frameBindingOf(ident);
-  const writes =
-    owner === undefined ? undefined : moduleArrayWrites(ident.getSourceFile()).get(owner);
+  const writes = holderWritesOf(ident);
   const reordered = work.reordered || (writes?.reordered ?? false);
   const initialValues = selected === undefined ? [] : selectedInitialExpressions(ident, selected);
   if (writes !== undefined) {
@@ -215,6 +216,9 @@ function stepHeldIdentifier(
   }
   for (const initial of initialValues.toReversed()) {
     pending.push({ ...work, expression: initial, held: true, reordered });
+  }
+  if (writes === undefined && initialValues.length === 0 && assignedSources.length === 0) {
+    recordTarget(ident, state);
   }
 }
 

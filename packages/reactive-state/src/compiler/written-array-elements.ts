@@ -3,21 +3,26 @@ import {
   type BinaryExpression,
   type CallExpression,
   type Expression,
+  type ForInOrOfStatement,
+  type Identifier,
   isBinaryExpression,
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
+  isExpression,
+  isForInStatement,
+  isForOfStatement,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAccessExpression,
+  isVariableDeclarationList,
   type Node,
   type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
-import { framedObjectSources } from './framed-object-members.ts';
+import { assignmentPatternDefault } from './framed-assignment-patterns.ts';
 import { unmutatedTuple } from './tuple-spreads.ts';
 import {
   asCallArguments,
@@ -30,42 +35,34 @@ import {
 import {
   ALIAS_ASSIGNMENT_OPERATORS,
   type AliasLinks,
+  type ArrayHolder,
+  arrayHolderOf,
   canonicalHoldersOf,
   classifyArrayKey,
-  classifyKeySlots,
-  collectDirectAliases,
-  collectSlotHolders,
   directArrayIdentifier,
+  ensureHolderWrites,
+  type HolderArrayWrites,
   LENGTH_KEY,
+  markHoldersShortened,
+  type ModuleArrayWrites,
   plainTarget,
+  recordOwnersWrite,
 } from './written-array-aliases.ts';
+import {
+  drainGlobalArrayWrites,
+  isGlobalArrayWriter,
+  type PendingGlobalWrite,
+} from './written-array-descriptors.ts';
+import {
+  collectDirectAliases,
+  collectPatternTargets,
+  type PatternTarget,
+} from './written-pattern-aliases.ts';
 
 /**
- * Per-module index of in-place array element assignments, appended elements, and reordering or
- * shortening mutator calls on local array holders and their direct or branched aliases.
+ * Per-module index of in-place array element assignments, destructuring/`for..of` reassignments,
+ * appended elements, global descriptor/property writers, and reordering/shortening mutator calls.
  */
-
-export interface IndexedElementWrite {
-  readonly index: number | undefined;
-  readonly spread: boolean;
-  readonly value: Expression;
-}
-
-export interface HolderPushCall {
-  readonly args: readonly CallArgument[];
-  readonly call: CallExpression;
-  readonly receiver: Expression;
-}
-
-export interface HolderArrayWrites {
-  readonly indexedWrites: IndexedElementWrite[];
-  readonly pushCalls: HolderPushCall[];
-  reassigned: boolean;
-  reordered: boolean;
-  shortened: boolean;
-}
-
-export type ModuleArrayWrites = ReadonlyMap<FrameDeclaration, HolderArrayWrites>;
 
 interface MutatorSite {
   readonly call: CallExpression;
@@ -73,7 +70,7 @@ interface MutatorSite {
 }
 
 const ARRAY_WRITES = new WeakMap<SourceFile, ModuleArrayWrites>();
-const REFLECT_SLOTS = { key: 1, receiver: 3, target: 0, value: 2 } as const;
+const SPLICE_FIRST_INSERT_INDEX = 2;
 const ASSIGNING_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   ...ALIAS_ASSIGNMENT_OPERATORS,
   SyntaxKind.AmpersandEqualsToken,
@@ -99,17 +96,24 @@ const REORDERING_METHODS: ReadonlySet<string> = new Set([
 ]);
 const SHORTENING_METHODS: ReadonlySet<string> = new Set(['pop', 'shift', 'splice']);
 
-/** Indexes in-place element writes and array-order mutators once per `SourceFile`. */
+/** Looks up recorded array mutations for `ident`'s canonical lexical/hoisted binding. */
+export function holderWritesOf(ident: Identifier): HolderArrayWrites | undefined {
+  const holder = arrayHolderOf(ident);
+  return holder === undefined ? undefined : moduleArrayWrites(ident.getSourceFile()).get(holder);
+}
+
+/** Indexes in-place element writes, mutators and global writers once per `SourceFile`. */
 export function moduleArrayWrites(file: SourceFile): ModuleArrayWrites {
   const cached = ARRAY_WRITES.get(file);
   if (cached !== undefined) {
     return cached;
   }
   const aliases = collectDirectAliases(file);
-  const byHolder = new Map<FrameDeclaration, HolderArrayWrites>();
+  const byHolder = new Map<ArrayHolder, HolderArrayWrites>();
+  const globalCalls: PendingGlobalWrite[] = [];
   const pending: Node[] = [file];
   for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    indexArrayWriteNode(current, aliases, byHolder);
+    indexArrayWriteNode(current, aliases, byHolder, globalCalls);
     current.forEachChild((child) => {
       pending.push(child);
     });
@@ -119,18 +123,30 @@ export function moduleArrayWrites(file: SourceFile): ModuleArrayWrites {
       (left, right) => left.call.end - right.call.end || left.call.pos - right.call.pos,
     );
   }
+  if (globalCalls.length > 0) {
+    drainGlobalArrayWrites(globalCalls, aliases, byHolder);
+  }
   ARRAY_WRITES.set(file, byHolder);
   return byHolder;
 }
 
-/** Records direct assignments, length updates, deletions, reflected writes and mutator calls. */
+/** Records assignments, iteration targets, length updates, deletions and mutator/global calls. */
 function indexArrayWriteNode(
   node: Node,
   aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+  globalCalls: PendingGlobalWrite[],
 ): void {
-  if (isBinaryExpression(node) && ASSIGNING_OPERATORS.has(node.operatorToken.kind)) {
+  if (
+    isBinaryExpression(node) &&
+    ASSIGNING_OPERATORS.has(node.operatorToken.kind) &&
+    !assignmentPatternDefault(node)
+  ) {
     indexAssignmentWrite(node, aliases, byHolder);
+    return;
+  }
+  if (isForOfStatement(node) || isForInStatement(node)) {
+    indexIterationWrite(node, aliases, byHolder);
     return;
   }
   if (
@@ -148,7 +164,26 @@ function indexArrayWriteNode(
     return;
   }
   if (isCallExpression(node)) {
-    indexCallWrite(node, aliases, byHolder);
+    indexCallWrite(node, aliases, byHolder, globalCalls);
+  }
+}
+
+/** Marks `reassigned` or element/length writes on `for (target of ...)` and `for (target in ...)`. */
+function indexIterationWrite(
+  node: ForInOrOfStatement,
+  aliases: AliasLinks,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+): void {
+  if (isVariableDeclarationList(node.initializer) || !isExpression(node.initializer)) {
+    return;
+  }
+  for (const target of collectPatternTargets(node.initializer)) {
+    recordTargetExpressionWrite(
+      target,
+      { indexFallbackSpread: isForOfStatement(node), rhs: node.expression },
+      aliases,
+      byHolder,
+    );
   }
 }
 
@@ -156,7 +191,7 @@ function indexArrayWriteNode(
 function indexLengthUpdateWrite(
   operand: Expression,
   aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
 ): void {
   const target = plainTarget(operand);
   if (isPropertyAccessExpression(target) && target.name.text === LENGTH_KEY) {
@@ -171,18 +206,49 @@ function indexLengthUpdateWrite(
   }
 }
 
-/** Records `holder = ...`, `holder.length = ...`, `holder['length'] = ...` and `holder[index] = ...`. */
+/** Records direct or destructuring `holder = ...`, `.length` resets and `holder[index] = ...`. */
 function indexAssignmentWrite(
   node: BinaryExpression,
   aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
 ): void {
-  const left = plainTarget(node.left);
+  const left = unwrapped(node.left);
+  if (node.operatorToken.kind !== SyntaxKind.EqualsToken || isElementAccessExpression(left)) {
+    recordDirectTargetWrite(left, node.right, aliases, byHolder);
+    return;
+  }
+  const patternTargets = collectPatternTargets(left);
+  if (
+    patternTargets.length === 1 &&
+    patternTargets[0] !== undefined &&
+    !patternTargets[0].arrayRest &&
+    patternTargets[0].expression === left
+  ) {
+    recordDirectTargetWrite(left, node.right, aliases, byHolder);
+    return;
+  }
+  for (const target of patternTargets) {
+    recordTargetExpressionWrite(
+      target,
+      { indexFallbackSpread: false, rhs: node.right },
+      aliases,
+      byHolder,
+    );
+  }
+}
+
+/** Records a direct non-destructured LHS target (`id`, `holder.length`, `holder[key]`). */
+function recordDirectTargetWrite(
+  left: Expression,
+  rhs: Expression,
+  aliases: AliasLinks,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+): void {
   const direct = directArrayIdentifier(left);
   if (direct !== undefined) {
-    const selfOwner = frameDeclarationOf(direct);
-    if (selfOwner !== undefined) {
-      ensureHolderWrites(byHolder, selfOwner).reassigned = true;
+    const selfHolder = arrayHolderOf(direct);
+    if (selfHolder !== undefined) {
+      ensureHolderWrites(byHolder, selfHolder).reassigned = true;
     }
     return;
   }
@@ -199,27 +265,64 @@ function indexAssignmentWrite(
     markHoldersShortened(owners, byHolder);
   }
   if (keyInfo.mayBeIndex) {
-    for (const owner of owners) {
-      ensureHolderWrites(byHolder, owner).indexedWrites.push({
-        index: keyInfo.index,
-        spread: false,
-        value: node.right,
-      });
-    }
+    recordOwnersWrite(owners, { index: keyInfo.index, spread: false, value: rhs }, byHolder);
   }
 }
 
-/** Records global property/element writers, borrowed/bound mutators and direct array mutator calls. */
+/** Records a leaf target inside a destructuring assignment or `for..in`/`for..of` header. */
+function recordTargetExpressionWrite(
+  target: PatternTarget,
+  source: { readonly indexFallbackSpread: boolean; readonly rhs: Expression },
+  aliases: AliasLinks,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+): void {
+  const expr = target.expression;
+  const direct = directArrayIdentifier(expr);
+  if (direct !== undefined) {
+    const selfHolder = arrayHolderOf(direct);
+    if (selfHolder !== undefined) {
+      ensureHolderWrites(byHolder, selfHolder).reassigned = true;
+      if (target.arrayRest) {
+        recordOwnersWrite(
+          [selfHolder],
+          { index: undefined, spread: true, value: source.rhs },
+          byHolder,
+        );
+      }
+    }
+    return;
+  }
+  if (isPropertyAccessExpression(expr) && expr.name.text === LENGTH_KEY) {
+    markHoldersShortened(canonicalHoldersOf(expr.expression, aliases), byHolder);
+    return;
+  }
+  if (!isElementAccessExpression(expr)) {
+    return;
+  }
+  const owners = canonicalHoldersOf(expr.expression, aliases);
+  const keyInfo = classifyArrayKey(expr.argumentExpression);
+  if (keyInfo.mayBeLength) {
+    markHoldersShortened(owners, byHolder);
+  }
+  if (keyInfo.mayBeIndex) {
+    recordOwnersWrite(
+      owners,
+      { index: undefined, spread: source.indexFallbackSpread, value: source.rhs },
+      byHolder,
+    );
+  }
+}
+
+/** Queues global writers for fixpoint resolution and indexes direct/borrowed array mutator calls. */
 function indexCallWrite(
   call: CallExpression,
   aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+  globalCalls: PendingGlobalWrite[],
 ): void {
   const globalCall = globalCallOf(call);
-  if (
-    globalCall !== undefined &&
-    indexGlobalArrayWrite(globalCall.path, globalCall.given, aliases, byHolder)
-  ) {
+  if (globalCall !== undefined && isGlobalArrayWriter(globalCall.path)) {
+    globalCalls.push({ given: globalCall.given, path: globalCall.path });
     return;
   }
   const lent = lentMethodOf(call);
@@ -247,122 +350,6 @@ function indexCallWrite(
       ensureHolderWrites(byHolder, owner),
       { call, receiver: callee.expression },
     );
-  }
-}
-
-/** Handles `Reflect.set`, `Object.defineProperty`, `Reflect.defineProperty` and related global writers. */
-function indexGlobalArrayWrite(
-  path: string,
-  given: readonly CallArgument[],
-  aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
-): boolean {
-  if (path === 'Reflect.set') {
-    indexReflectSetWrite(given, aliases, byHolder);
-    return true;
-  }
-  if (path === 'Object.defineProperty' || path === 'Reflect.defineProperty') {
-    indexDefinePropertyWrite(given, aliases, byHolder);
-    return true;
-  }
-  if (path === 'Reflect.deleteProperty' || path === 'Object.defineProperties') {
-    markHoldersShortened(collectSlotHolders(given, [REFLECT_SLOTS.target], aliases), byHolder);
-    return true;
-  }
-  if (path === 'Object.assign') {
-    indexObjectAssignWrite(given, aliases, byHolder);
-    return true;
-  }
-  return false;
-}
-
-/** Records `Reflect.set` element writes and `'length'` resets on both `target` and 4th-slot `receiver`. */
-function indexReflectSetWrite(
-  given: readonly CallArgument[],
-  aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
-): void {
-  const owners = collectSlotHolders(given, [REFLECT_SLOTS.target, REFLECT_SLOTS.receiver], aliases);
-  if (owners.length === 0) {
-    return;
-  }
-  const keyInfo = classifyKeySlots(slotArguments(given, REFLECT_SLOTS.key));
-  if (keyInfo.mayBeLength) {
-    markHoldersShortened(owners, byHolder);
-  }
-  if (!keyInfo.mayBeIndex) {
-    return;
-  }
-  const valueSlots = slotArguments(given, REFLECT_SLOTS.value);
-  for (const valueSlot of valueSlots) {
-    for (const owner of owners) {
-      ensureHolderWrites(byHolder, owner).indexedWrites.push({
-        index: valueSlot.spread ? undefined : keyInfo.index,
-        spread: valueSlot.spread,
-        value: valueSlot.expression,
-      });
-    }
-  }
-}
-
-/** Records `Object.defineProperty` / `Reflect.defineProperty` `'length'` resets and data values. */
-function indexDefinePropertyWrite(
-  given: readonly CallArgument[],
-  aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
-): void {
-  const owners = collectSlotHolders(given, [REFLECT_SLOTS.target], aliases);
-  if (owners.length === 0) {
-    return;
-  }
-  const keyInfo = classifyKeySlots(slotArguments(given, REFLECT_SLOTS.key));
-  if (keyInfo.mayBeLength) {
-    markHoldersShortened(owners, byHolder);
-  }
-  if (!keyInfo.mayBeIndex) {
-    return;
-  }
-  const descriptorSlots = slotArguments(given, REFLECT_SLOTS.value);
-  for (const descSlot of descriptorSlots) {
-    if (descSlot.spread) {
-      continue;
-    }
-    const values = framedObjectSources(descSlot.expression, ['value']) ?? [];
-    for (const entry of values) {
-      if (entry.keys.length === 0) {
-        for (const owner of owners) {
-          ensureHolderWrites(byHolder, owner).indexedWrites.push({
-            index: keyInfo.index,
-            spread: false,
-            value: entry.value,
-          });
-        }
-      }
-    }
-  }
-}
-
-/** Records `Object.assign(holder, ...sources)` length invalidations and copied source spreads. */
-function indexObjectAssignWrite(
-  given: readonly CallArgument[],
-  aliases: AliasLinks,
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
-): void {
-  const owners = collectSlotHolders(given, [REFLECT_SLOTS.target], aliases);
-  if (owners.length === 0) {
-    return;
-  }
-  markHoldersShortened(owners, byHolder);
-  if (given[0]?.spread === false) {
-    for (const sourceArg of given.slice(1)) {
-      for (const owner of owners) {
-        ensureHolderWrites(byHolder, owner).indexedWrites.push({
-          index: undefined,
-          spread: true,
-          value: sourceArg.expression,
-        });
-      }
-    }
   }
 }
 
@@ -394,8 +381,7 @@ function indexMethodMutator(
     return;
   }
   if (method === 'fill') {
-    const fillSlots = slotArguments(given, 0);
-    for (const slot of fillSlots) {
+    for (const slot of slotArguments(given, 0)) {
       entry.indexedWrites.push({ index: undefined, spread: slot.spread, value: slot.expression });
     }
   }
@@ -419,40 +405,21 @@ function recordSpliceInsertions(given: readonly CallArgument[], entry: HolderArr
       shifted = true;
       continue;
     }
-    if ((shifted || index >= 2) && current.expression.kind !== SyntaxKind.OmittedExpression) {
+    if (
+      (shifted || index >= SPLICE_FIRST_INSERT_INDEX) &&
+      current.expression.kind !== SyntaxKind.OmittedExpression
+    ) {
       entry.indexedWrites.push({ index: undefined, spread: false, value: current.expression });
     }
     index += 1;
   }
 }
 
-/** Marks every holder in `owners` as potentially shortened or length-invalidated. */
-function markHoldersShortened(
-  owners: readonly FrameDeclaration[],
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
-): void {
-  for (const owner of owners) {
-    ensureHolderWrites(byHolder, owner).shortened = true;
-  }
-}
-
-/** Returns or creates the mutable `HolderArrayWrites` bucket for `owner`. */
-function ensureHolderWrites(
-  byHolder: Map<FrameDeclaration, HolderArrayWrites>,
-  owner: FrameDeclaration,
-): HolderArrayWrites {
-  let entry = byHolder.get(owner);
-  if (entry === undefined) {
-    entry = {
-      indexedWrites: [],
-      pushCalls: [],
-      reassigned: false,
-      reordered: false,
-      shortened: false,
-    };
-    byHolder.set(owner, entry);
-  }
-  return entry;
-}
-
-export { directArrayIdentifier } from './written-array-aliases.ts';
+export {
+  type ArrayHolder,
+  directArrayIdentifier,
+  type HolderArrayWrites,
+  type HolderPushCall,
+  type IndexedElementWrite,
+  type ModuleArrayWrites,
+} from './written-array-aliases.ts';

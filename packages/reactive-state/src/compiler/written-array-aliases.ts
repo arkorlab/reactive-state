@@ -1,18 +1,22 @@
 import {
+  type CallExpression,
   type Expression,
   type Identifier,
-  isArrayLiteralExpression,
   isAsExpression,
-  isBinaryExpression,
   isCallExpression,
+  isComputedPropertyName,
   isExpression,
   isIdentifier,
   isNonNullExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isParenthesizedExpression,
+  isPropertyAssignment,
   isSatisfiesExpression,
-  isVariableDeclaration,
+  isStringLiteral,
   type Node,
-  type SourceFile,
+  type ObjectLiteralElementLike,
+  type PropertyName,
   SyntaxKind,
 } from 'typescript/ast';
 
@@ -22,27 +26,47 @@ import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts'
 import { constantValue } from './numbers.ts';
 import { readsBinding } from './scope.ts';
 import { constFollowedValue, constInitializerOf } from './tuple-spreads.ts';
-import {
-  asCallArguments,
-  branchOperands,
-  type CallArgument,
-  followedValue,
-  type SlotArgument,
-  slotArguments,
-} from './written-arguments.ts';
+import { branchOperands, type CallArgument } from './written-arguments.ts';
 
 /**
- * Branch-aware array-holder alias resolution and property-key classification (`length` vs integer
- * slot indices) shared with `written-array-elements.ts`.
+ * Per-binding array-holder identity, transitive alias lookup, property-key classification (`length`
+ * vs integer slot indices), and shared write buckets for array-mutation analyses.
  */
 
-export type AliasLinks = ReadonlyMap<FrameDeclaration, ReadonlySet<FrameDeclaration>>;
+export interface ArrayHolder {
+  readonly declared: FrameDeclaration;
+  readonly name: string;
+}
+
+export type AliasLinks = ReadonlyMap<ArrayHolder, ReadonlySet<ArrayHolder>>;
 
 export interface ArrayKeyInfo {
   readonly index: number | undefined;
   readonly mayBeIndex: boolean;
   readonly mayBeLength: boolean;
 }
+
+export interface IndexedElementWrite {
+  readonly index: number | undefined;
+  readonly spread: boolean;
+  readonly value: Expression;
+}
+
+export interface HolderPushCall {
+  readonly args: readonly CallArgument[];
+  readonly call: CallExpression;
+  readonly receiver: Expression;
+}
+
+export interface HolderArrayWrites {
+  readonly indexedWrites: IndexedElementWrite[];
+  readonly pushCalls: HolderPushCall[];
+  reassigned: boolean;
+  reordered: boolean;
+  shortened: boolean;
+}
+
+export type ModuleArrayWrites = ReadonlyMap<ArrayHolder, HolderArrayWrites>;
 
 export const LENGTH_KEY = 'length';
 export const ALIAS_ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
@@ -52,6 +76,7 @@ export const ALIAS_ASSIGNMENT_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
+const HOLDER_INTERN = new WeakMap<FrameDeclaration, Map<string, ArrayHolder>>();
 const WELL_KNOWN_SYMBOLS: ReadonlySet<string> = new Set([
   'Symbol.asyncDispose',
   'Symbol.asyncIterator',
@@ -69,6 +94,27 @@ const WELL_KNOWN_SYMBOLS: ReadonlySet<string> = new Set([
   'Symbol.toStringTag',
   'Symbol.unscopables',
 ]);
+
+/** Returns the canonical interned `ArrayHolder` for `(declared, name)`. */
+export function internArrayHolder(declared: FrameDeclaration, name: string): ArrayHolder {
+  let byName = HOLDER_INTERN.get(declared);
+  if (byName === undefined) {
+    byName = new Map();
+    HOLDER_INTERN.set(declared, byName);
+  }
+  let holder = byName.get(name);
+  if (holder === undefined) {
+    holder = { declared, name };
+    byName.set(name, holder);
+  }
+  return holder;
+}
+
+/** Resolves `ident` to its canonical `ArrayHolder` when `ident` names a lexical/hoisted binding. */
+export function arrayHolderOf(ident: Identifier): ArrayHolder | undefined {
+  const declared = frameDeclarationOf(ident);
+  return declared === undefined ? undefined : internArrayHolder(declared, ident.text);
+}
 
 /** Direct binding identifier after peeling type casts, parentheses and non-null wrappers. */
 export function directArrayIdentifier(node: Node): Identifier | undefined {
@@ -90,27 +136,70 @@ export function plainTarget(node: Node): Node {
   return current;
 }
 
-/** Maps variable initializers and reassignments (`alias = args || []`) to target declarations. */
-export function collectDirectAliases(file: SourceFile): AliasLinks {
-  const aliases = new Map<FrameDeclaration, Set<FrameDeclaration>>();
-  const pending: Node[] = [file];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    recordAliasNode(current, aliases);
-    current.forEachChild((child) => {
-      pending.push(child);
-    });
+/** Returns or creates the mutable `HolderArrayWrites` bucket for `owner`. */
+export function ensureHolderWrites(
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+  owner: ArrayHolder,
+): HolderArrayWrites {
+  let entry = byHolder.get(owner);
+  if (entry === undefined) {
+    entry = {
+      indexedWrites: [],
+      pushCalls: [],
+      reassigned: false,
+      reordered: false,
+      shortened: false,
+    };
+    byHolder.set(owner, entry);
   }
-  return aliases;
+  return entry;
 }
 
-/** Resolves `node` across branches to its `FrameDeclaration`s plus transitive alias targets. */
-export function canonicalHoldersOf(node: Node, aliases: AliasLinks): readonly FrameDeclaration[] {
-  const roots = rootDeclarationsOf(node);
+/** Marks every holder in `owners` as shortened, answering whether any holder newly changed. */
+export function markHoldersShortened(
+  owners: readonly ArrayHolder[],
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+): boolean {
+  let changed = false;
+  for (const owner of owners) {
+    const entry = ensureHolderWrites(byHolder, owner);
+    if (!entry.shortened) {
+      entry.shortened = true;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Appends `write` to every holder in `owners` when not already recorded, answering if changed. */
+export function recordOwnersWrite(
+  owners: readonly ArrayHolder[],
+  write: IndexedElementWrite,
+  byHolder: Map<ArrayHolder, HolderArrayWrites>,
+): boolean {
+  let changed = false;
+  for (const owner of owners) {
+    const list = ensureHolderWrites(byHolder, owner).indexedWrites;
+    const exists = list.some(
+      (prev) =>
+        prev.index === write.index && prev.spread === write.spread && prev.value === write.value,
+    );
+    if (!exists) {
+      list.push(write);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Resolves `node` across branches to its `ArrayHolder`s plus transitive alias targets. */
+export function canonicalHoldersOf(node: Node, aliases: AliasLinks): readonly ArrayHolder[] {
+  const roots = rootHoldersOf(node);
   if (roots.length === 0) {
     return [];
   }
-  const seen = new Set<FrameDeclaration>(roots);
-  const queue: FrameDeclaration[] = [...roots];
+  const seen = new Set<ArrayHolder>(roots);
+  const queue: ArrayHolder[] = [...roots];
   for (let current = queue.pop(); current !== undefined; current = queue.pop()) {
     const linked = aliases.get(current);
     if (linked === undefined) {
@@ -126,44 +215,57 @@ export function canonicalHoldersOf(node: Node, aliases: AliasLinks): readonly Fr
   return [...seen];
 }
 
-/** Resolves deduplicated canonical array holders occupying any of `slots` in `given`. */
-export function collectSlotHolders(
-  given: readonly CallArgument[],
-  slots: readonly number[],
-  aliases: AliasLinks,
-): readonly FrameDeclaration[] {
-  const owners = new Set<FrameDeclaration>();
-  for (const slot of slots) {
-    const candidates = slotArguments(given, slot);
-    for (const candidate of candidates) {
-      for (const expr of candidateSlotExpressions(candidate, slot)) {
-        for (const owner of canonicalHoldersOf(expr, aliases)) {
-          owners.add(owner);
-        }
-      }
+/** Collects direct `ArrayHolder`s reachable through logical and conditional value branches. */
+export function rootHoldersOf(node: Node): readonly ArrayHolder[] {
+  if (!isExpression(node)) {
+    const ident = directArrayIdentifier(node);
+    const holder = ident === undefined ? undefined : arrayHolderOf(ident);
+    return holder === undefined ? [] : [holder];
+  }
+  const roots: ArrayHolder[] = [];
+  const pending: Expression[] = [node];
+  const seen = new Set<Expression>();
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    const plain = unwrapped(current);
+    if (seen.has(plain)) {
+      continue;
+    }
+    seen.add(plain);
+    const branches = branchOperands(plain);
+    if (branches !== undefined) {
+      pending.push(...branches);
+      continue;
+    }
+    const ident = directArrayIdentifier(plain);
+    const holder = ident === undefined ? undefined : arrayHolderOf(ident);
+    if (holder !== undefined) {
+      roots.push(holder);
     }
   }
-  return [...owners];
+  return roots;
 }
 
-/** Classifies property-key slot arguments into slot index vs `'length'` possibilities. */
-export function classifyKeySlots(keySlots: readonly SlotArgument[]): ArrayKeyInfo {
-  if (keySlots.length === 0) {
-    return { index: undefined, mayBeIndex: false, mayBeLength: false };
+/** Whether `property` is a non-computed `__proto__: proto` literal prototype setter. */
+export function isPrototypeSetterProperty(property: ObjectLiteralElementLike): boolean {
+  return (
+    isPropertyAssignment(property) &&
+    (isIdentifier(property.name) || isStringLiteral(property.name)) &&
+    property.name.text === '__proto__'
+  );
+}
+
+/** Classifies an object-literal `PropertyName` into integer slot index, `'length'` or dynamic key. */
+export function classifyPropertyName(name: PropertyName): ArrayKeyInfo {
+  if (isComputedPropertyName(name)) {
+    return classifyArrayKey(name.expression);
   }
-  if (keySlots.some((slot) => slot.spread)) {
-    return { index: undefined, mayBeIndex: true, mayBeLength: true };
+  if (isNumericLiteral(name)) {
+    return classifyNumericKey(Number(name.text));
   }
-  let mayBeIndex = false;
-  let mayBeLength = false;
-  let singleIndex: number | undefined;
-  for (const [idx, slot] of keySlots.entries()) {
-    const info = classifyArrayKey(slot.expression);
-    mayBeIndex ||= info.mayBeIndex;
-    mayBeLength ||= info.mayBeLength;
-    singleIndex = idx === 0 ? info.index : undefined;
+  if (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name)) {
+    return classifyStringKey(name.text);
   }
-  return { index: singleIndex, mayBeIndex, mayBeLength };
+  return { index: undefined, mayBeIndex: false, mayBeLength: false };
 }
 
 /** Classifies `root` across branches into integer slot index, `'length'` or unknown dynamic key. */
@@ -202,84 +304,6 @@ export function classifyArrayKey(root: Expression): ArrayKeyInfo {
   return { index: multipleLeaves ? undefined : singleIndex, mayBeIndex, mayBeLength };
 }
 
-/** Links a direct identifier initializer or value-forwarding assignment onto `aliases`. */
-function recordAliasNode(node: Node, aliases: Map<FrameDeclaration, Set<FrameDeclaration>>): void {
-  if (isVariableDeclaration(node) && node.initializer !== undefined) {
-    linkAliasSource(node, node.initializer, aliases);
-    return;
-  }
-  if (isBinaryExpression(node) && ALIAS_ASSIGNMENT_OPERATORS.has(node.operatorToken.kind)) {
-    const left = directArrayIdentifier(node.left);
-    const holder = left === undefined ? undefined : frameDeclarationOf(left);
-    if (holder !== undefined) {
-      linkAliasSource(holder, node.right, aliases);
-    }
-  }
-}
-
-/** Adds `rhs` declaration targets across logical and conditional branches to `holder`'s aliases. */
-function linkAliasSource(
-  holder: FrameDeclaration,
-  rhs: Expression,
-  aliases: Map<FrameDeclaration, Set<FrameDeclaration>>,
-): void {
-  for (const target of rootDeclarationsOf(rhs)) {
-    if (target === holder) {
-      continue;
-    }
-    let linked = aliases.get(holder);
-    if (linked === undefined) {
-      linked = new Set();
-      aliases.set(holder, linked);
-    }
-    linked.add(target);
-  }
-}
-
-/** Collects direct binding declarations reachable through logical and conditional value branches. */
-function rootDeclarationsOf(node: Node): readonly FrameDeclaration[] {
-  if (!isExpression(node)) {
-    const ident = directArrayIdentifier(node);
-    const declared = ident === undefined ? undefined : frameDeclarationOf(ident);
-    return declared === undefined ? [] : [declared];
-  }
-  const roots: FrameDeclaration[] = [];
-  const pending: Expression[] = [node];
-  const seen = new Set<Expression>();
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    const plain = unwrapped(current);
-    if (seen.has(plain)) {
-      continue;
-    }
-    seen.add(plain);
-    const branches = branchOperands(plain);
-    if (branches !== undefined) {
-      pending.push(...branches);
-      continue;
-    }
-    const ident = directArrayIdentifier(plain);
-    const declared = ident === undefined ? undefined : frameDeclarationOf(ident);
-    if (declared !== undefined) {
-      roots.push(declared);
-    }
-  }
-  return roots;
-}
-
-/** Positional expression at `slot`, peeking into local array literals behind `.apply` spreads. */
-function candidateSlotExpressions(candidate: SlotArgument, slot: number): readonly Expression[] {
-  if (!candidate.spread) {
-    return [candidate.expression];
-  }
-  const tuple = followedValue(candidate.expression);
-  if (!isArrayLiteralExpression(tuple)) {
-    return [];
-  }
-  return slotArguments(asCallArguments(tuple.elements), slot - candidate.index)
-    .filter((sub) => !sub.spread)
-    .map((sub) => sub.expression);
-}
-
 /** Next expressions to inspect when `plain` is a branch expression or whole `const` binding read. */
 function keyStepOperands(plain: Expression): readonly Expression[] | undefined {
   const branches = branchOperands(plain);
@@ -294,24 +318,35 @@ function keyStepOperands(plain: Expression): readonly Expression[] | undefined {
 function classifyLeafArrayKey(plain: Expression): ArrayKeyInfo {
   const evaluated = constantValue(plain, constInitializerOf);
   if (typeof evaluated === 'number') {
-    const validIndex = Number.isSafeInteger(evaluated) && evaluated >= 0;
-    return {
-      index: validIndex ? evaluated : undefined,
-      mayBeIndex: validIndex,
-      mayBeLength: false,
-    };
+    return classifyNumericKey(evaluated);
   }
   if (typeof evaluated === 'string') {
-    if (evaluated === LENGTH_KEY) {
-      return { index: undefined, mayBeIndex: false, mayBeLength: true };
-    }
-    const parsed = Number(evaluated);
-    const validIndex = /^(?:0|[1-9]\d*)$/u.test(evaluated) && Number.isSafeInteger(parsed);
-    return { index: validIndex ? parsed : undefined, mayBeIndex: validIndex, mayBeLength: false };
+    return classifyStringKey(evaluated);
   }
   return isNonArrayPropertyKey(plain)
     ? { index: undefined, mayBeIndex: false, mayBeLength: false }
     : { index: undefined, mayBeIndex: true, mayBeLength: true };
+}
+
+/** Classifies a numeric property key into a non-negative integer slot index or non-index number. */
+function classifyNumericKey(evaluated: number): ArrayKeyInfo {
+  const validIndex = Number.isSafeInteger(evaluated) && evaluated >= 0;
+  const normalized = evaluated === 0 ? 0 : evaluated;
+  return {
+    index: validIndex ? normalized : undefined,
+    mayBeIndex: validIndex,
+    mayBeLength: false,
+  };
+}
+
+/** Classifies a static string property key into `'length'`, canonical integer index or other key. */
+function classifyStringKey(evaluated: string): ArrayKeyInfo {
+  if (evaluated === LENGTH_KEY) {
+    return { index: undefined, mayBeIndex: false, mayBeLength: true };
+  }
+  const parsed = Number(evaluated);
+  const validIndex = /^(?:0|[1-9]\d*)$/u.test(evaluated) && Number.isSafeInteger(parsed);
+  return { index: validIndex ? parsed : undefined, mayBeIndex: validIndex, mayBeLength: false };
 }
 
 /** Guaranteed non-index, non-`'length'` property keys (`boolean`, `null`, `undefined` or `symbol`). */
