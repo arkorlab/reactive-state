@@ -84,7 +84,7 @@ const TRANSFER_SPREAD_CASES: readonly TransferSpreadCase[] = [
   {
     id: 'reassigned-let-options-transfer',
     body: 'let options: StructuredSerializeOptions = {}; options = { transfer: [sharedBuffer] }; structuredClone({ ok: true }, options);',
-    argumentRoots: ['options'],
+    argumentRoots: ['options', 'sharedBuffer'],
     changed: true,
   },
   {
