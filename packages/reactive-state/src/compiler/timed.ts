@@ -1,0 +1,204 @@
+import {
+  type Expression,
+  isArrayLiteralExpression,
+  isArrowFunction,
+  isBigIntLiteral,
+  isBinaryExpression,
+  isCallExpression,
+  isClassExpression,
+  isComputedPropertyName,
+  isConditionalExpression,
+  isFunctionExpression,
+  isGetAccessorDeclaration,
+  isIdentifier,
+  isNewExpression,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
+  isObjectLiteralExpression,
+  isPropertyAssignment,
+  isRegularExpressionLiteral,
+  isSetAccessorDeclaration,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
+  isSpreadElement,
+  isStringLiteral,
+  isTemplateExpression,
+  type NewExpression,
+  type Node,
+  type ObjectLiteralElementLike,
+  SyntaxKind,
+} from 'typescript/ast';
+
+import { globalPathOf } from './code-globals.ts';
+import { constantValue } from './numbers.ts';
+import { platformInitializer } from './platform-inputs.ts';
+import { peelPlatform, platformPathsOf } from './platform-uses.ts';
+import { eventReadsClock } from './timed-events.ts';
+
+export { eventReadsClock } from './timed-events.ts';
+
+/** Argument index of the options bag on `new File(bits, name, options)`. */
+const FILE_OPTIONS_INDEX = 2;
+
+/**
+ * What of `node` reads the time through what the platform makes: `new File(…)` of no
+ * `lastModified` the code writes, `new File([], 'x')`; `timeStamp` of an event the code makes,
+ * `new Event('x').timeStamp` — none of another.
+ */
+export function timedMaking(node: Node): string | undefined {
+  if (isNewExpression(node) && isClass(node.expression, 'File') && !isDated(node)) {
+    return 'makes a `File` of no `lastModified`, which it takes of the time';
+  }
+  return eventReadsClock(node)
+    ? "reads an event's `timeStamp`, of the time it was made"
+    : undefined;
+}
+
+/** Whether `node` names or aliases the global class `name`. */
+function isClass(node: Expression, name: string): boolean {
+  return platformPathsOf(node).includes(name);
+}
+
+/**
+ * Whether `made`, a `File`, is made of a `lastModified` the code writes: of options it writes there,
+ * or variables around it are declared of, of no spread, whose last `lastModified` is shown defined.
+ */
+function isDated(made: NewExpression): boolean {
+  if (made.arguments?.some((each) => isSpreadElement(each)) === true) {
+    return false;
+  }
+  const options = made.arguments?.[FILE_OPTIONS_INDEX];
+  const value = options === undefined ? undefined : declaredValue(options, made);
+  if (
+    value === undefined ||
+    !isObjectLiteralExpression(value) ||
+    value.properties.some((each) => readsOptionsCode(each))
+  ) {
+    return false;
+  }
+  let dated = false;
+  for (const property of value.properties) {
+    if (isSpreadAssignment(property)) {
+      return false;
+    }
+    const key = keyOf(property.name);
+    if (key === undefined) {
+      dated = false;
+    } else if (key === 'lastModified') {
+      dated = propertyDated(property);
+    }
+  }
+  return dated;
+}
+
+/** Accessors or a custom prototype whose option reads may alter `lastModified`. */
+function readsOptionsCode(property: ObjectLiteralElementLike): boolean {
+  return (
+    isGetAccessorDeclaration(property) ||
+    isSetAccessorDeclaration(property) ||
+    (isPropertyAssignment(property) && keyOf(property.name) === '__proto__')
+  );
+}
+
+/** Whether a `lastModified` property writes a timestamp shown defined where the entry runs. */
+function propertyDated(property: ObjectLiteralElementLike): boolean {
+  if (isPropertyAssignment(property)) {
+    return definedValue(property.initializer);
+  }
+  return (
+    isShorthandPropertyAssignment(property) &&
+    isIdentifier(property.name) &&
+    definedValue(property.name)
+  );
+}
+
+/** The name of an entry the code writes: of a name, or text; none of another. */
+function keyOf(name: Node): string | undefined {
+  if (
+    isIdentifier(name) ||
+    isStringLiteral(name) ||
+    isNoSubstitutionTemplateLiteral(name) ||
+    isNumericLiteral(name)
+  ) {
+    return name.text;
+  }
+  const key = isComputedPropertyName(name)
+    ? constantValue(name.expression, (value) => platformInitializer(value, value))
+    : undefined;
+  return key === undefined ? undefined : String(key);
+}
+
+/** What an unchanged variable is declared of at `before` (or at each read site), without looping. */
+function declaredValue(node: Expression, before?: Node): Expression {
+  let value = peelPlatform(node);
+  const seen = new Set<Expression>();
+  while (isIdentifier(value) && !seen.has(value)) {
+    seen.add(value);
+    const declared = platformInitializer(value, before ?? value);
+    if (declared === undefined) {
+      break;
+    }
+    value = peelPlatform(declared);
+  }
+  return value;
+}
+
+/**
+ * Whether a timestamp expression is shown defined — and non-null where `nullable` is false — so a
+ * File cannot default `lastModified` to the current time across `??` fallbacks.
+ */
+function definedValue(node: Expression, seen = new Set<Expression>(), nullable = true): boolean {
+  const value = declaredValue(node);
+  if (seen.has(value)) {
+    return false;
+  }
+  const following = new Set([...seen, value]);
+  if (constantValue(value, (name) => platformInitializer(name, name)) !== undefined) {
+    return true;
+  }
+  if (isConditionalExpression(value)) {
+    return (
+      definedValue(value.whenTrue, following, nullable) &&
+      definedValue(value.whenFalse, following, nullable)
+    );
+  }
+  if (isBinaryExpression(value)) {
+    return definedBinary(value, following, nullable);
+  }
+  if (isCallExpression(value)) {
+    return ['Boolean', 'Number', 'String'].includes(
+      globalPathOf(peelPlatform(value.expression))?.join('.') ?? '',
+    );
+  }
+  return definedLiteral(value, nullable);
+}
+
+/** Literals and constructions that always supply a value, excluding `null` when `!nullable`. */
+function definedLiteral(value: Expression, nullable: boolean): boolean {
+  return (
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    [SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword].includes(value.kind) ||
+    isBigIntLiteral(value) ||
+    isArrayLiteralExpression(value) ||
+    isObjectLiteralExpression(value) ||
+    isArrowFunction(value) ||
+    isFunctionExpression(value) ||
+    isClassExpression(value) ||
+    isRegularExpressionLiteral(value) ||
+    isNewExpression(value) ||
+    isTemplateExpression(value)
+  );
+}
+
+/** Whether an expression selecting a value has no branch that may answer undefined. */
+function definedBinary(value: Expression, seen: Set<Expression>, nullable: boolean): boolean {
+  if (!isBinaryExpression(value)) {
+    return false;
+  }
+  if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
+    return definedValue(value.left, seen, false) || definedValue(value.right, seen, nullable);
+  }
+  return (
+    value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen, nullable)
+  );
+}
