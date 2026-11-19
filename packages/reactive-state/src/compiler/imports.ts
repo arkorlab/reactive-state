@@ -290,27 +290,32 @@ function localOf(line: ImportLine): string {
 /**
  * The import declarations of `lines`, in their order: the names of one module read at run time on
  * one line, and the ones its types alone name on another, as types. A type-only import names a
- * default or named bindings, never both, so each form of them gets its own.
+ * default or named bindings, never both, so each form of them gets its own. A module stands where
+ * its first runtime line does — a type-only import is erased, so one before it moves nothing — and
+ * a module read as types alone where its first line does.
  */
 export function importDeclarations(lines: readonly ImportLine[]): readonly string[] {
-  const order: string[] = [];
-  const byModule = new Map<string, { run: ImportLine[]; typed: ImportLine[] }>();
-  for (const line of lines) {
+  const byModule = new Map<
+    string,
+    { first: number; run: ImportLine[]; from: string; typed: ImportLine[] }
+  >();
+  for (const [index, line] of lines.entries()) {
     let entry = byModule.get(line.from);
     if (entry === undefined) {
-      entry = { run: [], typed: [] };
+      entry = { first: index, from: line.from, run: [], typed: [] };
       byModule.set(line.from, entry);
-      order.push(line.from);
+    }
+    if (!line.typeOnly && entry.run.length === 0) {
+      entry.first = index;
     }
     const into = line.typeOnly ? entry.typed : entry.run;
     if (into.every((other) => localOf(other) !== localOf(line))) {
       into.push(line);
     }
   }
-  return order.flatMap((from) => {
-    const { run, typed } = byModule.get(from) ?? { run: [], typed: [] };
-    return moduleImports(run, typed, from);
-  });
+  return [...byModule.values()]
+    .toSorted((one, other) => one.first - other.first)
+    .flatMap(({ from, run, typed }) => moduleImports(run, typed, from));
 }
 
 /** The import declarations of one module's runtime and type-only bindings. */
