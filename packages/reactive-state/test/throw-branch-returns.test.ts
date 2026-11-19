@@ -14,6 +14,7 @@ import {
   isTryStatement,
   type Node,
   type Statement,
+  type SwitchStatement,
 } from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
 
@@ -234,6 +235,21 @@ const SCANNED: readonly Scanned[] = [
     throws: false,
   },
   {
+    body: "switch (x) { case 1: return 1; } throw new Error('x');",
+    id: 'a return in a switch of a value the source does not give',
+    throws: false,
+  },
+  {
+    body: "switch (x) { case 1: items.push(1); break; case 2: return 2; } throw new Error('x');",
+    id: 'a return in a later clause of such a switch',
+    throws: false,
+  },
+  {
+    body: "switch (x) { case 1: return 1; default: break; } throw new Error('x');",
+    id: 'a return beside a default that breaks',
+    throws: false,
+  },
+  {
     body: "switch (0) { default: switch (0) { default: return 1; } throw new Error('unreachable'); }",
     id: 'a switch of a literal that returns, inside one',
     throws: false,
@@ -311,5 +327,85 @@ describe('a finalizer that may return replaces what its try block did', () => {
     });
 
     expect(found).toBe(returns);
+  });
+});
+
+/** A `switch`, and how it ends the function it stands in. */
+interface Switched {
+  readonly id: string;
+  readonly statement: string;
+  readonly ending: Ending;
+}
+
+const SWITCHED: readonly Switched[] = [
+  {
+    ending: 'returns',
+    id: 'a clause the source does not select returns',
+    statement: 'switch (x) { case 1: return 1; }',
+  },
+  {
+    ending: 'returns',
+    id: 'a later clause returns',
+    statement: 'switch (x) { case 1: items.push(1); break; case 2: return 2; }',
+  },
+  {
+    ending: 'returns',
+    id: 'a loop in a clause returns',
+    statement: 'switch (x) { case 1: for (const item of items) { if (item) { return item; } } }',
+  },
+  {
+    ending: 'returns',
+    id: 'a try in a clause returns',
+    statement: 'switch (x) { default: try { return 1; } catch {} }',
+  },
+  {
+    ending: 'runs',
+    id: 'no clause returns',
+    statement: 'switch (x) { case 1: items.push(1); }',
+  },
+  {
+    ending: 'runs',
+    id: 'no clause returns, one breaks',
+    statement: 'switch (x) { case 1: items.push(1); break; }',
+  },
+  {
+    ending: 'runs',
+    id: 'a clause only throws',
+    statement: "switch (x) { case 1: throw new Error('x'); }",
+  },
+  {
+    ending: 'runs',
+    id: 'a return of an arrow function in a clause is its own',
+    statement: 'switch (x) { case 1: (() => { return 1; })(); }',
+  },
+  {
+    ending: 'returns',
+    id: 'a literal selects the clause that returns',
+    statement: 'switch (1) { case 1: return 1; }',
+  },
+  {
+    ending: 'runs',
+    id: 'a literal selects no clause',
+    statement: 'switch (1) { case 2: return 1; }',
+  },
+  {
+    ending: 'runs',
+    id: 'a literal selects a clause that breaks',
+    statement: 'switch (1) { case 1: break; case 2: return 1; }',
+  },
+];
+
+describe('a switch of a value the source does not give ends the function where a clause returns', () => {
+  it.each(SWITCHED)('$id', ({ ending, statement }) => {
+    const found = inBody(statement, (block) => {
+      const [first] = block.statements;
+      if (first === undefined || !isSwitchStatement(first)) {
+        throw new Error('The fixture holds a switch.');
+      }
+      const node: SwitchStatement = first;
+      return switchEnding(node, NOTHING, endingOf, noThrow);
+    });
+
+    expect(found).toBe(ending);
   });
 });

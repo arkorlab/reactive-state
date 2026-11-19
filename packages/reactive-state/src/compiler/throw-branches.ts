@@ -213,7 +213,10 @@ export function branchThrows(
   );
 }
 
-/** The source-selected switch suffix, after each necessarily evaluated case test. */
+/**
+ * The source-selected switch suffix, after each necessarily evaluated case test; of a value the
+ * source does not give, it may return where any clause does, and otherwise it runs on.
+ */
 export function switchEnding(
   node: SwitchStatement,
   resolve: Resolve | undefined,
@@ -224,5 +227,9 @@ export function switchEnding(
   if (plan.checked.some((expression) => check(expression, resolve) !== undefined)) {
     return 'throws';
   }
-  return plan.statements === undefined ? 'runs' : ending(plan.statements, resolve);
+  if (plan.statements !== undefined) {
+    return ending(plan.statements, resolve);
+  }
+  // Any clause may be the one that runs: a return in one may end the function.
+  return conditionalReturn(node.caseBlock, resolve, () => true) ? 'returns' : 'runs';
 }
