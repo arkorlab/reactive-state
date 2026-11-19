@@ -1,4 +1,5 @@
 import {
+  type BinaryExpression,
   type Expression,
   isArrayLiteralExpression,
   isBinaryExpression,
@@ -7,6 +8,7 @@ import {
   type Identifier,
   isIdentifier,
   isParameterDeclaration,
+  isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -148,7 +150,7 @@ function writtenBy(
 ): void {
   if (!isIdentifier(name)) return;
   const selected = frameBindingOf(name);
-  if (selected?.keys.length === 0) record(selected.binding, ...givenBy(node, count));
+  if (selected?.keys.length === 0) record(selected.binding, ...givenBy(node, count, name));
   else {
     const part = declaredByPattern(name);
     if (part !== undefined) record(part, undefined);
@@ -162,14 +164,37 @@ const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
 ]);
 
-/** What a node that writes a name as a whole gives it: none kept for a number or a text, none known for a pattern. */
-function givenBy(node: Node, count: number): readonly WholeValue[] {
+/**
+ * What a node that writes a name as a whole gives it: none kept for a number or a text, none known for
+ * a pattern, but for the swap `[a, b] = [b, a]`, which gives each name the element of the list on the
+ * right at its own place.
+ */
+function givenBy(node: Node, count: number, name: Node): readonly WholeValue[] {
   if (isForInStatement(node)) return [];
   if (!isBinaryExpression(node)) return [undefined];
   const { kind } = node.operatorToken;
   if (kind === SyntaxKind.EqualsToken)
-    return count === 1 && isIdentifier(unwrapped(node.left)) ? [node.right] : [undefined];
+    return count === 1 && isIdentifier(unwrapped(node.left))
+      ? [node.right]
+      : [patternGiven(node, name)];
   return LOGICAL_ASSIGNMENTS.has(kind) ? [node.right] : [];
+}
+
+/**
+ * The element a list written on the right of an assignment to a list of names gives a name, none
+ * known where a spread, a hole or a name with a default comes before it, or the right is no list.
+ */
+function patternGiven(assignment: BinaryExpression, name: Node): Expression | undefined {
+  const { left, right } = assignment;
+  const pattern = unwrapped(left);
+  const list = unwrapped(right);
+  if (!isArrayLiteralExpression(pattern) || !isArrayLiteralExpression(list)) return undefined;
+  for (const [index, element] of pattern.elements.entries()) {
+    const target = unwrapped(element);
+    if (!isIdentifier(target) || isSpreadElement(list.elements[index] ?? element)) return undefined;
+    if (target === name) return list.elements[index];
+  }
+  return undefined;
 }
 
 /** What a declaration of a name again gives it: its initializer, none known for a loop head or a pattern, which selects a part. */

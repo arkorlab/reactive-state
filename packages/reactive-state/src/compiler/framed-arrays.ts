@@ -13,17 +13,28 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
-import { arrayWritesUnfollowed, writtenArrayElements } from './framed-array-elements.ts';
+import {
+  arrayWritesUnfollowed,
+  type WrittenArrayElement,
+  writtenArrayElements,
+} from './framed-array-elements.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { writtenAsWhole } from './framed-array-identity.ts';
+import { givenValues, writtenAsWhole } from './framed-array-identity.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
-import { mayBecomeArray, mayStartAsArray } from './framed-array-starts.ts';
+import {
+  isNoArray,
+  isScalarValue,
+  mayBecomeArray,
+  mayStartAsArray,
+} from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { UnfollowableError } from './framed-getter-writes.ts';
 import { mutatorInvocation } from './framed-mutator-calls.ts';
 import { destructuredList } from './framed-nested-lists.ts';
 import { methodMayBeOverridden } from './framed-overridden-methods.ts';
 import { sourceChanged } from './framed-pattern-sources.ts';
+import { isScalarType } from './framed-scalar-types.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
@@ -72,6 +83,23 @@ export function framedArrayString(
   call: Node,
 ): boolean {
   return value !== undefined && arrayError(value, words, call);
+}
+
+/**
+ * An implicit conversion, a `+` or `+=` operand or a template span, reads the elements of an array it
+ * can follow: a literal, its constant aliases, a written type that says it holds errors, what the
+ * program writes into it, and what a name is given where it is assigned, where that is a literal, a
+ * name or a scalar; a call, a member or a choice of arrays may hand an array on, and is refused. A
+ * name it cannot follow, a parameter assigned as a whole (`count += 1`), a name a swap or a loop
+ * writes, an array written through an element, is taken as the program shows it: an operand is far
+ * oftener text or a number than a list, and `String(name)` alone refuses such a name.
+ */
+export function framedArrayOperand(
+  value: Expression | undefined,
+  words: ArrayWords,
+  call: Node,
+): boolean {
+  return value !== undefined && arrayError(value, words, call, 'followed');
 }
 
 /** Borrowed native methods retain their receiver and the explicit join separator. */
@@ -123,8 +151,21 @@ function appliedSeparator(
     : arrayError(value, words, call);
 }
 
-/** Literal arrays, their lexical aliases, and explicitly array-typed inputs retain element words. */
-export function arrayError(value: Expression, words: ArrayWords, call: Node): boolean {
+/** How an array the compile cannot follow reads: refused as one that may hold an error, or only as far as it is followed. */
+type Reading = 'followed' | 'refused';
+
+/**
+ * Literal arrays, their lexical aliases, and explicitly array-typed inputs retain element words. A
+ * name written as a whole, a list that may have changed and an array written where no reader follows
+ * hold an error where the reading is `refused`, the default; where it is `followed` they are read by
+ * what they are shown to hold alone.
+ */
+export function arrayError(
+  value: Expression,
+  words: ArrayWords,
+  call: Node,
+  reading: Reading = 'refused',
+): boolean {
   const pending: Expression[] = [value];
   const seen = new Set<FrameBinding>();
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
@@ -141,7 +182,7 @@ export function arrayError(value: Expression, words: ArrayWords, call: Node): bo
           (element, keys) => words.error(element, keys),
           (source) => sourceChanged(source, call, (element, keys) => words.error(element, keys)),
         )) ||
-      bindingArrayWords(each, { call, words, pending, seen })
+      bindingArrayWords(each, { call, words, pending, seen, reading })
     )
       return true;
   }
@@ -153,11 +194,16 @@ function writtenElementErrors(
   value: Expression,
   call: Node,
   words: ArrayWords,
-  pending: Expression[],
+  context: { readonly pending: Expression[]; readonly reading: Reading },
 ): boolean {
-  if (arrayWritesUnfollowed(value, call, (element, keys) => words.error(element, keys)))
-    return true;
-  for (const source of writtenArrayElements(value, call)) {
+  const { pending, reading } = context;
+  const unfollowed = arrayWritesUnfollowed(value, call, (element, keys) =>
+    words.error(element, keys),
+  );
+  if (unfollowed && reading === 'refused') return true;
+  const sources = unfollowed ? explicitWrites(value, call) : writtenArrayElements(value, call);
+  if (sources === undefined) return true;
+  for (const source of sources) {
     if (source.array === true) {
       pending.push(source.value);
       continue;
@@ -167,6 +213,21 @@ function writtenElementErrors(
     } else if (elementErrors([source.value], words, pending)) return true;
   }
   return false;
+}
+
+/**
+ * What the program writes into an array it does not follow the identity of, an insertion and an
+ * element assignment on its name: read by an operand all the same, so that an error pushed into a
+ * list the code also gives another list is still one. Where a native object mutator may write the
+ * array nothing here can be read, and none is returned.
+ */
+function explicitWrites(value: Expression, call: Node): readonly WrittenArrayElement[] | undefined {
+  try {
+    return writtenArrayElements(value, call);
+  } catch (error) {
+    if (error instanceof UnfollowableError) return undefined;
+    throw error;
+  }
 }
 
 /** A whole lexical binding not already followed while reading this array's elements. */
@@ -233,13 +294,48 @@ function bindingArrayWords(
     readonly call: Node;
     readonly words: ArrayWords;
     readonly pending: Expression[];
+    readonly reading: Reading;
     readonly seen: Set<FrameBinding>;
   },
 ): boolean {
-  const { call, words, pending, seen } = context;
+  const { call, words, pending, seen, reading } = context;
   const binding = unseenArrayBinding(value, seen);
   if (binding === undefined) return false;
-  if (rewrittenArray(binding) || writtenElementErrors(value, call, words, pending)) return true;
+  if (reading === 'refused' && rewrittenArray(binding)) return true;
+  if (writtenElementErrors(value, call, words, { pending, reading })) return true;
+  if (reading === 'followed' && !followedGivens(binding)) return true;
   if (binding.initializer !== undefined) pending.push(binding.initializer);
   return false;
+}
+
+/**
+ * Whether a name written as a whole elsewhere may be read as it is shown to hold. A name the code
+ * writes as a scalar is no array. Any other name is refused unless everything it is given where it
+ * is assigned is no array (a literal, an operator's result, a function): an array literal, a name, a
+ * call, a member, a choice that ends at one, and a value a pattern or a loop head gives, may be a
+ * list that holds an error, and the name is refused as the reading that refuses every list does.
+ */
+function followedGivens(binding: FrameBinding): boolean {
+  if (writtenScalar(binding)) return true;
+  return givenValues(binding).every(
+    (given) => given !== undefined && (isNoArray(given) || isScalarName(given)),
+  );
+}
+
+/** Whether a value is a name the code writes as a scalar: what a swap of names gives one of them. */
+function isScalarName(value: Expression): boolean {
+  const name = unwrapped(value);
+  const selected = isIdentifier(name) ? frameBindingOf(name) : undefined;
+  return selected?.keys.length === 0 && writtenScalar(selected.binding);
+}
+
+/**
+ * Whether the code writes a name as a text, a number, a boolean or a bigint: its annotation says so,
+ * or, with none, it starts as a literal or an operator's scalar. TypeScript refuses to give such a
+ * name an array, as the compile trusts a written type that excludes an error, so what it is given
+ * is no array, a call result included (`text = JSON.stringify(value)`).
+ */
+function writtenScalar(binding: FrameBinding): boolean {
+  if (binding.type !== undefined) return isScalarType(binding.type);
+  return binding.initializer !== undefined && isScalarValue(binding.initializer);
 }

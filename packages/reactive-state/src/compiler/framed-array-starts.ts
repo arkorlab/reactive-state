@@ -1,4 +1,5 @@
 import {
+  type BinaryExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
@@ -9,6 +10,7 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isParenthesizedExpression,
   isPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
@@ -171,15 +173,68 @@ function defaultMayBeArray(name: Identifier): boolean {
  * on every path. A name, a member, an element and a call may hold an array, and are none of these.
  */
 export function isNoArray(value: Expression): boolean {
+  return endsAtKinds(value, NO_ARRAY_KINDS, { strip: unwrapped, typed: false });
+}
+
+/** The written values whose type is a text, a number, a boolean or a bigint, whatever their operands are. */
+const SCALAR_KINDS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.BigIntLiteral,
+  SyntaxKind.DeleteExpression,
+  SyntaxKind.FalseKeyword,
+  SyntaxKind.NoSubstitutionTemplateLiteral,
+  SyntaxKind.NumericLiteral,
+  SyntaxKind.PostfixUnaryExpression,
+  SyntaxKind.PrefixUnaryExpression,
+  SyntaxKind.StringLiteral,
+  SyntaxKind.TemplateExpression,
+  SyntaxKind.TrueKeyword,
+  SyntaxKind.TypeOfExpression,
+]);
+
+/**
+ * Whether an expression is written as a text, a number, a boolean or a bigint: a literal of one, what
+ * an operator makes of its operands, or a choice or a sequence that ends at such a value on every
+ * path. The empty object, `null`, `undefined`, a function and a regular expression are no array, but
+ * a name that starts as one is typed by it as any, or as `{}`, and TypeScript lets an array be
+ * assigned to it later: they are not scalars. A cast (`'x' as unknown`) says the name is typed as
+ * something else than what it starts as, and is read as no scalar: only parentheses are looked through.
+ */
+export function isScalarValue(value: Expression): boolean {
+  return endsAtKinds(value, SCALAR_KINDS, { strip: withoutParentheses, typed: true });
+}
+
+/** `node` within the parentheses that wrap it. */
+function withoutParentheses(node: Expression): Expression {
+  let each = node;
+  while (isParenthesizedExpression(each)) each = each.expression;
+  return each;
+}
+
+/** Whether every path of a choice or a sequence ends at a value of one of these kinds or at a scalar operator. */
+function endsAtKinds(
+  value: Expression,
+  kinds: ReadonlySet<SyntaxKind>,
+  reading: { readonly strip: (node: Expression) => Expression; readonly typed: boolean },
+): boolean {
   const pending = [value];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const written = unwrapped(each);
-    if (NO_ARRAY_KINDS.has(written.kind)) continue;
-    const ends = endsOf(written);
+    const written = reading.strip(each);
+    if (kinds.has(written.kind)) continue;
+    const ends =
+      reading.typed && isAddition(written) ? [written.left, written.right] : endsOf(written);
     if (ends === undefined) return false;
     pending.push(...ends);
   }
   return true;
+}
+
+/**
+ * An addition is typed by its operands where the type matters: a name that starts as `JSON.parse('0')
+ * + 1` is typed any, not number, and TypeScript lets an array be assigned to it. Both operands are
+ * read, so that only an addition of scalars is a scalar.
+ */
+function isAddition(value: Expression): value is BinaryExpression {
+  return isBinaryExpression(value) && value.operatorToken.kind === SyntaxKind.PlusToken;
 }
 
 /** The expressions a choice or a sequence may end at, and none for an operator that makes a scalar; undefined where it is neither. */
