@@ -240,9 +240,14 @@ function callableTargetsOf(target: Expression): readonly LocalInvocable[] {
   }
   const found: LocalInvocable[] = [];
   for (const map of methodsAtExpressionPath(path.root, path.steps)) {
-    const method = map.get(key);
-    if (method !== undefined && isAnswering(method)) {
-      found.push(...executableOverloads(method));
+    const candidates = map.get(key);
+    if (candidates === undefined) {
+      continue;
+    }
+    for (const method of candidates) {
+      if (isAnswering(method)) {
+        found.push(...executableOverloads(method));
+      }
     }
   }
   return found;
