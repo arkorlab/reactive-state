@@ -44,7 +44,6 @@ import { isBigIntWritten } from './throw-bigints.ts';
 import { globalCalleePath } from './throw-callees.ts';
 import { primitiveOf, writtenOf } from './throw-shapes.ts';
 import { isSymbolWritten } from './throw-symbols.ts';
-import { interveningEvaluation } from './written-evaluation.ts';
 
 /** A missing ordinary own member, distinct from an unknown accessor or receiver. */
 const ABSENT = { kind: 'absent' } as const;
@@ -192,8 +191,10 @@ function memberTarget(
   }
   const written = writtenOf(value.expression, reading.resolve);
   const held = metadataCallee(written);
+  // The literal a name holds is the receiver only where no write to it can come first — in the code
+  // between them, or in code that runs later (a function written above the write).
   const receiver =
-    held !== undefined && isExpression(held) && !interveningEvaluation(held, value.expression)
+    held !== undefined && isExpression(held) && !calleeUncertain(held, value.expression)
       ? held
       : written;
   if (isObjectLiteralExpression(receiver)) {
