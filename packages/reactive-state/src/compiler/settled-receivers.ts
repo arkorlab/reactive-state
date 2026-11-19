@@ -46,6 +46,9 @@ import { peelPlatform, platformPathsOf, wrappedBy } from './platform-uses.ts';
 import { readsBinding } from './scope.ts';
 import { methodOf, writtenBy } from './written.ts';
 
+/** The functions that may run when each method name is called: more than one where the code installs several. */
+type MethodTable = ReadonlyMap<string, readonly Node[]>;
+
 /** Binary operators that evaluate to one of their operand expressions. */
 const VALUE_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.AmpersandAmpersandToken,
@@ -156,7 +159,7 @@ export function receiverMemberPath(
 export function methodsAtExpressionPath(
   start: Expression,
   steps: readonly (string | null)[],
-): readonly ReadonlyMap<string, Node>[] {
+): readonly MethodTable[] {
   return projectExpressionPath(start, steps).flatMap((leaf) => leafMethodMaps(leaf));
 }
 
@@ -344,8 +347,8 @@ function expandInstanceStep(
 }
 
 /** Extracts per-branch method tables on `leaf`, expanding local factory calls without revisiting cycles. */
-function leafMethodMaps(leaf: Expression): readonly ReadonlyMap<string, Node>[] {
-  const maps: ReadonlyMap<string, Node>[] = [];
+function leafMethodMaps(leaf: Expression): readonly MethodTable[] {
+  const maps: MethodTable[] = [];
   const seenFactories = new Set<Node>();
   const pending: Expression[] = [leaf];
   for (let item = pending.pop(); item !== undefined; item = pending.pop()) {
@@ -362,7 +365,7 @@ function leafMethodMaps(leaf: Expression): readonly ReadonlyMap<string, Node>[] 
 }
 
 /** Extracts direct methods on an identifier, object literal, or local class construction. */
-function directLeafMethods(leaf: Expression): ReadonlyMap<string, Node> {
+function directLeafMethods(leaf: Expression): MethodTable {
   if (isIdentifier(leaf)) {
     return methodsOf(leaf);
   }
@@ -377,8 +380,8 @@ function directLeafMethods(leaf: Expression): ReadonlyMap<string, Node> {
 }
 
 /** Collects own methods and function-valued properties from `object`. */
-function inlineObjectMethods(object: ObjectLiteralExpression): ReadonlyMap<string, Node> {
-  const methods = new Map<string, Node>();
+function inlineObjectMethods(object: ObjectLiteralExpression): MethodTable {
+  const methods = new Map<string, readonly Node[]>();
   for (const prop of object.properties) {
     if (isSpreadAssignment(prop)) {
       continue;
@@ -388,17 +391,17 @@ function inlineObjectMethods(object: ObjectLiteralExpression): ReadonlyMap<strin
       continue;
     }
     if (isMethodDeclaration(prop)) {
-      methods.set(key, prop);
+      methods.set(key, [prop]);
     } else if (isPropertyAssignment(prop) && isFunctionExpression(peelPlatform(prop.initializer))) {
-      methods.set(key, peelPlatform(prop.initializer));
+      methods.set(key, [peelPlatform(prop.initializer)]);
     }
   }
   return methods;
 }
 
 /** Collects instance methods and arrow/function fields across `declared`'s lineage. */
-function inlineClassMethods(declared: ClassLikeDeclaration): ReadonlyMap<string, Node> {
-  const methods = new Map<string, Node>();
+function inlineClassMethods(declared: ClassLikeDeclaration): MethodTable {
+  const methods = new Map<string, readonly Node[]>();
   for (const cls of declaredLineage(declared)) {
     for (const member of cls.members) {
       recordClassInstanceMethod(member, methods);
@@ -408,7 +411,7 @@ function inlineClassMethods(declared: ClassLikeDeclaration): ReadonlyMap<string,
 }
 
 /** Records a non-static method or function-valued field from `member` into `methods`. */
-function recordClassInstanceMethod(member: Node, methods: Map<string, Node>): void {
+function recordClassInstanceMethod(member: Node, methods: Map<string, readonly Node[]>): void {
   if (!isMethodDeclaration(member) && !isPropertyDeclaration(member)) {
     return;
   }
@@ -420,12 +423,12 @@ function recordClassInstanceMethod(member: Node, methods: Map<string, Node>): vo
     return;
   }
   if (isMethodDeclaration(member)) {
-    methods.set(key, member);
+    methods.set(key, [member]);
     return;
   }
   const init = member.initializer === undefined ? undefined : peelPlatform(member.initializer);
   if (init !== undefined && (isArrowFunction(init) || isFunctionExpression(init))) {
-    methods.set(key, init);
+    methods.set(key, [init]);
   }
 }
 
