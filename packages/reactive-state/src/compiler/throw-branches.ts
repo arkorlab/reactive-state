@@ -3,7 +3,8 @@ import {
   type Expression,
   type Node,
   type IfStatement,
-  isBlock,
+  isClassDeclaration,
+  isFunctionDeclaration,
   isIfStatement,
   isSwitchStatement,
   isTryStatement,
@@ -38,9 +39,14 @@ export function knownBranch(
   return condition.kind === SyntaxKind.TrueKeyword ? [node.thenStatement] : undefined;
 }
 
-/** A source return in selected conditionals or blocks; loop exits do not return from a function. */
+/**
+ * A source return the function may reach from `node`: in a selected branch of an `if`, and in any
+ * statement a `switch`, `try`, loop, label or block holds, a clause the source does not select
+ * among them. A loop's `break` and `continue` do not return from the function, and a function written
+ * within the statement has its own returns.
+ */
 function conditionalReturn(
-  node: Statement,
+  node: Node,
   resolve: Resolve | undefined,
   returns: (node: ReturnStatement) => boolean,
 ): boolean {
@@ -54,9 +60,14 @@ function conditionalReturn(
     ];
     return branches.some((branch) => conditionalReturn(branch, resolve, returns));
   }
+  // An expression holds a return only in a function it writes, which returns from itself.
+  if (isExpression(node) || isFunctionDeclaration(node) || isClassDeclaration(node)) {
+    return false;
+  }
   return (
-    isBlock(node) &&
-    node.statements.some((statement) => conditionalReturn(statement, resolve, returns))
+    node.forEachChild((child) =>
+      conditionalReturn(child, resolve, returns) ? true : undefined,
+    ) === true
   );
 }
 
@@ -202,7 +213,10 @@ export function branchThrows(
   );
 }
 
-/** The source-selected switch suffix, after each necessarily evaluated case test. */
+/**
+ * The source-selected switch suffix, after each necessarily evaluated case test; of a value the
+ * source does not give, it may return where any clause does, and otherwise it runs on.
+ */
 export function switchEnding(
   node: SwitchStatement,
   resolve: Resolve | undefined,
@@ -213,5 +227,9 @@ export function switchEnding(
   if (plan.checked.some((expression) => check(expression, resolve) !== undefined)) {
     return 'throws';
   }
-  return plan.statements === undefined ? 'runs' : ending(plan.statements, resolve);
+  if (plan.statements !== undefined) {
+    return ending(plan.statements, resolve);
+  }
+  // Any clause may be the one that runs: a return in one may end the function.
+  return conditionalReturn(node.caseBlock, resolve, () => true) ? 'returns' : 'runs';
 }
