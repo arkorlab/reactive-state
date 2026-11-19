@@ -273,8 +273,10 @@ function constructorParameterPropertySources(
   key: string,
   source: MetadataSource,
 ): readonly MetadataSource[] | undefined {
-  const ctor = cls.members.find((member): member is ConstructorDeclaration =>
-    isConstructorDeclaration(member),
+  // Overload signatures carry no parameter properties: only the implementation, the one with a body, does.
+  const ctor = cls.members.find(
+    (member): member is ConstructorDeclaration =>
+      isConstructorDeclaration(member) && member.body !== undefined,
   );
   if (ctor === undefined) {
     return [];
