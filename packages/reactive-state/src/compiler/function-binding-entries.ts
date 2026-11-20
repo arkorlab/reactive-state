@@ -27,6 +27,7 @@ import {
   isPatternStepFunctionType,
 } from './function-binding-types.ts';
 import { bindingElementSteps } from './function-candidate-objects.ts';
+import { isGuardedNonFunction } from './function-guarded-reads.ts';
 import {
   arraySlotEntryKind,
   containerDynamicEntryKind,
@@ -65,6 +66,9 @@ export function identifierEntryKind(node: Identifier, context: ScanContext): Ent
   }
   if (isParameterDeclaration(declared) && isOutsideParameterScope(node, declared)) {
     return 'unknown';
+  }
+  if (isGuardedNonFunction(node, declared)) {
+    return NON_FUNCTION;
   }
   const target = declaredBindingTarget(node, declared);
   const cached = BINDING_ENTRY_KINDS.get(target);
