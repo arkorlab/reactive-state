@@ -47,6 +47,7 @@ import {
   accumulatorCarriesDated,
   type CalledWith,
   callbackSlotHoldsDated,
+  ELEMENT_CALLBACK_ARRAY_SLOT,
   elementMethodCarriesDated,
   REDUCE_ARRAY_METHODS,
   writtenArrayCarriesDated,
@@ -61,6 +62,9 @@ import {
 import { bindingIdentifiers } from './scope.ts';
 
 /** Tracks expressions inside a tag or helper body that carry Date-bearing substitution values. */
+
+/** The slots `map` and `flatMap` hand a function the Date in: the element, and the array after the index. */
+const MAP_SLOTS: ReadonlySet<number> = new Set([0, ELEMENT_CALLBACK_ARRAY_SLOT]);
 
 export interface DatedCarrierContext {
   readonly bindings: WrapperBindings;
@@ -448,7 +452,12 @@ function arrayMethodResultCarriesDated(
   }
   if (method === 'concat') return arrayConcatCarriesDated(call, receiver, ctx, seen);
   if (method === 'map' || method === 'flatMap') {
-    return mappedResultCarriesDated(call.arguments[0], receiver, datedQueries(ctx, seen));
+    return mappedResultCarriesDated(
+      call.arguments[0],
+      receiver,
+      datedQueries(ctx, seen),
+      MAP_SLOTS,
+    );
   }
   return elementMethodCarriesDated(call, receiver, method, (each) =>
     carriesDatedSubstitution(each, ctx.bindings, ctx.datedIndices, seen),

@@ -222,12 +222,14 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
 /**
  * What the callback of `map`, `flatMap` or `Array.from` answers of the elements of `receiver`: an
  * inline callback's returns (its parameter asks the receiver), or those of a function of the file
- * handed the element when the receiver carries a Date. A callback the code does not show answers none.
+ * handed the slots `slots` (the element, and for `map` and `flatMap` the array after the index) when the
+ * receiver carries a Date. A callback the code does not show answers none.
  */
 export function mappedResultCarriesDated(
   callback: Expression | undefined,
   receiver: Expression,
   queries: DatedQueries,
+  slots: ReadonlySet<number> = new Set([0]),
 ): boolean {
   const target = callback === undefined ? undefined : unwrapped(callback);
   if (target === undefined) return false;
@@ -236,6 +238,6 @@ export function mappedResultCarriesDated(
   }
   const functions = functionsOf(target);
   if (functions.length === 0 || !queries.fresh(receiver)) return false;
-  const handed: Handed = { at: new Set([0]), from: Infinity };
+  const handed: Handed = { at: slots, from: Infinity };
   return functions.some((fn) => answersHandedDate(fn, handed, queries.fresh));
 }
