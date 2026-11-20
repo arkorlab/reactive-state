@@ -33,6 +33,11 @@ import { collectWrites, type Owner, updaterId } from '../src/compiler/updaters.t
  * it; each import an update reads is named apart from every global an update reads, as it is
  * from those a dynamic site reads.
  *
+ * The same goes for what the program writes of the component as it is — the server part, the
+ * initializer of a state the authority evaluates, a slot — which reads the globals of the language
+ * too: an import the program writes under a global's name binds the global's reads there to the
+ * helper, where the same signatures leave nothing to tell the two apart.
+ *
  * Each row compiles a small application — a component, the hooks and the shared module it names —
  * through the component's analysis, its sides, its updaters and its program, and reads the text of
  * the program: its imports, and the body of each update.
@@ -58,6 +63,11 @@ const NEUTRAL = `export function widen(text: string, radix: number): number {
   return Number(text) * 100 + radix;
 }
 `;
+
+/** A module of one helper, of the name of a global, whose answer is not the global's. */
+function helperNamed(name: string): string {
+  return `export function ${name}(text: string, radix: number): number {\n  return Number(text) * 100 + radix;\n}\n`;
+}
 
 const CHILD = `export default function Child({ n }: { n: unknown }) {
   return <i>{String(n)}</i>;
@@ -96,6 +106,10 @@ interface Parts {
   readonly update?: string;
   readonly more?: string;
   readonly arguments?: string;
+  /** Statements of the server part, after its checks. */
+  readonly server?: string;
+  /** Elements of the section, after its buttons. */
+  readonly jsx?: string;
 }
 
 /** A component of a title of the database, and of the hooks of `parts`, each of an estimate. */
@@ -117,14 +131,14 @@ ${parts.imports ?? ''}
 export default async function Lab({ projectId, id }: { projectId: string; id: string }) {
   const user = await requireUser();
   await assertCanEditTodo(user, projectId, id);
-  const ref = db.todos.ref(id);
+${parts.server ?? ''}  const ref = db.todos.ref(id);
   const [title, setTitle] = useReactiveState(ref.title);
 ${calls.join('\n')}
 ${parts.more ?? ''}  return (
     <section>
       <button type="button" onClick={() => setTitle(${parts.update ?? '(current) => String(parseInt(current, 10))'})}>t</button>
 ${buttons.join('\n')}
-    </section>
+${parts.jsx ?? ''}    </section>
   );
 }
 `;
@@ -563,6 +577,188 @@ describe('the imports of a program for the authority, beside the globals its upd
 
       expect(imports).toStrictEqual(["import { parseInt as step$2 } from '@/numbers';"]);
       expect(updates['useCount#0.count']).toBe('step$2(String(current), 10)');
+    });
+  });
+
+  describe('an import is named apart from a global the program reads in what it writes as it is', () => {
+    /** The globals of the language a helper may share a name with, each read of what the server part awaited. */
+    const READS = [
+      { name: 'parseInt', read: 'parseInt(String(todo.estimate), 10)' },
+      { name: 'fetch', read: "typeof fetch === 'function' ? todo.estimate : 0" },
+      { name: 'structuredClone', read: 'structuredClone({ n: todo.estimate }).n' },
+      {
+        name: 'URL',
+        read: "new URL('https://example.com/' + String(todo.estimate)).pathname.length",
+      },
+      { name: 'Date', read: 'new Date(todo.estimate).getTime()' },
+    ] as const;
+    const TODO = '  const todo = await db.todos.get(id);\n';
+    const CHILD_IMPORT = "import Child from '@/components/child.reactive';";
+    /** The program of a component whose body reads a global as `place` puts it, and a hook that imports a helper of its name. */
+    function body(
+      name: string,
+      place: Pick<Parts, 'imports' | 'jsx' | 'more' | 'server'>,
+    ): { readonly imports: readonly string[]; readonly text: string; readonly update: string } {
+      const text = program({
+        'components/child.reactive.tsx': CHILD,
+        'components/lab.reactive.tsx': lab({
+          ...place,
+          imports: `${CHILD_IMPORT}\n${place.imports ?? ''}`,
+          update: '(current) => current',
+        }),
+        'hooks/useCount.ts': hook(
+          'useCount',
+          `${name}(String(current), 10)`,
+          `import { ${name} } from '@/numbers';`,
+        ),
+        'numbers.ts': helperNamed(name),
+      });
+      const { imports, updates } = readOf(text);
+      return { imports, text, update: updates['useCount#0.count'] ?? '' };
+    }
+    const places = [
+      {
+        id: 'a statement of the server part',
+        of: (read: string) => {
+          return {
+            jsx: '      <Child n={probe} />\n',
+            server: `${TODO}  const probe = ${read};\n`,
+          };
+        },
+      },
+      {
+        id: 'the initializer of a state the authority evaluates',
+        of: (read: string) => {
+          return {
+            more: `  const [count, setCount] = useReactiveState(${read});\n`,
+            jsx: '      <button type="button" onClick={() => setCount((c) => c + 1)}>{count}</button>\n',
+            server: TODO,
+          };
+        },
+      },
+      {
+        id: 'a slot, an element the authority renders',
+        of: (read: string) => ({ jsx: `      <Child n={${read}} />\n`, server: TODO }),
+      },
+    ] as const;
+
+    describe.each(places)('$id', ({ of }) => {
+      it.each(READS)('reads `$name`, a hook imports a helper of the name', ({ name, read }) => {
+        const { imports, text, update } = body(name, of(read));
+
+        expect(imports).toStrictEqual([`import { ${name} as ${name}$2 } from '@/numbers';`]);
+        expect(text).toContain(read);
+        expect(update).toBe(`${name}$2(String(current), 10)`);
+      });
+    });
+
+    it('a name the program reads as a global of its own text, `Object`, is the same', () => {
+      const { imports, text } = body('Object', { server: TODO });
+
+      expect(imports).toStrictEqual(["import { Object as Object$2 } from '@/numbers';"]);
+      expect(text).toContain('export const writable = Object.freeze(');
+    });
+
+    it('a name the server part declares, with an alias beside it, is named apart from both', () => {
+      const { imports, update } = body('parseInt', {
+        jsx: '      <Child n={probe} />\n',
+        server: `${TODO}  const parseInt$2 = todo.estimate;\n  const probe = parseInt(String(parseInt$2), 10);\n`,
+      });
+
+      expect(imports).toStrictEqual(["import { parseInt as parseInt$3 } from '@/numbers';"]);
+      expect(update).toBe('parseInt$3(String(current), 10)');
+    });
+  });
+
+  describe("a program whose body reads no global of an import's name is written as it was", () => {
+    it('the body reads `parseInt`, the hook imports a helper of another name', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/child.reactive.tsx': CHILD,
+          'components/lab.reactive.tsx': lab({
+            imports: "import Child from '@/components/child.reactive';",
+            jsx: '      <Child n={probe} />\n',
+            server:
+              '  const todo = await db.todos.get(id);\n  const probe = parseInt(String(todo.estimate), 10);\n',
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': hook(
+            'useCount',
+            'widen(String(current), 10)',
+            "import { widen } from '@/neutral';",
+          ),
+          'neutral.ts': NEUTRAL,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { widen } from '@/neutral';"]);
+      expect(updates['useCount#0.count']).toBe('widen(String(current), 10)');
+    });
+
+    it('a hook imports a helper named `parseInt`, and no global of the name is read', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/child.reactive.tsx': CHILD,
+          'components/lab.reactive.tsx': lab({
+            imports: "import Child from '@/components/child.reactive';",
+            jsx: '      <Child n={probe} />\n',
+            server:
+              '  const todo = await db.todos.get(id);\n  const probe = Number(todo.estimate) + 1;\n',
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': importing('useCount', '@/numbers'),
+          'numbers.ts': NUMBERS,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe('parseInt(String(current), 10)');
+    });
+
+    it("the component's own import of the helper is read by its server part, and a hook imports the same", () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/child.reactive.tsx': CHILD,
+          'components/lab.reactive.tsx': lab({
+            imports:
+              "import Child from '@/components/child.reactive';\nimport { parseInt } from '@/numbers';",
+            jsx: '      <Child n={probe} />\n',
+            server:
+              '  const todo = await db.todos.get(id);\n  const probe = parseInt(String(todo.estimate), 10);\n',
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': importing('useCount', '@/numbers'),
+          'numbers.ts': NUMBERS,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe('parseInt(String(current), 10)');
+    });
+
+    it('a name the server part declares is named apart from the import, as it was', () => {
+      const { imports, update } = (() => {
+        const text = program({
+          'components/child.reactive.tsx': CHILD,
+          'components/lab.reactive.tsx': lab({
+            imports: "import Child from '@/components/child.reactive';",
+            jsx: '      <Child n={todo.estimate} />\n',
+            server: '  const todo = await db.todos.get(id);\n',
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': hook(
+            'useCount',
+            'todo(String(current), 10)',
+            "import { todo } from '@/numbers';",
+          ),
+          'numbers.ts': `export function todo(text: string, radix: number): number {\n  return Number(text) + radix;\n}\n`,
+        });
+        const read = readOf(text);
+        return { imports: read.imports, update: read.updates['useCount#0.count'] };
+      })();
+
+      expect(imports).toStrictEqual(["import { todo as todo$2 } from '@/numbers';"]);
+      expect(update).toBe('todo$2(String(current), 10)');
     });
   });
 
