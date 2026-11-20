@@ -180,7 +180,7 @@ describe('a server part that writes an export of a shared module', () => {
 
   it('says what to write instead', () => {
     expect(reasonOf(sourceOf('defaults.value = first;', VIEW), 'authority')).toContain(
-      'Copy it — `const mine = { ...defaults }` — and write the copy, or keep the value in a state.',
+      'Copy it deeply — `const mine = structuredClone(defaults)` — and write the copy, or keep the value in a state.',
     );
   });
 
@@ -223,6 +223,14 @@ describe('a server part that writes an export of a shared module', () => {
     {
       id: 'a structured clone that is pushed to',
       body: 'structuredClone(defaults).items.push(first);',
+    },
+    {
+      id: 'the copy the refusal advises, a member pushed to',
+      body: 'const mine = structuredClone(defaults);\nmine.items.push(first);',
+    },
+    {
+      id: 'the copy the refusal advises, a member assigned',
+      body: 'const mine = structuredClone(defaults);\nmine.value = first;',
     },
     {
       id: 'a member read through a cast',

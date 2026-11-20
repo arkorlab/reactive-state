@@ -247,7 +247,7 @@ function authorityImport(
     case 'shared': {
       if (isWrittenAt(identifier)) {
         state.fail(
-          `\`${identifier.text}\` is \`${module.specifier}\`'s, a shared module of the application's, and the authority runs this code in its own copy of the module, which every session shares: a write here stays for the next render of any. Copy it — \`const mine = { ...${identifier.text} }\` — and write the copy, or keep the value in a state.`,
+          `\`${identifier.text}\` is \`${module.specifier}\`'s, a shared module of the application's, and the authority runs this code in its own copy of the module, which every session shares: a write here stays for the next render of any. Copy it deeply — \`const mine = structuredClone(${identifier.text})\` — and write the copy, or keep the value in a state.`,
           identifier,
         );
       }
