@@ -94,6 +94,19 @@ class Plans {
     this.#bound = bound;
   }
 
+  /**
+   * A fault for a partitioned table or a partition: a plan names the partitions of a table it reads,
+   * and a write to the table is logged as the table's, so a render that reads it would not be told
+   * of a write, whichever of them the schema declares.
+   */
+  #refusePartitioned(relation: Relation): void {
+    if (this.#catalog?.partitioned?.has(relationKey(relation)) === true) {
+      throw new Error(
+        `A render read ${relationKey(relation)}, a partitioned table or a partition of one: reactive-state does not follow partitioned tables, so read it outside the render.`,
+      );
+    }
+  }
+
   /** The followed table `relation` is; a fault for one nothing follows. */
   #tableOf(relation: Relation): string {
     const table = this.#followed.byRelation.get(relationKey(relation));
@@ -121,6 +134,7 @@ class Plans {
       );
     }
     for (const relation of plan.relations) {
+      this.#refusePartitioned(relation);
       this.#tableOf(relation);
     }
     // A statement that names a table's columns otherwise: its plan's names may be other columns'.
