@@ -27,6 +27,7 @@ import {
   textOf,
   unusedName,
 } from './splice.ts';
+import { reservedNames } from './update-globals.ts';
 import type { ApplySite, Registered } from './updaters.ts';
 
 /**
@@ -101,7 +102,8 @@ class ImportPlan {
   /** The program's own names, and each one it imports, by the import that takes it. */
   readonly #taken = new Map<string, string>();
 
-  constructor(component: Component, sides: Sides, propTypes: ReadonlySet<string>) {
+  constructor(input: AuthorityInput) {
+    const { component, propTypes, sides, updaters } = input;
     for (const name of OWN_NAMES) {
       this.#taken.set(name, '');
     }
@@ -112,8 +114,9 @@ class ImportPlan {
         this.#taken.set(name, '');
       }
     }
-    // What the code written into a site's function declares, or reads as a global (`derive.ts`).
-    for (const name of sides.derivation.taken) {
+    // What the code written into a site's function declares, or reads as a global (`derive.ts`), and
+    // what the updates read as globals, which the program writes as they are.
+    for (const name of reservedNames(sides.derivation.taken, updaters)) {
       this.#taken.set(name, '');
     }
     const { refs } = sides;
@@ -189,7 +192,7 @@ export function emitAuthority(input: AuthorityInput): string {
   const { component, sides } = input;
   const { refs } = sides;
   const stateful = component.returned !== undefined;
-  const lines = new ImportPlan(component, sides, input.propTypes);
+  const lines = new ImportPlan(input);
   const updaterLines = updaterEntries(input, lines);
   const values = [
     refs.components.size > 0 ? 'componentRef' : undefined,
