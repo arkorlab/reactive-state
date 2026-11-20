@@ -23,7 +23,7 @@ import { INTRINSIC } from './imports.ts';
 import { checkParameterKinds } from './kinds.ts';
 import type { Modules } from './modules.ts';
 import { checkBrowserNode } from './reads.ts';
-import { declaredWithin, type Space, walk } from './scope.ts';
+import { bindingIdentifiers, declaredWithin, type Space, walk } from './scope.ts';
 import { functionOf } from './statements.ts';
 import { constantType, rewrittenType, startedType, type TypeScope } from './types.ts';
 import { collectWrites, type UpdaterSite, updaterId, type Writes } from './updaters.ts';
@@ -148,7 +148,9 @@ function scopeOf(input: HookInput): HookScope {
     (statement) => statement.declarationList.declarations,
   );
   for (const declaration of declarations) {
-    declaring.add(declaration.name);
+    for (const identifier of bindingIdentifiers(declaration.name)) {
+      declaring.add(identifier);
+    }
   }
   return { declared, declaring };
 }
