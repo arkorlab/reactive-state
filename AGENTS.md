@@ -191,3 +191,9 @@ Questions already answered. A change that would reverse one of these needs an is
 - Code made of text by a key the compile cannot read is held as the module took it; by a name it can
   read, it is refused (`code-globals.ts`).
 - A root's props reach the program through `frozenJson`, which writes them as JSON does.
+- The values an update's call captures are the page's to say, a prop's among them, as a `set`'s
+  value is. The authority runs the registered update of the field's current value and of those
+  values, and checks what it makes against the field; it neither computes the captured values again
+  nor signs them. A bound the server keeps is the field's, or a server operation's (`SECURITY.md`,
+  "What a write trusts the page with"). A finding that a page can send other captured values is
+  this decision, not a defect.
