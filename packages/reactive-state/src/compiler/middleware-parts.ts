@@ -17,7 +17,7 @@ import {
 } from 'typescript/ast';
 
 import { checkComputedOnce, checkContextDefaults } from './middleware-alike.ts';
-import { checkBeforeGuard } from './middleware-order.ts';
+import { checkBeforeGuard, checkResources } from './middleware-order.ts';
 import {
   contextReads,
   declaredBy,
@@ -409,6 +409,7 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
   if (split.index < 0) {
     return { after: undefined, before: undefined, guard: undefined };
   }
+  checkResources(statements.slice(0, split.index), names);
   const { classified, suffix } = sortedOf(assembling);
   const of = (role: Role): readonly Classified[] => classified.filter((each) => each.role === role);
   const [pure, guards, envelopes] = [of('pure'), of('guard'), of('envelope')];
