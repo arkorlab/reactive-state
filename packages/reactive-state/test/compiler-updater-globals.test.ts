@@ -898,6 +898,127 @@ describe('the imports of a program for the authority, beside the globals its upd
     });
   });
 
+  describe("an import's name is reused for an update only where the update holds none", () => {
+    /** A shared module of two constants, which a hook imports under another name than the first does. */
+    const DELTA = 'export const DELTA = 3;\nexport const OTHER = 7;\n';
+    const FIRST = hook('useA', 'current + DELTA', "import { DELTA } from '@/delta';");
+    const AS_STEP = "import { DELTA as STEP } from '@/delta';";
+    const CHILD_IMPORT = "import Child from '@/components/child.reactive';";
+
+    /** The program of a component with the hooks `useA` and `useB`, `useB` importing `DELTA as STEP`, updating by `update`. */
+    function reused(update: string, parameter = 'current', before = ''): ReturnType<typeof readOf> {
+      return readOf(
+        program({
+          'components/lab.reactive.tsx': lab({
+            hooks: ['useA', 'useB'],
+            update: '(current) => current',
+          }),
+          'delta.ts': DELTA,
+          'hooks/useA.ts': FIRST,
+          'hooks/useB.ts': hook('useB', update, AS_STEP, parameter).replace(
+            '  const [count',
+            () => `${before}  const [count`,
+          ),
+        }),
+      );
+    }
+
+    it.each([
+      {
+        id: 'a parameter named as the first import',
+        update: 'DELTA + STEP',
+        parameter: 'DELTA',
+        before: '',
+      },
+      {
+        id: 'a constant of a block body, declared as the first import is named',
+        update: '{ const DELTA = current * 2; return DELTA + STEP; }',
+        parameter: 'current',
+        before: '',
+      },
+      {
+        id: "a nested function's parameter",
+        update: 'current + [1, 2].map((DELTA) => DELTA + STEP).length',
+        parameter: 'current',
+        before: '',
+      },
+      {
+        id: 'a `catch` binding',
+        update: '{ try { return current + STEP; } catch (DELTA) { return STEP + Number(DELTA); } }',
+        parameter: 'current',
+        before: '',
+      },
+      {
+        id: 'a name the update captures of the hook',
+        update: 'current + DELTA + STEP',
+        parameter: 'current',
+        before: '  const DELTA = 5;\n',
+      },
+    ])('$id is not read as the import', ({ before, parameter, update }) => {
+      const { imports, updates } = reused(update, parameter, before);
+
+      expect(imports).toStrictEqual(["import { DELTA, DELTA as STEP } from '@/delta';"]);
+      expect(updates['useA#0.count']).toBe('current + DELTA');
+      expect(updates['useB#0.count']).toBe(update);
+    });
+
+    it("the name of the component's own import, which its server part reads, is not read as the import either", () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/child.reactive.tsx': CHILD,
+          'components/lab.reactive.tsx': lab({
+            hooks: ['useB'],
+            imports: `${CHILD_IMPORT}\nimport { DELTA } from '@/delta';`,
+            jsx: '      <Child n={probe} />\n',
+            server:
+              '  const todo = await db.todos.get(id);\n  const probe = DELTA + todo.estimate;\n',
+            update: '(current) => current',
+          }),
+          'delta.ts': DELTA,
+          'hooks/useB.ts': hook('useB', 'DELTA + STEP', AS_STEP, 'DELTA'),
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { DELTA, DELTA as STEP } from '@/delta';"]);
+      expect(updates['useB#0.count']).toBe('DELTA + STEP');
+    });
+
+    it('a destructured parameter is refused by the rule of an update, as it was', () => {
+      const message = refusalOf(() => reused('DELTA + STEP', '{ DELTA }: { DELTA: number }'));
+
+      expect(message).toContain('An update is a function of the current value alone');
+    });
+
+    it("an update that holds no such name reads the import under the first one's name, as it did", () => {
+      const { imports, updates } = reused('current + STEP');
+
+      expect(imports).toStrictEqual(["import { DELTA } from '@/delta';"]);
+      expect(updates['useB#0.count']).toBe('current + DELTA');
+    });
+
+    it('a name that is an alias an import is written under is not read as the import', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab({
+            hooks: ['useA', 'useB'],
+            update: '(current) => String(parseInt(current, 10))',
+          }),
+          'hooks/useA.ts': importing('useA', '@/numbers'),
+          'hooks/useB.ts': hook(
+            'useB',
+            'parseInt$2 + STEP(String(parseInt$2), 10)',
+            "import { parseInt as STEP } from '@/numbers';",
+            'parseInt$2',
+          ),
+          'numbers.ts': NUMBERS,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt as parseInt$3 } from '@/numbers';"]);
+      expect(updates['useB#0.count']).toBe('parseInt$2 + parseInt$3(String(parseInt$2), 10)');
+    });
+  });
+
   describe('what was named apart before stays so', () => {
     it('two hooks import different helpers under one name', () => {
       const { imports, updates } = readOf(

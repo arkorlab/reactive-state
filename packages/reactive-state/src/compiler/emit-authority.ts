@@ -27,7 +27,13 @@ import {
   textOf,
   unusedName,
 } from './splice.ts';
-import { OWN_NAMES, refuseShadowing, reservedNames, updateGlobals } from './update-globals.ts';
+import {
+  namesHeld,
+  OWN_NAMES,
+  refuseShadowing,
+  reservedNames,
+  updateGlobals,
+} from './update-globals.ts';
 import type { ApplySite, Registered } from './updaters.ts';
 
 /**
@@ -135,14 +141,21 @@ class ImportPlan {
     });
   }
 
-  /** An import with a name available in derived code, reused only for compatible type/value reads. */
-  #require(binding: ImportBinding, typeOnly: boolean): string {
+  /**
+   * An import with a name available in derived code, reused only for compatible type/value reads —
+   * and, for an update's, under another name than the update writes it by, where the update holds
+   * none (`held`): its own declaration of the name would take the read.
+   */
+  #require(binding: ImportBinding, typeOnly: boolean, held?: ReadonlySet<string>): string {
     const identity = identityOf(binding);
+    const own = binding.name.text;
     const existing = this.#lines.find((line) => {
+      const local = line.local ?? line.binding.name.text;
       return (
         (typeOnly || !line.typeOnly) &&
         identityOf(line.binding) === identity &&
-        this.#taken.get(line.local ?? line.binding.name.text) === identity
+        this.#taken.get(local) === identity &&
+        (held === undefined || local === own || !held.has(local))
       );
     });
     if (existing !== undefined) {
@@ -157,8 +170,8 @@ class ImportPlan {
   }
 
   /** The name the program reads `binding`, a shared module's import, by: its own, or another. */
-  require(binding: ImportBinding): string {
-    return this.#require(binding, false);
+  require(binding: ImportBinding, held?: ReadonlySet<string>): string {
+    return this.#require(binding, false, held);
   }
 
   /** The name the program reads `binding`, an import of a type a hook's module imports, by. */
@@ -545,8 +558,9 @@ function applyOf(site: ApplySite, key: string, lines: ImportPlan): string {
   const { update } = site;
   const type = site.type ?? `States[${literal(key)}]`;
   const renames = new Map<string, string>();
+  const held = namesHeld(update);
   for (const binding of update.imports) {
-    const local = lines.require(binding);
+    const local = lines.require(binding, held);
     if (local !== binding.name.text) {
       renames.set(binding.name.text, local);
     }

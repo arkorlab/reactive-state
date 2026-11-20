@@ -88,19 +88,34 @@ function globalsOf(update: ApplySite['update']): readonly string[] {
     .filter((name) => !own.has(name));
 }
 
-/** The names `update` reads as globals, and the identifiers it holds that an alias would equal. */
+/**
+ * Every name `update` holds, whatever it does with it — declares it as a parameter, a pattern, a
+ * constant, a function or a `catch` binding, at any depth, captures it, reads it, or names a
+ * property by it — and each name it captures.
+ */
+export function namesHeld(update: ApplySite['update']): ReadonlySet<string> {
+  const held = new Set(update.captures.map((capture) => capture.name));
+  const visit = (node: Node): void => {
+    if (isIdentifier(node)) {
+      held.add(node.text);
+    }
+    node.forEachChild(visit);
+  };
+  visit(update.fn);
+  return held;
+}
+
+/** The names `update` reads as globals, and the names it holds that an alias would equal. */
 function reserveUpdate(update: ApplySite['update'], reserved: Set<string>): void {
   const imported = new Set(update.imports.map((binding) => binding.name.text));
   for (const name of globalsOf(update)) {
     reserved.add(name);
   }
-  const visit = (node: Node): void => {
-    if (isIdentifier(node) && ALIAS.test(node.text) && !imported.has(node.text)) {
-      reserved.add(node.text);
+  for (const name of namesHeld(update)) {
+    if (ALIAS.test(name) && !imported.has(name)) {
+      reserved.add(name);
     }
-    node.forEachChild(visit);
-  };
-  visit(update.fn);
+  }
 }
 
 /** Each name an update reads as a global, with the keys the updates that read it write. */
