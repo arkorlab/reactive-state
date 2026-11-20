@@ -1,14 +1,21 @@
-import { declaredWithin, freeReads } from './scope.ts';
+import { isIdentifier, type Node } from 'typescript/ast';
+
+import { freeReads } from './scope.ts';
 import type { Registered } from './updaters.ts';
+
+/** The shape of an alias an import is written under (`unusedName`): its name and `$2`, `$3`… */
+const ALIAS = /\$\d+$/u;
 
 /**
  * The names a program may not give an import: `taken` — which it declares or reads as a global in a
- * site's function — the names its updates read as globals, each what the update reads that is none
- * of its own imports or captures, and the names its updates declare, a parameter's, a local's, a
- * function's, at any depth. The program writes each update as it is, so an import it writes for
- * another update, under a name an update reads as a global, would take the global from that update,
- * and under a name an update declares, an alias would be taken by the local of the update that
- * reads the import.
+ * site's function — and, of its updates, which it writes as they are:
+ *
+ * - each name an update reads as a global — what it reads that is none of its own imports or
+ *   captures — which an import of that name would take from it;
+ * - each identifier an update holds that is shaped as an alias is (`name$2`, `name$3`…), whether it
+ *   declares it, captures it, reads it or names a property by it, which the alias an import is
+ *   written under would equal, and the update would read as its own. An update's import under its
+ *   own name is the import's, and no alias.
  */
 export function reservedNames(
   taken: ReadonlySet<string>,
@@ -20,7 +27,8 @@ export function reservedNames(
       continue;
     }
     const { captures, fn, imports } = site.update;
-    const own = new Set(imports.map((binding) => binding.name.text));
+    const imported = new Set(imports.map((binding) => binding.name.text));
+    const own = new Set(imported);
     for (const capture of captures) {
       own.add(capture.name);
     }
@@ -29,9 +37,13 @@ export function reservedNames(
         reserved.add(read.text);
       }
     }
-    for (const name of declaredWithin(fn)) {
-      reserved.add(name);
-    }
+    const visit = (node: Node): void => {
+      if (isIdentifier(node) && ALIAS.test(node.text) && !imported.has(node.text)) {
+        reserved.add(node.text);
+      }
+      node.forEachChild(visit);
+    };
+    visit(fn);
   }
   return reserved;
 }

@@ -95,13 +95,14 @@ interface Parts {
   readonly hooks?: readonly string[];
   readonly update?: string;
   readonly more?: string;
+  readonly arguments?: string;
 }
 
 /** A component of a title of the database, and of the hooks of `parts`, each of an estimate. */
 function lab(parts: Parts = {}): string {
   const calls = (parts.hooks ?? ['useCount']).map(
     (name, index) =>
-      `  const [value${String(index)}, bump${String(index)}] = ${name}(ref.estimate);`,
+      `  const [value${String(index)}, bump${String(index)}] = ${name}(${parts.arguments ?? 'ref.estimate'});`,
   );
   const buttons = (parts.hooks ?? ['useCount']).map(
     (_, index) =>
@@ -455,6 +456,113 @@ describe('the imports of a program for the authority, beside the globals its upd
       expect(updates['useCount#0.count']).toBe(
         '{ const total = current + 1; return parseInt$2(String(total), 10); }',
       );
+    });
+  });
+
+  describe('an import is not named by a name an update writes that is shaped as an alias', () => {
+    /** A hook of a number it is given, `Number$2`, which its update captures, and of an import named `Number`. */
+    const CAPTURING = hook(
+      'useCount',
+      'current + Number$2 + Number(String(current))',
+      "import { Number } from '@/numbers';",
+    ).replace('(ref: FieldRef<number>)', () => '(ref: FieldRef<number>, Number$2: number)');
+
+    it('a name the update captures, beside a component that reads the global', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab({
+            arguments: 'ref.estimate, 5',
+            update: '(current) => String(Number(current) + 1)',
+          }),
+          'hooks/useCount.ts': CAPTURING,
+          'numbers.ts':
+            'export function Number(text: string): number {\n  return text.length;\n}\n',
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { Number as Number$3 } from '@/numbers';"]);
+      expect(updates['title']).toBe('String(Number(current) + 1)');
+      expect(updates['useCount#0.count']).toBe('current + Number$2 + Number$3(String(current))');
+    });
+
+    it('a property the update names, which the alias does not read', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab(),
+          'hooks/useCount.ts': hook(
+            'useCount',
+            '{ const box = { parseInt$2: current }; return parseInt(String(box.parseInt$2), 10); }',
+            "import { parseInt } from '@/numbers';",
+          ),
+          'numbers.ts': NUMBERS,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt as parseInt$3 } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe(
+        '{ const box = { parseInt$2: current }; return parseInt$3(String(box.parseInt$2), 10); }',
+      );
+    });
+
+    it('a name another update reads, which the alias would equal', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab({
+            hooks: ['useCount', 'useOther'],
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': importing('useCount', '@/numbers'),
+          'hooks/useOther.ts': hook(
+            'useOther',
+            'parseInt(String(current), 10) + parseInt$2',
+            "import { parseInt } from '@/other';",
+          ).replace('(ref: FieldRef<number>)', () => '(ref: FieldRef<number>, parseInt$2: number)'),
+          'numbers.ts': NUMBERS,
+          'other.ts': OTHER,
+        }),
+      );
+
+      expect(imports).toStrictEqual([
+        "import { parseInt } from '@/numbers';",
+        "import { parseInt as parseInt$3 } from '@/other';",
+      ]);
+      expect(updates['useOther#0.count']).toBe('parseInt$3(String(current), 10) + parseInt$2');
+    });
+
+    it("an update that declares a local of an import's own name leaves the import its name", () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab({
+            update: '(current) => { const widen = 1; return String(current + widen); }',
+          }),
+          'hooks/useCount.ts': hook(
+            'useCount',
+            'widen(String(current), 10)',
+            "import { parseInt as widen } from '@/numbers';",
+          ),
+          'numbers.ts': NUMBERS,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt as widen } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe('widen(String(current), 10)');
+    });
+
+    it('an import whose own name is shaped as an alias keeps it', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab(),
+          'hooks/useCount.ts': hook(
+            'useCount',
+            'step$2(String(current), 10)',
+            "import { parseInt as step$2 } from '@/numbers';",
+          ),
+          'numbers.ts': NUMBERS,
+        }),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt as step$2 } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe('step$2(String(current), 10)');
     });
   });
 
