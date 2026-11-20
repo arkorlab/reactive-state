@@ -7,14 +7,18 @@ import {
   isClassDeclaration,
   isEnumDeclaration,
   isExportDeclaration,
+  isFunctionDeclaration,
   isIdentifier,
   isImportDeclaration,
+  isImportEqualsDeclaration,
   isInterfaceDeclaration,
+  isModuleDeclaration,
   isNamedExports,
   isNamespaceImport,
   isQualifiedName,
   isStringLiteral,
   isTypeAliasDeclaration,
+  isVariableStatement,
   type Node,
   type SourceFile,
   type Statement,
@@ -213,13 +217,21 @@ function exportedOf(name: string, site: TypeSite, reading: TypeReading): Declare
   reading.exports.add(key);
   try {
     const { statements } = site.sourceFile;
+    let explicit = false;
     for (const statement of statements) {
-      const found = isStarExport(statement)
-        ? undefined
-        : exportedBy(statement, name, site, reading);
+      if (isStarExport(statement)) {
+        continue;
+      }
+      const found = exportedBy(statement, name, site, reading);
       if (found !== undefined) {
         return found;
       }
+      explicit ||= exportsName(statement, name);
+    }
+    // A name the file exports itself hides the star's, as what it exports it as: a class, a
+    // package's type — which the reader cannot read, and which `export *` does not stand in for.
+    if (explicit) {
+      return undefined;
     }
     // What `export *` re-exports, where the file exports no such name of its own — none where two
     // of them re-export the name of what are not one declaration, which no import of it reads.
@@ -236,6 +248,43 @@ function exportedOf(name: string, site: TypeSite, reading: TypeReading): Declare
   } finally {
     reading.exports.delete(key);
   }
+}
+
+/**
+ * Whether `statement` exports `name` as a declaration or a list does, of what it declares or
+ * re-exports, read or not: a class, a function, a constant, a namespace, `export { … }`.
+ */
+function exportsName(statement: Statement, name: string): boolean {
+  if (isExportDeclaration(statement)) {
+    const clause = statement.exportClause;
+    return (
+      clause !== undefined &&
+      (isNamedExports(clause)
+        ? clause.elements.some((each) => each.name.text === name)
+        : clause.name.text === name)
+    );
+  }
+  const modifiers = (statement as { readonly modifiers?: readonly Node[] }).modifiers;
+  const exported = modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
+  const isDefault = modifiers?.some((each) => each.kind === SyntaxKind.DefaultKeyword) === true;
+  if (!exported || isDefault) {
+    return false;
+  }
+  if (isVariableStatement(statement)) {
+    return statement.declarationList.declarations.some(
+      (each) => isIdentifier(each.name) && each.name.text === name,
+    );
+  }
+  return (
+    (isClassDeclaration(statement) ||
+      isEnumDeclaration(statement) ||
+      isFunctionDeclaration(statement) ||
+      isImportEqualsDeclaration(statement) ||
+      isInterfaceDeclaration(statement) ||
+      isModuleDeclaration(statement) ||
+      isTypeAliasDeclaration(statement)) &&
+    statement.name?.text === name
+  );
 }
 
 /** Whether `statement` is `export * from '…'`, which re-exports what another file exports. */
