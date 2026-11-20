@@ -30,7 +30,12 @@ describe("the schema's digest of a temporary view's options", () => {
 
   /** The digest of the schema as the session reads it now, asked anew. */
   async function digestNow(): Promise<string> {
-    return (await new SchemaDigest(pg, RELATIONS).read(true)).digest;
+    const { digest } = await new SchemaDigest(pg, RELATIONS).read(true);
+    // The answer of a read that failed (which it reports, and does not throw) is no digest.
+
+    expect(digest).not.toMatch(/^unread-/u);
+
+    return digest;
   }
 
   it.each([

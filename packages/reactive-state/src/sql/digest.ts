@@ -21,12 +21,26 @@ export interface Queryable {
  * application's, of the search path and the schemas it resolves to, and of the role the store reads
  * as, by name. It holds what the role the store reads as may read and run besides — of the
  * application's relations, functions, types and schemas, and the roles whose rights it has, which a
- * policy's `TO` names — but not a grant of another's. A table altered, a view or a function defined again, an enum's label renamed, a policy
- * made, a role granted changes it. Nothing a write of rows changes is of it — a refreshed view,
- * statistics; a truncation too, where an event trigger counts the schema's commands — so a change
- * of it is a change of the schema alone. It is read at most once a `DIGEST.everyMs`, so that a page
- * read of the log, each of a turn's and each an operation asks, costs the database no more than it
- * did.
+ * policy's `TO` names — but not a grant of another's. A table altered, a view or a function
+ * defined again, an enum's label renamed, a policy made, a role granted changes it. Nothing a write
+ * of rows changes is of it — a refreshed view, statistics; a truncation too, where an event trigger
+ * counts the schema's commands — so a change of it is a change of the schema alone. It is read at
+ * most once a `DIGEST.everyMs`, so that a page read of the log, each of a turn's and each an
+ * operation asks, costs the database no more than it did.
+ *
+ * Whose rights a statement reads under is held of the roles that read: the session's, and the owner
+ * of each view of the application's or of the session's temporary schema that is no
+ * `security_invoker`, each by its rights, its attributes and every role it is a member of; and of
+ * each table its owner and its policies. Three things that decide which rows a statement reads are
+ * not held, and each for a reason that is no size of the change:
+ *
+ * - what a `SECURITY DEFINER` function reads, and the rights of its owner with it: a plan names no
+ *   table a function reads in its body (`plans.ts`), so nothing it reads is followed either;
+ * - a membership of a role that does not read, which a policy may ask of
+ *   (`pg_has_role(owner_name, …)`): holding every membership would move the digest for each role
+ *   an application makes of one of its users;
+ * - a setting of the session that a policy or a view reads (`current_setting('app.user')`), which
+ *   no list of names could hold.
  */
 
 /** How often the schema's digest is read again, at most. */
@@ -76,11 +90,12 @@ function rowsOf(catalog: string, column: string, oid: string, order: string): st
 
 /**
  * The roles a statement reads as, as `"readers"`: the session's, and the owner of each view of the
- * application's, whose rights a view that is no `security_invoker` reads its tables by, and whose
- * policies of them it reads by. `own` says which schemas are the application's.
+ * application's and of the session's temporary schema, whose rights a view that is no
+ * `security_invoker` reads its tables by, and whose policies of them it reads by. `own` says which
+ * schemas are the application's.
  */
 function readersSql(own: string): string {
-  return `"readers" AS MATERIALIZED (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = current_user UNION SELECT c.relowner FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${own})`;
+  return `"readers" AS MATERIALIZED (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = current_user UNION SELECT c.relowner FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND (${own} OR c.relnamespace = pg_my_temp_schema()))`;
 }
 
 /** Of each role a statement reads as (`readersSql`), by its oid `r.oid`, what `answers` answers. */
