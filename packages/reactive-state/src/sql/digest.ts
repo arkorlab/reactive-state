@@ -76,11 +76,12 @@ function rowsOf(catalog: string, column: string, oid: string, order: string): st
 
 /**
  * The roles a statement reads as, as `"readers"`: the session's, and the owner of each view of the
- * application's, whose rights a view that is no `security_invoker` reads its tables by, and whose
- * policies of them it reads by. `own` says which schemas are the application's.
+ * application's and of the session's temporary schema, whose rights a view that is no
+ * `security_invoker` reads its tables by, and whose policies of them it reads by. `own` says which
+ * schemas are the application's.
  */
 function readersSql(own: string): string {
-  return `"readers" AS MATERIALIZED (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = current_user UNION SELECT c.relowner FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${own})`;
+  return `"readers" AS MATERIALIZED (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = current_user UNION SELECT c.relowner FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND (${own} OR c.relnamespace = pg_my_temp_schema()))`;
 }
 
 /** Of each role a statement reads as (`readersSql`), by its oid `r.oid`, what `answers` answers. */
