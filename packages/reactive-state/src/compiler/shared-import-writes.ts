@@ -1,78 +1,44 @@
 import {
-  type CallExpression,
   type Expression,
   type Identifier,
-  isBinaryExpression,
-  isCallExpression,
-  isDeleteExpression,
+  isAsExpression,
   isElementAccessExpression,
   isNonNullExpression,
   isParenthesizedExpression,
-  isPostfixUnaryExpression,
-  isPrefixUnaryExpression,
   isPropertyAccessExpression,
-  SyntaxKind,
+  isSatisfiesExpression,
+  type Node,
 } from 'typescript/ast';
 
-import { globalOf, literalName, unwrapped } from './bounded.ts';
-import { INCREMENTS, MUTATORS, OBJECT_MUTATORS } from './computed.ts';
+import { writtenBy } from './written.ts';
 
 /**
  * Whether `identifier`, an import of a shared module's, is written where it stands: itself or a
- * member of it assigned, incremented or deleted, a method of the language's arrays that changes what
- * it is called on called on it, or it the target of `Object.assign` and its kin. Not one it is handed
- * to a call, or copies: what a function does with an argument is that function's, and a copy is the
- * code's own.
+ * member of it written as `writtenBy` reads a write — assigned, counted, deleted, the target of a
+ * loop of no declaration, changed in place by a method that changes what it is called on, or given
+ * first to a function of a global's that changes what it is given. A cast, a parenthesis or a `!`
+ * around it, or around a member of it, is the same value. Not one it is handed to a function of the
+ * application's, or copies: what a function does with an argument is that function's, and a copy is
+ * the code's own.
  */
 export function isWrittenAt(identifier: Identifier): boolean {
-  const node = outermost(identifier);
-  const { parent } = node;
-  if (isBinaryExpression(parent)) {
-    const operator = parent.operatorToken.kind;
-    return (
-      parent.left === node &&
-      operator >= SyntaxKind.FirstAssignment &&
-      operator <= SyntaxKind.LastAssignment
-    );
-  }
-  if (isPrefixUnaryExpression(parent) || isPostfixUnaryExpression(parent)) {
-    return INCREMENTS.has(parent.operator);
-  }
-  if (isDeleteExpression(parent)) {
-    return true;
-  }
-  return isCallExpression(parent) && isChangedBy(parent, node);
-}
-
-/** The expression `identifier` is the root of, through the members and the wrappers around it. */
-function outermost(identifier: Identifier): Expression {
+  const rooted = new Set<Node>();
   let node: Expression = identifier;
   for (;;) {
+    rooted.add(node);
     const { parent } = node;
     if (
       isParenthesizedExpression(parent) ||
       isNonNullExpression(parent) ||
+      isAsExpression(parent) ||
+      isSatisfiesExpression(parent) ||
       ((isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
         parent.expression === node)
     ) {
       node = parent;
     } else {
-      return node;
+      const written = writtenBy(parent);
+      return written !== undefined && rooted.has(written);
     }
   }
-}
-
-/** Whether `call` changes `node`: a method of arrays called on it, or `Object.assign` of it. */
-function isChangedBy(call: CallExpression, node: Expression): boolean {
-  const callee = unwrapped(call.expression);
-  if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) {
-    return false;
-  }
-  const name = isPropertyAccessExpression(callee) ? callee.name.text : literalName(callee);
-  if (name === undefined) {
-    return false;
-  }
-  return globalOf(unwrapped(callee.expression)) === 'Object'
-    ? OBJECT_MUTATORS.has(name) && call.arguments[0] === node
-    : MUTATORS.has(name) && callee === unwrapped(node);
 }

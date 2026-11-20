@@ -129,6 +129,55 @@ describe('a server part that writes an export of a shared module', () => {
     expect(reason).toContain(`\`defaults\` is \`${SHARED_MODULE}\`'s`);
   });
 
+  it.each([
+    {
+      id: 'a cast before a member assigned',
+      body: '(defaults as { value: number }).value = first;',
+    },
+    { id: 'a cast of a member before a push', body: '(defaults.items as number[]).push(first);' },
+    {
+      id: 'a satisfies before a member assigned',
+      body: '(defaults satisfies { value: number }).value = first;',
+    },
+    {
+      id: 'a satisfies of a member before a sort',
+      body: '(defaults.items satisfies number[]).sort();',
+    },
+    {
+      id: 'a cast as the target of Object.assign',
+      body: 'Object.assign(defaults as object, { first });',
+    },
+    {
+      id: 'two casts before an increment',
+      body: '(defaults as unknown as { value: number }).value++;',
+    },
+  ])('refuses a write through a type assertion: $id', ({ body }) => {
+    const reason = reasonOf(sourceOf(body, VIEW), 'authority');
+
+    expect(reason).toContain(SAYS);
+    expect(reason).toContain(`\`defaults\` is \`${SHARED_MODULE}\`'s`);
+  });
+
+  it.each([
+    { id: 'a Map set', body: "defaults.set('title', first);" },
+    { id: 'a Set add', body: 'defaults.add(first);' },
+    { id: 'a Map delete', body: 'defaults.delete(first);' },
+    { id: 'a Map clear', body: 'defaults.clear();' },
+    { id: 'a date setter of a member', body: 'defaults.at.setTime(first);' },
+    {
+      id: 'an append to search parameters',
+      body: "defaults.params.append('page', String(first));",
+    },
+    { id: 'Reflect.set', body: "Reflect.set(defaults, 'value', first);" },
+    { id: 'a push borrowed with call', body: 'defaults.items.push.call(defaults.items, first);' },
+    { id: 'a loop that writes a member', body: 'for (defaults.value of [first]) {}' },
+    { id: 'Object.freeze', body: 'Object.freeze(defaults);' },
+  ])('refuses a method or a function that changes what it is given: $id', ({ body }) => {
+    const reason = reasonOf(sourceOf(body, VIEW), 'authority');
+
+    expect(reason).toContain(SAYS);
+  });
+
   it('says what to write instead', () => {
     expect(reasonOf(sourceOf('defaults.value = first;', VIEW), 'authority')).toContain(
       'Copy it — `const mine = { ...defaults }` — and write the copy, or keep the value in a state.',
@@ -160,6 +209,28 @@ describe('a server part that writes an export of a shared module', () => {
       body: 'const own = { value: first };\nown.value = 2;',
     },
   ])('takes $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+  });
+
+  it.each([
+    { id: 'a Map get', body: 'const found = defaults.get(first);' },
+    { id: 'a Map has', body: 'const found = defaults.has(first);' },
+    {
+      id: 'the entries of a Map spread into an array',
+      body: 'const rows = [...defaults.entries()];',
+    },
+    { id: 'a copy of a Map that is set', body: "new Map(defaults).set('title', first);" },
+    {
+      id: 'a structured clone that is pushed to',
+      body: 'structuredClone(defaults).items.push(first);',
+    },
+    {
+      id: 'a member read through a cast',
+      body: 'const shown = (defaults as { value: number }).value;',
+    },
+    { id: 'a member searched', body: 'const found = defaults.items.includes(first);' },
+    { id: 'a member looped over', body: 'for (const item of defaults.items) { String(item); }' },
+  ])('takes what only reads it, through a cast or not: $id', ({ body }) => {
     expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
   });
 
