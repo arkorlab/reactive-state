@@ -67,8 +67,9 @@ export interface NonJsonPart {
 }
 
 /**
- * The aliases, interfaces and type parameters a walk has met, by what they are read as: an object's
- * entry, which JSON leaves `undefined` out of, or an array's element, which it does not.
+ * The aliases, interfaces, type parameters and indexed accesses a walk has met, by what they are
+ * read as: an object's entry, which JSON leaves `undefined` out of, or an array's element, which it
+ * does not.
  */
 interface Reads {
   readonly elements: Set<Node>;
@@ -207,8 +208,8 @@ function leafPart(node: TypeNode, entry: boolean): NonJsonPart | undefined {
 
 /**
  * What a type of another admits: `readonly T[]`, as its array; `T['key']`, as the member `key` of
- * `T` — `undefined` too, of one that may be left out; `unique symbol`, a symbol; and `keyof T`, of
- * symbols too, what the compile cannot read.
+ * `T` — `undefined` too, of one that may be left out, and read once where its own type names it
+ * again; `unique symbol`, a symbol; and `keyof T`, of symbols too, what the compile cannot read.
  */
 function derivedPart(
   node: IndexedAccessTypeNode | TypeOperatorNode,
@@ -229,12 +230,14 @@ function derivedPart(
       : undefined;
   const member =
     key === undefined ? undefined : memberOf(node.objectType, key, walk.at, walk.reading);
-  if (member?.type === undefined) {
+  const written = member?.type;
+  if (member === undefined || written === undefined) {
     return admitting(node, UNTOLD);
   }
+  // `S['x']` of `{ x: { y: S['x'] } }`: read once, as a type of itself is.
   return !entry && member.optional
     ? admitting(node, ELEMENT)
-    : partOf(member.type, { ...walk, at: member.at }, entry);
+    : walked(node, walk, entry, () => partOf(written, { ...walk, at: member.at }, entry));
 }
 
 /** What a tuple's element admits: one that may be left out, `undefined` in its place too. */
@@ -435,9 +438,9 @@ function reads(): Reads {
  * the same. A read that a declaration under way cut short is kept too: whoever began that one reads
  * it to the end before the walk answers. What a declaration answers depends on it and on `entry`
  * alone — the site its names are read at is its file's, and what the reading holds is the walk's —
- * so an alias and a type parameter are kept by both; an object's members are read as entries
- * whatever it is read as, so an interface and what the language makes of an object are kept by
- * `true`.
+ * so an alias, a type parameter and an indexed access are kept by both; an object's members are
+ * read as entries whatever it is read as, so an interface and what the language makes of an object
+ * are kept by `true`.
  */
 function walked(
   declaration: Node,
