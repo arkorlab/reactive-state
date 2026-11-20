@@ -59,6 +59,7 @@ import {
   carriesDatedExpr,
   collectCallArgDatedSlots,
 } from './render-tag-date-calls.ts';
+import { isSafeGlobalCall, isSafeGlobalConstructor } from './render-tag-date-native-globals.ts';
 
 /** Detects native text coercions and local-time Date reads inside custom template tag bodies. */
 
@@ -69,25 +70,7 @@ const STRING_ONLY_LOCALE_METHODS: ReadonlySet<string> = new Set([
 ]);
 const STRINGS: ReadonlySet<string> = new Set(['String']);
 const RAW_TAGS: ReadonlySet<string> = new Set(['String.raw']);
-const SAFE_GLOBAL_CALLS: ReadonlySet<string> = new Set([
-  'Array',
-  'Array.from',
-  'Array.isArray',
-  'Array.of',
-  'Boolean',
-  'Date',
-  'Date.UTC',
-  'isFinite',
-  'isNaN',
-  'JSON.stringify',
-  'Number',
-  'Number.isFinite',
-  'Number.isNaN',
-  'Object.is',
-  'Object.prototype.toString',
-  'String.fromCharCode',
-  'String.fromCodePoint',
-]);
+
 /** String methods that convert their first argument, the text they search for or split by, to text. */
 const SEARCH_METHODS: ReadonlySet<string> = new Set([
   'endsWith',
@@ -191,6 +174,10 @@ function constructedStringCoerces(
   context: WrapperCoerceContext,
 ): boolean {
   const args = node.arguments ?? [];
+  const path = globalPathOf(unwrapped(node.expression))?.join('.');
+  if (path !== undefined && path !== 'String' && !isSafeGlobalConstructor(path)) {
+    return anyCallArgCarriesDated({ elements: args, kind: 'elements' }, context);
+  }
   if (args.length === 0 || !argElementsSlotCarriesDated(args, 0, context)) return false;
   return context.query.maySelectTag(node.expression, {
     datedIndices: new Set([0]),
@@ -492,6 +479,8 @@ function externalCallbackCoerces(
 function helperCallCoerces(unpacked: UnwrappedCall, context: WrapperCoerceContext): boolean {
   const target = unwrapped(unpacked.target);
   if (isSkippedHelperTarget(target, unpacked.receiver, context)) return false;
+  // A native function of the globals the walk cannot read, handed a Date, writes it as text or a key.
+  if (globalPathOf(target) !== undefined) return anyCallArgCarriesDated(unpacked.args, context);
   if (unpacked.args.kind === 'whole-arguments') {
     if (context.query.datedIndices.size === 0) return false;
     const shifted = shiftIndices(context.query.datedIndices, context.bindings.paramOffset);
@@ -533,9 +522,6 @@ function isSkippedHelperTarget(
 ): boolean {
   if (framedNativeConstructor(target, RAW_TAGS)) return true;
   const path = globalPathOf(target)?.join('.');
-  if (path !== undefined) {
-    if (path === 'String.raw' || SAFE_GLOBAL_CALLS.has(path)) return true;
-    if (path.startsWith('Math.') || path.startsWith('Date.prototype.')) return true;
-  }
+  if (path !== undefined && (path === 'String.raw' || isSafeGlobalCall(path))) return true;
   return receiver !== undefined && carriesDatedExpr(receiver, context);
 }
