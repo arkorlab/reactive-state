@@ -423,6 +423,26 @@ describe('a server part that writes an export of a shared module', () => {
     expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
   });
 
+  describe('a pattern of two hundred targets', () => {
+    const SIZE = 200;
+    const names = Array.from({ length: SIZE }, (_, at) => `own${at}`);
+    const declared = `let ${names.join(', ')};`;
+    const reads = Array.from({ length: SIZE }, (_, at) => `defaults.field${at}`).join(', ');
+
+    it('takes the import read for each of them', () => {
+      const body = `${declared}\n[${names.join(', ')}] = [${reads}];`;
+
+      expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+    });
+
+    it('refuses the import as the last of them', () => {
+      const targets = [...names.slice(0, SIZE - 1), 'defaults.last'];
+      const body = `${declared}\n[${targets.join(', ')}] = [${reads}];`;
+
+      expect(reasonOf(sourceOf(body, VIEW), 'authority')).toContain(SAYS);
+    });
+  });
+
   it('takes a write the browser runs, which has a copy of its own', () => {
     const jsx = [
       '<button type="button" onClick={() => { defaults.value = 1; setValue(value + 1); }}>',

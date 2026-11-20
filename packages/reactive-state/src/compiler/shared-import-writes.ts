@@ -8,7 +8,6 @@ import {
   isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
-  isExpression,
   isNonNullExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
@@ -36,7 +35,7 @@ import { writtenArgumentBy, writtenBy } from './written.ts';
  * it, `math.items.push(x)`, `math.total = 1`, stays one.
  */
 export function isWrittenAt(identifier: Identifier): boolean {
-  const rooted = new Set<Node>();
+  const rooted = new Set<Expression>();
   let node: Expression = identifier;
   for (;;) {
     rooted.add(node);
@@ -58,14 +57,11 @@ export function isWrittenAt(identifier: Identifier): boolean {
   }
   const namespace = namesNamespace(identifier);
   for (let each = node.parent; !isSourceFile(each); each = each.parent) {
-    const found = writtenIn(each).some((target) => {
-      return (
-        rooted.has(target) &&
-        !(namespace && isExpression(target) && unwrapped(target) === identifier)
-      );
-    });
-    if (found) {
-      return true;
+    const targets = writtenIn(each);
+    for (const target of rooted) {
+      if (targets.has(target) && !(namespace && unwrapped(target) === identifier)) {
+        return true;
+      }
     }
   }
   return false;
@@ -92,6 +88,21 @@ function picks(parent: Node, node: Node): parent is BinaryExpression | Condition
   );
 }
 
+/** What each node writes into, which every occurrence of an import below it asks of it again. */
+const WRITES = new WeakMap<Node, ReadonlySet<Node>>();
+const NONE: ReadonlySet<Node> = new Set();
+
+/** What `node` writes into (`targetsWrittenBy`), the same set for each question of it. */
+function writtenIn(node: Node): ReadonlySet<Node> {
+  let found = WRITES.get(node);
+  if (found === undefined) {
+    const targets = targetsWrittenBy(node);
+    found = targets.length === 0 ? NONE : new Set(targets);
+    WRITES.set(node, found);
+  }
+  return found;
+}
+
 /**
  * What `node` writes into, each: what `writtenBy` names, of an assignment or a loop each target of
  * the pattern it writes (`targetsOf`); of a call its receiver or first argument as it is, no
@@ -99,7 +110,7 @@ function picks(parent: Node, node: Node): parent is BinaryExpression | Condition
  * names beside it — the event a dispatch is given, the buffers a structured clone's transfer list
  * detaches (`structuredClone(value, { transfer: [defaults.buffer] })`).
  */
-function writtenIn(node: Node): readonly Node[] {
+function targetsWrittenBy(node: Node): readonly Node[] {
   const written = writtenBy(node);
   if (isCallExpression(node)) {
     return written === undefined ? writtenArgumentBy(node) : [written, ...writtenArgumentBy(node)];
