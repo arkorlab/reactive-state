@@ -185,6 +185,11 @@ export function dateText(node: Node): string | undefined {
     : undefined;
 }
 
+/** Whether `node` names or constructs a local `Date` value directly or via typed/initialized aliases. */
+export function isDateValue(node: Expression): boolean {
+  return isDate(unwrapped(node), new Set());
+}
+
 /** What `node` writes as text where it writes it so: `toString`'s receiver, `String`'s argument, an operand. */
 function datedOf(node: Node): Expression | undefined {
   const receiver = toStringReceiver(node);
