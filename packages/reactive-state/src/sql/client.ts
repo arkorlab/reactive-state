@@ -95,14 +95,22 @@ class Plans {
   }
 
   /**
-   * A fault for a partitioned table or a partition: a plan names the partitions of a table it reads,
-   * and a write to the table is logged as the table's, so a render that reads it would not be told
-   * of a write, whichever of them the schema declares.
+   * A fault for a partitioned table or a partition, and for a table that inherits from another: a
+   * plan names the partitions of a table it reads, and a write to the table is logged as the
+   * table's; a write through a table's parent changes its rows and is logged as the parent's. A
+   * render that reads one would not be told of such a write, whichever of the tables the schema
+   * declares.
    */
-  #refusePartitioned(relation: Relation): void {
-    if (this.#catalog?.partitioned?.has(relationKey(relation)) === true) {
+  #refuseUnfollowable(relation: Relation): void {
+    const key = relationKey(relation);
+    if (this.#catalog?.partitioned?.has(key) === true) {
       throw new Error(
-        `A render read ${relationKey(relation)}, a partitioned table or a partition of one: reactive-state does not follow partitioned tables, so read it outside the render.`,
+        `A render read ${key}, a partitioned table or a partition of one: reactive-state does not follow partitioned tables, so read it outside the render.`,
+      );
+    }
+    if (this.#catalog?.inherited?.has(key) === true) {
+      throw new Error(
+        `A render read ${key}, a table that inherits from another: reactive-state does not follow inheritance, so read it outside the render.`,
       );
     }
   }
@@ -134,7 +142,7 @@ class Plans {
       );
     }
     for (const relation of plan.relations) {
-      this.#refusePartitioned(relation);
+      this.#refuseUnfollowable(relation);
       this.#tableOf(relation);
     }
     // A statement that names a table's columns otherwise: its plan's names may be other columns'.
