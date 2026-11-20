@@ -3,16 +3,20 @@ import {
   type ConditionalExpression,
   type Expression,
   type Identifier,
+  isArrayLiteralExpression,
   isAsExpression,
   isBinaryExpression,
   isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
   isNonNullExpression,
+  isObjectLiteralExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
+  isPropertyAssignment,
   isSatisfiesExpression,
-  isSourceFile,
+  isSpreadAssignment,
+  isSpreadElement,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -42,10 +46,7 @@ export function isWrittenAt(identifier: Identifier): boolean {
     const { parent } = node;
     if (
       !(
-        isParenthesizedExpression(parent) ||
-        isNonNullExpression(parent) ||
-        isAsExpression(parent) ||
-        isSatisfiesExpression(parent) ||
+        isWrapper(parent) ||
         ((isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
           parent.expression === node) ||
         picks(parent, node)
@@ -56,15 +57,46 @@ export function isWrittenAt(identifier: Identifier): boolean {
     node = parent;
   }
   const namespace = namesNamespace(identifier);
-  for (let each = node.parent; !isSourceFile(each); each = each.parent) {
+  for (let below: Node = node, each = node.parent; ; below = each, each = each.parent) {
     const targets = writtenIn(each);
     for (const target of rooted) {
       if (targets.has(target) && !(namespace && unwrapped(target) === identifier)) {
         return true;
       }
     }
+    if (!holds(each, below)) {
+      return false;
+    }
   }
-  return false;
+}
+
+/**
+ * Whether `parent`, a node `node` is below, still holds the import's own reference: a cast, a
+ * parenthesis or a `!` around it, the element of an array or the value of an entry of an object
+ * the code writes, a spread there, a value that picks it. What it may be written through is the
+ * node that holds it so, and the one above: an assignment, a count, a `delete`, a call, a loop's
+ * head. A sum, a comparison, a template, a condition's test, a function, a statement hold none.
+ */
+function holds(parent: Node, node: Node): boolean {
+  return (
+    isWrapper(parent) ||
+    isArrayLiteralExpression(parent) ||
+    isObjectLiteralExpression(parent) ||
+    (isPropertyAssignment(parent) && parent.initializer === node) ||
+    isSpreadElement(parent) ||
+    isSpreadAssignment(parent) ||
+    picks(parent, node)
+  );
+}
+
+/** Whether `node` is a parenthesis, a cast or a `!` around another expression: the same value. */
+function isWrapper(node: Node): node is Expression {
+  return (
+    isParenthesizedExpression(node) ||
+    isNonNullExpression(node) ||
+    isAsExpression(node) ||
+    isSatisfiesExpression(node)
+  );
 }
 
 /**

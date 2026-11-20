@@ -443,6 +443,41 @@ describe('a server part that writes an export of a shared module', () => {
     });
   });
 
+  describe('a sum of five hundred reads of the import', () => {
+    const sum = Array.from({ length: 500 }, (_, at) => `defaults.field${at}`).join(' + ');
+
+    it('takes it', () => {
+      expect(reasonOf(sourceOf(`const total = ${sum};`, VIEW), 'authority')).toBeUndefined();
+    });
+
+    it('refuses a write of the import beside it', () => {
+      const body = `const total = ${sum};\ndefaults.total = total;`;
+
+      expect(reasonOf(sourceOf(body, VIEW), 'authority')).toContain(SAYS);
+    });
+  });
+
+  it.each([
+    {
+      id: 'a pattern in an argument',
+      body: 'const copy = structuredClone(first, { transfer: [...defaults.buffers] });',
+    },
+    {
+      id: 'a transfer list within a spread of options',
+      body: 'const copy = structuredClone(first, { ...{ transfer: [defaults.buffer] } });',
+    },
+    {
+      id: 'a target of a pattern within a pattern with a default',
+      body: '[[defaults.value] = []] = [[first]];',
+    },
+    {
+      id: 'a target in an object pattern with a default',
+      body: '({ a: defaults.value = 0 } = { a: first });',
+    },
+  ])('refuses a write that reaches the import through literals and spreads: $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toContain(SAYS);
+  });
+
   it('takes a write the browser runs, which has a copy of its own', () => {
     const jsx = [
       '<button type="button" onClick={() => { defaults.value = 1; setValue(value + 1); }}>',
