@@ -29,6 +29,7 @@ import { type ImportBinding, INTRINSIC } from './imports.ts';
 import type { ModuleKind, Modules } from './modules.ts';
 import { checkRunTimeImport, checkServerNode } from './prefix.ts';
 import { type Space, type Visitor, withinFunction } from './scope.ts';
+import { isWrittenAt } from './shared-import-writes.ts';
 import type { ReactiveElement, Slot } from './slots.ts';
 import { functionOf } from './statements.ts';
 
@@ -244,6 +245,12 @@ function authorityImport(
       break;
     }
     case 'shared': {
+      if (isWrittenAt(identifier)) {
+        state.fail(
+          `\`${identifier.text}\` is \`${module.specifier}\`'s, a shared module of the application's, and the authority runs this code in its own copy of the module, which every session shares: a write here stays for the next render of any. Copy it — \`const mine = { ...${identifier.text} }\` — and write the copy, or keep the value in a state.`,
+          identifier,
+        );
+      }
       state.authority.add(identifier, 'value');
       break;
     }
