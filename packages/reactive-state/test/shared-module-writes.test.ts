@@ -26,10 +26,10 @@ const SAYS =
   "a shared module of the application's, and the authority runs this code in its own copy";
 
 /** A component whose server part is `body`, and whose JSX is `jsx`, which the browser runs. */
-function sourceOf(body: string, jsx: string): string {
+function sourceOf(body: string, jsx: string, imported = '{ defaults, helper }'): string {
   return [
     "import { useReactiveState } from 'framework/react';",
-    `import { defaults, helper } from '${SHARED_MODULE}';`,
+    `import ${imported} from '${SHARED_MODULE}';`,
     "import { loadInto } from '@/lib/load';",
     '',
     'export default function Lab({ first }: { first: number }) {',
@@ -232,6 +232,40 @@ describe('a server part that writes an export of a shared module', () => {
     { id: 'a member looped over', body: 'for (const item of defaults.items) { String(item); }' },
   ])('takes what only reads it, through a cast or not: $id', ({ body }) => {
     expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+  });
+
+  it.each([
+    { id: 'add', body: 'const sum = defaults.add(1, 2);' },
+    { id: 'set', body: "const stored = defaults.set('title', first);" },
+    { id: 'delete', body: 'const gone = defaults.delete(first);' },
+    { id: 'clear', body: 'const cleared = defaults.clear();' },
+    { id: 'append', body: 'const added = defaults.append(first);' },
+    { id: 'push', body: 'const pushed = defaults.push(first);' },
+    { id: 'sort', body: 'const sorted = defaults.sort();' },
+    { id: 'a receiver in parentheses', body: 'const sum = (defaults).add(1, 2);' },
+    { id: 'a receiver with a non-null assertion', body: 'const sum = defaults!.add(1, 2);' },
+    { id: 'a receiver cast', body: 'const sum = (defaults as typeof defaults).add(1, 2);' },
+    { id: 'a name in brackets', body: "const sum = defaults['add'](1, 2);" },
+  ])('takes a call of an export of a namespace import, $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW, '* as defaults'), 'authority')).toBeUndefined();
+  });
+
+  it.each([
+    { id: 'a push to a member', body: 'defaults.items.push(first);' },
+    { id: 'a sort of a member', body: 'defaults.items.sort();' },
+    { id: 'a set of a member', body: "defaults.registry.set('title', first);" },
+    { id: 'an increment of a member of a member', body: 'defaults.config.count++;' },
+    { id: 'an assignment to a member of a member', body: 'defaults.total.value = first;' },
+    { id: 'Object.assign into a member', body: 'Object.assign(defaults.config, { first });' },
+    { id: 'an increment of a member', body: 'defaults.count++;' },
+    { id: 'an assignment to a member', body: 'defaults.count = first;' },
+    { id: 'a delete of a member', body: 'delete defaults.config;' },
+    { id: 'a push to a member through a cast', body: '(defaults.items as number[]).push(first);' },
+  ])('refuses a write of a member of a namespace import: $id', ({ body }) => {
+    const reason = reasonOf(sourceOf(body, VIEW, '* as defaults'), 'authority');
+
+    expect(reason).toContain(SAYS);
+    expect(reason).toContain(`\`defaults\` is \`${SHARED_MODULE}\`'s`);
   });
 
   it('takes a write the browser runs, which has a copy of its own', () => {

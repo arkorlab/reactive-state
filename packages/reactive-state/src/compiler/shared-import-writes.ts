@@ -3,6 +3,7 @@ import {
   type Identifier,
   isAsExpression,
   isElementAccessExpression,
+  isExpression,
   isNonNullExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
@@ -10,6 +11,7 @@ import {
   type Node,
 } from 'typescript/ast';
 
+import { namesNamespace, unwrapped } from './bounded.ts';
 import { writtenBy } from './written.ts';
 
 /**
@@ -19,7 +21,10 @@ import { writtenBy } from './written.ts';
  * first to a function of a global's that changes what it is given. A cast, a parenthesis or a `!`
  * around it, or around a member of it, is the same value. Not one it is handed to a function of the
  * application's, or copies: what a function does with an argument is that function's, and a copy is
- * the code's own.
+ * the code's own. Of a namespace import (`import * as math from …`, `namesNamespace`) the namespace
+ * itself is no write of the module's: a call of one of its exports, `math.add(1, 2)`,
+ * `cookies.set(…)`, has the namespace for its receiver and is no method of a collection, whatever
+ * its name; a member of it, `math.items.push(x)`, `math.total = 1`, stays one.
  */
 export function isWrittenAt(identifier: Identifier): boolean {
   const rooted = new Set<Node>();
@@ -38,7 +43,11 @@ export function isWrittenAt(identifier: Identifier): boolean {
       node = parent;
     } else {
       const written = writtenBy(parent);
-      return written !== undefined && rooted.has(written);
+      return (
+        written !== undefined &&
+        rooted.has(written) &&
+        !(namesNamespace(identifier) && isExpression(written) && unwrapped(written) === identifier)
+      );
     }
   }
 }
