@@ -32,6 +32,24 @@ import type { Setter, UpdaterSite, Uses, Writes } from './updaters.ts';
  * the code that calls the hook holds through it.
  */
 
+/**
+ * Whether an item is the value of a state a parameter feeds, its setter, or a function that writes
+ * one: what a caller reads from a hook it binds whole must not do. A state the hook starts itself
+ * is the hook's own; its setter and its functions are followed only where the caller names them
+ * one by one, and a hook bound whole stays untracked, as it was.
+ */
+function holdsFed(item: Item, fed: ReadonlyMap<string, Fed>): boolean {
+  if (item.value !== undefined || (item.setter !== undefined && fed.has(item.setter.key))) {
+    return true;
+  }
+  for (const keys of item.uses.values()) {
+    if (keys.some((key) => fed.has(key))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** What each name a hook's call binds is, item by item. */
 function boundItems(call: HookCall): ReadonlyMap<string, Item> {
   const found = new Map<string, Item>();
@@ -41,7 +59,7 @@ function boundItems(call: HookCall): ReadonlyMap<string, Item> {
     const whole = hook.items.get('whole');
     let writes = false;
     for (const item of hook.items.values()) {
-      writes ||= item.setter !== undefined || item.uses.size > 0 || item.value !== undefined;
+      writes ||= holdsFed(item, hook.fed);
     }
     if (whole !== undefined) {
       found.set(binding.name.text, whole);
