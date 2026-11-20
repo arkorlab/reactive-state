@@ -2,6 +2,7 @@ import {
   type ArrowFunction,
   type Expression,
   type FunctionExpression,
+  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isAsExpression,
@@ -18,6 +19,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ReturnStatement,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import type { HookCall, OwnedState, TopLevel } from './analyze.ts';
@@ -228,5 +230,28 @@ export function itemOf(node: Node, context: ItemContext): Item {
     };
   }
   const fn = entry.kind === 'constant' ? functionOf(entry.declaration) : undefined;
-  return fn === undefined ? plain : { ...plain, uses: context.writes.usesOf(fn) };
+  if (fn !== undefined) {
+    return { ...plain, uses: context.writes.usesOf(fn) };
+  }
+  // A constant that is another name of a setter, or of a function that writes: `const reset = setCount`.
+  const alias = entry.kind === 'constant' ? aliasOf(entry.declaration) : undefined;
+  return alias === undefined
+    ? plain
+    : {
+        ...plain,
+        setter: context.held.setters.get(alias.text),
+        uses: context.held.writing.get(alias.text) ?? new Map(),
+      };
+}
+
+/** The name a constant is another name of, through parentheses and casts: `const reset = setCount`. */
+function aliasOf(declaration: VariableDeclaration): Identifier | undefined {
+  let value = declaration.initializer;
+  while (
+    value !== undefined &&
+    (isParenthesizedExpression(value) || isAsExpression(value) || isSatisfiesExpression(value))
+  ) {
+    value = value.expression;
+  }
+  return value !== undefined && isIdentifier(value) ? value : undefined;
 }
