@@ -355,6 +355,7 @@ function bindingInitializers(binding: BindingName, actual: Selection, reading: R
   if (bindingFailure(binding, actual, reading.resolve)) {
     return false;
   }
+  const members = readsIterator(binding, actual, reading.resolve) ? UNKNOWN : actual;
   for (const [index, element] of binding.elements.entries()) {
     if (!isBindingElement(element) || element.name === undefined) {
       continue;
@@ -364,7 +365,7 @@ function bindingInitializers(binding: BindingName, actual: Selection, reading: R
       : propertyName(element.propertyName ?? element.name);
     const value =
       element.dotDotDotToken === undefined
-        ? selectedValue(actual, key, reading.resolve)
+        ? selectedValue(members, key, reading.resolve)
         : restValue(actual, index, reading.resolve);
     const chosen = withDefault(value, element.initializer, reading);
     if (!bindingInitializers(element.name, chosen, reading)) {
@@ -372,6 +373,15 @@ function bindingInitializers(binding: BindingName, actual: Selection, reading: R
     }
   }
   return true;
+}
+
+/** Whether an array pattern is written over an object literal, whose iterator it reads, not its numbers. */
+function readsIterator(binding: BindingName, actual: Selection, resolve: Resolve): boolean {
+  return (
+    isArrayBindingPattern(binding) &&
+    actual.value !== undefined &&
+    isObjectLiteralExpression(writtenOf(actual.value, resolve))
+  );
 }
 
 /** A statically missing, nullish or non-iterable pattern source. */

@@ -101,6 +101,77 @@ describe('the __proto__ key of an object pattern', () => {
   );
 });
 
+/** An array pattern steps the iterator of an object, whose numbered members it never reads. */
+const ITERATED_OBJECT: readonly Row[] = [
+  {
+    id: 'a nested pattern over an iterator and a null member 0',
+    pattern: '[[x]]',
+    argument: '{ *[Symbol.iterator]() { yield []; }, 0: null }',
+  },
+  {
+    id: 'two nested patterns over an iterator and a null member 1',
+    pattern: '[[x], [y]]',
+    argument: '{ *[Symbol.iterator]() { yield []; yield []; }, 1: null }',
+  },
+  {
+    id: 'a nested pattern over a constant object',
+    pattern: '[[x]]',
+    argument: 'source',
+    before: 'const source = { *[Symbol.iterator]() { yield []; }, 0: null };\n',
+  },
+];
+
+/** What an array pattern fails on, or reads without failing, as before. */
+const ITERATED_AS_BEFORE: readonly Row[] = [
+  {
+    id: 'a nested pattern over an iterator alone',
+    pattern: '[[x]]',
+    argument: '{ *[Symbol.iterator]() { yield []; } }',
+  },
+  {
+    id: 'a pattern over an iterator and a number member 0',
+    pattern: '[x]',
+    argument: '{ *[Symbol.iterator]() { yield 1; }, 0: 5 }',
+  },
+  { id: 'a nested pattern over an array', pattern: '[[x]]', argument: '[[1]]' },
+  {
+    id: 'an object pattern over an iterator and an array member 0',
+    pattern: '{ 0: [x] }',
+    argument: '{ *[Symbol.iterator]() { yield 1; }, 0: [1] }',
+  },
+];
+
+const ITERATED_FAILURES: readonly Row[] = [
+  { id: 'an object with no iterator', pattern: '[[x]]', argument: '{ 0: [1] }' },
+  { id: 'a null element of an array', pattern: '[[x]]', argument: '[null]' },
+  { id: 'a null second element of an array', pattern: '[[x], [y]]', argument: '[[1], null]' },
+  { id: 'an empty array', pattern: '[[x]]', argument: '[]' },
+  { id: 'an object pattern over a null member 0', pattern: '{ 0: [x] }', argument: '{ 0: null }' },
+];
+
+describe('an array pattern written over an object', () => {
+  it.each(ITERATED_OBJECT.map((row) => [row.id, row] as const))(
+    'does not read the numbered members for %s',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(false);
+    },
+  );
+
+  it.each(ITERATED_AS_BEFORE.map((row) => [row.id, row] as const))(
+    'reads %s without a failure',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(false);
+    },
+  );
+
+  it.each(ITERATED_FAILURES.map((row) => [row.id, row] as const))(
+    'still fails on %s',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(true);
+    },
+  );
+});
+
 describe('the member of an array a pattern selects', () => {
   it.each(NOT_AN_INDEX.map((row) => [row.id, row] as const))(
     'falls back to the default for %s',
