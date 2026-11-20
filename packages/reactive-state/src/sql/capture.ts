@@ -12,10 +12,15 @@
  * Each entry's number is taken from one counter row, which the writing transaction holds until it
  * commits: two transactions that write followed tables commit in the order of their numbers, so a
  * follower that has read an entry has read every entry before it. That orders those writers as
- * PostgreSQL orders writes of one row. The log notifies its channel (`channelOf`) as it commits, for
- * a host to read it then rather than at its next interval. A table followed by the logs of two
- * namespaces holds the triggers of each, named by its namespace; a trigger of the application's of
- * one of those names is replaced, so a namespace is one of the log's own.
+ * PostgreSQL orders writes of one row. The row is taken as the statement that first writes a
+ * followed table ends, after that statement's own rows, and held to the end of the transaction: a
+ * transaction whose later statement writes a row that another transaction's statement has written
+ * meanwhile can deadlock with it where, without the capture, it would only have waited for it.
+ * PostgreSQL ends one of the two with `40P01`, and an application retries that transaction as it
+ * retries any deadlock. The log notifies its channel (`channelOf`) as it commits, for a host to
+ * read it then rather than at its next interval. A table followed by the logs of two namespaces
+ * holds the triggers of each, named by its namespace; a trigger of the application's of one of
+ * those names is replaced, so a namespace is one of the log's own.
  *
  * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`: they
  * run as the role that made the log, so a role that writes a followed table needs no right to the
@@ -382,10 +387,17 @@ function ddlCounterOf(namespace: string): readonly string[] {
 
 /**
  * The statements that make the log in `namespace` and the triggers of each of `relations`, each to
- * be run by itself, in order. Every statement leaves what it makes as it is when it is there
- * already: a host may run them each time it starts, after the application's migrations, which may
- * have made a followed table again without its triggers. A table no longer followed keeps its
- * triggers until the application drops them.
+ * be run by itself, in order, as the role that made the log, which may create triggers on the
+ * followed tables: once, or each time a host starts, after the application's migrations, which may
+ * have made a followed table again without its triggers. Each may be run again: the log's tables
+ * keep their rows and gain what an installation made before lacks (the column `n` of `ddl` and its
+ * `FULL` replica identity, the columns `side` and `image` of `changes`), and its functions and
+ * triggers are made anew, which brings an installation made before up to date. Another role's run
+ * fails at the first function it would replace (`must be owner of function`), by PostgreSQL's rule
+ * for `CREATE OR REPLACE FUNCTION`. A role that only writes followed tables needs nothing of the
+ * log's schema, and a host that only reads the log runs none of them: it needs `USAGE` on the
+ * schema and `SELECT` on `head` and `changes`. A table no longer followed keeps its triggers until
+ * the application drops them.
  */
 export function changeCaptureSql(
   relations: readonly FollowedRelation[],
