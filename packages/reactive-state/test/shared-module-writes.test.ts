@@ -364,6 +364,65 @@ describe('a server part that writes an export of a shared module', () => {
     expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
   });
 
+  it.each([
+    { id: 'a nullish fallback', body: '(defaults.items ?? []).push(first);' },
+    { id: 'a logical fallback', body: '(defaults.items || []).push(first);' },
+    {
+      id: 'the true branch of a condition',
+      body: 'const other = [1];\n(first > 0 ? defaults.items : other).push(first);',
+    },
+    {
+      id: 'the false branch of a condition',
+      body: 'const other = [1];\n(first > 0 ? other : defaults.items).push(first);',
+    },
+    { id: 'a Map with a fallback', body: "(defaults.map ?? new Map()).set('k', first);" },
+    {
+      id: 'an assignment through a fallback',
+      body: 'const fallback = { value: 0 };\n(defaults.box ?? fallback).value = first;',
+    },
+    {
+      id: 'the import as the fallback',
+      body: 'const mine = [1];\n(mine ?? defaults.items).push(first);',
+    },
+    { id: 'the right of an and', body: '(defaults.ready && defaults.items).push(first);' },
+    { id: 'the last operand of a comma', body: '(first, defaults.items).push(first);' },
+    {
+      id: 'a fallback as the target of Object.assign',
+      body: 'Object.assign(defaults.config ?? {}, { first });',
+    },
+  ])('refuses a write into the import through a value that picks it: $id', ({ body }) => {
+    const reason = reasonOf(sourceOf(body, VIEW), 'authority');
+
+    expect(reason).toContain(SAYS);
+  });
+
+  it.each([
+    { id: 'the length of a fallback', body: 'const size = (defaults.items ?? []).length;' },
+    {
+      id: 'a map over a fallback',
+      body: 'const doubled = (defaults.items ?? []).map((item) => item * 2);',
+    },
+    { id: 'a fallback spread into an array', body: 'const copy = [...(defaults.items ?? [])];' },
+    {
+      id: 'the import in the condition alone',
+      body: 'const mine = [1];\n(defaults.flag ? mine : mine).push(first);',
+    },
+    {
+      id: 'the import on the left of an and',
+      body: 'const mine = [1];\n(defaults.ready && mine).push(first);',
+    },
+    {
+      id: 'a fallback pushed into an array of its own',
+      body: 'const mine = [1];\nmine.push(defaults.value ?? 0);',
+    },
+    {
+      id: 'a fallback assigned to a property of its own',
+      body: 'const own = { v: 0 };\nown.v = defaults.value ?? first;',
+    },
+  ])('takes a value that picks the import where it is only read: $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+  });
+
   it('takes a write the browser runs, which has a copy of its own', () => {
     const jsx = [
       '<button type="button" onClick={() => { defaults.value = 1; setValue(value + 1); }}>',

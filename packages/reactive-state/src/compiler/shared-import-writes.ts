@@ -1,8 +1,12 @@
 import {
+  type BinaryExpression,
+  type ConditionalExpression,
   type Expression,
   type Identifier,
   isAsExpression,
+  isBinaryExpression,
   isCallExpression,
+  isConditionalExpression,
   isElementAccessExpression,
   isExpression,
   isNonNullExpression,
@@ -11,6 +15,7 @@ import {
   isSatisfiesExpression,
   isSourceFile,
   type Node,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { namesNamespace, unwrapped } from './bounded.ts';
@@ -43,7 +48,8 @@ export function isWrittenAt(identifier: Identifier): boolean {
         isAsExpression(parent) ||
         isSatisfiesExpression(parent) ||
         ((isPropertyAccessExpression(parent) || isElementAccessExpression(parent)) &&
-          parent.expression === node)
+          parent.expression === node) ||
+        picks(parent, node)
       )
     ) {
       break;
@@ -63,6 +69,27 @@ export function isWrittenAt(identifier: Identifier): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Whether `parent` answers the value of `node` as its own where it picks it: an operand of `??` or
+ * `||` (`(defaults.items ?? []).push(x)` pushes into the import where it is set), the right of `&&`
+ * or a comma, a branch of a condition, not what the condition tests.
+ */
+function picks(parent: Node, node: Node): parent is BinaryExpression | ConditionalExpression {
+  if (isConditionalExpression(parent)) {
+    return parent.condition !== node;
+  }
+  if (!isBinaryExpression(parent)) {
+    return false;
+  }
+  const operator = parent.operatorToken.kind;
+  return (
+    operator === SyntaxKind.QuestionQuestionToken ||
+    operator === SyntaxKind.BarBarToken ||
+    ((operator === SyntaxKind.AmpersandAmpersandToken || operator === SyntaxKind.CommaToken) &&
+      parent.right === node)
+  );
 }
 
 /**
