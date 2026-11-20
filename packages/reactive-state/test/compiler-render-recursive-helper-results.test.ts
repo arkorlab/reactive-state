@@ -19,7 +19,9 @@ const ONE = `tag\`${OPEN}new Date(0)}\``;
  * again is cut), and a helper that returns a call of itself, past a conditional or a logical
  * operator, is taken to answer the Date, as the walk does not follow the path of the recursion: a
  * recursion that ends in a number but is returned as it is refuses, one that adds to the call or
- * passes the Date on without returning the call does not.
+ * passes the Date on without returning the call does not. The same holds for helpers whose returns
+ * call one another back (two, or a ring of three), and a question that meets a function again with
+ * an overlapping set of parameters keeps the assumptions of the one in hand.
  */
 const CASES = [
   {
@@ -43,6 +45,41 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
+    id: 'mutual-recursion-meeting-again-with-an-overlapping-set',
+    tag: `${VALUE}{function pick(a:unknown,_b:unknown,n:number):unknown{return n?relay(a,n-1):a;}function relay(a:unknown,n:number):unknown{return pick(a,a,n);}return String(pick(value,null,0));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-meeting-again-in-a-ring-of-three',
+    tag: `${VALUE}{function pick(a:unknown,_b:unknown,n:number):unknown{return n?first(a,n-1):a;}function first(a:unknown,n:number):unknown{return second(a,n);}function second(a:unknown,n:number):unknown{return pick(a,a,n);}return String(pick(value,null,0));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-meeting-again-through-a-local',
+    tag: `${VALUE}{function pick(a:unknown,_b:unknown,n:number):unknown{if(n){const answer=relay(a,n-1);return answer;}return a;}function relay(a:unknown,n:number):unknown{return pick(a,a,n);}return String(pick(value,null,0));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-meeting-again-in-arrow-constants',
+    tag: `${VALUE}{const pick=(a:unknown,_b:unknown,n:number):unknown=>(n?relay(a,n-1):a);const relay=(a:unknown,n:number):unknown=>pick(a,a,n);return String(pick(value,null,0));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-met-again-inside-an-array-element',
+    tag: `${VALUE}{function pick(a:unknown,_b:unknown,n:number):unknown{return n?[relay(a,n-1)][0]:a;}function relay(a:unknown,n:number):unknown{return pick(a,a,n);}return String(pick(value,null,0));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-adding-to-the-call-pin',
+    tag: `${VALUE}{function pick(a:unknown,_b:unknown,n:number):number{return n?relay(a,n-1)+1:0;}function relay(a:unknown,n:number):number{return pick(a,a,n)+1;}return String(pick(value,null,2));}`,
+    local: undefined,
+  },
+  {
+    id: 'helpers-calling-one-another-without-a-cycle-pin',
+    tag: `${VALUE}{const outer=(d:unknown)=>inner(d);const inner=(d:unknown)=>(d as Date).getTime();return String(outer(value));}`,
+    local: undefined,
+  },
+  {
     id: 'recursion-returning-the-parameter-it-is-handed-pin',
     tag: `${VALUE}{const same=(d:unknown,n:number):unknown=>(n===0?d:same(d,n-1));return String(same(value,3));}`,
     local: DATE_TEXT,
@@ -58,9 +95,9 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
-    id: 'mutual-recursion-returning-numbers-pin',
+    id: 'mutual-recursion-returned-directly-and-ending-in-numbers-is-refused-pin',
     tag: `${VALUE}{function even(d:unknown,n:number):number{return n===0?1:odd(d,n-1);}function odd(d:unknown,n:number):number{return n===0?0:even(d,n-1);}return String(even(value,4));}`,
-    local: undefined,
+    local: DATE_TEXT,
   },
   {
     id: 'recursive-callback-handed-to-flatMap-pin',

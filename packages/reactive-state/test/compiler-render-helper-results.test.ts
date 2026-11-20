@@ -433,10 +433,10 @@ const CASES = [
     local: undefined,
   },
   {
-    id: 'two-helpers-that-call-each-other-end-pin',
+    id: 'two-helpers-that-only-call-each-other-are-refused-pin',
     pre: 'const ping=(value:unknown):unknown=>pong(value);const pong=(value:unknown):unknown=>ping(value);',
     tag: `${DATED}String(ping(date))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
 ] as const;
 

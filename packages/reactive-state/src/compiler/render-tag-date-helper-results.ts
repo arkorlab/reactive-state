@@ -144,13 +144,38 @@ function answeredLeaves(expression: Expression): readonly Expression[] {
   return [value];
 }
 
-/** Whether one of the returns of `fn` is a call of `fn` itself: `n === 0 ? c : turn(c, a, b, n - 1)`. */
-function answersItself(fn: Answering): boolean {
-  return returnedBy(fn).some((returned) => {
-    return answeredLeaves(returned).some(
-      (leaf) => isCallExpression(leaf) && functionsOf(leaf.expression).includes(fn),
+/** The functions of the file that a function's returns may be a call of: past a conditional, a logical operator and a comma. */
+function returnedCallees(fn: Answering): readonly Answering[] {
+  return returnedBy(fn).flatMap((returned) => {
+    return answeredLeaves(returned).flatMap((leaf) =>
+      isCallExpression(leaf) ? functionsOf(leaf.expression) : [],
     );
   });
+}
+
+const ANSWERS_ITSELF = new WeakMap<Node, boolean>();
+
+/**
+ * Whether the returns of `fn` lead back to `fn`: one is a call of `fn` itself (`n === 0 ? c : turn(c,
+ * a, b, n - 1)`), or of a function whose own returns are a call of it, as far as the returns go
+ * through each other (`pick` returns `relay(…)`, `relay` returns `pick(…)`).
+ */
+function answersItself(fn: Answering): boolean {
+  const known = ANSWERS_ITSELF.get(fn);
+  if (known !== undefined) return known;
+  const seen = new Set<Node>();
+  const pending: Answering[] = [...returnedCallees(fn)];
+  let found = false;
+  for (let next = pending.pop(); next !== undefined && !found; next = pending.pop()) {
+    if (next === fn) {
+      found = true;
+    } else if (!seen.has(next)) {
+      seen.add(next);
+      pending.push(...returnedCallees(next));
+    }
+  }
+  ANSWERS_ITSELF.set(fn, found);
+  return found;
 }
 
 /** Answers found for a function and the parameters it is handed, while one outermost question runs. */
@@ -190,7 +215,7 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
     ASKING.cut += 1;
     return false;
   }
-  // A function that answers a call of itself, handed a Date, may answer it on another path than
+  // A function whose answers lead back to itself, handed a Date, may answer it on another path than
   // the one in hand reads: the walk takes it for an answer that is the Date.
   if (answersItself(fn)) return true;
   const known = ANSWERED.get(key);
@@ -201,7 +226,10 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
   const cutBefore = ASKING.cut;
   ASKING.depth += 1;
   ASKED.add(question);
-  for (const parameter of parameters) ASSUMED.add(parameter);
+  // A question that meets the function again with an overlapping set keeps the assumptions of the
+  // one in hand: it removes only what it added.
+  const added = parameters.filter((parameter) => !ASSUMED.has(parameter));
+  for (const parameter of added) ASSUMED.add(parameter);
   try {
     const answer = returnedBy(fn).some((returned) => fresh(returned, !isArrowFunction(fn)));
     // An answer found while a function that is asked again was cut is not final: it is not kept.
@@ -209,7 +237,7 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
     return answer;
   } finally {
     ASKED.delete(question);
-    for (const parameter of parameters) ASSUMED.delete(parameter);
+    for (const parameter of added) ASSUMED.delete(parameter);
     ASKING.depth -= 1;
     if (ASKING.depth === 0) {
       ANSWERED.clear();
