@@ -3,7 +3,6 @@ import {
   type Identifier,
   isIdentifier,
   isShorthandPropertyAssignment,
-  isSpreadElement,
   type Node,
   type VariableDeclaration,
 } from 'typescript/ast';
@@ -39,6 +38,7 @@ import {
 } from './following.ts';
 import {
   annotatedIn,
+  argumentAt,
   browserValueOf,
   COMPONENT,
   type Frame,
@@ -437,8 +437,8 @@ export class Derivation {
     if (frame.hook.declaration.parameters[index]?.initializer !== undefined) {
       this.#refuse(at.origin, `In ${where}: ${defaulted(identifier.text)}`);
     }
-    const argument = frame.call.call.arguments[index];
-    if (argument === undefined || isSpreadElement(argument)) {
+    const argument = argumentAt(frame.call.call.arguments, index);
+    if (argument === undefined) {
       this.#refuse(
         at.origin,
         `In ${where}: \`${identifier.text}\` is given no value of its own by the call to compute a value of.`,
@@ -493,8 +493,8 @@ export class Derivation {
         `In ${where}: \`${local}\` binds a field of the database, and a dynamic site is rendered of local states alone. Have the reactive component read the field itself.`,
       );
     }
-    const argument = frame.call.call.arguments[fed.index];
-    if (argument === undefined || isSpreadElement(argument)) {
+    const argument = argumentAt(frame.call.call.arguments, fed.index);
+    if (argument === undefined) {
       this.#refuse(at.origin, `In ${where}: ${ungiven(local)}`);
     }
     const key = `${frame.prefix}${local}`;

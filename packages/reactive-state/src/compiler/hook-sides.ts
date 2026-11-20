@@ -17,6 +17,7 @@ import {
 
 import type { OwnedState, TopLevel } from './analyze.ts';
 import type { Fail } from './errors.ts';
+import { argumentAt } from './frames.ts';
 import { type Held, heldThroughHooks, itemOf, itemsOf } from './hook-items.ts';
 import type { Fed, HookModule, Item } from './hooks.ts';
 import { INTRINSIC } from './imports.ts';
@@ -203,7 +204,7 @@ function feedsOf(input: HookInput): ReadonlyMap<number, Feed> {
     }
     for (const [index, key] of state.hook.feeds) {
       const argument = state.call.arguments[index];
-      const parameter = parameterIn(argument, names);
+      const parameter = parameterIn(argumentAt(state.call.arguments, index), names);
       if (parameter === undefined) {
         fail(
           `\`${state.callee.text}\` declares a state with this argument as it is, which the authority evaluates for the browser: within a hook, that is one of the hook's own parameters, given as it is.`,

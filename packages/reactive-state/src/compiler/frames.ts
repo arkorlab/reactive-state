@@ -1,4 +1,4 @@
-import type { Identifier } from 'typescript/ast';
+import { type Expression, type Identifier, isSpreadElement } from 'typescript/ast';
 
 import type { HookCall } from './analyze.ts';
 import type { HookDefinition } from './hooks.ts';
@@ -144,4 +144,13 @@ export function annotatedIn(
     names: hook.names,
     sourceFile: hook.module.sourceFile,
   });
+}
+
+/**
+ * The argument a call gives the parameter at `index`, as the call writes it: none where it writes
+ * none there, or a spread at or before that place, which gives the parameters after it more or fewer
+ * arguments than it names — the argument written at `index` is then another's.
+ */
+export function argumentAt(given: readonly Expression[], index: number): Expression | undefined {
+  return given.slice(0, index + 1).some((each) => isSpreadElement(each)) ? undefined : given[index];
 }
