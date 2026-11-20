@@ -5,6 +5,7 @@ import {
   isArrowFunction,
   isBinaryExpression,
   isBindingElement,
+  isComputedPropertyName,
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
@@ -139,13 +140,29 @@ export function isOuterTemplateConsumedAsText(template: TemplateExpression): boo
 
 export function nodeCoercesDatedSubstitution(node: Node, context: WrapperCoerceContext): boolean {
   if (isTemplateExpression(node)) return untaggedTemplateCoerces(node, context);
-  if (isBinaryExpression(node)) return binaryAdditionCoerces(node, context);
+  if (isComputedPropertyName(node)) return carriesDatedExpr(node.expression, context);
+  if (isBinaryExpression(node))
+    return binaryAdditionCoerces(node, context) || keyTestCoerces(node, context);
   if (isNewExpression(node)) return constructedStringCoerces(node, context);
   if (isBindingElement(node)) return patternDestructureCoerces(node, context);
+  if (isElementAccessExpression(node) && carriesDatedExpr(node.argumentExpression, context)) {
+    return true;
+  }
   if (isPropertyAccessExpression(node) || isElementAccessExpression(node)) {
     return memberReadCoerces(node, context);
   }
   return isCallExpression(node) && callExpressionCoerces(node, context);
+}
+
+/** `value in record` converts the left operand to a property key, as a key in brackets does. */
+function keyTestCoerces(
+  node: Expression & {
+    readonly left: Expression;
+    readonly operatorToken: { readonly kind: SyntaxKind };
+  },
+  context: WrapperCoerceContext,
+): boolean {
+  return node.operatorToken.kind === SyntaxKind.InKeyword && carriesDatedExpr(node.left, context);
 }
 
 function untaggedTemplateCoerces(node: TemplateExpression, context: WrapperCoerceContext): boolean {
