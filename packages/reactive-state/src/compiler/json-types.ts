@@ -41,7 +41,7 @@ import { firstLine } from './bounded.ts';
 import { constantNumber } from './numbers.ts';
 import { shapesKind } from './object-kinds.ts';
 import { LANGUAGE_OBJECTS, membersOf, type ObjectMember } from './object-members.ts';
-import { memberOf } from './type-members.ts';
+import { memberOf, within } from './type-members.ts';
 import {
   type Declared,
   declarationOf,
@@ -67,8 +67,9 @@ export interface NonJsonPart {
 }
 
 /**
- * The aliases, interfaces and type parameters a walk has met, by what they are read as: an object's
- * entry, which JSON leaves `undefined` out of, or an array's element, which it does not.
+ * The aliases, interfaces, type parameters and indexed accesses a walk has met, by what they are
+ * read as: an object's entry, which JSON leaves `undefined` out of, or an array's element, which it
+ * does not.
  */
 interface Reads {
   readonly elements: Set<Node>;
@@ -103,6 +104,13 @@ const JSON_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.BooleanKeyword,
   SyntaxKind.NeverKeyword,
   SyntaxKind.NullKeyword,
+  SyntaxKind.NumberKeyword,
+  SyntaxKind.StringKeyword,
+  SyntaxKind.TemplateLiteralType,
+]);
+
+/** The types of an index's key that no symbol is of: text, a number, a template literal. */
+const PLAIN_KEYS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.NumberKeyword,
   SyntaxKind.StringKeyword,
   SyntaxKind.TemplateLiteralType,
@@ -207,8 +215,8 @@ function leafPart(node: TypeNode, entry: boolean): NonJsonPart | undefined {
 
 /**
  * What a type of another admits: `readonly T[]`, as its array; `T['key']`, as the member `key` of
- * `T` — `undefined` too, of one that may be left out; `unique symbol`, a symbol; and `keyof T`, of
- * symbols too, what the compile cannot read.
+ * `T` — `undefined` too, of one that may be left out, and read once where its own type names it
+ * again; `unique symbol`, a symbol; and `keyof T`, of symbols too, what the compile cannot read.
  */
 function derivedPart(
   node: IndexedAccessTypeNode | TypeOperatorNode,
@@ -229,12 +237,14 @@ function derivedPart(
       : undefined;
   const member =
     key === undefined ? undefined : memberOf(node.objectType, key, walk.at, walk.reading);
-  if (member?.type === undefined) {
+  const written = member?.type;
+  if (member === undefined || written === undefined) {
     return admitting(node, UNTOLD);
   }
+  // `S['x']` of `{ x: { y: S['x'] } }`: read once, as a type of itself is.
   return !entry && member.optional
     ? admitting(node, ELEMENT)
-    : partOf(member.type, { ...walk, at: member.at }, entry);
+    : walked(node, walk, entry, () => partOf(written, { ...walk, at: member.at }, entry));
 }
 
 /** What a tuple's element admits: one that may be left out, `undefined` in its place too. */
@@ -293,7 +303,7 @@ function memberPart({ at, member, value }: ObjectMember, walk: Walk): NonJsonPar
   }
   if (isIndexSignatureDeclaration(member)) {
     const [key] = member.parameters;
-    return key?.type !== undefined && holdsSymbol(key.type)
+    return key?.type !== undefined && mayBeSymbol(key.type, at, walk.reading)
       ? admitting(member, SYMBOL_KEY)
       : partOf(member.type, there, true);
   }
@@ -305,11 +315,37 @@ function isLiteralName(name: Node): boolean {
   return isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name) || isNumericLiteral(name);
 }
 
-/** Whether an index's key type takes a symbol: `symbol`, or a union of it. */
-function holdsSymbol(type: TypeNode): boolean {
-  return isUnionTypeNode(type)
-    ? type.types.some((each) => holdsSymbol(each))
-    : type.kind === SyntaxKind.SymbolKeyword;
+/**
+ * Whether an index's key type may take a symbol: any but `string`, `number`, a template literal
+ * type, or a union of those, read through parentheses and through a name the module reads as an
+ * alias without type parameters, of the file or of an import — `type Key = symbol` is one, `type
+ * UserId = string` is not. What it cannot read to one of those, a type parameter or a package's
+ * type among it, may be a symbol.
+ */
+function mayBeSymbol(type: TypeNode, at: TypeSite, reading: TypeReading): boolean {
+  let node = type;
+  while (isParenthesizedTypeNode(node)) {
+    node = node.type;
+  }
+  if (isUnionTypeNode(node)) {
+    return node.types.some((each) => mayBeSymbol(each, at, reading));
+  }
+  if (!isTypeReferenceNode(node)) {
+    return !PLAIN_KEYS.has(node.kind);
+  }
+  const declared =
+    typeParameterOf(node.typeName, at, reading) === undefined
+      ? declarationOf(node.typeName, at, reading)
+      : undefined;
+  const alias = declared?.declaration;
+  if (declared === undefined || alias === undefined || !isTypeAliasDeclaration(alias)) {
+    return true;
+  }
+  // An alias that names itself adds no symbol to what it names beside.
+  return (
+    alias.typeParameters !== undefined ||
+    (within(alias, reading, () => mayBeSymbol(alias.type, declared.at, reading)) ?? false)
+  );
 }
 
 /**
@@ -435,9 +471,9 @@ function reads(): Reads {
  * the same. A read that a declaration under way cut short is kept too: whoever began that one reads
  * it to the end before the walk answers. What a declaration answers depends on it and on `entry`
  * alone — the site its names are read at is its file's, and what the reading holds is the walk's —
- * so an alias and a type parameter are kept by both; an object's members are read as entries
- * whatever it is read as, so an interface and what the language makes of an object are kept by
- * `true`.
+ * so an alias, a type parameter and an indexed access are kept by both; an object's members are
+ * read as entries whatever it is read as, so an interface and what the language makes of an object
+ * are kept by `true`.
  */
 function walked(
   declaration: Node,
