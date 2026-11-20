@@ -16,6 +16,11 @@
  * a host to read it then rather than at its next interval. A table followed by the logs of two
  * namespaces holds the triggers of each, named by its namespace; a trigger of the application's of
  * one of those names is replaced, so a namespace is one of the log's own.
+ *
+ * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`: they
+ * run as the role that made the log, so a role that writes a followed table needs no right to the
+ * log's schema, and only the role that made it may call `note` itself or attach one of them to a
+ * table. Their search path stays `pg_catalog, pg_temp`.
  */
 
 /** A table of the application's, as PostgreSQL names it. */
@@ -231,7 +236,7 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
         logged(side, TRANSITION[side], side === 'after' ? '"before_rows"' : '0::bigint'),
       )
       .join('; ');
-    return `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ #variable_conflict use_variable\nDECLARE "before_rows" bigint := 0; "after_rows" bigint := 0; "changed" bigint; "total" bigint; "last" bigint; "image" text; BEGIN ${counted}; "changed" := greatest("before_rows", "after_rows"); IF "changed" = 0 THEN RETURN NULL; END IF; IF TG_NARGS = 0 OR "changed" > ${String(ROWS.logged)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END IF; "total" := "before_rows" + "after_rows"; "image" := ${schema}."image_sql"(TG_RELID, TG_ARGV); UPDATE ${head} SET "seq" = "seq" + "total" RETURNING "seq" INTO "last"; ${inserts}; PERFORM pg_notify(${channel}, "last"::text); RETURN NULL; END $$`;
+    return `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ #variable_conflict use_variable\nDECLARE "before_rows" bigint := 0; "after_rows" bigint := 0; "changed" bigint; "total" bigint; "last" bigint; "image" text; BEGIN ${counted}; "changed" := greatest("before_rows", "after_rows"); IF "changed" = 0 THEN RETURN NULL; END IF; IF TG_NARGS = 0 OR "changed" > ${String(ROWS.logged)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END IF; "total" := "before_rows" + "after_rows"; "image" := ${schema}."image_sql"(TG_RELID, TG_ARGV); UPDATE ${head} SET "seq" = "seq" + "total" RETURNING "seq" INTO "last"; ${inserts}; PERFORM pg_notify(${channel}, "last"::text); RETURN NULL; END $$`;
   };
   return [
     // The expression of a row's image, `r`: an object of the text of each key the table still
@@ -248,6 +253,8 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
     made('capture_inserted', ['after']),
     made('capture_deleted', ['before']),
     made('capture_updated', ['before', 'after']),
+    // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
+    `REVOKE EXECUTE ON FUNCTION ${schema}."capture_inserted"(), ${schema}."capture_deleted"(), ${schema}."capture_updated"() FROM PUBLIC`,
   ];
 }
 
@@ -394,8 +401,12 @@ export function changeCaptureSql(
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
     `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname = 'image' AND NOT attisdropped) THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
-    `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
-    `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+    `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
+    `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+    // Of the role that made the log alone, of which the functions above run: any other that may use
+    // the log's schema could else append an entry that renders what read a table again, or attach a
+    // trigger function to a table of its own.
+    `REVOKE EXECUTE ON FUNCTION ${schema}."note"(text, text), ${schema}."capture_all"() FROM PUBLIC`,
     ...rowFunctionsOf(namespace, channel),
     ...ddlCounterOf(namespace),
     ...relations.flatMap((relation) => triggersOf(relation, namespace)),

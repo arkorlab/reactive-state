@@ -13,7 +13,10 @@ import { type Condition, conditionsOf } from './quals.ts';
  * The plan of `sql` as a cursor's, `DECLARE … CURSOR FOR`, as `EXPLAIN (GENERIC_PLAN, VERBOSE,
  * FORMAT JSON)` answers it: a cursor is declared of one query alone, which PostgreSQL holds the text
  * to as it parses it — a statement that is no query, `SELECT … INTO`, which makes a table, and a
- * data-modifying `WITH` are refused there — and the plan is the query's. Nothing is declared.
+ * data-modifying `WITH` are refused there — and the plan is the query's. Nothing is declared. That
+ * holds of the extended protocol, which takes one statement alone: the caller asks the text through
+ * it first, for the simple protocol runs every statement of a text, and a second is outside both
+ * `EXPLAIN` and the cursor.
  */
 export function explainSql(sql: string): string {
   return `EXPLAIN (GENERIC_PLAN, VERBOSE, FORMAT JSON) DECLARE "reactive_state_plan" NO SCROLL CURSOR FOR ${sql}`;
