@@ -10,6 +10,7 @@ import {
   isNoSubstitutionTemplateLiteral,
   isParenthesizedExpression,
   isPropertyAccessExpression,
+  isSourceFile,
   isSpreadElement,
   isStringLiteral,
   type Node,
@@ -377,10 +378,11 @@ function isTypeOfExpression(node: Node | undefined): boolean {
  * The name `node` writes, where it is a write a function makes each time it is called — an
  * assignment, `++`, `delete`, a method or a global's function that changes what it is given, or
  * locks it — of a name the module holds once, as it loads (`isKept`): its own, an import's, a
- * global's, what a call it keeps declared; none of another.
+ * global's, what a call it keeps declared; none of another. None of a source file either, which a
+ * walk of every node hands in first: it writes nothing, and has no parent for `runsPerCall` to read.
  */
 export function keptWrite(node: Node): Identifier | undefined {
-  if (!runsPerCall(node)) {
+  if (isSourceFile(node) || !runsPerCall(node)) {
     return undefined;
   }
   const written = writtenBy(node);
