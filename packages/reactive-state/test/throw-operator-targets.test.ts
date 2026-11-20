@@ -32,6 +32,69 @@ const PROTOTYPED: readonly Row[] = [
   { id: 'a function expression', source: '({}) instanceof (function () {} as any);' },
 ];
 
+/** The statements before an `instanceof` whose right side is a plain object, in a function body. */
+const HOOK =
+  'function installHook() { (Object.prototype as any)[Symbol.hasInstance] = () => true; }\n';
+const AFTER = 'return ({}) instanceof ({} as any) ? 1 : 2;';
+const inBody = (statements: string): string =>
+  `${HOOK}function initial() {\n${statements}\n${AFTER}\n}`;
+
+/** A `Math` call whose argument runs application code may install the hook that `instanceof` reads. */
+const RUNS_APPLICATION_CODE: readonly Row[] = [
+  {
+    id: 'void of a call that installs the hook',
+    source: inBody('Math.abs(void installHook() as any);'),
+  },
+  {
+    id: 'one argument of two runs the call',
+    source: inBody('Math.max(1, void installHook() as any);'),
+  },
+  {
+    id: 'void of a member read, which may run a getter',
+    source: inBody('declare const holder: { value: number };\nMath.abs(void holder.value as any);'),
+  },
+];
+
+/** A `Math` call of written scalars, and a statement that is no `Math` call, as before. */
+const UNRELATED_TO_THE_HOOK: readonly Row[] = [
+  { id: 'a number', source: inBody('Math.abs(1);') },
+  { id: 'two numbers', source: inBody('Math.max(1, 2);') },
+  { id: 'a negative number', source: inBody('Math.abs(-1);') },
+  { id: 'void of a number', source: inBody('Math.abs(void 0 as any);') },
+  {
+    id: 'void of the assignment to a local',
+    source: inBody('let local = 0;\nMath.abs(void (local = 1) as any);'),
+  },
+];
+
+/** A call of the hook's installer written as a statement is application work that stays unproven. */
+const INSTALLER_STATEMENT: readonly Row[] = [
+  { id: 'the installer called as a statement', source: inBody('installHook();') },
+];
+
+describe('the Math call before an instanceof', () => {
+  it.each(RUNS_APPLICATION_CODE.map((row) => [row.id, row] as const))(
+    'leaves an instanceof unproven after %s',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(false);
+    },
+  );
+
+  it.each(UNRELATED_TO_THE_HOOK.map((row) => [row.id, row] as const))(
+    'reads a Math call of %s as unrelated to the hook',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(true);
+    },
+  );
+
+  it.each(INSTALLER_STATEMENT.map((row) => [row.id, row] as const))(
+    'leaves an instanceof unproven after %s',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(false);
+    },
+  );
+});
+
 describe('the function target of instanceof', () => {
   it.each(GENERATORS.map((row) => [row.id, row] as const))('reads %s as no throw', (_id, row) => {
     expect(throwsOf(row)).toBe(false);

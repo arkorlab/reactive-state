@@ -254,7 +254,8 @@ function unrelatedIntrinsic(node: Expression, resolve: Resolve | undefined): boo
   const path = globalCalleePath(node.expression, resolve)?.join('.');
   if (path?.startsWith('Math.') === true) {
     return node.arguments.every(
-      (each) => primitiveOf(writtenOf(each, resolve), resolve) !== undefined,
+      (each) =>
+        primitiveOf(writtenOf(each, resolve), resolve) !== undefined && !includesApplication(each),
     );
   }
   if (!DEFINING.has(path ?? '')) {
