@@ -36,6 +36,71 @@ const AN_INDEX_WITHOUT_FAILURE: readonly Row[] = [
   { id: 'the key length', pattern: '{ length: { x } = {} }', argument: '[0]' },
 ];
 
+/** The colon-form `__proto__` of a literal sets its prototype, so the member it names is absent. */
+const PROTOTYPE_KEY: readonly Row[] = [
+  {
+    id: 'the key __proto__ over a null prototype',
+    pattern: '{ __proto__: { x } = {} }',
+    argument: '{ __proto__: null }',
+  },
+  {
+    id: 'the string key "__proto__" over a null prototype',
+    pattern: '{ "__proto__": { x } = {} }',
+    argument: '{ __proto__: null }',
+  },
+  {
+    id: 'the key __proto__, no default, over a null prototype',
+    pattern: '{ __proto__: { x } }',
+    argument: '{ __proto__: null }',
+  },
+];
+
+/** The key `__proto__` over what writes no prototype entry, and other keys, as before. */
+const OTHER_KEYS_READ: readonly Row[] = [
+  {
+    id: 'the key __proto__ over an empty object',
+    pattern: '{ __proto__: { x } = {} }',
+    argument: '{}',
+  },
+  {
+    id: 'the key __proto__ over an object prototype',
+    pattern: '{ __proto__: { x } = {} }',
+    argument: '{ __proto__: {} }',
+  },
+  { id: 'the key __proto__ over an array', pattern: '{ __proto__: { x } = {} }', argument: '[0]' },
+  {
+    id: 'a key over an undefined member',
+    pattern: '{ a: { x } = {} }',
+    argument: '{ a: undefined }',
+  },
+  { id: 'a key over an empty object', pattern: '{ a: { x } = {} }', argument: '{}' },
+];
+
+/** A key over a null member is read, and the pattern fails on it. */
+const NULL_MEMBER: readonly Row[] = [
+  { id: 'a key over a null member', pattern: '{ a: { x } = {} }', argument: '{ a: null }' },
+];
+
+describe('the __proto__ key of an object pattern', () => {
+  it.each(PROTOTYPE_KEY.map((row) => [row.id, row] as const))('leaves %s unproven', (_id, row) => {
+    expect(throwsOf(row)).toBe(false);
+  });
+
+  it.each(OTHER_KEYS_READ.map((row) => [row.id, row] as const))(
+    'reads %s without a failure',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(false);
+    },
+  );
+
+  it.each(NULL_MEMBER.map((row) => [row.id, row] as const))(
+    'reads %s and fails on it',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(true);
+    },
+  );
+});
+
 describe('the member of an array a pattern selects', () => {
   it.each(NOT_AN_INDEX.map((row) => [row.id, row] as const))(
     'falls back to the default for %s',

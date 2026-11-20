@@ -386,9 +386,12 @@ function bindingFailure(binding: BindingName, actual: Selection, resolve: Resolv
   );
 }
 
-/** A literal member or a known inherited member, without reading a getter or unknown prototype. */
+/**
+ * A literal member or a known inherited member, without reading a getter or unknown prototype; the
+ * key `__proto__` reads the prototype where a literal writes one, so it stays unproven.
+ */
 function selectedValue(actual: Selection, key: string | undefined, resolve: Resolve): Selection {
-  if (key === undefined || actual.unknown) {
+  if (key === undefined || key === '__proto__' || actual.unknown) {
     return UNKNOWN;
   }
   const value = actual.value === undefined ? undefined : sourceValue(actual.value, resolve);
@@ -404,19 +407,28 @@ function selectedValue(actual: Selection, key: string | undefined, resolve: Reso
     return selectedArray(entries, key, resolve);
   }
   const picked = selected(value?.value, key);
-  if (
-    value?.value !== undefined &&
-    isObjectLiteralExpression(value.value) &&
-    picked.value === undefined &&
-    !picked.unknown &&
-    Object.hasOwn(Object.prototype, key) &&
-    !value.value.properties.some(
-      (property) => isPropertyAssignment(property) && propertyName(property.name) === '__proto__',
-    )
-  ) {
+  if (inheritsMember(value?.value, picked, key)) {
     return PRESENT;
   }
   return picked.unknown ? UNKNOWN : sourceValue(picked.value, resolve);
+}
+
+/** Whether an object literal that writes no prototype inherits `key` from `Object.prototype`. */
+function inheritsMember(
+  literal: Expression | undefined,
+  picked: Pick<Selection, 'unknown' | 'value'>,
+  key: string,
+): boolean {
+  return (
+    literal !== undefined &&
+    isObjectLiteralExpression(literal) &&
+    picked.value === undefined &&
+    !picked.unknown &&
+    Object.hasOwn(Object.prototype, key) &&
+    !literal.properties.some(
+      (property) => isPropertyAssignment(property) && propertyName(property.name) === '__proto__',
+    )
+  );
 }
 
 /** A stored array entry, a hole or an inherited member that does not select its fallback. */
