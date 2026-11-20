@@ -19,6 +19,7 @@ import {
   isTaggedTemplateExpression,
   isTemplateExpression,
   isTypeOfExpression,
+  isVariableDeclaration,
   isVoidExpression,
   type Node,
   SyntaxKind,
@@ -118,7 +119,10 @@ export function isOuterTemplateConsumedAsText(template: TemplateExpression): boo
       parent.arguments?.[0] === at
     );
   }
-  return parent.kind === SyntaxKind.TemplateSpan;
+  return (
+    parent.kind === SyntaxKind.TemplateSpan ||
+    (isVariableDeclaration(parent) && isExpression(at) && parent.initializer === at)
+  );
 }
 
 export function nodeCoercesDatedSubstitution(node: Node, context: WrapperCoerceContext): boolean {
