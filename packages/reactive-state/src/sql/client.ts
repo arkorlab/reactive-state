@@ -85,8 +85,8 @@ class Plans {
   readonly #bound: Bound;
   readonly #kept = new Map<string, readonly TableScan[]>();
   #catalog: Catalog | undefined;
-  /** Whether a plan carries the catalog's statement now: the plans asked beside it carry none. */
-  #asking = false;
+  /** How many plans carry the catalog's statement now: the plans asked beside them carry none. */
+  #asking = 0;
   #generation = 0;
 
   constructor(followed: Followed, bound: Bound) {
@@ -156,6 +156,35 @@ class Plans {
   }
 
   /**
+   * `explain`'s plan, with the catalog's statement before it where `ask`; and whether the schema was
+   * as it was when `generation` was read as it came back: the catalog it answered is kept of one
+   * that was.
+   */
+  async #planned(
+    explain: string,
+    planner: Planner,
+    generation: number,
+    ask: boolean,
+  ): Promise<{
+    readonly answered: Awaited<ReturnType<Planner['plan']>>;
+    readonly current: boolean;
+  }> {
+    const asked = ask ? catalogSql(this.#followed) : undefined;
+    if (asked !== undefined) this.#asking += 1;
+    let answered: Awaited<ReturnType<Planner['plan']>>;
+    try {
+      answered = await planner.plan(explain, asked);
+    } finally {
+      if (asked !== undefined) this.#asking -= 1;
+    }
+    const current = this.#followed.schema.generation === generation;
+    if (asked !== undefined && current) {
+      this.#catalog ??= catalogOf(answered.catalog, this.#followed);
+    }
+    return { answered, current };
+  }
+
+  /**
    * The scans `sql` reads, by its plan, which `planner` answers once a text — the catalog with the
    * first; the texts asked least lately are the first a full connection forgets.
    */
@@ -180,20 +209,20 @@ class Plans {
     }
     // One plan carries the catalog's statement: a plan asked beside it, before its answer, reads its
     // tables by no condition (`NO_CONDITIONS`) where the catalog is not yet known.
-    const asked =
-      this.#catalog === undefined && !this.#asking ? catalogSql(this.#followed) : undefined;
-    if (asked !== undefined) this.#asking = true;
-    let answered: Awaited<ReturnType<Planner['plan']>>;
-    try {
-      answered = await planner.plan(explain, asked);
-    } finally {
-      if (asked !== undefined) this.#asking = false;
+    let planned = await this.#planned(
+      explain,
+      planner,
+      generation,
+      this.#catalog === undefined && this.#asking === 0,
+    );
+    // A plan asked beside the one that carries it may come back before that one's answer, or where
+    // that one failed: the catalog is asked again, by this plan alone, rather than this one read or
+    // kept where no table is known to be partitioned or to inherit.
+    if (planned.current && this.#catalog === undefined) {
+      planned = await this.#planned(explain, planner, generation, true);
     }
     // A plan asked as the schema changed may say what it is no more: read whole, and kept not.
-    const current = this.#followed.schema.generation === generation;
-    if (asked !== undefined && current) {
-      this.#catalog ??= catalogOf(answered.catalog, this.#followed);
-    }
+    const { answered, current } = planned;
     const scans = this.#scansOfPlan(sql, planReads(answered.plan, this.#followed.namespace));
     if (!current) {
       return { current, scans };

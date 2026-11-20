@@ -1,3 +1,6 @@
+import { setTimeout as sleep } from 'node:timers/promises';
+
+import type { PGlite } from '@electric-sql/pglite';
 import { sql } from 'drizzle-orm';
 import { pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -15,6 +18,7 @@ import { engineOf, openedWith } from './support/drizzle.ts';
 
 const parted = pgTable('parted', { id: text().notNull(), region: text().notNull() });
 const partedEu = pgTable('parted_eu', { id: text().notNull(), region: text().notNull() });
+const partedUs = pgTable('parted_us', { id: text().notNull(), region: text().notNull() });
 const plain = pgTable('plain', { id: text().primaryKey() });
 const PARTITIONED = `
   CREATE TABLE parted (id text, region text NOT NULL, PRIMARY KEY (id, region)) PARTITION BY LIST (region);
@@ -27,6 +31,49 @@ const PARTITIONED = `
 const REFUSED = 'does not follow partitioned tables';
 /** Each test makes a PGlite of its own, as long as a second and more under load. */
 const TEST_TIMEOUT_MS = 20_000;
+
+/** How long a held answer waits once the statement beside it has been answered: a render's microtasks fit in it. */
+const HELD_MS = 20;
+/** What the statement that asks the catalog begins with. */
+const CATALOG = "SELECT current_setting('server_version_num')";
+
+/**
+ * Holds the answer of the first statement that carries the catalog until the next that `pg` runs has
+ * been answered and its render has gone on, as a connection that answers out of turn would.
+ */
+function catalogLast(pg: PGlite): void {
+  const exec = pg.exec.bind(pg);
+  const held = Promise.withResolvers<undefined>();
+  let asked = false;
+  vi.spyOn(pg, 'exec').mockImplementation(async (statement, options) => {
+    const answered = exec(statement, options);
+    if (!asked && statement.startsWith(CATALOG)) {
+      asked = true;
+      const results = await answered;
+      await held.promise;
+      await sleep(HELD_MS);
+      return results;
+    }
+    if (asked) {
+      try {
+        return await answered;
+      } finally {
+        held.resolve(undefined);
+      }
+    }
+    return answered;
+  });
+}
+
+/** Whether `statement` ran, for a render that goes on where it failed. */
+async function ranOrFailed(statement: PromiseLike<unknown>): Promise<'failed' | 'ran'> {
+  try {
+    await statement;
+    return 'ran';
+  } catch {
+    return 'failed';
+  }
+}
 
 /** A render that reads `statement`'s rows as text. */
 function reading(setup: Awaited<ReturnType<typeof openedWith>>, statement: ReturnType<typeof sql>) {
@@ -84,6 +131,54 @@ describe('a render that reads a partitioned table', { timeout: TEST_TIMEOUT_MS }
       ]);
       return $.h('p', null, JSON.stringify([ordinary.rows.length, partitioned.rows.length]));
     });
+
+    await expect(render()).rejects.toThrow(REFUSED);
+  });
+
+  it.each([
+    ['the ordinary table', 'plain'],
+    ['the partitioned table', 'parted'],
+  ] as const)(
+    'is refused where the catalog is answered after the statement beside it, which asked it first for %s',
+    async (_name, first) => {
+      const setup = await openedWith({ parted, partedEu, partedUs, plain }, PARTITIONED);
+      catalogLast(setup.pg);
+      const { render } = await engineOf(setup, async (_props, $) => {
+        const reads = [
+          () => setup.orm.execute(sql`SELECT id FROM plain`),
+          () => setup.orm.execute(sql`SELECT id FROM parted`),
+        ];
+        const [ordinary, partitioned] = await Promise.all(
+          (first === 'plain' ? reads : reads.toReversed()).map((read) => read()),
+        );
+        return $.h('p', null, JSON.stringify([ordinary?.rows.length, partitioned?.rows.length]));
+      });
+
+      await expect(render()).rejects.toThrow(REFUSED);
+    },
+  );
+
+  it('is refused where the statement that asked the catalog failed beside it, not served what a write through the table changes', async () => {
+    const setup = await openedWith({ parted, partedEu, partedUs, plain }, PARTITIONED);
+    let renders = 0;
+    const { engine, render } = await engineOf(setup, async (_props, $) => {
+      renders += 1;
+      // The first render's other statement reads a table that does not exist: its plan, which
+      // carries the catalog, fails, and the statement of the partitioned table is planned beside it.
+      const table = renders === 1 ? 'missing' : 'plain';
+      const other = ranOrFailed(setup.orm.execute(sql.raw(`SELECT id FROM ${table}`)));
+      const [, partitioned] = await Promise.all([
+        other,
+        setup.orm.execute(sql`SELECT id FROM parted`),
+      ]);
+      return $.h('p', null, String(partitioned.rows.length));
+    });
+
+    await expect(render()).rejects.toBeInstanceOf(Error);
+    await expect(render()).rejects.toThrow(REFUSED);
+
+    await setup.orm.insert(parted).values({ id: 'b', region: 'eu' });
+    await engine.poke();
 
     await expect(render()).rejects.toThrow(REFUSED);
   });
