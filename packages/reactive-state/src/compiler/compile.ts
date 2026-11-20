@@ -75,11 +75,19 @@ function ownerOf(component: Component, sides: Sides): Owner {
   const local = new Set(sides.evaluated.filter((state) => state.local).map((state) => state.key));
   const held = heldThroughHooks(component.states);
   for (const state of component.states) {
-    const key = state.kind === 'state' ? state.value.text : '';
-    if (state.kind === 'state' && state.setter !== undefined && evaluated.has(key)) {
+    if (state.kind !== 'state' || state.setter === undefined) {
+      continue;
+    }
+    const key = state.value.text;
+    // A state the browser starts, which no site reads, is local too: its setter registers nothing.
+    const started = sides.local.has(state);
+    if (started || evaluated.has(key)) {
       const set = updaterId(component.id, key, 'set');
       const setter = { key, set, site: key, type: undefined };
-      held.setters.set(state.setter.text, local.has(key) ? { ...setter, local: true } : setter);
+      held.setters.set(
+        state.setter.text,
+        started || local.has(key) ? { ...setter, local: true } : setter,
+      );
     }
   }
   const typing: Typing = {

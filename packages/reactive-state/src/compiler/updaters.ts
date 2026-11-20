@@ -243,7 +243,7 @@ class WriteReader {
   #setterReference(reference: Identifier, setter: Setter): void {
     const { parent } = reference;
     if (isCallExpression(parent) && parent.expression === reference) {
-      if (!this.#inHandler(parent)) {
+      if (!this.#inHandler(parent, setter.local === true)) {
         this.#fail(`The setter is called ${HANDLER_ONLY}`, parent);
       }
       if (setter.local === true) {
@@ -448,13 +448,14 @@ class WriteReader {
    * owner's, or a function a hook returns, whose own reads are held to this — rather than while the
    * tree is built, as a call in a child, or in a function a child's expression calls at once
    * (`items.map(…)`), would, as React commits it, as a callback `ref` is, or as an event that fires
-   * by itself does.
+   * by itself does. A local state's setter is React's, which the page alone applies, so a function
+   * a condition, `&&`, `||` or `??` answers (`answered`) is the attribute's as well.
    */
-  #inHandler(node: Node): boolean {
+  #inHandler(node: Node, local = false): boolean {
     for (let parent = node.parent; parent !== this.#owner.declaration; parent = parent.parent) {
       if (
         (isArrowFunction(parent) || isFunctionExpression(parent)) &&
-        (handlerAttributeOf(parent) !== undefined ||
+        (handlerAttributeOf(local ? answered(parent) : parent) !== undefined ||
           this.#isConstant(parent) ||
           this.#isItem(parent))
       ) {
@@ -485,6 +486,30 @@ class WriteReader {
       updaters: this.#updaters,
       usesOf: (fn) => this.#usesOf(fn),
     };
+  }
+}
+
+/**
+ * `node`, or what it stands in where that answers it as it is: parentheses, a cast, a condition's
+ * answer, `&&`, `||`, `??`.
+ */
+function answered(node: Node): Node {
+  let each = node;
+  for (let { parent } = each; ; { parent } = each) {
+    const answers =
+      isParenthesizedExpression(parent) ||
+      isAsExpression(parent) ||
+      isSatisfiesExpression(parent) ||
+      isNonNullExpression(parent) ||
+      (isConditionalExpression(parent) && parent.condition !== each) ||
+      (isBinaryExpression(parent) &&
+        (parent.operatorToken.kind === SyntaxKind.AmpersandAmpersandToken ||
+          parent.operatorToken.kind === SyntaxKind.BarBarToken ||
+          parent.operatorToken.kind === SyntaxKind.QuestionQuestionToken));
+    if (!answers) {
+      return each;
+    }
+    each = parent;
   }
 }
 
