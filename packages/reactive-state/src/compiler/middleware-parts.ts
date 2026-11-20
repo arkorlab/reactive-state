@@ -17,7 +17,7 @@ import {
 } from 'typescript/ast';
 
 import { checkComputedOnce, checkContextDefaults } from './middleware-alike.ts';
-import { checkBeforeGuard } from './middleware-order.ts';
+import { checkBeforeGuard, checkResources } from './middleware-order.ts';
 import {
   contextReads,
   declaredBy,
@@ -29,6 +29,7 @@ import {
   type StatementReads,
   unionOf,
 } from './middleware-reads.ts';
+import { checkReassigned } from './middleware-reassigned.ts';
 import { type GuardAnswers, guardAnswers } from './middleware-response.ts';
 import type { ModuleKind } from './modules.ts';
 import { checkServerNode } from './prefix.ts';
@@ -409,6 +410,7 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
   if (split.index < 0) {
     return { after: undefined, before: undefined, guard: undefined };
   }
+  checkResources(statements.slice(0, split.index), names);
   const { classified, suffix } = sortedOf(assembling);
   const of = (role: Role): readonly Classified[] => classified.filter((each) => each.role === role);
   const [pure, guards, envelopes] = [of('pure'), of('guard'), of('envelope')];
@@ -421,6 +423,21 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
     hostSeeds.map((each) => each.reads),
     pure,
   );
+  const hostReads = unionOf(
+    ...[...hostSeeds, ...elsewhere].map((each) => each.reads.values.keys()),
+  );
+  // A constant of the params alone that nothing reads runs where the request is, as written.
+  const unread = pure.filter((each) => !inGuard.has(each) && !elsewhere.has(each));
+  const before = inOrder([...envelopes, ...elsewhere, ...unread]);
+  const guardReads = inOrder([...guards, ...inGuard]);
+  checkReassigned(
+    {
+      guard: guardReads.map((each) => each.statement),
+      host: before.map((each) => each.statement),
+      hostReads,
+    },
+    names,
+  );
   // What both read is written into both: only what each computes alike.
   checkComputedOnce(
     pure,
@@ -431,7 +448,6 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
     names.context,
     names.fail,
   );
-  const guardReads = inOrder([...guards, ...inGuard]);
   const envelopeNames = new Set(envelopes.flatMap((each) => each.declares));
   for (const read of guardReads) {
     checkGuard(read, names, envelopeNames);
@@ -447,9 +463,6 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
       checkAfter(read, names, { guard: guardNames, response });
     }
   }
-  // A constant of the params alone that nothing reads runs where the request is, as written.
-  const unread = pure.filter((each) => !inGuard.has(each) && !elsewhere.has(each));
-  const before = inOrder([...envelopes, ...elsewhere, ...unread]);
   checkBeforeGuard(
     before.map((each) => each.statement),
     guards.map((each) => each.statement),
