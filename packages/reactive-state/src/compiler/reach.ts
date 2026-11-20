@@ -2,11 +2,8 @@ import { isBuiltin } from 'node:module';
 import path from 'node:path';
 
 import {
-  type ConstructorDeclaration,
   type ExportDeclaration,
-  type GetAccessorDeclaration,
   type ImportDeclaration,
-  isBlock,
   isCallExpression,
   isDecorator,
   isExportDeclaration,
@@ -17,11 +14,10 @@ import {
   isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
   isParameterDeclaration,
+  isParenthesizedExpression,
   isSourceFile,
   isStringLiteral,
-  type MethodDeclaration,
   type Node,
-  type SetAccessorDeclaration,
   type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
@@ -178,11 +174,7 @@ export function isFunctionLike(node: Node): boolean {
 }
 
 /** What an object or a class holds that is a function, with a name and decorators run as it is made. */
-type Owned =
-  | ConstructorDeclaration
-  | GetAccessorDeclaration
-  | MethodDeclaration
-  | SetAccessorDeclaration;
+type Owned = Node & { readonly body?: Node | undefined };
 
 function isOwned(node: Node): node is Owned {
   return (
@@ -193,10 +185,20 @@ function isOwned(node: Node): node is Owned {
   );
 }
 
+/** Whether `fn`, a function, is called where it is written, once: `(() => Date.now())()`. */
+function isCalledInPlace(fn: Node): boolean {
+  let at = fn;
+  while (isParenthesizedExpression(at.parent)) {
+    at = at.parent;
+  }
+  return isCallExpression(at.parent) && at.parent.expression === at;
+}
+
 /**
- * Whether `node` runs elsewhere than where it stands: a function, when it is called — but of a
- * method or an accessor of an object or a class, only its parameters and its body: its computed key
- * and its decorators, and its parameters' decorators, run as the object or the class is made.
+ * Whether `node` runs elsewhere than where it stands: a function, when it is called — but one
+ * called where it is written runs there, and of a method or an accessor of an object or a class,
+ * only its parameters and its body run when it is called: its computed key and its decorators, and
+ * its parameters' decorators, run as the object or the class is made.
  */
 function runsElsewhere(node: Node): boolean {
   if (isSourceFile(node)) {
@@ -207,9 +209,9 @@ function runsElsewhere(node: Node): boolean {
     return !isDecorator(node);
   }
   if (isOwned(parent)) {
-    return isBlock(node) && node === parent.body;
+    return node === parent.body;
   }
-  return isFunctionLike(node) && !isOwned(node);
+  return isFunctionLike(node) && !isOwned(node) && !isCalledInPlace(node);
 }
 
 /** One module a file imports, re-exports or loads, as the facts of it are read. */
