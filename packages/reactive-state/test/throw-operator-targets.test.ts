@@ -95,6 +95,89 @@ describe('the Math call before an instanceof', () => {
   );
 });
 
+/** An own hook before an explicit prototype shadows what the prototype holds: `GetMethod` reads it. */
+const OWN_HOOK_BEFORE_PROTOTYPE: readonly Row[] = [
+  {
+    id: 'a number, then a prototype object',
+    source: '({}) instanceof ({ [Symbol.hasInstance]: 0, __proto__: {} } as any);',
+  },
+  {
+    id: 'null, then a prototype object',
+    source: '({}) instanceof ({ [Symbol.hasInstance]: null, __proto__: {} } as any);',
+  },
+  {
+    id: 'a number, then a prototype that holds a hook',
+    source:
+      'const base = { [Symbol.hasInstance]: () => true };\n({}) instanceof ({ [Symbol.hasInstance]: 0, __proto__: base } as any);',
+  },
+];
+
+/** What an explicit prototype leaves unproven, or a hook that is callable or not written whole. */
+const OWN_HOOK_UNPROVEN: readonly Row[] = [
+  {
+    id: 'a function, then a prototype object',
+    source: '({}) instanceof ({ [Symbol.hasInstance]: () => true, __proto__: {} } as any);',
+  },
+  {
+    id: 'a method, then a prototype object',
+    source: '({}) instanceof ({ [Symbol.hasInstance]() { return true; }, __proto__: {} } as any);',
+  },
+  { id: 'a prototype object alone', source: '({}) instanceof ({ __proto__: {} } as any);' },
+  {
+    id: 'a prototype object that holds a hook',
+    source:
+      'const base = { [Symbol.hasInstance]: () => true };\n({}) instanceof ({ __proto__: base } as any);',
+  },
+  {
+    id: 'a key the code does not write, between',
+    source:
+      'declare const key: string;\n({}) instanceof ({ [Symbol.hasInstance]: 0, [key]: 1, __proto__: {} } as any);',
+  },
+  {
+    id: 'a spread, between',
+    source:
+      'declare const extra: object;\n({}) instanceof ({ [Symbol.hasInstance]: 0, ...extra, __proto__: {} } as any);',
+  },
+];
+
+/** The hook written after the prototype, or alone, or with a null prototype, as before. */
+const OWN_HOOK_AS_BEFORE: readonly Row[] = [
+  {
+    id: 'a prototype object, then a number',
+    source: '({}) instanceof ({ __proto__: {}, [Symbol.hasInstance]: 0 } as any);',
+  },
+  { id: 'a number alone', source: '({}) instanceof ({ [Symbol.hasInstance]: 0 } as any);' },
+  { id: 'a plain object', source: '({}) instanceof ({} as any);' },
+  { id: 'a null prototype', source: '({}) instanceof ({ __proto__: null } as any);' },
+  {
+    id: 'a number, then a null prototype',
+    source: '({}) instanceof ({ [Symbol.hasInstance]: 0, __proto__: null } as any);',
+  },
+];
+
+describe('the own hook of an object before its explicit prototype', () => {
+  it.each(OWN_HOOK_BEFORE_PROTOTYPE.map((row) => [row.id, row] as const))(
+    'reads %s as a throw',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(true);
+    },
+  );
+
+  it.each(OWN_HOOK_UNPROVEN.map((row) => [row.id, row] as const))(
+    'leaves %s unproven',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(false);
+    },
+  );
+
+  it.each(OWN_HOOK_AS_BEFORE.map((row) => [row.id, row] as const))(
+    'reads %s as a throw',
+    (_id, row) => {
+      expect(throwsOf(row)).toBe(true);
+    },
+  );
+});
+
 describe('the function target of instanceof', () => {
   it.each(GENERATORS.map((row) => [row.id, row] as const))('reads %s as no throw', (_id, row) => {
     expect(throwsOf(row)).toBe(false);
