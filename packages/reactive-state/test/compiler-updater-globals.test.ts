@@ -317,6 +317,28 @@ function declaring(update: string, parameter = 'current'): Record<string, string
   };
 }
 
+/** A shared module of a function named `Object` and a constant `none`. */
+const OWN_MODULE = `${helperNamed('Object')}export const none = 7;\n`;
+
+/** The program of a component of no props, or of no JSX of its own, that imports `none` as `name` and reads it in its server part. */
+function withParameter(name: string, body: string, jsx: boolean): string {
+  return program({
+    'components/child.reactive.tsx': CHILD,
+    'components/lab.reactive.tsx': [
+      "import { requireUser } from '@/auth';",
+      `import { none as ${name} } from '@/own';`,
+      ...(jsx ? ["import Child from '@/components/child.reactive';"] : []),
+      'export default async function Lab() {',
+      '  await requireUser();',
+      `  const probe = ${name} + 1;`,
+      body,
+      '}',
+      '',
+    ].join('\n'),
+    'own.ts': OWN_MODULE,
+  });
+}
+
 describe('the imports of a program for the authority, beside the globals its updates read', () => {
   afterEach(() => {
     for (const dir of dirs.splice(0)) {
@@ -1016,6 +1038,154 @@ describe('the imports of a program for the authority, beside the globals its upd
 
       expect(imports).toStrictEqual(["import { parseInt as parseInt$3 } from '@/numbers';"]);
       expect(updates['useB#0.count']).toBe('parseInt$2 + parseInt$3(String(parseInt$2), 10)');
+    });
+  });
+
+  describe("a component's import the program keeps under its own name is refused where the program's own text reads a global of it", () => {
+    const TODO = '  const todo = await db.todos.get(id);\n';
+    const CHILD_IMPORT = "import Child from '@/components/child.reactive';";
+    /** A shared module of a function named `Object` and a constant `none`, which a component imports under another name too. */
+    const OWN = `${helperNamed('Object')}export const none = 7;\n`;
+    /** The program of a component whose imports are `imports`, beside a hook whose update reads no global of any of their names. */
+    function keeping(imports: string, place: Pick<Parts, 'jsx' | 'more' | 'server'>): string {
+      return program({
+        'components/child.reactive.tsx': CHILD,
+        'components/lab.reactive.tsx': lab({
+          ...place,
+          imports: `${CHILD_IMPORT}\n${imports}`,
+          update: '(current) => current',
+        }),
+        'hooks/useCount.ts': hook('useCount', 'Math.max(0, current - 1)'),
+        'own.ts': OWN,
+      });
+    }
+
+    it.each([
+      {
+        id: 'a statement of the server part',
+        place: {
+          jsx: '      <Child n={probe} />\n',
+          server: `${TODO}  const probe = Object(todo.estimate);\n`,
+        },
+      },
+      {
+        id: 'the initializer of a state the authority evaluates',
+        place: {
+          more: '  const [count, setCount] = useReactiveState(Object(todo.estimate));\n',
+          jsx: '      <button type="button" onClick={() => setCount((c) => c + 1)}>{count}</button>\n',
+          server: TODO,
+        },
+      },
+      {
+        id: 'a slot',
+        place: { jsx: '      <Child n={Object(todo.estimate)} />\n', server: TODO },
+      },
+    ])('imports `Object`, which $id reads, and the program writes `Object.freeze`', ({ place }) => {
+      const message = refusalOf(() => keeping("import { Object } from '@/own';", place));
+
+      expect(message).toContain('`Object` is imported here');
+      expect(message).toContain("the program's own code reads the global `Object`");
+      expect(message).toContain('Import it under another name.');
+    });
+
+    it('a reactive element the component imports as `Object`, which the program binds by a constant of that name', () => {
+      const message = refusalOf(() => {
+        return keeping("import Object from '@/components/child.reactive';", {
+          jsx: '      <Object n={todo.estimate} />\n',
+          server: TODO,
+        });
+      });
+
+      expect(message).toContain('`Object` is imported here');
+      expect(message).toContain("the program's own code reads the global `Object`");
+    });
+
+    it('a constant imported as `undefined`, which an optional chain of a site is written with', () => {
+      const message = refusalOf(() => {
+        return keeping("import { none as undefined } from '@/own';", {
+          jsx: '      <Child n={probe} />\n',
+          server: `${TODO}  const probe = undefined;\n`,
+        });
+      });
+
+      expect(message).toContain('`undefined` is imported here');
+      expect(message).toContain("the program's own code reads the global `undefined`");
+    });
+
+    it("an import of the name that only the browser reads is not the program's, and is written as it was", () => {
+      const text = keeping("import { Object } from '@/own';", {
+        jsx: '      <button type="button" onClick={() => setTitle(String(Object(1)))}>x</button>\n',
+        server: TODO,
+      });
+
+      expect(readOf(text).imports).toStrictEqual([]);
+      expect(text).toContain('export const writable = Object.freeze(');
+    });
+
+    it('a hook that imports `Object` and `undefined` has them written under an alias', () => {
+      const text = program({
+        'components/lab.reactive.tsx': lab({ update: '(current) => current' }),
+        'hooks/useCount.ts': hook(
+          'useCount',
+          'Object(String(current), 10) + undefined',
+          "import { Object, none as undefined } from '@/own';",
+        ),
+        'own.ts': OWN,
+      });
+
+      expect(readOf(text).imports).toStrictEqual([
+        "import { Object as Object$2, none as undefined$2 } from '@/own';",
+      ]);
+      expect(text).toContain('export const writable = Object.freeze(');
+    });
+
+    describe("a name the program's own function declares as a parameter", () => {
+      it('the component takes no props, and its server part reads an import named `_props`', () => {
+        const message = refusalOf(() =>
+          withParameter('_props', '  return <Child n={probe} />;', true),
+        );
+
+        expect(message).toContain('`_props` is imported here');
+        expect(message).toContain('its own function declares a parameter `_props`');
+        expect(message).toContain('Import it under another name.');
+      });
+
+      it('the component renders no JSX and has no state, and its server part reads an import named `_$`', () => {
+        const message = refusalOf(() => withParameter('_$', '  return String(probe);', false));
+
+        expect(message).toContain('`_$` is imported here');
+        expect(message).toContain('its own function declares a parameter `_$`');
+      });
+
+      it('the component takes props and renders JSX, where neither parameter is declared, is written as it was', () => {
+        const props = readOf(
+          program({
+            'components/child.reactive.tsx': CHILD,
+            'components/lab.reactive.tsx': lab({
+              hooks: ['useCount'],
+              imports: `${CHILD_IMPORT}\nimport { none as _props, none as _$ } from '@/own';`,
+              jsx: '      <Child n={probe} />\n',
+              server: `${TODO}  const probe = _props + _$ + todo.estimate;\n`,
+              update: '(current) => current',
+            }),
+            'hooks/useCount.ts': hook('useCount', 'Math.max(0, current - 1)'),
+            'own.ts': OWN,
+          }),
+        );
+
+        expect(props.imports).toStrictEqual([
+          "import { none as _props, none as _$ } from '@/own';",
+        ]);
+      });
+    });
+
+    it('a kept import of another name is written as it was', () => {
+      const text = keeping("import { none } from '@/own';", {
+        jsx: '      <Child n={probe} />\n',
+        server: `${TODO}  const probe = none + todo.estimate;\n`,
+      });
+
+      expect(readOf(text).imports).toStrictEqual(["import { none } from '@/own';"]);
     });
   });
 
