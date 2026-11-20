@@ -236,13 +236,23 @@ export function itemOf(node: Node, context: ItemContext): Item {
   // A constant that is another name of a setter, or of a function that writes: `const reset = setCount`.
   const alias =
     entry.kind === 'constant' ? aliasedName(entry.declaration, context.names) : undefined;
-  return alias === undefined
-    ? plain
-    : {
-        ...plain,
-        setter: context.held.setters.get(alias.text),
-        uses: context.held.writing.get(alias.text) ?? new Map(),
-      };
+  return alias === undefined ? plain : { ...plain, ...keptUnder(alias, context) };
+}
+
+/**
+ * What a name that another is a name of is held as: a setter, a function the hook holds that writes,
+ * or a constant function of the hook's own, which writes what its body does.
+ */
+function keptUnder(name: Identifier, context: ItemContext): Pick<Item, 'setter' | 'uses'> {
+  const entry = context.names.get(name.text);
+  const fn = entry?.kind === 'constant' ? functionOf(entry.declaration) : undefined;
+  return {
+    setter: context.held.setters.get(name.text),
+    uses:
+      fn === undefined
+        ? (context.held.writing.get(name.text) ?? new Map())
+        : context.writes.usesOf(fn),
+  };
 }
 
 /**

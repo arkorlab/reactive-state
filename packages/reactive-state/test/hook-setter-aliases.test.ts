@@ -27,6 +27,8 @@ const KEPT = '  const reset = setCount;';
 
 const CALLED = 'The setter is called from the handler of an event a person';
 const GIVEN = 'writes a state, and given to a call as the JSX is built';
+const WRITES =
+  'writes a state, so it is called, or handed on, from the handler of an event a person';
 const COMMITTED = 'writes a state, and React calls what `ref` is given itself';
 
 describe.each([
@@ -142,6 +144,57 @@ describe.each([
         'const { count, reset } = useLab(1);\nreturn <p>{count}{reset(0)}</p>;',
       ),
     ).toContain(CALLED);
+  });
+
+  it.each([
+    {
+      id: 'called as the JSX is built',
+      use: 'const { count, again } = useLab(1);\nreturn <p>{count}{again()}</p>;',
+      refused: WRITES,
+    },
+    {
+      id: 'handed to a call as the JSX is built',
+      use: 'const { count, again } = useLab(1);\nreturn <p>{count}{[1].map(again)}</p>;',
+      refused: GIVEN,
+    },
+  ])('refuses another name of a function that writes: $id', ({ use, refused }) => {
+    const body = '  const reset = () => {\n    setCount(0);\n  };\n  const again = reset;';
+
+    expect(read(hookOf(body, '{ count, again }', started), use)).toContain(refused);
+  });
+
+  it('refuses a chain of names of a function that writes', () => {
+    const body =
+      '  const reset = () => {\n    setCount(0);\n  };\n  const again = reset;\n  const third = again;';
+
+    expect(
+      read(
+        hookOf(body, '{ count, third }', started),
+        'const { count, third } = useLab(1);\nreturn <p>{count}{third()}</p>;',
+      ),
+    ).toContain(WRITES);
+  });
+
+  it('takes another name of a function that writes where a handler calls it', () => {
+    const body = '  const reset = () => {\n    setCount(0);\n  };\n  const again = reset;';
+
+    expect(
+      read(
+        hookOf(body, '{ count, again }', started),
+        'const { count, again } = useLab(1);\nreturn <button onClick={again}>{count}</button>;',
+      ),
+    ).toBe('taken');
+  });
+
+  it('takes another name of a function that writes nothing', () => {
+    const body = '  const shown = () => count + 1;\n  const again = shown;';
+
+    expect(
+      read(
+        hookOf(body, '{ count, again }', started),
+        'const { count, again } = useLab(1);\nreturn <p>{count}{again()}</p>;',
+      ),
+    ).toBe('taken');
   });
 
   it.each([
