@@ -30,6 +30,7 @@ import {
   moduleResolutionsOf,
 } from '../compiler/module-resolutions.ts';
 import { byCodeUnits } from '../compiler/splice.ts';
+import { inputRoots } from './input-roots.ts';
 
 /**
  * The compile a build runs before Next.js reads the application (`./adapter.ts`), and a platform's
@@ -338,9 +339,10 @@ function compilerTypeScript(): string {
 /**
  * The digest of everything a compile of `layout` reads: the application's sources — under its
  * root, not only its components' directory, as they import its modules wherever they are — but
- * what the compile itself writes there; this package's own, the compiler's; the TypeScript it reads
- * them with; and where it is told to read and write. Each file by its path from its root and the
- * digest of its bytes, in one order whatever the directory's.
+ * what the compile itself writes there; the components' directory and the app's, where either is
+ * out of its root (`inputRoots`); this package's own, the compiler's; the TypeScript it reads them
+ * with; and where it is told to read and write. Each file by its path from its root and the digest
+ * of its bytes, in one order whatever the directory's.
  */
 function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
   const hash = createHash('sha256');
@@ -357,10 +359,7 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
       typescript: compilerTypeScript(),
     }),
   );
-  const roots = [
-    { name: 'project', root: layout.projectDir },
-    { name: 'compiler', root: PACKAGE_SOURCES },
-  ];
+  const roots = [...inputRoots(layout), { name: 'compiler', root: PACKAGE_SOURCES }];
   const skipped = new Set([layout.outDir]);
   for (const { name, root } of roots) {
     const files = sourceFiles(root, skipped)
