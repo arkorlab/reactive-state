@@ -9,6 +9,7 @@ import {
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPrivateIdentifier,
+  isShorthandPropertyAssignment,
   isTemplateLiteralToken,
   isYieldExpression,
   type Node,
@@ -207,7 +208,9 @@ interface Forming {
  * An update's body as the compiler's own form: each node by its kind, the current value as `$`,
  * what it captures by name, what it imports by module and export, and a literal by its value — the
  * text of a template's parts between its substitutions, and a private name, among them, which no
- * child of theirs holds. Types are no part of it, nor how a node is spelled.
+ * child of theirs holds. Types are no part of it, nor how a node is spelled. A shorthand property
+ * is both its key and its value, and the value is `$` or a capture: its key is a part of the form
+ * as well, or `left => ({ left })` and `right => ({ right })` would be one update.
  */
 function formOf(node: Node, forming: Forming): string {
   if (isIdentifier(node)) {
@@ -216,7 +219,10 @@ function formOf(node: Node, forming: Forming): string {
   if (isLiteralExpression(node) || isTemplateLiteralToken(node) || isPrivateIdentifier(node)) {
     return `${formatSyntaxKind(node.kind)}:${JSON.stringify(node.text)}`;
   }
-  const parts: string[] = [];
+  const parts: string[] =
+    isShorthandPropertyAssignment(node) && isIdentifier(node.name)
+      ? [`name:${node.name.text}`]
+      : [];
   node.forEachChild((child) => {
     if (!isTypeOnly(child)) {
       parts.push(formOf(child, forming));
