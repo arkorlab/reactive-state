@@ -93,7 +93,8 @@ function invalidFunctionTarget(
     quietClass;
   return (
     object &&
-    ((isExpression(target) && lacksFunctionPrototype(target, right)) || isMethodDeclaration(target))
+    ((isExpression(target) && lacksFunctionPrototype(target, right)) ||
+      (isMethodDeclaration(target) && target.asteriskToken === undefined))
   );
 }
 
