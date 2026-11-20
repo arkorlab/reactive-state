@@ -248,6 +248,72 @@ const CASES = [
     source: `export function label(value: string | (() => string)) { const alias = value; return typeof value === "function" ? "" : \`\${alias}\`; }`,
   },
   {
+    id: 'case-expression-is-not-narrowed-by-a-guard-in-its-clause',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(key: string, value: string | (() => string)) { switch (key) { case String(value): if (typeof value === "function") { return ""; } return "matched"; } return ""; }',
+  },
+  {
+    id: 'case-expression-reading-a-member-is-not-narrowed-by-a-guard-in-its-clause',
+    reason: TOSTRING_REASON,
+    source:
+      'export function label(key: string, value: string | (() => string)) { switch (key) { case value.toString(): if (typeof value === "function") { return ""; } return "matched"; } return ""; }',
+  },
+  {
+    id: 'statement-of-the-same-clause-after-the-guard-is-narrowed',
+    reason: undefined,
+    source:
+      'export function label(key: string, value: string | (() => string)) { switch (key) { case "a": if (typeof value === "function") { return ""; } return String(value); } return ""; }',
+  },
+  {
+    id: 'statement-of-a-default-clause-after-the-guard-is-narrowed',
+    reason: undefined,
+    source:
+      'export function label(key: string, value: string | (() => string)) { switch (key) { default: if (typeof value === "function") { return ""; } return String(value); } return ""; }',
+  },
+  {
+    id: 'guard-in-one-clause-does-not-narrow-another-clause-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(key: string, value: string | (() => string)) { switch (key) { case "a": if (typeof value === "function") { return ""; } break; case "b": return String(value); } return ""; }',
+  },
+  {
+    id: 'switch-discriminant-before-a-guard-in-a-clause-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string)) { switch (String(value)) { case "a": if (typeof value === "function") { return ""; } return "x"; } return ""; }',
+  },
+  {
+    id: 'for-head-before-a-guard-in-the-body-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string)) { for (const each of [String(value)]) { if (typeof value === "function") { return each; } } return ""; }',
+  },
+  {
+    id: 'while-condition-before-a-guard-in-the-body-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string)) { while (String(value) === "a") { if (typeof value === "function") { return ""; } break; } return ""; }',
+  },
+  {
+    id: 'default-parameter-value-before-a-guard-in-the-body-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string), text = String(value)) { if (typeof value === "function") { return ""; } return text; }',
+  },
+  {
+    id: 'class-member-initializer-before-the-guard-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function make(value: string | (() => string)) { class Box { text = String(value); } if (typeof value === "function") { return ""; } return new Box().text; }',
+  },
+  {
+    id: 'class-declared-after-the-guard-is-narrowed',
+    reason: undefined,
+    source:
+      'export function make(value: string | (() => string)) { if (typeof value === "function") { return ""; } class Box { text = String(value); } return new Box().text; }',
+  },
+  {
     id: 'unknown-parameter-is-no-function-stays-accepted-pin',
     reason: undefined,
     source: `export function label(value: unknown) { return \`\${String(value)}\`; }`,

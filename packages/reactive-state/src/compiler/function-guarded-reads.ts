@@ -117,17 +117,20 @@ function isChild(child: Node, branch: Node | undefined): boolean {
   return child === branch;
 }
 
-/** Whether a statement before `child` is an `if` that always leaves, and that a guard of `name` makes. */
+/**
+ * Whether `child` is one of `statements`, after an `if` that always leaves and that a guard of
+ * `name` makes. What else a node with statements holds — the expression of a `case` — runs before
+ * them, so only a statement of the list is looked at.
+ */
 function afterLeavingGuard(
   statements: readonly Statement[],
   child: Node,
   name: Identifier,
   declared: FrameDeclaration,
 ): boolean {
-  for (const statement of statements) {
-    if (isChild(child, statement)) {
-      return false;
-    }
+  const at = statements.findIndex((statement) => isChild(child, statement));
+  const before = statements.slice(0, Math.max(at, 0));
+  for (const statement of before) {
     if (
       isIfStatement(statement) &&
       leaves(statement.thenStatement) &&
