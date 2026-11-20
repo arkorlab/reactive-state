@@ -38,6 +38,18 @@ interface Outcome {
   readonly moved: boolean;
 }
 
+/** What `SchemaDigest.read` answers where its query failed, which it reports and does not throw. */
+const UNREAD = /^unread-/u;
+
+/** The digest as it is read now, which is one that was read: not the answer of a read that failed. */
+async function readNow(digest: SchemaDigest): Promise<{ changed: boolean; digest: string }> {
+  const read = await digest.read(true);
+
+  expect(read.digest).not.toMatch(UNREAD);
+
+  return read;
+}
+
 /** What `b` reads of `read` and whether the digest moves, once `change` ran as the superuser. */
 async function changing({ change, read, setup }: Omit<Case, 'rows'>): Promise<Outcome> {
   const pg = await PGlite.create();
@@ -51,15 +63,19 @@ async function changing({ change, read, setup }: Omit<Case, 'rows'>): Promise<Ou
     return rows.map((row) => row.id).join(',');
   };
   await pg.exec('SET ROLE b');
-  await digest.read(true);
+  await readNow(digest);
   const before = await idsRead();
 
   await pg.exec('RESET ROLE');
   await pg.exec(change);
   await pg.exec('SET ROLE b');
   const after = await idsRead();
-  const { changed } = await digest.read(true);
-  return { moved: changed, rows: [before, after] };
+  const moved = await readNow(digest);
+
+  // Asked again at once, it is what it was: a read that failed says it changed each time.
+  await expect(readNow(digest)).resolves.toStrictEqual({ changed: false, digest: moved.digest });
+
+  return { moved: moved.changed, rows: [before, after] };
 }
 
 const READ_TASKS = 'SELECT id FROM tasks ORDER BY id';

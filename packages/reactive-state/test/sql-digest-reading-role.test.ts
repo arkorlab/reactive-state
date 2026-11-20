@@ -39,6 +39,18 @@ async function idsRead(pg: PGlite): Promise<string> {
   return rows.map((row) => row.id).join(',');
 }
 
+/** What `SchemaDigest.read` answers where its query failed, which it reports and does not throw. */
+const UNREAD = /^unread-/u;
+
+/** The digest as it is read now, which is one that was read: not the answer of a read that failed. */
+async function readNow(digest: SchemaDigest): Promise<{ changed: boolean; digest: string }> {
+  const read = await digest.read(true);
+
+  expect(read.digest).not.toMatch(UNREAD);
+
+  return read;
+}
+
 /** One view of the application's for each of the roles `a` and `b`, each owned by its role. */
 const VIEWS_OF_BOTH = `
   CREATE VIEW va AS SELECT id FROM tasks; ALTER VIEW va OWNER TO a;
@@ -60,14 +72,14 @@ describe("the schema's digest of the role a statement reads as", () => {
       const pg = await opened('owner_name = current_user', ddl);
       const digest = new SchemaDigest(pg, RELATIONS);
       await pg.exec('SET ROLE a');
-      const asA = await digest.read(true);
+      const asA = await readNow(digest);
       const idsA = await idsRead(pg);
 
       await pg.exec('RESET ROLE; SET ROLE b');
-      const asB = await digest.read(true);
+      const asB = await readNow(digest);
       const idsB = await idsRead(pg);
       await pg.exec('RESET ROLE; SET ROLE a');
-      const backAsA = await digest.read(true);
+      const backAsA = await readNow(digest);
 
       expect([idsA, idsB]).toStrictEqual(['t1', 't2']);
       expect(asB.changed).toBe(true);
@@ -84,8 +96,8 @@ describe("the schema's digest of the role a statement reads as", () => {
       const digest = new SchemaDigest(pg, RELATIONS);
       await pg.exec('SET ROLE b');
 
-      const first = await digest.read(true);
-      const second = await digest.read(true);
+      const first = await readNow(digest);
+      const second = await readNow(digest);
 
       expect(second).toStrictEqual({ changed: false, digest: first.digest });
     },
@@ -99,14 +111,14 @@ describe("the schema's digest of the role a statement reads as", () => {
       await pg.exec("UPDATE tasks SET owner_name = CASE id WHEN 't1' THEN 'x' ELSE 'y' END");
       const digest = new SchemaDigest(pg, RELATIONS);
       await pg.exec('SET SESSION AUTHORIZATION x; SET ROLE a');
-      const asX = await digest.read(true);
+      const asX = await readNow(digest);
       const idsX = await idsRead(pg);
 
       await pg.exec('RESET ROLE; SET SESSION AUTHORIZATION y; SET ROLE a');
-      const asY = await digest.read(true);
+      const asY = await readNow(digest);
       const idsY = await idsRead(pg);
       await pg.exec('RESET ROLE; SET SESSION AUTHORIZATION x; SET ROLE a');
-      const backAsX = await digest.read(true);
+      const backAsX = await readNow(digest);
 
       expect([idsX, idsY]).toStrictEqual(['t1', 't2']);
       expect(asY.changed).toBe(true);
