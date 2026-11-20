@@ -314,6 +314,48 @@ const CASES = [
       'export function make(value: string | (() => string)) { if (typeof value === "function") { return ""; } class Box { text = String(value); } return new Box().text; }',
   },
   {
+    id: 'var-redeclaration-with-an-initializer-is-a-write-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string), replacement: () => string) { if (typeof value !== "function") { var value = replacement; return String(value); } return ""; }',
+  },
+  {
+    id: 'var-loop-head-of-the-same-name-is-a-write-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string), all: (() => string)[]) { for (var value of all) { value; } return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'var-pattern-of-the-same-name-is-a-write-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string), holder: { value: () => string }) { var { value } = holder; return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'var-without-an-initializer-is-no-write',
+    reason: undefined,
+    source:
+      'export function label(value: string | (() => string)) { var value; return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'var-of-the-same-name-in-another-function-is-no-write',
+    reason: undefined,
+    source:
+      'export function other() { var value = 1; return value; } export function label(value: string | (() => string)) { return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'own-initialized-var-of-the-binding-is-no-write',
+    reason: undefined,
+    source:
+      'declare function pick(): string | (() => string); export function label() { var value: string | (() => string) = pick(); return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'const-of-the-same-name-in-a-nested-block-is-no-write',
+    reason: undefined,
+    source:
+      'export function label(value: string | (() => string)) { { const value = 1; void value; } return typeof value === "function" ? "" : String(value); }',
+  },
+  {
     id: 'unknown-parameter-is-no-function-stays-accepted-pin',
     reason: undefined,
     source: `export function label(value: unknown) { return \`\${String(value)}\`; }`,

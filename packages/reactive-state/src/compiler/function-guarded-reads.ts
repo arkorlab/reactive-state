@@ -28,19 +28,28 @@ import {
   isStringLiteral,
   isThrowStatement,
   isTypeOfExpression,
+  isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
   type ObjectLiteralElementLike,
   type SourceFile,
   type Statement,
   SyntaxKind,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import { type FrameDeclaration, frameDeclarationOf } from './framed-bindings.ts';
 import { unwrapTarget } from './function-this-writes.ts';
+import { bindingIdentifiers } from './scope.ts';
 
-const WRITTEN_NAMES = new WeakMap<SourceFile, ReadonlySet<string>>();
+/** What a file assigns, by name, and the declarations that bind a name again, by name. */
+interface WrittenNames {
+  readonly assigned: Set<string>;
+  readonly redeclared: Map<string, Node[]>;
+}
+
+const WRITTEN_NAMES = new WeakMap<SourceFile, WrittenNames>();
 
 /** The `typeof` result of a function, which no other value has. */
 const FUNCTION_TYPEOF = 'function';
@@ -64,7 +73,7 @@ const UNEQUAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
  * holds it; what a guard cannot prove — `instanceof`, a test of another name — shows nothing.
  */
 export function isGuardedNonFunction(name: Identifier, declared: FrameDeclaration): boolean {
-  if (isWritten(name)) {
+  if (isWritten(name, declared)) {
     return false;
   }
   for (let at: Node = name.parent, child: Node = name; ; child = at, at = at.parent) {
@@ -226,41 +235,93 @@ function typeofComparison(
     : undefined;
 }
 
-/** Whether the file assigns a name `name` is spelled as, anywhere: `=`, `+=`, `++`, a loop head or a pattern. */
-function isWritten(name: Identifier): boolean {
+/**
+ * Whether the file writes the binding `declared` of `name`: it assigns a name spelled as `name`
+ * anywhere (`=`, `+=`, `++`, a loop head, a pattern), or another declaration of the same function
+ * binds the name again and so assigns it — an initialized `var` or a `var` loop head.
+ */
+function isWritten(name: Identifier, declared: FrameDeclaration): boolean {
   const file = name.getSourceFile();
   let names = WRITTEN_NAMES.get(file);
   if (names === undefined) {
-    const written = new Set<string>();
-    collectWrittenNames(file, written);
-    names = written;
+    names = { assigned: new Set<string>(), redeclared: new Map<string, Node[]>() };
+    collectWrittenNames(file, names);
     WRITTEN_NAMES.set(file, names);
   }
-  return names.has(name.text);
+  const redeclaring = names.redeclared.get(name.text) ?? [];
+  return (
+    names.assigned.has(name.text) ||
+    redeclaring.some((each) => !isChild(declared, each) && scopeOf(each) === scopeOf(declared))
+  );
 }
 
-/** Adds the names `node` and what it holds assign: the targets of assignments, updates and loop heads. */
-function collectWrittenNames(node: Node, written: Set<string>): void {
+/** The function, static block or file whose variables `node` declares or is a parameter of. */
+function scopeOf(node: Node): Node {
+  let at = node.parent;
+  while (
+    !isFunctionLikeDeclaration(at) &&
+    !isClassStaticBlockDeclaration(at) &&
+    !isSourceFile(at)
+  ) {
+    at = at.parent;
+  }
+  return at;
+}
+
+/** Adds what `node` and what it holds write: assignments, updates and loop heads, and redeclarations. */
+function collectWrittenNames(node: Node, written: WrittenNames): void {
+  recordAssignment(node, written.assigned);
+  recordRedeclaration(node, written.redeclared);
+  node.forEachChild((each) => {
+    collectWrittenNames(each, written);
+  });
+}
+
+/** Adds the names `node` assigns: the targets of assignments, updates and loop heads. */
+function recordAssignment(node: Node, assigned: Set<string>): void {
   if (
     isBinaryExpression(node) &&
     node.operatorToken.kind >= SyntaxKind.FirstAssignment &&
     node.operatorToken.kind <= SyntaxKind.LastAssignment
   ) {
-    addTargetNames(node.left, written);
+    addTargetNames(node.left, assigned);
   } else if (
     (isPrefixUnaryExpression(node) || isPostfixUnaryExpression(node)) &&
     (node.operator === SyntaxKind.PlusPlusToken || node.operator === SyntaxKind.MinusMinusToken)
   ) {
-    addTargetNames(node.operand, written);
+    addTargetNames(node.operand, assigned);
   } else if (
     (isForInStatement(node) || isForOfStatement(node)) &&
     !isVariableDeclarationList(node.initializer)
   ) {
-    addTargetNames(node.initializer, written);
+    addTargetNames(node.initializer, assigned);
   }
-  node.forEachChild((each) => {
-    collectWrittenNames(each, written);
-  });
+}
+
+/** Adds the names `node` declares again, as a `var` that gives them a value or heads a loop. */
+function recordRedeclaration(node: Node, redeclared: Map<string, Node[]>): void {
+  if (!isVariableDeclaration(node) || !assignsItsNames(node)) {
+    return;
+  }
+  for (const bound of bindingIdentifiers(node.name)) {
+    redeclared.set(bound.text, [...(redeclared.get(bound.text) ?? []), node]);
+  }
+}
+
+/** Whether `declaration` is a `var` that gives its names a value: an initializer or a loop head. */
+function assignsItsNames(declaration: VariableDeclaration): boolean {
+  const list = declaration.parent;
+  if (
+    !isVariableDeclarationList(list) ||
+    !/^var\b/u.test(list.getText(declaration.getSourceFile()))
+  ) {
+    return false;
+  }
+  return (
+    declaration.initializer !== undefined ||
+    isForInStatement(list.parent) ||
+    isForOfStatement(list.parent)
+  );
 }
 
 /** Adds the names a target binds: a name, or the names of an object or array pattern, with their defaults. */
