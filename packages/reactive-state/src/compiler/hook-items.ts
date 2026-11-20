@@ -244,7 +244,10 @@ export function itemOf(node: Node, context: ItemContext): Item {
       };
 }
 
-/** The name a constant is another name of, through parentheses and casts: `const reset = setCount`. */
+/**
+ * The name a constant is another name of, through parentheses and casts: `const reset = setCount`.
+ * A pattern binds a part of what it is given, which is not another name of it.
+ */
 function aliasOf(declaration: VariableDeclaration): Identifier | undefined {
   let value = declaration.initializer;
   while (
@@ -253,5 +256,7 @@ function aliasOf(declaration: VariableDeclaration): Identifier | undefined {
   ) {
     value = value.expression;
   }
-  return value !== undefined && isIdentifier(value) ? value : undefined;
+  return value !== undefined && isIdentifier(value) && isIdentifier(declaration.name)
+    ? value
+    : undefined;
 }

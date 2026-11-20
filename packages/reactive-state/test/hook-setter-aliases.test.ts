@@ -106,6 +106,18 @@ describe.each([
     ).toContain('from the handler of an event a person');
   });
 
+  it.each([
+    { id: 'an object pattern', body: '  const { length: arity } = setCount;' },
+    { id: 'an array pattern', body: '  const [arity] = setCount as unknown as number[];' },
+  ])('takes what a pattern binds of the setter, which is no setter: $id', ({ body }) => {
+    expect(
+      read(
+        hookOf(body, '{ count, arity }', started),
+        'const { count, arity } = useLab(1);\nreturn <p>{count}{Math.max(arity, 1)}</p>;',
+      ),
+    ).toBe('taken');
+  });
+
   it('takes an alias of what is no setter', () => {
     expect(
       read(
