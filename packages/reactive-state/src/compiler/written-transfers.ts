@@ -13,6 +13,7 @@ import {
   isShorthandPropertyAssignment,
   isSpreadAssignment,
   isSpreadElement,
+  isVariableDeclaration,
   type Node,
   type ObjectLiteralElementLike,
   type ObjectLiteralExpression,
@@ -22,6 +23,9 @@ import {
 
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { frameDeclarationOf } from './framed-bindings.ts';
+import { framedVariableWritesOf } from './framed-member-writes.ts';
+import { isConstantDeclaration } from './framed-source-changes.ts';
 import { initializerOf } from './framed.ts';
 import { constantValue } from './numbers.ts';
 import {
@@ -236,6 +240,7 @@ function enqueueIdentifierOptions(
     return;
   }
   collectTransferTargets(name, state);
+  pending.push(...mutableAliasValues(name).toReversed());
 }
 
 /** Walks an options object literal right-to-left until a definite `transfer` property is met. */
@@ -332,6 +337,9 @@ function enqueueTransferEntry(
   if (value.kind !== SyntaxKind.OmittedExpression) {
     recordTarget(value, state);
   }
+  if (isIdentifier(value)) {
+    pending.push(...mutableAliasValues(value).toReversed());
+  }
 }
 
 /** Value-producing operands of conditional, logical, assignment or comma expressions. */
@@ -378,6 +386,28 @@ function recordTarget(node: Node, state: TransferState): void {
     state.recorded.add(node);
     state.targets.push(node);
   }
+}
+
+/**
+ * What a `let` or `var` variable of one name may hold: its initializer and every value the module
+ * assigns it anew; none of a `const`, a parameter or a pattern. The variable itself stays the opaque
+ * holder recorded for it, which a function-local one makes no state kept; the module-owned buffers
+ * its values name are what the call detaches, so each value counts, in whatever order.
+ */
+function mutableAliasValues(name: Identifier): readonly Expression[] {
+  const declared = frameDeclarationOf(name);
+  if (
+    declared === undefined ||
+    !isVariableDeclaration(declared) ||
+    !isIdentifier(declared.name) ||
+    isConstantDeclaration(declared)
+  ) {
+    return [];
+  }
+  const assigned = framedVariableWritesOf(name.getSourceFile(), declared).map(
+    (write) => write.value,
+  );
+  return declared.initializer === undefined ? assigned : [declared.initializer, ...assigned];
 }
 
 /** The `const` alias or literal container a transfer entry is declared of; none of constructions. */

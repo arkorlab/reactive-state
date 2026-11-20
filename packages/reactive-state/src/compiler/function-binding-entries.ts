@@ -4,10 +4,13 @@ import {
   type Expression,
   type Identifier,
   isArrayBindingPattern,
+  isClassExpression,
   isDecorator,
+  isFunctionExpression,
   isIdentifier,
   isObjectBindingPattern,
   isParameterDeclaration,
+  isSourceFile,
   isVariableDeclaration,
   isVoidExpression,
   type Node,
@@ -59,7 +62,7 @@ const BINDING_ENTRY_KINDS = new WeakMap<Node, EntryKind>();
 export function identifierEntryKind(node: Identifier, context: ScanContext): EntryKind {
   const declared = frameDeclarationOf(node);
   if (declared === undefined) {
-    return 'unknown';
+    return namesItsOwnExpression(node) ? 'renamed' : 'unknown';
   }
   if (isParameterDeclaration(declared) && isOutsideParameterScope(node, declared)) {
     return 'unknown';
@@ -97,6 +100,20 @@ function computeDeclaredEntryKind(
     return parameterEntryKind(node, declared, target, context);
   }
   return isVariableDeclaration(declared) ? variableEntryKind(node, declared, context) : 'renamed';
+}
+
+/**
+ * Whether `node`, which no declaration binds, is the name a function or class expression gives
+ * itself — `pick` read within `const pick = function pick() { … }` — which is bound there to the
+ * expression itself, whatever the outer scope declares: a function whose name a minifier may shorten.
+ */
+function namesItsOwnExpression(node: Identifier): boolean {
+  for (let at: Node = node.parent; !isSourceFile(at); at = at.parent) {
+    if ((isFunctionExpression(at) || isClassExpression(at)) && at.name?.text === node.text) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Whether `node` always evaluates to `undefined` (`void ...` or unshadowed `undefined`). */
