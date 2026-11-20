@@ -1,6 +1,7 @@
 import {
   type Expression,
   type Identifier,
+  isArrayBindingPattern,
   isArrowFunction,
   isBinaryExpression,
   isCallExpression,
@@ -37,10 +38,11 @@ const ASSUMED = new Set<Node>();
 const ASKED = new Set<string>();
 
 /**
- * Whether a parameter of a function the answers of which are being asked is handed a Date. Only a
- * parameter that is a plain name is: what a helper makes of a position (`...items`, `arguments`), a
- * member (`({ length })`) or an element a pattern takes of what it is handed is not read as the Date
- * itself, so the helper's answer is the Date only where it returns the parameter, as it is handed.
+ * Whether a parameter of a function the answers of which are being asked is handed a Date: a plain
+ * name, a rest parameter, or an array pattern (whose names, and the rest list, are the Date to the
+ * walk). What a helper makes of a member (`({ length })`), `arguments` or a `this` it is typed of is
+ * not the Date itself, so the helper's answer is the Date only where it returns the parameter, as
+ * it is handed.
  */
 export function isHandedDate(parameter: ParameterDeclaration): boolean {
   return ASSUMED.has(parameter);
@@ -148,8 +150,7 @@ function answersItself(fn: Answering): boolean {
     return answeredLeaves(returned).some(
       (leaf) => isCallExpression(leaf) && functionsOf(leaf.expression).includes(fn),
     );
-  },
-  );
+  });
 }
 
 /** Answers found for a function and the parameters it is handed, while one outermost question runs. */
@@ -157,14 +158,29 @@ const ANSWERED = new Map<string, boolean>();
 const ASKING = { asked: 0, cut: 0, depth: 0 };
 const BUDGET = { asks: 512 } as const;
 
-function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['fresh']): boolean {
-  const parameters = parametersOf(fn).filter((parameter, index) => {
+/**
+ * Whether a call hands the Date to `parameter`, the one at `index`: a plain name at its position
+ * (or from a spread on); a rest parameter, from its position on, with a spread anywhere in doubt,
+ * and an array pattern at its position, whose names the walk takes for the Date, as it does not tell
+ * the positions of a list apart; not an object pattern, whose members are not the Date.
+ */
+function handsPosition(parameter: ParameterDeclaration, index: number, handed: Handed): boolean {
+  if (parameter.dotDotDotToken !== undefined) {
     return (
       isIdentifier(parameter.name) &&
-      parameter.dotDotDotToken === undefined &&
-      (handed.at.has(index) || index >= handed.from)
+      (handed.from !== Infinity || [...handed.at].some((position) => position >= index))
     );
-  });
+  }
+  return (
+    (isIdentifier(parameter.name) || isArrayBindingPattern(parameter.name)) &&
+    (handed.at.has(index) || index >= handed.from)
+  );
+}
+
+function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['fresh']): boolean {
+  const parameters = parametersOf(fn).filter((parameter, index) =>
+    handsPosition(parameter, index, handed),
+  );
   if (parameters.length === 0) return false;
   const question = `${String(fn.pos)}:${parameters.map((each) => String(each.pos)).join(',')}`;
   const key = `${question}|${[...ASSUMED].map((each) => String(each.pos)).join(',')}`;
