@@ -27,7 +27,7 @@ import {
   textOf,
   unusedName,
 } from './splice.ts';
-import { reservedNames } from './update-globals.ts';
+import { OWN_NAMES, refuseShadowing, reservedNames, updateGlobals } from './update-globals.ts';
 import type { ApplySite, Registered } from './updaters.ts';
 
 /**
@@ -75,23 +75,6 @@ const BY_REFERENCE: ReadonlySet<ModuleKind> = new Set([
   'operations',
 ]);
 
-/** The names a program declares itself, which an import it writes for an update may not take. */
-const OWN_NAMES: ReadonlySet<string> = new Set([
-  'actionRef',
-  'buildId',
-  'component',
-  'componentRef',
-  'evaluate',
-  'moduleRef',
-  'ProgramUpdater',
-  'protocolVersion',
-  'RenderScope',
-  'States',
-  'StatesOf',
-  'updaters',
-  'writable',
-]);
-
 /**
  * The imports a program writes: what its code reads of the component's imports — at run time, or in
  * a type — and what its updates read of the application's shared modules, a hook's among them,
@@ -114,21 +97,26 @@ class ImportPlan {
         this.#taken.set(name, '');
       }
     }
-    // What the code written into a site's function declares, or reads as a global (`derive.ts`), and
-    // what the updates read as globals, which the program writes as they are.
-    for (const name of reservedNames(sides.derivation.taken, updaters)) {
+    // What the program writes as it is reads as globals, and what the code written into a site's
+    // function declares or reads as a global (`derive.ts`): no import takes any of them.
+    for (const name of reservedNames(component, sides, updaters)) {
       this.#taken.set(name, '');
     }
     const { refs } = sides;
+    const readers = updateGlobals(updaters);
     const bindings = component.modules.flatMap((module) => module.bindings);
     for (const binding of bindings) {
       const name = binding.name.text;
       if (refs.components.has(name) || refs.modules.has(name) || refs.actions.has(name)) {
+        refuseShadowing(binding.name, readers, component.fail);
         this.#taken.set(name, '');
         continue;
       }
       const byReference = BY_REFERENCE.has(binding.module.target.kind);
       const value = !byReference && !binding.typeOnly && sides.authority.values.has(name);
+      if (value) {
+        refuseShadowing(binding.name, readers, component.fail);
+      }
       if (value || sides.authority.types.has(name) || propTypes.has(name)) {
         this.#add(binding, !value);
       }
