@@ -66,12 +66,23 @@ export interface NonJsonPart {
   readonly admits: string;
 }
 
-/** Where a type is read, and the declarations walked under way. */
+/**
+ * The aliases, interfaces and type parameters a walk has met, by what they are read as: an object's
+ * entry, which JSON leaves `undefined` out of, or an array's element, which it does not.
+ */
+interface Reads {
+  readonly elements: Set<Node>;
+  readonly entries: Set<Node>;
+}
+
+/** Where a type is read, and the declarations walked under way and walked to the end. */
 interface Walk {
   readonly at: TypeSite;
   readonly reading: TypeReading;
-  /** The aliases, interfaces and type parameters walked under way, each walked once. */
-  readonly walking: Set<Node>;
+  /** What is walked under way, each walked once: a type of itself is not walked again. */
+  readonly walking: Reads;
+  /** What was walked to the end and admits nothing no JSON holds, which no later read walks again. */
+  readonly completed: Reads;
 }
 
 const FUNCTION = 'a function';
@@ -128,7 +139,7 @@ export function nonJsonPart(
   at: TypeSite,
   reading: TypeReading,
 ): NonJsonPart | undefined {
-  return partOf(type, { at, reading, walking: new Set() }, true);
+  return partOf(type, { at, completed: reads(), reading, walking: reads() }, true);
 }
 
 /**
@@ -321,7 +332,7 @@ function referencePart(
     }
     return constraint === undefined
       ? admitting(reference, ANY)
-      : walked(parameter, walk, () => partOf(constraint, walk, entry));
+      : walked(parameter, walk, entry, () => partOf(constraint, walk, entry));
   }
   if (isLanguageType(reference.typeName, at)) {
     return languagePart(reference, walk, entry);
@@ -343,10 +354,11 @@ function declaredPart(
   }
   if (isTypeAliasDeclaration(declaration)) {
     return declaration.typeParameters === undefined
-      ? walked(declaration, walk, () => partOf(declaration.type, { ...walk, at }, entry))
+      ? walked(declaration, walk, entry, () => partOf(declaration.type, { ...walk, at }, entry))
       : admitting(reference, UNTOLD);
   }
-  return walked(declaration, walk, () =>
+  // An object's members are read as entries, whatever the object is read as.
+  return walked(declaration, walk, true, () =>
     objectPart(reference, membersOf(reference, walk.at, walk.reading), walk),
   );
 }
@@ -366,7 +378,7 @@ function languagePart(
   const name = isIdentifier(reference.typeName) ? reference.typeName.text : '';
   if (LANGUAGE_OBJECTS.has(name)) {
     // `Partial<Tree>` of `{ children: Partial<Tree>[] }`: read once, as a type of itself is.
-    return walked(reference, walk, () =>
+    return walked(reference, walk, true, () =>
       objectPart(reference, membersOf(reference, walk.at, walk.reading), walk),
     );
   }
@@ -409,23 +421,45 @@ function numberPart(member: EnumMember, initializer: Expression): NonJsonPart | 
   return Number.isFinite(value) ? undefined : admitting(member, NON_FINITE);
 }
 
+/** No declaration walked, under way or to the end. */
+function reads(): Reads {
+  return { elements: new Set(), entries: new Set() };
+}
+
 /**
- * What `read` answers of `declaration`, walked under way while it does: nothing more where it is
- * already, as a type of itself (`{ children: Tree[] }`) admits nothing it has not already.
+ * What `read` answers of `declaration`, read as an entry or an element (`entry`), walked under way
+ * while it does: nothing more where it is already, as a type of itself (`{ children: Tree[] }`)
+ * admits nothing it has not already, and nothing where it was walked to the end before, whatever
+ * reached it then. A part found ends the whole walk, so what is kept is that a declaration, read
+ * as it is read, holds none: reading it again, as a sibling member of the type does, would answer
+ * the same. A read that a declaration under way cut short is kept too: whoever began that one reads
+ * it to the end before the walk answers. What a declaration answers depends on it and on `entry`
+ * alone — the site its names are read at is its file's, and what the reading holds is the walk's —
+ * so an alias and a type parameter are kept by both; an object's members are read as entries
+ * whatever it is read as, so an interface and what the language makes of an object are kept by
+ * `true`.
  */
 function walked(
   declaration: Node,
   walk: Walk,
+  entry: boolean,
   read: () => NonJsonPart | undefined,
 ): NonJsonPart | undefined {
-  if (walk.walking.has(declaration)) {
+  const key = entry ? 'entries' : 'elements';
+  const under = walk.walking[key];
+  const completed = walk.completed[key];
+  if (under.has(declaration) || completed.has(declaration)) {
     return undefined;
   }
-  walk.walking.add(declaration);
+  under.add(declaration);
   try {
-    return read();
+    const found = read();
+    if (found === undefined) {
+      completed.add(declaration);
+    }
+    return found;
   } finally {
-    walk.walking.delete(declaration);
+    under.delete(declaration);
   }
 }
 
