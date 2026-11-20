@@ -382,10 +382,15 @@ function ddlCounterOf(namespace: string): readonly string[] {
 
 /**
  * The statements that make the log in `namespace` and the triggers of each of `relations`, each to
- * be run by itself, in order. Every statement leaves what it makes as it is when it is there
- * already: a host may run them each time it starts, after the application's migrations, which may
- * have made a followed table again without its triggers. A table no longer followed keeps its
- * triggers until the application drops them.
+ * be run by itself, in order, as the role that made the log, which may create triggers on the
+ * followed tables: once, or each time a host starts, after the application's migrations, which may
+ * have made a followed table again without its triggers. Each may be run again: the log's tables
+ * are left as they are, and its functions and triggers are made anew, which brings an installation
+ * made before up to date. Another role's run fails at the first function it would replace (`must
+ * be owner of function`), by PostgreSQL's rule for `CREATE OR REPLACE FUNCTION`. A role that only
+ * writes followed tables needs nothing of the log's schema, and a host that only reads the log runs
+ * none of them: it needs `USAGE` on the schema and `SELECT` on `head` and `changes`. A table no
+ * longer followed keeps its triggers until the application drops them.
  */
 export function changeCaptureSql(
   relations: readonly FollowedRelation[],
