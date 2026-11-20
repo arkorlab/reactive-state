@@ -2,17 +2,19 @@ import {
   type Expression,
   type Identifier,
   isAsExpression,
+  isCallExpression,
   isElementAccessExpression,
   isExpression,
   isNonNullExpression,
   isParenthesizedExpression,
   isPropertyAccessExpression,
   isSatisfiesExpression,
+  isSourceFile,
   type Node,
 } from 'typescript/ast';
 
 import { namesNamespace, unwrapped } from './bounded.ts';
-import { writtenBy } from './written.ts';
+import { writtenArgumentBy, writtenBy } from './written.ts';
 
 /**
  * Whether `identifier`, an import of a shared module's, is written where it stands: itself or a
@@ -44,10 +46,29 @@ export function isWrittenAt(identifier: Identifier): boolean {
     } else {
       const written = writtenBy(parent);
       return (
-        written !== undefined &&
-        rooted.has(written) &&
-        !(namesNamespace(identifier) && isExpression(written) && unwrapped(written) === identifier)
+        (written !== undefined &&
+          rooted.has(written) &&
+          !(
+            namesNamespace(identifier) &&
+            isExpression(written) &&
+            unwrapped(written) === identifier
+          )) ||
+        isGivenToWrite(node, rooted)
       );
     }
   }
+}
+
+/**
+ * Whether a call that holds `node` among its arguments writes into something of the import's beside
+ * its receiver: the event a dispatch is given, the buffers a structured clone's transfer list
+ * detaches (`structuredClone(value, { transfer: [defaults.buffer] })`).
+ */
+function isGivenToWrite(node: Node, rooted: ReadonlySet<Node>): boolean {
+  for (let each = node.parent; !isSourceFile(each); each = each.parent) {
+    if (isCallExpression(each) && writtenArgumentBy(each).some((target) => rooted.has(target))) {
+      return true;
+    }
+  }
+  return false;
 }

@@ -268,6 +268,55 @@ describe('a server part that writes an export of a shared module', () => {
     expect(reason).toContain(`\`defaults\` is \`${SHARED_MODULE}\`'s`);
   });
 
+  it.each([
+    {
+      id: 'a transfer list of the import and a member',
+      body: 'structuredClone(defaults, { transfer: [defaults.buffer] });',
+    },
+    {
+      id: 'a transfer list of a member alone',
+      body: 'structuredClone(first, { transfer: [defaults.buffer] });',
+    },
+    {
+      id: 'a transfer list of a member through a cast',
+      body: 'structuredClone(first, { transfer: [defaults.buffer as ArrayBuffer] });',
+    },
+    {
+      id: 'a dispatch of an event it holds',
+      body: 'new EventTarget().dispatchEvent(defaults.event);',
+    },
+  ])('refuses a write into it that a call makes beside its receiver: $id', ({ body }) => {
+    const reason = reasonOf(sourceOf(body, VIEW), 'authority');
+
+    expect(reason).toContain(SAYS);
+  });
+
+  it.each([
+    { id: 'a structured clone alone', body: 'const copy = structuredClone(defaults);' },
+    {
+      id: 'a structured clone of a member with an empty transfer list',
+      body: 'const copy = structuredClone(defaults.items, { transfer: [] });',
+    },
+    {
+      id: 'a transfer list of a buffer of its own',
+      body: 'const own = new ArrayBuffer(8);\nconst copy = structuredClone(own, { transfer: [own] });',
+    },
+    {
+      id: 'a structured clone of a member with other options',
+      body: 'const copy = structuredClone(defaults.items, { transfer: [], extra: defaults.value });',
+    },
+    {
+      id: 'a dispatch of an event of its own',
+      body: "new EventTarget().dispatchEvent(new Event('ready'));",
+    },
+    {
+      id: 'a dispatch of an event built of a member',
+      body: 'new EventTarget().dispatchEvent(new Event(defaults.name));',
+    },
+  ])('takes what a call writes into that is no part of it: $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+  });
+
   it('takes a write the browser runs, which has a copy of its own', () => {
     const jsx = [
       '<button type="button" onClick={() => { defaults.value = 1; setValue(value + 1); }}>',
