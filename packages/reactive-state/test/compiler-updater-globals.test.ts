@@ -64,15 +64,18 @@ const CHILD = `export default function Child({ n }: { n: unknown }) {
 }
 `;
 
-/** A hook module of one hook, `name`, whose update is `update` of the current value, after `imports`. */
-function hook(name: string, update: string, imports = ''): string {
+/**
+ * A hook module of one hook, `name`, whose update is `update` of the current value, which it names
+ * `parameter`, after `imports`.
+ */
+function hook(name: string, update: string, imports = '', parameter = 'current'): string {
   return `import { useReactiveState } from 'framework/react';
 import type { FieldRef } from '@arkorlab/reactive-state/program';
 ${imports}
 export function ${name}(ref: FieldRef<number>) {
   const [count, setCount] = useReactiveState(ref);
   const bump = () => {
-    setCount((current) => ${update});
+    setCount((${parameter}) => ${update});
   };
   return [count, bump] as const;
 }
@@ -275,6 +278,20 @@ function readOf(text: string): {
   return { imports, updates };
 }
 
+/** A hook that imports `parseInt` and declares `parseInt$2`, beside a component that reads the global. */
+function declaring(update: string, parameter = 'current'): Record<string, string> {
+  return {
+    'components/lab.reactive.tsx': lab(),
+    'hooks/useCount.ts': hook(
+      'useCount',
+      update,
+      "import { parseInt } from '@/numbers';",
+      parameter,
+    ),
+    'numbers.ts': NUMBERS,
+  };
+}
+
 describe('the imports of a program for the authority, beside the globals its updates read', () => {
   afterEach(() => {
     for (const dir of dirs.splice(0)) {
@@ -350,6 +367,94 @@ describe('the imports of a program for the authority, beside the globals its upd
       expect(imports).toStrictEqual(["import { Number as Number$2 } from '@/numbers';"]);
       expect(updates['title']).toBe('String(Number(current) + 1)');
       expect(updates['useCount#0.count']).toBe('Number$2(String(current))');
+    });
+  });
+
+  describe('an import is not named by a name an update declares', () => {
+    it.each([
+      {
+        id: 'a constant',
+        update: '{ const parseInt$2 = current + 1; return parseInt(String(parseInt$2), 10); }',
+        written: '{ const parseInt$2 = current + 1; return parseInt$3(String(parseInt$2), 10); }',
+      },
+      {
+        id: 'a function of its own',
+        update:
+          '{ function parseInt$2(): number { return 1; } return parseInt(String(parseInt$2()), 10); }',
+        written:
+          '{ function parseInt$2(): number { return 1; } return parseInt$3(String(parseInt$2()), 10); }',
+      },
+      {
+        id: 'a name a pattern destructures',
+        update:
+          '{ const { parseInt$2 } = { parseInt$2: current }; return parseInt(String(parseInt$2), 10); }',
+        written:
+          '{ const { parseInt$2 } = { parseInt$2: current }; return parseInt$3(String(parseInt$2), 10); }',
+      },
+      {
+        id: 'a name a nested function takes as its parameter',
+        update:
+          '{ const again = (parseInt$2: number): number => parseInt(String(parseInt$2), 10); return again(current); }',
+        written:
+          '{ const again = (parseInt$2: number): number => parseInt$3(String(parseInt$2), 10); return again(current); }',
+      },
+    ])(
+      '$id, in the update that imports, beside a component that reads the global',
+      ({ update, written }) => {
+        const { imports, updates } = readOf(program(declaring(update)));
+
+        expect(imports).toStrictEqual(["import { parseInt as parseInt$3 } from '@/numbers';"]);
+        expect(updates['title']).toBe('String(parseInt(current, 10))');
+        expect(updates['useCount#0.count']).toBe(written);
+      },
+    );
+
+    it('the current value of the update, named so', () => {
+      const { imports, updates } = readOf(
+        program(declaring('parseInt(String(parseInt$2), 10)', 'parseInt$2')),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt as parseInt$3 } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe('parseInt$3(String(parseInt$2), 10)');
+    });
+
+    it('two hooks import different helpers under one name, and the second declares the name its alias would be', () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab({
+            hooks: ['useCount', 'useOther'],
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': importing('useCount', '@/numbers'),
+          'hooks/useOther.ts': hook(
+            'useOther',
+            '{ const parseInt$2 = current + 1; return parseInt(String(parseInt$2), 10); }',
+            "import { parseInt } from '@/other';",
+          ),
+          'numbers.ts': NUMBERS,
+          'other.ts': OTHER,
+        }),
+      );
+
+      expect(imports).toStrictEqual([
+        "import { parseInt } from '@/numbers';",
+        "import { parseInt as parseInt$3 } from '@/other';",
+      ]);
+      expect(updates['useCount#0.count']).toBe('parseInt(String(current), 10)');
+      expect(updates['useOther#0.count']).toBe(
+        '{ const parseInt$2 = current + 1; return parseInt$3(String(parseInt$2), 10); }',
+      );
+    });
+
+    it('a local of another name leaves the alias as it was', () => {
+      const { imports, updates } = readOf(
+        program(declaring('{ const total = current + 1; return parseInt(String(total), 10); }')),
+      );
+
+      expect(imports).toStrictEqual(["import { parseInt as parseInt$2 } from '@/numbers';"]);
+      expect(updates['useCount#0.count']).toBe(
+        '{ const total = current + 1; return parseInt$2(String(total), 10); }',
+      );
     });
   });
 
