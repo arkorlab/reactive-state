@@ -168,8 +168,8 @@ export function patternCapturesNothing(
   if (isSpreadElement(node)) {
     return true;
   }
-  const imported = scope.importedOf?.(unwrapped(node));
-  return capturesNothing(imported ?? reached(node, reading).value);
+  const { value } = reached(node, reading);
+  return capturesNothing(scope.importedOf?.(value) ?? value);
 }
 
 /** How a call of the component's code reads what it calls: of its names (`functionOf`). */
