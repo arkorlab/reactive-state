@@ -9,6 +9,7 @@ import { proxyOf } from './app-route.ts';
 import { SHARING_OFF } from './emit-host.ts';
 import { ReactiveCompileError } from './errors.ts';
 import { checkUnderGuard } from './middleware-order.ts';
+import { patternReads } from './middleware-reads.ts';
 import { type MiddlewareSplit, readMiddleware } from './middleware.ts';
 import type { Modules } from './modules.ts';
 import { plainRoutesOf } from './plain-routes.ts';
@@ -73,7 +74,8 @@ function middlewarePath(id: string): string {
 
 /**
  * What `split`'s guard reaches: the imports it reads at run time, and what its own code reads that
- * nothing tracks, or keeps between calls (`Reach.keptIn`).
+ * nothing tracks, or keeps between calls (`Reach.keptIn`): its statements, and the defaults and
+ * computed keys of the context's pattern it binds, which run each time the guard does.
  */
 function guardFacts(split: MiddlewareSplit, reach: Reach): Facts {
   const { guard, names } = split;
@@ -84,7 +86,8 @@ function guardFacts(split: MiddlewareSplit, reach: Reach): Facts {
     guard.values.has(binding.name.text),
   );
   const { untracked } = guard;
-  const kept = reach.keptIn(guard.statements);
+  const defaults = [...patternReads(guard.context, names).reads.keys()];
+  const kept = reach.keptIn([...guard.statements, ...defaults]);
   return mergedFacts(reach.bindingFacts(bindings), {
     ...(untracked !== undefined && { untracked }),
     ...(kept !== undefined && { kept }),
