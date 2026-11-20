@@ -29,6 +29,7 @@ import {
   type StatementReads,
   unionOf,
 } from './middleware-reads.ts';
+import { checkReassigned } from './middleware-reassigned.ts';
 import { type GuardAnswers, guardAnswers } from './middleware-response.ts';
 import type { ModuleKind } from './modules.ts';
 import { checkServerNode } from './prefix.ts';
@@ -422,6 +423,10 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
     hostSeeds.map((each) => each.reads),
     pure,
   );
+  const hostReads = unionOf(
+    ...[...hostSeeds, ...elsewhere].map((each) => each.reads.values.keys()),
+  );
+  checkReassigned(statements.slice(0, split.index), hostReads, names);
   // What both read is written into both: only what each computes alike.
   checkComputedOnce(
     pure,
