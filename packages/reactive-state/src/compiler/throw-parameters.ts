@@ -431,7 +431,8 @@ function selectedArray(entries: readonly Expression[], key: string, resolve: Res
   ) {
     return PRESENT;
   }
-  const entry = entries[Number(key)];
+  const index = Number(key);
+  const entry = String(index) === key ? entries[index] : undefined;
   return sourceValue(
     entry === undefined || isOmittedExpression(entry) ? undefined : entry,
     resolve,
