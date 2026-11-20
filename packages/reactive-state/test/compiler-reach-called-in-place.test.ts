@@ -55,7 +55,6 @@ const DEFERRED: readonly Row[] = [
     id: 'handed-to-a-call',
     source: 'const register = (run: () => number): number => 1;\nregister(() => Date.now());',
   },
-  { id: 'callback-of-a-method', source: 'const stamps = [1].map(() => Date.now());' },
   { id: 'bound-then-called', source: 'const stamp = (() => Date.now()).call(undefined);' },
   {
     id: 'argument-of-an-invoked-function',

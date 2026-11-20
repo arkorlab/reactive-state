@@ -33,6 +33,7 @@ import {
 } from './database-handle.ts';
 import type { ImportBinding } from './imports.ts';
 import type { ModuleKind, Modules } from './modules.ts';
+import { runsAsGiven } from './runs-as-given.ts';
 import { keptMethodWrite, keptWrite } from './settled.ts';
 import { isScript } from './typescript.ts';
 import { firstIn, untrackedAt } from './untracked-reads.ts';
@@ -196,7 +197,7 @@ function isCalledInPlace(fn: Node): boolean {
 
 /**
  * Whether `node` runs elsewhere than where it stands: a function, when it is called — but one
- * called where it is written runs there, and of a method or an accessor of an object or a class,
+ * called where it is written, or given to a call that runs it as it is made (`runsAsGiven`), runs there, and of a method or an accessor of an object or a class,
  * only its parameters and its body run when it is called: its computed key and its decorators, and
  * its parameters' decorators, run as the object or the class is made.
  */
@@ -211,7 +212,7 @@ function runsElsewhere(node: Node): boolean {
   if (isOwned(parent)) {
     return node === parent.body;
   }
-  return isFunctionLike(node) && !isOwned(node) && !isCalledInPlace(node);
+  return isFunctionLike(node) && !isOwned(node) && !isCalledInPlace(node) && !runsAsGiven(node);
 }
 
 /** One module a file imports, re-exports or loads, as the facts of it are read. */
