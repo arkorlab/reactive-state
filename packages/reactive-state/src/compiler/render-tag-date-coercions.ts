@@ -8,6 +8,7 @@ import {
   isCallExpression,
   isDeleteExpression,
   isElementAccessExpression,
+  isExpression,
   isFunctionExpression,
   isIdentifier,
   isNewExpression,
@@ -129,8 +130,8 @@ export function isOuterTemplateConsumedAsText(template: TemplateExpression): boo
   if (isCallExpression(parent) || isNewExpression(parent)) {
     return (
       framedNativeConstructor(parent.expression, STRINGS) &&
-      parent.arguments?.[0] !== undefined &&
-      unwrapped(parent.arguments[0]) === at
+      isExpression(at) &&
+      parent.arguments?.[0] === at
     );
   }
   return parent.kind === SyntaxKind.TemplateSpan;

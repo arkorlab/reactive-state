@@ -84,22 +84,22 @@ const CASES = [
     local: DATE_TEXT,
   },
   {
-    id: 'rest-parameter-selecting-another-element-than-the-date',
+    id: 'rest-parameter-selecting-another-element-is-refused-pin',
     pre: 'const pick=(...items:unknown[])=>items[1];',
     tag: `${DATED}String(pick(date,'ok'))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
   {
-    id: 'rest-parameter-is-not-followed',
+    id: 'rest-parameter-answers-its-first',
     pre: 'const head=(...items:unknown[])=>items[0];',
     tag: `${DATED}String(head(date))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
   {
-    id: 'rest-parameter-given-a-spread-is-not-followed',
+    id: 'rest-parameter-given-a-spread-answers-its-first',
     pre: 'const head=(...items:unknown[])=>items[0];',
     tag: `${REST}String(head(...values))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
   {
     id: 'two-helpers-in-a-row',
@@ -193,16 +193,16 @@ const CASES = [
     local: undefined,
   },
   {
-    id: 'array-pattern-parameter-is-not-followed',
+    id: 'array-pattern-parameter-answers-an-element',
     pre: 'const first=([head]:unknown[])=>head;',
     tag: `${DATED}String(first([date]))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
   {
-    id: 'array-pattern-with-a-rest-is-not-followed',
+    id: 'array-pattern-with-a-rest-answers-the-rest',
     pre: 'const rest=([_head,...tail]:unknown[])=>tail;',
     tag: `${DATED}String(rest([1,date]))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
   {
     id: 'plain-parameter-given-a-spread-of-the-substitutions',
@@ -433,10 +433,10 @@ const CASES = [
     local: undefined,
   },
   {
-    id: 'two-helpers-that-call-each-other-end-pin',
+    id: 'two-helpers-that-only-call-each-other-are-refused-pin',
     pre: 'const ping=(value:unknown):unknown=>pong(value);const pong=(value:unknown):unknown=>ping(value);',
     tag: `${DATED}String(ping(date))`,
-    local: undefined,
+    local: DATE_TEXT,
   },
 ] as const;
 
