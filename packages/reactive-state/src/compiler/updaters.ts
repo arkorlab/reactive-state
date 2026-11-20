@@ -345,7 +345,12 @@ class WriteReader {
       return this.#fail('The setter takes one argument: an update, or a value.', call);
     }
     let argument = input;
-    while (isParenthesizedExpression(argument)) {
+    while (
+      isParenthesizedExpression(argument) ||
+      isAsExpression(argument) ||
+      isSatisfiesExpression(argument) ||
+      isNonNullExpression(argument)
+    ) {
       argument = argument.expression;
     }
     let fn: ArrowFunction | FunctionExpression | undefined;
