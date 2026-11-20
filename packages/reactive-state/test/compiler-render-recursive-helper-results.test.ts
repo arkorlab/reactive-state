@@ -1,0 +1,104 @@
+import type { Node } from 'typescript/ast';
+import type { API } from 'typescript/sync';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { renderLocalInput } from '../src/compiler/render-local-inputs.ts';
+import { isTypeOnly } from '../src/compiler/scope.ts';
+import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
+
+const DATE_TEXT = 'writes a date as text of the time zone where it runs';
+
+const VALUE = '(_s:TemplateStringsArray,value:unknown)=>';
+const OPEN = '${';
+const ONE = `tag\`${OPEN}new Date(0)}\``;
+
+/**
+ * A helper of the file that calls itself answers the Date its returns make of the parameters a call
+ * hands one. A call of itself that hands the Date to another parameter than the outer call did is
+ * another question, asked once for each set of parameters (only a call that hands the same ones
+ * again is cut), and a helper that returns a call of itself, past a conditional or a logical
+ * operator, is taken to answer the Date, as the walk does not follow the path of the recursion: a
+ * recursion that ends in a number but is returned as it is refuses, one that adds to the call or
+ * passes the Date on without returning the call does not.
+ */
+const CASES = [
+  {
+    id: 'recursion-passing-the-date-to-the-other-parameter',
+    tag: `${VALUE}{function move(a:unknown,b:unknown):unknown{if(a)return move(null,a);return b;}return String(move(value,null));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'recursion-swapping-the-parameters',
+    tag: `${VALUE}{const pick=(a:unknown,b:unknown):unknown=>(a?a:pick(b,a));return String(pick(null,value));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'recursion-rotating-three-parameters',
+    tag: `${VALUE}{function turn(a:unknown,b:unknown,c:unknown,n:number):unknown{return n===0?c:turn(c,a,b,n-1);}return String(turn(value,null,null,2));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-passing-the-date-on',
+    tag: `${VALUE}{function ping(a:unknown,b:unknown):unknown{return a?pong(b,a):b;}function pong(a:unknown,b:unknown):unknown{return a?ping(b,a):b;}return String(ping(value,null));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'recursion-returning-the-parameter-it-is-handed-pin',
+    tag: `${VALUE}{const same=(d:unknown,n:number):unknown=>(n===0?d:same(d,n-1));return String(same(value,3));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'recursion-passing-the-date-and-returning-a-number-pin',
+    tag: `${VALUE}{const count=(d:unknown,n:number):number=>(n===0?0:count(d,n-1)+1);return String(count(value,3));}`,
+    local: undefined,
+  },
+  {
+    id: 'recursion-returned-directly-and-ending-in-a-number-is-refused-pin',
+    tag: `${VALUE}{function move(a:unknown,b:unknown):number{if(a)return move(null,a);return 0;}return String(move(value,null));}`,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'mutual-recursion-returning-numbers-pin',
+    tag: `${VALUE}{function even(d:unknown,n:number):number{return n===0?1:odd(d,n-1);}function odd(d:unknown,n:number):number{return n===0?0:even(d,n-1);}return String(even(value,4));}`,
+    local: undefined,
+  },
+  {
+    id: 'recursive-callback-handed-to-flatMap-pin',
+    tag: `(_s:TemplateStringsArray,...values:unknown[])=>{const flat=(item:unknown):unknown[]=>(Array.isArray(item)?item.flatMap(flat):[1]);return String(values.flatMap(flat));}`,
+    local: undefined,
+  },
+] as const;
+
+describe('the answer of a helper of the file that calls itself', () => {
+  let api: API;
+
+  beforeAll(() => {
+    api = openTypeScript();
+  });
+
+  afterAll(() => {
+    api[Symbol.dispose]();
+  });
+
+  it.each(CASES)('$id', ({ tag, local }) => {
+    const source = `export function Widget(){const tag=${tag};return <p>{${ONE}}</p>;}`;
+
+    expect(firstLocalInput(api, source)).toBe(local);
+  });
+});
+
+function firstLocalInput(api: API, source: string): string | undefined {
+  using parsed = parseModule(api, 'render-recursive-helper-results.tsx', source);
+  const pending: Node[] = [parsed.sourceFile];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    const found = renderLocalInput(node);
+    if (found !== undefined) return found;
+    const children: Node[] = [];
+    node.forEachChild((child) => {
+      children.push(child);
+    });
+    pending.push(...children.toReversed());
+  }
+  return undefined;
+}

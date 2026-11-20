@@ -2,6 +2,9 @@ import {
   type Expression,
   type Identifier,
   isArrowFunction,
+  isBinaryExpression,
+  isCallExpression,
+  isConditionalExpression,
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
@@ -10,6 +13,7 @@ import {
   type CallExpression,
   type Node,
   type ParameterDeclaration,
+  SyntaxKind,
 } from 'typescript/ast';
 
 import { type Answering, answersLater, overloadsOf, parametersOf, returnedBy } from './answers.ts';
@@ -28,9 +32,9 @@ export interface DatedQueries {
   readonly fresh: (expression: Expression, ownArguments?: boolean) => boolean;
 }
 
-/** The parameters a call hands a Date, while the answers of the function are asked, and the functions asked. */
+/** The parameters a call hands a Date, while the answers of the function are asked, and the questions asked. */
 const ASSUMED = new Set<Node>();
-const ASKED = new Set<Node>();
+const ASKED = new Set<string>();
 
 /**
  * Whether a parameter of a function the answers of which are being asked is handed a Date. Only a
@@ -119,16 +123,41 @@ export function helperResultCarriesDated(call: CallExpression, queries: DatedQue
   return functions.some((fn) => answersHandedDate(fn, handed, queries.fresh));
 }
 
+const FORWARDING_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.BarBarToken,
+  SyntaxKind.CommaToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/** The expressions a returned value may be: past a conditional, a logical operator and a comma. */
+function answeredLeaves(expression: Expression): readonly Expression[] {
+  const value = unwrapped(expression);
+  if (isConditionalExpression(value)) {
+    return [...answeredLeaves(value.whenTrue), ...answeredLeaves(value.whenFalse)];
+  }
+  if (isBinaryExpression(value) && FORWARDING_OPERATORS.has(value.operatorToken.kind)) {
+    return [...answeredLeaves(value.left), ...answeredLeaves(value.right)];
+  }
+  return [value];
+}
+
+/** Whether one of the returns of `fn` is a call of `fn` itself: `n === 0 ? c : turn(c, a, b, n - 1)`. */
+function answersItself(fn: Answering): boolean {
+  return returnedBy(fn).some((returned) => {
+    return answeredLeaves(returned).some(
+      (leaf) => isCallExpression(leaf) && functionsOf(leaf.expression).includes(fn),
+    );
+  },
+  );
+}
+
 /** Answers found for a function and the parameters it is handed, while one outermost question runs. */
 const ANSWERED = new Map<string, boolean>();
 const ASKING = { asked: 0, cut: 0, depth: 0 };
 const BUDGET = { asks: 512 } as const;
 
 function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['fresh']): boolean {
-  if (ASKED.has(fn)) {
-    ASKING.cut += 1;
-    return false;
-  }
   const parameters = parametersOf(fn).filter((parameter, index) => {
     return (
       isIdentifier(parameter.name) &&
@@ -137,7 +166,17 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
     );
   });
   if (parameters.length === 0) return false;
-  const key = `${String(fn.pos)}:${parameters.map((each) => String(each.pos)).join(',')}|${[...ASSUMED].map((each) => String(each.pos)).join(',')}`;
+  const question = `${String(fn.pos)}:${parameters.map((each) => String(each.pos)).join(',')}`;
+  const key = `${question}|${[...ASSUMED].map((each) => String(each.pos)).join(',')}`;
+  // A call that hands the same parameters again asks what is being asked: it is cut. One that hands
+  // the Date to another parameter is another question, asked once for each set of parameters.
+  if (ASKED.has(question)) {
+    ASKING.cut += 1;
+    return false;
+  }
+  // A function that answers a call of itself, handed a Date, may answer it on another path than
+  // the one in hand reads: the walk takes it for an answer that is the Date.
+  if (answersItself(fn)) return true;
   const known = ANSWERED.get(key);
   if (known !== undefined) return known;
   // A question that asks more than any plausible helper's answers is taken to be answered yes.
@@ -145,7 +184,7 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
   ASKING.asked += 1;
   const cutBefore = ASKING.cut;
   ASKING.depth += 1;
-  ASKED.add(fn);
+  ASKED.add(question);
   for (const parameter of parameters) ASSUMED.add(parameter);
   try {
     const answer = returnedBy(fn).some((returned) => fresh(returned, !isArrowFunction(fn)));
@@ -153,7 +192,7 @@ function answersHandedDate(fn: Answering, handed: Handed, fresh: DatedQueries['f
     if (ASKING.cut === cutBefore) ANSWERED.set(key, answer);
     return answer;
   } finally {
-    ASKED.delete(fn);
+    ASKED.delete(question);
     for (const parameter of parameters) ASSUMED.delete(parameter);
     ASKING.depth -= 1;
     if (ASKING.depth === 0) {
