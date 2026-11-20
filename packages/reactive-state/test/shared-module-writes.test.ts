@@ -478,6 +478,30 @@ describe('a server part that writes an export of a shared module', () => {
     expect(reasonOf(sourceOf(body, VIEW), 'authority')).toContain(SAYS);
   });
 
+  it.each([
+    { id: 'a method named by a string in brackets', body: "defaults.items['push'](first);" },
+    { id: 'a member and a method both in brackets', body: "defaults['items']['sort']();" },
+  ])('refuses a write by a method whose key the code writes as text: $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toContain(SAYS);
+  });
+
+  it.each([
+    {
+      id: 'a lookup of a function in an exported table',
+      body: "const kind = first > 0 ? 'short' : 'long';\nconst shown = defaults.formatters[kind](first);",
+    },
+    {
+      id: 'a lookup of a method by a key the code computes',
+      body: "const method = first > 0 ? 'concat' : 'slice';\nconst shown = defaults.items[method](first);",
+    },
+    {
+      id: 'a lookup with a key in a call',
+      body: 'const shown = defaults.handlers[String(first)](first);',
+    },
+  ])('takes a call whose key the compile cannot read: $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+  });
+
   it('takes a write the browser runs, which has a copy of its own', () => {
     const jsx = [
       '<button type="button" onClick={() => { defaults.value = 1; setValue(value + 1); }}>',
