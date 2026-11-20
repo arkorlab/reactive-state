@@ -147,6 +147,13 @@ export function followDrizzle<S extends Readonly<Record<string, unknown>>>(
       name: config.name,
       schema: config.schema ?? 'public',
     };
+    // A plan names no relation of the log's own schema (`planReads`), so a render that read such a
+    // table would note nothing but the schema's change.
+    if (relation.schema === namespace) {
+      throw new TypeError(
+        `followDrizzle(): \`${name}\` is a table of \`${namespace}\`, the schema the change log is kept in: keep the application's tables out of it.`,
+      );
+    }
     // The keys' values of each changed row, as the log keeps them: what a render's conditions name.
     tables[name] = table(Object.fromEntries(keys.map((key) => [key.field, text()])), {
       external: storeName,

@@ -690,6 +690,27 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     );
   });
 
+  it.each([
+    ['the default', undefined, 'reactive_state'],
+    ['one that is given', { namespace: 'ledger' }, 'ledger'],
+  ] as const)(
+    'refuses a table of the schema the log is kept in, which no plan names: %s namespace',
+    (_name, options, kept) => {
+      const inLog = pgSchema(kept).table('entries', { id: text().primaryKey() });
+
+      expect(() => followDrizzle({ entries: inLog }, options)).toThrow(
+        `\`entries\` is a table of \`${kept}\`, the schema the change log is kept in`,
+      );
+    },
+  );
+
+  it('follows a table of the default log schema where the log is kept in another', () => {
+    const inDefault = pgSchema('reactive_state').table('entries', { id: text().primaryKey() });
+
+    expect(() => followDrizzle({ entries: inDefault }, { namespace: 'ledger' })).not.toThrow();
+    expect(() => followDrizzle(schema)).not.toThrow();
+  });
+
   it('runs what an operation started that settles after it, as it would have', async () => {
     const setup = await opened();
     let late: Promise<unknown> | undefined;

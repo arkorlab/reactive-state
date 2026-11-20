@@ -85,8 +85,8 @@ class Plans {
   readonly #bound: Bound;
   readonly #kept = new Map<string, readonly TableScan[]>();
   #catalog: Catalog | undefined;
-  /** Whether a plan carries the catalog's statement now: the plans asked beside it carry none. */
-  #asking = false;
+  /** How many plans carry the catalog's statement now: the plans asked beside them carry none. */
+  #asking = 0;
   #generation = 0;
 
   constructor(followed: Followed, bound: Bound) {
@@ -95,14 +95,22 @@ class Plans {
   }
 
   /**
-   * A fault for a partitioned table or a partition: a plan names the partitions of a table it reads,
-   * and a write to the table is logged as the table's, so a render that reads it would not be told
-   * of a write, whichever of them the schema declares.
+   * A fault for a partitioned table or a partition, and for a table that inherits from another: a
+   * plan names the partitions of a table it reads, and a write to the table is logged as the
+   * table's; a write through a table's parent changes its rows and is logged as the parent's. A
+   * render that reads one would not be told of such a write, whichever of the tables the schema
+   * declares.
    */
-  #refusePartitioned(relation: Relation): void {
-    if (this.#catalog?.partitioned?.has(relationKey(relation)) === true) {
+  #refuseUnfollowable(relation: Relation): void {
+    const key = relationKey(relation);
+    if (this.#catalog?.partitioned?.has(key) === true) {
       throw new Error(
-        `A render read ${relationKey(relation)}, a partitioned table or a partition of one: reactive-state does not follow partitioned tables, so read it outside the render.`,
+        `A render read ${key}, a partitioned table or a partition of one: reactive-state does not follow partitioned tables, so read it outside the render.`,
+      );
+    }
+    if (this.#catalog?.inherited?.has(key) === true) {
+      throw new Error(
+        `A render read ${key}, a table that inherits from another: reactive-state does not follow inheritance, so read it outside the render.`,
       );
     }
   }
@@ -134,7 +142,7 @@ class Plans {
       );
     }
     for (const relation of plan.relations) {
-      this.#refusePartitioned(relation);
+      this.#refuseUnfollowable(relation);
       this.#tableOf(relation);
     }
     // A statement that names a table's columns otherwise: its plan's names may be other columns'.
@@ -145,6 +153,35 @@ class Plans {
   /** One scan of a plan, by the table it reads: of no condition, where its columns are `renamed`. */
   #tableScanOf(scan: Scan, renamed: boolean): TableScan {
     return { conditions: renamed ? [] : scan.conditions, table: this.#tableOf(scan.relation) };
+  }
+
+  /**
+   * `explain`'s plan, with the catalog's statement before it where `ask`; and whether the schema was
+   * as it was when `generation` was read as it came back: the catalog it answered is kept of one
+   * that was.
+   */
+  async #planned(
+    explain: string,
+    planner: Planner,
+    generation: number,
+    ask: boolean,
+  ): Promise<{
+    readonly answered: Awaited<ReturnType<Planner['plan']>>;
+    readonly current: boolean;
+  }> {
+    const asked = ask ? catalogSql(this.#followed) : undefined;
+    if (asked !== undefined) this.#asking += 1;
+    let answered: Awaited<ReturnType<Planner['plan']>>;
+    try {
+      answered = await planner.plan(explain, asked);
+    } finally {
+      if (asked !== undefined) this.#asking -= 1;
+    }
+    const current = this.#followed.schema.generation === generation;
+    if (asked !== undefined && current) {
+      this.#catalog ??= catalogOf(answered.catalog, this.#followed);
+    }
+    return { answered, current };
   }
 
   /**
@@ -172,20 +209,20 @@ class Plans {
     }
     // One plan carries the catalog's statement: a plan asked beside it, before its answer, reads its
     // tables by no condition (`NO_CONDITIONS`) where the catalog is not yet known.
-    const asked =
-      this.#catalog === undefined && !this.#asking ? catalogSql(this.#followed) : undefined;
-    if (asked !== undefined) this.#asking = true;
-    let answered: Awaited<ReturnType<Planner['plan']>>;
-    try {
-      answered = await planner.plan(explain, asked);
-    } finally {
-      if (asked !== undefined) this.#asking = false;
+    let planned = await this.#planned(
+      explain,
+      planner,
+      generation,
+      this.#catalog === undefined && this.#asking === 0,
+    );
+    // A plan asked beside the one that carries it may come back before that one's answer, or where
+    // that one failed: the catalog is asked again, by this plan alone, rather than this one read or
+    // kept where no table is known to be partitioned or to inherit.
+    if (planned.current && this.#catalog === undefined) {
+      planned = await this.#planned(explain, planner, generation, true);
     }
     // A plan asked as the schema changed may say what it is no more: read whole, and kept not.
-    const current = this.#followed.schema.generation === generation;
-    if (asked !== undefined && current) {
-      this.#catalog ??= catalogOf(answered.catalog, this.#followed);
-    }
+    const { answered, current } = planned;
     const scans = this.#scansOfPlan(sql, planReads(answered.plan, this.#followed.namespace));
     if (!current) {
       return { current, scans };
