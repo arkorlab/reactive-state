@@ -2,9 +2,13 @@ import { isBuiltin } from 'node:module';
 import path from 'node:path';
 
 import {
+  type ConstructorDeclaration,
   type ExportDeclaration,
+  type GetAccessorDeclaration,
   type ImportDeclaration,
+  isBlock,
   isCallExpression,
+  isDecorator,
   isExportDeclaration,
   isExternalModuleReference,
   isImportDeclaration,
@@ -12,8 +16,12 @@ import {
   isNamedExports,
   isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
+  isParameterDeclaration,
+  isSourceFile,
   isStringLiteral,
+  type MethodDeclaration,
   type Node,
+  type SetAccessorDeclaration,
   type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
@@ -146,11 +154,11 @@ const WHOLE = (): boolean => false;
 
 /**
  * The first read among `nodes` of an input nothing tracks (`untrackedAt`) — and, with
- * `outsideFunctions`, outside the functions they hold: what runs as a part renders, not what a
- * handler runs later.
+ * `outsideFunctions`, outside the functions they hold (`runsElsewhere`): what runs as a part
+ * renders, not what a handler runs later.
  */
 export function untrackedIn(nodes: readonly Node[], outsideFunctions = false): string | undefined {
-  return firstIn(nodes, untrackedAt, outsideFunctions ? isFunctionLike : WHOLE);
+  return firstIn(nodes, untrackedAt, outsideFunctions ? runsElsewhere : WHOLE);
 }
 
 /** The functions whose bodies run when they are called, not where they stand. */
@@ -167,6 +175,41 @@ const FUNCTIONS: ReadonlySet<SyntaxKind> = new Set([
 /** Whether `node` is a function whose body runs when it is called, not where it stands. */
 export function isFunctionLike(node: Node): boolean {
   return FUNCTIONS.has(node.kind);
+}
+
+/** What an object or a class holds that is a function, with a name and decorators run as it is made. */
+type Owned =
+  | ConstructorDeclaration
+  | GetAccessorDeclaration
+  | MethodDeclaration
+  | SetAccessorDeclaration;
+
+function isOwned(node: Node): node is Owned {
+  return (
+    node.kind === SyntaxKind.Constructor ||
+    node.kind === SyntaxKind.GetAccessor ||
+    node.kind === SyntaxKind.MethodDeclaration ||
+    node.kind === SyntaxKind.SetAccessor
+  );
+}
+
+/**
+ * Whether `node` runs elsewhere than where it stands: a function, when it is called — but of a
+ * method or an accessor of an object or a class, only its parameters and its body: its computed key
+ * and its decorators, and its parameters' decorators, run as the object or the class is made.
+ */
+function runsElsewhere(node: Node): boolean {
+  if (isSourceFile(node)) {
+    return false;
+  }
+  const { parent } = node;
+  if (isParameterDeclaration(parent) && isOwned(parent.parent)) {
+    return !isDecorator(node);
+  }
+  if (isOwned(parent)) {
+    return isBlock(node) && node === parent.body;
+  }
+  return isFunctionLike(node) && !isOwned(node);
 }
 
 /** One module a file imports, re-exports or loads, as the facts of it are read. */
@@ -603,10 +646,11 @@ export class Reach {
   /**
    * The first name among `nodes` that the code holds once and a function of it writes each time
    * it is called — assigns, changes in place, or calls a method of that writes through `this` — of
-   * what runs, as `firstIn` reads it: what the code keeps between calls; none the database commits.
+   * what runs, as `firstIn` reads it (with `outsideFunctions`, as `untrackedIn` does): what the code
+   * keeps between calls; none the database commits.
    */
   keptIn(nodes: readonly Node[], outsideFunctions = false): string | undefined {
-    return firstIn(nodes, (node) => this.#keptAt(node), outsideFunctions ? isFunctionLike : WHOLE);
+    return firstIn(nodes, (node) => this.#keptAt(node), outsideFunctions ? runsElsewhere : WHOLE);
   }
 
   /** What `files`, modules of the application's, and every module they reach through `follow`, hold. */
