@@ -262,7 +262,28 @@ describe('the argument a hook call gives a parameter, past a spread', () => {
           },
           'value',
         );
-      }).toThrow('declares a state with this argument as it is');
+      }).toThrow(
+        'hooks/useNesting.ts:4:30: `useInner` declares a state with this argument as it is',
+      );
+    });
+
+    it('the refusal points at the first spread, which is what to change', () => {
+      expect(() => {
+        followed(
+          {
+            'components/lab.reactive.tsx': component(
+              IMPORT_NESTING,
+              'const { value } = useNesting(first, filter);',
+              'value',
+            ),
+            'hooks/useInner.ts': HOOKS.inner,
+            'hooks/useNesting.ts': nesting('...([] as []), ...([] as []), initial'),
+          },
+          'value',
+        );
+      }).toThrow(
+        'hooks/useNesting.ts:4:30: `useInner` declares a state with this argument as it is',
+      );
     });
   });
 
@@ -297,7 +318,9 @@ describe('the argument a hook call gives a parameter, past a spread', () => {
           },
           'value',
         );
-      }).toThrow('declares a state with this argument as it is');
+      }).toThrow(
+        'hooks/useNesting.ts:4:35: `useInner` declares a state with this argument as it is',
+      );
     });
 
     it('a call without a spread is taken, in a hook and in the component', () => {
