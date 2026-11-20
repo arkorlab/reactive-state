@@ -18,10 +18,10 @@ export interface Queryable {
  * too), default and generated expression, rule, function, aggregate, type, enum label, operator,
  * operator class and family, collation, cast, text search configuration and dictionary, and policy;
  * of each relation of the session's temporary schema a statement may read in place of the
- * application's, and of the search path and the schemas it resolves to. It holds what the role the
- * store reads as may read and run besides — of the application's relations, functions, types and
- * schemas, and the roles whose rights it has, which a policy's `TO` names — but not a grant of
- * another's. A table altered, a view or a function defined again, an enum's label renamed, a policy
+ * application's, of the search path and the schemas it resolves to, and of the role the store reads
+ * as, by name. It holds what the role the store reads as may read and run besides — of the
+ * application's relations, functions, types and schemas, and the roles whose rights it has, which a
+ * policy's `TO` names — but not a grant of another's. A table altered, a view or a function defined again, an enum's label renamed, a policy
  * made, a role granted changes it. Nothing a write of rows changes is of it — a refreshed view,
  * statistics; a truncation too, where an event trigger counts the schema's commands — so a change
  * of it is a change of the schema alone. It is read at most once a `DIGEST.everyMs`, so that a page
@@ -176,14 +176,17 @@ function sessionParts(own: string, relations: readonly Relation[]): readonly str
     // Each role's own rights over every row, and the roles whose rights it has, inherited or not:
     // a policy's `TO`.
     `SELECT concat_ws(':', 'role', s.oid, s.rolsuper, s.rolinherit, s.rolbypassrls, CASE WHEN s.rolsuper THEN '' ELSE (SELECT string_agg(concat_ws('.', g.oid, pg_has_role(s.oid, g.oid, 'USAGE')), ',' ORDER BY g.oid) FROM pg_roles AS g WHERE pg_has_role(s.oid, g.oid, 'MEMBER')) END) FROM pg_roles AS s WHERE s.oid IN (SELECT r.oid FROM "readers" AS r)`,
-    // The search path as it is set, the schemas it resolves to — `"$user"`'s, of the role — whether
-    // a policy's rows are read or refused (`row_security`), how a string's `\` is read, and what a
-    // plan folds of the session's settings: a float's or a `bytea`'s text, whose functions
-    // PostgreSQL holds immutable (`extra_float_digits`, `bytea_output`), a date's, a time's, an
-    // interval's or an array's constant as its text is read (`DateStyle`, `TimeZone`,
-    // `timezone_abbreviations`, `IntervalStyle`, `array_nulls`), and `= NULL` read as `IS NULL`
-    // (`transform_null_equals`).
-    `SELECT concat_ws(':', 's', current_setting('search_path'), current_schemas(false)::text, current_setting('row_security'), current_setting('standard_conforming_strings'), current_setting('extra_float_digits'), current_setting('bytea_output'), current_setting('DateStyle'), current_setting('TimeZone'), current_setting('timezone_abbreviations'), current_setting('IntervalStyle'), current_setting('array_nulls'), current_setting('transform_null_equals'))`,
+    // The role the session reads as and the one it logged in as, by name, which a policy may name
+    // (`current_user`, `session_user`): the rows a statement reads differ with them where no right
+    // does, as the readers' rights say nothing of which of them reads; quoted, so that no two pairs
+    // of names make one text. The search path as it is set, the schemas it resolves to —
+    // `"$user"`'s, of the role — whether a policy's rows are read or refused (`row_security`), how a
+    // string's `\` is read, and what a plan folds of the session's settings: a float's or a
+    // `bytea`'s text, whose functions PostgreSQL holds immutable (`extra_float_digits`,
+    // `bytea_output`), a date's, a time's, an interval's or an array's constant as its text is read
+    // (`DateStyle`, `TimeZone`, `timezone_abbreviations`, `IntervalStyle`, `array_nulls`), and
+    // `= NULL` read as `IS NULL` (`transform_null_equals`).
+    `SELECT concat_ws(':', 's', quote_ident(current_user), quote_ident(session_user), current_setting('search_path'), current_schemas(false)::text, current_setting('row_security'), current_setting('standard_conforming_strings'), current_setting('extra_float_digits'), current_setting('bytea_output'), current_setting('DateStyle'), current_setting('TimeZone'), current_setting('timezone_abbreviations'), current_setting('IntervalStyle'), current_setting('array_nulls'), current_setting('transform_null_equals'))`,
   ];
 }
 
