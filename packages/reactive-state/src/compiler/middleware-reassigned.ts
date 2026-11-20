@@ -99,21 +99,34 @@ function assignedIn(statements: readonly Statement[]): ReadonlyMap<string, Ident
   return assigned;
 }
 
+/** Where the statements before `next` go: the guard's, the host's, and what the host's parts read. */
+interface Sides {
+  readonly guard: readonly Statement[];
+  readonly host: readonly Statement[];
+  readonly hostReads: ReadonlySet<string>;
+}
+
 /**
- * Refuses a name of the context that a statement before `next` (`before`) assigns and a part the
- * host runs (`hostReads`) reads: the guard holds the assigned value, the host's parts the one the
- * context gave.
+ * Refuses a name of the context that is assigned before `next` where one part cannot see the other's
+ * assignment: in a statement the guard takes, where a part the host runs reads it — the guard holds
+ * the assigned value, the host's parts the one the context gave — and in a statement the host runs
+ * before `next`, which the guard reads as the context gave it, and where the middleware declares its
+ * context's type the host's part binds the names by a `const`, which an assignment would throw at.
  */
-export function checkReassigned(
-  before: readonly Statement[],
-  hostReads: ReadonlySet<string>,
-  names: MiddlewareNames,
-): void {
+export function checkReassigned(sides: Sides, names: MiddlewareNames): void {
   const bound = contextNames(names.context);
-  for (const [name, place] of assignedIn(before)) {
-    if (bound.has(name) && hostReads.has(name)) {
+  for (const [name, place] of assignedIn(sides.guard)) {
+    if (bound.has(name) && sides.hostReads.has(name)) {
       names.fail(
         `\`${name}\` is a name of the route middleware's context, assigned before \`next\` and read by what the host runs: the assignment is written into the guard, which the authority runs, and the host's parts bind \`${name}\` as the context gave it, not as it was assigned. Give the assigned value a constant of its own, and read that where it is needed.`,
+        place,
+      );
+    }
+  }
+  for (const [name, place] of assignedIn(sides.host)) {
+    if (bound.has(name)) {
+      names.fail(
+        `\`${name}\` is a name of the route middleware's context, assigned before \`next\` by what the host runs: the guard, which the authority runs, binds \`${name}\` as the context gave it, and where the middleware declares its context's type the host's part binds it by a \`const\`, which the assignment would throw at. Give the assigned value a constant of its own, and read that where it is needed.`,
         place,
       );
     }

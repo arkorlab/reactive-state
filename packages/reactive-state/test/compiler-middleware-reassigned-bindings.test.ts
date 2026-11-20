@@ -55,6 +55,38 @@ const ASSIGNED: readonly Row[] = [
   },
 ];
 
+/**
+ * A name the host assigns, in a constant only the host evaluates: the host's part binds the context's
+ * names by a `const` where the middleware declares its type, and the guard binds its own.
+ */
+const HOST_ASSIGNED: readonly Row[] = [
+  {
+    body: `  const normalized = (projectId = projectId.trim());\n  const response = await next();\n  response.headers.set('x-norm', normalized);\n  return response;`,
+    id: 'constant-of-the-host-read-after-next',
+  },
+  {
+    body: `  const normalized = (projectId = projectId.trim());\n  const response = await next();\n  return response;`,
+    id: 'constant-of-the-host-nobody-reads',
+  },
+  {
+    body: `  const noise = (projectId += '-x');\n  const response = await next();\n  return response;`,
+    id: 'compound-assignment-in-a-constant-nobody-reads',
+  },
+  {
+    body: `  const [seen] = [(projectId = 'q')];\n  const response = await next();\n  response.headers.set('x-seen', seen);\n  return response;`,
+    id: 'assignment-in-a-literal-of-a-constant',
+  },
+  {
+    body: `  const seen = (projectId = request.headers.get('x-id') ?? 'none');\n  const response = await next();\n  return response;`,
+    context: '{ params: { projectId }, request }',
+    id: 'constant-of-the-request-nobody-reads',
+  },
+  {
+    body: `  const normalized = (projectId = projectId.trim());\n  if (projectId === 'x') return new Response('no', { status: 403 });\n  const response = await next();\n  response.headers.set('x-norm', normalized);\n  return response;`,
+    id: 'assigned-by-the-host-and-read-by-the-guard',
+  },
+];
+
 /** A target of a pattern's assignment: the name it assigns, not a key, a computed key or a default. */
 const TARGETS: readonly Row[] = [
   {
@@ -156,6 +188,12 @@ describe('a name of the context that a route middleware assigns before next', ()
   }
 
   it.each(ASSIGNED)('refuses a name assigned before next that the host reads: $id', async (row) => {
+    await expect(refused(row)).resolves.toContain(
+      "is a name of the route middleware's context, assigned before `next`",
+    );
+  });
+
+  it.each(HOST_ASSIGNED)('refuses a name the host assigns before next: $id', async (row) => {
     await expect(refused(row)).resolves.toContain(
       "is a name of the route middleware's context, assigned before `next`",
     );
