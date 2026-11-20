@@ -134,7 +134,13 @@ export function declarationOf(
 
 /** What `name`, a name of its own, names in `at`'s file, as `declarationOf` reads it. */
 function namedIn(name: string, at: TypeSite, reading: TypeReading): Declared | undefined {
-  const statement = at.sourceFile.statements.find((each) => declares(each, name));
+  const declarations = at.sourceFile.statements.filter((each) => declares(each, name));
+  // A name declared more than once is one type of several declarations, which TypeScript merges:
+  // an interface twice, an interface beside a class, an enum twice. No one body is its type.
+  if (declarations.length > 1) {
+    return undefined;
+  }
+  const [statement] = declarations;
   if (statement !== undefined) {
     const declaration = typeDeclaration(statement);
     return declaration === undefined ? undefined : { at, declaration };
@@ -217,20 +223,17 @@ function exportedOf(name: string, site: TypeSite, reading: TypeReading): Declare
   reading.exports.add(key);
   try {
     const { statements } = site.sourceFile;
-    let explicit = false;
-    for (const statement of statements) {
-      if (isStarExport(statement)) {
-        continue;
-      }
-      const found = exportedBy(statement, name, site, reading);
-      if (found !== undefined) {
-        return found;
-      }
-      explicit ||= exportsName(statement, name);
+    const own = ownExports(statements, name, site, reading);
+    // A name declared and exported more than once is one type of several declarations, merged.
+    if (own.declared > 1) {
+      return undefined;
+    }
+    if (own.found !== undefined) {
+      return own.found;
     }
     // A name the file exports itself hides the star's, as what it exports it as: a class, a
     // package's type — which the reader cannot read, and which `export *` does not stand in for.
-    if (explicit) {
+    if (own.explicit) {
       return undefined;
     }
     // What `export *` re-exports, where the file exports no such name of its own — none where two
@@ -251,6 +254,36 @@ function exportedOf(name: string, site: TypeSite, reading: TypeReading): Declare
 }
 
 /**
+ * What the file's own exports, those of `statements` but `export *`, make of `name`: the one the
+ * reader reads, whether any exports the name, and how many types they declare and export of it.
+ */
+function ownExports(
+  statements: readonly Statement[],
+  name: string,
+  site: TypeSite,
+  reading: TypeReading,
+): { readonly declared: number; readonly explicit: boolean; readonly found: Declared | undefined } {
+  let found: Declared | undefined;
+  let explicit = false;
+  let declared = 0;
+  for (const statement of statements) {
+    if (isStarExport(statement)) {
+      continue;
+    }
+    found ??= exportedBy(statement, name, site, reading);
+    explicit ||= exportsName(statement, name);
+    declared += carries(statement, SyntaxKind.ExportKeyword) && declares(statement, name) ? 1 : 0;
+  }
+  return { declared, explicit, found };
+}
+
+/** Whether `statement` carries the modifier `kind`: `export`, `default`. */
+function carries(statement: Statement, kind: SyntaxKind): boolean {
+  const { modifiers } = statement as { readonly modifiers?: readonly Node[] };
+  return modifiers?.some((each) => each.kind === kind) === true;
+}
+
+/**
  * Whether `statement` exports `name` as a declaration or a list does, of what it declares or
  * re-exports, read or not: a class, a function, a constant, a namespace, `export { … }`.
  */
@@ -264,10 +297,10 @@ function exportsName(statement: Statement, name: string): boolean {
         : clause.name.text === name)
     );
   }
-  const modifiers = (statement as { readonly modifiers?: readonly Node[] }).modifiers;
-  const exported = modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
-  const isDefault = modifiers?.some((each) => each.kind === SyntaxKind.DefaultKeyword) === true;
-  if (!exported || isDefault) {
+  if (
+    !carries(statement, SyntaxKind.ExportKeyword) ||
+    carries(statement, SyntaxKind.DefaultKeyword)
+  ) {
     return false;
   }
   if (isVariableStatement(statement)) {
