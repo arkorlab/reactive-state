@@ -133,8 +133,11 @@ const DESTRUCTURED_MODULE_EXPORTS: readonly {
 
 type StatementTag = 'export' | 'none' | 'other' | 'variable';
 
-function namedModule(sourceFile: SourceFile, name: string): ParsedModule {
-  return { file: name, name, sourceFile, text: sourceFile.text };
+/** The file every row of this suite is parsed as. */
+const MODULE = 'actions/destructured.ts';
+
+function namedModule(sourceFile: SourceFile): ParsedModule {
+  return { file: MODULE, name: MODULE, sourceFile, text: sourceFile.text };
 }
 
 function statementTag(statement: Statement | undefined): StatementTag {
@@ -177,15 +180,15 @@ describe('destructured exports in operations and module exports', () => {
   });
 
   it.each(DESTRUCTURED_OPERATIONS)('lists $id', ({ expected, source }) => {
-    using parsed = parseModule(api, 'actions/destructured.ts', source);
-    const module = namedModule(parsed.sourceFile, 'actions/destructured.ts');
+    using parsed = parseModule(api, MODULE, source);
+    const module = namedModule(parsed.sourceFile);
 
     expect(operationExports(module)).toStrictEqual(expected);
   });
 
   it.each(REFUSED_DESTRUCTURED_DUPLICATES)('refuses $id', ({ reason, source }) => {
-    using parsed = parseModule(api, 'actions/destructured.ts', source);
-    const module = namedModule(parsed.sourceFile, 'actions/destructured.ts');
+    using parsed = parseModule(api, MODULE, source);
+    const module = namedModule(parsed.sourceFile);
 
     expect(() => operationExports(module)).toThrow(reason);
   });

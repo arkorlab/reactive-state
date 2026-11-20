@@ -110,8 +110,11 @@ const MODULE_EXPORT_PINS = [
   },
 ] as const;
 
-function namedModule(sourceFile: SourceFile, name: string): ParsedModule {
-  return { file: name, name, sourceFile, text: sourceFile.text };
+/** The file every row of this suite is parsed as. */
+const MODULE = 'actions/string-exports.ts';
+
+function namedModule(sourceFile: SourceFile): ParsedModule {
+  return { file: MODULE, name: MODULE, sourceFile, text: sourceFile.text };
 }
 
 async function presencePair(
@@ -146,15 +149,15 @@ describe('string-literal export names in operations and module exports', () => {
   });
 
   it.each(ACCEPTED_EXPORTS)('lists $id', ({ expected, source }) => {
-    using parsed = parseModule(api, 'actions/string-exports.ts', source);
-    const module = namedModule(parsed.sourceFile, 'actions/string-exports.ts');
+    using parsed = parseModule(api, MODULE, source);
+    const module = namedModule(parsed.sourceFile);
 
     expect(operationExports(module)).toStrictEqual(expected);
   });
 
   it.each(REFUSED_DUPLICATES)('refuses $id', ({ reason, source }) => {
-    using parsed = parseModule(api, 'actions/string-exports.ts', source);
-    const module = namedModule(parsed.sourceFile, 'actions/string-exports.ts');
+    using parsed = parseModule(api, MODULE, source);
+    const module = namedModule(parsed.sourceFile);
 
     expect(() => operationExports(module)).toThrow(reason);
   });

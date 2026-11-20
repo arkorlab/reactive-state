@@ -174,13 +174,16 @@ const MODULE_EXPORT_CASES = [
 
 type ExportedKind = 'bodyless-function' | 'implemented-function' | 'none' | 'other' | 'variable';
 
-function namedModule(sourceFile: SourceFile, name: string): ParsedModule {
-  return { file: name, name, sourceFile, text: sourceFile.text };
+/** The file every row of this suite is parsed as. */
+const MODULE = 'actions/overloads.ts';
+
+function namedModule(sourceFile: SourceFile): ParsedModule {
+  return { file: MODULE, name: MODULE, sourceFile, text: sourceFile.text };
 }
 
 function refusalLine(api: API, source: string): { readonly line: number; readonly reason: string } {
-  using parsed = parseModule(api, 'actions/overloads.ts', source);
-  const module = namedModule(parsed.sourceFile, 'actions/overloads.ts');
+  using parsed = parseModule(api, MODULE, source);
+  const module = namedModule(parsed.sourceFile);
   try {
     operationExports(module);
   } catch (error) {
@@ -226,8 +229,8 @@ describe('overloaded and ambient exports in operations and module exports', () =
   });
 
   it.each(ACCEPTED_OPERATIONS)('lists $id', ({ expected, source }) => {
-    using parsed = parseModule(api, 'actions/overloads.ts', source);
-    const module = namedModule(parsed.sourceFile, 'actions/overloads.ts');
+    using parsed = parseModule(api, MODULE, source);
+    const module = namedModule(parsed.sourceFile);
 
     expect(operationExports(module)).toStrictEqual(expected);
   });
