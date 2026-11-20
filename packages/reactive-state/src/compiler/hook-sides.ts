@@ -87,10 +87,13 @@ export function hookSides(input: HookInput): HookSides {
     }
     const key = state.value.text;
     const declared = fed.get(key);
+    const set = updaterId(input.owner, key, 'set');
     // A local state's setter is React's, which the page alone applies: called from a handler alone,
-    // as any setter is, it registers nothing.
-    if (declared !== undefined) {
-      const set = updaterId(input.owner, key, 'set');
+    // as any setter is, it registers nothing. So is the setter of a state no parameter feeds, which
+    // the hook starts itself — `useReactiveState(0)` — and the authority never holds.
+    if (declared === undefined) {
+      held.setters.set(state.setter.text, { key, local: true, set, site: key, type: undefined });
+    } else {
       const setter = { key, set, site: key, type: declared.type };
       held.setters.set(
         state.setter.text,
