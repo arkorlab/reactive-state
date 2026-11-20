@@ -2,6 +2,7 @@ import {
   type ArrowFunction,
   type Expression,
   type FunctionExpression,
+  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isAsExpression,
@@ -18,6 +19,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ReturnStatement,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import type { HookCall, OwnedState, TopLevel } from './analyze.ts';
@@ -228,5 +230,66 @@ export function itemOf(node: Node, context: ItemContext): Item {
     };
   }
   const fn = entry.kind === 'constant' ? functionOf(entry.declaration) : undefined;
-  return fn === undefined ? plain : { ...plain, uses: context.writes.usesOf(fn) };
+  if (fn !== undefined) {
+    return { ...plain, uses: context.writes.usesOf(fn) };
+  }
+  // A constant that is another name of a setter, or of a function that writes: `const reset = setCount`.
+  const alias =
+    entry.kind === 'constant' ? aliasedName(entry.declaration, context.names) : undefined;
+  return alias === undefined ? plain : { ...plain, ...keptUnder(alias, context) };
+}
+
+/**
+ * What a name that another is a name of is held as: a setter, a function the hook holds that writes,
+ * or a constant function of the hook's own, which writes what its body does.
+ */
+function keptUnder(name: Identifier, context: ItemContext): Pick<Item, 'setter' | 'uses'> {
+  const entry = context.names.get(name.text);
+  const fn = entry?.kind === 'constant' ? functionOf(entry.declaration) : undefined;
+  return {
+    setter: context.held.setters.get(name.text),
+    uses:
+      fn === undefined
+        ? (context.held.writing.get(name.text) ?? new Map())
+        : context.writes.usesOf(fn),
+  };
+}
+
+/**
+ * The name a constant is another name of, through parentheses and casts: `const reset = setCount`.
+ * A pattern binds a part of what it is given, which is not another name of it.
+ */
+function aliasOf(declaration: VariableDeclaration): Identifier | undefined {
+  let value = declaration.initializer;
+  while (
+    value !== undefined &&
+    (isParenthesizedExpression(value) || isAsExpression(value) || isSatisfiesExpression(value))
+  ) {
+    value = value.expression;
+  }
+  return value !== undefined && isIdentifier(value) && isIdentifier(declaration.name)
+    ? value
+    : undefined;
+}
+
+/**
+ * The name a chain of constants ends at, each another name of the next: `const a = setCount; const b
+ * = a`. A name is followed once, so a chain that turns back on itself ends.
+ */
+function aliasedName(
+  declaration: VariableDeclaration,
+  names: ReadonlyMap<string, TopLevel>,
+): Identifier | undefined {
+  const seen = new Set<string>();
+  let name = aliasOf(declaration);
+  while (name !== undefined) {
+    seen.add(name.text);
+    const entry = names.get(name.text);
+    const next = entry?.kind === 'constant' ? aliasOf(entry.declaration) : undefined;
+    if (next === undefined || seen.has(next.text)) {
+      break;
+    }
+    name = next;
+  }
+  return name;
 }

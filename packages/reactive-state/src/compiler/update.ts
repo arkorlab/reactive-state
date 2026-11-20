@@ -11,10 +11,12 @@ import {
   isPrivateIdentifier,
   isShorthandPropertyAssignment,
   isTemplateLiteralToken,
+  isVariableDeclarationList,
   isYieldExpression,
   type Node,
   type SourceFile,
   SyntaxKind,
+  type VariableDeclarationList,
 } from 'typescript/ast';
 
 import type { TopLevel } from './analyze.ts';
@@ -210,7 +212,9 @@ interface Forming {
  * text of a template's parts between its substitutions, and a private name, among them, which no
  * child of theirs holds. Types are no part of it, nor how a node is spelled. A shorthand property
  * is both its key and its value, and the value is `$` or a capture: its key is a part of the form
- * as well, or `left => ({ left })` and `right => ({ right })` would be one update.
+ * as well, or `left => ({ left })` and `right => ({ right })` would be one update; and so is the kind
+ * of a declaration, `let` or `const` or `var`, which `{ let r = n; { let r = 0; } return r; }` is
+ * another update of than the same with `var`.
  */
 function formOf(node: Node, forming: Forming): string {
   if (isIdentifier(node)) {
@@ -219,10 +223,7 @@ function formOf(node: Node, forming: Forming): string {
   if (isLiteralExpression(node) || isTemplateLiteralToken(node) || isPrivateIdentifier(node)) {
     return `${formatSyntaxKind(node.kind)}:${JSON.stringify(node.text)}`;
   }
-  const parts: string[] =
-    isShorthandPropertyAssignment(node) && isIdentifier(node.name)
-      ? [`name:${node.name.text}`]
-      : [];
+  const parts: string[] = [...besideChildren(node)];
   node.forEachChild((child) => {
     if (!isTypeOnly(child)) {
       parts.push(formOf(child, forming));
@@ -233,6 +234,19 @@ function formOf(node: Node, forming: Forming): string {
       ? `:${formatSyntaxKind(node.operator)}`
       : '';
   return `${formatSyntaxKind(node.kind)}${operator}(${parts.join(',')})`;
+}
+
+/** What a node is beside its children: a shorthand property's key, and the kind of a declaration list. */
+function besideChildren(node: Node): readonly string[] {
+  if (isShorthandPropertyAssignment(node) && isIdentifier(node.name)) {
+    return [`name:${node.name.text}`];
+  }
+  return isVariableDeclarationList(node) ? [`declares:${declaresWith(node)}`] : [];
+}
+
+/** What a list declares with — `let`, `const`, `var` or `using`: the first word of its text, which no child of the list holds. */
+function declaresWith(list: VariableDeclarationList): string {
+  return /^[a-z]+/u.exec(list.getText(list.getSourceFile()))?.[0] ?? '';
 }
 
 function identifierForm(identifier: Identifier, forming: Forming): string {
