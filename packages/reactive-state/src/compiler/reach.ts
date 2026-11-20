@@ -14,7 +14,6 @@ import {
   isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
   isParameterDeclaration,
-  isParenthesizedExpression,
   isSourceFile,
   isStringLiteral,
   type Node,
@@ -37,6 +36,7 @@ import { runsAsGiven } from './runs-as-given.ts';
 import { keptMethodWrite, keptWrite } from './settled.ts';
 import { isScript } from './typescript.ts';
 import { firstIn, untrackedAt } from './untracked-reads.ts';
+import { useOf } from './uses.ts';
 
 /**
  * What a route's document would take from somewhere other than its params and the database the
@@ -186,13 +186,10 @@ function isOwned(node: Node): node is Owned {
   );
 }
 
-/** Whether `fn`, a function, is called where it is written, once: `(() => Date.now())()`. */
+/** Whether `fn`, a function, is called where it is written, once: `(() => Date.now())()`, past casts too. */
 function isCalledInPlace(fn: Node): boolean {
-  let at = fn;
-  while (isParenthesizedExpression(at.parent)) {
-    at = at.parent;
-  }
-  return isCallExpression(at.parent) && at.parent.expression === at;
+  const { at, parent } = useOf(fn);
+  return isCallExpression(parent) && parent.expression === at;
 }
 
 /**

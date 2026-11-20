@@ -24,6 +24,14 @@ interface Row {
 /** Each is called where it is written, and reads the clock as it runs. */
 const IN_PLACE: readonly Row[] = [
   { id: 'arrow', source: 'const stamp = (() => Date.now())();' },
+  { id: 'cast', source: 'const stamp = ((() => Date.now()) as () => number)();' },
+  { id: 'satisfies', source: 'const stamp = ((() => Date.now()) satisfies () => number)();' },
+  { id: 'non-null', source: 'const stamp = (() => Date.now())!();' },
+  { id: 'angle-bracket-cast', source: 'const stamp = (<() => number>(() => Date.now()))();' },
+  {
+    id: 'casts-within-parentheses',
+    source: 'const stamp = (((() => Date.now()) as () => number) as () => number)();',
+  },
   { id: 'arrow-with-a-block', source: 'const stamp = (() => { return Date.now(); })();' },
   { id: 'function-expression', source: 'const stamp = (function () { return Date.now(); })();' },
   {
@@ -44,6 +52,11 @@ const IN_PLACE: readonly Row[] = [
 /** Each runs when it is called, not where it stands, and is skipped as before. */
 const DEFERRED: readonly Row[] = [
   { id: 'arrow-held', source: 'const read = () => Date.now();' },
+  { id: 'cast-then-held', source: 'const read = (() => Date.now()) as () => number;' },
+  {
+    id: 'cast-then-bound',
+    source: 'const stamp = ((() => Date.now()) as () => number).call(undefined);',
+  },
   { id: 'function-held', source: 'const read = function () { return Date.now(); };' },
   { id: 'handler-property', source: 'const holder = { onClick: () => Date.now() };' },
   { id: 'returned-from-an-invoked-function', source: 'const read = (() => () => Date.now())();' },
