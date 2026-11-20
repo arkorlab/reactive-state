@@ -3,7 +3,6 @@ import {
   isShorthandPropertyAssignment,
   type Node,
   type SourceFile,
-  type Statement,
 } from 'typescript/ast';
 
 import { PROTOCOL_VERSION } from '../program.ts';
@@ -29,10 +28,11 @@ import {
 } from './splice.ts';
 import {
   namesHeld,
+  ownText,
   OWN_NAMES,
   refuseShadowing,
+  renders,
   reservedNames,
-  updateGlobals,
 } from './update-globals.ts';
 import type { ApplySite, Registered } from './updaters.ts';
 
@@ -109,19 +109,19 @@ class ImportPlan {
       this.#taken.set(name, '');
     }
     const { refs } = sides;
-    const readers = updateGlobals(updaters);
+    const own = ownText(component, updaters);
     const bindings = component.modules.flatMap((module) => module.bindings);
     for (const binding of bindings) {
       const name = binding.name.text;
       if (refs.components.has(name) || refs.modules.has(name) || refs.actions.has(name)) {
-        refuseShadowing(binding.name, readers, component.fail);
+        refuseShadowing(binding.name, own, component.fail);
         this.#taken.set(name, '');
         continue;
       }
       const byReference = BY_REFERENCE.has(binding.module.target.kind);
       const value = !byReference && !binding.typeOnly && sides.authority.values.has(name);
       if (value) {
-        refuseShadowing(binding.name, readers, component.fail);
+        refuseShadowing(binding.name, own, component.fail);
       }
       if (value || sides.authority.types.has(name) || propTypes.has(name)) {
         this.#add(binding, !value);
@@ -245,21 +245,6 @@ function programImport(values: readonly string[], types: readonly string[]): str
   }
   const named = [...values, ...types.map((type) => `type ${type}`)];
   return `import { ${named.join(', ')} } from '${PROGRAM}';`;
-}
-
-/** Whether the server part holds JSX, which it renders with `$`. */
-function renders(statements: readonly Statement[]): boolean {
-  let found = false;
-  const visit = (node: Node): void => {
-    found ||= isJsx(node);
-    if (!found) {
-      node.forEachChild(visit);
-    }
-  };
-  for (const statement of statements) {
-    visit(statement);
-  }
-  return found;
 }
 
 /** The constant a reference the authority renders or binds by is declared as. */

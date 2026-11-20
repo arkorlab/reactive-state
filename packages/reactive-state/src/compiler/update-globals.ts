@@ -1,7 +1,8 @@
-import { type Identifier, isIdentifier, type Node } from 'typescript/ast';
+import { type Identifier, isIdentifier, type Node, type Statement } from 'typescript/ast';
 
 import type { Component } from './analyze.ts';
 import type { Fail } from './errors.ts';
+import { isJsx } from './jsx.ts';
 import { freeReads } from './scope.ts';
 import type { Sides } from './sides.ts';
 import type { ApplySite, Registered } from './updaters.ts';
@@ -10,9 +11,16 @@ import type { ApplySite, Registered } from './updaters.ts';
 const ALIAS = /\$\d+$/u;
 
 /**
- * The names a program declares itself, or reads as a global in what it writes of its own — `Object`
- * of `Object.freeze`, `Readonly` and `Record` of the types it writes — which an import it writes for
- * an update may not take.
+ * The globals that the text a program writes of its own reads at run time: `Object` of
+ * `Object.freeze`, and the `undefined` that an optional chain of a site is written with. No import
+ * may take either name, whatever reads it.
+ */
+const PROGRAM_READS: ReadonlySet<string> = new Set(['Object', 'undefined']);
+
+/**
+ * The names a program declares itself, or reads as a global in what it writes of its own — the
+ * `PROGRAM_READS`, and `Readonly` and `Record` of the types it writes — which an import it writes
+ * for an update may not take.
  */
 export const OWN_NAMES: ReadonlySet<string> = new Set([
   '_$',
@@ -31,6 +39,7 @@ export const OWN_NAMES: ReadonlySet<string> = new Set([
   'RenderScope',
   'States',
   'StatesOf',
+  'undefined',
   'updaters',
   'writable',
 ]);
@@ -138,21 +147,63 @@ export function updateGlobals(
   return found;
 }
 
+/** Whether the server part holds JSX, which it renders with `$`. */
+export function renders(statements: readonly Statement[]): boolean {
+  let found = false;
+  const visit = (node: Node): void => {
+    found ||= isJsx(node);
+    if (!found) {
+      node.forEachChild(visit);
+    }
+  };
+  for (const statement of statements) {
+    visit(statement);
+  }
+  return found;
+}
+
+/** What the program's own text does with names an import might take, for `refuseShadowing`. */
+export interface OwnText {
+  /** Each name an update reads as a global, with the keys the updates that read it write. */
+  readonly readers: ReadonlyMap<string, ReadonlySet<string>>;
+  /** The parameters its function declares, where nothing of the component's holds the name. */
+  readonly declared: ReadonlySet<string>;
+}
+
+/** The program's own text: what the updates read, and the parameters of `evaluate` it declares for itself. */
+export function ownText(component: Component, updaters: ReadonlyMap<string, Registered>): OwnText {
+  const declared = new Set<string>();
+  if (component.parameter === undefined) {
+    declared.add('_props');
+  }
+  if (component.returned === undefined && !renders(component.server)) {
+    declared.add('_$');
+  }
+  return { declared, readers: updateGlobals(updaters) };
+}
+
 /**
  * Refuses an import the program writes under its own name — its server part reads it, or the
- * authority renders or binds it by reference — where an update reads a global of that name: the
- * import cannot be written under another name, the server part reads it as it is, and the update,
- * written as it is, would call the import.
+ * authority renders or binds it by reference — where an update, or the text the program writes of
+ * its own, reads a global of that name, or declares a parameter of it: the import cannot be written
+ * under another name, the code that reads it reads it as it is, and what reads the global, written
+ * as it is, would read the import, or the code that reads the import would read the parameter.
  */
-export function refuseShadowing(
-  name: Identifier,
-  readers: ReadonlyMap<string, ReadonlySet<string>>,
-  fail: Fail,
-): void {
-  const keys = readers.get(name.text);
-  if (keys !== undefined) {
+export function refuseShadowing(name: Identifier, own: OwnText, fail: Fail): void {
+  const keys = own.readers.get(name.text);
+  let because =
+    keys === undefined
+      ? undefined
+      : `the update of \`${[...keys].join('`, `')}\` reads the global \`${name.text}\`: it would read the import`;
+  if (PROGRAM_READS.has(name.text)) {
+    because = `the program's own code reads the global \`${name.text}\`: it would read the import`;
+  }
+  if (own.declared.has(name.text)) {
+    because = `its own function declares a parameter \`${name.text}\`: the code that reads the import would read the parameter`;
+  }
+  if (because !== undefined) {
     fail(
-      `\`${name.text}\` is imported here, and the program for the authority writes it under its own name, where the update of \`${[...keys].join('`, `')}\` reads the global \`${name.text}\`: the update would call the import. Import it under another name.`,
+      `\`${name.text}\` is imported here, and the program for the authority writes it under its own name, where ${because}. Import it under another name.`,
       name,
     );
   }
