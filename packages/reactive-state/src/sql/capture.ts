@@ -12,10 +12,15 @@
  * Each entry's number is taken from one counter row, which the writing transaction holds until it
  * commits: two transactions that write followed tables commit in the order of their numbers, so a
  * follower that has read an entry has read every entry before it. That orders those writers as
- * PostgreSQL orders writes of one row. The log notifies its channel (`channelOf`) as it commits, for
- * a host to read it then rather than at its next interval. A table followed by the logs of two
- * namespaces holds the triggers of each, named by its namespace; a trigger of the application's of
- * one of those names is replaced, so a namespace is one of the log's own.
+ * PostgreSQL orders writes of one row. The row is taken as the statement that first writes a
+ * followed table ends, after that statement's own rows, and held to the end of the transaction: a
+ * transaction whose later statement writes a row that another transaction's statement has written
+ * meanwhile can deadlock with it where, without the capture, it would only have waited for it.
+ * PostgreSQL ends one of the two with `40P01`, and an application retries that transaction as it
+ * retries any deadlock. The log notifies its channel (`channelOf`) as it commits, for a host to
+ * read it then rather than at its next interval. A table followed by the logs of two namespaces
+ * holds the triggers of each, named by its namespace; a trigger of the application's of one of
+ * those names is replaced, so a namespace is one of the log's own.
  *
  * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`: they
  * run as the role that made the log, so a role that writes a followed table needs no right to the
