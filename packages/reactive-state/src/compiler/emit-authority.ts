@@ -27,7 +27,7 @@ import {
   textOf,
   unusedName,
 } from './splice.ts';
-import { OWN_NAMES, reservedNames } from './update-globals.ts';
+import { OWN_NAMES, refuseShadowing, reservedNames, updateGlobals } from './update-globals.ts';
 import type { ApplySite, Registered } from './updaters.ts';
 
 /**
@@ -103,15 +103,20 @@ class ImportPlan {
       this.#taken.set(name, '');
     }
     const { refs } = sides;
+    const readers = updateGlobals(updaters);
     const bindings = component.modules.flatMap((module) => module.bindings);
     for (const binding of bindings) {
       const name = binding.name.text;
       if (refs.components.has(name) || refs.modules.has(name) || refs.actions.has(name)) {
+        refuseShadowing(binding.name, readers, component.fail);
         this.#taken.set(name, '');
         continue;
       }
       const byReference = BY_REFERENCE.has(binding.module.target.kind);
       const value = !byReference && !binding.typeOnly && sides.authority.values.has(name);
+      if (value) {
+        refuseShadowing(binding.name, readers, component.fail);
+      }
       if (value || sides.authority.types.has(name) || propTypes.has(name)) {
         this.#add(binding, !value);
       }

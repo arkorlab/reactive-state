@@ -69,6 +69,16 @@ function helperNamed(name: string): string {
   return `export function ${name}(text: string, radix: number): number {\n  return Number(text) * 100 + radix;\n}\n`;
 }
 
+/** The message of the refusal `run` ends in. */
+function refusalOf(run: () => unknown): string {
+  try {
+    run();
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  return '';
+}
+
 const CHILD = `export default function Child({ n }: { n: unknown }) {
   return <i>{String(n)}</i>;
 }
@@ -759,6 +769,132 @@ describe('the imports of a program for the authority, beside the globals its upd
 
       expect(imports).toStrictEqual(["import { todo as todo$2 } from '@/numbers';"]);
       expect(update).toBe('todo$2(String(current), 10)');
+    });
+  });
+
+  describe("a component's import the program keeps under its own name is refused where an update reads a global of it", () => {
+    const TODO = '  const todo = await db.todos.get(id);\n';
+    const CHILD_IMPORT = "import Child from '@/components/child.reactive';";
+    /** The program of a component that imports `name` from the shared module for what the program writes as it is, and a hook whose update reads the global `name`. */
+    function withImport(
+      name: string,
+      place: Pick<Parts, 'jsx' | 'more' | 'server'>,
+      update = `${name}(String(current), 10)`,
+    ): string {
+      return program({
+        'components/child.reactive.tsx': CHILD,
+        'components/lab.reactive.tsx': lab({
+          ...place,
+          imports: `${CHILD_IMPORT}\nimport { ${name} } from '@/numbers';`,
+          update: '(current) => current',
+        }),
+        'hooks/useCount.ts': hook('useCount', update),
+        'numbers.ts': helperNamed(name),
+      });
+    }
+
+    describe.each([
+      {
+        id: 'a statement of the server part',
+        of: (read: string) => {
+          return {
+            jsx: '      <Child n={probe} />\n',
+            server: `${TODO}  const probe = ${read};\n`,
+          };
+        },
+      },
+      {
+        id: 'the initializer of a state the authority evaluates',
+        of: (read: string) => {
+          return {
+            more: `  const [count, setCount] = useReactiveState(${read});\n`,
+            jsx: '      <button type="button" onClick={() => setCount((c) => c + 1)}>{count}</button>\n',
+            server: TODO,
+          };
+        },
+      },
+      {
+        id: 'a slot',
+        of: (read: string) => ({ jsx: `      <Child n={${read}} />\n`, server: TODO }),
+      },
+    ] as const)('read by $id', ({ of }) => {
+      it.each([
+        { name: 'parseInt', read: 'parseInt(String(todo.estimate), 10)' },
+        { name: 'structuredClone', read: 'structuredClone({ n: todo.estimate }).n' },
+        { name: 'Date', read: 'new Date(todo.estimate).getTime()' },
+      ])('imports `$name`, and a hook updates by the global of the name', ({ name, read }) => {
+        const message = refusalOf(() => withImport(name, of(read)));
+
+        expect(message).toContain(`\`${name}\` is imported here`);
+        expect(message).toContain(
+          `the update of \`useCount#0.count\` reads the global \`${name}\``,
+        );
+        expect(message).toContain('Import it under another name.');
+      });
+    });
+
+    it('the program renders a reactive element the component imports under the name of a global', () => {
+      const message = refusalOf(() => {
+        return program({
+          'components/child.reactive.tsx': CHILD,
+          'components/lab.reactive.tsx': lab({
+            imports: "import Date from '@/components/child.reactive';",
+            jsx: '      <Date n={1} />\n',
+            update: '(current) => current',
+          }),
+          'hooks/useCount.ts': hook('useCount', 'new Date(current).getTime()'),
+        });
+      });
+
+      expect(message).toContain('`Date` is imported here');
+      expect(message).toContain('reads the global `Date`');
+      expect(message).toContain('Import it under another name.');
+    });
+
+    it('the same import, and no update reads a global of its name, is written as it was', () => {
+      const text = program({
+        'components/child.reactive.tsx': CHILD,
+        'components/lab.reactive.tsx': lab({
+          imports: `${CHILD_IMPORT}\nimport { parseInt } from '@/numbers';`,
+          jsx: '      <Child n={probe} />\n',
+          server: `${TODO}  const probe = parseInt(String(todo.estimate), 10);\n`,
+          update: '(current) => current',
+        }),
+        'hooks/useCount.ts': hook('useCount', 'Math.max(0, current - 1)'),
+        'numbers.ts': NUMBERS,
+      });
+
+      expect(readOf(text).imports).toStrictEqual(["import { parseInt } from '@/numbers';"]);
+      expect(text).toContain('const probe = parseInt(String(todo.estimate), 10);');
+    });
+
+    it("an update reads the global, and no import of the name is the program's own, is written as it was", () => {
+      const { imports, updates } = readOf(
+        program({
+          'components/lab.reactive.tsx': lab({ update: '(current) => current' }),
+          'hooks/useCount.ts': hook('useCount', 'parseInt(String(current), 10)'),
+        }),
+      );
+
+      expect(imports).toStrictEqual([]);
+      expect(updates['useCount#0.count']).toBe('parseInt(String(current), 10)');
+    });
+
+    it('a type the component imports under the name of a global, which the program erases, is no refusal', () => {
+      const text = program({
+        'components/child.reactive.tsx': CHILD,
+        'components/lab.reactive.tsx': lab({
+          imports: `${CHILD_IMPORT}\nimport type { Date } from '@/numbers';`,
+          jsx: '      <Child n={probe} />\n',
+          server: `${TODO}  const probe: Date | undefined = todo.estimate > 99 ? undefined : undefined;\n`,
+          update: '(current) => current',
+        }),
+        'hooks/useCount.ts': hook('useCount', 'new Date(current).getTime()'),
+        'numbers.ts': 'export type Date = { readonly at: number };\n',
+      });
+
+      expect(text).toContain('new Date(current).getTime()');
+      expect(text).toContain("import type { Date } from '@/numbers';");
     });
   });
 
