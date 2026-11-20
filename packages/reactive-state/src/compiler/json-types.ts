@@ -41,7 +41,7 @@ import { firstLine } from './bounded.ts';
 import { constantNumber } from './numbers.ts';
 import { shapesKind } from './object-kinds.ts';
 import { LANGUAGE_OBJECTS, membersOf, type ObjectMember } from './object-members.ts';
-import { memberOf } from './type-members.ts';
+import { memberOf, within } from './type-members.ts';
 import {
   type Declared,
   declarationOf,
@@ -303,7 +303,7 @@ function memberPart({ at, member, value }: ObjectMember, walk: Walk): NonJsonPar
   }
   if (isIndexSignatureDeclaration(member)) {
     const [key] = member.parameters;
-    return key?.type !== undefined && mayBeSymbol(key.type)
+    return key?.type !== undefined && mayBeSymbol(key.type, at, walk.reading)
       ? admitting(member, SYMBOL_KEY)
       : partOf(member.type, there, true);
   }
@@ -317,12 +317,35 @@ function isLiteralName(name: Node): boolean {
 
 /**
  * Whether an index's key type may take a symbol: any but `string`, `number`, a template literal
- * type, or a union of those. An alias or parentheses are not followed: `type Key = symbol` is one.
+ * type, or a union of those, read through parentheses and through a name the module reads as an
+ * alias without type parameters, of the file or of an import — `type Key = symbol` is one, `type
+ * UserId = string` is not. What it cannot read to one of those, a type parameter or a package's
+ * type among it, may be a symbol.
  */
-function mayBeSymbol(type: TypeNode): boolean {
-  return isUnionTypeNode(type)
-    ? type.types.some((each) => mayBeSymbol(each))
-    : !PLAIN_KEYS.has(type.kind);
+function mayBeSymbol(type: TypeNode, at: TypeSite, reading: TypeReading): boolean {
+  let node = type;
+  while (isParenthesizedTypeNode(node)) {
+    node = node.type;
+  }
+  if (isUnionTypeNode(node)) {
+    return node.types.some((each) => mayBeSymbol(each, at, reading));
+  }
+  if (!isTypeReferenceNode(node)) {
+    return !PLAIN_KEYS.has(node.kind);
+  }
+  const declared =
+    typeParameterOf(node.typeName, at, reading) === undefined
+      ? declarationOf(node.typeName, at, reading)
+      : undefined;
+  const alias = declared?.declaration;
+  if (declared === undefined || alias === undefined || !isTypeAliasDeclaration(alias)) {
+    return true;
+  }
+  // An alias that names itself adds no symbol to what it names beside.
+  return (
+    alias.typeParameters !== undefined ||
+    (within(alias, reading, () => mayBeSymbol(alias.type, declared.at, reading)) ?? false)
+  );
 }
 
 /**
