@@ -109,6 +109,13 @@ const JSON_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TemplateLiteralType,
 ]);
 
+/** The types of an index's key that no symbol is of: text, a number, a template literal. */
+const PLAIN_KEYS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.NumberKeyword,
+  SyntaxKind.StringKeyword,
+  SyntaxKind.TemplateLiteralType,
+]);
+
 /** The literals of JSON's values, as a literal type writes them, a number past its sign. */
 const JSON_LITERALS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.FalseKeyword,
@@ -296,7 +303,7 @@ function memberPart({ at, member, value }: ObjectMember, walk: Walk): NonJsonPar
   }
   if (isIndexSignatureDeclaration(member)) {
     const [key] = member.parameters;
-    return key?.type !== undefined && holdsSymbol(key.type)
+    return key?.type !== undefined && mayBeSymbol(key.type)
       ? admitting(member, SYMBOL_KEY)
       : partOf(member.type, there, true);
   }
@@ -308,11 +315,14 @@ function isLiteralName(name: Node): boolean {
   return isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name) || isNumericLiteral(name);
 }
 
-/** Whether an index's key type takes a symbol: `symbol`, or a union of it. */
-function holdsSymbol(type: TypeNode): boolean {
+/**
+ * Whether an index's key type may take a symbol: any but `string`, `number`, a template literal
+ * type, or a union of those. An alias or parentheses are not followed: `type Key = symbol` is one.
+ */
+function mayBeSymbol(type: TypeNode): boolean {
   return isUnionTypeNode(type)
-    ? type.types.some((each) => holdsSymbol(each))
-    : type.kind === SyntaxKind.SymbolKeyword;
+    ? type.types.some((each) => mayBeSymbol(each))
+    : !PLAIN_KEYS.has(type.kind);
 }
 
 /**
