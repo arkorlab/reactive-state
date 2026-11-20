@@ -344,8 +344,8 @@ const CASES = [
       'export function other() { var value = 1; return value; } export function label(value: string | (() => string)) { return typeof value === "function" ? "" : String(value); }',
   },
   {
-    id: 'own-initialized-var-of-the-binding-is-no-write',
-    reason: undefined,
+    id: 'var-binding-is-never-narrowed-an-over-refusal-we-accept-pin',
+    reason: SOURCE_REASON,
     source:
       'declare function pick(): string | (() => string); export function label() { var value: string | (() => string) = pick(); return typeof value === "function" ? "" : String(value); }',
   },
@@ -354,6 +354,36 @@ const CASES = [
     reason: undefined,
     source:
       'export function label(value: string | (() => string)) { { const value = 1; void value; } return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'guard-before-the-hoisted-var-of-the-binding-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label() { if (typeof value !== "function") { var value: string | (() => string) | undefined = () => "text"; return String(value); } return ""; }',
+  },
+  {
+    id: 'let-of-a-union-type-resolved-by-the-guard',
+    reason: undefined,
+    source:
+      'declare function pick(): string | (() => string); export function label() { let value: string | (() => string) = pick(); return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'let-the-file-assigns-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'declare function pick(): string | (() => string); export function label(other: () => string) { let value: string | (() => string) = pick(); value = other; return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'parameter-redeclared-by-an-initialized-var-in-its-function-stays-refused-pin',
+    reason: SOURCE_REASON,
+    source:
+      'export function label(value: string | (() => string), other: () => string) { var value = other; return typeof value === "function" ? "" : String(value); }',
+  },
+  {
+    id: 'var-pattern-binding-is-never-narrowed-pin',
+    reason: SOURCE_REASON,
+    source:
+      'declare const holder: { value: string | (() => string) }; export function label() { var { value }: { value: string | (() => string) } = holder; return typeof value === "function" ? "" : String(value); }',
   },
   {
     id: 'unknown-parameter-is-no-function-stays-accepted-pin',

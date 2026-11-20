@@ -17,6 +17,7 @@ import {
   isIfStatement,
   isNoSubstitutionTemplateLiteral,
   isObjectLiteralExpression,
+  isParameterDeclaration,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPropertyAssignment,
@@ -65,15 +66,18 @@ const UNEQUAL_OPERATORS: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
- * Whether the read `name`, of a binding that the code never assigns, stands where a guard of the
- * same binding has shown that it holds no function: the branch of a conditional or an `if` that a
- * `typeof name` test selects, the right operand of an `&&` or `||` that it selects, or the
- * statements after an `if` whose test it makes and whose then branch always leaves. A function a
- * closure runs later is none of these, so the read is looked for only as far as the function that
- * holds it; what a guard cannot prove — `instanceof`, a test of another name — shows nothing.
+ * Whether the read `name`, of a parameter or a `const` or `let` that the code never assigns,
+ * stands where a guard of the same binding has shown that it holds no function: the branch of a
+ * conditional or an `if` that a `typeof name` test selects, the right operand of an `&&` or `||`
+ * that it selects, or the statements after an `if` whose test it makes and whose then branch always
+ * leaves. A function a closure runs later is none of these, so the read is looked for only as far
+ * as the function that holds it; what a guard cannot prove — `instanceof`, a test of another name —
+ * shows nothing. A `var` is never narrowed: it is hoisted, so its own initializer may run between
+ * a guard and a read, which a parameter and a block-scoped binding (whose temporal dead zone keeps
+ * a guard from running before its declaration) do not allow.
  */
 export function isGuardedNonFunction(name: Identifier, declared: FrameDeclaration): boolean {
-  if (isWritten(name, declared)) {
+  if (!isScopedBinding(declared) || isWritten(name, declared)) {
     return false;
   }
   for (let at: Node = name.parent, child: Node = name; ; child = at, at = at.parent) {
@@ -235,10 +239,24 @@ function typeofComparison(
     : undefined;
 }
 
+/** Whether `declared` is a parameter, or a `const` or `let`: a binding that is no hoisted `var`. */
+function isScopedBinding(declared: FrameDeclaration): boolean {
+  if (isParameterDeclaration(declared)) {
+    return true;
+  }
+  const list = isVariableDeclaration(declared) ? declared.parent : undefined;
+  return (
+    list !== undefined &&
+    isVariableDeclarationList(list) &&
+    /^(?:const|let)\b/u.test(list.getText(declared.getSourceFile()))
+  );
+}
+
 /**
  * Whether the file writes the binding `declared` of `name`: it assigns a name spelled as `name`
- * anywhere (`=`, `+=`, `++`, a loop head, a pattern), or another declaration of the same function
- * binds the name again and so assigns it — an initialized `var` or a `var` loop head.
+ * anywhere (`=`, `+=`, `++`, a loop head, a pattern), or, where `declared` is a parameter, a `var`
+ * of the same function binds the name again and so assigns it — an initialized `var` or a `var`
+ * loop head. (A `const` or `let` that a `var` of its own scope would redeclare is a syntax error.)
  */
 function isWritten(name: Identifier, declared: FrameDeclaration): boolean {
   const file = name.getSourceFile();
@@ -248,11 +266,13 @@ function isWritten(name: Identifier, declared: FrameDeclaration): boolean {
     collectWrittenNames(file, names);
     WRITTEN_NAMES.set(file, names);
   }
-  const redeclaring = names.redeclared.get(name.text) ?? [];
-  return (
-    names.assigned.has(name.text) ||
-    redeclaring.some((each) => !isChild(declared, each) && scopeOf(each) === scopeOf(declared))
-  );
+  if (names.assigned.has(name.text)) {
+    return true;
+  }
+  const redeclaring = isParameterDeclaration(declared)
+    ? (names.redeclared.get(name.text) ?? [])
+    : [];
+  return redeclaring.some((each) => scopeOf(each) === scopeOf(declared));
 }
 
 /** The function, static block or file whose variables `node` declares or is a parameter of. */
