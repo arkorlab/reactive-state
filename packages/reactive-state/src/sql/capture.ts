@@ -19,8 +19,8 @@
  *
  * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`: they
  * run as the role that made the log, so a role that writes a followed table needs no right to the
- * log's schema, and only the role that made it may call `note` itself. Their search path stays
- * `pg_catalog, pg_temp`.
+ * log's schema, and only the role that made it may call `note` itself or attach one of them to a
+ * table. Their search path stays `pg_catalog, pg_temp`.
  */
 
 /** A table of the application's, as PostgreSQL names it. */
@@ -253,6 +253,8 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
     made('capture_inserted', ['after']),
     made('capture_deleted', ['before']),
     made('capture_updated', ['before', 'after']),
+    // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
+    `REVOKE EXECUTE ON FUNCTION ${schema}."capture_inserted"(), ${schema}."capture_deleted"(), ${schema}."capture_updated"() FROM PUBLIC`,
   ];
 }
 
@@ -402,8 +404,9 @@ export function changeCaptureSql(
     `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
     `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
     // Of the role that made the log alone, of which the functions above run: any other that may use
-    // the log's schema could else append an entry that renders what read a table again.
-    `REVOKE EXECUTE ON FUNCTION ${schema}."note"(text, text) FROM PUBLIC`,
+    // the log's schema could else append an entry that renders what read a table again, or attach a
+    // trigger function to a table of its own.
+    `REVOKE EXECUTE ON FUNCTION ${schema}."note"(text, text), ${schema}."capture_all"() FROM PUBLIC`,
     ...rowFunctionsOf(namespace, channel),
     ...ddlCounterOf(namespace),
     ...relations.flatMap((relation) => triggersOf(relation, namespace)),

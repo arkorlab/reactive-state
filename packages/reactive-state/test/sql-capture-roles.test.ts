@@ -16,6 +16,11 @@ const RELATIONS = [{ keys: ['id'], name: 'items', schema: 'public' }];
 /** Each test makes a PGlite of its own, as long as a second and more under load. */
 const TEST_TIMEOUT_MS = 30_000;
 
+/** The statement of a trigger of `public.mine` that runs the function of the capture of rows inserted. */
+function attach(name: string): string {
+  return `CREATE TRIGGER ${name} AFTER INSERT ON public.mine REFERENCING NEW TABLE AS rows_after FOR EACH STATEMENT EXECUTE FUNCTION reactive_state.capture_inserted('id')`;
+}
+
 /** The digest of a key's text, as the log keeps it. */
 function digest(text: string): string {
   return createHash('sha256').update(text).digest('hex');
@@ -189,21 +194,44 @@ describe('the functions that write the log', { timeout: TEST_TIMEOUT_MS }, () =>
     expect((await log()).head).toBe(1);
   });
 
-  it("write the digests of a row's keys alone, of a table a role that may create one attaches them to", async () => {
-    const { as, log } = await opened();
+  it('are executable by the role that made the log alone, no trigger function by `PUBLIC` either', async () => {
+    const { pg } = await opened();
 
-    await as(
-      'other',
-      `CREATE TABLE public.mine (id text PRIMARY KEY, secret text);
-       CREATE TRIGGER mine AFTER INSERT ON public.mine REFERENCING NEW TABLE AS rows_after FOR EACH STATEMENT EXECUTE FUNCTION reactive_state.capture_inserted('id', 'secret', 'absent')`,
+    const { rows } = await pg.query<{ name: string; owner: boolean; others: boolean }>(`
+      SELECT p.proname AS name, has_function_privilege('migrator', p.oid, 'EXECUTE') AS owner, has_function_privilege('other', p.oid, 'EXECUTE') AS others
+      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+      WHERE n.nspname = 'reactive_state' AND p.proname IN ('capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note')
+      ORDER BY p.proname
+    `);
+
+    expect(rows.map((row) => [row.name, row.owner, row.others])).toStrictEqual(
+      ['capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note'].map(
+        (name) => [name, true, false],
+      ),
     );
-    await as('other', "INSERT INTO mine VALUES ('i', 'confidential')");
+  });
 
-    const { entries } = await log();
+  it('are attached to no table by a role that may create one', async () => {
+    const { as } = await opened();
+    await as('other', 'CREATE TABLE public.mine (id text PRIMARY KEY, secret text)');
 
-    expect(entries.map((entry) => entry.image)).toStrictEqual([
-      { id: digest('i'), secret: digest('confidential') },
-    ]);
+    for (const [event, images, run] of [
+      ['INSERT', 'REFERENCING NEW TABLE AS rows_after', "capture_inserted('id', 'secret')"],
+      ['DELETE', 'REFERENCING OLD TABLE AS rows_before', "capture_deleted('id', 'secret')"],
+      [
+        'UPDATE',
+        'REFERENCING OLD TABLE AS rows_before NEW TABLE AS rows_after',
+        "capture_updated('id', 'secret')",
+      ],
+      ['TRUNCATE', '', 'capture_all()'],
+    ] as const) {
+      await expect(
+        as(
+          'other',
+          `CREATE TRIGGER mine AFTER ${event} ON public.mine ${images} FOR EACH STATEMENT EXECUTE FUNCTION reactive_state.${run}`,
+        ),
+      ).rejects.toThrow('permission denied for function');
+    }
   });
 
   it('log the rows a policy of the table lets the writer change, and none it hides', async () => {
@@ -229,10 +257,13 @@ describe('the functions that write the log', { timeout: TEST_TIMEOUT_MS }, () =>
 
   it('reach an installation made before, which installs the capture again', async () => {
     const { as, log, pg } = await opened('', beforeDefiners);
+    await as('other', 'CREATE TABLE public.mine (id text PRIMARY KEY)');
 
     await expect(as('app', "INSERT INTO items VALUES ('a', 'x')")).rejects.toThrow(
       'permission denied for schema reactive_state',
     );
+
+    await as('other', attach('before_installing_again'));
 
     await pg.exec('SET ROLE migrator');
     for (const statement of changeCaptureSql(RELATIONS)) {
@@ -244,6 +275,9 @@ describe('the functions that write the log', { timeout: TEST_TIMEOUT_MS }, () =>
     expect((await log()).head).toBe(1);
     await expect(as('reader', "SELECT reactive_state.note('public', 'items')")).rejects.toThrow(
       'permission denied for function note',
+    );
+    await expect(as('other', attach('after_installing_again'))).rejects.toThrow(
+      'permission denied for function',
     );
   });
 
