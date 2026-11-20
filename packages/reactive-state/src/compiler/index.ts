@@ -282,7 +282,7 @@ function byPath(a: readonly string[], b: readonly string[]): number {
   return byCodeUnits(a[0] ?? '', b[0] ?? '');
 }
 
-/** Whether a directory holds no component of the application's: packages, and what is hidden. */
+/** Whether a directory or a file is no component of the application's: packages, and what is hidden. */
 function isHidden(name: string): boolean {
   return name === 'node_modules' || name.startsWith('.');
 }
@@ -294,8 +294,10 @@ function componentFiles(srcDir: string, outDir: string): readonly string[] {
     const entries = readdirSync(directory, { withFileTypes: true });
     for (const entry of entries) {
       const full = path.join(directory, entry.name);
-      const skipped = full === outDir || isHidden(entry.name);
-      if (!skipped && entry.isDirectory()) {
+      if (full === outDir || isHidden(entry.name)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
         visit(full);
       } else if (entry.isFile() && entry.name.endsWith(COMPONENT_SUFFIX)) {
         found.push(full);
