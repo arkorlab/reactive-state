@@ -373,21 +373,33 @@ interface Emitting {
   readonly appDir: string;
 }
 
-/** Every file of the build, by its path. */
+/**
+ * Every file of the build, by its path. No two are one file: not by their paths, nor by their
+ * paths in lower case, which a file system that keeps no case (macOS, Windows) writes one over the
+ * other — a module of the application's named as a file the compile names itself, `Elements.ts`
+ * beside `elements.ts`, or two components whose ids differ in case alone — whichever the system the
+ * compile runs on.
+ */
 function emitAll(emitting: Emitting): Map<string, string> {
   const { app, appDir, outDir } = emitting;
   const outputs = new Map<string, string>();
+  /** Each path put, by its lower case: what a file system that keeps no case calls the file. */
+  const folded = new Map<string, string>();
   const put = (file: string, text: string): void => {
-    if (outputs.has(file)) {
-      throw new ReactiveCompileError(
-        `Two of what the compile writes are \`${path.relative(outDir, file)}\`: rename the module of the application's that takes the name.`,
-        {
-          fileName: path.relative(outDir, file),
-          position: { character: 0, line: 0 },
-        },
-      );
+    const taken = folded.get(file.toLowerCase());
+    if (taken !== undefined) {
+      const name = path.relative(outDir, file);
+      const message =
+        taken === file
+          ? `Two of what the compile writes are \`${name}\`: rename the module of the application's that takes the name.`
+          : `Two of what the compile writes, \`${path.relative(outDir, taken)}\` and \`${name}\`, are one file where the file system keeps no case (macOS, Windows): rename the module of the application's that takes the name.`;
+      throw new ReactiveCompileError(message, {
+        fileName: name,
+        position: { character: 0, line: 0 },
+      });
     }
     outputs.set(file, text);
+    folded.set(file.toLowerCase(), file);
   };
   const outputOf = (from: string) => {
     return (target: ModuleClass): string | undefined => {
