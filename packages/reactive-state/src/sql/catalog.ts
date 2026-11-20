@@ -49,6 +49,13 @@ export interface Catalog {
    * other tables too, which the policy's own conditions — of the role that reads — may scan.
    */
   readonly hidden: ReadonlySet<string>;
+  /**
+   * The partitioned tables and the partitions among the followed tables, and the partitions of a
+   * followed partitioned table, by `relationKey`: a plan names a partitioned table's partitions, and
+   * a write to the table is logged as the table's, so nothing follows either. Not known, as of no
+   * catalog, is none.
+   */
+  readonly partitioned?: ReadonlySet<string>;
 }
 
 /** No condition followed: every read of a table is of the table whole. */
@@ -93,7 +100,9 @@ export function catalogSql(followed: Followed): string {
   const kept = `SELECT r.ev_action::text AS tree FROM pg_rewrite AS r JOIN pg_class AS c ON c.oid = r.ev_class JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${others} UNION ALL SELECT p.prosqlbody::text FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE p.prosqlbody IS NOT NULL AND ${others}`;
   const trees = `(WITH "kept" AS MATERIALIZED (${kept}) SELECT coalesce(json_agg(k.tree), '[]'::json) FROM "kept" AS k WHERE k.tree ~ ${aliasList})`;
   const bodies = `(SELECT coalesce(json_agg(p.prosrc), '[]'::json) FROM pg_proc AS p JOIN pg_language AS l ON l.oid = p.prolang JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE l.lanname = 'sql' AND p.prosqlbody IS NULL AND ${others})`;
-  return `SELECT current_setting('server_version_num')::int AS "version", current_setting('standard_conforming_strings') = 'on' AS "conforming", getdatabaseencoding() = 'UTF8' AS "utf8", ${operators} AS "operators", ${trees} AS "trees", ${bodies} AS "bodies", coalesce((SELECT json_agg(json_build_object('schema', n.nspname, 'name', c.relname, 'kind', c.relkind, 'partition', c.relispartition, 'hidden', c.relrowsecurity, 'columns', ${columns})) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${listed})), '[]'::json) AS "tables"`;
+  // The partitions, at any depth, of a followed partitioned table: a plan names them, not the table.
+  const partitionsOfListed = `SELECT t.relid FROM pg_class AS p JOIN pg_namespace AS pn ON pn.oid = p.relnamespace CROSS JOIN LATERAL pg_partition_tree(p.oid) AS t WHERE p.relkind = 'p' AND (pn.nspname, p.relname) IN (${listed})`;
+  return `SELECT current_setting('server_version_num')::int AS "version", current_setting('standard_conforming_strings') = 'on' AS "conforming", getdatabaseencoding() = 'UTF8' AS "utf8", ${operators} AS "operators", ${trees} AS "trees", ${bodies} AS "bodies", coalesce((SELECT json_agg(json_build_object('schema', n.nspname, 'name', c.relname, 'kind', c.relkind, 'partition', c.relispartition, 'hidden', c.relrowsecurity, 'columns', ${columns})) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${listed}) OR c.oid IN (${partitionsOfListed})), '[]'::json) AS "tables"`;
 }
 
 /** `value` as a record of fields, where it is an object of JSON's. */
@@ -186,6 +195,18 @@ function keysOfTable(
   return usable;
 }
 
+/** The tables of `tables`, the rows of `catalogSql`'s list, that are partitioned or are partitions. */
+function partitionedIn(tables: readonly unknown[]): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const each of tables) {
+    const table = recordOf(each) ?? {};
+    if (table['kind'] === 'p' || table['partition'] === true) {
+      found.add(relationKey({ name: String(table['name']), schema: String(table['schema']) }));
+    }
+  }
+  return found;
+}
+
 /** What the rows `catalogSql` answered say, of the tables `followed` follows. */
 export function catalogOf(rows: unknown, followed: Followed): Catalog {
   const [first] = Array.isArray(rows) ? (rows as unknown[]) : [];
@@ -193,13 +214,15 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
   const version = row['version'];
   const conforming = row['conforming'] === true;
   const utf8 = row['utf8'] === true;
+  const partitioned = partitionedIn(listOf(row['tables']));
   if (
     typeof version !== 'number' ||
     version < CONDITIONS_SINCE ||
     row['operators'] !== false ||
     renamesIn(row['trees'], row['bodies'], conforming)
   ) {
-    return NO_CONDITIONS;
+    // No condition is followed, but which tables are partitioned is not a condition's fact.
+    return { ...NO_CONDITIONS, partitioned };
   }
   const keys = new Map<string, ReadonlySet<string>>();
   const types = new Map<string, ReadonlyMap<string, string>>();
@@ -225,5 +248,5 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
     oids.set(declared, usable.oids);
     if (table['hidden'] !== false) hidden.add(declared);
   }
-  return { conforming, hidden, keys, oids, types };
+  return { conforming, hidden, keys, oids, partitioned, types };
 }
