@@ -118,6 +118,60 @@ describe.each([
     ).toBe('taken');
   });
 
+  it.each([
+    {
+      id: 'two names',
+      body: '  const first = setCount;\n  const reset = first;',
+    },
+    {
+      id: 'three names, through a cast and a parenthesis',
+      body: '  const first = setCount;\n  const second = first as (n: number) => void;\n  const reset = (second);',
+    },
+    {
+      id: 'twelve names',
+      body: [
+        '  const n0 = setCount;',
+        ...Array.from({ length: 11 }, (_, at) => `  const n${at + 1} = n${at};`),
+        '  const reset = n11;',
+      ].join('\n'),
+    },
+  ])('refuses a setter kept under a chain of names: $id', ({ body }) => {
+    expect(
+      read(
+        hookOf(body, '{ count, reset }', started),
+        'const { count, reset } = useLab(1);\nreturn <p>{count}{reset(0)}</p>;',
+      ),
+    ).toContain(CALLED);
+  });
+
+  it.each([
+    {
+      id: 'a chain of names of a value',
+      body: '  const first = count;\n  const shown = first;',
+      name: 'shown',
+    },
+    {
+      id: 'a chain that turns back on itself',
+      body: '  const first = second;\n  const second = first;',
+      name: 'first',
+    },
+    {
+      id: 'a chain that ends in a pattern',
+      body: '  const { length: arity } = setCount;\n  const shown = arity;',
+      name: 'shown',
+    },
+  ])('takes what no chain of names ends at a setter: $id', ({ body, name }) => {
+    const use = [
+      'const { count, ',
+      name,
+      ' } = useLab(1);\nreturn <p>{count}{String(',
+      name,
+      ')}</p>;',
+    ].join('');
+
+    expect(read(hookOf(body, `{ count, ${name} }`, started), use)).toBe('taken');
+  });
+
   it('takes an alias of what is no setter', () => {
     expect(
       read(

@@ -234,7 +234,8 @@ export function itemOf(node: Node, context: ItemContext): Item {
     return { ...plain, uses: context.writes.usesOf(fn) };
   }
   // A constant that is another name of a setter, or of a function that writes: `const reset = setCount`.
-  const alias = entry.kind === 'constant' ? aliasOf(entry.declaration) : undefined;
+  const alias =
+    entry.kind === 'constant' ? aliasedName(entry.declaration, context.names) : undefined;
   return alias === undefined
     ? plain
     : {
@@ -259,4 +260,26 @@ function aliasOf(declaration: VariableDeclaration): Identifier | undefined {
   return value !== undefined && isIdentifier(value) && isIdentifier(declaration.name)
     ? value
     : undefined;
+}
+
+/**
+ * The name a chain of constants ends at, each another name of the next: `const a = setCount; const b
+ * = a`. A name is followed once, so a chain that turns back on itself ends.
+ */
+function aliasedName(
+  declaration: VariableDeclaration,
+  names: ReadonlyMap<string, TopLevel>,
+): Identifier | undefined {
+  const seen = new Set<string>();
+  let name = aliasOf(declaration);
+  while (name !== undefined) {
+    seen.add(name.text);
+    const entry = names.get(name.text);
+    const next = entry?.kind === 'constant' ? aliasOf(entry.declaration) : undefined;
+    if (next === undefined || seen.has(next.text)) {
+      break;
+    }
+    name = next;
+  }
+  return name;
 }
