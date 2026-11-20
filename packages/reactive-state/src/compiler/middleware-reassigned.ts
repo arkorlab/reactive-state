@@ -1,19 +1,25 @@
 import {
   type Identifier,
+  isArrayLiteralExpression,
   isBinaryExpression,
-  isElementAccessExpression,
   isForInStatement,
+  isExpression,
   isForOfStatement,
   isIdentifier,
+  isObjectLiteralExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
-  isPropertyAccessExpression,
+  isPropertyAssignment,
+  isShorthandPropertyAssignment,
+  isSpreadAssignment,
+  isSpreadElement,
   isVariableDeclarationList,
   type Node,
   type Statement,
   SyntaxKind,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import type { ContextParameter, MiddlewareNames } from './middleware-reads.ts';
 
 /**
@@ -33,17 +39,37 @@ function contextNames(context: ContextParameter | undefined): ReadonlySet<string
 }
 
 /**
+ * What a target of an assignment assigns through, where it is a pattern: an array's elements, an
+ * object's members, a member's value side — not its key, nor a computed one — a spread's expression,
+ * and the left of a default, never its expression. A name is a target itself; a member, `params.slug`,
+ * writes the member, and a call or an operation is none.
+ */
+function partsOf(target: Node): readonly Node[] {
+  if (isArrayLiteralExpression(target)) return target.elements;
+  if (isObjectLiteralExpression(target)) return target.properties;
+  if (isShorthandPropertyAssignment(target)) return [target.name];
+  if (isPropertyAssignment(target)) return [target.initializer];
+  if (isSpreadElement(target) || isSpreadAssignment(target)) return [target.expression];
+  const isDefault =
+    isBinaryExpression(target) && target.operatorToken.kind === SyntaxKind.EqualsToken;
+  return isDefault ? [target.left] : [];
+}
+
+/**
  * Each name `statements` assign, with the first place they do: by `=`, an operator's `=`, `++` or
- * `--`, a pattern's targets, or the head of a `for … in` or `for … of` that declares nothing. A
- * pattern's targets are read coarsely, every name within it.
+ * `--`, the targets of a pattern (`partsOf`), or the head of a `for … in` or `for … of` that
+ * declares nothing.
  */
 function assignedIn(statements: readonly Statement[]): ReadonlyMap<string, Identifier> {
   const assigned = new Map<string, Identifier>();
   const target = (node: Node): void => {
-    if (isIdentifier(node)) {
-      assigned.set(node.text, assigned.get(node.text) ?? node);
-    } else if (!isPropertyAccessExpression(node) && !isElementAccessExpression(node)) {
-      node.forEachChild(target);
+    const written = isExpression(node) ? unwrapped(node) : node;
+    if (isIdentifier(written)) {
+      assigned.set(written.text, assigned.get(written.text) ?? written);
+    } else {
+      for (const part of partsOf(written)) {
+        target(part);
+      }
     }
   };
   const visit = (node: Node): void => {

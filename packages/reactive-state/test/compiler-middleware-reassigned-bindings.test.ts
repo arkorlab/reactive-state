@@ -55,6 +55,51 @@ const ASSIGNED: readonly Row[] = [
   },
 ];
 
+/** A target of a pattern's assignment: the name it assigns, not a key, a computed key or a default. */
+const TARGETS: readonly Row[] = [
+  {
+    body: `  ({ a: projectId } = { a: 'q' });\n${AFTER}`,
+    id: 'value-side-of-a-property',
+  },
+  { body: `  [projectId = 'q'] = [];\n${AFTER}`, id: 'left-of-a-default-in-an-array' },
+  { body: `  ({ a: projectId = 'q' } = {});\n${AFTER}`, id: 'left-of-a-default-in-an-object' },
+  { body: `  ({ ...projectId } = { a: 'q' });\n${AFTER}`, id: 'rest-of-an-object' },
+  { body: `  [...projectId] = ['q'];\n${AFTER}`, id: 'rest-of-an-array' },
+  { body: `  [, projectId] = ['q', 'r'];\n${AFTER}`, id: 'element-after-a-hole' },
+  { body: `  [[projectId]] = [['q']];\n${AFTER}`, id: 'nested-array' },
+  { body: `  ({ a: { b: projectId } } = { a: { b: 'q' } });\n${AFTER}`, id: 'nested-object' },
+  { body: `  [(projectId)] = ['q'];\n${AFTER}`, id: 'parenthesized-target' },
+];
+
+/** What a pattern's assignment only reads of a name of the context: a key, a computed key, a default. */
+const ONLY_READ: readonly Row[] = [
+  {
+    body: `  let x = 'a';\n  ({ projectId: x } = { projectId: 'q' });\n  void x;\n${AFTER}`,
+    id: 'key',
+  },
+  {
+    body: `  let x = 'a';\n  ({ [projectId]: x } = { q: 'q' });\n  void x;\n${AFTER}`,
+    id: 'computed-key',
+  },
+  {
+    body: `  let x = 'a';\n  [x = projectId] = [];\n  void x;\n${AFTER}`,
+    id: 'default-in-an-array',
+  },
+  {
+    body: `  let x = 'a';\n  ({ a: x = projectId } = {});\n  void x;\n${AFTER}`,
+    id: 'default-in-an-object',
+  },
+  {
+    body: `  let x = 'a';\n  ({ x = projectId } = {});\n  void x;\n${AFTER}`,
+    id: 'default-of-a-shorthand',
+  },
+  { body: `  let x = 'a';\n  [x] = [projectId];\n  void x;\n${AFTER}`, id: 'value-assigned' },
+  {
+    body: `  const holder = { projectId: 'a' };\n  holder.projectId = 'q';\n${AFTER}`,
+    id: 'member-written',
+  },
+];
+
 /** What is no name of the context assigned and read by the host, which is taken as before. */
 const TAKEN: readonly Row[] = [
   {
@@ -114,6 +159,16 @@ describe('a name of the context that a route middleware assigns before next', ()
     await expect(refused(row)).resolves.toContain(
       "is a name of the route middleware's context, assigned before `next`",
     );
+  });
+
+  it.each(TARGETS)('refuses a name a pattern assigns through: $id', async (row) => {
+    await expect(refused(row)).resolves.toContain(
+      "is a name of the route middleware's context, assigned before `next`",
+    );
+  });
+
+  it.each(ONLY_READ)('takes a name a pattern’s assignment only reads: $id', async (row) => {
+    await expect(refused(row)).resolves.toBeUndefined();
   });
 
   it.each(TAKEN)('takes what the host does not read of an assigned name: $id', async (row) => {
