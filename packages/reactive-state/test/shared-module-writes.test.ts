@@ -325,6 +325,45 @@ describe('a server part that writes an export of a shared module', () => {
     expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
   });
 
+  it.each([
+    { id: 'an array pattern', body: '[defaults.value] = [first];' },
+    { id: 'an object pattern', body: '({ value: defaults.value } = { value: first });' },
+    {
+      id: 'members of members in an array pattern',
+      body: '[defaults.items[0], defaults.value] = [first, first];',
+    },
+    { id: 'a pattern within a pattern', body: '({ a: [defaults.value] } = { a: [first] });' },
+    { id: 'a rest element', body: '[...defaults.items] = [first];' },
+    { id: 'an element with a default', body: '[defaults.value = 0] = [first];' },
+    { id: 'a pattern as the target of a loop', body: 'for ([defaults.value] of [[first]]) {}' },
+    { id: 'a cast in a pattern', body: '[(defaults as { value: number }).value] = [first];' },
+  ])('refuses a write of the import as a target of a pattern: $id', ({ body }) => {
+    const reason = reasonOf(sourceOf(body, VIEW), 'authority');
+
+    expect(reason).toContain(SAYS);
+  });
+
+  it.each([
+    {
+      id: 'the import read on the right',
+      body: 'let a = 0;\nlet b = 0;\n[a, b] = [defaults.value, defaults.value];',
+    },
+    { id: 'the import as the value destructured', body: 'let a = 0;\n({ a } = defaults);' },
+    { id: 'the import as a default', body: 'let a = 0;\n[a = defaults.value] = [first];' },
+    { id: 'a declaration of a pattern', body: 'const { value: shown } = defaults;' },
+    { id: 'an array that holds a member', body: 'const list = [defaults.value, first];' },
+    {
+      id: 'a key a pattern computes',
+      body: 'let key = 0;\n({ [defaults.name]: key } = { n: first });',
+    },
+    {
+      id: 'a copy spread into an array that is written',
+      body: 'const [head] = [...defaults.items];\nlet own = head;\nown = first;',
+    },
+  ])('takes a pattern that only reads the import: $id', ({ body }) => {
+    expect(reasonOf(sourceOf(body, VIEW), 'authority')).toBeUndefined();
+  });
+
   it('takes a write the browser runs, which has a copy of its own', () => {
     const jsx = [
       '<button type="button" onClick={() => { defaults.value = 1; setValue(value + 1); }}>',
