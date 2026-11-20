@@ -148,11 +148,12 @@ function definitionParts(own: string): readonly string[] {
  */
 function sessionParts(own: string, relations: readonly Relation[]): readonly string[] {
   return [
-    // A view of the session's temporary schema; a relation or a type of it of a name of the
-    // application's, which a statement's name of it resolves to first; and a function of it, which
-    // a statement names as `pg_temp`'s: a temporary table a plan names is one nothing follows, a
-    // fault of the render once a plan is asked again.
-    `SELECT concat_ws(':', 'v', c.oid, c.relname, ${hashed('r.ev_action::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    // A view of the session's temporary schema, with its options (`security_invoker`, which says
+    // by whose rights and policies the view's tables are read; none is of no more than before); a
+    // relation or a type of it of a name of the application's, which a statement's name of it
+    // resolves to first; and a function of it, which a statement names as `pg_temp`'s: a temporary
+    // table a plan names is one nothing follows, a fault of the render once a plan is asked again.
+    `SELECT concat_ws(':', 'v', c.oid, c.relname, c.reloptions::text, ${hashed('r.ev_action::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
     // A temporary type of a name of the application's, which a statement's name of it resolves to
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
