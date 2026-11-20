@@ -193,18 +193,26 @@ function sourceValue(node: Expression | undefined, resolve: Resolve): Selection 
   return { unknown: false, value };
 }
 
-/** Only a proven omitted or undefined value selects a default; unknown values retain runtime checks. */
+/**
+ * Only a proven omitted or undefined value selects a default; unknown values retain runtime checks,
+ * and a default they may select forgets the parameters it writes.
+ */
 function withDefault(
   value: Selection,
   initializer: Expression | undefined,
   reading: Reading,
 ): Selection {
-  if (
-    initializer === undefined ||
-    value.unknown ||
-    value.present === true ||
-    !omittedArgument(value.value, reading.bindings)
-  ) {
+  if (initializer === undefined || value.present === true) {
+    return value;
+  }
+  if (value.unknown) {
+    // The default may run, so what it writes is no longer what the parameters held; it is not
+    // recorded as run, and the value stays unknown.
+    forgetWrittenParameters(initializer, reading);
+    reading.resolve = initializedResolve(new Map(reading.bindings), reading.resolve);
+    return value;
+  }
+  if (!omittedArgument(value.value, reading.bindings)) {
     return value;
   }
   const resolve = reading.resolve;

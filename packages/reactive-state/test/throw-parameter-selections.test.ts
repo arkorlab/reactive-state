@@ -172,6 +172,128 @@ describe('an array pattern written over an object', () => {
   );
 });
 
+interface Called {
+  readonly id: string;
+  /** The parameters of `f`; `a` is the one an element default may write. */
+  readonly parameters: string;
+  /** The arguments of the call. */
+  readonly argument: string;
+  readonly before?: string;
+}
+
+const iterated = (yielded: string, members = ''): string =>
+  `{ *[Symbol.iterator]() { yield ${yielded}; }${members} }`;
+
+/**
+ * A default that the value selecting it leaves unknown may run: it may write `a`, so the parameter
+ * after it reads `a` as unknown, not as the `null` it was given. Node runs each of these calls
+ * (and throws only where the default does not run, which stays unproven).
+ */
+const MAY_WRITE_A: readonly Called[] = [
+  {
+    id: 'an array pattern over an iterator that yields undefined',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined', ', 0: undefined')}`,
+  },
+  {
+    id: 'an array pattern over an iterator that yields a value',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: `null, ${iterated('1', ', 0: undefined')}`,
+  },
+  {
+    id: 'an array pattern over an argument the code does not write',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: 'null, items',
+    before: 'declare const items: any;\n',
+  },
+  {
+    id: 'a nested array pattern over an iterator',
+    parameters: 'a: any, [[c = (a = {})]]: any, { x }: any = a',
+    argument: `null, ${iterated('[]', ', 0: null')}`,
+  },
+  {
+    id: 'a default that writes in a function it calls at once',
+    parameters: 'a: any, [b = (() => { a = {}; })()]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined', ', 0: undefined')}`,
+  },
+  {
+    id: 'a default that writes under an if',
+    parameters: 'a: any, [b = (() => { if (a) { a = {}; } })()]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined', ', 0: undefined')}`,
+  },
+];
+
+/** What a default does not write, a known element, and a parameter that is given keep their answer. */
+const WRITES_AS_BEFORE: readonly Called[] = [
+  {
+    id: 'a known array element that is undefined (the default runs)',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: 'null, [undefined]',
+  },
+  {
+    id: 'a known empty array (the default runs)',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: 'null, []',
+  },
+  {
+    id: 'a third parameter that is given',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined', ', 0: undefined')}, {}`,
+  },
+];
+
+const WRITES_STILL_FAIL: readonly Called[] = [
+  {
+    id: 'a known array element that is a value (the default does not run)',
+    parameters: 'a: any, [b = (a = {})]: any, { x }: any = a',
+    argument: 'null, [1]',
+  },
+  {
+    id: 'a default with no write, over an iterator',
+    parameters: 'a: any, [b = 1]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined', ', 0: undefined')}`,
+  },
+  {
+    id: 'a default with no write, over an argument the code does not write',
+    parameters: 'a: any, [b = 1]: any, { x }: any = a',
+    argument: 'null, items',
+    before: 'declare const items: any;\n',
+  },
+  {
+    id: 'a default that only creates a function that would write',
+    parameters: 'a: any, [b = () => { a = {}; }]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined', ', 0: undefined')}`,
+  },
+  {
+    id: 'a rest element, whose default there is none',
+    parameters: 'a: any, [...rest]: any, { x }: any = a',
+    argument: `null, ${iterated('undefined')}`,
+  },
+];
+
+describe('a default the value that selects it leaves unknown', () => {
+  it.each(MAY_WRITE_A.map((row) => [row.id, row] as const))(
+    'forgets what it may write for %s',
+    (_id, row) => {
+      expect(throwsOfCall(row)).toBe(false);
+    },
+  );
+
+  it.each(WRITES_AS_BEFORE.map((row) => [row.id, row] as const))(
+    'reads %s without a failure',
+    (_id, row) => {
+      expect(throwsOfCall(row)).toBe(false);
+    },
+  );
+
+  it.each(WRITES_STILL_FAIL.map((row) => [row.id, row] as const))(
+    'still fails on %s',
+    (_id, row) => {
+      expect(throwsOfCall(row)).toBe(true);
+    },
+  );
+});
+
 describe('the member of an array a pattern selects', () => {
   it.each(NOT_AN_INDEX.map((row) => [row.id, row] as const))(
     'falls back to the default for %s',
@@ -194,12 +316,22 @@ describe('the member of an array a pattern selects', () => {
 
 /** Whether the module answers that the last call of `f` fails to bind its parameter. */
 function throwsOf(row: Row): boolean {
-  using api = openTypeScript();
-  using parsed = parseModule(
-    api,
-    'parameter-selections.ts',
+  return throwsOfSource(
     `${row.before ?? ''}function f(${row.pattern}: any) { return 1; }\nf(${row.argument});`,
   );
+}
+
+/** Whether the module answers that the call of `f` of a row fails to bind a parameter. */
+function throwsOfCall(row: Called): boolean {
+  return throwsOfSource(
+    `${row.before ?? ''}function f(${row.parameters}) { return 1; }\nf(${row.argument});`,
+  );
+}
+
+/** Whether the module answers that the last call of `f` in the source fails to bind a parameter. */
+function throwsOfSource(source: string): boolean {
+  using api = openTypeScript();
+  using parsed = parseModule(api, 'parameter-selections.ts', source);
   const found = lastCall(parsed.sourceFile);
   if (found === undefined) {
     throw new Error('The fixture calls f.');
