@@ -104,6 +104,13 @@ describe('the id of an update that declares', () => {
       updates: ['(n) => { const r = n; return r + 1; }', '(n) => { var r = n; return r + 1; }'],
     },
     {
+      id: '`using` and `const`',
+      updates: [
+        '(n) => { using r = open(n); return r.size + 1; }',
+        '(n) => { const r = open(n); return r.size + 1; }',
+      ],
+    },
+    {
       id: 'a declaration in a loop head',
       updates: [
         '(n) => { let sum = 0; for (let i = 0; i < n; i += 1) { sum += i; } return sum; }',

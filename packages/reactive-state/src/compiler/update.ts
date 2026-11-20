@@ -14,7 +14,6 @@ import {
   isVariableDeclarationList,
   isYieldExpression,
   type Node,
-  NodeFlags,
   type SourceFile,
   SyntaxKind,
   type VariableDeclarationList,
@@ -242,13 +241,12 @@ function besideChildren(node: Node): readonly string[] {
   if (isShorthandPropertyAssignment(node) && isIdentifier(node.name)) {
     return [`name:${node.name.text}`];
   }
-  return isVariableDeclarationList(node) ? [`declares:${String(declaresWith(node))}`] : [];
+  return isVariableDeclarationList(node) ? [`declares:${declaresWith(node)}`] : [];
 }
 
-/** What a list declares with: `let`, `const` or `using`, or none of them for `var` — a flag of the list, which no child holds. */
-function declaresWith(list: VariableDeclarationList): number {
-  // eslint-disable-next-line no-bitwise -- TypeScript says `let`, `const` or `using` in these flags alone.
-  return list.flags & NodeFlags.BlockScoped;
+/** What a list declares with — `let`, `const`, `var` or `using`: the first word of its text, which no child of the list holds. */
+function declaresWith(list: VariableDeclarationList): string {
+  return /^[a-z]+/u.exec(list.getText(list.getSourceFile()))?.[0] ?? '';
 }
 
 function identifierForm(identifier: Identifier, forming: Forming): string {
