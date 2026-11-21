@@ -16,6 +16,7 @@ import {
   isPropertyAssignment,
   isReturnStatement,
   isShorthandPropertyAssignment,
+  isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
   type Node,
@@ -392,7 +393,13 @@ function headerName(name: Node, fail: Fail): string {
 
 /** An element of a list of pairs, as a header: its name where it is a literal; none for no pair. */
 function listedPair(element: Expression, sourceFile: SourceFile): HeaderPair | undefined {
-  if (!isArrayLiteralExpression(element) || element.elements.length !== 2) {
+  // A spread makes as many items at run time as its array holds, which `Headers` counts: not two
+  // where the pair is written of two elements and one is a spread.
+  if (
+    !isArrayLiteralExpression(element) ||
+    element.elements.length !== 2 ||
+    element.elements.some((each) => isSpreadElement(each))
+  ) {
     return undefined;
   }
   const [name, value] = element.elements;
