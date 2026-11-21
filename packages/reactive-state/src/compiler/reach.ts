@@ -363,12 +363,14 @@ function importsOf(sourceFile: SourceFile): readonly Imported[] {
 
 /**
  * Whether a file loads a module it names as it runs (`import(name)`), which the compile cannot
- * classify: as it may be the platform's, or anything else's, an input nothing tracks.
+ * classify: as it may be the platform's, or anything else's, an input nothing tracks — outside what
+ * `skips` says runs elsewhere, as `firstIn` reads a file: the code of the browser alone, which the
+ * server's render does not run.
  */
-function loadsUnnamed(sourceFile: SourceFile): boolean {
+function loadsUnnamed(sourceFile: SourceFile, skips: (node: Node) => boolean = WHOLE): boolean {
   let found = false;
   const visit = (node: Node): void => {
-    if (found) {
+    if (found || skips(node)) {
       return;
     }
     if (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
@@ -566,7 +568,7 @@ export class Reach {
       const skips = browserOnlyIn(sourceFile);
       const untracked =
         firstIn([sourceFile], untrackedAt, skips) ??
-        (loadsUnnamed(sourceFile) ? UNNAMED_LOAD : undefined);
+        (loadsUnnamed(sourceFile, skips) ? UNNAMED_LOAD : undefined);
       const kept = firstIn([sourceFile], (node) => this.#keptAt(node), skips);
       facts = renderTimeOf(
         mergedFacts(this.#ownOf(file).imported, {
