@@ -1501,3 +1501,39 @@ describe('an import an update reads in a type position alone', () => {
     ]);
   });
 });
+
+describe('jSX in the body of an update', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { id: 'an element', body: '<i />' },
+    { id: 'a fragment', body: '<>{current}</>' },
+    { id: 'an element with a child', body: '<b>{current}</b>' },
+  ])('$id the update makes is refused, which the program would copy as it is', ({ body }) => {
+    const message = refusalOf(() => {
+      return program({
+        'components/lab.reactive.tsx': lab({
+          hooks: [],
+          update: `(current) => { const preview = ${body}; return preview ? current : current; }`,
+        }),
+      });
+    });
+
+    expect(message).toContain('JSX is rendered, not held');
+  });
+
+  it('an update that holds none is read as it was', () => {
+    const text = program({
+      'components/lab.reactive.tsx': lab({
+        hooks: [],
+        update: '(current) => String(Number(current) + 1)',
+      }),
+    });
+
+    expect(text).toContain('String(Number(current) + 1)');
+  });
+});

@@ -20,6 +20,7 @@ import {
 import type { TopLevel } from './analyze.ts';
 import type { Fail } from './errors.ts';
 import type { ImportBinding } from './imports.ts';
+import { isJsx } from './jsx.ts';
 import { isTypeOnly, readsBinding, walk } from './scope.ts';
 import { functionOf } from './statements.ts';
 
@@ -101,6 +102,12 @@ export function readUpdate(fn: ArrowFunction | FunctionExpression, scope: Update
           isYieldExpression(node)
         ) {
           fail(ONLY, node);
+        }
+        if (isJsx(node)) {
+          fail(
+            `An update makes the field's next value of the current one, and JSX is rendered, not held: ${ONLY}`,
+            node,
+          );
         }
       },
       read: (identifier, space) => {
