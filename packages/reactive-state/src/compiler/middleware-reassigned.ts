@@ -27,7 +27,8 @@ import type { ContextParameter, MiddlewareNames } from './middleware-reads.ts';
  * slug.toLowerCase()` — is assigned in the guard, which runs on the authority, where the host's part
  * before `next` binds it as the context gave it and hands that to the part after `next`: a part the
  * host runs that reads the name reads the value the context gave it, not the value the source
- * assigned. A write through a member, `params.slug = …`, is no assignment of the name.
+ * assigned. One it assigns after `next` throws: the host's part binds the names it reads by a `const`.
+ * A write through a member, `params.slug = …`, is no assignment of the name.
  */
 
 /** The names a context binds. */
@@ -99,11 +100,15 @@ function assignedIn(statements: readonly Statement[]): ReadonlyMap<string, Ident
   return assigned;
 }
 
-/** Where the statements before `next` go: the guard's, the host's, and what the host's parts read. */
+/**
+ * Where the statements go: those before `next` the guard's and the host's, what the host's parts
+ * read, and those after `next`, which the host runs.
+ */
 interface Sides {
   readonly guard: readonly Statement[];
   readonly host: readonly Statement[];
   readonly hostReads: ReadonlySet<string>;
+  readonly after: readonly Statement[];
 }
 
 /**
@@ -111,7 +116,8 @@ interface Sides {
  * assignment: in a statement the guard takes, where a part the host runs reads it — the guard holds
  * the assigned value, the host's parts the one the context gave — and in a statement the host runs
  * before `next`, which the guard reads as the context gave it, and where the middleware declares its
- * context's type the host's part binds the names by a `const`, which an assignment would throw at.
+ * context's type the host's part binds the names by a `const`, which an assignment would throw at —
+ * and in a statement after `next`, where the part binds every name it reads by a `const`.
  */
 export function checkReassigned(sides: Sides, names: MiddlewareNames): void {
   const bound = contextNames(names.context);
@@ -127,6 +133,14 @@ export function checkReassigned(sides: Sides, names: MiddlewareNames): void {
     if (bound.has(name)) {
       names.fail(
         `\`${name}\` is a name of the route middleware's context, assigned before \`next\` by what the host runs: the guard, which the authority runs, binds \`${name}\` as the context gave it, and where the middleware declares its context's type the host's part binds it by a \`const\`, which the assignment would throw at. Give the assigned value a constant of its own, and read that where it is needed.`,
+        place,
+      );
+    }
+  }
+  for (const [name, place] of assignedIn(sides.after)) {
+    if (bound.has(name)) {
+      names.fail(
+        `\`${name}\` is a name of the route middleware's context, assigned after \`next\`, where the host binds it by a \`const\` of what the part before \`next\` handed on, which the assignment would throw at. Give the assigned value a constant of its own, and read that where it is needed.`,
         place,
       );
     }

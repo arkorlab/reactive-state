@@ -149,6 +149,56 @@ const TAKEN: readonly Row[] = [
   },
 ];
 
+/**
+ * A name the middleware assigns after `next`, in a constant or an argument of a header's call: the host's
+ * part there binds the names it reads by a `const`, which the assignment would throw at.
+ */
+const ASSIGNED_AFTER: readonly Row[] = [
+  {
+    body: "  const response = await next();\n  const normalized = (projectId = projectId.trim() + '!');\n  response.headers.set('x-id', normalized);\n  return response;",
+    id: 'assigned-in-a-constant',
+  },
+  {
+    body: "  const response = await next();\n  response.headers.set('x-id', (projectId = 'z'));\n  return response;",
+    id: 'assigned-in-an-argument',
+  },
+  {
+    body: "  const response = await next();\n  const n = (projectId += '-x');\n  response.headers.set('x-id', n);\n  return response;",
+    id: 'compound-assignment',
+  },
+  {
+    body: "  const response = await next();\n  const n = ([projectId] = ['z']);\n  response.headers.set('x-id', String(n));\n  return response;",
+    id: 'array-pattern-assignment',
+  },
+  {
+    body: "  const response = await next();\n  const f = () => (projectId = 'z');\n  response.headers.set('x-id', f());\n  return response;",
+    id: 'assigned-in-a-function-of-a-constant',
+  },
+  {
+    body: "  const response = await next();\n  const n = projectId === 'p1' ? (projectId = 'z') : 'k';\n  response.headers.set('x-id', n);\n  return response;",
+    id: 'assigned-in-a-branch-of-a-constant',
+  },
+  {
+    body: "  const response = await next();\n  const c = (params = { projectId: 'q' });\n  response.headers.set('x-id', c.projectId);\n  return response;",
+    context: '{ params }',
+    id: 'a-name-of-the-context-that-holds-the-params',
+  },
+];
+
+/** What assigns no name of the context after `next`: taken. */
+const READ_AFTER: readonly Row[] = [
+  { body: AFTER, id: 'a-name-only-read' },
+  {
+    body: "  const response = await next();\n  const n = (params.projectId = 'z');\n  response.headers.set('x-id', n);\n  return response;",
+    context: '{ params }',
+    id: 'a-member-written',
+  },
+  {
+    body: "  const response = await next();\n  const n = projectId + '!';\n  response.headers.set('x-id', n);\n  return response;",
+    id: 'a-new-value-of-its-own',
+  },
+];
+
 describe('a name of the context that a route middleware assigns before next', () => {
   let api: API;
   const roots: string[] = [];
@@ -212,4 +262,17 @@ describe('a name of the context that a route middleware assigns before next', ()
   it.each(TAKEN)('takes what the host does not read of an assigned name: $id', async (row) => {
     await expect(refused(row)).resolves.toBeUndefined();
   });
+
+  it.each(ASSIGNED_AFTER)('refuses a name assigned after next: $id', async (row) => {
+    await expect(refused(row)).resolves.toContain(
+      "is a name of the route middleware's context, assigned after `next`",
+    );
+  });
+
+  it.each(READ_AFTER)(
+    'takes a name only read, or a value of its own, after next: $id',
+    async (row) => {
+      await expect(refused(row)).resolves.toBeUndefined();
+    },
+  );
 });
