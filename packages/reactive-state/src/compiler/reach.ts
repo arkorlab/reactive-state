@@ -5,6 +5,7 @@ import {
   type ExportDeclaration,
   type ImportDeclaration,
   isCallExpression,
+  isDecorator,
   isExportDeclaration,
   isExternalModuleReference,
   isImportDeclaration,
@@ -12,6 +13,8 @@ import {
   isNamedExports,
   isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
+  isParameterDeclaration,
+  isSourceFile,
   isStringLiteral,
   type Node,
   type SourceFile,
@@ -29,9 +32,11 @@ import {
 } from './database-handle.ts';
 import type { ImportBinding } from './imports.ts';
 import type { ModuleKind, Modules } from './modules.ts';
+import { runsAsGiven } from './runs-as-given.ts';
 import { keptMethodWrite, keptWrite } from './settled.ts';
 import { isScript } from './typescript.ts';
 import { firstIn, untrackedAt } from './untracked-reads.ts';
+import { useOf } from './uses.ts';
 
 /**
  * What a route's document would take from somewhere other than its params and the database the
@@ -146,11 +151,11 @@ const WHOLE = (): boolean => false;
 
 /**
  * The first read among `nodes` of an input nothing tracks (`untrackedAt`) — and, with
- * `outsideFunctions`, outside the functions they hold: what runs as a part renders, not what a
- * handler runs later.
+ * `outsideFunctions`, outside the functions they hold (`runsElsewhere`): what runs as a part
+ * renders, not what a handler runs later.
  */
 export function untrackedIn(nodes: readonly Node[], outsideFunctions = false): string | undefined {
-  return firstIn(nodes, untrackedAt, outsideFunctions ? isFunctionLike : WHOLE);
+  return firstIn(nodes, untrackedAt, outsideFunctions ? runsElsewhere : WHOLE);
 }
 
 /** The functions whose bodies run when they are called, not where they stand. */
@@ -167,6 +172,44 @@ const FUNCTIONS: ReadonlySet<SyntaxKind> = new Set([
 /** Whether `node` is a function whose body runs when it is called, not where it stands. */
 export function isFunctionLike(node: Node): boolean {
   return FUNCTIONS.has(node.kind);
+}
+
+/** What an object or a class holds that is a function, with a name and decorators run as it is made. */
+type Owned = Node & { readonly body?: Node | undefined };
+
+function isOwned(node: Node): node is Owned {
+  return (
+    node.kind === SyntaxKind.Constructor ||
+    node.kind === SyntaxKind.GetAccessor ||
+    node.kind === SyntaxKind.MethodDeclaration ||
+    node.kind === SyntaxKind.SetAccessor
+  );
+}
+
+/** Whether `fn`, a function, is called where it is written, once: `(() => Date.now())()`, past casts too. */
+function isCalledInPlace(fn: Node): boolean {
+  const { at, parent } = useOf(fn);
+  return isCallExpression(parent) && parent.expression === at;
+}
+
+/**
+ * Whether `node` runs elsewhere than where it stands: a function, when it is called — but one
+ * called where it is written, or given to a call that runs it as it is made (`runsAsGiven`), runs there, and of a method or an accessor of an object or a class,
+ * only its parameters and its body run when it is called: its computed key and its decorators, and
+ * its parameters' decorators, run as the object or the class is made.
+ */
+function runsElsewhere(node: Node): boolean {
+  if (isSourceFile(node)) {
+    return false;
+  }
+  const { parent } = node;
+  if (isParameterDeclaration(parent) && isOwned(parent.parent)) {
+    return !isDecorator(node);
+  }
+  if (isOwned(parent)) {
+    return node === parent.body;
+  }
+  return isFunctionLike(node) && !isOwned(node) && !isCalledInPlace(node) && !runsAsGiven(node);
 }
 
 /** One module a file imports, re-exports or loads, as the facts of it are read. */
@@ -320,12 +363,14 @@ function importsOf(sourceFile: SourceFile): readonly Imported[] {
 
 /**
  * Whether a file loads a module it names as it runs (`import(name)`), which the compile cannot
- * classify: as it may be the platform's, or anything else's, an input nothing tracks.
+ * classify: as it may be the platform's, or anything else's, an input nothing tracks — outside what
+ * `skips` says runs elsewhere, as `firstIn` reads a file: the code of the browser alone, which the
+ * server's render does not run.
  */
-function loadsUnnamed(sourceFile: SourceFile): boolean {
+function loadsUnnamed(sourceFile: SourceFile, skips: (node: Node) => boolean = WHOLE): boolean {
   let found = false;
   const visit = (node: Node): void => {
-    if (found) {
+    if (found || skips(node)) {
       return;
     }
     if (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) {
@@ -523,7 +568,7 @@ export class Reach {
       const skips = browserOnlyIn(sourceFile);
       const untracked =
         firstIn([sourceFile], untrackedAt, skips) ??
-        (loadsUnnamed(sourceFile) ? UNNAMED_LOAD : undefined);
+        (loadsUnnamed(sourceFile, skips) ? UNNAMED_LOAD : undefined);
       const kept = firstIn([sourceFile], (node) => this.#keptAt(node), skips);
       facts = renderTimeOf(
         mergedFacts(this.#ownOf(file).imported, {
@@ -603,10 +648,11 @@ export class Reach {
   /**
    * The first name among `nodes` that the code holds once and a function of it writes each time
    * it is called — assigns, changes in place, or calls a method of that writes through `this` — of
-   * what runs, as `firstIn` reads it: what the code keeps between calls; none the database commits.
+   * what runs, as `firstIn` reads it (with `outsideFunctions`, as `untrackedIn` does): what the code
+   * keeps between calls; none the database commits.
    */
   keptIn(nodes: readonly Node[], outsideFunctions = false): string | undefined {
-    return firstIn(nodes, (node) => this.#keptAt(node), outsideFunctions ? isFunctionLike : WHOLE);
+    return firstIn(nodes, (node) => this.#keptAt(node), outsideFunctions ? runsElsewhere : WHOLE);
   }
 
   /** What `files`, modules of the application's, and every module they reach through `follow`, hold. */

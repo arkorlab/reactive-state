@@ -26,6 +26,7 @@ import {
 import { type Answering, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
+import { mayMakeCollection } from './collection-values.ts';
 import { memberPath } from './exported-values.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedQuietSource } from './framed-native-evaluation.ts';
@@ -113,8 +114,7 @@ export function mutatedSharedConstant<T extends Constant>(
     for (const declaration of constant.statement.declarationList.declarations) {
       const { name, initializer } = declaration;
       if (initializer === undefined || !isIdentifier(name) || !reached.has(name.text)) continue;
-      const value = unwrapped(initializer);
-      if (!isObjectLiteralExpression(value) && !isArrayLiteralExpression(value)) continue;
+      if (!mayMakeCollection(initializer)) continue;
       if (mutated(declaration, name)) return constant;
     }
   }
