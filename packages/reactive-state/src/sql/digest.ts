@@ -28,24 +28,59 @@ export interface Queryable {
  * most once a `DIGEST.everyMs`, so that a page read of the log, each of a turn's and each an
  * operation asks, costs the database no more than it did.
  *
- * Whose rights a statement reads under is held of the roles that read: the session's, and the owner
- * of each view of the application's or of the session's temporary schema that is no
- * `security_invoker`, each by its rights, its attributes and every role it is a member of; and of
- * each table its owner and its policies. Anything of the session's temporary schema that the
- * digest holds is held with its owner and its ACL whole — a relation's, and its columns', a
- * function's, a type's — of any role, so that a grant, a revoke or another owner of it moves the
- * digest, which the application's relations and functions do not (they hold what the readers may
- * read and run); what a role comes to by the roles it is a member of is held by the readers' rows.
- * Three things that decide which rows a statement reads are not held, and each for a reason that is
- * no size of the change:
+ * Scope. Each kind of object the digest follows is held by whole catalog rows or by a chosen set of
+ * fields, and by which for a reason of the kind. Whole, each row hashed in full — a column of the
+ * catalog that no review has named yet is in it — where the kind changes seldom, and a field left
+ * out is a change missed: the session's temporary schema (a relation by its `pg_class` row but the
+ * eleven columns its upkeep moves (`relpages`, `reltuples`, `relallvisible`, `relallfrozen`,
+ * `relfilenode`, `relfrozenxid` and `relminmxid`, which a write of rows or a maintenance moves, and
+ * `relhasindex`, `relhasrules`, `relhastriggers` and `relhassubclass`, flags of what it has or once
+ * had that the catalog clears late and that say nothing a statement can tell), and by each of its
+ * `pg_attribute` rows but `atthasmissing` and `attmissingval`, which a rewrite clears; a view by
+ * its `pg_rewrite` row besides; a function, a type with its constraints, labels and columns, an
+ * operator, a collation and each text search object by its row), the roles that read (each by its
+ * `pg_roles` row, and of each role it is a member of, at any depth, the oid, the name, whether it
+ * has that role's rights and the `pg_auth_members` rows; a superuser, a member of every role, holds
+ * none of it), and, of the application's, a policy, an aggregate, an enum label, a cast, an
+ * operator, an operator class and family with its members, a collation, and a text search
+ * configuration with its map, dictionary, parser and template. Chosen fields, where a row holds
+ * what moves of no change a statement could tell — a grant to a role that reads nothing, which must
+ * not make every cached read stale; statistics; a parse tree, held by the text PostgreSQL prints of
+ * it — in the application's relations and functions: of a relation its schema, name, kind, owner,
+ * `relrowsecurity`, `relforcerowsecurity`, `relispartition` and `reloptions`, and what each role
+ * that reads may select of it or of any column; of a column its relation, number, name, type,
+ * modifier, collation, `attnotnull`, `attisdropped`, `attgenerated` and `attacl`; of a default or a
+ * generated expression its column and the hash of its text; of an inheritance its table, parent and
+ * number, and of a unique index its table, name, columns, classes, collations, `indimmediate`,
+ * `indisvalid` and the hashes of its predicate and expressions (of the application's relations, and
+ * of a temporary one that shadows an application's, for which they are what the late flags stand
+ * for); of a constraint its table or domain, kind and the hash of its definition; of a rule the
+ * hashes of its action and condition; of a function and of a type its row but its ACL, and whether
+ * the session's role may run or use it; of a schema its name and whether the session's role may use
+ * it; of each followed table the file its rows are in; and of the session its `current_user`,
+ * `session_user`, search path and the settings a plan folds into its constants.
+ * What a result can depend on besides, that is in no row the digest reads, is six things, and each
+ * is for a reason that is no size of the change:
  *
- * - what a `SECURITY DEFINER` function reads, and the rights of its owner with it: a plan names no
- *   table a function reads in its body (`plans.ts`), so nothing it reads is followed either;
- * - a membership of a role that does not read, which a policy may ask of
- *   (`pg_has_role(owner_name, …)`): holding every membership would move the digest for each role
- *   an application makes of one of its users;
- * - a setting of the session that a policy or a view reads (`current_setting('app.user')`), which
- *   no list of names could hold.
+ * 1. what a `SECURITY DEFINER` function reads, and the rights of its owner with it: a plan names no
+ *    table a function reads in its body (`plans.ts`), so nothing it reads is followed either;
+ * 2. a role that reads nothing — its rights, its attributes, its name, its memberships — which a
+ *    policy may ask of by a value (`pg_has_role(owner_name, 'admins', 'member')`): holding every
+ *    membership would move the digest for each role an application makes of one of its users (a
+ *    role the reader is no member of, renamed to a name a policy asks of, changes none of the
+ *    reader's answers and does not move the digest, nor does a role made of a name no role had,
+ *    where the statement failed before);
+ * 3. a setting of the session that a policy, a view or a function reads
+ *    (`current_setting('app.user')`), which no list of names could hold;
+ * 4. the rows of a materialized view, which a refresh changes and no entry of the log tells of;
+ * 5. what a policy, a view or a function computes of what no catalog row holds: the clock, and the
+ *    rows of a table a function reads in its body that no plan names;
+ * 6. a relation of the session's temporary schema that no relation of the application is named
+ *    like, which a statement names as `pg_temp`'s: a temporary table a plan names is one nothing
+ *    follows.
+ *
+ * A change the catalog records in a row the digest reads whole, or in a field it lists, that leaves
+ * the digest equal is a defect; a dependency outside those rows is one of the limits above.
  */
 
 /** How often the schema's digest is read again, at most. */
@@ -112,22 +147,98 @@ function mayRead(): string {
 }
 
 /**
- * What rights are granted of each column of the relation `alias`, to any role: the column's `attacl`
- * where it has one, as the rows of the application's columns hold it.
+ * Of the role `s`, as the row of a role that reads holds it: each role it is a member of, at every
+ * depth (itself too), by its oid, its name and whether it has that role's rights (`USAGE`); and the
+ * `pg_auth_members` rows whole of each of them, which say by whom and with which options (`ADMIN`,
+ * `INHERIT`, `SET`) each membership was granted, and which `pg_has_role(…, 'SET')` and
+ * `pg_has_role(…, 'MEMBER WITH ADMIN OPTION')` answer. A superuser is a member of every role and
+ * holds none of it: a role made or renamed would move the digest of every application that has one.
+ * The names are quoted, so that no two lists of roles make one text.
  */
-function columnRights(alias: string): string {
-  return `(SELECT string_agg(concat_ws('.', a.attnum, a.attacl::text), ',' ORDER BY a.attnum) FROM pg_attribute AS a WHERE a.attrelid = ${alias}.oid AND a.attnum > 0 AND a.attacl IS NOT NULL)`;
+function memberships(): string {
+  const roles = `(SELECT string_agg(concat_ws('.', g.oid, quote_ident(g.rolname), pg_has_role(s.oid, g.oid, 'USAGE')), ',' ORDER BY g.oid) FROM pg_roles AS g WHERE pg_has_role(s.oid, g.oid, 'MEMBER'))`;
+  const grants = hashed(
+    "coalesce(string_agg(m::text, ',' ORDER BY m.roleid, m.member, m.grantor), '')",
+  );
+  return `CASE WHEN s.rolsuper THEN '' ELSE concat_ws(':', ${roles}, (SELECT ${grants} FROM pg_auth_members AS m WHERE pg_has_role(s.oid, m.member, 'MEMBER'))) END`;
 }
 
 /**
- * The owner of the relation `alias`, its ACL whole and its columns' (`columnRights`): what a row of
- * an object of the session's temporary schema holds of rights, of any role. A grant, a revoke or
- * another owner then moves the digest, whether the role it is of reads or not, which is the side
- * that cannot miss one: rights of a temporary object change seldom. What a role comes to by the
- * roles it is a member of is held by the readers' own rows.
+ * The columns of `pg_class` that a relation's own upkeep moves, of no definition: what a write of
+ * rows, a vacuum, a truncation or a sequence set again changes (its size and its count of rows, the
+ * pages that are visible and frozen, the file its rows are in, and the horizons it was frozen to),
+ * and the four flags the manual documents as "has, or once had", which `VACUUM` and `ANALYZE` clear
+ * late (an index, a rule, a trigger, a child): a flag that is cleared late says nothing a statement
+ * can tell. What each stands for is held where it matters — a view's rule by its `pg_rewrite` row, a
+ * unique index and a child of a temporary relation by their own rows (`temporaryParts`), and an
+ * index that is no unique one, and a trigger, change no row a statement reads. Measured on a
+ * temporary table through each of those commands, the first seven are every column of the row that
+ * a write or a maintenance moved besides the four flags, and a view's row moved by none.
  */
-function relationRights(alias: string): string {
-  return `${alias}.relowner, ${alias}.relacl::text, ${columnRights(alias)}`;
+const MAINTAINED_CLASS_COLUMNS = [
+  'relpages',
+  'reltuples',
+  'relallvisible',
+  'relallfrozen',
+  'relfilenode',
+  'relfrozenxid',
+  'relminmxid',
+  'relhasindex',
+  'relhasrules',
+  'relhastriggers',
+  'relhassubclass',
+];
+
+/**
+ * The columns of `pg_attribute` that a rewrite of the relation clears: the value a column added
+ * with a constant default gives the rows that were there (`VACUUM FULL` and `CLUSTER` write it into
+ * them and clear it). The column added is a row of its own; the value is data.
+ */
+const MAINTAINED_ATTRIBUTE_COLUMNS = ['atthasmissing', 'attmissingval'];
+
+/** `columns` as the text array of a literal, to take from a row's JSON. */
+function withoutColumns(columns: readonly string[]): string {
+  return `ARRAY[${columns.map((column) => literal(column)).join(', ')}]::text[]`;
+}
+
+/** The digest of the `pg_attribute` rows of the relation `oid`, whole but for what upkeep moves. */
+function attributesOf(oid: string): string {
+  const row = `(to_jsonb(r) - ${withoutColumns(MAINTAINED_ATTRIBUTE_COLUMNS)})::text`;
+  const rows = hashed(`coalesce(string_agg(${row}, ',' ORDER BY r.attnum), '')`);
+  return `(SELECT ${rows} FROM pg_attribute AS r WHERE r.attrelid = ${oid})`;
+}
+
+/**
+ * What the catalog records of the relation `alias` of the session's temporary schema, whole: its
+ * `pg_class` row but `MAINTAINED_CLASS_COLUMNS`, and each of its `pg_attribute` rows but
+ * `MAINTAINED_ATTRIBUTE_COLUMNS`. The row says its name, kind, owner, ACL, options and row
+ * security; the rows say each column's name, type, ACL and options. Any change of the relation, of a
+ * column, or of the right to either of any role moves the digest, whether the role reads or not,
+ * which is the side that cannot miss one: a temporary relation changes seldom. What a role comes to
+ * by the roles it is a member of is held by the readers' own rows.
+ */
+function temporaryRelation(alias: string): string {
+  const row = hashed(`(to_jsonb(${alias}) - ${withoutColumns(MAINTAINED_CLASS_COLUMNS)})::text`);
+  const oid = `${alias}.oid`;
+  return `${row}, ${attributesOf(oid)}`;
+}
+
+/**
+ * The relations `t` of the session's temporary schema that a statement's name of an application's
+ * relation resolves to first, which `own` (the application's schemas) says: the ones the digest
+ * holds besides a view.
+ */
+function shadowing(own: string): string {
+  return `t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`;
+}
+
+/**
+ * A unique index, by which a plan leaves out an outer join that adds no rows: one dropped reads
+ * the join again. By its name, which an index built again (`REINDEX CONCURRENTLY`) keeps. `tag`
+ * names the row: of the application's relations, or of a temporary one.
+ */
+function uniqueIndexRow(tag: string): string {
+  return `concat_ws(':', '${tag}', x.indrelid, ci.relname, x.indkey::text, x.indclass::text, x.indcollation::text, x.indimmediate, x.indisvalid, ${hashed("coalesce(pg_get_expr(x.indpred, x.indrelid), '')")}, ${hashed("coalesce(pg_get_expr(x.indexprs, x.indrelid), '')")})`;
 }
 
 /** What the catalog defines of the application's relations: `own` says which schemas are its. */
@@ -138,7 +249,7 @@ function relationParts(own: string): readonly string[] {
     // An index's own relation is of no digest: what a unique one says is (`u`). Of each other, what
     // each role a statement reads as may read of it, which a statement that reads it fails without;
     // and of a column, the rights granted of it alone, to any role.
-    `SELECT concat_ws(':', 'c', c.oid, n.nspname, c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity, c.relispartition, c.reloptions::text, ${mayRead()}) AS x FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE ${own} AND c.relkind NOT IN ('i', 'I')`,
+    `SELECT concat_ws(':', 'c', c.oid, n.nspname, c.relname, c.relkind, c.relowner, c.relrowsecurity, c.relforcerowsecurity, c.relispartition, c.reloptions::text, ${mayRead()}) AS x FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE ${own} AND c.relkind NOT IN ('i', 'I')`,
     `SELECT concat_ws(':', 'a', a.attrelid, a.attnum, a.attname, a.atttypid, a.atttypmod, a.attcollation, a.attnotnull, a.attisdropped, a.attgenerated, a.attacl::text) FROM pg_attribute AS a ${related('a.attrelid')} AND a.attnum > 0 AND c.relkind NOT IN ('i', 'I')`,
     // A column's default and a generated column's expression: one set again rewrites its rows.
     `SELECT concat_ws(':', 'd', d.adrelid, d.adnum, ${hashed('pg_get_expr(d.adbin, d.adrelid)')}) FROM pg_attrdef AS d ${related('d.adrelid')}`,
@@ -146,9 +257,8 @@ function relationParts(own: string): readonly string[] {
     // statement that reads it reads besides.
     `SELECT concat_ws(':', 'i', i.inhrelid, i.inhparent, i.inhseqno) FROM pg_inherits AS i ${related('i.inhparent')}`,
     `SELECT concat_ws(':', 'k', k.oid, k.conrelid, k.contype, ${hashed('pg_get_constraintdef(k.oid)')}) FROM pg_constraint AS k ${related('k.conrelid')}`,
-    // A unique index, by which a plan leaves out an outer join that adds no rows: one dropped reads
-    // the join again. By its name, which an index built again (`REINDEX CONCURRENTLY`) keeps.
-    `SELECT concat_ws(':', 'u', x.indrelid, ci.relname, x.indkey::text, x.indclass::text, x.indcollation::text, x.indimmediate, x.indisvalid, ${hashed("coalesce(pg_get_expr(x.indpred, x.indrelid), '')")}, ${hashed("coalesce(pg_get_expr(x.indexprs, x.indrelid), '')")}) FROM pg_index AS x JOIN pg_class AS ci ON ci.oid = x.indexrelid ${related('x.indrelid')} AND x.indisunique`,
+    // A unique index (`uniqueIndexRow`).
+    `SELECT ${uniqueIndexRow('u')} FROM pg_index AS x JOIN pg_class AS ci ON ci.oid = x.indexrelid ${related('x.indrelid')} AND x.indisunique`,
     `SELECT concat_ws(':', 'r', r.oid, ${hashed('r.ev_action::text')}, ${hashed("coalesce(r.ev_qual::text, '')")}) FROM pg_rewrite AS r ${related('r.ev_class')}`,
     `SELECT concat_ws(':', 'p', p.oid, ${hashed('p::text')}) FROM pg_policy AS p`,
   ];
@@ -164,7 +274,7 @@ function definitionParts(own: string): readonly string[] {
     // An aggregate's functions and first state, which `CREATE OR REPLACE AGGREGATE` sets again.
     `SELECT concat_ws(':', 'g', g.aggfnoid, ${hashed('g::text')}) FROM pg_aggregate AS g JOIN pg_proc AS p ON p.oid = g.aggfnoid ${of('p.pronamespace')}`,
     `SELECT concat_ws(':', 't', t.oid, ${definedOf('t', 'typacl')}, has_type_privilege(t.oid, 'USAGE')) FROM pg_type AS t ${ofType}`,
-    `SELECT concat_ws(':', 'e', e.oid, e.enumtypid, e.enumsortorder, e.enumlabel) FROM pg_enum AS e JOIN pg_type AS t ON t.oid = e.enumtypid ${ofType}`,
+    `SELECT concat_ws(':', 'e', e.oid, ${hashed('e::text')}) FROM pg_enum AS e JOIN pg_type AS t ON t.oid = e.enumtypid ${ofType}`,
     // A domain's constraints, which its type's own row says nothing of.
     `SELECT concat_ws(':', 'kd', k.oid, k.contypid, ${hashed('pg_get_constraintdef(k.oid)')}) FROM pg_constraint AS k JOIN pg_type AS t ON t.oid = k.contypid ${ofType}`,
     `SELECT concat_ws(':', 'o', o.oid, ${hashed('o::text')}) FROM pg_operator AS o ${of('o.oprnamespace')}`,
@@ -173,7 +283,7 @@ function definitionParts(own: string): readonly string[] {
     `SELECT concat_ws(':', 'h', h.oid, ${hashed('h::text')}, ${rowsOf('pg_amop', 'amopfamily', 'h.oid', 'r.oid')}, ${rowsOf('pg_amproc', 'amprocfamily', 'h.oid', 'r.oid')}) FROM pg_opfamily AS h ${of('h.opfnamespace')}`,
     `SELECT concat_ws(':', 'l', l.oid, ${hashed('l::text')}) FROM pg_collation AS l ${of('l.collnamespace')}`,
     // The casts of the application's: PostgreSQL's own are numbered below its first free oid.
-    `SELECT concat_ws(':', 'x', x.oid, x.castsource, x.casttarget, x.castfunc, x.castcontext, x.castmethod) FROM pg_cast AS x WHERE x.oid >= ${String(FIRST_NORMAL_OID)}`,
+    `SELECT concat_ws(':', 'x', x.oid, ${hashed('x::text')}) FROM pg_cast AS x WHERE x.oid >= ${String(FIRST_NORMAL_OID)}`,
     // Text search: a configuration and the dictionaries it maps each kind of token to, a
     // dictionary's options, a parser and a template.
     `SELECT concat_ws(':', 'y', y.oid, ${hashed('y::text')}, ${rowsOf('pg_ts_config_map', 'mapcfg', 'y.oid', 'r.maptokentype, r.mapseqno')}) FROM pg_ts_config AS y ${of('y.cfgnamespace')}`,
@@ -190,21 +300,25 @@ function definitionParts(own: string): readonly string[] {
  */
 function sessionParts(own: string, relations: readonly Relation[]): readonly string[] {
   return [
-    // A view of the session's temporary schema, with its options (`security_invoker`; a view of none
-    // holds nothing of them); a relation or a type of it of a name of the application's, which a
-    // statement's name of it resolves to first; and a function of it, which a statement names as
-    // `pg_temp`'s: a temporary table a plan names is one nothing follows, a fault of the render once
-    // a plan is asked again. Each with its owner and its ACL whole, and a relation's columns'
-    // (`relationRights`; a type's and a function's rows are of the whole row), of any role: a grant,
-    // a revoke or another owner of anything of the temporary schema moves the digest, whether the role
-    // it is of reads or not.
-    `SELECT concat_ws(':', 'v', c.oid, c.relname, ${relationRights('c')}, c.reloptions::text, ${hashed('r.ev_action::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind, ${relationRights('t')}) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
+    // A view of the session's temporary schema and its rule, whole; a relation of it of a name of the
+    // application's, which a statement's name of it resolves to first, as the catalog records it
+    // (`temporaryRelation`); a type of it of such a name, and a function, an operator, a collation
+    // and a text search object of it, each by its whole row: a temporary table a plan names is one
+    // nothing follows, a fault of the render once a plan is asked again. A change of any of them, of
+    // the right of any role to it included, moves the digest, whether the role reads or not.
+    `SELECT concat_ws(':', 'v', c.oid, ${temporaryRelation('c')}, ${hashed('r::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'm', t.oid, ${temporaryRelation('t')}) FROM pg_class AS t WHERE ${shadowing(own)}`,
+    // What a plan tells of such a relation besides, which the flags of its row (`relhasindex`,
+    // `relhassubclass`) say late and say of any index: a unique index, by which the plan leaves out
+    // an outer join that adds no rows and so names no table; and a child, whose rows a statement
+    // reads too, and which a relation that has one is no more left out by.
+    `SELECT ${uniqueIndexRow('tu')} FROM pg_index AS x JOIN pg_class AS ci ON ci.oid = x.indexrelid JOIN pg_class AS t ON t.oid = x.indrelid WHERE x.indisunique AND ${shadowing(own)}`,
+    `SELECT concat_ws(':', 'ti', i.inhrelid, i.inhparent, i.inhseqno) FROM pg_inherits AS i JOIN pg_class AS t ON t.oid = i.inhparent WHERE ${shadowing(own)}`,
     // A temporary type of a name of the application's, which a statement's name of it resolves to
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
     // unless an object a statement names is of it or of its array (a domain over it, a function's
     // result).
-    `SELECT concat_ws(':', 'tt', t.oid, t.typname, ${hashed('t::text')}, ${rowsOf('pg_constraint', 'contypid', 't.oid', 'r.oid')}, ${rowsOf('pg_enum', 'enumtypid', 't.oid', 'r.enumsortorder')}, ${rowsOf('pg_attribute', 'attrelid', 't.typrelid', 'r.attnum')}) FROM pg_type AS t LEFT JOIN pg_class AS k ON k.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND (t.typname IN (SELECT o.typname FROM pg_type AS o JOIN pg_namespace AS n ON n.oid = o.typnamespace WHERE ${own}) OR (t.typelem = 0 AND (t.typrelid = 0 OR k.relkind = 'c')) OR EXISTS (SELECT 1 FROM pg_depend AS p WHERE p.refclassid = 'pg_type'::regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n'))`,
+    `SELECT concat_ws(':', 'tt', t.oid, t.typname, ${hashed('t::text')}, ${rowsOf('pg_constraint', 'contypid', 't.oid', 'r.oid')}, ${rowsOf('pg_enum', 'enumtypid', 't.oid', 'r.enumsortorder')}, ${attributesOf('t.typrelid')}) FROM pg_type AS t LEFT JOIN pg_class AS k ON k.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND (t.typname IN (SELECT o.typname FROM pg_type AS o JOIN pg_namespace AS n ON n.oid = o.typnamespace WHERE ${own}) OR (t.typelem = 0 AND (t.typrelid = 0 OR k.relkind = 'c')) OR EXISTS (SELECT 1 FROM pg_depend AS p WHERE p.refclassid = 'pg_type'::regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n'))`,
     `SELECT concat_ws(':', 'tf', p.oid, ${hashed('p::text')}) FROM pg_proc AS p WHERE p.pronamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'to', o.oid, ${hashed('o::text')}) FROM pg_operator AS o WHERE o.oprnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'tl', l.oid, ${hashed('l::text')}) FROM pg_collation AS l WHERE l.collnamespace = pg_my_temp_schema()`,
@@ -218,9 +332,11 @@ function sessionParts(own: string, relations: readonly Relation[]): readonly str
     // truncation, of the table alone.
     `SELECT concat_ws(':', 'w', c.oid, c.relfilenode) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${followedList(relations)})`,
     `SELECT concat_ws(':', 'n', n.oid, n.nspname, has_schema_privilege(n.oid, 'USAGE')) FROM pg_namespace AS n WHERE ${own}`,
-    // Each role's own rights over every row, and the roles whose rights it has, inherited or not:
-    // a policy's `TO`.
-    `SELECT concat_ws(':', 'role', s.oid, s.rolsuper, s.rolinherit, s.rolbypassrls, CASE WHEN s.rolsuper THEN '' ELSE (SELECT string_agg(concat_ws('.', g.oid, pg_has_role(s.oid, g.oid, 'USAGE')), ',' ORDER BY g.oid) FROM pg_roles AS g WHERE pg_has_role(s.oid, g.oid, 'MEMBER')) END) FROM pg_roles AS s WHERE s.oid IN (SELECT r.oid FROM "readers" AS r)`,
+    // Each role that reads, by its `pg_roles` row whole (its attributes, its row security, its
+    // settings; the password is masked there), and its memberships (`memberships`): a policy's `TO`
+    // names a role by its oid, `pg_has_role(current_user, 'admins', 'member')` asks of a name, and a
+    // role renamed to the name a policy asks of is another role.
+    `SELECT concat_ws(':', 'role', s.oid, ${hashed('s::text')}, ${memberships()}) FROM pg_roles AS s WHERE s.oid IN (SELECT r.oid FROM "readers" AS r)`,
     // The role the session reads as and the one it logged in as, by name, which a policy may name
     // (`current_user`, `session_user`): the rows a statement reads differ with them where no right
     // does, as the readers' rights say nothing of which of them reads; quoted, so that no two pairs
