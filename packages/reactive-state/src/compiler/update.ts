@@ -4,12 +4,16 @@ import {
   type FunctionExpression,
   type Identifier,
   isAwaitExpression,
+  isCallExpression,
   isIdentifier,
   isLiteralExpression,
+  isNewExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPrivateIdentifier,
+  isPropertyAccessExpression,
   isShorthandPropertyAssignment,
+  isTaggedTemplateExpression,
   isTemplateLiteralToken,
   isVariableDeclarationList,
   isYieldExpression,
@@ -25,6 +29,7 @@ import type { ImportBinding } from './imports.ts';
 import { isJsx } from './jsx.ts';
 import { isTypeOnly, readsBinding, walk } from './scope.ts';
 import { functionOf } from './statements.ts';
+import { useOf } from './uses.ts';
 
 /**
  * An update a setter is given — `current => addEstimate(current, step)` — as both sides run it: the
@@ -180,7 +185,35 @@ function readName(identifier: Identifier, space: 'type' | 'value', reading: Read
   }
 }
 
-/** A value of the owner's an update reads, which its call captures: never a function. */
+/** The members of a function that a call goes through: `onSave.call(…)`. */
+const CALLING: ReadonlySet<string> = new Set(['apply', 'bind', 'call']);
+
+/**
+ * Whether the update calls what `identifier` names — `onSave()`, `onSave?.()`, `new onSave()`, a
+ * template it tags, `onSave.call(…)` — within parentheses, `!`, `satisfies` and casts (`useOf`). What is called is a
+ * function, whatever type its owner gives it: an alias or an interface that a component or a hook
+ * imports is no type this compile reads, and its member, or the parameter, may be one.
+ */
+function isCalled(identifier: Identifier): boolean {
+  const { at, parent } = useOf(identifier);
+  if (isPropertyAccessExpression(parent) && parent.expression === at) {
+    const member = useOf(parent);
+    return (
+      CALLING.has(parent.name.text) &&
+      isCallExpression(member.parent) &&
+      member.parent.expression === member.at
+    );
+  }
+  return (
+    ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
+    (isTaggedTemplateExpression(parent) && parent.tag === at)
+  );
+}
+
+/**
+ * A value of the owner's an update reads, which its call captures: never a function, whether the
+ * owner's code says so — a function declared, a function type written — or the update calls it.
+ */
 function capture(
   identifier: Identifier,
   entry: TopLevel,
@@ -193,7 +226,7 @@ function capture(
       identifier,
     );
   }
-  if (scope.holdsFunction(identifier)) {
+  if (scope.holdsFunction(identifier) || isCalled(identifier)) {
     scope.fail(
       `\`${identifier.text}\` is a function, which an update does not capture: ${ONLY}`,
       identifier,
