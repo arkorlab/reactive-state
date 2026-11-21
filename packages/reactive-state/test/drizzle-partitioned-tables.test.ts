@@ -221,6 +221,8 @@ describe(
       const read = await store.changes(head, 10);
 
       expect(read.head).toBeGreaterThan(head);
+      // Of the declared table, not of the partition the row went to: a reader of `parted` is told.
+      expect(read.changes.map((change) => change.table)).toStrictEqual(['parted']);
     });
   },
 );
