@@ -6,7 +6,6 @@ import {
   isIdentifier,
   isImportDeclaration,
   isImportEqualsDeclaration,
-  isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
   isPropertyAccessExpression,
   isStringLiteral,
@@ -14,8 +13,6 @@ import {
   type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
-
-import { declaredWithin } from './scope.ts';
 
 /**
  * Module evaluation follows ordinary runtime imports and reexports, including empty clauses, and the
@@ -29,49 +26,28 @@ import { declaredWithin } from './scope.ts';
  */
 export const COMPUTED_IMPORT = 'import(…)';
 
-/** The names the file's imports bind: a default, a namespace, each named one, `import x = require()`'s. */
-function importedNames(sourceFile: SourceFile): readonly string[] {
-  return sourceFile.statements.flatMap((statement) => {
-    if (isImportEqualsDeclaration(statement)) {
-      return [statement.name.text];
-    }
-    const clause = isImportDeclaration(statement) ? statement.importClause : undefined;
-    const bound = clause?.namedBindings;
-    const names = clause?.name === undefined ? [] : [clause.name.text];
-    if (bound === undefined) {
-      return names;
-    }
-    return isNamespaceImport(bound)
-      ? [...names, bound.name.text]
-      : [...names, ...bound.elements.map((element) => element.name.text)];
-  });
-}
-
 /**
- * Whether `callee` loads the module its call is given: `import(…)`, or CommonJS's own `require(…)`
- * and `module.require(…)` — where the file declares no `require`, no `module` of its own, which it
- * may bind to a loader that resolves from another directory (`const require = createRequire(base)`),
- * and which its calls then name no module of the file's own directory by.
+ * Whether `callee` loads the module its call is given: `import(…)`, or `require(…)` and
+ * `module.require(…)`, by those names and whatever the file declares of them — in a helper a
+ * `require` loads relative to the file in every ordinary case: CommonJS's own, a bundler's, and the
+ * `const require = createRequire(import.meta.url)` of ES modules. One made with another base, or a
+ * function or a parameter the file names `require`, is read the same, which may refuse a split that
+ * loads other modules: the refusing side, for forms nothing writes.
  */
-function loads(callee: Expression, declared: ReadonlySet<string>): boolean {
+function loads(callee: Expression): boolean {
   return (
     callee.kind === SyntaxKind.ImportKeyword ||
-    (isIdentifier(callee) && callee.text === 'require' && !declared.has('require')) ||
+    (isIdentifier(callee) && callee.text === 'require') ||
     (isPropertyAccessExpression(callee) &&
       isIdentifier(callee.expression) &&
       callee.expression.text === 'module' &&
-      callee.name.text === 'require' &&
-      !declared.has('module'))
+      callee.name.text === 'require')
   );
 }
 
 /** Ordinary value declarations evaluate their dependency even when individual names are types. */
 export function runtimeModuleSpecifiers(sourceFile: SourceFile): readonly string[] {
   const specifiers: string[] = [];
-  const declared = new Set(declaredWithin(sourceFile));
-  for (const name of importedNames(sourceFile)) {
-    declared.add(name);
-  }
   for (const statement of sourceFile.statements) {
     if (isImportDeclaration(statement)) {
       if (
@@ -96,7 +72,7 @@ export function runtimeModuleSpecifiers(sourceFile: SourceFile): readonly string
     }
   }
   const visit = (node: Node): void => {
-    if (isCallExpression(node) && loads(node.expression, declared)) {
+    if (isCallExpression(node) && loads(node.expression)) {
       const [specifier] = node.arguments;
       specifiers.push(
         specifier !== undefined &&
