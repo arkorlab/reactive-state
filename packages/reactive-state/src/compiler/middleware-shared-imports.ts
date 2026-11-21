@@ -1,6 +1,6 @@
 import type { ImportBinding } from './imports.ts';
 import type { MiddlewareNames } from './middleware-reads.ts';
-import { runtimeModuleSpecifiers } from './middleware-runtime-imports.ts';
+import { COMPUTED_IMPORT, runtimeModuleSpecifiers } from './middleware-runtime-imports.ts';
 import type { Modules } from './modules.ts';
 
 /** Runtime imports whose module identity would be read in both extracted runtimes. */
@@ -47,7 +47,10 @@ function includeModule(
     if (file === undefined) continue;
     const parsed = modules.parse(file, false);
     for (const specifier of runtimeModuleSpecifiers(parsed.sourceFile)) {
-      pending.push({ file: modules.resolve(specifier, file), specifier });
+      pending.push({
+        file: specifier === COMPUTED_IMPORT ? undefined : modules.resolve(specifier, file),
+        specifier,
+      });
     }
   }
 }
