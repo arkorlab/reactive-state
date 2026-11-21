@@ -31,10 +31,13 @@ export interface Queryable {
  * Whose rights a statement reads under is held of the roles that read: the session's, and the owner
  * of each view of the application's or of the session's temporary schema that is no
  * `security_invoker`, each by its rights, its attributes and every role it is a member of; and of
- * each table its owner and its policies. A view of the session's temporary schema is held as a
- * table is: its owner, its options and rule, what each reader may read of it, and the rights granted
- * of its columns to any role. Three things that decide which rows a statement reads are not held,
- * and each for a reason that is no size of the change:
+ * each table its owner and its policies. Anything of the session's temporary schema that the
+ * digest holds is held with its owner and its ACL whole — a relation's, and its columns', a
+ * function's, a type's — of any role, so that a grant, a revoke or another owner of it moves the
+ * digest, which the application's relations and functions do not (they hold what the readers may
+ * read and run); what a role comes to by the roles it is a member of is held by the readers' rows.
+ * Three things that decide which rows a statement reads are not held, and each for a reason that is
+ * no size of the change:
  *
  * - what a `SECURITY DEFINER` function reads, and the rights of its owner with it: a plan names no
  *   table a function reads in its body (`plans.ts`), so nothing it reads is followed either;
@@ -109,12 +112,22 @@ function mayRead(): string {
 }
 
 /**
- * What rights are granted of each column of the relation `c`, to any role: the column's `attacl`
- * where it has one, as the rows of the application's columns hold it. A role may be left able to
- * read some columns and not another, which neither of a reader's answers (`mayRead`) tells apart.
+ * What rights are granted of each column of the relation `alias`, to any role: the column's `attacl`
+ * where it has one, as the rows of the application's columns hold it.
  */
-function columnRights(): string {
-  return `(SELECT string_agg(concat_ws('.', a.attnum, a.attacl::text), ',' ORDER BY a.attnum) FROM pg_attribute AS a WHERE a.attrelid = c.oid AND a.attnum > 0 AND a.attacl IS NOT NULL)`;
+function columnRights(alias: string): string {
+  return `(SELECT string_agg(concat_ws('.', a.attnum, a.attacl::text), ',' ORDER BY a.attnum) FROM pg_attribute AS a WHERE a.attrelid = ${alias}.oid AND a.attnum > 0 AND a.attacl IS NOT NULL)`;
+}
+
+/**
+ * The owner of the relation `alias`, its ACL whole and its columns' (`columnRights`): what a row of
+ * an object of the session's temporary schema holds of rights, of any role. A grant, a revoke or
+ * another owner then moves the digest, whether the role it is of reads or not, which is the side
+ * that cannot miss one: rights of a temporary object change seldom. What a role comes to by the
+ * roles it is a member of is held by the readers' own rows.
+ */
+function relationRights(alias: string): string {
+  return `${alias}.relowner, ${alias}.relacl::text, ${columnRights(alias)}`;
 }
 
 /** What the catalog defines of the application's relations: `own` says which schemas are its. */
@@ -177,22 +190,22 @@ function definitionParts(own: string): readonly string[] {
  */
 function sessionParts(own: string, relations: readonly Relation[]): readonly string[] {
   return [
-    // A view of the session's temporary schema, with its owner (whose rights a view that is no
-    // `security_invoker` reads its tables by, which the readers hold as a set and not as this
-    // view's), its options (`security_invoker`; a view of none holds nothing of them), what each role
-    // a statement reads as may read of it, which a statement that reads it fails without, and the
-    // rights granted of its columns, as of the application's relations; a
-    // relation or a type of it of a name of the application's, which a statement's name of it
-    // resolves to first; and a function of it, which a statement names as `pg_temp`'s: a temporary
-    // table a plan names is one nothing follows, a fault of the render once a plan is asked again.
-    `SELECT concat_ws(':', 'v', c.oid, c.relname, c.relowner, c.reloptions::text, ${hashed('r.ev_action::text')}, ${mayRead()}, ${columnRights()}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
+    // A view of the session's temporary schema, with its options (`security_invoker`; a view of none
+    // holds nothing of them); a relation or a type of it of a name of the application's, which a
+    // statement's name of it resolves to first; and a function of it, which a statement names as
+    // `pg_temp`'s: a temporary table a plan names is one nothing follows, a fault of the render once
+    // a plan is asked again. Each with its owner and its ACL whole, and a relation's columns'
+    // (`relationRights`; a type's and a function's rows are of the whole row), of any role: a grant,
+    // a revoke or another owner of anything of the temporary schema moves the digest, whether the role
+    // it is of reads or not.
+    `SELECT concat_ws(':', 'v', c.oid, c.relname, ${relationRights('c')}, c.reloptions::text, ${hashed('r.ev_action::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind, ${relationRights('t')}) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
     // A temporary type of a name of the application's, which a statement's name of it resolves to
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
     // unless an object a statement names is of it or of its array (a domain over it, a function's
     // result).
-    `SELECT concat_ws(':', 'tt', t.oid, t.typname, ${definedOf('t', 'typacl')}, ${rowsOf('pg_constraint', 'contypid', 't.oid', 'r.oid')}, ${rowsOf('pg_enum', 'enumtypid', 't.oid', 'r.enumsortorder')}, ${rowsOf('pg_attribute', 'attrelid', 't.typrelid', 'r.attnum')}) FROM pg_type AS t LEFT JOIN pg_class AS k ON k.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND (t.typname IN (SELECT o.typname FROM pg_type AS o JOIN pg_namespace AS n ON n.oid = o.typnamespace WHERE ${own}) OR (t.typelem = 0 AND (t.typrelid = 0 OR k.relkind = 'c')) OR EXISTS (SELECT 1 FROM pg_depend AS p WHERE p.refclassid = 'pg_type'::regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n'))`,
-    `SELECT concat_ws(':', 'tf', p.oid, ${definedOf('p', 'proacl')}) FROM pg_proc AS p WHERE p.pronamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'tt', t.oid, t.typname, ${hashed('t::text')}, ${rowsOf('pg_constraint', 'contypid', 't.oid', 'r.oid')}, ${rowsOf('pg_enum', 'enumtypid', 't.oid', 'r.enumsortorder')}, ${rowsOf('pg_attribute', 'attrelid', 't.typrelid', 'r.attnum')}) FROM pg_type AS t LEFT JOIN pg_class AS k ON k.oid = t.typrelid WHERE t.typnamespace = pg_my_temp_schema() AND (t.typname IN (SELECT o.typname FROM pg_type AS o JOIN pg_namespace AS n ON n.oid = o.typnamespace WHERE ${own}) OR (t.typelem = 0 AND (t.typrelid = 0 OR k.relkind = 'c')) OR EXISTS (SELECT 1 FROM pg_depend AS p WHERE p.refclassid = 'pg_type'::regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n'))`,
+    `SELECT concat_ws(':', 'tf', p.oid, ${hashed('p::text')}) FROM pg_proc AS p WHERE p.pronamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'to', o.oid, ${hashed('o::text')}) FROM pg_operator AS o WHERE o.oprnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'tl', l.oid, ${hashed('l::text')}) FROM pg_collation AS l WHERE l.collnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'ty', y.oid, ${hashed('y::text')}, ${rowsOf('pg_ts_config_map', 'mapcfg', 'y.oid', 'r.maptokentype, r.mapseqno')}) FROM pg_ts_config AS y WHERE y.cfgnamespace = pg_my_temp_schema()`,

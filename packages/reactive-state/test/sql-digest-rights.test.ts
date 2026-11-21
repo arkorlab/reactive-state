@@ -105,6 +105,37 @@ const TEMPORARY_VIEW_OF_A = `
 const ONLY_T1 = "CREATE POLICY seen ON tasks FOR SELECT TO b USING (id = 't1');";
 const ADMINS_SEE = 'CREATE POLICY admin ON tasks FOR SELECT TO admins USING (true);';
 const ALL_THREE = 't1,t2,t3';
+/** A function of the session's temporary schema, made as `a`, which `PUBLIC` may execute. */
+const TEMPORARY_FUNCTION_OF_A = `
+  SET ROLE a; CREATE FUNCTION pg_temp.f() RETURNS text LANGUAGE sql AS $$ SELECT 'x' $$; RESET ROLE;
+`;
+/** The same, `PUBLIC`'s execution taken away, and `a` and `b` given it. */
+const TEMPORARY_FUNCTION_FOR_A_AND_B = `${TEMPORARY_FUNCTION_OF_A}
+  REVOKE EXECUTE ON FUNCTION pg_temp.f() FROM PUBLIC;
+  GRANT EXECUTE ON FUNCTION pg_temp.f() TO a, b;
+`;
+const CALL_TEMPORARY_FUNCTION = 'SELECT pg_temp.f() AS id';
+/** A type of the session's temporary schema, made as `a`, which `PUBLIC` may use. */
+const TEMPORARY_TYPE_OF_A = `
+  SET ROLE a; CREATE TYPE pg_temp.mood AS ENUM ('ok'); RESET ROLE;
+`;
+const USE_TEMPORARY_TYPE = "SELECT 'ok'::pg_temp.mood::text AS id";
+/** A table of the session's temporary schema of a name of the application's, made as `a`. */
+const TEMPORARY_TABLE_OF_A = `
+  SET ROLE a; CREATE TEMP TABLE tasks (id text, x text); INSERT INTO pg_temp.tasks VALUES ('t', 'u');
+  GRANT SELECT (id), SELECT (x) ON pg_temp.tasks TO b; RESET ROLE;
+`;
+const READ_TEMPORARY_TABLE = 'SELECT x AS id FROM pg_temp.tasks';
+/** The same, which `b` may read as a whole. */
+const TEMPORARY_TABLE_FOR_B = `
+  SET ROLE a; CREATE TEMP TABLE tasks (id text, x text); INSERT INTO pg_temp.tasks VALUES ('t', 'u');
+  GRANT SELECT ON pg_temp.tasks TO b; RESET ROLE;
+`;
+/** A function of the application's, which `PUBLIC` may execute. */
+const APPLICATION_FUNCTION = `
+  CREATE FUNCTION public.af() RETURNS text LANGUAGE sql AS $$ SELECT 'x' $$;
+`;
+const CALL_APPLICATION_FUNCTION = 'SELECT public.af() AS id';
 /** What `b` reads of a column of the temporary view, the owners' names of the rows `a` sees. */
 const NAMES = 'a,b,c';
 const THROUGH_COLUMN = 'SELECT owner_name AS id FROM pg_temp.tv ORDER BY 1';
@@ -156,6 +187,15 @@ describe("the schema's digest of whose rights a statement reads under", () => {
       },
     ],
     [
+      'a role that reads nothing is given the right to read it',
+      {
+        change: 'GRANT SELECT ON pg_temp.tv TO c',
+        read: THROUGH_TEMPORARY,
+        rows: [ALL_THREE, ALL_THREE],
+        setup: A_SEES + TEMPORARY_VIEW_OF_A,
+      },
+    ],
+    [
       'the reader may no longer read a column of it, and still reads another',
       {
         change: 'REVOKE SELECT (owner_name) ON pg_temp.tv FROM b',
@@ -202,6 +242,141 @@ describe("the schema's digest of whose rights a statement reads under", () => {
     ],
   ])(
     'moves with a view of the session’s temporary schema, made by another role, once %s',
+    async (_what, given) => {
+      const outcome = await changing(given);
+
+      expect(outcome.rows).toStrictEqual(given.rows);
+      expect(outcome.moved).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each<readonly [string, Case]>([
+    [
+      'its execution is taken from PUBLIC',
+      {
+        change: 'REVOKE EXECUTE ON FUNCTION pg_temp.f() FROM PUBLIC',
+        read: CALL_TEMPORARY_FUNCTION,
+        rows: ['x', DENIED],
+        setup: TEMPORARY_FUNCTION_OF_A,
+      },
+    ],
+    [
+      'a role that reads nothing is given its execution',
+      {
+        change: 'GRANT EXECUTE ON FUNCTION pg_temp.f() TO c',
+        read: CALL_TEMPORARY_FUNCTION,
+        rows: ['x', 'x'],
+        setup: TEMPORARY_FUNCTION_FOR_A_AND_B,
+      },
+    ],
+    [
+      'it has another owner',
+      {
+        change: 'ALTER FUNCTION pg_temp.f() OWNER TO c',
+        read: CALL_TEMPORARY_FUNCTION,
+        rows: ['x', 'x'],
+        setup: TEMPORARY_FUNCTION_OF_A,
+      },
+    ],
+    [
+      'the reader is granted a role that may execute it',
+      {
+        change: 'GRANT g1 TO b',
+        read: CALL_TEMPORARY_FUNCTION,
+        rows: [DENIED, 'x'],
+        setup: `${TEMPORARY_FUNCTION_OF_A} REVOKE EXECUTE ON FUNCTION pg_temp.f() FROM PUBLIC; GRANT EXECUTE ON FUNCTION pg_temp.f() TO a, g1;`,
+      },
+    ],
+  ])(
+    'moves with a function of the session’s temporary schema, once %s',
+    async (_what, given) => {
+      const outcome = await changing(given);
+
+      expect(outcome.rows).toStrictEqual(given.rows);
+      expect(outcome.moved).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each<readonly [string, Case]>([
+    [
+      'its use is taken from PUBLIC',
+      {
+        change: 'REVOKE USAGE ON TYPE pg_temp.mood FROM PUBLIC',
+        read: USE_TEMPORARY_TYPE,
+        rows: ['ok', 'ok'],
+        setup: TEMPORARY_TYPE_OF_A,
+      },
+    ],
+    [
+      'a role that reads nothing is given its use',
+      {
+        change: 'GRANT USAGE ON TYPE pg_temp.mood TO c',
+        read: USE_TEMPORARY_TYPE,
+        rows: ['ok', 'ok'],
+        setup: `${TEMPORARY_TYPE_OF_A} REVOKE USAGE ON TYPE pg_temp.mood FROM PUBLIC; GRANT USAGE ON TYPE pg_temp.mood TO a, b;`,
+      },
+    ],
+    [
+      'it has another owner',
+      {
+        change: 'ALTER TYPE pg_temp.mood OWNER TO c',
+        read: USE_TEMPORARY_TYPE,
+        rows: ['ok', 'ok'],
+        setup: TEMPORARY_TYPE_OF_A,
+      },
+    ],
+  ])(
+    'moves with a type of the session’s temporary schema, once %s',
+    async (_what, given) => {
+      const outcome = await changing(given);
+
+      expect(outcome.rows).toStrictEqual(given.rows);
+      expect(outcome.moved).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each<readonly [string, Case]>([
+    [
+      'the reader may no longer read it',
+      {
+        change: 'REVOKE SELECT ON pg_temp.tasks FROM b',
+        read: READ_TEMPORARY_TABLE,
+        rows: ['u', DENIED],
+        setup: TEMPORARY_TABLE_FOR_B,
+      },
+    ],
+    [
+      'the reader may no longer read a column of it',
+      {
+        change: 'REVOKE SELECT (x) ON pg_temp.tasks FROM b',
+        read: READ_TEMPORARY_TABLE,
+        rows: ['u', DENIED],
+        setup: TEMPORARY_TABLE_OF_A,
+      },
+    ],
+    [
+      'a role that reads nothing is given the right to read it',
+      {
+        change: 'GRANT SELECT ON pg_temp.tasks TO c',
+        read: READ_TEMPORARY_TABLE,
+        rows: ['u', 'u'],
+        setup: TEMPORARY_TABLE_OF_A,
+      },
+    ],
+    [
+      'it has another owner',
+      {
+        change: 'ALTER TABLE pg_temp.tasks OWNER TO c',
+        read: READ_TEMPORARY_TABLE,
+        rows: ['u', 'u'],
+        setup: TEMPORARY_TABLE_OF_A,
+      },
+    ],
+  ])(
+    'moves with a table of the session’s temporary schema of a name of the application’s, once %s',
     async (_what, given) => {
       const outcome = await changing(given);
 
@@ -287,6 +462,15 @@ describe("the schema's digest of whose rights a statement reads under", () => {
       },
     ],
     [
+      'a function of the application’s, once its execution is taken from PUBLIC',
+      {
+        change: 'REVOKE EXECUTE ON FUNCTION public.af() FROM PUBLIC',
+        read: CALL_APPLICATION_FUNCTION,
+        rows: ['x', DENIED],
+        setup: APPLICATION_FUNCTION,
+      },
+    ],
+    [
       'the table, once the role owns it',
       {
         change: 'ALTER TABLE tasks OWNER TO b',
@@ -335,12 +519,12 @@ describe("the schema's digest of whose rights a statement reads under", () => {
       },
     ],
     [
-      'the right to read a view of the session’s temporary schema, given to a role that reads nothing',
+      'execution of a function of the application’s, given to a role that reads nothing',
       {
-        change: 'GRANT SELECT ON pg_temp.tv TO c',
-        read: THROUGH_TEMPORARY,
-        rows: [ALL_THREE, ALL_THREE],
-        setup: A_SEES + TEMPORARY_VIEW_OF_A,
+        change: 'GRANT EXECUTE ON FUNCTION public.af() TO c',
+        read: CALL_APPLICATION_FUNCTION,
+        rows: ['x', 'x'],
+        setup: `${APPLICATION_FUNCTION} REVOKE EXECUTE ON FUNCTION public.af() FROM PUBLIC; GRANT EXECUTE ON FUNCTION public.af() TO b;`,
       },
     ],
     [
