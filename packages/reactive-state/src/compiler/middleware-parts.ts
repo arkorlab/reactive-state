@@ -426,10 +426,14 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
   // A constant of the params alone that nothing reads runs where the request is, as written, and
   // the constants it reads are written there as well.
   const unread = pure.filter((each) => !inGuard.has(each) && !readByHost.has(each));
+  // What the host runs of the middleware's own statements: its envelope's and after `next`, and these.
+  const hostRuns = [...hostSeeds, ...unread];
   const elsewhere = closureOf(
-    [...hostSeeds, ...unread].map((each) => each.reads),
+    hostRuns.map((each) => each.reads),
     pure,
   );
+  // An unread constant is written ahead of the guard (`checkBeforeGuard`), where it reads the context's
+  // names as the guard does, so what it reads is not among what the host reads of the names the guard assigns.
   const hostReads = unionOf(
     ...[...hostSeeds, ...elsewhere].map((each) => each.reads.values.keys()),
   );
@@ -449,7 +453,7 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
     pure,
     {
       both: (each) => inGuard.has(each) && elsewhere.has(each),
-      host: (name) => hostSeeds.some((each) => each.reads.values.has(name)),
+      host: (name) => hostRuns.some((each) => each.reads.values.has(name)),
     },
     names.context,
     names.fail,

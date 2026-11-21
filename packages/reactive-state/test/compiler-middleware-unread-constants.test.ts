@@ -43,6 +43,58 @@ const REFUSED: readonly Row[] = [
     body: `  const a = params.projectId.toUpperCase();\n  const b = a;\n  if (a === 'P1') return new Response(null, { status: 403 });\n  return next();`,
     id: 'reads-a-call-the-guard-reads',
   },
+  {
+    body: `  const m = new Map<string, number>();\n  const r = m.set('a', 1);\n  if (m.size > 0) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'a-map-an-unread-constant-sets',
+  },
+  {
+    body: `  const s = new Set<string>();\n  const r = s.add('a');\n  if (s.size > 0) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'a-set-an-unread-constant-adds-to',
+  },
+];
+
+/** The guard reads a collection an unread constant writes, or hands to a call that may: refused. */
+const ROLES = "  const roles: string[] = [];\n  const count = roles.push('blocked');\n";
+const BLOCKED =
+  '  if (roles.length > 0) return new Response(null, { status: 403 });\n  return next();';
+const MUTATED: readonly Row[] = [
+  { body: `${ROLES}${BLOCKED}`, id: 'a-push' },
+  {
+    body: `  const options = { mode: 'a' };\n  const w = (options.mode = 'blocked');\n  if (options.mode === 'blocked') return new Response(null, { status: 403 });\n  return next();`,
+    id: 'an-assignment-to-a-member',
+  },
+  {
+    body: `  const counts = { n: 0 };\n  const w = counts.n++;\n  if (counts.n > 0) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'an-increment-of-a-member',
+  },
+  {
+    body: `  const roles: string[] = [];\n  const alias = roles;\n  const count = alias.push('blocked');\n${BLOCKED}`,
+    id: 'through-a-second-unread-constant',
+  },
+  {
+    body: `  const roles: string[] = [];\n  const filled = Object.assign(roles, ['blocked']);\n${BLOCKED}`,
+    id: 'handed-to-a-call-that-writes',
+  },
+  {
+    body: `  const roles: string[] = [];\n  const n = Array.prototype.push.call(roles, 'blocked');\n${BLOCKED}`,
+    id: 'handed-to-a-method-by-call',
+  },
+  {
+    body: `${ROLES}  const n = roles.length;\n  if (n > 0) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'the-guard-reads-a-constant-computed-from-it',
+  },
+  {
+    body: `  const roles: string[] = [];\n  const n = roles.length;\n  const count = roles.push('blocked');\n  if (n > 0) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'the-guard-reads-a-copy-of-its-length-made-before',
+  },
+  {
+    body: `  const flags = { blocked: false };\n  const w = (flags.blocked = true);\n  if (flags.blocked) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'an-object-literal',
+  },
+  {
+    body: `  const rows: string[][] = [[]];\n  const w = rows[0].push('x');\n  if (rows[0].length > 0) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'a-collection-in-a-collection',
+  },
 ];
 
 /** What was taken and ran as written: no constant of the guard's an unread one reads. */
@@ -58,6 +110,22 @@ const ALONE: readonly Row[] = [
   {
     body: `  const a = 1;\n  const b = a;\n  const response = await next();\n  response.headers.set('x-a', String(a));\n  return response;`,
     id: 'a-constant-only-the-host-reads',
+  },
+  {
+    body: `  const roles: string[] = ['a'];\n  const count = roles.length;\n  if (roles.length > 5) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'an-unread-constant-that-only-reads-the-collection',
+  },
+  {
+    body: `  const roles: string[] = ['a'];\n  const text = String(roles);\n  if (roles.length > 5) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'an-unread-constant-handed-to-a-read-only-call',
+  },
+  {
+    body: `  const limit = 5;\n  const copy = limit;\n  if (limit > 7) return new Response(null, { status: 403 });\n  return next();`,
+    id: 'a-primitive-an-unread-constant-copies',
+  },
+  {
+    body: `${ROLES}  if (params.projectId === 'z') return new Response(null, { status: 403 });\n  return next();`,
+    id: 'a-collection-only-the-host-touches',
   },
 ];
 
@@ -128,6 +196,15 @@ describe('a constant of a route middleware’s params that nothing reads', () =>
 
     expect(found.refused).toContain('read by the guard');
   });
+
+  it.each(MUTATED)(
+    'refuses a collection an unread constant writes, the guard reading it: $id',
+    async (row) => {
+      const found = await split(row);
+
+      expect(found.refused).toContain('is mutated or passed to a call that may mutate it');
+    },
+  );
 
   it.each(ALONE)('keeps what an unread constant read before: $id', async (row) => {
     const found = await split(row);
