@@ -193,16 +193,23 @@ function literal(text: string): string {
 
 /**
  * `create`, a statement that makes a function the role that made the log alone may execute, with
- * what `PUBLIC` is given of it taken away (`signature` names it), as one statement: a `DO` block
- * runs both in the transaction of its one statement, so that no committed state has the function
- * executable by `PUBLIC` — not between two statements, which a role that may use the log's schema
- * could meet, and not where an installation stops after the first. `CREATE OR REPLACE` keeps the
- * privileges a function has, so a function an installation made before, which `PUBLIC` may execute,
- * would be a definer's that `PUBLIC` may execute until the `REVOKE` committed. The function's own
- * body is quoted by `$$`, the block by another tag.
+ * what every other role is given of it taken away (`signature` names it), as one statement: a `DO`
+ * block runs them in the transaction of its one statement, so that no committed state has the
+ * function executable by a role but its owner — not between two statements, which a role that may
+ * use the log's schema could meet, and not where an installation stops after the first. Executable
+ * by another role it would be by `PUBLIC`, which `CREATE OR REPLACE` keeps for a function an
+ * installation made before made so; by a role named in the installer's default privileges
+ * (`ALTER DEFAULT PRIVILEGES … GRANT EXECUTE ON FUNCTIONS TO app`), which a function is made with;
+ * or by one granted it since, which `CREATE OR REPLACE` keeps as well. So `PUBLIC`'s execution is
+ * revoked, and each named role's that is not the owner, each with `CASCADE`, which also takes away
+ * what a role with the grant option granted on (an owner's `REVOKE` takes away its own grants
+ * alone). What is left is no entry of the function's ACL: a superuser, and a role that is a member
+ * of the owner, which has the owner's rights. The function's own body is quoted by `$$`, the block
+ * by another tag.
  */
 function restricted(create: string, signature: string): string {
-  return `DO $restricted$ BEGIN ${create}; REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC; END $restricted$`;
+  const named = literal(signature);
+  return `DO $restricted$ DECLARE "who" text; BEGIN ${create}; REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC CASCADE; FOR "who" IN SELECT DISTINCT x.grantee::pg_catalog.regrole::text FROM pg_catalog.pg_proc AS p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) AS x WHERE p.oid = ${named}::pg_catalog.regprocedure AND x.grantee NOT IN (0, p.proowner) LOOP EXECUTE pg_catalog.format('REVOKE EXECUTE ON FUNCTION %s FROM %s CASCADE', ${named}, "who"); END LOOP; END $restricted$`;
 }
 
 /**
@@ -408,8 +415,8 @@ function ddlCounterOf(namespace: string): readonly string[] {
  * triggers are made anew, which brings an installation made before up to date. Another role's run
  * fails at the first function it would replace (`must be owner of function`), by PostgreSQL's rule
  * for `CREATE OR REPLACE FUNCTION`. A function that only the role that made the log may execute is
- * made in the one statement that takes `PUBLIC`'s execution from it (`restricted`), so that a run
- * that stops anywhere leaves none executable by a role that may use the log's schema. A role that
+ * made in the one statement that takes every other role's execution from it (`restricted`), so
+ * that a run that stops anywhere leaves none executable by a role that may use the log's schema. A role that
  * only writes followed tables needs nothing of the log's schema, and a host that only reads the log
  * runs none of them: it needs `USAGE` on the schema and `SELECT` on `head` and `changes`. A table
  * no longer followed keeps its triggers until the application drops them.
