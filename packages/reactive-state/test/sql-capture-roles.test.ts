@@ -36,14 +36,19 @@ interface Opened {
   }>;
 }
 
-/** The statements of the capture as an installation made before the functions were definers ran them. */
-function beforeDefiners(statement: string): string | undefined {
-  if (statement.startsWith('REVOKE EXECUTE ON FUNCTION')) {
-    return undefined;
+/**
+ * The statements of the capture as an installation made before the functions were definers ran
+ * them. A function the log's role alone may execute is made now in one statement with the
+ * revocation of what `PUBLIC` is given (`DO $restricted$ … $restricted$`); an installation made
+ * before ran it as an invoker's function, with no revocation.
+ */
+function beforeDefiners(statement: string): string {
+  if (!statement.startsWith('DO $restricted$')) {
+    return statement;
   }
-  return /^CREATE OR REPLACE FUNCTION "reactive_state"\."(?:capture_\w+|note)"\(/u.test(statement)
-    ? statement.replace(' SECURITY DEFINER', '')
-    : statement;
+  const revoke = statement.indexOf(' REVOKE EXECUTE ON FUNCTION');
+  const end = statement.indexOf(';', revoke) + 1;
+  return `${statement.slice(0, revoke)}${statement.slice(end)}`.replace(' SECURITY DEFINER', '');
 }
 
 /**

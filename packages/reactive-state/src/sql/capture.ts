@@ -192,6 +192,20 @@ function literal(text: string): string {
 }
 
 /**
+ * `create`, a statement that makes a function the role that made the log alone may execute, with
+ * what `PUBLIC` is given of it taken away (`signature` names it), as one statement: a `DO` block
+ * runs both in the transaction of its one statement, so that no committed state has the function
+ * executable by `PUBLIC` — not between two statements, which a role that may use the log's schema
+ * could meet, and not where an installation stops after the first. `CREATE OR REPLACE` keeps the
+ * privileges a function has, so a function an installation made before, which `PUBLIC` may execute,
+ * would be a definer's that `PUBLIC` may execute until the `REVOKE` committed. The function's own
+ * body is quoted by `$$`, the block by another tag.
+ */
+function restricted(create: string, signature: string): string {
+  return `DO $restricted$ BEGIN ${create}; REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC; END $restricted$`;
+}
+
+/**
  * The statements of each trigger a followed table holds: one each of the events it logs, named
  * `<namespace>_<event>`, so that the triggers of another namespace's log stay as they are. Each
  * names the table's key columns to the function it runs, as its arguments.
@@ -255,11 +269,10 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
     // Of each writer, which the trigger's function calls it as, though the database's default
     // privileges keep functions from `PUBLIC`: it reads the catalog's attributes alone.
     `GRANT EXECUTE ON FUNCTION ${schema}."image_sql"(oid, text[]) TO PUBLIC`,
-    made('capture_inserted', ['after']),
-    made('capture_deleted', ['before']),
-    made('capture_updated', ['before', 'after']),
     // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
-    `REVOKE EXECUTE ON FUNCTION ${schema}."capture_inserted"(), ${schema}."capture_deleted"(), ${schema}."capture_updated"() FROM PUBLIC`,
+    restricted(made('capture_inserted', ['after']), `${schema}."capture_inserted"()`),
+    restricted(made('capture_deleted', ['before']), `${schema}."capture_deleted"()`),
+    restricted(made('capture_updated', ['before', 'after']), `${schema}."capture_updated"()`),
   ];
 }
 
@@ -394,10 +407,12 @@ function ddlCounterOf(namespace: string): readonly string[] {
  * `FULL` replica identity, the columns `side` and `image` of `changes`), and its functions and
  * triggers are made anew, which brings an installation made before up to date. Another role's run
  * fails at the first function it would replace (`must be owner of function`), by PostgreSQL's rule
- * for `CREATE OR REPLACE FUNCTION`. A role that only writes followed tables needs nothing of the
- * log's schema, and a host that only reads the log runs none of them: it needs `USAGE` on the
- * schema and `SELECT` on `head` and `changes`. A table no longer followed keeps its triggers until
- * the application drops them.
+ * for `CREATE OR REPLACE FUNCTION`. A function that only the role that made the log may execute is
+ * made in the one statement that takes `PUBLIC`'s execution from it (`restricted`), so that a run
+ * that stops anywhere leaves none executable by a role that may use the log's schema. A role that
+ * only writes followed tables needs nothing of the log's schema, and a host that only reads the log
+ * runs none of them: it needs `USAGE` on the schema and `SELECT` on `head` and `changes`. A table
+ * no longer followed keeps its triggers until the application drops them.
  */
 export function changeCaptureSql(
   relations: readonly FollowedRelation[],
@@ -413,12 +428,17 @@ export function changeCaptureSql(
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
     `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname = 'image' AND NOT attisdropped) THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
-    `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
-    `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
-    // Of the role that made the log alone, of which the functions above run: any other that may use
-    // the log's schema could else append an entry that renders what read a table again, or attach a
+    // Of the role that made the log alone, of which the functions run: any other that may use the
+    // log's schema could else append an entry that renders what read a table again, or attach a
     // trigger function to a table of its own.
-    `REVOKE EXECUTE ON FUNCTION ${schema}."note"(text, text), ${schema}."capture_all"() FROM PUBLIC`,
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
+      `${schema}."note"(text, text)`,
+    ),
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+      `${schema}."capture_all"()`,
+    ),
     ...rowFunctionsOf(namespace, channel),
     ...ddlCounterOf(namespace),
     ...relations.flatMap((relation) => triggersOf(relation, namespace)),
