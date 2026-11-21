@@ -105,6 +105,26 @@ const TEMPORARY_VIEW_OF_A = `
 const ONLY_T1 = "CREATE POLICY seen ON tasks FOR SELECT TO b USING (id = 't1');";
 const ADMINS_SEE = 'CREATE POLICY admin ON tasks FOR SELECT TO admins USING (true);';
 const ALL_THREE = 't1,t2,t3';
+/** What `b` reads of a column of the temporary view, the owners' names of the rows `a` sees. */
+const NAMES = 'a,b,c';
+const THROUGH_COLUMN = 'SELECT owner_name AS id FROM pg_temp.tv ORDER BY 1';
+/** A view of `tasks` in the session's temporary schema, made as `a`, of which `b` may read the columns. */
+const TEMPORARY_COLUMNS_OF_A = `
+  SET ROLE a; CREATE TEMP VIEW tv AS SELECT id, owner_name FROM tasks;
+  GRANT SELECT (id), SELECT (owner_name) ON pg_temp.tv TO b; RESET ROLE;
+`;
+/** A view of `tasks` in the session's temporary schema, made as `a`, which only `g1` may read. */
+const TEMPORARY_VIEW_FOR_G1 = `
+  SET ROLE a; CREATE TEMP VIEW tv AS SELECT id, owner_name FROM tasks;
+  GRANT SELECT ON pg_temp.tv TO g1; RESET ROLE;
+`;
+/** `a` and `c` each own a view of the application's, and a policy each lets through other rows. */
+const A_AND_C_OWN_VIEWS = `
+  CREATE POLICY pa ON tasks FOR SELECT TO a USING (id = 't1');
+  CREATE POLICY pc ON tasks FOR SELECT TO c USING (true);
+  CREATE VIEW va AS SELECT id FROM tasks; ALTER VIEW va OWNER TO a;
+  CREATE VIEW vc AS SELECT id FROM tasks; ALTER VIEW vc OWNER TO c;
+`;
 
 describe("the schema's digest of whose rights a statement reads under", () => {
   it.each<readonly [string, Case]>([
@@ -133,6 +153,51 @@ describe("the schema's digest of whose rights a statement reads under", () => {
         read: THROUGH_TEMPORARY,
         rows: [ALL_THREE, DENIED],
         setup: A_SEES + TEMPORARY_VIEW_OF_A,
+      },
+    ],
+    [
+      'the reader may no longer read a column of it, and still reads another',
+      {
+        change: 'REVOKE SELECT (owner_name) ON pg_temp.tv FROM b',
+        read: THROUGH_COLUMN,
+        rows: [NAMES, DENIED],
+        setup: A_SEES + TEMPORARY_COLUMNS_OF_A,
+      },
+    ],
+    [
+      'a role that reads nothing is given the right to read a column of it',
+      {
+        change: 'GRANT SELECT (owner_name) ON pg_temp.tv TO c',
+        read: THROUGH_COLUMN,
+        rows: [NAMES, NAMES],
+        setup: A_SEES + TEMPORARY_COLUMNS_OF_A,
+      },
+    ],
+    [
+      'its owner is replaced by another role that reads, with the same right to read it',
+      {
+        change: 'ALTER VIEW pg_temp.tv OWNER TO c; GRANT SELECT ON pg_temp.tv TO a, b, c',
+        read: THROUGH_TEMPORARY,
+        rows: ['t1', ALL_THREE],
+        setup: `${A_AND_C_OWN_VIEWS} SET ROLE a; CREATE TEMP VIEW tv AS SELECT * FROM tasks; GRANT SELECT ON pg_temp.tv TO a, b, c; RESET ROLE;`,
+      },
+    ],
+    [
+      'the reader is granted a role that may read it',
+      {
+        change: 'GRANT g1 TO b',
+        read: THROUGH_COLUMN,
+        rows: [DENIED, NAMES],
+        setup: A_SEES + TEMPORARY_VIEW_FOR_G1,
+      },
+    ],
+    [
+      'the reader is granted a role that may read a column of it',
+      {
+        change: 'GRANT g1 TO b',
+        read: THROUGH_COLUMN,
+        rows: [DENIED, NAMES],
+        setup: `${A_SEES} SET ROLE a; CREATE TEMP VIEW tv AS SELECT id, owner_name FROM tasks; GRANT SELECT (owner_name) ON pg_temp.tv TO g1; RESET ROLE;`,
       },
     ],
   ])(
@@ -210,6 +275,15 @@ describe("the schema's digest of whose rights a statement reads under", () => {
         rows: [ALL_THREE, ''],
         setup:
           'GRANT g2 TO g1; GRANT g1 TO b; CREATE POLICY via ON tasks FOR SELECT TO g2 USING (true);',
+      },
+    ],
+    [
+      'a table of the application’s, once a role that reads nothing is given the right to read a column of it',
+      {
+        change: 'GRANT SELECT (owner_name) ON tasks TO c',
+        read: READ_TASKS,
+        rows: ['t1', 't1'],
+        setup: ONLY_T1,
       },
     ],
     [
