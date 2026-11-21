@@ -464,3 +464,104 @@ describe("the schema's digest of the application's kinds it holds by whole rows"
     TEST_TIMEOUT_MS,
   );
 });
+
+/** A table of the session's temporary schema of a name of the application's, which `b` may read. */
+const SHADOWING_TABLE = `
+  CREATE TEMP TABLE tasks (id text, x text); GRANT SELECT ON pg_temp.tasks TO b;
+`;
+/** What clears what `pg_class` and `pg_attribute` say of a relation late, or never of itself. */
+const MAINTENANCE = [
+  'VACUUM pg_temp.tasks',
+  'ANALYZE pg_temp.tasks',
+  'VACUUM (ANALYZE) pg_temp.tasks',
+  'VACUUM (FREEZE) pg_temp.tasks',
+  'VACUUM FULL pg_temp.tasks',
+  'VACUUM',
+  'ANALYZE',
+];
+const TRIGGER_FUNCTION = `
+  CREATE FUNCTION pg_temp.tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+`;
+
+describe("the schema's digest of what the catalog says a relation has, or once had", () => {
+  it.each([
+    ['an index', 'CREATE INDEX tx ON pg_temp.tasks (x); DROP INDEX pg_temp.tx'],
+    [
+      'a rule',
+      'CREATE RULE r AS ON INSERT TO pg_temp.tasks DO ALSO NOTHING; DROP RULE r ON pg_temp.tasks',
+    ],
+    [
+      'a trigger',
+      `${TRIGGER_FUNCTION} CREATE TRIGGER g BEFORE INSERT ON pg_temp.tasks FOR EACH ROW EXECUTE FUNCTION pg_temp.tg(); DROP TRIGGER g ON pg_temp.tasks`,
+    ],
+    ['a child', 'CREATE TEMP TABLE kid () INHERITS (pg_temp.tasks); DROP TABLE pg_temp.kid'],
+    [
+      'a column added with a default over a row',
+      "INSERT INTO pg_temp.tasks VALUES ('a', 'b'); ALTER TABLE pg_temp.tasks ADD COLUMN n int DEFAULT 5",
+    ],
+  ])(
+    'is the same after maintenance of a temporary table that had %s, and has it no more',
+    async (_what, made) => {
+      const pg = await opened(SHADOWING_TABLE + made);
+      const digest = new SchemaDigest(pg, RELATIONS);
+      await pg.exec('SET ROLE b');
+      const baseline = await readNow(digest);
+      const moved: string[] = [];
+
+      for (const statement of MAINTENANCE) {
+        await pg.exec('RESET ROLE');
+        await pg.exec(statement);
+        await pg.exec('SET ROLE b');
+        const read = await readNow(digest);
+        if (read.digest !== baseline.digest) {
+          moved.push(statement);
+        }
+      }
+
+      expect(moved).toStrictEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    ['a unique index is made on it', '', 'CREATE UNIQUE INDEX tu ON pg_temp.tasks (id)'],
+    [
+      'the unique index is dropped while a plain one stays',
+      'CREATE UNIQUE INDEX tu ON pg_temp.tasks (id); CREATE INDEX tn ON pg_temp.tasks (id)',
+      'DROP INDEX pg_temp.tu',
+    ],
+    ['a child is made of it', '', 'CREATE TEMP TABLE kid () INHERITS (pg_temp.tasks)'],
+    [
+      'its child is dropped',
+      'CREATE TEMP TABLE kid () INHERITS (pg_temp.tasks)',
+      'DROP TABLE pg_temp.kid',
+    ],
+    ['a rule is made on it', '', 'CREATE RULE r AS ON INSERT TO pg_temp.tasks DO ALSO NOTHING'],
+  ])(
+    'moves once %s, which a plan tells of a temporary table that shadows an application’s',
+    async (_what, setup, change) => {
+      await expect(movedBy(SHADOWING_TABLE + setup, change)).resolves.toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    ['a plain index is made on it', '', 'CREATE INDEX tx ON pg_temp.tasks (x)'],
+    [
+      'a plain index is dropped from it, and another stays',
+      'CREATE INDEX tx ON pg_temp.tasks (x); CREATE INDEX ty ON pg_temp.tasks (id)',
+      'DROP INDEX pg_temp.tx',
+    ],
+    [
+      'a trigger is made on it',
+      TRIGGER_FUNCTION,
+      'CREATE TRIGGER g BEFORE INSERT ON pg_temp.tasks FOR EACH ROW EXECUTE FUNCTION pg_temp.tg()',
+    ],
+  ])(
+    'does not move once %s, which no statement that reads it tells',
+    async (_what, setup, change) => {
+      await expect(movedBy(SHADOWING_TABLE + setup, change)).resolves.toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
