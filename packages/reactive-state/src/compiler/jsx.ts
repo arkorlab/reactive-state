@@ -210,14 +210,18 @@ function childrenOf(children: readonly JsxChild[], rendering: Rendering): readon
   return pieces;
 }
 
+/** Whether React takes a tag of this name for the browser's own: it starts with a lowercase letter, or holds a dash. */
+export function isIntrinsicTag(name: string): boolean {
+  return /^[a-z]/u.test(name) || name.includes('-');
+}
+
 /** How an element's type is written in the authority's program, from its tag. */
 export function typeOfTag(tag: JsxTagNameExpression, fail: Fail): string {
   if (isJsxNamespacedName(tag)) {
     return literal(`${tag.namespace.text}:${tag.name.text}`);
   }
   if (isIdentifier(tag)) {
-    // React takes a tag that starts with a lowercase letter, or holds a dash, for the browser's own.
-    return /^[a-z]/u.test(tag.text) || tag.text.includes('-') ? literal(tag.text) : tag.text;
+    return isIntrinsicTag(tag.text) ? literal(tag.text) : tag.text;
   }
   return fail(
     "An element the authority renders is a tag of the browser's, or a component imported by name: `<Link>`, not `<ui.Link>` — the authority renders it by reference, by its export's name.",
