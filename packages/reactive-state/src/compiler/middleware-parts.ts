@@ -419,15 +419,20 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
     pure,
   );
   const hostSeeds = [...envelopes, ...suffix];
-  const elsewhere = closureOf(
+  const readByHost = closureOf(
     hostSeeds.map((each) => each.reads),
+    pure,
+  );
+  // A constant of the params alone that nothing reads runs where the request is, as written, and
+  // the constants it reads are written there as well.
+  const unread = pure.filter((each) => !inGuard.has(each) && !readByHost.has(each));
+  const elsewhere = closureOf(
+    [...hostSeeds, ...unread].map((each) => each.reads),
     pure,
   );
   const hostReads = unionOf(
     ...[...hostSeeds, ...elsewhere].map((each) => each.reads.values.keys()),
   );
-  // A constant of the params alone that nothing reads runs where the request is, as written.
-  const unread = pure.filter((each) => !inGuard.has(each) && !elsewhere.has(each));
   const before = inOrder([...envelopes, ...elsewhere, ...unread]);
   const guardReads = inOrder([...guards, ...inGuard]);
   checkReassigned(
