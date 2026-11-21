@@ -439,8 +439,9 @@ function headersOf(headers: Expression, sourceFile: SourceFile, fail: Fail): rea
   const named = new Set<string>();
   return value.properties.map((property): HeaderPair => {
     if (isShorthandPropertyAssignment(property)) {
-      // `{ __proto__ }` is a property of its own, as no `__proto__: …` is; a name twice is not.
-      const name = property.name.getText(sourceFile);
+      // `{ __proto__ }` is a property of its own, as no `__proto__: …` is; a name twice is not. The
+      // name is the one the identifier decodes to (`{ \u0076ary }` is `vary`), which the value reads.
+      const name = headerName(property.name, fail);
       if (named.has(name)) {
         return fail(HEADERS_OWN, property);
       }

@@ -127,6 +127,38 @@ describe('a guard that answers what its source middleware gives', () => {
     expect(source.headers).toContainEqual(['vary', 'a']);
   });
 
+  it('answers a header written as a shorthand property', async () => {
+    const { emitted, source } = await both({
+      answer: "new Response('x', { headers: { vary } })",
+      prelude: "const vary = 'Cookie';",
+    });
+
+    expect(emitted).toStrictEqual(source);
+    expect(source.headers).toContainEqual(['vary', 'Cookie']);
+  });
+
+  it.each([
+    { id: 'a letter escaped', name: String.raw`\u0076ary`, declared: 'vary', header: 'vary' },
+    {
+      id: 'an upper-case letter escaped',
+      name: String.raw`\u0058Test`,
+      declared: 'XTest',
+      header: 'xtest',
+    },
+    { id: 'a code point escaped', name: String.raw`\u{76}ary`, declared: 'vary', header: 'vary' },
+  ])(
+    'answers a shorthand header whose name is written escaped: $id',
+    async ({ declared, header, name }) => {
+      const { emitted, source } = await both({
+        answer: `new Response('x', { headers: { ${name} } })`,
+        prelude: `const ${declared} = 'Cookie';`,
+      });
+
+      expect(emitted).toStrictEqual(source);
+      expect(source.headers).toContainEqual([header, 'Cookie']);
+    },
+  );
+
   it.each([
     {
       id: 'a spread of one item',
