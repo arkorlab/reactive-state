@@ -204,7 +204,7 @@ function closureOf(
 }
 
 /** Refuses an import made at run time anywhere in the middleware, and its module's own URL. */
-function checkRunTime(statements: readonly Statement[], names: MiddlewareNames): void {
+function checkRunTime(nodes: readonly Node[], names: MiddlewareNames): void {
   const visit = (node: Node): void => {
     if (
       (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) ||
@@ -214,8 +214,8 @@ function checkRunTime(statements: readonly Statement[], names: MiddlewareNames):
     }
     node.forEachChild(visit);
   };
-  for (const statement of statements) {
-    visit(statement);
+  for (const node of nodes) {
+    visit(node);
   }
 }
 
@@ -583,10 +583,12 @@ function beforeOf(
 
 /**
  * Refuses a default of the context's pattern the host binds — before `next`, for each request —
- * that reads what runs on the authority alone, or renders: a statement that reads either is the
- * guard's, or refused, and a default is bound where the part that reads its name runs.
+ * that imports at run time or reads its module's URL, as a statement of the middleware may not, that
+ * reads what runs on the authority alone, or that renders: a statement that reads either of the last
+ * two is the guard's, or refused, and a default is bound where the part that reads its name runs.
  */
 function checkEnvelopeDefault(read: Checked, names: MiddlewareNames): void {
+  checkRunTime([read.statement], names);
   const authority = importRead(read.reads, names, AUTHORITY_ONLY);
   if (authority !== undefined) {
     names.fail(
