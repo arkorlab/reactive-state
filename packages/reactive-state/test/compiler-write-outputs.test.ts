@@ -96,8 +96,31 @@ function locked(): {
   return { blocked, outDir, root };
 }
 
-/** Whether this process may read what its permissions forbid, which a row about a directory nobody may read cannot show. */
-const ROOT = process.getuid?.() === 0;
+/**
+ * Whether a directory nobody may read is one here: not for the superuser, and not on a volume that
+ * keeps no permissions of a directory (a Windows volume mounted under WSL), where a row about a
+ * directory the scan cannot read has none to show.
+ */
+function unreadableHere(): boolean {
+  if (process.getuid?.() === 0) {
+    return false;
+  }
+  const probe = mkdtempSync(path.join(tmpdir(), 'reactive-state-permission-probe-'));
+  const blocked = path.join(probe, 'blocked');
+  try {
+    mkdirSync(blocked);
+    chmodSync(blocked, 0o000);
+    readdirSync(blocked);
+    return false;
+  } catch {
+    return true;
+  } finally {
+    chmodSync(blocked, 0o700);
+    rmSync(probe, { force: true, recursive: true });
+  }
+}
+
+const UNREADABLE = unreadableHere();
 
 const CASE_INSENSITIVE = !workspace().keepsCase;
 
@@ -257,14 +280,14 @@ describe('what a write of the outputs does with the files an earlier build left'
       }
     });
 
-    it.skipIf(ROOT)('a check does not pass over it', () => {
+    it.skipIf(!UNREADABLE)('a check does not pass over it', () => {
       const { blocked, outDir } = locked();
       const output = new Map([[path.join(outDir, 'kept.authority.mts'), generated('kept')]]);
 
       expect(() => writeOutputs(output, outDir, { check: true })).toThrow(blocked);
     });
 
-    it.skipIf(ROOT)('a write does not go on over it', () => {
+    it.skipIf(!UNREADABLE)('a write does not go on over it', () => {
       const { blocked, outDir } = locked();
       const output = new Map([[path.join(outDir, 'kept.authority.mts'), generated('kept')]]);
 
