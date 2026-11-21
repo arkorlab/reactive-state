@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import type { ImportBinding } from './imports.ts';
 import type { MiddlewareNames } from './middleware-reads.ts';
 import { COMPUTED_IMPORT, runtimeModuleSpecifiers } from './middleware-runtime-imports.ts';
@@ -15,6 +17,13 @@ interface SplitParts {
   readonly after: RuntimePart | undefined;
 }
 
+/** What a walk of one part's modules holds: where it started, the modules, the files it has read. */
+interface Reached {
+  readonly importer: string;
+  readonly modules: Modules;
+  readonly walked: Set<string>;
+}
+
 /** Each selected runtime import, by its resolved local module or unresolved package specifier. */
 function importedBy(
   part: RuntimePart | undefined,
@@ -23,13 +32,21 @@ function importedBy(
 ): ReadonlyMap<string, ImportBinding> {
   const imported = new Map<string, ImportBinding>();
   if (part === undefined) return imported;
+  const walked = new Set<string>();
   for (const name of part.values) {
     const binding = names.imports.get(name);
     if (binding !== undefined && !binding.typeOnly) {
-      includeModule(imported, binding, { importer: names.sourceFile.fileName, modules });
+      includeModule(imported, binding, { importer: names.sourceFile.fileName, modules, walked });
     }
   }
   return imported;
+}
+
+/** A module reached: its file, where it is the application's, the file that names it, and its specifier. */
+interface Reaching {
+  readonly file: string | undefined;
+  readonly from: string;
+  readonly specifier: string;
 }
 
 /**
@@ -38,38 +55,59 @@ function importedBy(
  * `state` and `state/state` — and the specifier itself, `process` and `node:process` among them
  * (`Modules.identities`). One computed under a name stands for itself.
  */
-function identitiesOf(
-  next: { readonly file: string | undefined; readonly from: string; readonly specifier: string },
-  modules: Modules,
-): readonly string[] {
+function identitiesOf(next: Reaching, modules: Modules): readonly string[] {
   if (next.file !== undefined) return [next.file];
   return next.specifier === COMPUTED_IMPORT
     ? [next.specifier]
     : modules.identities(next.specifier, next.from, 'authority');
 }
 
-/** Every reachable runtime module retains the selected middleware binding for its diagnostic. */
+/**
+ * The files whose imports are read where `next` is reached: its own, where it is the application's;
+ * and of a `#` import of the application's package, which names the files of it that it resolves to,
+ * as a package's `exports` names another's.
+ */
+function filesOf(next: Reaching, identities: readonly string[]): readonly string[] {
+  if (next.file !== undefined) return [next.file];
+  return next.specifier.startsWith('#')
+    ? identities.filter((each) => path.isAbsolute(each) && !each.includes('/node_modules/'))
+    : [];
+}
+
+/** What the file `file` loads: each module named by its imports, reached from it. */
+function importsOf(file: string, modules: Modules): readonly Reaching[] {
+  const { sourceFile } = modules.parse(file, false);
+  return runtimeModuleSpecifiers(sourceFile).map((specifier) => {
+    return {
+      file: specifier === COMPUTED_IMPORT ? undefined : modules.resolve(specifier, file),
+      from: file,
+      specifier,
+    };
+  });
+}
+
+/**
+ * Every reachable runtime module retains the selected middleware binding for its diagnostic. A
+ * module is reached under each of its identities, and its imports are read once, `walked`, whichever
+ * name reaches it first: a file a `#` import named is read when a path names it later too.
+ */
 function includeModule(
   imported: Map<string, ImportBinding>,
   binding: ImportBinding,
-  { importer, modules }: { readonly importer: string; readonly modules: Modules },
+  { importer, modules, walked }: Reached,
 ): void {
-  const pending = [
+  const pending: Reaching[] = [
     { file: binding.module.target.file, from: importer, specifier: binding.module.specifier },
   ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const identities = identitiesOf(next, modules);
-    if (identities.some((identity) => imported.has(identity))) continue;
-    for (const identity of identities) imported.set(identity, binding);
-    const { file } = next;
-    if (file === undefined) continue;
-    const parsed = modules.parse(file, false);
-    for (const specifier of runtimeModuleSpecifiers(parsed.sourceFile)) {
-      pending.push({
-        file: specifier === COMPUTED_IMPORT ? undefined : modules.resolve(specifier, file),
-        from: file,
-        specifier,
-      });
+    for (const identity of identities) {
+      if (!imported.has(identity)) imported.set(identity, binding);
+    }
+    for (const file of filesOf(next, identities)) {
+      if (walked.has(file)) continue;
+      walked.add(file);
+      pending.push(...importsOf(file, modules));
     }
   }
 }
