@@ -98,9 +98,12 @@ function readersSql(own: string): string {
   return `"readers" AS MATERIALIZED (SELECT r.oid FROM pg_roles AS r WHERE r.rolname = current_user UNION SELECT c.relowner FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND (${own} OR c.relnamespace = pg_my_temp_schema()))`;
 }
 
-/** Of each role a statement reads as (`readersSql`), by its oid `r.oid`, what `answers` answers. */
-function readersOf(answers: string): string {
-  return `(SELECT string_agg(concat_ws('.', r.oid, ${answers}), ',' ORDER BY r.oid) FROM "readers" AS r)`;
+/**
+ * Of each role a statement reads as (`readersSql`), by its oid `r.oid`, whether it may read the
+ * relation `c`, or any column of it: what a statement that reads it fails without.
+ */
+function mayRead(): string {
+  return `(SELECT string_agg(concat_ws('.', r.oid, has_table_privilege(r.oid, c.oid, 'SELECT'), has_any_column_privilege(r.oid, c.oid, 'SELECT')), ',' ORDER BY r.oid) FROM "readers" AS r)`;
 }
 
 /** What the catalog defines of the application's relations: `own` says which schemas are its. */
@@ -111,7 +114,7 @@ function relationParts(own: string): readonly string[] {
     // An index's own relation is of no digest: what a unique one says is (`u`). Of each other, what
     // each role a statement reads as may read of it, which a statement that reads it fails without;
     // and of a column, the rights granted of it alone, to any role.
-    `SELECT concat_ws(':', 'c', c.oid, n.nspname, c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity, c.relispartition, c.reloptions::text, ${readersOf("has_table_privilege(r.oid, c.oid, 'SELECT'), has_any_column_privilege(r.oid, c.oid, 'SELECT')")}) AS x FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE ${own} AND c.relkind NOT IN ('i', 'I')`,
+    `SELECT concat_ws(':', 'c', c.oid, n.nspname, c.relname, c.relkind, c.relrowsecurity, c.relforcerowsecurity, c.relispartition, c.reloptions::text, ${mayRead()}) AS x FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE ${own} AND c.relkind NOT IN ('i', 'I')`,
     `SELECT concat_ws(':', 'a', a.attrelid, a.attnum, a.attname, a.atttypid, a.atttypmod, a.attcollation, a.attnotnull, a.attisdropped, a.attgenerated, a.attacl::text) FROM pg_attribute AS a ${related('a.attrelid')} AND a.attnum > 0 AND c.relkind NOT IN ('i', 'I')`,
     // A column's default and a generated column's expression: one set again rewrites its rows.
     `SELECT concat_ws(':', 'd', d.adrelid, d.adnum, ${hashed('pg_get_expr(d.adbin, d.adrelid)')}) FROM pg_attrdef AS d ${related('d.adrelid')}`,
@@ -164,11 +167,13 @@ function definitionParts(own: string): readonly string[] {
 function sessionParts(own: string, relations: readonly Relation[]): readonly string[] {
   return [
     // A view of the session's temporary schema, with its options (`security_invoker`, which says
-    // by whose rights and policies the view's tables are read; none is of no more than before); a
+    // by whose rights and policies the view's tables are read; a view of none holds nothing of
+    // them) and what each role a statement reads as may read of it, which a statement that reads it
+    // fails without, as of the application's relations; a
     // relation or a type of it of a name of the application's, which a statement's name of it
     // resolves to first; and a function of it, which a statement names as `pg_temp`'s: a temporary
     // table a plan names is one nothing follows, a fault of the render once a plan is asked again.
-    `SELECT concat_ws(':', 'v', c.oid, c.relname, c.reloptions::text, ${hashed('r.ev_action::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'v', c.oid, c.relname, c.reloptions::text, ${hashed('r.ev_action::text')}, ${mayRead()}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
     // A temporary type of a name of the application's, which a statement's name of it resolves to
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
