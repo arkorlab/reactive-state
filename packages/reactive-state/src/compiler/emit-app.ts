@@ -348,7 +348,11 @@ export function emitStub(
   ].join('\n');
 }
 
-/** The names the authority's registry declares or imports at its top level besides the application's. */
+/**
+ * The names the authority's registry declares or imports at its top level besides the application's,
+ * and the shape of the rest of them: each name it generates — `program$…`, `operations$…`, `guard$…`,
+ * `database$` — has a `$` in it (`localNames`, `moduleNames`).
+ */
 const REGISTRY_NAMES: ReadonlySet<string> = new Set([
   'buildId',
   'database',
@@ -372,8 +376,10 @@ export function emitRegistry(input: AppInput): string {
   );
   const { database } = input;
   // The database is imported by its own name unless the registry declares or imports that name
-  // itself: `database`, `routes`, the names of what it exports, and the types it imports.
-  const aliased = database.name === 'default' || REGISTRY_NAMES.has(database.name);
+  // itself — `database`, `routes`, the names of what it exports, the types it imports — or may
+  // generate it: a name with a `$` in it.
+  const aliased =
+    database.name === 'default' || REGISTRY_NAMES.has(database.name) || database.name.includes('$');
   const local = aliased ? 'database$' : database.name;
   const from = specifierLiteral(database.specifier);
   const imported = aliased ? `${database.name} as database$` : database.name;
