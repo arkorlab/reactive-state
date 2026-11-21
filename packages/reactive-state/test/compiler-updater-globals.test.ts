@@ -1288,3 +1288,252 @@ describe('the imports of a program for the authority, beside the globals its upd
     });
   });
 });
+
+/** The program of a component that imports a reactive component as `name`, beside `jsx`. */
+function rendering(name: string, jsx: string): string {
+  return program({
+    'components/child.reactive.tsx': CHILD,
+    'components/lab.reactive.tsx': lab({
+      hooks: [],
+      imports: `import ${name} from '@/components/child.reactive';`,
+      jsx,
+      update: '(current) => current',
+    }),
+  });
+}
+
+describe('the elements of a component the authority renders by reference', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('a tag the browser takes for its own is none of a reactive component, whatever a lowercase name imports', () => {
+    const text = rendering(
+      'button',
+      '      <button type="button" onClick={() => setTitle("done")}>mark</button>\n',
+    );
+
+    expect(text).toContain('slots: {}');
+    expect(text).not.toContain('"button"');
+  });
+
+  it('a tag of a capitalized name that imports one is rendered by reference, as it was', () => {
+    const text = rendering('Child', '      <Child n={1} />\n');
+
+    expect(text).toContain('const Child = componentRef(');
+    expect(text).toContain('$.h(Child, { n: 1 })');
+  });
+});
+
+describe('an import of a module whole and an import of an export named `"*"`', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  /** A module of a constant, and of a function exported under the name `"*"`. */
+  const TOOLS =
+    'export const factor = 3;\nconst star = (n: number): number => n * 2;\nexport { star as "*" };\n';
+  const WHOLE = "import * as Tools from '@/tools';";
+  const NAMED = 'import { "*" as step } from \'@/tools\';';
+
+  /** The program of two hooks, `useA` and `useB`, each updating by `update`, after `imports`. */
+  function hooks(
+    first: readonly [string, string],
+    second: readonly [string, string],
+  ): ReturnType<typeof readOf> {
+    return readOf(
+      program({
+        'components/lab.reactive.tsx': lab({
+          hooks: ['useA', 'useB'],
+          update: '(current) => current',
+        }),
+        'hooks/useA.ts': hook('useA', first[1], first[0]),
+        'hooks/useB.ts': hook('useB', second[1], second[0]),
+        'tools.ts': TOOLS,
+      }),
+    );
+  }
+
+  it.each([
+    {
+      id: 'the module whole, then the export',
+      first: [WHOLE, 'current + Tools.factor'],
+      second: [NAMED, 'step(current)'],
+      updates: ['current + Tools.factor', 'step(current)'],
+    },
+    {
+      id: 'the export, then the module whole',
+      first: [NAMED, 'step(current)'],
+      second: [WHOLE, 'current + Tools.factor'],
+      updates: ['step(current)', 'current + Tools.factor'],
+    },
+  ] as const)('$id, are two imports', ({ first, second, updates }) => {
+    const { imports, updates: written } = hooks(first, second);
+
+    expect(imports).toHaveLength(2);
+    expect(imports).toContain(WHOLE);
+    expect(imports).toContain(NAMED);
+    expect(written['useA#0.count']).toBe(updates[0]);
+    expect(written['useB#0.count']).toBe(updates[1]);
+  });
+
+  it('the module whole under two names is one import, as it was', () => {
+    const { imports, updates } = hooks(
+      [WHOLE, 'current + Tools.factor'],
+      ["import * as T from '@/tools';", 'current + T.factor'],
+    );
+
+    expect(imports).toStrictEqual([WHOLE]);
+    expect(updates['useB#0.count']).toBe('current + Tools.factor');
+  });
+});
+
+/** The program of a component of `params`, whose server part declares `const name = 7`, then `body`. */
+function declaringParameter(name: string, params: string, body: string, jsx: boolean): string {
+  return program({
+    'components/child.reactive.tsx': CHILD,
+    'components/lab.reactive.tsx': [
+      "import { requireUser } from '@/auth';",
+      ...(jsx ? ["import Child from '@/components/child.reactive';"] : []),
+      `export default async function Lab(${params}) {`,
+      '  await requireUser();',
+      `  const ${name} = 7;`,
+      body,
+      '}',
+      '',
+    ].join('\n'),
+  });
+}
+
+describe("a name the server part declares that the program's function declares as a parameter", () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('a component that takes no props declares `_props`, which `evaluate` takes as a parameter', () => {
+    const message = refusalOf(() =>
+      declaringParameter('_props', '', '  return <Child n={_props} />;', true),
+    );
+
+    expect(message).toContain('`_props` is declared by the server part');
+    expect(message).toContain('the module would not parse');
+    expect(message).toContain('Declare it under another name.');
+  });
+
+  it('a component that renders no JSX and has no state declares `_$`', () => {
+    const message = refusalOf(() => declaringParameter('_$', '', '  return String(_$);', false));
+
+    expect(message).toContain('`_$` is declared by the server part');
+  });
+
+  it('a component that takes props, or renders JSX, where neither parameter is declared, is written as it was', () => {
+    const props = declaringParameter(
+      '_props',
+      '{ id }: { id: string }',
+      '  return <Child n={_props + id} />;',
+      true,
+    );
+    const scope = declaringParameter('_$', '', '  return <Child n={_$} />;', true);
+
+    expect(props).toContain('const _props = 7;');
+    expect(scope).toContain('const _$ = 7;');
+  });
+});
+
+describe('an import an update reads in a type position alone', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  /** A module of a type, of a constant, and of a class, which is a type and a value. */
+  const TYPES =
+    'export type Delta = number;\nexport const STEP = 2;\nexport class Item {\n  readonly n = 1;\n}\n';
+
+  /** The imports of the program of a component and a hook whose update is `update`, after `imports`. */
+  function imported(imports: string, update: string): readonly string[] {
+    return readOf(
+      program({
+        'components/lab.reactive.tsx': lab({ update: '(current) => current' }),
+        'hooks/useCount.ts': hook('useCount', update, imports),
+        'types.ts': TYPES,
+      }),
+    ).imports;
+  }
+
+  it.each([
+    { id: 'a plain `import { Delta }`', imports: "import { Delta } from '@/types';" },
+    { id: '`import type { Delta }`', imports: "import type { Delta } from '@/types';" },
+  ])('$id, read in the update as a type, is written as a type', ({ imports }) => {
+    expect(imported(imports, '{ const delta: Delta = 1; return current + delta; }')).toStrictEqual([
+      "import type { Delta } from '@/types';",
+    ]);
+  });
+
+  it('a type and a value of one module are two imports, the value at run time', () => {
+    expect(
+      imported(
+        "import { Delta, STEP } from '@/types';",
+        '{ const delta: Delta = STEP; return current + delta; }',
+      ),
+    ).toStrictEqual(["import { STEP } from '@/types';", "import type { Delta } from '@/types';"]);
+  });
+
+  it('a class the update reads as a value and as a type is read at run time, as it was', () => {
+    expect(
+      imported(
+        "import { Item } from '@/types';",
+        '{ const item: Item = new Item(); return current + item.n; }',
+      ),
+    ).toStrictEqual(["import { Item } from '@/types';"]);
+  });
+
+  it('a value the update reads is read at run time, as it was', () => {
+    expect(imported("import { STEP } from '@/types';", 'current + STEP')).toStrictEqual([
+      "import { STEP } from '@/types';",
+    ]);
+  });
+});
+
+describe('jSX in the body of an update', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it.each([
+    { id: 'an element', body: '<i />' },
+    { id: 'a fragment', body: '<>{current}</>' },
+    { id: 'an element with a child', body: '<b>{current}</b>' },
+  ])('$id the update makes is refused, which the program would copy as it is', ({ body }) => {
+    const message = refusalOf(() => {
+      return program({
+        'components/lab.reactive.tsx': lab({
+          hooks: [],
+          update: `(current) => { const preview = ${body}; return preview ? current : current; }`,
+        }),
+      });
+    });
+
+    expect(message).toContain('JSX is rendered, not held');
+  });
+
+  it('an update that holds none is read as it was', () => {
+    const text = program({
+      'components/lab.reactive.tsx': lab({
+        hooks: [],
+        update: '(current) => String(Number(current) + 1)',
+      }),
+    });
+
+    expect(text).toContain('String(Number(current) + 1)');
+  });
+});

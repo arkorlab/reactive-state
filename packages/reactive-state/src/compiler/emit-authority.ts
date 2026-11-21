@@ -13,7 +13,7 @@ import type { SiteInput } from './frames.ts';
 import { type ImportBinding, importDeclarations, type ImportLine } from './imports.ts';
 import { isJsx, type Rendering, rendered, typeOfTag } from './jsx.ts';
 import type { ModuleKind } from './modules.ts';
-import { readsBinding } from './scope.ts';
+import { freeReads, readsBinding } from './scope.ts';
 import { reads, type Sides } from './sides.ts';
 import { accessed, guardOf, operand, type Site, type SiteList } from './sites.ts';
 import {
@@ -30,6 +30,7 @@ import {
   namesHeld,
   ownText,
   OWN_NAMES,
+  refuseRedeclared,
   refuseShadowing,
   renders,
   reservedNames,
@@ -110,6 +111,7 @@ class ImportPlan {
     }
     const { refs } = sides;
     const own = ownText(component, updaters);
+    refuseRedeclared(component, own, component.fail);
     const bindings = component.modules.flatMap((module) => module.bindings);
     for (const binding of bindings) {
       const name = binding.name.text;
@@ -169,9 +171,12 @@ class ImportPlan {
     return name;
   }
 
-  /** The name the program reads `binding`, a shared module's import, by: its own, or another. */
-  require(binding: ImportBinding, held?: ReadonlySet<string>): string {
-    return this.#require(binding, false, held);
+  /**
+   * The name the program reads `binding`, a shared module's import, by: its own, or another — as
+   * a type alone, where it is read as one.
+   */
+  require(binding: ImportBinding, held?: ReadonlySet<string>, typeOnly = false): string {
+    return this.#require(binding, typeOnly, held);
   }
 
   /** The name the program reads `binding`, an import of a type a hook's module imports, by. */
@@ -184,9 +189,13 @@ class ImportPlan {
   }
 }
 
-/** What an import is, whatever it is named: its module, as written, and its export. */
+/**
+ * What an import is, whatever it is named: its module, as written, and its export — or the module
+ * whole, which no export of any name is.
+ */
 function identityOf(binding: ImportBinding): string {
-  return `${binding.module.written}#${binding.exported}`;
+  const exported = binding.form === 'namespace' ? 'namespace' : `export:${binding.exported}`;
+  return `${binding.module.written}#${exported}`;
 }
 
 export function emitAuthority(input: AuthorityInput): string {
@@ -544,8 +553,10 @@ function applyOf(site: ApplySite, key: string, lines: ImportPlan): string {
   const type = site.type ?? `States[${literal(key)}]`;
   const renames = new Map<string, string>();
   const held = namesHeld(update);
+  // An import the update reads in a type position alone is written as a type, erased with the types.
+  const values = new Set(freeReads(update.fn).map((read) => read.text));
   for (const binding of update.imports) {
-    const local = lines.require(binding, held);
+    const local = lines.require(binding, held, !values.has(binding.name.text));
     if (local !== binding.name.text) {
       renames.set(binding.name.text, local);
     }
