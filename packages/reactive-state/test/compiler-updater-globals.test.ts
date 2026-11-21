@@ -1326,3 +1326,68 @@ describe('the elements of a component the authority renders by reference', () =>
     expect(text).toContain('$.h(Child, { n: 1 })');
   });
 });
+
+describe('an import of a module whole and an import of an export named `"*"`', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  /** A module of a constant, and of a function exported under the name `"*"`. */
+  const TOOLS =
+    'export const factor = 3;\nconst star = (n: number): number => n * 2;\nexport { star as "*" };\n';
+  const WHOLE = "import * as Tools from '@/tools';";
+  const NAMED = 'import { "*" as step } from \'@/tools\';';
+
+  /** The program of two hooks, `useA` and `useB`, each updating by `update`, after `imports`. */
+  function hooks(
+    first: readonly [string, string],
+    second: readonly [string, string],
+  ): ReturnType<typeof readOf> {
+    return readOf(
+      program({
+        'components/lab.reactive.tsx': lab({
+          hooks: ['useA', 'useB'],
+          update: '(current) => current',
+        }),
+        'hooks/useA.ts': hook('useA', first[1], first[0]),
+        'hooks/useB.ts': hook('useB', second[1], second[0]),
+        'tools.ts': TOOLS,
+      }),
+    );
+  }
+
+  it.each([
+    {
+      id: 'the module whole, then the export',
+      first: [WHOLE, 'current + Tools.factor'],
+      second: [NAMED, 'step(current)'],
+      updates: ['current + Tools.factor', 'step(current)'],
+    },
+    {
+      id: 'the export, then the module whole',
+      first: [NAMED, 'step(current)'],
+      second: [WHOLE, 'current + Tools.factor'],
+      updates: ['step(current)', 'current + Tools.factor'],
+    },
+  ] as const)('$id, are two imports', ({ first, second, updates }) => {
+    const { imports, updates: written } = hooks(first, second);
+
+    expect(imports).toHaveLength(2);
+    expect(imports).toContain(WHOLE);
+    expect(imports).toContain(NAMED);
+    expect(written['useA#0.count']).toBe(updates[0]);
+    expect(written['useB#0.count']).toBe(updates[1]);
+  });
+
+  it('the module whole under two names is one import, as it was', () => {
+    const { imports, updates } = hooks(
+      [WHOLE, 'current + Tools.factor'],
+      ["import * as T from '@/tools';", 'current + T.factor'],
+    );
+
+    expect(imports).toStrictEqual([WHOLE]);
+    expect(updates['useB#0.count']).toBe('current + Tools.factor');
+  });
+});

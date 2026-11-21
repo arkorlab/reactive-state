@@ -184,9 +184,13 @@ class ImportPlan {
   }
 }
 
-/** What an import is, whatever it is named: its module, as written, and its export. */
+/**
+ * What an import is, whatever it is named: its module, as written, and its export — or the module
+ * whole, which no export of any name is.
+ */
 function identityOf(binding: ImportBinding): string {
-  return `${binding.module.written}#${binding.exported}`;
+  const exported = binding.form === 'namespace' ? 'namespace' : `export:${binding.exported}`;
+  return `${binding.module.written}#${exported}`;
 }
 
 export function emitAuthority(input: AuthorityInput): string {
