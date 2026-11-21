@@ -65,7 +65,10 @@ function compiled(files: Readonly<Record<string, Buffer | string>>): {
     outDir: path.join(root, '.reactive'),
     srcDir: source,
   });
-  const outputs = [...result.outputs.keys()].map((file) => path.relative(root, file));
+  // As `/`-separated paths, which `path.relative` writes with `\` where the system's separator is.
+  const outputs = [...result.outputs.keys()].map((file) =>
+    path.relative(root, file).split(path.sep).join('/'),
+  );
   return {
     components: outputs
       .filter((file) => file.endsWith('.authority.mts'))
