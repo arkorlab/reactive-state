@@ -16,7 +16,6 @@ import {
   isJsxElement,
   isJsxFragment,
   isJsxSelfClosingElement,
-  isNoSubstitutionTemplateLiteral,
   isStringLiteral,
   type Node,
   type SourceFile,
@@ -32,6 +31,7 @@ import {
   resolveAliasFiles,
 } from '../authority/aliases.ts';
 import { isErased, readsCodeGlobal } from './code-globals.ts';
+import { literalSpecifier } from './load-specifiers.ts';
 import { moduleFile, type ModuleResolution } from './module-resolutions.ts';
 import { browserMapped, packageFiles, type Side } from './packages.ts';
 import { unsettledIn } from './settled.ts';
@@ -509,20 +509,18 @@ function isRuntimeLoad(node: Node): node is CallExpression {
 }
 
 /**
- * What a module loads as it runs, where the specifier is written as it is — `import('./x')`,
- * `require('./x')` — which the compile reads as it reads an import, so that what it loads is in the
- * build's id too. One the code computes is none the compile can name.
+ * What a module loads as it runs, where the specifier is written as a literal (`literalSpecifier`):
+ * `import('./x')`, `require('./x')`, past the parentheses and assertions around it. The compile reads
+ * it as it reads an import, so that what it loads is in the build's id too. One the code computes is
+ * none the compile can name.
  */
 function runtimeLoads(sourceFile: SourceFile): readonly Dependency[] {
   const loads: Dependency[] = [];
   const visit = (node: Node): void => {
     if (isRuntimeLoad(node)) {
-      const [specifier] = node.arguments;
-      if (
-        specifier !== undefined &&
-        (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
-      ) {
-        loads.push({ specifier: specifier.text, typeOnly: false });
+      const specifier = literalSpecifier(node.arguments[0]);
+      if (specifier !== undefined) {
+        loads.push({ specifier, typeOnly: false });
       }
     }
     node.forEachChild(visit);
