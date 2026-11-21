@@ -32,10 +32,12 @@ export interface Queryable {
  * of each view of the application's or of the session's temporary schema that is no
  * `security_invoker`, each by its rights, its attributes and every role it is a member of; and of
  * each table its owner and its policies. Anything of the session's temporary schema that the
- * digest holds is held with its owner and its ACL whole — a relation's, and its columns', a
- * function's, a type's — of any role, so that a grant, a revoke or another owner of it moves the
- * digest, which the application's relations and functions do not (they hold what the readers may
- * read and run); what a role comes to by the roles it is a member of is held by the readers' rows.
+ * digest holds is held by the rows of the catalog whole — a relation by its `pg_class` row but the
+ * columns a write of rows moves (`STORAGE_COLUMNS`) and by each of its columns' rows, a view by its
+ * rule's row besides, a function, a type and the rest by theirs — so that a rename of a column, a
+ * grant, a revoke or another owner of it, of any role, moves the digest, which the application's
+ * relations and functions do not (they hold what the readers may read and run); what a role comes
+ * to by the roles it is a member of is held by the readers' rows.
  * Three things that decide which rows a statement reads are not held, and each for a reason that is
  * no size of the change:
  *
@@ -112,22 +114,36 @@ function mayRead(): string {
 }
 
 /**
- * What rights are granted of each column of the relation `alias`, to any role: the column's `attacl`
- * where it has one, as the rows of the application's columns hold it.
+ * The columns of `pg_class` that a write of a relation's rows, a vacuum, a truncation or a sequence
+ * set again moves, of no definition: its size and its count of rows, the pages that are visible and
+ * frozen, the file its rows are in, and the horizons it was frozen to. Measured on a temporary table
+ * through each of those commands, they are every column of the row that moved, and a view's row
+ * moved by none.
  */
-function columnRights(alias: string): string {
-  return `(SELECT string_agg(concat_ws('.', a.attnum, a.attacl::text), ',' ORDER BY a.attnum) FROM pg_attribute AS a WHERE a.attrelid = ${alias}.oid AND a.attnum > 0 AND a.attacl IS NOT NULL)`;
-}
+const STORAGE_COLUMNS = [
+  'relpages',
+  'reltuples',
+  'relallvisible',
+  'relallfrozen',
+  'relfilenode',
+  'relfrozenxid',
+  'relminmxid',
+];
 
 /**
- * The owner of the relation `alias`, its ACL whole and its columns' (`columnRights`): what a row of
- * an object of the session's temporary schema holds of rights, of any role. A grant, a revoke or
- * another owner then moves the digest, whether the role it is of reads or not, which is the side
- * that cannot miss one: rights of a temporary object change seldom. What a role comes to by the
- * roles it is a member of is held by the readers' own rows.
+ * What the catalog records of the relation `alias` of the session's temporary schema, whole: its
+ * `pg_class` row but `STORAGE_COLUMNS`, and each of its `pg_attribute` rows. The row says its name,
+ * kind, owner, ACL, options and row security; the rows say each column's name, type, ACL and
+ * options. Any change of the relation, of a column, or of the right to either of any role moves the
+ * digest, whether the role reads or not, which is the side that cannot miss one: a temporary
+ * relation changes seldom. What a role comes to by the roles it is a member of is held by the
+ * readers' own rows.
  */
-function relationRights(alias: string): string {
-  return `${alias}.relowner, ${alias}.relacl::text, ${columnRights(alias)}`;
+function temporaryRelation(alias: string): string {
+  const storage = STORAGE_COLUMNS.map((column) => literal(column)).join(', ');
+  const row = hashed(`(to_jsonb(${alias}) - ARRAY[${storage}]::text[])::text`);
+  const columns = rowsOf('pg_attribute', 'attrelid', `${alias}.oid`, 'r.attnum');
+  return `${row}, ${columns}`;
 }
 
 /** What the catalog defines of the application's relations: `own` says which schemas are its. */
@@ -190,16 +206,14 @@ function definitionParts(own: string): readonly string[] {
  */
 function sessionParts(own: string, relations: readonly Relation[]): readonly string[] {
   return [
-    // A view of the session's temporary schema, with its options (`security_invoker`; a view of none
-    // holds nothing of them); a relation or a type of it of a name of the application's, which a
-    // statement's name of it resolves to first; and a function of it, which a statement names as
-    // `pg_temp`'s: a temporary table a plan names is one nothing follows, a fault of the render once
-    // a plan is asked again. Each with its owner and its ACL whole, and a relation's columns'
-    // (`relationRights`; a type's and a function's rows are of the whole row), of any role: a grant,
-    // a revoke or another owner of anything of the temporary schema moves the digest, whether the role
-    // it is of reads or not.
-    `SELECT concat_ws(':', 'v', c.oid, c.relname, ${relationRights('c')}, c.reloptions::text, ${hashed('r.ev_action::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
-    `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind, ${relationRights('t')}) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
+    // A view of the session's temporary schema and its rule, whole; a relation of it of a name of the
+    // application's, which a statement's name of it resolves to first, as the catalog records it
+    // (`temporaryRelation`); a type of it of such a name, and a function, an operator, a collation
+    // and a text search object of it, each by its whole row: a temporary table a plan names is one
+    // nothing follows, a fault of the render once a plan is asked again. A change of any of them, of
+    // the right of any role to it included, moves the digest, whether the role reads or not.
+    `SELECT concat_ws(':', 'v', c.oid, ${temporaryRelation('c')}, ${hashed('r::text')}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'm', t.oid, ${temporaryRelation('t')}) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
     // A temporary type of a name of the application's, which a statement's name of it resolves to
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
     // unless an object a statement names is of it or of its array (a domain over it, a function's
