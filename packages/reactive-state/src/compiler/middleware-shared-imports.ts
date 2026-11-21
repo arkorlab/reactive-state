@@ -26,29 +26,48 @@ function importedBy(
   for (const name of part.values) {
     const binding = names.imports.get(name);
     if (binding !== undefined && !binding.typeOnly) {
-      includeModule(imported, binding, modules);
+      includeModule(imported, binding, { importer: names.sourceFile.fileName, modules });
     }
   }
   return imported;
 }
 
-/** Every reachable static runtime module retains the selected middleware binding for its diagnostic. */
+/**
+ * What names a module: its file, where the application's own; and of a package's, or a built-in's,
+ * the files its specifier resolves to — a package's `exports` may name one file by two specifiers,
+ * `state` and `state/state` — and the specifier itself, `process` and `node:process` among them
+ * (`Modules.identities`). One computed under a name stands for itself.
+ */
+function identitiesOf(
+  next: { readonly file: string | undefined; readonly from: string; readonly specifier: string },
+  modules: Modules,
+): readonly string[] {
+  if (next.file !== undefined) return [next.file];
+  return next.specifier === COMPUTED_IMPORT
+    ? [next.specifier]
+    : modules.identities(next.specifier, next.from, 'authority');
+}
+
+/** Every reachable runtime module retains the selected middleware binding for its diagnostic. */
 function includeModule(
   imported: Map<string, ImportBinding>,
   binding: ImportBinding,
-  modules: Modules,
+  { importer, modules }: { readonly importer: string; readonly modules: Modules },
 ): void {
-  const pending = [{ file: binding.module.target.file, specifier: binding.module.specifier }];
+  const pending = [
+    { file: binding.module.target.file, from: importer, specifier: binding.module.specifier },
+  ];
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const identity = next.file ?? next.specifier;
-    if (imported.has(identity)) continue;
-    imported.set(identity, binding);
+    const identities = identitiesOf(next, modules);
+    if (identities.some((identity) => imported.has(identity))) continue;
+    for (const identity of identities) imported.set(identity, binding);
     const { file } = next;
     if (file === undefined) continue;
     const parsed = modules.parse(file, false);
     for (const specifier of runtimeModuleSpecifiers(parsed.sourceFile)) {
       pending.push({
         file: specifier === COMPUTED_IMPORT ? undefined : modules.resolve(specifier, file),
+        from: file,
         specifier,
       });
     }
