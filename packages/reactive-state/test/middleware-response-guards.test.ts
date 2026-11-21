@@ -160,6 +160,24 @@ describe('a guard that answers what its source middleware gives', () => {
   );
 
   it.each([
+    { id: 'no body, as `void 0`', body: 'void 0' },
+    { id: 'no body, as `null`', body: 'null' },
+    { id: 'text', body: "'hi'" },
+  ])(
+    'answers a body the guard computes where it declares its own `undefined`: $id',
+    async ({ body }) => {
+      const { emitted, source } = await both({
+        answer: "new Response(body, { headers: { 'x-note': note } })",
+        declared: ['undefined'],
+        prelude: `const undefined = 'local'; const note = undefined; const body = ${body};`,
+      });
+
+      expect(source.headers).toContainEqual(['x-note', 'local']);
+      expect(emitted).toStrictEqual(source);
+    },
+  );
+
+  it.each([
     {
       id: 'a spread of one item',
       prelude: "const parts: [string] = ['one'];",

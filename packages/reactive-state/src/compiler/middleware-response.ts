@@ -691,7 +691,7 @@ function computedDescriptor(
   const handed = [body.getText(sourceFile), ...order.map((key) => values[key])];
   const making = makingOf(made, WRITTEN_NAMES, named);
   const text = `if (typeof body === 'string') { ${computedText(given, context)} }`;
-  const none = "if (body === null || body === undefined) { return { body: '', status, headers }; }";
+  const none = "if (body === null || body === void 0) { return { body: '', status, headers }; }";
   const thrown = `throw new ${named('TypeError')}(${literal(NOT_TEXT_THROWN)});`;
   return `((${parameters.join(', ')}) => { ${making}${text} ${none} ${thrown} })(${handed.join(', ')})`;
 }
