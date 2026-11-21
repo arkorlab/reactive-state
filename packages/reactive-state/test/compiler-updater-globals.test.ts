@@ -1445,3 +1445,59 @@ describe("a name the server part declares that the program's function declares a
     expect(scope).toContain('const _$ = 7;');
   });
 });
+
+describe('an import an update reads in a type position alone', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  /** A module of a type, of a constant, and of a class, which is a type and a value. */
+  const TYPES =
+    'export type Delta = number;\nexport const STEP = 2;\nexport class Item {\n  readonly n = 1;\n}\n';
+
+  /** The imports of the program of a component and a hook whose update is `update`, after `imports`. */
+  function imported(imports: string, update: string): readonly string[] {
+    return readOf(
+      program({
+        'components/lab.reactive.tsx': lab({ update: '(current) => current' }),
+        'hooks/useCount.ts': hook('useCount', update, imports),
+        'types.ts': TYPES,
+      }),
+    ).imports;
+  }
+
+  it.each([
+    { id: 'a plain `import { Delta }`', imports: "import { Delta } from '@/types';" },
+    { id: '`import type { Delta }`', imports: "import type { Delta } from '@/types';" },
+  ])('$id, read in the update as a type, is written as a type', ({ imports }) => {
+    expect(imported(imports, '{ const delta: Delta = 1; return current + delta; }')).toStrictEqual([
+      "import type { Delta } from '@/types';",
+    ]);
+  });
+
+  it('a type and a value of one module are two imports, the value at run time', () => {
+    expect(
+      imported(
+        "import { Delta, STEP } from '@/types';",
+        '{ const delta: Delta = STEP; return current + delta; }',
+      ),
+    ).toStrictEqual(["import { STEP } from '@/types';", "import type { Delta } from '@/types';"]);
+  });
+
+  it('a class the update reads as a value and as a type is read at run time, as it was', () => {
+    expect(
+      imported(
+        "import { Item } from '@/types';",
+        '{ const item: Item = new Item(); return current + item.n; }',
+      ),
+    ).toStrictEqual(["import { Item } from '@/types';"]);
+  });
+
+  it('a value the update reads is read at run time, as it was', () => {
+    expect(imported("import { STEP } from '@/types';", 'current + STEP')).toStrictEqual([
+      "import { STEP } from '@/types';",
+    ]);
+  });
+});

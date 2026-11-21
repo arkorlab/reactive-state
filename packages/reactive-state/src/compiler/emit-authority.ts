@@ -13,7 +13,7 @@ import type { SiteInput } from './frames.ts';
 import { type ImportBinding, importDeclarations, type ImportLine } from './imports.ts';
 import { isJsx, type Rendering, rendered, typeOfTag } from './jsx.ts';
 import type { ModuleKind } from './modules.ts';
-import { readsBinding } from './scope.ts';
+import { freeReads, readsBinding } from './scope.ts';
 import { reads, type Sides } from './sides.ts';
 import { accessed, guardOf, operand, type Site, type SiteList } from './sites.ts';
 import {
@@ -171,9 +171,12 @@ class ImportPlan {
     return name;
   }
 
-  /** The name the program reads `binding`, a shared module's import, by: its own, or another. */
-  require(binding: ImportBinding, held?: ReadonlySet<string>): string {
-    return this.#require(binding, false, held);
+  /**
+   * The name the program reads `binding`, a shared module's import, by: its own, or another — as
+   * a type alone, where it is read as one.
+   */
+  require(binding: ImportBinding, held?: ReadonlySet<string>, typeOnly = false): string {
+    return this.#require(binding, typeOnly, held);
   }
 
   /** The name the program reads `binding`, an import of a type a hook's module imports, by. */
@@ -550,8 +553,10 @@ function applyOf(site: ApplySite, key: string, lines: ImportPlan): string {
   const type = site.type ?? `States[${literal(key)}]`;
   const renames = new Map<string, string>();
   const held = namesHeld(update);
+  // An import the update reads in a type position alone is written as a type, erased with the types.
+  const values = new Set(freeReads(update.fn).map((read) => read.text));
   for (const binding of update.imports) {
-    const local = lines.require(binding, held);
+    const local = lines.require(binding, held, !values.has(binding.name.text));
     if (local !== binding.name.text) {
       renames.set(binding.name.text, local);
     }
