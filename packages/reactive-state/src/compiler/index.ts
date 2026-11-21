@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import type { API } from 'typescript/sync';
@@ -468,7 +476,12 @@ export interface WriteOptions {
 /**
  * Writes `outputs`, or with `check`, says which of them are stale. A file the compile wrote into
  * `outDir` before — one that opens as what it writes does — that it no longer writes is stale too,
- * and a write removes it.
+ * and a write removes it, and the directories it leaves empty, before it writes anything: where the
+ * file system keeps no case (macOS, Windows), a file of a name that differs from an output's in
+ * case alone is that output's, and a write over it would update it in place under the old spelling,
+ * after which it would be taken for what the compile no longer writes and removed; removed first,
+ * the output is written afresh, under its own spelling. A check removes nothing, and takes the old
+ * spelling for stale, which it is: it is not the name the compile writes.
  */
 export function writeOutputs(
   outputs: ReadonlyMap<string, string>,
@@ -476,6 +489,14 @@ export function writeOutputs(
   options: WriteOptions = {},
 ): readonly Output[] {
   const check = options.check === true;
+  const root = path.resolve(outDir);
+  const leftovers = generatedFiles(root).filter((file) => !outputs.has(file));
+  if (!check) {
+    for (const file of leftovers) {
+      rmSync(file);
+      removeEmptyDirectories(path.dirname(file), root);
+    }
+  }
   const written = [...outputs].map(([file, text]): Output => {
     const current = readIfPresent(file) === text;
     if (!current && !check) {
@@ -484,13 +505,23 @@ export function writeOutputs(
     }
     return { current, leftover: false, path: file };
   });
-  const leftovers = generatedFiles(path.resolve(outDir)).filter((file) => !outputs.has(file));
-  for (const file of leftovers) {
-    if (!check) {
-      rmSync(file);
+  return [...written, ...leftovers.map((file) => ({ current: false, leftover: true, path: file }))];
+}
+
+/** Removes `directory`, and each directory above it below `root`, while it is empty. */
+function removeEmptyDirectories(directory: string, root: string): void {
+  for (
+    let each = directory;
+    each !== root && each.startsWith(`${root}${path.sep}`);
+    each = path.dirname(each)
+  ) {
+    try {
+      rmdirSync(each);
+    } catch {
+      // One that is not empty holds what is not the compile's: it stays, and so does what it is in.
+      return;
     }
   }
-  return [...written, ...leftovers.map((file) => ({ current: false, leftover: true, path: file }))];
 }
 
 /** The files under `directory` that a compile wrote. */
