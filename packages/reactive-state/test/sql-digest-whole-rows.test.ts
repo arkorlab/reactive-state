@@ -4,12 +4,13 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 import { SchemaDigest } from '../src/sql/digest.ts';
 
 /**
- * The schema's digest of what the catalog records of the session's temporary schema, which it holds
- * by whole rows: a relation by its `pg_class` row but the columns a write of rows moves, and by each
- * of its `pg_attribute` rows. Each row reads `tasks`, or a relation of the same name or a view of
- * the session's, as the role `b` before and after the superuser changes something, and says what
- * `b` read and whether the digest moved; where no event trigger counts the command, as here, the
- * digest is the only thing that tells a plan kept for the statement.
+ * The schema's digest of what the catalog records of the session's temporary schema and of the roles
+ * that read, which it holds by whole rows: a temporary relation by its `pg_class` row but the
+ * columns a write of rows moves, and by each of its `pg_attribute` rows; a role that reads by its
+ * `pg_roles` row, and by its memberships' names and rows. Each row reads `tasks`, or a relation of
+ * the same name or a view of the session's, as the role `b` before and after the superuser changes
+ * something, and says what `b` read and whether the digest moved; where no event trigger counts the
+ * command, as here, the digest is the only thing that tells a plan kept for the statement.
  */
 
 const RELATIONS = [{ name: 'tasks', schema: 'public' }];
@@ -18,7 +19,7 @@ const TEST_TIMEOUT_MS = 30_000;
 const BASE = `
   CREATE TABLE public.tasks (id text PRIMARY KEY, owner_name text NOT NULL);
   INSERT INTO tasks VALUES ('t1', 'a'), ('t2', 'b'), ('t3', 'c');
-  CREATE ROLE a; CREATE ROLE b; CREATE ROLE c;
+  CREATE ROLE a; CREATE ROLE b; CREATE ROLE c; CREATE ROLE admins; CREATE ROLE guests;
   GRANT SELECT ON tasks TO a, b, c;
 `;
 
@@ -177,6 +178,15 @@ describe("the schema's digest of what the catalog records of the session's tempo
       },
     ],
     [
+      'the reader becomes the owner of a table with row security, which an owner reads past',
+      {
+        change: 'ALTER TABLE tasks OWNER TO b',
+        read: READ_TASKS,
+        rows: [NOTHING, IDS],
+        setup: 'ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;',
+      },
+    ],
+    [
       'another table takes the name of `tasks`',
       {
         change: 'ALTER TABLE tasks RENAME TO t0; ALTER TABLE other RENAME TO tasks',
@@ -264,6 +274,192 @@ describe("the schema's digest of the session's temporary relations, held by whol
       }
 
       expect(moved).toStrictEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+/** A policy that lets every row through to a role of which `privilege` says it has the role `admins`. */
+function admins(privilege: string): string {
+  return `ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+    CREATE POLICY asks ON tasks FOR SELECT USING (pg_has_role(current_user, 'admins', '${privilege}'));`;
+}
+/** The reader is a member of `admins`, which the policy asks of by name. */
+const bIsAdmin = (privilege: string): string => `GRANT admins TO b; ${admins(privilege)}`;
+/** `admins` is renamed, and the role `guests`, which the reader is no member of, takes its name. */
+const SWAP_ADMINS = `ALTER ROLE admins RENAME TO former_admins; ALTER ROLE guests RENAME TO admins`;
+
+describe("the schema's digest of the roles that read, held by their whole rows", () => {
+  it.each<readonly [string, Case]>([
+    [
+      'a role it is a member of is renamed, and a role it is no member of takes its name',
+      {
+        change: SWAP_ADMINS,
+        read: READ_TASKS,
+        rows: [IDS, NOTHING],
+        setup: bIsAdmin('member'),
+      },
+    ],
+    [
+      'a role it has the rights of is renamed, and a role it has none of takes its name',
+      {
+        change: SWAP_ADMINS,
+        read: READ_TASKS,
+        rows: [IDS, NOTHING],
+        setup: bIsAdmin('usage'),
+      },
+    ],
+    [
+      'the role a policy asks of is renamed, and no role has its name',
+      {
+        change: 'ALTER ROLE admins RENAME TO former_admins',
+        read: READ_TASKS,
+        rows: [IDS, MISSING],
+        setup: bIsAdmin('member'),
+      },
+    ],
+    [
+      'a role it is a member of is renamed to the name a policy asks of',
+      {
+        change: 'ALTER ROLE admins RENAME TO staff',
+        read: READ_TASKS,
+        rows: [MISSING, IDS],
+        setup: `GRANT admins TO b; ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+          CREATE POLICY asks ON tasks FOR SELECT USING (pg_has_role(current_user, 'staff', 'member'));`,
+      },
+    ],
+    [
+      'it is no longer let `SET ROLE` to a role it is a member of',
+      {
+        change: 'REVOKE SET OPTION FOR admins FROM b',
+        read: READ_TASKS,
+        rows: [IDS, NOTHING],
+        setup: bIsAdmin('set'),
+      },
+    ],
+    [
+      'it is given the admin option of a role it is a member of',
+      {
+        change: 'GRANT admins TO b WITH ADMIN OPTION',
+        read: READ_TASKS,
+        rows: [NOTHING, IDS],
+        setup: bIsAdmin('member with admin option'),
+      },
+    ],
+    [
+      'its connection limit is set',
+      {
+        change: 'ALTER ROLE b CONNECTION LIMIT 5',
+        read: READ_TASKS,
+        rows: [IDS, IDS],
+        setup: '',
+      },
+    ],
+  ])(
+    'moves once %s',
+    async (_what, given) => {
+      const outcome = await changing(given);
+
+      expect(outcome.rows).toStrictEqual(given.rows);
+      expect(outcome.moved).toBe(true);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each<readonly [string, Case]>([
+    [
+      'a role it is no member of is renamed, and another it is no member of takes its name',
+      {
+        change: `ALTER ROLE admins RENAME TO former_admins; CREATE ROLE other; ALTER ROLE other RENAME TO admins`,
+        read: READ_TASKS,
+        rows: [NOTHING, NOTHING],
+        setup: `GRANT guests TO b; ${admins('member')}`,
+      },
+    ],
+    [
+      'a role it is no member of takes the name a policy asks of, which another had',
+      {
+        change: SWAP_ADMINS,
+        read: READ_TASKS,
+        rows: [NOTHING, NOTHING],
+        setup: admins('member'),
+      },
+    ],
+    [
+      'a role it is no member of is made, and its name is the one a policy asks of',
+      {
+        change: 'CREATE ROLE staff',
+        read: READ_TASKS,
+        rows: [MISSING, NOTHING],
+        setup: `ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+          CREATE POLICY asks ON tasks FOR SELECT USING (pg_has_role(current_user, 'staff', 'member'));`,
+      },
+    ],
+    [
+      'its password is set',
+      {
+        change: "ALTER ROLE b PASSWORD 'secret'",
+        read: READ_TASKS,
+        rows: [IDS, IDS],
+        setup: '',
+      },
+    ],
+    [
+      'a role that reads nothing is made and given to another role that reads nothing',
+      {
+        change: 'CREATE ROLE user_1; GRANT user_1 TO c',
+        read: READ_TASKS,
+        rows: [IDS, IDS],
+        setup: '',
+      },
+    ],
+  ])(
+    'does not move once %s',
+    async (_what, given) => {
+      const outcome = await changing(given);
+
+      expect(outcome.rows).toStrictEqual(given.rows);
+      expect(outcome.moved).toBe(false);
+    },
+    TEST_TIMEOUT_MS,
+  );
+});
+
+/** Whether the digest moves once `change` ran as the superuser, of a schema that `setup` made. */
+async function movedBy(setup: string, change: string): Promise<boolean> {
+  const pg = await opened(setup);
+  const digest = new SchemaDigest(pg, RELATIONS);
+  await pg.exec('SET ROLE b');
+  await readNow(digest);
+
+  await pg.exec('RESET ROLE');
+  await pg.exec(change);
+  await pg.exec('SET ROLE b');
+
+  return (await readNow(digest)).changed;
+}
+
+describe("the schema's digest of the application's kinds it holds by whole rows", () => {
+  it.each([
+    [
+      'an enum label is renamed',
+      "CREATE TYPE public.mood AS ENUM ('ok', 'bad')",
+      "ALTER TYPE public.mood RENAME VALUE 'ok' TO 'fine'",
+    ],
+    [
+      'an enum label is added between two',
+      "CREATE TYPE public.mood AS ENUM ('ok', 'bad')",
+      "ALTER TYPE public.mood ADD VALUE 'meh' BEFORE 'bad'",
+    ],
+    [
+      'a cast is made again with another context',
+      "CREATE TYPE public.mood AS ENUM ('ok'); CREATE CAST (text AS public.mood) WITH INOUT AS ASSIGNMENT",
+      'DROP CAST (text AS public.mood); CREATE CAST (text AS public.mood) WITH INOUT AS IMPLICIT',
+    ],
+  ])(
+    'moves once %s',
+    async (_what, setup, change) => {
+      await expect(movedBy(setup, change)).resolves.toBe(true);
     },
     TEST_TIMEOUT_MS,
   );
