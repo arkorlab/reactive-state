@@ -192,6 +192,196 @@ describe('a page’s own instant export, in each form a module has', () => {
 });
 
 /**
+ * An export of the name in a form TypeScript erases some of, where it leaves a value as the module
+ * runs: the page's own setting still, and nothing is added. A list that exports an ambient value
+ * is kept by the compiler, and so is counted with them: a second export of the name would be no
+ * module.
+ */
+const VALUES = [
+  {
+    id: 'namespace-of-a-namespace-of-a-value',
+    source: page('export namespace instant{export namespace inner{export const on=true;}}'),
+  },
+  {
+    id: 'dotted-namespace-of-a-value',
+    source: page('export namespace instant.inner{export const on=true;}'),
+  },
+  { id: 'namespace-of-a-statement', source: page('export namespace instant{console.log(1);}') },
+  { id: 'namespace-of-a-function', source: page('export namespace instant{function on(){}}') },
+  { id: 'namespace-of-an-enum', source: page('export namespace instant{export enum E{on}}') },
+  {
+    id: 'namespace-of-a-const-enum',
+    source: page('export namespace instant{export const enum E{on}}'),
+  },
+  {
+    id: 'namespace-of-a-declared-constant',
+    source: page('export namespace instant{declare const on:boolean;}'),
+  },
+  {
+    id: 'namespace-of-an-import-alias',
+    source: page(
+      'namespace other{export const on=true;}export namespace instant{import on=other.on;}',
+    ),
+  },
+  {
+    id: 'namespace-of-a-declared-one-of-a-value',
+    source: page('export namespace instant{declare namespace inner{const on:boolean;}}'),
+  },
+  {
+    id: 'namespace-in-two-blocks',
+    source: page(
+      'export namespace instant{export type T=1;}export namespace instant{export const on=true;}',
+    ),
+  },
+  { id: 'const-enum', source: page('export const enum instant{on}') },
+  { id: 'abstract-class', source: page('export abstract class instant{}') },
+  // Whether what an alias names is a type cannot be told where another module declares it.
+  {
+    id: 'import-alias-of-a-type',
+    source: page('namespace segment{export type T=1;}export import instant=segment.T;'),
+  },
+  {
+    id: 'list-of-a-value-import',
+    source: page("import {instant} from './segment';export {instant};"),
+  },
+  {
+    id: 'list-of-a-type-and-a-constant',
+    source: page('type instant=boolean;const instant=true;export {instant};'),
+  },
+  {
+    id: 'list-of-an-interface-and-a-class',
+    source: page('interface instant{on:boolean}class instant{}export {instant};'),
+  },
+  {
+    id: 'list-of-a-declared-constant',
+    source: page('declare const instant:boolean;export {instant};'),
+  },
+  {
+    id: 'list-of-a-declared-function',
+    source: page('declare function instant():void;export {instant};'),
+  },
+  { id: 'list-of-a-declared-class', source: page('declare class instant{}export {instant};') },
+  { id: 'list-of-a-declared-enum', source: page('declare enum instant{on}export {instant};') },
+  {
+    id: 'list-of-a-declared-namespace-of-a-value',
+    source: page('declare namespace instant{const on:boolean;}export {instant};'),
+  },
+  {
+    id: 'list-of-a-type-and-a-declared-constant',
+    source: page('type instant=boolean;declare const instant:boolean;export {instant};'),
+  },
+] as const;
+
+describe('an export of the name that leaves a value as the module runs', () => {
+  it.each(VALUES)('$id', ({ source }) => {
+    expect(instantLoader(source)).toBe(source);
+  });
+});
+
+/**
+ * An export of the name TypeScript erases: nothing of it is there as the module runs, so it is no
+ * setting of the page's, and the permission is added — as a constant of another name where the
+ * module names something `instant`, which each of these does but the one that names it by text.
+ */
+const ERASED = [
+  { id: 'type-alias', source: page('export type instant=boolean;') },
+  { id: 'interface', source: page('export interface instant{on:boolean}') },
+  { id: 'declared-function', source: page('export declare function instant():void;') },
+  { id: 'declared-class', source: page('export declare class instant{}') },
+  { id: 'declared-enum', source: page('export declare enum instant{on}') },
+  {
+    id: 'declared-namespace',
+    source: page('export declare namespace instant{const on:boolean;}'),
+  },
+  { id: 'signature-alone', source: page('export function instant():void;') },
+  { id: 'type-import-alias', source: page("export import type instant=require('./segment');") },
+  { id: 'type-list-from-a-module', source: page("export type {instant} from './segment';") },
+  { id: 'type-module-as-the-name', source: page("export type * as instant from './segment';") },
+  { id: 'empty-namespace', source: page('export namespace instant{}') },
+  {
+    id: 'namespace-of-a-type',
+    source: page('export namespace instant{export type Options={enabled:boolean};}'),
+  },
+  {
+    id: 'namespace-of-an-interface',
+    source: page('export namespace instant{export interface Options{enabled:boolean}}'),
+  },
+  {
+    id: 'namespace-of-an-unexported-type',
+    source: page('export namespace instant{type Options=boolean;}'),
+  },
+  {
+    id: 'namespace-of-a-namespace-of-types',
+    source: page('export namespace instant{export namespace inner{export type T=1;}}'),
+  },
+  {
+    id: 'dotted-namespace-of-types',
+    source: page('export namespace instant.inner{export type T=1;}'),
+  },
+  {
+    id: 'namespace-of-an-empty-namespace',
+    source: page('export namespace instant{namespace inner{}}'),
+  },
+  {
+    id: 'namespace-of-a-declared-one-of-types',
+    source: page('export namespace instant{declare namespace inner{type T=1;}}'),
+  },
+  {
+    id: 'namespace-beside-an-interface',
+    source: page('export interface instant{on:boolean}export namespace instant{export type T=1;}'),
+  },
+  { id: 'list-of-a-type', source: page('type instant=boolean;export {instant};') },
+  { id: 'list-of-an-interface', source: page('interface instant{on:boolean}export {instant};') },
+  { id: 'list-of-a-renamed-type', source: page('type Blocks=boolean;export {Blocks as instant};') },
+  {
+    id: 'list-of-a-type-import',
+    source: page("import type {instant} from './segment';export {instant};"),
+  },
+  {
+    id: 'list-of-an-inline-type-import',
+    source: page("import {type instant} from './segment';export {instant};"),
+  },
+  {
+    id: 'list-of-a-default-type-import',
+    source: page("import type instant from './segment';export {instant};"),
+  },
+  {
+    id: 'list-of-a-module-type-import',
+    source: page("import type * as instant from './segment';export {instant};"),
+  },
+  {
+    id: 'list-of-a-type-import-alias',
+    source: page("import type instant=require('./segment');export {instant};"),
+  },
+  {
+    id: 'list-of-a-namespace-of-types',
+    source: page('namespace instant{export type T=1;}export {instant};'),
+  },
+  {
+    id: 'list-of-a-declared-namespace-of-types',
+    source: page('declare namespace instant{type T=1;}export {instant};'),
+  },
+  // The compiler reads a module's own statements for what a list exports: a `var` in a block is
+  // none of them, and the list is erased with the type.
+  {
+    id: 'list-of-a-type-and-a-var-in-a-block',
+    source: page('type instant=boolean;if(globalThis.on){var instant=1;}export {instant};'),
+  },
+] as const;
+
+describe('an export of the name that TypeScript erases', () => {
+  it.each(ERASED)('$id', ({ source }) => {
+    expect(instantLoader(source)).toBe(`${source}${permissionAs('instant$1')}`);
+  });
+
+  it('adds the constant itself where the erased export names it by text alone', () => {
+    const source = page("type Blocks=boolean;export {Blocks as 'instant'};");
+
+    expect(instantLoader(source)).toBe(`${source}${PERMISSION}`);
+  });
+});
+
+/**
  * A module that names something `instant` and exports no value by the name: a second declaration
  * of the name would be no module, so the permission is a constant of another name, exported as
  * `instant`. Whatever is named so, a type and a property too: the rule reads no scopes.
