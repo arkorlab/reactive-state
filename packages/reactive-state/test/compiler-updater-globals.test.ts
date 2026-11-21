@@ -1288,3 +1288,41 @@ describe('the imports of a program for the authority, beside the globals its upd
     });
   });
 });
+
+/** The program of a component that imports a reactive component as `name`, beside `jsx`. */
+function rendering(name: string, jsx: string): string {
+  return program({
+    'components/child.reactive.tsx': CHILD,
+    'components/lab.reactive.tsx': lab({
+      hooks: [],
+      imports: `import ${name} from '@/components/child.reactive';`,
+      jsx,
+      update: '(current) => current',
+    }),
+  });
+}
+
+describe('the elements of a component the authority renders by reference', () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('a tag the browser takes for its own is none of a reactive component, whatever a lowercase name imports', () => {
+    const text = rendering(
+      'button',
+      '      <button type="button" onClick={() => setTitle("done")}>mark</button>\n',
+    );
+
+    expect(text).toContain('slots: {}');
+    expect(text).not.toContain('"button"');
+  });
+
+  it('a tag of a capitalized name that imports one is rendered by reference, as it was', () => {
+    const text = rendering('Child', '      <Child n={1} />\n');
+
+    expect(text).toContain('const Child = componentRef(');
+    expect(text).toContain('$.h(Child, { n: 1 })');
+  });
+});
