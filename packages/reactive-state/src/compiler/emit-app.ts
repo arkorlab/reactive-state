@@ -62,11 +62,19 @@ const NEXT = '@arkorlab/reactive-state/next';
 
 const APPLICATION = "the application's components";
 
-/** The specifier one output imports another by: a relative path, without its extension. */
+/**
+ * The specifier one output imports another by: a relative path, without its extension, as an import
+ * writes it — in single quotes, or escaped where a name in the path asks for it.
+ */
 export function relativeSpecifier(from: string, to: string): string {
   const relative = path.relative(path.dirname(from), to).split(path.sep).join('/');
   const named = relative.startsWith('.') ? relative : `./${relative}`;
-  return `'${named}'`;
+  return specifierLiteral(named);
+}
+
+/** The specifier of an output of the file `id`, beside the module that imports it. */
+function siblingSpecifier(id: string, suffix: string): string {
+  return specifierLiteral(`./${id}${suffix}`);
 }
 
 /** A name for each key that no other key of the same kind takes: its segments joined by `$`. */
@@ -195,7 +203,9 @@ function stubImport(operation: OperationModule, names: ReadonlyMap<string, strin
     const local = names.get(`${operation.id}#${name}`) ?? '';
     return `${exportName(name)} as ${local}`;
   });
-  return named.length === 0 ? '' : `import { ${named.join(', ')} } from './${operation.id}';`;
+  return named.length === 0
+    ? ''
+    : `import { ${named.join(', ')} } from ${siblingSpecifier(operation.id, '')};`;
 }
 
 /** The import map the host renders the authority's tree with (`elements.ts`). */
@@ -217,7 +227,9 @@ export function emitElements(input: AppInput): string {
       const ref = modules.get(key);
       return ref === undefined ? [] : [moduleImport(ref, moduleNames.get(key) ?? '')];
     }),
-    ...clients.map((id) => `import ${clientNames.get(id) ?? ''} from './${id}.client';`),
+    ...clients.map(
+      (id) => `import ${clientNames.get(id) ?? ''} from ${siblingSpecifier(id, '.client')};`,
+    ),
     ...input.operations.map((operation) => stubImport(operation, actionNames)),
     ...(input.host?.session === undefined
       ? []
@@ -356,7 +368,8 @@ export function emitRegistry(input: AppInput): string {
   return [
     header(APPLICATION, 'components'),
     ...programs.map(
-      (id) => `import * as ${programNames.get(id) ?? ''} from './${id}.authority.mts';`,
+      (id) =>
+        `import * as ${programNames.get(id) ?? ''} from ${siblingSpecifier(id, '.authority.mts')};`,
     ),
     ...input.operations.map(
       (operation) =>
