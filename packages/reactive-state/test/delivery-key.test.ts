@@ -101,3 +101,27 @@ describe('the build’s delivery key kept out of an answer', () => {
     ).toStrictEqual([true, true, true, false]);
   });
 });
+
+/** A key of both cases, as base64url makes one. */
+const MIXED = 'AbC_123-xYz_0123456789';
+
+/**
+ * An answer hands on a header's name lowercased, whatever case it was written in, and a value and
+ * the status text as they are: the key is found in a name whatever its case, and elsewhere as it
+ * was issued alone — the rewrite's condition matches no other spelling of it.
+ */
+const MIXED_CASES = [
+  { held: true, id: 'name-as-issued', init: { headers: { [`X-${MIXED}`]: '1' } } },
+  { held: true, id: 'name-lowercased', init: { headers: { [`x-${MIXED.toLowerCase()}`]: '1' } } },
+  { held: true, id: 'value-as-issued', init: { headers: { 'x-echo': `a ${MIXED} b` } } },
+  { held: true, id: 'status-text-as-issued', init: { statusText: MIXED } },
+  { held: false, id: 'value-lowercased', init: { headers: { 'x-echo': MIXED.toLowerCase() } } },
+  { held: false, id: 'status-text-uppercased', init: { statusText: MIXED.toUpperCase() } },
+  { held: false, id: 'name-of-part-of-it', init: { headers: { [`x-${MIXED.slice(1)}`]: '1' } } },
+] as const;
+
+describe('a delivery key of both cases in an answer’s headers', () => {
+  it.each(MIXED_CASES)('$id', ({ held, init }) => {
+    expect(holdsKey(new Response(null, init), MIXED)).toBe(held);
+  });
+});
