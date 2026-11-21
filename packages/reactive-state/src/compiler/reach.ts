@@ -31,6 +31,7 @@ import {
   databaseUseIn,
 } from './database-handle.ts';
 import type { ImportBinding } from './imports.ts';
+import { literalSpecifier } from './load-specifiers.ts';
 import type { ModuleKind, Modules } from './modules.ts';
 import { runsAsGiven } from './runs-as-given.ts';
 import { keptMethodWrite, keptWrite } from './settled.ts';
@@ -385,7 +386,10 @@ function loadsUnnamed(sourceFile: SourceFile, skips: (node: Node) => boolean = W
   return found;
 }
 
-/** Literal dynamic imports and unshadowed CommonJS calls retain their named source dependencies. */
+/**
+ * Literal dynamic imports and unshadowed CommonJS calls retain their named source dependencies: a
+ * literal is one past the parentheses and assertions around it (`literalSpecifier`).
+ */
 function loadsOf(sourceFile: SourceFile): readonly Imported[] {
   const found: Imported[] = [];
   const visit = (node: Node): void => {
@@ -394,12 +398,9 @@ function loadsOf(sourceFile: SourceFile): readonly Imported[] {
       (node.expression.kind === SyntaxKind.ImportKeyword ||
         globalPathOf(unwrapped(node.expression))?.join('.') === 'require')
     ) {
-      const [specifier] = node.arguments;
-      if (
-        specifier !== undefined &&
-        (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
-      ) {
-        found.push({ names: ['*'], specifier: specifier.text });
+      const specifier = literalSpecifier(node.arguments[0]);
+      if (specifier !== undefined) {
+        found.push({ names: ['*'], specifier });
       }
     }
     node.forEachChild(visit);
