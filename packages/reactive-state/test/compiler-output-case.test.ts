@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -17,12 +17,28 @@ import { openTypeScript } from '../src/compiler/typescript.ts';
  * the build, naming both. Two that differ in more than case are as they were.
  *
  * Each row compiles a small application through `compileApp` and reads what it refuses and writes.
- * This system keeps case, so a refusal is shown by the two paths it names and a success by the two
- * distinct paths it writes, not by an overwrite.
+ * On a system that keeps case a refusal is shown by the two paths it names and a success by the two
+ * distinct paths it writes, not by an overwrite. Two rows write two files of the application's own
+ * that differ in case alone, which the system the suite runs on must keep apart: they run where the
+ * temporary directory keeps case, and are skipped where it is one that keeps none (default macOS and
+ * Windows volumes), where the two names are one file and the application has one component.
  */
 
 const api = openTypeScript();
 const dirs: string[] = [];
+
+/** Whether the temporary directory keeps the case of a name: of the files `a` and `A`, it holds two. */
+function keepsCase(): boolean {
+  const probe = mkdtempSync(path.join(tmpdir(), 'reactive-state-case-probe-'));
+  try {
+    writeFileSync(path.join(probe, 'a'), '');
+    return !existsSync(path.join(probe, 'A'));
+  } finally {
+    rmSync(probe, { force: true, recursive: true });
+  }
+}
+
+const KEEPS_CASE = keepsCase();
 
 const DATABASE = `import { boolean, database, table, text } from '@arkorlab/reactive-state/server';
 export const db = database({
@@ -178,7 +194,7 @@ describe('what the compile writes, where the file system keeps no case', () => {
       ]);
     });
 
-    it('two components whose ids differ in case alone', () => {
+    it.skipIf(!KEEPS_CASE)('two components whose ids differ in case alone', () => {
       const { refusals, written } = compiled({
         'components/Board.reactive.tsx': BOARD,
         'components/board.reactive.tsx': BOARD,
@@ -190,7 +206,7 @@ describe('what the compile writes, where the file system keeps no case', () => {
       expect(written).toStrictEqual([]);
     });
 
-    it('two components in directories that differ in case alone', () => {
+    it.skipIf(!KEEPS_CASE)('two components in directories that differ in case alone', () => {
       const { refusals } = compiled({
         'components/Board/Card.reactive.tsx': BOARD,
         'components/board/Card.reactive.tsx': BOARD,
