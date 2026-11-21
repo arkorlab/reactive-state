@@ -1392,8 +1392,8 @@ describe('an import of a module whole and an import of an export named `"*"`', (
   });
 });
 
-/** The program of a component of `params`, whose server part declares `const name = 7`, then `body`. */
-function declaringParameter(name: string, params: string, body: string, jsx: boolean): string {
+/** The program of a component of `params`, whose server part declares `declaration`, then `body`. */
+function declaringAs(declaration: string, params: string, body: string, jsx: boolean): string {
   return program({
     'components/child.reactive.tsx': CHILD,
     'components/lab.reactive.tsx': [
@@ -1401,12 +1401,17 @@ function declaringParameter(name: string, params: string, body: string, jsx: boo
       ...(jsx ? ["import Child from '@/components/child.reactive';"] : []),
       `export default async function Lab(${params}) {`,
       '  await requireUser();',
-      `  const ${name} = 7;`,
+      `  ${declaration}`,
       body,
       '}',
       '',
     ].join('\n'),
   });
+}
+
+/** The program of a component of `params`, whose server part declares `const name = 7`, then `body`. */
+function declaringParameter(name: string, params: string, body: string, jsx: boolean): string {
+  return declaringAs(`const ${name} = 7;`, params, body, jsx);
 }
 
 describe("a name the server part declares that the program's function declares as a parameter", () => {
@@ -1443,6 +1448,95 @@ describe("a name the server part declares that the program's function declares a
 
     expect(props).toContain('const _props = 7;');
     expect(scope).toContain('const _$ = 7;');
+  });
+
+  describe('a name that only types declare is no redeclaration: the declaration is erased', () => {
+    it.each([
+      { id: 'a type alias `_props`', declaration: 'type _props = string;', jsx: true },
+      { id: 'an interface `_props`', declaration: 'interface _props { n: number }', jsx: true },
+      { id: 'a type alias `_$`', declaration: 'type _$ = string;', jsx: false },
+      { id: 'an interface `_$`', declaration: 'interface _$ { n: number }', jsx: false },
+    ])('$id, in a component that takes the parameter it names', ({ declaration, jsx }) => {
+      const text = declaringAs(
+        declaration,
+        '',
+        jsx ? '  return <Child n={7} />;' : '  return String(1);',
+        jsx,
+      );
+
+      expect(text).toContain(`  ${declaration}\n`);
+      expect(text).toContain('export async function evaluate(_props: ');
+    });
+
+    it('a component that takes props, or renders JSX, declares the type as it did', () => {
+      const props = declaringAs(
+        'type _props = string;',
+        '{ id }: { id: string }',
+        '  return <Child n={id} />;',
+        true,
+      );
+      const scope = declaringAs('type _$ = string;', '', '  return <Child n={7} />;', true);
+
+      expect(props).toContain('type _props = string;');
+      expect(scope).toContain('type _$ = string;');
+    });
+  });
+
+  describe('a name any declaration of which is run is refused, as it was', () => {
+    it.each([
+      { id: 'a `const`', declaration: 'const _props = 7;', name: '_props', jsx: true },
+      { id: 'a `let`', declaration: 'let _props = 7;', name: '_props', jsx: true },
+      { id: 'a `var`', declaration: 'var _props = 7;', name: '_props', jsx: true },
+      { id: 'a function', declaration: 'function _$() { return 7; }', name: '_$', jsx: false },
+      { id: 'a class', declaration: 'class _props {}', name: '_props', jsx: true },
+      {
+        id: 'an ambient `const`, which is erased too but is no type',
+        declaration: 'declare const _props: number;',
+        name: '_props',
+        jsx: true,
+      },
+    ])('$id', ({ declaration, jsx, name }) => {
+      const message = refusalOf(() => {
+        return declaringAs(
+          declaration,
+          '',
+          jsx ? '  return <Child n={7} />;' : '  return String(1);',
+          jsx,
+        );
+      });
+
+      expect(message).toContain(`\`${name}\` is declared by the server part`);
+      expect(message).toContain('Declare it under another name.');
+    });
+
+    it('an `enum`, which the server part is refused whatever its name', () => {
+      const message = refusalOf(() =>
+        declaringAs('enum _props { a }', '', '  return <Child n={7} />;', true),
+      );
+
+      expect(message).toContain('leaves an `enum` nothing to run');
+    });
+
+    it.each([
+      {
+        id: 'a type alias, then a `const`',
+        declaration: 'type _props = string;\n  const _props = 7;',
+      },
+      {
+        id: 'a `const`, then a type alias',
+        declaration: 'const _props = 7;\n  type _props = string;',
+      },
+      {
+        id: 'an interface, then a function',
+        declaration: 'interface _props { n: number }\n  function _props() { return 7; }',
+      },
+    ])('a name declared twice, $id', ({ declaration }) => {
+      const message = refusalOf(() =>
+        declaringAs(declaration, '', '  return <Child n={7} />;', true),
+      );
+
+      expect(message).toContain('`_props` is declared twice among the component');
+    });
   });
 });
 
