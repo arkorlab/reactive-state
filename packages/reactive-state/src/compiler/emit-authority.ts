@@ -30,6 +30,7 @@ import {
   namesHeld,
   ownText,
   OWN_NAMES,
+  refuseRedeclared,
   refuseShadowing,
   renders,
   reservedNames,
@@ -110,6 +111,7 @@ class ImportPlan {
     }
     const { refs } = sides;
     const own = ownText(component, updaters);
+    refuseRedeclared(component, own, component.fail);
     const bindings = component.modules.flatMap((module) => module.bindings);
     for (const binding of bindings) {
       const name = binding.name.text;

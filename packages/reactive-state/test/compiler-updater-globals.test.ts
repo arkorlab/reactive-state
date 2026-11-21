@@ -1391,3 +1391,57 @@ describe('an import of a module whole and an import of an export named `"*"`', (
     expect(updates['useB#0.count']).toBe('current + Tools.factor');
   });
 });
+
+/** The program of a component of `params`, whose server part declares `const name = 7`, then `body`. */
+function declaringParameter(name: string, params: string, body: string, jsx: boolean): string {
+  return program({
+    'components/child.reactive.tsx': CHILD,
+    'components/lab.reactive.tsx': [
+      "import { requireUser } from '@/auth';",
+      ...(jsx ? ["import Child from '@/components/child.reactive';"] : []),
+      `export default async function Lab(${params}) {`,
+      '  await requireUser();',
+      `  const ${name} = 7;`,
+      body,
+      '}',
+      '',
+    ].join('\n'),
+  });
+}
+
+describe("a name the server part declares that the program's function declares as a parameter", () => {
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
+
+  it('a component that takes no props declares `_props`, which `evaluate` takes as a parameter', () => {
+    const message = refusalOf(() =>
+      declaringParameter('_props', '', '  return <Child n={_props} />;', true),
+    );
+
+    expect(message).toContain('`_props` is declared by the server part');
+    expect(message).toContain('the module would not parse');
+    expect(message).toContain('Declare it under another name.');
+  });
+
+  it('a component that renders no JSX and has no state declares `_$`', () => {
+    const message = refusalOf(() => declaringParameter('_$', '', '  return String(_$);', false));
+
+    expect(message).toContain('`_$` is declared by the server part');
+  });
+
+  it('a component that takes props, or renders JSX, where neither parameter is declared, is written as it was', () => {
+    const props = declaringParameter(
+      '_props',
+      '{ id }: { id: string }',
+      '  return <Child n={_props + id} />;',
+      true,
+    );
+    const scope = declaringParameter('_$', '', '  return <Child n={_$} />;', true);
+
+    expect(props).toContain('const _props = 7;');
+    expect(scope).toContain('const _$ = 7;');
+  });
+});

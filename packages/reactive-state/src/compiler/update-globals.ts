@@ -183,6 +183,23 @@ export function ownText(component: Component, updaters: ReadonlyMap<string, Regi
 }
 
 /**
+ * Refuses a name the server part declares that `evaluate` declares as a parameter, where the
+ * component holds neither: the server part is copied into `evaluate`, where a `const` of the name
+ * would redeclare the parameter and the module would not parse.
+ */
+export function refuseRedeclared(component: Component, own: OwnText, fail: Fail): void {
+  for (const [name, entry] of component.names) {
+    if (entry.kind === 'server' && own.declared.has(name)) {
+      const at = [...component.declaring].find((node) => isIdentifier(node) && node.text === name);
+      fail(
+        `\`${name}\` is declared by the server part, and the program for the authority declares a parameter of that name in the function it copies the server part into: the module would not parse. Declare it under another name.`,
+        at,
+      );
+    }
+  }
+}
+
+/**
  * Refuses an import the program writes under its own name — its server part reads it, or the
  * authority renders or binds it by reference — where an update, or the text the program writes of
  * its own, reads a global of that name, or declares a parameter of it: the import cannot be written
