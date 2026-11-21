@@ -348,6 +348,20 @@ export function emitStub(
   ].join('\n');
 }
 
+/** The names the authority's registry declares or imports at its top level besides the application's. */
+const REGISTRY_NAMES: ReadonlySet<string> = new Set([
+  'buildId',
+  'database',
+  'middleware',
+  'MiddlewareProgram',
+  'operations',
+  'programs',
+  'RegisteredRoute',
+  'RouteRegistration',
+  'routes',
+  'sessions',
+]);
+
 /** The authority's registry (`authority.mts`): every program, every operation module, the database. */
 export function emitRegistry(input: AppInput): string {
   const programs = input.components.map(({ component }) => component.id).toSorted(byCodeUnits);
@@ -357,11 +371,16 @@ export function emitRegistry(input: AppInput): string {
     'operations',
   );
   const { database } = input;
-  const local = database.name === 'default' ? 'database$' : database.name;
+  // The database is imported by its own name unless the registry declares or imports that name
+  // itself: `database`, `routes`, the names of what it exports, and the types it imports.
+  const aliased = database.name === 'default' || REGISTRY_NAMES.has(database.name);
+  const local = aliased ? 'database$' : database.name;
+  const from = specifierLiteral(database.specifier);
+  const imported = aliased ? `${database.name} as database$` : database.name;
   const databaseImport =
     database.name === 'default'
-      ? `import database$ from ${specifierLiteral(database.specifier)};`
-      : `import { ${database.name} } from ${specifierLiteral(database.specifier)};`;
+      ? `import database$ from ${from};`
+      : `import { ${imported} } from ${from};`;
   const operations = input.operations.map(
     (operation) => `${keyOf(operation.id)}: ${operationNames.get(operation.id) ?? ''}`,
   );
