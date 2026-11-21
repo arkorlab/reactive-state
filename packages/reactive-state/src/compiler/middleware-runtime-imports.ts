@@ -6,18 +6,21 @@ import {
   isIdentifier,
   isImportDeclaration,
   isImportEqualsDeclaration,
-  isNoSubstitutionTemplateLiteral,
   isPropertyAccessExpression,
   isStringLiteral,
+  isVariableDeclaration,
   type Node,
   type SourceFile,
   SyntaxKind,
 } from 'typescript/ast';
 
+import { declarationOf } from './framed.ts';
+import { constantValue, type Resolve } from './numbers.ts';
+
 /**
  * Module evaluation follows ordinary runtime imports and reexports, including empty clauses, and the
  * modules a file loads as it runs: `import('./state')` and CommonJS's `require('./state')`, wherever
- * they are written.
+ * they are written, by the specifier they write or a `const` of the file gives them.
  */
 
 /**
@@ -25,6 +28,20 @@ import {
  * which no walk reads a file of: every part that reaches one is read as reaching the same.
  */
 export const COMPUTED_IMPORT = 'import(…)';
+
+/**
+ * What a name holds where a `const` of its file gives it: the initializer of that declaration, so
+ * `const name = './state'; import(name)` names the module `'./state'`. A `let`, a parameter and a name
+ * the file does not declare hold nothing the file gives.
+ */
+const constants: Resolve = (name) => {
+  const declared = declarationOf(name);
+  return declared !== undefined &&
+    isVariableDeclaration(declared) &&
+    /^const\s/u.test(declared.parent.getText(name.getSourceFile()))
+    ? declared.initializer
+    : undefined;
+};
 
 /**
  * Whether `callee` loads the module its call is given: `import(…)`, or CommonJS's own `require(…)`
@@ -70,12 +87,8 @@ export function runtimeModuleSpecifiers(sourceFile: SourceFile): readonly string
   const visit = (node: Node): void => {
     if (isCallExpression(node) && loads(node.expression)) {
       const [specifier] = node.arguments;
-      specifiers.push(
-        specifier !== undefined &&
-          (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
-          ? specifier.text
-          : COMPUTED_IMPORT,
-      );
+      const named = specifier === undefined ? undefined : constantValue(specifier, constants);
+      specifiers.push(typeof named === 'string' ? named : COMPUTED_IMPORT);
     }
     node.forEachChild(visit);
   };

@@ -150,3 +150,136 @@ describe('the modules a split middleware loads as it runs', () => {
     expect(checkOf(application(files))).toBe('taken');
   });
 });
+
+/**
+ * A specifier the file does not write in place but gives by a `const` of its own — `const name =
+ * './state'; await import(name)` — names the module as the literal does; one the compile cannot name
+ * (`let`, a parameter, a call, a join of text) stands for the one module no walk can read, which
+ * only two such loads, in both parts, are refused for.
+ */
+
+/** A helper that exports `name`, loading by `specifier`, declared as `declaration`, and calling `use`. */
+function named(name: string, declaration: string, specifier: string, use: string): string {
+  return `${declaration}\nexport async function ${name}(${specifier === 'path' ? "path = './state'" : ''}): Promise<number> { const { ${use} } = await import(${specifier}); return ${use}(); }\n`;
+}
+
+const STATIC_B =
+  "import { current } from './state';\nexport async function seen(): Promise<number> { return current(); }\n";
+const STATIC_A =
+  "import { bump } from './state';\nexport async function counted(): Promise<number> { return bump(); }\n";
+
+describe('the modules a split middleware loads by a specifier a constant gives', () => {
+  afterEach(cleanUp);
+
+  it.each([
+    {
+      id: 'a constant in the guard’s helper, the envelope’s helper importing the module',
+      files: {
+        'lib/a.ts': named('counted', "const name = './state';", 'name', 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a constant in the envelope’s helper, the guard’s helper importing the module',
+      files: {
+        'lib/a.ts': STATIC_A,
+        'lib/b.ts': named('seen', "const name = './state';", 'name', 'current'),
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a constant of a template with no substitution',
+      files: {
+        'lib/a.ts': named('counted', 'const name = `./state`;', 'name', 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a constant with `as const`',
+      files: {
+        'lib/a.ts': named('counted', "const name = './state' as const;", 'name', 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a constant read through another constant',
+      files: {
+        'lib/a.ts': named('counted', "const base = './state';\nconst name = base;", 'name', 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a constant in a function of the helper',
+      files: {
+        'lib/a.ts':
+          "export async function counted(): Promise<number> { const name = './state'; const { bump } = await import(name); return bump(); }\n",
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a constant of the path of a `require`',
+      files: {
+        'lib/a.ts':
+          "const name = './state';\nexport function counted(): number { return require(name).bump(); }\n",
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+  ])('refuses $id', ({ files }) => {
+    expect(checkOf(application(files))).toContain(REFUSED);
+  });
+
+  it.each([
+    {
+      id: 'a constant that names another module than the envelope’s',
+      files: {
+        'lib/a.ts': named('counted', "const name = './other';", 'name', 'other'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+        'lib/other.ts': OTHER,
+      },
+    },
+    {
+      id: 'a variable the helper assigns again',
+      files: {
+        'lib/a.ts': named('counted', "let name = './state';\nname = './other';", 'name', 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+        'lib/other.ts': OTHER,
+      },
+    },
+    {
+      id: 'a parameter',
+      files: {
+        'lib/a.ts': named('counted', '', 'path', 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a join of text',
+      files: {
+        'lib/a.ts': named('counted', "const dir = './';", "dir + 'state'", 'bump'),
+        'lib/b.ts': STATIC_B,
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a template with a substitution, the envelope’s helper loading nothing the compile can name',
+      files: {
+        'lib/a.ts': named('counted', "const dir = 'state';", ['`./$', '{dir}`'].join(''), 'bump'),
+        'lib/b.ts':
+          "import { log } from './logger';\nexport async function seen(): Promise<number> { return log('x').length; }\n",
+        'lib/logger.ts': 'export function log(message: string): string { return message; }\n',
+        'lib/state.ts': STATE,
+      },
+    },
+  ])('takes $id', ({ files }) => {
+    expect(checkOf(application(files))).toBe('taken');
+  });
+});
