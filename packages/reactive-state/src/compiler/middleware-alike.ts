@@ -27,6 +27,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { mayMakeCollection } from './collection-values.ts';
 import type { Fail } from './errors.ts';
 import type { ContextParameter } from './middleware-reads.ts';
 import { mutatedCollection, mutatedSharedConstant } from './middleware-shared-writes.ts';
@@ -282,12 +283,9 @@ function writtenTwice(name: string): string {
   return `A default of the context's pattern, \`${name}\`, read by the guard — which the authority runs — and by what the host runs around each request, holds an object or an array the middleware writes, or hands to a call that may write it: each part binds a copy of its own, so a write by one is absent from the other. Read it on one side alone, or copy its primitive value before the guard.`;
 }
 
-/** Whether `node`, a default, is an object or an array written there, whose identity each part makes anew. */
+/** Whether `node`, a default, may make an object or an array there, whose identity each part makes anew. */
 function collection(node: Expression | undefined): boolean {
-  const value = node === undefined ? undefined : unwrapped(node);
-  return (
-    value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
-  );
+  return node !== undefined && mayMakeCollection(node);
 }
 
 /**
