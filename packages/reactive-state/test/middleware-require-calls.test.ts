@@ -110,6 +110,46 @@ describe('the modules a split middleware loads with require', () => {
         'lib/state.ts': STATE,
       },
     },
+    {
+      id: 'a module the guard’s helper loads by the usual `require` of ES modules, which `createRequire` makes',
+      files: {
+        'lib/a.ts':
+          "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport function counted(): number { return require('./state').bump(); }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a module the envelope’s helper loads by the usual `require` of ES modules',
+      files: {
+        'lib/a.ts':
+          "import { bump } from './state';\nexport function counted(): number { return bump(); }\n",
+        'lib/b.ts':
+          "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport function seen(): number { return require('./state').current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a call of `require` in a file whose other function has a parameter named `require`',
+      files: {
+        'lib/a.ts':
+          "export function unrelated(require: (name: string) => unknown): unknown { return require('x'); }\nexport function counted(): number { return require('./state').bump(); }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a call of `module.require` in a file with a local `module`',
+      files: {
+        'lib/a.ts':
+          "export function unrelated(): number { const module = { require: (name: string) => name }; return module.require('x').length; }\nexport function counted(): number { return module.require('./state').bump(); }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
   ])('refuses $id', ({ files }) => {
     expect(checkOf(application(files))).toContain(REFUSED);
   });
@@ -166,32 +206,38 @@ describe('the modules a split middleware loads with require', () => {
   });
 
   /**
-   * A `require` the file declares — a function of its own, a parameter, an import, a binding of
-   * `createRequire(base)`, which resolves from the directory of its base — is no CommonJS's, and a
-   * call of it names no module of the helper's directory: it is no load the walk reads.
+   * The refusing side, a stated limit: a `require` the file declares — a binding of
+   * `createRequire(base)` with another base, a function, a parameter, an import, a local `module` —
+   * is read as a load relative to the file too, as the usual `require` of ES modules and CommonJS's
+   * own are, so a split that loads other modules by it may be refused. Nothing writes these forms.
    */
   it.each([
     {
+      // `createRequire` with a base outside the file's directory loads from there, and is read from here.
       id: 'a binding of `createRequire` with a base in another directory',
       a: "import { createRequire } from 'node:module';\nconst require = createRequire(new URL('../plugins/package.json', import.meta.url));\nexport function counted(): number { return require('./state').bump(); }\n",
     },
     {
+      // A function the file names `require` loads nothing, and is read as a load.
       id: 'a function of its own',
       a: "function require(name: string): { bump(): number } { return { bump: () => name.length }; }\nexport function counted(): number { return require('./state').bump(); }\n",
     },
     {
+      // A parameter named `require` is read as a load.
       id: 'a parameter',
       a: "export function counted(require: (name: string) => { bump(): number }): number { return require('./state').bump(); }\n",
     },
     {
+      // An import named `require` is read as a load.
       id: 'an import',
       a: "import require from 'some-loader';\nexport function counted(): number { return require('./state').bump(); }\n",
     },
     {
+      // A `module` the file declares is read as CommonJS's.
       id: 'a `module` of its own',
       a: "const module = { require: (name: string) => ({ bump: () => name.length }) };\nexport function counted(): number { return module.require('./state').bump(); }\n",
     },
-  ])('takes a `require` the file declares of its own: $id', ({ a }) => {
+  ])('refuses, on the refusing side, a `require` the file declares of its own: $id', ({ a }) => {
     const files = {
       'lib/a.ts': a,
       'lib/b.ts':
@@ -199,13 +245,13 @@ describe('the modules a split middleware loads with require', () => {
       'lib/state.ts': STATE,
     };
 
-    expect(checkOf(application(files))).toBe('taken');
+    expect(checkOf(application(files))).toContain(REFUSED);
   });
 
   /**
    * The stated limits: loads the walk does not read, taken, and the reason for each in the standing
-   * decisions of the pull request. A specifier a constant of the file gives, and a `require` bound to
-   * another name or made by `createRequire`, are loads the compile does not name.
+   * decisions of the pull request. A specifier a constant of the file gives, a `require` bound to
+   * another name, and `createRequire(…)` called as it is made, are loads the compile does not name.
    */
   it.each([
     {
@@ -219,10 +265,6 @@ describe('the modules a split middleware loads with require', () => {
     {
       id: 'the `require` `createRequire` makes, called as it is made',
       a: "import { createRequire } from 'node:module';\nexport function counted(): number { return createRequire(import.meta.url)('./state').bump(); }\n",
-    },
-    {
-      id: 'a `require` of its own made by `createRequire`',
-      a: "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport function counted(): number { return require('./state').bump(); }\n",
     },
   ])('takes, as a limit of the walk, $id', ({ a }) => {
     const files = {
