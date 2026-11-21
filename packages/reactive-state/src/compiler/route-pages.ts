@@ -205,14 +205,18 @@ function rootsDeclared(
   });
 }
 
-/** Literal module loads keep their source location without guessing a computed specifier. */
+/**
+ * Literal module loads keep their source location without guessing a computed specifier: a literal
+ * is one past the parentheses and casts around it.
+ */
 function loadedSpecifier(at: Node): string | undefined {
   if (!isCallExpression(at)) return undefined;
   const nativeLoad =
     at.expression.kind === SyntaxKind.ImportKeyword ||
     globalPathOf(unwrapped(at.expression))?.join('.') === 'require';
   if (!nativeLoad) return undefined;
-  const [specifier] = at.arguments;
+  const [argument] = at.arguments;
+  const specifier = argument === undefined ? undefined : unwrapped(argument);
   return specifier !== undefined &&
     (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
     ? specifier.text
