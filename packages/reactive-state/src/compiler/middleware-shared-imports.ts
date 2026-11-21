@@ -7,6 +7,9 @@ import type { Modules } from './modules.ts';
 
 /** Runtime imports whose module identity would be read in both extracted runtimes. */
 
+/** A path below a `node_modules` directory, written with either separator. */
+const NODE_MODULES = /[/\\]node_modules[/\\]/u;
+
 interface RuntimePart {
   readonly values: ReadonlySet<string>;
 }
@@ -70,7 +73,7 @@ function identitiesOf(next: Reaching, modules: Modules): readonly string[] {
 function filesOf(next: Reaching, identities: readonly string[]): readonly string[] {
   if (next.file !== undefined) return [next.file];
   return next.specifier.startsWith('#')
-    ? identities.filter((each) => path.isAbsolute(each) && !each.includes('/node_modules/'))
+    ? identities.filter((each) => path.isAbsolute(each) && !NODE_MODULES.test(each))
     : [];
 }
 
