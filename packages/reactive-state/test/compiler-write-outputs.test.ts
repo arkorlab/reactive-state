@@ -1,4 +1,5 @@
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -9,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -22,6 +24,10 @@ import { writeOutputs } from '../src/compiler/index.ts';
  * the old spelling, and the scan that follows takes that spelling for a file the build no longer
  * writes and removes it, the write reporting success with the output gone. Removed first, an output
  * is written afresh under its own spelling. A check removes and writes nothing.
+ *
+ * A directory that cannot be read is no empty one: the scan of the stale files reports it, with its
+ * path, where a check would otherwise pass over a file it could not see. One that is not there holds
+ * none.
  *
  * The order of what is removed and what is written is read from the calls the module makes, which
  * holds on any file system; the rows that need one that keeps no case run where the temporary
@@ -74,6 +80,24 @@ function listing(directory: string): readonly string[] {
     .map(String)
     .toSorted((a, b) => a.localeCompare(b));
 }
+
+/** The output directory of a build that left a stale file beside a directory nobody may read. */
+function locked(): {
+  readonly blocked: string;
+  readonly outDir: string;
+  readonly root: string;
+} {
+  const { root } = workspace();
+  const outDir = path.join(root, '.reactive');
+  const blocked = path.join(outDir, 'blocked');
+  mkdirSync(blocked, { recursive: true });
+  writeFileSync(path.join(outDir, 'Stale.authority.mts'), generated('stale'));
+  chmodSync(blocked, 0o000);
+  return { blocked, outDir, root };
+}
+
+/** Whether this process may read what its permissions forbid, which a row about a directory nobody may read cannot show. */
+const ROOT = process.getuid?.() === 0;
 
 const CASE_INSENSITIVE = !workspace().keepsCase;
 
@@ -193,6 +217,46 @@ describe('what a write of the outputs does with the files an earlier build left'
       expect(
         writeOutputs(outputs, outDir, { check: true }).filter(({ current }) => !current),
       ).toStrictEqual([]);
+    });
+  });
+
+  describe('a directory the scan cannot read is reported, with its path', () => {
+    afterEach(() => {
+      for (const dir of dirs) {
+        for (const blocked of [path.join(dir, '.reactive/blocked')]) {
+          if (existsSync(blocked)) {
+            chmodSync(blocked, 0o700);
+          }
+        }
+      }
+    });
+
+    it.skipIf(ROOT)('a check does not pass over it', () => {
+      const { blocked, outDir } = locked();
+      const output = new Map([[path.join(outDir, 'kept.authority.mts'), generated('kept')]]);
+
+      expect(() => writeOutputs(output, outDir, { check: true })).toThrow(blocked);
+    });
+
+    it.skipIf(ROOT)('a write does not go on over it', () => {
+      const { blocked, outDir } = locked();
+      const output = new Map([[path.join(outDir, 'kept.authority.mts'), generated('kept')]]);
+
+      expect(() => writeOutputs(output, outDir)).toThrow(blocked);
+      expect(existsSync(path.join(outDir, 'kept.authority.mts'))).toBe(false);
+    });
+
+    it('an output directory that is not there holds none, and a check says every output is stale', () => {
+      const { root } = workspace();
+      const outDir = path.join(root, '.reactive');
+      const output = new Map([[path.join(outDir, 'kept.authority.mts'), generated('kept')]]);
+
+      const checked = writeOutputs(output, outDir, { check: true });
+
+      expect(checked).toStrictEqual([
+        { current: false, leftover: false, path: path.join(outDir, 'kept.authority.mts') },
+      ]);
+      expect(existsSync(outDir)).toBe(false);
     });
   });
 });

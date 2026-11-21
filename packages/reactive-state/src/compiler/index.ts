@@ -524,13 +524,17 @@ function removeEmptyDirectories(directory: string, root: string): void {
   }
 }
 
-/** The files under `directory` that a compile wrote. */
+/** The files under `directory` that a compile wrote: none where there is no `directory`. */
 function generatedFiles(directory: string): readonly string[] {
   let entries;
   try {
     entries = readdirSync(directory, { recursive: true, withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    // Only a directory that is not there holds none; one that cannot be read may hold stale files.
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
   }
   return entries
     .filter((entry) => entry.isFile())
