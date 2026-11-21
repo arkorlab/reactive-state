@@ -83,8 +83,8 @@ function exportsInstant(statement, statements) {
   const { declaration } = statement;
   if (!declaration) return listsInstant(statement, statements);
   // What `declare` says is elsewhere, and so is a function of a signature alone (no body).
-  const ambient = declaration.declare === true || declaration.type === 'TSDeclareFunction';
-  return !ambient && declaredAs(declaration, NAME) === 'value';
+  const isAmbient = declaration.declare === true || declaration.type === 'TSDeclareFunction';
+  return !isAmbient && declaredAs(declaration, NAME) === 'value';
 }
 
 // Whether a namespace holds a value. TypeScript erases one that holds nothing but types (type
@@ -122,8 +122,8 @@ function listsInstant(statement, statements) {
     const name = entry.exported.type === 'Identifier' ? entry.exported.name : entry.exported.value;
     if (name !== NAME) return false;
     // Whether what another module exports is a type cannot be told here: it is taken for a value.
-    const own = !statement.source && entry.type === 'ExportSpecifier';
-    return !(own && namesTypeAlone(entry.local.name, statements));
+    const isOwn = !statement.source && entry.type === 'ExportSpecifier';
+    return !(isOwn && namesTypeAlone(entry.local.name, statements));
   });
 }
 
