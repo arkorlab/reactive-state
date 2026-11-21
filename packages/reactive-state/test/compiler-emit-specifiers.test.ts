@@ -36,7 +36,8 @@ function componentOf(id: string): CompiledComponent {
 }
 
 function operationOf(id: string): OperationModule {
-  return { exports: ['go'], fileName: `${id}.ts`, id, written: `'./${id}.ts'` };
+  // `written` is the specifier as the first importer wrote it, quotes and all.
+  return { exports: ['go'], fileName: `${id}.ts`, id, written: JSON.stringify(`./${id}.ts`) };
 }
 
 function inputOf(id: string): AppInput {
@@ -78,11 +79,15 @@ describe('the specifiers of the generated modules', () => {
     expect(specifiersOf(`import x from ${specifier};`)).toStrictEqual([`../${id}`]);
   });
 
-  it.each(IDS)('writes the import of a program in the registry: $id', ({ id }) => {
-    const specifiers = specifiersOf(emitRegistry(inputOf(id)));
+  it.each(IDS)(
+    'writes the imports of a program and an operation module in the registry: $id',
+    ({ id }) => {
+      const specifiers = specifiersOf(emitRegistry(inputOf(id)));
 
-    expect(specifiers).toContain(`./${id}.authority.mts`);
-  });
+      expect(specifiers).toContain(`./${id}.authority.mts`);
+      expect(specifiers).toContain(`./${id}.ts`);
+    },
+  );
 
   it.each(IDS)('writes the imports of a client part and a stub in the elements: $id', ({ id }) => {
     const specifiers = specifiersOf(emitElements(inputOf(id)));
