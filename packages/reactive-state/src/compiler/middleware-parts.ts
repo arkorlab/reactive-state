@@ -437,6 +437,7 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
   const guardReads = inOrder([...guards, ...inGuard]);
   checkReassigned(
     {
+      after: suffix.map((each) => each.statement),
       guard: guardReads.map((each) => each.statement),
       host: before.map((each) => each.statement),
       hostReads,
