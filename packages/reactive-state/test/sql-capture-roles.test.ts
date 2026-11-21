@@ -39,15 +39,15 @@ interface Opened {
 /**
  * The statements of the capture as an installation made before the functions were definers ran
  * them. A function the log's role alone may execute is made now in one statement with the
- * revocation of what `PUBLIC` is given (`DO $restricted$ … $restricted$`); an installation made
- * before ran it as an invoker's function, with no revocation.
+ * revocation of what every other role is given (`DO $restricted$ … $restricted$`); an installation
+ * made before ran it as an invoker's function, with no revocation.
  */
 function beforeDefiners(statement: string): string {
   if (!statement.startsWith('DO $restricted$')) {
     return statement;
   }
   const revoke = statement.indexOf(' REVOKE EXECUTE ON FUNCTION');
-  const end = statement.indexOf(';', revoke) + 1;
+  const end = statement.lastIndexOf(' END $restricted$');
   return `${statement.slice(0, revoke)}${statement.slice(end)}`.replace(' SECURITY DEFINER', '');
 }
 
