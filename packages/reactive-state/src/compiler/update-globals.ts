@@ -1,4 +1,11 @@
-import { type Identifier, isIdentifier, type Node, type Statement } from 'typescript/ast';
+import {
+  type Identifier,
+  isIdentifier,
+  isInterfaceDeclaration,
+  isTypeAliasDeclaration,
+  type Node,
+  type Statement,
+} from 'typescript/ast';
 
 import type { Component } from './analyze.ts';
 import type { Fail } from './errors.ts';
@@ -185,18 +192,30 @@ export function ownText(component: Component, updaters: ReadonlyMap<string, Regi
 /**
  * Refuses a name the server part declares that `evaluate` declares as a parameter, where the
  * component holds neither: the server part is copied into `evaluate`, where a `const` of the name
- * would redeclare the parameter and the module would not parse.
+ * would redeclare the parameter and the module would not parse. A name declared by types alone — a
+ * type alias, an interface — is let through: the declaration is erased, and the parameter is the
+ * only one of the name that runs. Where one declaration of the name is none of those, it is refused
+ * at that one.
  */
 export function refuseRedeclared(component: Component, own: OwnText, fail: Fail): void {
   for (const [name, entry] of component.names) {
     if (entry.kind === 'server' && own.declared.has(name)) {
-      const at = [...component.declaring].find((node) => isIdentifier(node) && node.text === name);
-      fail(
-        `\`${name}\` is declared by the server part, and the program for the authority declares a parameter of that name in the function it copies the server part into: the module would not parse. Declare it under another name.`,
-        at,
+      const at = [...component.declaring].find(
+        (node) => isIdentifier(node) && node.text === name && !isErased(node),
       );
+      if (at !== undefined) {
+        fail(
+          `\`${name}\` is declared by the server part, and the program for the authority declares a parameter of that name in the function it copies the server part into: the module would not parse. Declare it under another name.`,
+          at,
+        );
+      }
     }
   }
+}
+
+/** Whether the name `identifier` is of a declaration that is only a type, which running erases. */
+function isErased(identifier: Identifier): boolean {
+  return isTypeAliasDeclaration(identifier.parent) || isInterfaceDeclaration(identifier.parent);
 }
 
 /**
