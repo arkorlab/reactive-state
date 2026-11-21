@@ -31,8 +31,10 @@ export interface Queryable {
  * Whose rights a statement reads under is held of the roles that read: the session's, and the owner
  * of each view of the application's or of the session's temporary schema that is no
  * `security_invoker`, each by its rights, its attributes and every role it is a member of; and of
- * each table its owner and its policies. Three things that decide which rows a statement reads are
- * not held, and each for a reason that is no size of the change:
+ * each table its owner and its policies. A view of the session's temporary schema is held as a
+ * table is: its owner, its options and rule, what each reader may read of it, and the rights granted
+ * of its columns to any role. Three things that decide which rows a statement reads are not held,
+ * and each for a reason that is no size of the change:
  *
  * - what a `SECURITY DEFINER` function reads, and the rights of its owner with it: a plan names no
  *   table a function reads in its body (`plans.ts`), so nothing it reads is followed either;
@@ -106,6 +108,15 @@ function mayRead(): string {
   return `(SELECT string_agg(concat_ws('.', r.oid, has_table_privilege(r.oid, c.oid, 'SELECT'), has_any_column_privilege(r.oid, c.oid, 'SELECT')), ',' ORDER BY r.oid) FROM "readers" AS r)`;
 }
 
+/**
+ * What rights are granted of each column of the relation `c`, to any role: the column's `attacl`
+ * where it has one, as the rows of the application's columns hold it. A role may be left able to
+ * read some columns and not another, which neither of a reader's answers (`mayRead`) tells apart.
+ */
+function columnRights(): string {
+  return `(SELECT string_agg(concat_ws('.', a.attnum, a.attacl::text), ',' ORDER BY a.attnum) FROM pg_attribute AS a WHERE a.attrelid = c.oid AND a.attnum > 0 AND a.attacl IS NOT NULL)`;
+}
+
 /** What the catalog defines of the application's relations: `own` says which schemas are its. */
 function relationParts(own: string): readonly string[] {
   const related = (column: string): string =>
@@ -166,14 +177,15 @@ function definitionParts(own: string): readonly string[] {
  */
 function sessionParts(own: string, relations: readonly Relation[]): readonly string[] {
   return [
-    // A view of the session's temporary schema, with its options (`security_invoker`, which says
-    // by whose rights and policies the view's tables are read; a view of none holds nothing of
-    // them) and what each role a statement reads as may read of it, which a statement that reads it
-    // fails without, as of the application's relations; a
+    // A view of the session's temporary schema, with its owner (whose rights a view that is no
+    // `security_invoker` reads its tables by, which the readers hold as a set and not as this
+    // view's), its options (`security_invoker`; a view of none holds nothing of them), what each role
+    // a statement reads as may read of it, which a statement that reads it fails without, and the
+    // rights granted of its columns, as of the application's relations; a
     // relation or a type of it of a name of the application's, which a statement's name of it
     // resolves to first; and a function of it, which a statement names as `pg_temp`'s: a temporary
     // table a plan names is one nothing follows, a fault of the render once a plan is asked again.
-    `SELECT concat_ws(':', 'v', c.oid, c.relname, c.reloptions::text, ${hashed('r.ev_action::text')}, ${mayRead()}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
+    `SELECT concat_ws(':', 'v', c.oid, c.relname, c.relowner, c.reloptions::text, ${hashed('r.ev_action::text')}, ${mayRead()}, ${columnRights()}) FROM pg_class AS c JOIN pg_rewrite AS r ON r.ev_class = c.oid WHERE c.relnamespace = pg_my_temp_schema()`,
     `SELECT concat_ws(':', 'm', t.oid, t.relname, t.relkind) FROM pg_class AS t WHERE t.relnamespace = pg_my_temp_schema() AND t.relkind IN (${TEMPORARY_KINDS}) AND EXISTS (SELECT 1 FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relname = t.relname AND c.relkind IN (${READ_KINDS}) AND ${own})`,
     // A temporary type of a name of the application's, which a statement's name of it resolves to
     // first, and every one a statement names as `pg_temp`'s — but a table's row type and an array,
