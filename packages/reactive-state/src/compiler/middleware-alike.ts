@@ -3,6 +3,7 @@ import {
   type BindingName,
   type Expression,
   type Identifier,
+  isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
   isComputedPropertyName,
@@ -269,6 +270,8 @@ interface Binding {
   readonly collected: boolean;
   /** Whether the element binds an object the context hands, its own prop: `params`, `request`. */
   readonly handed: boolean;
+  /** Whether an array's pattern the element is within is written whole into each part that reads a name of it, as both do. */
+  readonly whole: boolean;
   readonly readBy: ContextReaders;
   readonly fail: Fail;
 }
@@ -301,8 +304,9 @@ function checkBound(element: BindingElement, binding: Binding): void {
   }
   const bound = bindingIdentifiers(name).map((identifier) => identifier.text);
   const shared =
-    bound.some((each) => binding.readBy.guard(each)) &&
-    bound.some((each) => binding.readBy.host(each));
+    binding.whole ||
+    (bound.some((each) => binding.readBy.guard(each)) &&
+      bound.some((each) => binding.readBy.host(each)));
   const computed = key !== undefined && isComputedPropertyName(key) ? key.expression : undefined;
   for (const value of [computed, element.initializer]) {
     if (value !== undefined && shared && !isAlike(value, binding.alike)) {
@@ -318,6 +322,7 @@ function checkBound(element: BindingElement, binding: Binding): void {
     ...binding,
     collected: binding.collected || collection(element.initializer),
     handed: false,
+    whole: binding.whole || (shared && isArrayBindingPattern(name)),
   };
   for (const inner of name.elements) {
     if (!isOmittedExpression(inner)) {
@@ -380,6 +385,14 @@ export function checkContextDefaults(
   for (const element of context.pattern.elements) {
     const key = element.propertyName ?? element.name;
     const params = key !== undefined && isIdentifier(key) && key.text === 'params';
-    checkBound(element, { alike, collected: false, fail, handed: true, params, readBy });
+    checkBound(element, {
+      alike,
+      collected: false,
+      fail,
+      handed: true,
+      params,
+      readBy,
+      whole: false,
+    });
   }
 }
