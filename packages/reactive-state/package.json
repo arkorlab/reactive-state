@@ -17,6 +17,7 @@
     "./cloudflare": "./src/cloudflare/index.ts",
     "./compiler": "./src/compiler/index.ts",
     "./d1": "./src/cloudflare/d1-store.ts",
+    "./drizzle": "./src/sql/index.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
     "./program": "./src/program.ts",
