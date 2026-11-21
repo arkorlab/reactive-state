@@ -13,13 +13,16 @@ import { openTypeScript } from '../src/compiler/typescript.ts';
  * A page under a guard that renders a reactive root through a module load — `import('…')`,
  * `require('…')` — is refused unless a registered route names the root: where the root renders, the
  * guard would be left out. The specifier is read as the literal it is past parentheses, a cast,
- * `satisfies` and `!`; one the code computes is none the compile can name.
+ * `satisfies`, `!` and an angle-bracket assertion, which a `page.ts` can hold where a `page.tsx` cannot;
+ * one the code computes is none the compile can name.
  */
 
 interface Row {
   readonly id: string;
   /** The module load, as the page writes it. */
   readonly load: string;
+  /** The page's file: `page.tsx`, or `page.ts` where the load holds an angle-bracket assertion. */
+  readonly file?: 'page.ts' | 'page.tsx';
 }
 
 const ROOT = '@/components/stats.reactive';
@@ -37,12 +40,37 @@ const LITERAL: readonly Row[] = [
   { id: 'require', load: `require('${ROOT}')` },
   { id: 'require-in-parentheses', load: `require(('${ROOT}'))` },
   { id: 'require-cast', load: `require('${ROOT}' as string)` },
+  { file: 'page.ts', id: 'ts-import', load: `import('${ROOT}')` },
+  { file: 'page.ts', id: 'ts-import-angle-bracket', load: `import(<string>'${ROOT}')` },
+  {
+    file: 'page.ts',
+    id: 'ts-import-angle-bracket-in-parentheses',
+    load: `import((<string>'${ROOT}'))`,
+  },
+  {
+    file: 'page.ts',
+    id: 'ts-import-two-angle-brackets',
+    load: `import(<string><string>'${ROOT}')`,
+  },
+  {
+    file: 'page.ts',
+    id: 'ts-import-angle-bracket-cast',
+    load: `import(<string>'${ROOT}' as string)`,
+  },
+  { file: 'page.ts', id: 'ts-import-angle-bracket-non-null', load: `import(<string>'${ROOT}'!)` },
+  { file: 'page.ts', id: 'ts-import-angle-bracket-template', load: `import(<string>\`${ROOT}\`)` },
+  { file: 'page.ts', id: 'ts-require-angle-bracket', load: `require(<string>'${ROOT}')` },
 ];
 
 /** A specifier the code computes: no module the compile can name. */
 const COMPUTED: readonly Row[] = [
   { id: 'element-of-an-array', load: `import([ '${ROOT}' ][0])` },
   { id: 'concatenation', load: `import('@/components/' + 'stats.reactive')` },
+  {
+    file: 'page.ts',
+    id: 'ts-angle-bracket-of-an-element',
+    load: `import(<string>[ '${ROOT}' ][0])`,
+  },
 ];
 
 const MIDDLEWARE = `import type { RouteMiddleware } from '@arkorlab/reactive-state/server';
@@ -52,8 +80,8 @@ export default (async ({ params }, next) => {
 }) satisfies RouteMiddleware<{ projectId: string }>;
 `;
 
-const pageOf = (load: string): string =>
-  `export default async function Page() {\n  const { default: Stats } = await ${load};\n  return <Stats />;\n}\n`;
+const pageOf = (load: string, file: 'page.ts' | 'page.tsx'): string =>
+  `export default async function Page() {\n  const { default: Stats } = await ${load};\n  return ${file === 'page.ts' ? 'Stats' : '<Stats />'};\n}\n`;
 
 const STATS = 'export default function Stats() {\n  return <p>stats</p>;\n}\n';
 
@@ -83,7 +111,8 @@ describe('a page under a guard that renders a root through a load of a module', 
       JSON.stringify({ compilerOptions: { paths: { '@/*': ['./src/*'] } } }),
     );
     await writeFile(path.join(src, 'components', 'stats.reactive.tsx'), STATS);
-    await writeFile(path.join(directory, 'page.tsx'), pageOf(row.load));
+    const file = row.file ?? 'page.tsx';
+    await writeFile(path.join(directory, file), pageOf(row.load, file));
     await writeFile(
       path.join(src, 'app', 'boards', '[projectId]', guarded ? 'middleware.ts' : 'unused.ts'),
       MIDDLEWARE,
