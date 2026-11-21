@@ -25,6 +25,11 @@ const BASE = `
   ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
 `;
 
+/** What `b` reads of a statement it may not read. */
+const DENIED = 'denied';
+/** A policy that lets `a` read every row, so that a view of `a`'s lets `b` read them. */
+const A_SEES = 'CREATE POLICY own ON tasks FOR SELECT TO a USING (true);';
+
 /** What is set up, what `b` reads, what the superuser changes, and what `b` reads before and after. */
 interface Case {
   readonly setup: string;
@@ -59,8 +64,16 @@ async function changing({ change, read, setup }: Omit<Case, 'rows'>): Promise<Ou
   await pg.exec(BASE + setup);
   const digest = new SchemaDigest(pg, RELATIONS);
   const idsRead = async (): Promise<string> => {
-    const { rows } = await pg.query<{ id: string }>(read);
-    return rows.map((row) => row.id).join(',');
+    try {
+      const { rows } = await pg.query<{ id: string }>(read);
+      return rows.map((row) => row.id).join(',');
+    } catch (error) {
+      // A statement `b` may no longer read fails: the row says it was refused.
+      if (String((error as { message?: unknown }).message).startsWith('permission denied')) {
+        return DENIED;
+      }
+      throw error;
+    }
   };
   await pg.exec('SET ROLE b');
   await readNow(digest);
@@ -113,6 +126,15 @@ describe("the schema's digest of whose rights a statement reads under", () => {
         setup: ADMINS_SEE + TEMPORARY_VIEW_OF_A,
       },
     ],
+    [
+      'the reader may no longer read it',
+      {
+        change: 'REVOKE SELECT ON pg_temp.tv FROM b',
+        read: THROUGH_TEMPORARY,
+        rows: [ALL_THREE, DENIED],
+        setup: A_SEES + TEMPORARY_VIEW_OF_A,
+      },
+    ],
   ])(
     'moves with a view of the session’s temporary schema, made by another role, once %s',
     async (_what, given) => {
@@ -150,6 +172,15 @@ describe("the schema's digest of whose rights a statement reads under", () => {
         read: THROUGH_VIEW,
         rows: ['', ALL_THREE],
         setup: `CREATE POLICY c ON tasks FOR SELECT TO c USING (true); ${VIEW_OF_A}`,
+      },
+    ],
+    [
+      'a view of the application’s, once the reader may no longer read it',
+      {
+        change: 'REVOKE SELECT ON va FROM b',
+        read: THROUGH_VIEW,
+        rows: [ALL_THREE, DENIED],
+        setup: A_SEES + VIEW_OF_A,
       },
     ],
     [
@@ -227,6 +258,15 @@ describe("the schema's digest of whose rights a statement reads under", () => {
         read: READ_TASKS,
         rows: ['t1', 't1'],
         setup: `GRANT g2 TO b; ${ONLY_T1}`,
+      },
+    ],
+    [
+      'the right to read a view of the session’s temporary schema, given to a role that reads nothing',
+      {
+        change: 'GRANT SELECT ON pg_temp.tv TO c',
+        read: THROUGH_TEMPORARY,
+        rows: [ALL_THREE, ALL_THREE],
+        setup: A_SEES + TEMPORARY_VIEW_OF_A,
       },
     ],
     [
