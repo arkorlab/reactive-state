@@ -110,6 +110,36 @@ describe('the modules a split middleware loads with require', () => {
         'lib/state.ts': STATE,
       },
     },
+    {
+      id: 'a module the guard’s helper loads by the `require` `createRequire` makes, called as it is made',
+      files: {
+        'lib/a.ts':
+          "import { createRequire } from 'node:module';\nexport function counted(): number { return createRequire(import.meta.url)('./state').bump(); }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a module the envelope’s helper loads by `module.createRequire`, called as it is made',
+      files: {
+        'lib/a.ts':
+          "import { bump } from './state';\nexport function counted(): number { return bump(); }\n",
+        'lib/b.ts':
+          "import module from 'node:module';\nexport function seen(): number { return module.createRequire(import.meta.url)('./state').current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a module the guard’s helper loads by a `require` of its own made by `createRequire`',
+      files: {
+        'lib/a.ts':
+          "import { createRequire } from 'node:module';\nconst require = createRequire(import.meta.url);\nexport function counted(): number { return require('./state').bump(); }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
   ])('refuses $id', ({ files }) => {
     expect(checkOf(application(files))).toContain(REFUSED);
   });
@@ -158,6 +188,26 @@ describe('the modules a split middleware loads with require', () => {
           "const registry = { require: (name: string) => name };\nexport function counted(): number { return registry.require('./state').length; }\n",
         'lib/b.ts':
           "const registry = { require: (name: string) => name };\nexport function seen(): number { return registry.require('./state').length; }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a `require` made by `createRequire` and not called with a module',
+      files: {
+        'lib/a.ts':
+          "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nexport function counted(): number { return load.resolve('./state').length; }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
+        'lib/state.ts': STATE,
+      },
+    },
+    {
+      id: 'a `require` that `createRequire` made and the helper bound to a name of its own',
+      files: {
+        'lib/a.ts':
+          "import { createRequire } from 'node:module';\nconst load = createRequire(import.meta.url);\nexport function counted(): number { return load('./state').bump(); }\n",
+        'lib/b.ts':
+          "import { current } from './state';\nexport function seen(): number { return current(); }\n",
         'lib/state.ts': STATE,
       },
     },

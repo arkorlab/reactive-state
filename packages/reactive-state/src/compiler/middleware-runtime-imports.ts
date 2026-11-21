@@ -43,9 +43,19 @@ const constants: Resolve = (name) => {
     : undefined;
 };
 
+/** Whether `callee` is `name`, or a member of that name of anything: `createRequire`, `module.createRequire`. */
+function names(callee: Expression, name: string): boolean {
+  return (
+    (isIdentifier(callee) && callee.text === name) ||
+    (isPropertyAccessExpression(callee) && callee.name.text === name)
+  );
+}
+
 /**
  * Whether `callee` loads the module its call is given: `import(…)`, or CommonJS's own `require(…)`
- * and `module.require(…)`, by those names, where the file declares one of its own of them or not.
+ * and `module.require(…)`, or the `require` that `createRequire(import.meta.url)` makes, called as
+ * it is made — by those names, where the file declares one of its own of them or not. A `require`
+ * a name is bound to (`const load = createRequire(…)`) is a call of that name, not read.
  */
 function loads(callee: Expression): boolean {
   return (
@@ -54,7 +64,8 @@ function loads(callee: Expression): boolean {
     (isPropertyAccessExpression(callee) &&
       isIdentifier(callee.expression) &&
       callee.expression.text === 'module' &&
-      callee.name.text === 'require')
+      callee.name.text === 'require') ||
+    (isCallExpression(callee) && names(callee.expression, 'createRequire'))
   );
 }
 
