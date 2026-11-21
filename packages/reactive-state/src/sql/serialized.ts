@@ -5,6 +5,14 @@ import type { KeyKind } from './keys.ts';
  * writes each value by a serializer of the type PostgreSQL takes it as — its own, or one the
  * application gave the instance (`PGlite.create({ serializers })`) — and a condition of the value is
  * followed by the text PostgreSQL was sent: only where that is the value's own.
+ *
+ * A serializer is asked that text here, and asked again by PGlite as it binds the value: what it
+ * answers the one is taken for what it answers the other. So a serializer the application gives is
+ * a function of its value alone — the same text of the same value each time it is asked, and
+ * nothing changed by its being asked. One that answers otherwise from one call to the next (a
+ * count of its calls, a clock, a setting read as it runs) may bind a text this check was never
+ * answered, and a change of the rows of that text would not render the read again: such a
+ * serializer is not followed, and nothing here looks for one.
  */
 
 /**
@@ -48,7 +56,10 @@ function ownText(value: unknown, kind: KeyKind): string | undefined {
     : undefined;
 }
 
-/** Whether `serialize`, a serializer of PGlite's or the application's, sends `value` as `text`. */
+/**
+ * Whether `serialize`, a serializer of PGlite's or the application's, sends `value` as `text`: by
+ * what it answers now, which it is to answer as the value is bound too (the contract above).
+ */
 function sends(serialize: unknown, value: unknown, text: string | undefined): boolean {
   if (typeof serialize !== 'function') return true;
   try {
@@ -63,6 +74,11 @@ function sends(serialize: unknown, value: unknown, text: string | undefined): bo
  * of a type a key's value may be taken as — PostgreSQL's of its kind, and the key's own type's (an
  * enum's) — writing the value as PGlite's own do. As they are as the value is bound: the
  * application gives an enum its serializer once the enum, and its oid, are made.
+ *
+ * What the answer relies on of a serializer the application gives: the same text of the same value
+ * each time it is called, and no effect of a call. It is called here before PGlite calls it, with
+ * a text, a number, a `bigint` or a boolean alone, and a condition is kept for the text it answered
+ * then. A serializer that is no function of its value is outside what is followed.
  */
 export function boundOf(connection: unknown): Bound {
   return (value, kind, oid) => {

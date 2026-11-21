@@ -119,7 +119,12 @@ export interface DrizzleFollow<S> {
   readonly channel: string;
   /** The statements that make the log and each table's triggers, each run by itself, in order. */
   readonly captureSql: () => readonly string[];
-  /** `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client. */
+  /**
+   * `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client. A
+   * serializer the application gave it (`PGlite.create({ serializers })`) answers the same text of
+   * the same value each time it is called, and changes nothing as it is: a render's condition is
+   * followed by the text it answers, which is asked before the value is bound.
+   */
   readonly client: <C extends Connection>(client: C) => C;
   /** The store the host gives the authority, which reads the log through `client`. */
   readonly store: (client: Queryable) => ExternalStore;
