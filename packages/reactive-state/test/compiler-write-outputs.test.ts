@@ -146,6 +146,32 @@ describe('what a write of the outputs does with the files an earlier build left'
       expect(listing(outDir)).toStrictEqual(['kept.authority.mts', 'shared', 'shared/notes.md']);
     });
 
+    it('a directory the files of an earlier build were in does not block the file that takes its name', () => {
+      const { root } = workspace();
+      const outDir = path.join(root, '.reactive');
+      mkdirSync(path.join(outDir, 'reports.ts'), { recursive: true });
+      writeFileSync(path.join(outDir, 'reports.ts/Board.authority.mts'), generated('before'));
+      const output = path.join(outDir, 'reports.ts');
+
+      writeOutputs(new Map([[output, generated('after')]]), outDir);
+      writeOutputs(new Map([[output, generated('after')]]), outDir);
+
+      expect(listing(outDir)).toStrictEqual(['reports.ts']);
+      expect(readFileSync(output, 'utf8')).toBe(generated('after'));
+    });
+
+    it('a directory that holds a file of the application’s stays, and the error names its path', () => {
+      const { root } = workspace();
+      const outDir = path.join(root, '.reactive');
+      mkdirSync(path.join(outDir, 'reports.ts'), { recursive: true });
+      writeFileSync(path.join(outDir, 'reports.ts/Board.authority.mts'), generated('before'));
+      writeFileSync(path.join(outDir, 'reports.ts/notes.md'), 'a file of the application’s');
+      const output = path.join(outDir, 'reports.ts');
+
+      expect(() => writeOutputs(new Map([[output, generated('after')]]), outDir)).toThrow(output);
+      expect(listing(outDir)).toStrictEqual(['reports.ts', 'reports.ts/notes.md']);
+    });
+
     it('a check removes and writes nothing, and takes the old spelling for stale', () => {
       const { root } = workspace();
       const outDir = path.join(root, '.reactive');
