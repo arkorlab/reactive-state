@@ -22,7 +22,10 @@ function leftOut(count: number): Record<string, undefined> {
 }
 
 /** `value`, counting each time a copy reads it, and a plain object otherwise. */
-function counted<T extends WeakKey>(value: T): { readonly held: T; readonly reads: () => number } {
+function counted(value: Record<string, undefined>): {
+  readonly held: Record<string, undefined>;
+  readonly reads: () => number;
+} {
   let reads = 0;
   const held = new Proxy(value, {
     getPrototypeOf: (target) => {
