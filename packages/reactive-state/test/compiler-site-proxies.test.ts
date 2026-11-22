@@ -65,6 +65,21 @@ describe('source Proxy origins in dynamic sites', () => {
     expect(compile(app).refusals).toStrictEqual([]);
   });
 
+  // A write of the parameter under a condition is not read as the one value the helper answers:
+  // what it was handed stays among them, whatever the condition is.
+  it('refuses a component Proxy the helper replaces under a condition', async () => {
+    const app = await fixture({
+      declaration: 'const carrier=new Proxy({value:first},{});',
+      domain:
+        'export function identity(input:{value:string},_text:string){if(true){input={value:"safe"};}return input;}',
+    });
+    apps.push(app);
+
+    expect(compile(app).refusals.map((refusal) => refusal.reason)).toStrictEqual([
+      expect.stringContaining('Proxy'),
+    ]);
+  });
+
   it.each([
     { declaration: 'const carrier=true?{value:first}:new Proxy({value:first},{});' },
     { declaration: 'const carrier={value:new Proxy({},{}),value:first};' },
@@ -93,11 +108,6 @@ describe('source Proxy origins in dynamic sites', () => {
       declaration: 'const carrier={value:first};',
       domain:
         'export function identity(input:{value:string},_text:string){const proxy=new Proxy({toString(){return input.value;}},{});return {value:String(proxy)};}',
-    },
-    {
-      declaration: 'const carrier=new Proxy({value:first},{});',
-      domain:
-        'export function identity(input:{value:string},_text:string){if(true){input={value:"safe"};}return input;}',
     },
   ])(
     'keeps Proxy work whose result does not reach the measured value: $declaration',
