@@ -81,7 +81,7 @@ const CASES = [
     source:
       'function frames(error:Error){const items=[error];items.some=()=>false;return items.some(value=>value.stack!.includes("Firefox"));}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'array-empty-no-callback',

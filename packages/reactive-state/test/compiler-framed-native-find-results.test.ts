@@ -86,7 +86,7 @@ const CASES = [
     source:
       "function frames(error:Error){const values=[error];values.find=()=>({stack:'fixed'}) as Error;return values.find(()=>true)!.stack;}",
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'typed-find-frames',

@@ -74,14 +74,14 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[[error]];values.join=()=>"fixed";return values.join(",");}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'own-inner-text-data',
     source:
       'function frames(error:Error){const inner=[error];inner.toString=()=>"fixed";return [inner].join(",");}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'local-made-words-data',
@@ -107,14 +107,14 @@ const CASES = [
     source:
       'function frames(error:Error){const inner=[error];inner.toString=()=>"fixed";const values:Error[][]=[inner];return values.join(",");}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'global-string-own-array-text-data',
     source:
       'function frames(error:Error){const values=[[error]];values.toString=()=>"fixed";return String(values);}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'global-string-local-words-data',

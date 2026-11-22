@@ -100,8 +100,8 @@ const CASES = [
     source:
       'function frames(error:Error){const[_,...values]=[{stack:"fixed"},error];values.at=()=>({stack:"fixed"})as never;return values.at(-1)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'negative-native-borrow-override-error',
