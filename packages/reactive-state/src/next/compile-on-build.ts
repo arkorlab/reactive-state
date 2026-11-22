@@ -55,8 +55,10 @@ import { writeCompiled, writeWhole } from './write-compiled.ts';
  *   process left behind as it died, and its file is taken away by its own name, then the directory
  *   where nothing is left in it: never a lock taken since, whose file is another's, however many
  *   processes found the same one left behind.
- * - Each file is written whole beside where it goes, then renamed over it; the manifest last, once
- *   everything it describes is in place; the digest after it.
+ * - What an earlier compile wrote that this one does not is taken away first, with the directories
+ *   that leaves empty (`./write-compiled.ts`). Each file is then written whole beside where it goes
+ *   and renamed over it; the manifest last, once everything it describes is in place; the digest
+ *   after it.
  */
 
 export interface ProjectOptions {
