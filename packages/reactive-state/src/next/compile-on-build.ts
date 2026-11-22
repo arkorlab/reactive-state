@@ -22,7 +22,7 @@ import { Worker } from 'node:worker_threads';
 
 import { GENERATED, isGeneratedFile } from '../compiler/app-route.ts';
 import { givenHost } from '../compiler/host.ts';
-import { compileApp, writeOutputs } from '../compiler/index.ts';
+import { compileApp } from '../compiler/index.ts';
 import {
   isModuleResolutions,
   type ModuleResolution,
@@ -31,6 +31,7 @@ import {
 } from '../compiler/module-resolutions.ts';
 import { byCodeUnits } from '../compiler/splice.ts';
 import { inputRoots } from './input-roots.ts';
+import { writeCompiled, writeWhole } from './write-compiled.ts';
 
 /**
  * The compile a build runs before Next.js reads the application (`./adapter.ts`), and a platform's
@@ -54,8 +55,10 @@ import { inputRoots } from './input-roots.ts';
  *   process left behind as it died, and its file is taken away by its own name, then the directory
  *   where nothing is left in it: never a lock taken since, whose file is another's, however many
  *   processes found the same one left behind.
- * - Each file is written whole beside where it goes, then renamed over it; the manifest last, once
- *   everything it describes is in place; the digest after it.
+ * - What an earlier compile wrote that this one does not is taken away first, with the directories
+ *   that leaves empty (`./write-compiled.ts`). Each file is then written whole beside where it goes
+ *   and renamed over it; the manifest last, once everything it describes is in place; the digest
+ *   after it.
  */
 
 export interface ProjectOptions {
@@ -125,8 +128,6 @@ const LOCK_BEAT_MS = 10_000;
 /** How often a process waiting for the lock looks again. */
 const LOCK_POLL_MS = 50;
 
-/** The manifest, which a compile writes last. */
-const MANIFEST = 'manifest.json';
 /** The files a compile may read: code, and the JSON of a `tsconfig.json` or a `package.json`. */
 const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.cjs',
@@ -238,26 +239,47 @@ function removeEmpty(directory: string, top: string): void {
 }
 
 /**
+ * Takes away the directories under `top`, and `top` with them, where no file is left under it: the
+ * folders an application's pages left empty as they moved away. A link is no directory of its own.
+ */
+function removeHollow(top: string): void {
+  try {
+    const entries = readdirSync(top, { recursive: true, withFileTypes: true });
+    if (entries.every((entry) => entry.isDirectory())) {
+      // Listed from the top down: taken away from the bottom up.
+      for (const entry of entries.toReversed()) {
+        rmdirSync(pathOf(entry));
+      }
+      rmdirSync(top);
+    }
+  } catch {
+    // Gone already, or something was put into one meanwhile: what is left stays.
+  }
+}
+
+/**
  * Takes away what a compile wrote into an `app` directory the compile no longer writes into — `app`
  * in the application's root, or `src/app`, whichever `layout`'s is not, as its pages moved from one
- * to the other — and each directory that leaves empty, up to that `app` directory: Next.js reads an
- * `app` directory in the root wherever it is there at all, its pages or none, before `src/app`.
- * Nothing the compile did not write: a file only where it opens as what the compile writes, and a
- * directory only where nothing is left in it. Answers whether it took anything away.
+ * to the other — and each directory that leaves empty, up to that `app` directory; and, where no
+ * file is left under that `app` directory then, the folders the pages left empty in it as they were
+ * moved file by file, and the directory with them (`removeHollow`): Next.js reads an `app`
+ * directory in the root wherever it is there at all, its pages or none, before `src/app`. Nothing
+ * the compile did not write: a file only where it opens as what the compile writes, and a directory
+ * only where nothing is left in it. Answers whether it took anything away.
  */
 function removeStaleRoutes(layout: ProjectLayout): boolean {
   let removed = false;
   const { appDir, projectDir } = layout;
   for (const directory of [path.join(projectDir, 'app'), path.join(projectDir, 'src', 'app')]) {
-    if (directory === appDir) {
-      continue;
+    const written =
+      directory === appDir ? [] : entriesUnder(directory).filter((entry) => isGenerated(entry));
+    for (const entry of written) {
+      rmSync(pathOf(entry), { force: true });
+      removeEmpty(entry.parentPath, directory);
     }
-    for (const entry of entriesUnder(directory)) {
-      if (isGenerated(entry)) {
-        rmSync(pathOf(entry), { force: true });
-        removeEmpty(entry.parentPath, directory);
-        removed = true;
-      }
+    if (written.length > 0) {
+      removeHollow(directory);
+      removed = true;
     }
   }
   return removed;
@@ -359,7 +381,7 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
       typescript: compilerTypeScript(),
     }),
   );
-  const roots = [...inputRoots(layout), { name: 'compiler', root: PACKAGE_SOURCES }];
+  const roots = [...inputRoots(layout, NOT_SOURCES), { name: 'compiler', root: PACKAGE_SOURCES }];
   const skipped = new Set([layout.outDir]);
   for (const { name, root } of roots) {
     const files = sourceFiles(root, skipped)
@@ -468,44 +490,6 @@ function isCurrent(layout: ProjectLayout, inputs: string): boolean {
     holds(layout, record.reads) &&
     moduleResolutionsHold(layout.projectDir, record.resolutions)
   );
-}
-
-/** Writes `text` to `file` whole: beside it first, then in its place in one rename. */
-function writeWhole(file: string, text: string): void {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = path.join(
-    path.dirname(file),
-    `.${path.basename(file)}.${String(process.pid)}.${randomUUID()}.tmp`,
-  );
-  try {
-    writeFileSync(temporary, text);
-    renameSync(temporary, file);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
-}
-
-/**
- * Writes what the compile wrote that is not on disk already, each file whole; takes away the files
- * an earlier compile wrote that this one does not; then the manifest, last. Answers whether it
- * changed anything.
- */
-function writeCompiled(outputs: ReadonlyMap<string, string>, outDir: string): boolean {
-  const manifest = path.join(outDir, MANIFEST);
-  const stale = writeOutputs(outputs, outDir, { check: true }).filter((output) => !output.current);
-  const ordered = stale.toSorted(
-    (left, right) => Number(left.path === manifest) - Number(right.path === manifest),
-  );
-  for (const output of ordered) {
-    const text = outputs.get(output.path);
-    if (text === undefined || output.leftover) {
-      rmSync(output.path, { force: true });
-    } else {
-      writeWhole(output.path, text);
-    }
-  }
-  return stale.length > 0;
 }
 
 /** The code of a system error; none of anything else. */
@@ -688,6 +672,10 @@ function compileLocked(layout: ProjectLayout, options: ProjectOptions, inputs: s
       `@arkorlab/reactive-state refused to compile the components under ${layout.srcDir}:\n${refusals.join('\n')}`,
     );
   }
+  // Accepted: nothing a compile wrote is changed or taken away before this. First the route an
+  // earlier compile wrote where the application's pages no longer are: Next.js would read that
+  // directory, and none of the pages.
+  const removed = removeStaleRoutes(layout);
   const changed = writeCompiled(compiled.outputs, layout.outDir);
   const record: DigestRecord = {
     inputs,
@@ -702,13 +690,15 @@ function compileLocked(layout: ProjectLayout, options: ProjectOptions, inputs: s
     }),
   };
   writeWhole(path.join(layout.outDir, DIGEST_FILE), `${JSON.stringify(record, null, 2)}\n`);
-  return changed;
+  return changed || removed;
 }
 
 /**
  * Compiles the application `options` names where what the compile reads changed since it last
  * wrote, and writes what it compiles; refuses with each refusal where it refuses anything, and
- * writes nothing then.
+ * writes nothing then, nor takes anything away. Where it compiles nothing, it still takes away the
+ * route an earlier compile wrote where the application's pages no longer are, whatever the digest
+ * says (`removeStaleRoutes`).
  */
 export async function compileProject(options: ProjectOptions): Promise<ProjectCompile> {
   const layout = layoutOf(options);
@@ -717,26 +707,27 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
       `${layout.srcDir} does not exist: @arkorlab/reactive-state compiles the components under \`src\`, or under the \`src\` withReactiveState is given.`,
     );
   }
-  // The route an earlier compile wrote where the application's pages no longer are, whatever the
-  // digest says: Next.js would read that directory, and none of the pages.
-  const removed = removeStaleRoutes(layout);
   if (isCurrent(layout, inputDigest(layout, options))) {
-    return { ...layout, changed: removed, compiled: false };
+    return { ...layout, changed: removeStaleRoutes(layout), compiled: false };
   }
   const held = await lock(path.join(layout.outDir, LOCK_DIRECTORY));
-  // Beaten from the moment it is held, however long what follows takes — reading the sources again
-  // as well as the compile — a holder alive.
-  const stop = beating(held.file, held.holder);
+  let stop: (() => Promise<void>) | undefined;
   try {
+    // Beaten from the moment it is held, however long what follows takes — reading the sources again
+    // as well as the compile — a holder alive. Started in here: a lock whose beat could not start is
+    // let go like any other, not left to a process that lives on and never beats it.
+    stop = beating(held.file, held.holder);
     // Another process may have compiled while this one waited, or the sources changed meanwhile.
     const inputs = inputDigest(layout, options);
     if (isCurrent(layout, inputs)) {
-      return { ...layout, changed: removed, compiled: false };
+      return { ...layout, changed: removeStaleRoutes(layout), compiled: false };
     }
-    const changed = compileLocked(layout, options, inputs);
-    return { ...layout, changed: changed || removed, compiled: true };
+    return { ...layout, changed: compileLocked(layout, options, inputs), compiled: true };
   } finally {
-    await stop();
-    unlock(held.file);
+    try {
+      await stop?.();
+    } finally {
+      unlock(held.file);
+    }
   }
 }

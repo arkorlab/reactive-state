@@ -81,6 +81,11 @@ describe('a compile skipped for what it read', () => {
       options: (shared: string): Rest => ({ src: path.join(shared, 'components') }),
       src: (project: string) => path.join(project, '../shared/components'),
     },
+    {
+      id: 'in a components’ directory under a folder of the root no source is read from',
+      options: (): Rest => ({ src: '.state/components' }),
+      src: (project: string) => path.join(project, '.state/components'),
+    },
   ])('compiles a component added $id', async ({ options, src }) => {
     const { project, shared } = workspace();
     const given: ProjectOptions = { ...options(shared), projectDir: project };
