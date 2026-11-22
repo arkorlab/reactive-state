@@ -672,6 +672,10 @@ function compileLocked(layout: ProjectLayout, options: ProjectOptions, inputs: s
       `@arkorlab/reactive-state refused to compile the components under ${layout.srcDir}:\n${refusals.join('\n')}`,
     );
   }
+  // Accepted: nothing a compile wrote is changed or taken away before this. First the route an
+  // earlier compile wrote where the application's pages no longer are: Next.js would read that
+  // directory, and none of the pages.
+  const removed = removeStaleRoutes(layout);
   const changed = writeCompiled(compiled.outputs, layout.outDir);
   const record: DigestRecord = {
     inputs,
@@ -686,13 +690,15 @@ function compileLocked(layout: ProjectLayout, options: ProjectOptions, inputs: s
     }),
   };
   writeWhole(path.join(layout.outDir, DIGEST_FILE), `${JSON.stringify(record, null, 2)}\n`);
-  return changed;
+  return changed || removed;
 }
 
 /**
  * Compiles the application `options` names where what the compile reads changed since it last
  * wrote, and writes what it compiles; refuses with each refusal where it refuses anything, and
- * writes nothing then.
+ * writes nothing then, nor takes anything away. Where it compiles nothing, it still takes away the
+ * route an earlier compile wrote where the application's pages no longer are, whatever the digest
+ * says (`removeStaleRoutes`).
  */
 export async function compileProject(options: ProjectOptions): Promise<ProjectCompile> {
   const layout = layoutOf(options);
@@ -701,11 +707,8 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
       `${layout.srcDir} does not exist: @arkorlab/reactive-state compiles the components under \`src\`, or under the \`src\` withReactiveState is given.`,
     );
   }
-  // The route an earlier compile wrote where the application's pages no longer are, whatever the
-  // digest says: Next.js would read that directory, and none of the pages.
-  const removed = removeStaleRoutes(layout);
   if (isCurrent(layout, inputDigest(layout, options))) {
-    return { ...layout, changed: removed, compiled: false };
+    return { ...layout, changed: removeStaleRoutes(layout), compiled: false };
   }
   const held = await lock(path.join(layout.outDir, LOCK_DIRECTORY));
   let stop: (() => Promise<void>) | undefined;
@@ -717,10 +720,9 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
     // Another process may have compiled while this one waited, or the sources changed meanwhile.
     const inputs = inputDigest(layout, options);
     if (isCurrent(layout, inputs)) {
-      return { ...layout, changed: removed, compiled: false };
+      return { ...layout, changed: removeStaleRoutes(layout), compiled: false };
     }
-    const changed = compileLocked(layout, options, inputs);
-    return { ...layout, changed: changed || removed, compiled: true };
+    return { ...layout, changed: compileLocked(layout, options, inputs), compiled: true };
   } finally {
     try {
       await stop?.();

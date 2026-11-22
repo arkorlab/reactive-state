@@ -486,6 +486,33 @@ describe('compileProject', () => {
     });
   });
 
+  it('takes nothing away where it refuses: the route it wrote where the pages moved from stays until a compile is accepted', async () => {
+    const dir = application({ 'app/page.tsx': PAGE });
+    rmSync(path.join(dir, 'src', 'app'), { recursive: true });
+    await compileProject({ projectDir: dir });
+    const digest = readFileSync(path.join(dir, '.reactive', DIGEST_FILE), 'utf8');
+    // The page moves to `src/app`, and a component the compile refuses comes with it.
+    mkdirSync(path.join(dir, 'src', 'app'));
+    renameSync(path.join(dir, 'app/page.tsx'), path.join(dir, 'src/app/page.tsx'));
+    writeFileSync(path.join(dir, 'src/components/broken.reactive.tsx'), NO_COMPONENT);
+
+    await expect(compileProject({ projectDir: dir })).rejects.toThrow('refused to compile');
+
+    expect(existsSync(path.join(dir, 'app/api/reactive-state/[...path]/route.ts'))).toBe(true);
+    expect(readFileSync(path.join(dir, '.reactive', DIGEST_FILE), 'utf8')).toBe(digest);
+
+    rmSync(path.join(dir, 'src/components/broken.reactive.tsx'));
+    const accepted = await compileProject({ projectDir: dir });
+
+    expect(accepted).toMatchObject({
+      appDir: path.join(dir, 'src', 'app'),
+      changed: true,
+      compiled: true,
+    });
+    expect(existsSync(path.join(dir, 'app'))).toBe(false);
+    expect(existsSync(path.join(dir, 'src/app/api/reactive-state/[...path]/route.ts'))).toBe(true);
+  });
+
   it('leaves the folders of an `app` directory it is told to read no pages from, where a file of the application’s is among them', async () => {
     const dir = application({ 'src/app/(site)/notes.md': 'Kept.\n' });
     await compileProject({ projectDir: dir });
