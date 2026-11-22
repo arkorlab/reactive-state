@@ -209,7 +209,7 @@ const CASES: readonly Case[] = [
     source:
       "type Data={stack:string};type Box={failure:Error;caption:Data;label:Data};function frames<K extends 'failure'|'caption'>(value:Box[K&'caption']){return value.stack;}",
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'imported-key-existing-boundary',

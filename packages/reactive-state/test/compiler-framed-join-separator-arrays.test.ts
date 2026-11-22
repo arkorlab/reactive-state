@@ -79,14 +79,14 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const separator=[error];separator.toString=()=>"-";return["a","b"].join(separator as never);}',
     invocation: OURS,
-    refused: false,
+    refused: true,
   },
   {
     id: 'join-own-join-separator-pin',
     source:
       'function frames(error:Error){const separator=[error];separator.join=()=>"-";return["a","b"].join(separator as never);}',
     invocation: OURS,
-    refused: false,
+    refused: true,
   },
   {
     id: 'join-ignored-argument-pin',

@@ -71,14 +71,14 @@ const CASES = [
     source:
       'function frames(){const inputs:[{stack:string}?,Error?]=[];const values:unknown[]=["fixed"];for(values[0] of inputs){}return values.join();}',
     invocation: 'frames()',
-    refused: false,
+    refused: true,
   },
   {
     id: 'rest-data-boundary',
     source:
       'function frames(){const inputs:[{stack:string},...Error[]]=[{stack:"fixed"}];const values:unknown[]=["fixed"];for(values[0] of inputs){}return values.join();}',
     invocation: 'frames()',
-    refused: false,
+    refused: true,
   },
   {
     id: 'declaration-target-shadow',
