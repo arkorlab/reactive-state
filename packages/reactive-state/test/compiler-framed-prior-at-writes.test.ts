@@ -69,7 +69,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values:unknown[]=[];values.push(error);values.at=()=>({stack:"data"});return values.at(0)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     group: 'at',
