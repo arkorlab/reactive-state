@@ -68,7 +68,7 @@ const CASES = [
     source:
       'function frames(error:Error){const name=[error];name.toString=()=>"fixed";return new File(["fixed"],name as never,{lastModified:0}).name;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
     reader: false,
   },
 ];

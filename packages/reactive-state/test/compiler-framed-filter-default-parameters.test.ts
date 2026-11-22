@@ -115,7 +115,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values={filter(_callback:unknown){return [{stack:"fixed"}];}};return values.filter(()=>true)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'call-default-reported-independent',

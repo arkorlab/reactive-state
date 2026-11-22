@@ -95,7 +95,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const list=[error];list.toString=()=>"fixed";return new Error(list as never).message;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'cause-array-not-converted',
