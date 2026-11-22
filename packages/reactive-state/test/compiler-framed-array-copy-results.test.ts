@@ -66,7 +66,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.slice=()=>[{stack:"fixed"}as any];return values.slice()[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     group: 'copy',

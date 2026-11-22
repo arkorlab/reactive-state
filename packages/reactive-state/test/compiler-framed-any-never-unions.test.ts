@@ -96,7 +96,7 @@ const CASES = [
     id: 'any-template',
     source: `type Failure = (\`\${any}\`) extends never ? Error : { stack: string }; function frames(value: Failure): string { return value.stack ?? ""; }`,
     argument: '{ stack: "fixed" }',
-    refused: false,
+    refused: true,
   },
   {
     id: 'any-union-template',

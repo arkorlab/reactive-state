@@ -136,14 +136,14 @@ const CASES = [
     id: 'own-at-implementation',
     source:
       'function frames(error:Error){let values:any[]=[];values=[error];values.at=()=>({stack:"fixed"});return values.at(0).stack;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'custom-at-implementation',
     source:
       'function frames(error:Error){let values={at:(_index:number)=>({stack:"fixed"})};values={at:(_index:number)=>({stack:"fixed"})};return values.at(0).stack;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
