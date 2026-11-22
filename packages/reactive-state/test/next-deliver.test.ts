@@ -1741,14 +1741,14 @@ describe('a middleware route, delivered', () => {
     await expect(answeredCoded('compress')).resolves.toStrictEqual([500, null, null, '']);
   });
 
-  it('asks for the page with the visitor’s `Accept-Encoding` as it came, as the page’s code would read it asked directly', async () => {
+  it('asks for the page with the visitor’s `Accept-Encoding` as it came but for `zstd`, as the page’s code would read it asked directly', async () => {
     await delivered('/projects/p1/publication', PUBLICATION_PATH, {
-      headers: { 'accept-encoding': 'zstd, deflate' },
+      headers: { 'accept-encoding': 'zstd, deflate;q=0.5, gzip' },
     });
     await delivered('/projects/p1/publication', PUBLICATION_PATH, {});
 
     expect(hoisted.fetched.map((page) => page.headers.get('accept-encoding'))).toStrictEqual([
-      'zstd, deflate',
+      'deflate;q=0.5, gzip',
       null,
     ]);
   });

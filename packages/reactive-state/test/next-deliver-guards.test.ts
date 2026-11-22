@@ -381,6 +381,8 @@ describe('one guard admission for a delivered HTTP page', () => {
     });
 
     await expect(response.text()).resolves.toBe('<main>root:main</main>');
+    // An admission of the authority's own, not none: the visitor's merely taken off would be none.
+    expect(observed.pages[0]?.get(ADMISSION)).toMatch(/./u);
     expect(observed.pages[0]?.get(ADMISSION)).not.toBe('visitor-forgery');
   });
 });

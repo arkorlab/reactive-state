@@ -2,7 +2,7 @@ import { refresh } from 'next/cache';
 
 import { AUTHORITY_UNAVAILABLE, type Failure } from '../client/index.ts';
 import type { OperationArgument, OperationCall } from '../program.ts';
-import { toJson } from '../runtime/json.ts';
+import { type JsonBudget, jsonBudget, spendJson, toJson } from '../runtime/json.ts';
 import { operationDigest } from '../runtime/outcome.ts';
 import { HTTP_INTERNAL_ERROR } from '../status.ts';
 import { authority, requestSession, type SessionSource } from './authority.ts';
@@ -68,8 +68,11 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** A form's text fields, as the authority rebuilds the form from them; a file is refused. */
-function formOf(form: FormData, where: string): (readonly [string, string])[] {
+/**
+ * A form's text fields, as the authority rebuilds the form from them; a file is refused. Its bytes
+ * are counted with the call's other arguments (`budget`).
+ */
+function formOf(form: FormData, where: string, budget: JsonBudget): (readonly [string, string])[] {
   const encoder = new TextEncoder();
   const entries: (readonly [string, string])[] = [];
   let bytes = 0;
@@ -90,15 +93,21 @@ function formOf(form: FormData, where: string): (readonly [string, string])[] {
       `${where} holds ${String(entries.length)} fields of ${String(bytes)} bytes: a server operation is sent ${String(MAX_FORM_ENTRIES)} fields of ${String(MAX_FORM_BYTES)} bytes at most.`,
     );
   }
+  spendJson(budget, bytes + 2, where);
   return entries;
 }
 
-/** An argument as it crosses to the authority: a form's text fields, or JSON as it is. */
-function encodeArgument(argument: unknown, index: number): OperationArgument {
+/**
+ * An argument as it crosses to the authority: a form's text fields, or JSON as it is — within what
+ * `budget` has left of the JSON one request carries, which the arguments of a call are counted
+ * against together: an object a caller's arguments hold many times over is counted each time, in
+ * one argument or across them.
+ */
+function encodeArgument(argument: unknown, index: number, budget: JsonBudget): OperationArgument {
   const where = `Argument ${String(index + 1)}`;
   return argument instanceof FormData
-    ? { form: formOf(argument, where) }
-    : { json: toJson(argument, where) };
+    ? { form: formOf(argument, where, budget) }
+    : { json: toJson(argument, where, budget) };
 }
 
 /**
@@ -141,8 +150,9 @@ export async function operate(
   built: string | OperatedBy,
 ): Promise<unknown> {
   const { build, session: source } = typeof built === 'string' ? { build: built } : built;
+  const budget = jsonBudget();
   const call: OperationCall = {
-    args: args.map((argument, index) => encodeArgument(argument, index)),
+    args: args.map((argument, index) => encodeArgument(argument, index, budget)),
     build,
     module,
     name,

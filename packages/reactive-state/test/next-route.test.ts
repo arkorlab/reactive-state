@@ -334,6 +334,25 @@ describe('the route a compile writes', () => {
       expect(signedOut.status).toBe(200);
       expect(signedOut.headers.get('set-cookie')).toContain('Max-Age=0');
     });
+
+    it('signs the browser out where the authority did not answer, and answers that it did not', async () => {
+      hoisted.client['logout']?.mockResolvedValueOnce(
+        refusal(503, 'AUTHORITY_UNAVAILABLE', 'No answer.'),
+      );
+
+      const response = await remove(
+        request('session', { method: 'DELETE', session: 'session-a' }),
+        segments('session'),
+      );
+
+      // The session is left to end at the authority as it expires, within the day a cookie lasts.
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toMatchObject({ code: 'AUTHORITY_UNAVAILABLE' });
+      expect(response.headers.get('set-cookie')).toBe(
+        `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
+      );
+      expect(hoisted.client['logout']).toHaveBeenCalledExactlyOnceWith('session-a');
+    });
   });
 
   describe('a method a route handler may be asked with beside its own', () => {
