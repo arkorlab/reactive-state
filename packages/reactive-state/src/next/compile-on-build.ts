@@ -750,12 +750,14 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
     // as well as the compile — a holder alive. Started in here: a lock whose beat could not start is
     // let go like any other, not left to a process that lives on and never beats it.
     stop = beating(held.file, held.holder);
-    // Another process may have compiled while this one waited, or the sources changed meanwhile.
-    const inputs = inputDigest(layout, options);
-    if (isCurrent(layout, inputs)) {
-      return { ...layout, changed: removeStaleRoutes(layout), compiled: false };
+    // Another process may have compiled while this one waited, or the sources changed meanwhile:
+    // where the pages are among them, so the layout is read again as the sources are.
+    const now = layoutOf(options);
+    const inputs = inputDigest(now, options);
+    if (isCurrent(now, inputs)) {
+      return { ...now, changed: removeStaleRoutes(now), compiled: false };
     }
-    return { ...layout, changed: compileLocked(layout, options, inputs), compiled: true };
+    return { ...now, changed: compileLocked(now, options, inputs), compiled: true };
   } finally {
     try {
       await stop?.();
