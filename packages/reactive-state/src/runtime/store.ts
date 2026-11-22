@@ -1,6 +1,6 @@
 import type { FieldOperation, FieldReceipt, Frame, Json, Result, Value } from '../program.ts';
 import { BUILD_MISMATCH, HTTP_UNAUTHORIZED } from '../status.ts';
-import { toJsonRecord } from './json.ts';
+import { carriedRecord } from './json.ts';
 import { type PendingOperation, type Predictor, reflects } from './operations.ts';
 import { isDefinitive, isReceipt, refusesBinding } from './store-answers.ts';
 
@@ -132,6 +132,8 @@ const NOT_SAVED = 'The change could not be saved.';
 const UNCERTAIN = 'The change may have been saved: check the page before making it again.';
 const OFFLINE = 'Not connected. Try again once the connection is back.';
 const TOO_MANY = 'Too many unconfirmed changes.';
+/** What the page says of an update that captured too much to send, in the authority's words. */
+const TOO_MUCH = 'The update captured too much.';
 const UPDATED = 'The application was updated. Reload the page.';
 const REVOKED = 'Your access was revoked.';
 
@@ -587,7 +589,9 @@ export class PageStore {
    * Writes a field through a registered `apply`: `predict` shows the result at once, and the
    * authority computes the real one with its own copy of the update, from the values the call
    * captured — copied here, so that nothing the page changes later changes what was sent. Returns
-   * the operation's id, or nothing when it was refused here.
+   * the operation's id, or nothing when it was refused here — as a write made offline or one too
+   * many is, so is one whose update captured more than one request carries. What JSON does not
+   * carry at all is thrown for: a mistake of the page's code.
    */
   apply(write: ApplyWrite): string | undefined {
     if (!this.#ready()) {
@@ -601,7 +605,12 @@ export class PageStore {
       this.#refuse(TOO_MANY);
       return undefined;
     }
-    const captures = Object.freeze(toJsonRecord(write.captures, 'What the update captured'));
+    const captures = carriedRecord(write.captures, 'What the update captured');
+    if (captures === undefined) {
+      this.#refuse(TOO_MUCH);
+      return undefined;
+    }
+    Object.freeze(captures);
     return this.#push(this.#operation(write, { captures, kind: 'apply', predict: write.predict }));
   }
 

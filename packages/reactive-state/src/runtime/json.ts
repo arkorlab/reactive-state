@@ -8,17 +8,19 @@ import type { Json } from '../program.ts';
  * is left out, as JSON leaves it out, `-0` is `0`, as JSON writes it, and every other key is the
  * copy's own, `__proto__` among them. Runtime-neutral: the browser's store and the application's server use it.
  * Two values are compared as the one text each is (`canonicalJson`). A value is copied within a
- * bound of the JSON it comes to (`JsonBudget`), counted as it is copied: a copy takes no more work
- * than the largest value a request carries does, however few objects the value was built of.
+ * bound of the JSON it comes to and of the properties it leaves out (`JsonBudget`), counted as it
+ * is copied: a copy takes no more work than the largest value a request carries does, however few
+ * objects the value was built of.
  */
 
 /** How deep a value may nest: one deeper is taken for a cycle, or for a value no page means. */
 const MAX_DEPTH = 64;
 
 /**
- * The most JSON the values of one request may come to, in characters: as many as the authority
- * reads bytes of a request (`MAX_CARRIED_BYTES`, 1 MiB), so that a value past it is one no request
- * could carry there.
+ * The most the values of one request may come to, as a copy counts them (`JsonBudget`): the
+ * characters of their JSON, and one for each property that holds `undefined` and is left out of
+ * it. As many as the authority reads bytes of a request (`MAX_CARRIED_BYTES`, 1 MiB), so that a
+ * value past it by its JSON alone is one no request could carry there.
  */
 export const MAX_JSON_LENGTH = 1_048_576;
 
@@ -28,12 +30,18 @@ const KEY_MARKS = 3;
 /**
  * What is left of `MAX_JSON_LENGTH` as the values of one request are copied. Each value spends what
  * JSON writes of it at the least, where it stands and every time it stands there — a string or a
- * key its length and its quotes, an array its brackets and its commas, an object its braces, any
- * other value a character — before anything of it is read or copied. An object a value holds twice
- * is two in the JSON a copy writes, as a Server Function's decoder hands a caller's values, which
- * keeps one object for every place a request names it: thirty objects that each hold the next twice
- * are a thousand million in the copy, and are refused here once they are counted past the bound,
- * whatever the size of the request that carried them.
+ * key its length and its quotes, an array its brackets and its commas, an object its braces and a
+ * comma for each of its properties but the first, any other value a character — before anything
+ * of it is read or copied, but the list of an object's names, which is read to count them. An
+ * object a value holds twice is two in the JSON a copy writes, as a Server Function's decoder hands
+ * a caller's values, which keeps one object for every place a request names it: thirty objects
+ * that each hold the next twice are a thousand million in the copy, and are refused here once they
+ * are counted past the bound, whatever the size of the request that carried them.
+ *
+ * A property that holds `undefined` is left out of the copy, and is a property the copy reads all
+ * the same, at every place its object stands: it spends the comma a property that is written
+ * spends. So the count is never more than the JSON a value comes to and one for each property left
+ * out of it, and no property is read that was not counted first.
  */
 export interface JsonBudget {
   remaining: number;
@@ -57,7 +65,8 @@ export function spendJson(budget: JsonBudget, length: number, where: string): vo
 /**
  * What JSON writes of `value` at the least, the members of an array or of an object aside: a
  * string's characters and its quotes, an array's brackets and the commas between its elements, an
- * object's braces, and a character of anything else.
+ * object's braces — the commas between its properties are counted once its names are listed
+ * (`copyObject`) — and a character of anything else.
  */
 function leastLength(value: unknown): number {
   if (typeof value === 'string') {
@@ -90,12 +99,16 @@ function copyObject(
   if (prototype !== null && prototype !== Object.prototype) {
     return refuse(where, `an instance of ${kindOf(value)}`);
   }
+  // Each property is read below, one that holds `undefined` and is left out among them: all are
+  // counted before any is read, as a comma is of each property but the first.
+  const names = Object.getOwnPropertyNames(value);
+  spendJson(budget, Math.max(0, names.length - 1), where);
   if (Object.getOwnPropertySymbols(value).length > 0) {
     return refuse(where, 'an object with symbol keys');
   }
   // An entry it does not enumerate, which JSON leaves out, or one an accessor computes, which may
   // answer otherwise each time: copied, it would be another.
-  if (Object.getOwnPropertyNames(value).some((name) => !isWrittenAsIs(value, name))) {
+  if (names.some((name) => !isWrittenAsIs(value, name))) {
     return refuse(where, 'an object with an entry it does not enumerate, or an accessor computes');
   }
   // `JSON.rawJSON(…)`, which JSON writes as the text it holds, and a copy as an object of an entry.
@@ -228,6 +241,27 @@ export function toJsonRecord(
     return refuse(where, 'not an object');
   }
   return copied as Readonly<Record<string, Json>>;
+}
+
+/**
+ * A JSON object, copied within a budget of its own; none where it is past what one request carries,
+ * for a caller that answers that otherwise than it answers what JSON does not carry at all — which
+ * is thrown for here as `toJsonRecord` throws for it.
+ */
+export function carriedRecord(
+  value: unknown,
+  where: string,
+): Readonly<Record<string, Json>> | undefined {
+  const budget = jsonBudget();
+  try {
+    return toJsonRecord(value, where, budget);
+  } catch (error) {
+    // Only the bound's refusal leaves the budget spent past what it held.
+    if (budget.remaining >= 0) {
+      throw error;
+    }
+    return undefined;
+  }
 }
 
 function written(value: Json, out: string[]): void {

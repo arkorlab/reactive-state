@@ -66,8 +66,8 @@ describe('the bound a value is copied within', () => {
     const { leaf, reads } = countedLeaf();
 
     expect(() => toJson(doubled(18, leaf))).toThrow(/is past the 1048576 characters of JSON/u);
-    // Each object above the leaf writes ten characters of its own at the least, the leaf two: the
-    // bound has room for a hundred thousand of them, of the half a million places the value has.
+    // Each object above the leaf writes eleven characters of its own, the leaf two: the bound has
+    // room for fewer than a hundred thousand of them, of the half a million places the value has.
     expect(reads()).toBeLessThan(BOUND / 10);
   });
 
@@ -131,7 +131,7 @@ describe('the bound a value is copied within', () => {
     ['an empty array', []],
     ['an empty object', {}],
     ['a list of lists', [[], [1, [2, [3]]], ['a', null, true]]],
-    ['a record', { id: 'p1', nested: { list: [1, 2, 3], none: undefined, zero: -0 }, title: '' }],
+    ['a record', { id: 'p1', nested: { list: [1, 2, 3], zero: -0 }, title: '' }],
   ])('counts no more of %s than JSON writes of it', (_what, value) => {
     expect(spentBy(value)).toBeLessThanOrEqual(JSON.stringify(value).length);
     expect(spentBy(value)).toBeGreaterThan(0);
