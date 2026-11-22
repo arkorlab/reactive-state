@@ -14,7 +14,7 @@ import {
 import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   abandoned,
@@ -384,9 +384,15 @@ describe('compileProject', () => {
     const dir = application();
     const lock = lockedBy(dir, LOCK_STALE_MS, 'holder\n');
     const stop = beating(lock, 'holder\n', HELD_MS / 10);
+    // Its thread is up once it has beaten the lock once.
+    await vi.waitFor(() => {
+      expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(LOCK_STALE_MS / 2);
+    });
 
+    // Aged again, and this thread held from then until the lock is read, no timer of its own run
+    // in between: what beats the lock meanwhile is a thread of its own.
+    lockedBy(dir, LOCK_STALE_MS, 'holder\n');
     holdThread(HELD_MS);
-    await delay(HELD_MS / 10);
     const beaten = Date.now() - statSync(lock).mtimeMs;
     await stop();
     // Let go of: its lock aged again, and left so.
