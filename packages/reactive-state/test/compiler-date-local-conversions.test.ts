@@ -403,8 +403,8 @@ const CASES = [
     id: 'array-captured-own-Date',
     source:
       'export function Widget(){const dates=[new Date(0)];function text(prepare:()=>void){prepare();return dates.join("");}return <p>{text(()=>{dates[0]!.toString=()=>"fixed";})}</p>;}',
-    input: false,
-    private: false,
+    input: true,
+    private: true,
   },
   {
     id: 'deferred-String-conversion',
