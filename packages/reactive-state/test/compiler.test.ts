@@ -990,6 +990,8 @@ describe('the compiler, of the workspace the specification writes two other ways
         d1: { guard: [], inputs: [panels], list: true },
       });
       expect(checked.stdout + checked.stderr).toBe('');
+      // A check that was killed prints nothing either: it must have ended, and found nothing.
+      expect(checked.status).toBe(0);
     },
   );
 });
