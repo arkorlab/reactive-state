@@ -74,6 +74,18 @@ const KINDS_SOURCE = [
   '',
 ].join('\n');
 
+/**
+ * A shared module whose `frames` reads the stack of what `read` selects of `values`, a tuple of
+ * the type `tuple` that holds an Error after a text, below the declarations `prelude` writes.
+ */
+function tupleRestFrames(prelude: string, tuple: string, read: string): string {
+  return [
+    "import type {TodoFilter} from '@/navigation';",
+    `${prelude}function frames(values:${tuple},i:number){return ${read}.stack;}`,
+    "export function normalizeFilter(value:string):TodoFilter{return String(frames(['x',new Error(value)] as never,1)).length>40?'all':value==='active'||value==='done'?value:'all';}",
+  ].join('\n');
+}
+
 /** A component of state given children, which the fixture has none of. */
 const PANEL_SOURCE = [
   "import type { ReactNode } from 'react';",
@@ -11136,6 +11148,34 @@ const REFUSED: readonly Refused[] = [
     marker: 'const decision',
     reason: 'A collection (`decision`) read by both the guard and the host is mutated',
   },
+  // A tuple's rest written as a reference to the language's array is the array's elements: an
+  // index the code computes, and `at`, read an Error of it.
+  ...(
+    [
+      ['tuple rest Array index retains frames', '[string,...Array<Error>]', 'values[i]!'],
+      ['tuple rest Array at retains frames', '[string,...Array<Error>]', 'values.at(-1)!'],
+      [
+        'readonly tuple rest retains frames',
+        'readonly [string,...ReadonlyArray<Error>]',
+        'values[i]!',
+      ],
+      [
+        'tuple rest global Array retains frames',
+        '[string,...globalThis.Array<Error>]',
+        'values[i]!',
+      ],
+    ] as const
+  ).map(([what, tuple, read]): Refused => {
+    return {
+      beside: { 'domain/todo-filter.ts': tupleRestFrames('', tuple, read) },
+      file: 'components/project-workspace.reactive.tsx',
+      from: 'const renderedFilter = effectiveFilter;',
+      marker: 'renderedFilter} />',
+      reason: 'a shared module that answers otherwise',
+      to: 'const renderedFilter = effectiveFilter;',
+      what,
+    };
+  }),
 ];
 
 describe('the compiler refuses', () => {
@@ -11157,6 +11197,21 @@ describe('the compiler refuses', () => {
       });
     },
   );
+
+  it('no tuple rest of an `Array` the module declares itself, which is no array', async () => {
+    // The twin of 'tuple rest Array index retains frames': the name is the module's own type here,
+    // of a text `stack`, so the read is of no Error.
+    const app = await application({
+      'domain/todo-filter.ts': tupleRestFrames(
+        'type Array<T>={stack:string};',
+        '[string,...Array<Error>]',
+        'values[i]!',
+      ),
+    });
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
 
   it('a module read on both sides of a component, which the browser would import whole', async () => {
     const editor = variant(
