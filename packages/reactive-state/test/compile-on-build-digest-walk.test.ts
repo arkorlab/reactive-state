@@ -26,6 +26,25 @@ const MIDDLEWARE = [
   '',
 ].join('\n');
 const HANDLER = 'export default function handler() {}\n';
+/**
+ * A page of a route of one param, which the component is given: one view for every visitor. In
+ * `shared/app/greet/[name]`, beside the application `project` whose component it renders.
+ */
+const GREETING_PAGE = [
+  "import Hello from '../../../../project/src/components/hello.reactive';",
+  '',
+  'export default async function Page({ params }: { params: Promise<{ name: string }> }) {',
+  '  const { name } = await params;',
+  '  return <Hello name={name} />;',
+  '}',
+  '',
+].join('\n');
+const GREETING = [
+  'export default function Hello({ name }: { readonly name: string }) {',
+  '  return <p>Hello, {name}</p>;',
+  '}',
+  '',
+].join('\n');
 const MODULE = 'export const value = 1;\n';
 
 /** A component of the name `name`, which renders nothing but it. */
@@ -91,6 +110,24 @@ function manifestOf(dir: string): {
 /** The routes `dir`'s compile registered, each with the middleware around it. */
 function routesOf(dir: string): readonly (readonly [string, readonly string[]])[] {
   return manifestOf(dir).routes.map(({ middleware, route }) => [route, middleware]);
+}
+
+/** An application whose pages are in a folder beside it, `shared/app`, and its root. */
+function beside(): {
+  readonly given: { app: string; projectDir: string };
+  readonly shared: string;
+} {
+  const root = mkdtempSync(path.join(tmpdir(), 'reactive-state-digest-walk-'));
+  projects.push(root);
+  const projectDir = path.join(root, 'project');
+  put(projectDir, {
+    'src/components/hello.reactive.tsx': GREETING,
+    'tsconfig.json': JSON.stringify({
+      compilerOptions: { jsx: 'react-jsx', paths: { '@/*': ['./src/*'] } },
+    }),
+  });
+  put(root, { 'shared/app/greet/[name]/page.tsx': GREETING_PAGE });
+  return { given: { app: '../shared/app', projectDir }, shared: path.join(root, 'shared') };
 }
 
 describe('a compile skipped for what it read, and the folders its inputs’ walk leaves out by name', () => {
@@ -181,6 +218,35 @@ describe('a compile skipped for what it read, and the folders its inputs’ walk
       await expect(compileProject({ projectDir: dir })).resolves.toMatchObject({
         compiled: false,
       });
+    });
+  });
+
+  describe('beside an app directory the walk of the application’s root does not read', () => {
+    it('refuses a route of the Pages Router added beside it, where the compile’s own route is served', async () => {
+      const { given, shared } = beside();
+      await compileProject(given);
+
+      put(shared, { 'pages/api/reactive-state/feed.ts': HANDLER });
+
+      await expect(compileProject(given)).rejects.toThrow(
+        'pages/api/reactive-state/feed.ts:1:1: A route of the application',
+      );
+    });
+
+    it('compiles again once a proxy stands beside it, and shares no route from then on', async () => {
+      const { given, shared } = beside();
+      const isShared = (): unknown =>
+        manifestOf(given.projectDir).routes.find(({ route }) => route === '/greet/[name]');
+      await compileProject(given);
+
+      expect(isShared()).toMatchObject({ shared: true });
+
+      put(shared, { 'proxy.ts': 'export function proxy() {}\n' });
+      const proxied = await compileProject(given);
+
+      expect(proxied).toMatchObject({ changed: true, compiled: true });
+      expect(isShared()).toMatchObject({ shared: false });
+      await expect(compileProject(given)).resolves.toMatchObject({ compiled: false });
     });
   });
 

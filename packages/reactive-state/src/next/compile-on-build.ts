@@ -20,7 +20,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
-import { GENERATED, isGeneratedFile } from '../compiler/app-route.ts';
+import { GENERATED, isGeneratedFile, proxyOf } from '../compiler/app-route.ts';
 import { givenHost } from '../compiler/host.ts';
 import { compileApp } from '../compiler/index.ts';
 import {
@@ -397,12 +397,16 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
   const add = (part: string): void => {
     hash.update(part).update('\0');
   };
+  // The application's proxy as the compile reads it, by its name alone: beside the app directory,
+  // wherever that is, a folder no walk below reads among them.
+  const proxy = proxyOf(layout.appDir);
   add(
     JSON.stringify({
       app: path.relative(layout.projectDir, layout.appDir),
       database: options.database,
       host: [options.session ?? null, options.prefetch ?? null, options.share ?? null],
       out: path.relative(layout.projectDir, layout.outDir),
+      proxy: proxy === undefined ? null : path.basename(proxy),
       src: path.relative(layout.projectDir, layout.srcDir),
       typescript: compilerTypeScript(),
     }),
