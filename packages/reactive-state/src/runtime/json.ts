@@ -243,6 +243,27 @@ export function toJsonRecord(
   return copied as Readonly<Record<string, Json>>;
 }
 
+/**
+ * A JSON object, copied within a budget of its own; none where it is past what one request carries,
+ * for a caller that answers that otherwise than it answers what JSON does not carry at all — which
+ * is thrown for here as `toJsonRecord` throws for it.
+ */
+export function carriedRecord(
+  value: unknown,
+  where: string,
+): Readonly<Record<string, Json>> | undefined {
+  const budget = jsonBudget();
+  try {
+    return toJsonRecord(value, where, budget);
+  } catch (error) {
+    // Only the bound's refusal leaves the budget spent past what it held.
+    if (budget.remaining >= 0) {
+      throw error;
+    }
+    return undefined;
+  }
+}
+
 function written(value: Json, out: string[]): void {
   if (typeof value !== 'object' || value === null) {
     out.push(JSON.stringify(value));
