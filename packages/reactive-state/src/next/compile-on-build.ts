@@ -20,7 +20,7 @@ import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
-import { GENERATED, isGeneratedFile } from '../compiler/app-route.ts';
+import { GENERATED, isGeneratedFile, proxyOf } from '../compiler/app-route.ts';
 import { givenHost } from '../compiler/host.ts';
 import { compileApp } from '../compiler/index.ts';
 import {
@@ -29,8 +29,9 @@ import {
   moduleResolutionsHold,
   moduleResolutionsOf,
 } from '../compiler/module-resolutions.ts';
+import { pagesDirOf } from '../compiler/pages-routes.ts';
 import { byCodeUnits } from '../compiler/splice.ts';
-import { inputRoots } from './input-roots.ts';
+import { inputRoots, isWithin } from './input-roots.ts';
 import { writeCompiled, writeWhole } from './write-compiled.ts';
 
 /**
@@ -143,6 +144,12 @@ const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
 /** What Next.js writes into the application's root at each build: no source of the compile's. */
 const NEXT_WRITES: ReadonlySet<string> = new Set(['next-env.d.ts']);
 /**
+ * A folder's name the walk of the inputs may leave out: the packages', or one of a leading dot,
+ * the two forms the compiler's walk of the components leaves out as well (`componentFiles`). A name
+ * of another form is none the list below may hold.
+ */
+type Unread = 'node_modules' | `.${string}`;
+/**
  * The directories no source is read from, by name, wherever they stand: what installs, builds,
  * deployments, runs and tools write into an application — its packages (`node_modules`, pnpm's and
  * Yarn's stores), its history (`.git`), Next.js's build (`.next`), Turborepo's cache (`.turbo`),
@@ -150,8 +157,12 @@ const NEXT_WRITES: ReadonlySet<string> = new Set(['next-env.d.ts']);
  * (`.state`) and the copies their variants are run in (`.variants`). Every other directory is read,
  * a hidden one among them (`src/.generated`): the compile reads a module wherever it is imported
  * from.
+ *
+ * Not inside a tree a walk of the compile's own reads whole, where none is left out by its name
+ * (`Passed`). And each is a name the walk of the components leaves out itself (`Unread`), so that
+ * none hides a component that walk would find.
  */
-const NOT_SOURCES: ReadonlySet<string> = new Set([
+const NOT_SOURCES: ReadonlySet<string> = new Set<Unread>([
   '.arkor',
   '.git',
   '.next',
@@ -313,15 +324,29 @@ function followed(entry: Dirent, file: string): Pick<Dirent, 'isDirectory' | 'is
   }
 }
 
+/** What the walk of a compile's inputs passes by. */
+interface Passed {
+  /** The directories left out by their own paths: where the compile writes. */
+  readonly skipped: ReadonlySet<string>;
+  /**
+   * The trees a walk of the compile's own reads whole, whatever a folder in them is named: the app
+   * directory's (`scanApp`, which leaves out private folders alone) and the Pages Router's beside
+   * it (`pagesRoutesOf`). Inside one, no folder is left out by its name: a page added under
+   * `app/node_modules` is a route the compile registers, and its inputs hold it.
+   */
+  readonly whole: readonly string[];
+}
+
 /**
  * The source files under `directory` the compile may read, each by its absolute path: a hidden one
- * too, but none under `NOT_SOURCES` or `skipped` — a link for what it links to, as the walk of the
- * app's routes follows one (`scanApp`) and the compile reads through one, and a link to a folder
- * along the way (`above`, by their own paths) walked no further.
+ * too, but none under `NOT_SOURCES` outside the trees read whole, nor under what `passed` skips —
+ * a link for what it links to, as the walk of the app's routes follows one (`scanApp`) and the
+ * compile reads through one, and a link to a folder along the way (`above`, by their own paths)
+ * walked no further.
  */
 function sourceFiles(
   directory: string,
-  skipped: ReadonlySet<string>,
+  passed: Passed,
   above: ReadonlySet<string> = new Set(),
 ): string[] {
   let entries;
@@ -336,12 +361,13 @@ function sourceFiles(
     return [];
   }
   const along = new Set([...above, real]);
+  const isWhole = passed.whole.some((tree) => isWithin(tree, directory));
   return entries.flatMap((entry) => {
     const file = path.join(directory, entry.name);
-    const kind =
-      NOT_SOURCES.has(entry.name) || skipped.has(file) ? undefined : followed(entry, file);
+    const isLeftOut = (!isWhole && NOT_SOURCES.has(entry.name)) || passed.skipped.has(file);
+    const kind = isLeftOut ? undefined : followed(entry, file);
     if (kind?.isDirectory() === true) {
-      return sourceFiles(file, skipped, along);
+      return sourceFiles(file, passed, along);
     }
     const source =
       kind?.isFile() === true &&
@@ -371,20 +397,27 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
   const add = (part: string): void => {
     hash.update(part).update('\0');
   };
+  // The application's proxy as the compile reads it, by its name alone: beside the app directory,
+  // wherever that is, a folder no walk below reads among them.
+  const proxy = proxyOf(layout.appDir);
   add(
     JSON.stringify({
       app: path.relative(layout.projectDir, layout.appDir),
       database: options.database,
       host: [options.session ?? null, options.prefetch ?? null, options.share ?? null],
       out: path.relative(layout.projectDir, layout.outDir),
+      proxy: proxy === undefined ? null : path.basename(proxy),
       src: path.relative(layout.projectDir, layout.srcDir),
       typescript: compilerTypeScript(),
     }),
   );
   const roots = [...inputRoots(layout, NOT_SOURCES), { name: 'compiler', root: PACKAGE_SOURCES }];
-  const skipped = new Set([layout.outDir]);
+  const passed: Passed = {
+    skipped: new Set([layout.outDir]),
+    whole: [layout.appDir, pagesDirOf(layout.appDir)],
+  };
   for (const { name, root } of roots) {
-    const files = sourceFiles(root, skipped)
+    const files = sourceFiles(root, passed)
       .map((file) => ({ file, relative: path.relative(root, file).split(path.sep).join('/') }))
       .toSorted((left, right) => byCodeUnits(left.relative, right.relative));
     for (const { file, relative } of files) {
@@ -717,12 +750,14 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
     // as well as the compile — a holder alive. Started in here: a lock whose beat could not start is
     // let go like any other, not left to a process that lives on and never beats it.
     stop = beating(held.file, held.holder);
-    // Another process may have compiled while this one waited, or the sources changed meanwhile.
-    const inputs = inputDigest(layout, options);
-    if (isCurrent(layout, inputs)) {
-      return { ...layout, changed: removeStaleRoutes(layout), compiled: false };
+    // Another process may have compiled while this one waited, or the sources changed meanwhile:
+    // where the pages are among them, so the layout is read again as the sources are.
+    const now = layoutOf(options);
+    const inputs = inputDigest(now, options);
+    if (isCurrent(now, inputs)) {
+      return { ...now, changed: removeStaleRoutes(now), compiled: false };
     }
-    return { ...layout, changed: compileLocked(layout, options, inputs), compiled: true };
+    return { ...now, changed: compileLocked(now, options, inputs), compiled: true };
   } finally {
     try {
       await stop?.();

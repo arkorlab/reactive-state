@@ -300,6 +300,30 @@ describe('compileProject', () => {
     expect(existsSync(leftBehind)).toBe(false);
   });
 
+  it('reads where the pages are again once it has the lock, and compiles them where they moved while it waited', async () => {
+    const dir = application({ 'app/page.tsx': PAGE });
+    rmSync(path.join(dir, 'src', 'app'), { recursive: true });
+    await compileProject({ projectDir: dir });
+    // Something to compile, and another process holding the lock.
+    writeFileSync(path.join(dir, 'src/components/world.reactive.tsx'), HELLO);
+    const holding = lockedBy(dir, 0);
+
+    const waiting = compileProject({ projectDir: dir });
+    await delay(HELD_MS / 2);
+    // The page moves to `src/app` while the compile waits.
+    mkdirSync(path.join(dir, 'src', 'app'));
+    renameSync(path.join(dir, 'app/page.tsx'), path.join(dir, 'src/app/page.tsx'));
+    rmSync(holding);
+
+    await expect(waiting).resolves.toMatchObject({
+      appDir: path.join(dir, 'src', 'app'),
+      compiled: true,
+    });
+    expect(existsSync(path.join(dir, 'src/app/api/reactive-state/[...path]/route.ts'))).toBe(true);
+    // Next.js reads an `app` in the root while one is there at all: none is left.
+    expect(existsSync(path.join(dir, 'app'))).toBe(false);
+  });
+
   it('takes at once a lock whose holder, a process of this host, is gone, and waits for one whose holder is not', async () => {
     const left = application();
     const held = application();
