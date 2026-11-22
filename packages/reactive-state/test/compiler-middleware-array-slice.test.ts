@@ -64,25 +64,25 @@ const CASES = [
     id: 'readonly-slice',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.slice();\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'fresh-wrapper-slot-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.slice()[0]={allowed:true};\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'fresh-wrapper-length-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.slice().length=0;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'wrapper-replaced-before-payload-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nconst copy=decision.slice();copy[0]={allowed:false};\nawait requirePublishedProject(params.projectId);\ncopy[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'primitive-copy-before-mutation',
@@ -94,25 +94,25 @@ const CASES = [
     id: 'scalar-copy-read',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[0];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.slice()[0];\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'empty-copy-read',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision:{allowed:boolean}[]=[];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.slice()[0];\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision.length));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'fixed-empty-range',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.slice(2)[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'equal-bounds-empty',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.slice(0,0)[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'ordinary-own-slice',
@@ -124,7 +124,7 @@ const CASES = [
     id: 'replaced-native-slice',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nReflect.defineProperty(Array.prototype,'slice',{value:()=>[{allowed:false}]});\nawait requirePublishedProject(params.projectId);\ndecision.slice()[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'unrelated-slice-write-keeps-at',
@@ -184,7 +184,7 @@ const CASES = [
     id: 'wrapper-replaced-before-at-payload-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nconst copy=decision.slice();copy[0]={allowed:false};\nawait requirePublishedProject(params.projectId);\ncopy.at(0)!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'aliased-undefined-end',
@@ -196,19 +196,19 @@ const CASES = [
     id: 'null-end-is-empty',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.slice(0,null as unknown as number)[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'false-end-is-empty',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.slice(0,false as unknown as number)[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'at-index-evaluation-replaces-only-wrapper',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nconst copy=decision.slice();\nawait requirePublishedProject(params.projectId);\ncopy.at((copy[0]={allowed:false},0))!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
   },
   {
     id: 'unknown-slice-bounds-negative-at',

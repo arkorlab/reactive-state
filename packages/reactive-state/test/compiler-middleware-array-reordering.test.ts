@@ -45,28 +45,28 @@ const CASES = [
     id: 'reversed-wrapper-replaced-before-read',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nconst copy=decision.toReversed();copy[0]={allowed:false};\nawait requirePublishedProject(params.projectId);\ncopy[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'reversed-fresh-wrapper-slot-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.toReversed()[0]={allowed:true};\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'reversed-fresh-wrapper-length-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.toReversed().length=0;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'readonly-native-toReversed',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toReversed();\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
@@ -122,28 +122,28 @@ const CASES = [
     id: 'sorted-wrapper-replaced-before-read',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nconst copy=decision.toSorted();copy[0]={allowed:false};\nawait requirePublishedProject(params.projectId);\ncopy[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'sorted-fresh-wrapper-slot-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.toSorted()[0]={allowed:true};\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'sorted-fresh-wrapper-length-write',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.toSorted().length=0;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'readonly-native-toSorted',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toSorted();\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
@@ -199,7 +199,7 @@ const CASES = [
     id: 'scalar-copy-read',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[0];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toReversed()[0];\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: '0',
   },
   {
@@ -220,14 +220,14 @@ const CASES = [
     id: 'readonly-toSorted-quiet-two-items',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false},{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toSorted();\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'readonly-toSorted-known-comparator',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false},{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toSorted(()=>0);\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
@@ -241,14 +241,14 @@ const CASES = [
     id: 'prototype-toReversed-replaced-before-copy',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];Object.defineProperty(Array.prototype,\"toReversed\",{value:()=>[{allowed:false}]});\n\nawait requirePublishedProject(params.projectId);\ndecision.toReversed()[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'prototype-toSorted-replaced-before-copy',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];Object.defineProperty(Array.prototype,\"toSorted\",{value:()=>[{allowed:false}]});\n\nawait requirePublishedProject(params.projectId);\ndecision.toSorted()[0]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
@@ -276,7 +276,7 @@ const CASES = [
     id: 'unrelated-prototype-field-keeps-readonly-sort',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false},{allowed:false}];Object.defineProperty(Object.prototype,\"unrelated\",{value:0});\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toSorted();\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
 ] as const;

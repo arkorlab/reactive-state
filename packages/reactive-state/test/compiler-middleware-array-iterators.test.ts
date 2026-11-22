@@ -38,21 +38,21 @@ const CASES = [
     id: 'fresh-result-value-replacement',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nconst result=decision.values().next();result.value={allowed:false};result.value!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'fresh-result-done-field',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nconst result=decision.values().next();result.done=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
     id: 'readonly-native-result',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nvoid decision.values().next().value!.allowed;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
   {
@@ -73,7 +73,7 @@ const CASES = [
     id: 'source-own-next',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];const iterator=decision.values();iterator.next=()=>({value:{allowed:false},done:false});\nawait requirePublishedProject(params.projectId);\niterator.next().value!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
 ];

@@ -171,7 +171,7 @@ const CASES = [
     id: 'empty-native-no-callback',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision:{allowed:boolean}[]=[];\nfunction mutate(item:{allowed:boolean}){item.allowed=true;}\nawait requirePublishedProject(params.projectId);\ndecision.forEach(mutate);\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision.length));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     reason: 'mutated',
   },
   {
@@ -179,7 +179,7 @@ const CASES = [
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision={value:{allowed:false},forEach(_fn:(item:{allowed:boolean})=>void){return;}};\nfunction mutate(item:{allowed:boolean}){item.allowed=true;}\nawait requirePublishedProject(params.projectId);\ndecision.forEach(mutate);\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision.value.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
     refused: true,
-    reason: 'only a constant of literals and the params alone',
+    reason: 'mutated',
   },
   {
     id: 'inline-mutation-pin',
@@ -248,21 +248,21 @@ const CASES = [
     id: 'single-reduce-no-callback',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nfunction mutate(first:{allowed:boolean},_item:{allowed:boolean}){first.allowed=true;return first;}\nawait requirePublishedProject(params.projectId);\ndecision.reduce(mutate);\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     reason: 'mutated',
   },
   {
     id: 'single-toSorted-no-callback',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nfunction mutate(first:{allowed:boolean},_second:{allowed:boolean}){first.allowed=true;return 0;}\nawait requirePublishedProject(params.projectId);\ndecision.toSorted(mutate);\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     reason: 'mutated',
   },
   {
     id: 'readonly-native-comparator',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false},{allowed:false}];\nfunction read(first:{allowed:boolean},second:{allowed:boolean}){return Number(first.allowed)-Number(second.allowed);}\nawait requirePublishedProject(params.projectId);\ndecision.toSorted(read);\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     reason: 'mutated',
   },
 ] as const;
