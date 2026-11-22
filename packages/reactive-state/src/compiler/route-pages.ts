@@ -1,4 +1,5 @@
 import {
+  type Expression,
   type ImportDeclaration,
   isCallExpression,
   isExportDeclaration,
@@ -7,6 +8,7 @@ import {
   isNamespaceImport,
   isNoSubstitutionTemplateLiteral,
   isStringLiteral,
+  isTypeAssertion,
   type Node,
   type SourceFile,
   SyntaxKind,
@@ -205,14 +207,27 @@ function rootsDeclared(
   });
 }
 
-/** Literal module loads keep their source location without guessing a computed specifier. */
+/** `node` past the parentheses, casts, `satisfies`, `!` and angle-bracket assertions around it. */
+function literalOf(node: Expression): Expression {
+  let each = unwrapped(node);
+  while (isTypeAssertion(each)) {
+    each = unwrapped(each.expression);
+  }
+  return each;
+}
+
+/**
+ * Literal module loads keep their source location without guessing a computed specifier: a literal
+ * is one past the parentheses and the assertions around it.
+ */
 function loadedSpecifier(at: Node): string | undefined {
   if (!isCallExpression(at)) return undefined;
   const nativeLoad =
     at.expression.kind === SyntaxKind.ImportKeyword ||
     globalPathOf(unwrapped(at.expression))?.join('.') === 'require';
   if (!nativeLoad) return undefined;
-  const [specifier] = at.arguments;
+  const [argument] = at.arguments;
+  const specifier = argument === undefined ? undefined : literalOf(argument);
   return specifier !== undefined &&
     (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
     ? specifier.text

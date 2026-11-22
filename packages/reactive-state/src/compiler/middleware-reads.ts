@@ -239,7 +239,12 @@ export function readsOf(node: Node, middleware: MiddlewareNames): StatementReads
           types.add(identifier.text);
           return;
         }
-        values.set(identifier.text, [...(values.get(identifier.text) ?? []), identifier]);
+        const places = values.get(identifier.text);
+        if (places === undefined) {
+          values.set(identifier.text, [identifier]);
+        } else {
+          places.push(identifier);
+        }
       },
     },
     middleware.fail,

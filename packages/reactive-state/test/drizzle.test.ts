@@ -408,6 +408,14 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     });
 
     await expect(render()).rejects.toThrow(refused);
+
+    // Nothing of the refused statement ran: by the connection itself, the task is as it was, no
+    // table was selected into, and no setting was left the session.
+    await expect(
+      setup.pg.query(
+        "SELECT title, to_regclass('copied')::text AS copied, current_setting('transaction.who', true) AS who FROM tasks",
+      ),
+    ).resolves.toMatchObject({ rows: [{ copied: null, title: 'Write docs', who: null }] });
   });
 
   it('runs no other statement of a text it plans', async () => {
@@ -690,14 +698,35 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     );
   });
 
+  it.each([
+    ['the default', undefined, 'reactive_state'],
+    ['one that is given', { namespace: 'ledger' }, 'ledger'],
+  ] as const)(
+    'refuses a table of the schema the log is kept in, which no plan names: %s namespace',
+    (_name, options, kept) => {
+      const inLog = pgSchema(kept).table('entries', { id: text().primaryKey() });
+
+      expect(() => followDrizzle({ entries: inLog }, options)).toThrow(
+        `\`entries\` is a table of \`${kept}\`, the schema the change log is kept in`,
+      );
+    },
+  );
+
+  it('follows a table of the default log schema where the log is kept in another', () => {
+    const inDefault = pgSchema('reactive_state').table('entries', { id: text().primaryKey() });
+
+    expect(() => followDrizzle({ entries: inDefault }, { namespace: 'ledger' })).not.toThrow();
+    expect(() => followDrizzle(schema)).not.toThrow();
+  });
+
   it('runs what an operation started that settles after it, as it would have', async () => {
     const setup = await opened();
+    // Held until the operation has been answered: the write is made after it settled, never before.
+    const answered = Promise.withResolvers<undefined>();
     let late: Promise<unknown> | undefined;
     const start = (): void => {
       late = (async () => {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 0);
-        });
+        await answered.promise;
         await setup.orm.insert(tasks).values({ id: 'late', projectId: 'p1', title: 'late' });
       })();
     };
@@ -706,6 +735,12 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     });
 
     await operate('actions/tasks', 'start');
+
+    await expect(setup.pg.query("SELECT id FROM tasks WHERE id = 'late'")).resolves.toMatchObject({
+      rows: [],
+    });
+
+    answered.resolve(undefined);
     await late;
 
     await expect(setup.pg.query("SELECT id FROM tasks WHERE id = 'late'")).resolves.toMatchObject({
@@ -747,17 +782,20 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
       await run(1);
       await run(KEPT_PLANS + 1);
       await run(1);
+      await run(2);
       return $.h('p', null, 'read');
     });
 
     await render();
 
     // The first plan is asked with the catalog's statement before it.
-    const explains = planned.mock.calls.filter(([statement]) =>
-      statement.endsWith(explained(numbered(1))),
-    );
+    const explains = (number: number) =>
+      planned.mock.calls.filter(([statement]) => statement.endsWith(explained(numbered(number))));
 
-    expect(explains).toHaveLength(1);
+    // Asked again, the first is kept past one statement more than the connection keeps; the second,
+    // the one asked least lately then, is forgotten for it, and its plan asked once more.
+    expect(explains(1)).toHaveLength(1);
+    expect(explains(2)).toHaveLength(2);
   });
 
   it('asks a statement its plan once, and only in a render', async () => {

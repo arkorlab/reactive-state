@@ -20,13 +20,22 @@ import {
 import { readsOf } from './local-module-reads.ts';
 import { bindingIdentifiers } from './scope.ts';
 import { freshReceiverDefault, receiverKey } from './this-defaults.ts';
+import { prependBindingPath } from './this-rest-defaults.ts';
 
 /** Constant aliases of this, including retained members selected by a binding pattern. */
 interface Alias {
   readonly name: Identifier;
   readonly value: Expression;
   readonly projected: boolean;
+  readonly rest: boolean;
   readonly reads: (node: Node) => node is Identifier;
+}
+
+/** Mutable walk state tracking member selections along a candidate receiver reference. */
+interface WalkState {
+  readonly path: (string | undefined)[];
+  selected: boolean;
+  readonly whole: boolean;
 }
 
 const ALIASES = new WeakMap<SourceFile, readonly Alias[]>();
@@ -47,52 +56,56 @@ export function receiverWrite(target: Node, operation: Node): boolean {
 /** Whether a value retains this or one of its members; whole excludes member projections. */
 export function receiverOf(node: Node, whole = false): boolean {
   const seen = new Set<Node>();
-  const path: (string | undefined)[] = [];
+  const state: WalkState = { path: [], selected: false, whole };
   let value = node;
   while (!seen.has(value)) {
     seen.add(value);
     if (value.kind === SyntaxKind.ThisKeyword) {
       return true;
     }
-    if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
-      if (whole) {
-        return false;
-      }
-      path.unshift(receiverKey(value));
-      value = value.expression;
-      continue;
-    }
-    if (wrapped(value)) {
-      value = value.expression;
-      continue;
-    }
-    if (!isIdentifier(value)) {
+    const next = nextValue(value, state);
+    if (next === undefined) {
       return false;
     }
-    const held = aliasValue(value, path, whole);
-    if (held === undefined) {
-      return false;
-    }
-    value = held;
+    value = next;
   }
   return false;
 }
 
-/** A lexical alias excluding a chosen fresh default and projections of another receiver. */
-function aliasValue(
-  name: Identifier,
-  path: readonly (string | undefined)[],
-  whole: boolean,
-): Expression | undefined {
+/** Advances one step backward from `value` toward its underlying receiver expression. */
+function nextValue(value: Node, state: WalkState): Node | undefined {
+  if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
+    if (state.whole) {
+      return undefined;
+    }
+    state.path.unshift(receiverKey(value));
+    state.selected = true;
+    return value.expression;
+  }
+  if (wrapped(value)) {
+    return value.expression;
+  }
+  return isIdentifier(value) ? aliasValue(value, state) : undefined;
+}
+
+/** A lexical alias excluding a fresh rest container itself, fresh defaults, and member projections when `whole`. */
+function aliasValue(name: Identifier, state: WalkState): Expression | undefined {
   const alias = aliasesOf(name.getSourceFile()).find(
     (each) => each.name.text === name.text && each.reads(name),
   );
-  if (alias === undefined || (whole && alias.projected)) {
+  if (
+    alias === undefined ||
+    (state.whole && alias.projected) ||
+    (alias.rest && !state.selected) ||
+    (alias.projected && freshReceiverDefault(alias.name, alias.value, state.path))
+  ) {
     return undefined;
   }
-  return alias.projected && freshReceiverDefault(alias.name, alias.value, path)
-    ? undefined
-    : alias.value;
+  if (alias.projected) {
+    prependBindingPath(alias.name, state.path);
+    state.selected = true;
+  }
+  return alias.value;
 }
 
 /** Wrappers preserving the same object reference. */
@@ -120,14 +133,13 @@ function aliasesOf(file: SourceFile): readonly Alias[] {
       /^const\s/u.test(node.parent.getText(file))
     ) {
       for (const name of bindingIdentifiers(node.name)) {
-        if (!restBinding(name, node.name)) {
-          aliases.push({
-            name,
-            value: node.initializer,
-            projected: !isIdentifier(node.name),
-            reads: readsOf(name, file),
-          });
-        }
+        aliases.push({
+          name,
+          value: node.initializer,
+          projected: !isIdentifier(node.name),
+          rest: isRestContainer(name),
+          reads: readsOf(name, file),
+        });
       }
     }
     node.forEachChild(visit);
@@ -137,12 +149,7 @@ function aliasesOf(file: SourceFile): readonly Alias[] {
   return aliases;
 }
 
-/** Rest patterns allocate a fresh container instead of retaining the receiver itself. */
-function restBinding(name: Identifier, pattern: Node): boolean {
-  for (let at: Node = name; at !== pattern; at = at.parent) {
-    if (isBindingElement(at) && at.dotDotDotToken !== undefined) {
-      return true;
-    }
-  }
-  return false;
+/** Whether `name` itself binds the fresh shallow container allocated by a rest element. */
+function isRestContainer(name: Identifier): boolean {
+  return isBindingElement(name.parent) && name.parent.dotDotDotToken !== undefined;
 }

@@ -11,13 +11,20 @@
  * URL, JSON nor HTML escapes — the one spelling of it an application would reflect.
  */
 
-/** Whether `response`'s headers — a name or a value of one — or its status text hold `key`. */
+/**
+ * Whether `response`'s headers — a name or a value of one — or its status text hold `key`. A
+ * header's name is handed on lowercased, whatever case the answer wrote it in, and the key has
+ * letters of both cases: a name is read for the key lowercased. A value and the status text keep
+ * their case, and are read for the key as it was issued — the one spelling the rewrite's condition
+ * matches.
+ */
 export function holdsKey(response: Response, key: string): boolean {
   if (response.statusText.includes(key)) {
     return true;
   }
+  const lowered = key.toLowerCase();
   for (const [name, value] of response.headers) {
-    if (name.includes(key) || value.includes(key)) {
+    if (name.includes(lowered) || value.includes(key)) {
       return true;
     }
   }

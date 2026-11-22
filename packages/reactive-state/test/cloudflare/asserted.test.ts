@@ -28,6 +28,22 @@ function assertedAuthority(): AuthorityStub {
   return stub;
 }
 
+/**
+ * How long a short session lasts: long enough, once the object has started, to open its stream and
+ * to commit within it, short enough that the test waits for the expiry itself.
+ */
+const SHORT_SESSION_MS = 1000;
+
+/**
+ * `stub` once its object has started and its schema is in place, by a render of a session of
+ * another key: a short session is then not spent on starting the object, which a loaded machine
+ * takes longer to do than the session lasts.
+ */
+async function started(stub: AuthorityStub): Promise<AuthorityStub> {
+  await render(stub, alice('started'));
+  return stub;
+}
+
 /** The client an application's server calls `stub` through, as `bindingClient` makes it. */
 function clientOf(stub: AuthorityStub): AuthorityClient {
   return bindingClient({ getByName: () => stub });
@@ -116,17 +132,16 @@ describe('the application’s own sessions, over the binding', () => {
   });
 
   it('renews a stream at its session’s expiry, rendering nothing more', async () => {
-    const stub = assertedAuthority();
-    // Long enough to open the stream within it.
-    const { events } = await followed(stub, alice('k1', 500));
+    const stub = await started(assertedAuthority());
+    const { events } = await followed(stub, alice('k1', SHORT_SESSION_MS));
 
     await expect(events.next()).resolves.toStrictEqual({ data: {}, event: 'renew' });
     await expect(events.next()).rejects.toThrow('The event stream ended.');
   });
 
   it('renews a stream at its session’s expiry while commits keep coming', async () => {
-    const stub = assertedAuthority();
-    const session = alice('k1', 500);
+    const stub = await started(assertedAuthority());
+    const session = alice('k1', SHORT_SESSION_MS);
     const { events, rendered } = await followed(stub, session);
     const binding = bindingOf(rendered, EDITOR, 'title');
     const writing = new AbortController();

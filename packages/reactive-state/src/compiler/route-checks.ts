@@ -117,13 +117,15 @@ function checkRenderedRoots(
     readonly first: ReadonlyMap<string, Registered>;
     readonly chains: ReadonlyMap<string, ReadonlySet<string>>;
     readonly pages: ReadonlySet<string>;
+    /** The roots a file renders, read once for the check of every page it is rendered by. */
+    readonly rootsOf: (file: string) => ReturnType<typeof rootsImported>;
   },
   checking: Checking,
 ): void {
-  const { chain, first, chains, pages } = context;
+  const { chain, first, chains, pages, rootsOf } = context;
   const { middleware, modules } = checking;
   const guard = guardIn(chain, middleware, (compiled) => compiled.registration.guard);
-  for (const { at, root } of rootsImported(page, modules)) {
+  for (const { at, root } of rootsOf(page.file)) {
     const owner = first.get(root);
     if (owner !== undefined && chainName(owner.chain) !== chainName(chain)) {
       refuseIn(
@@ -160,6 +162,14 @@ function checkChains(registered: readonly Registered[], checking: Checking): voi
     chains.set(root, (chains.get(root) ?? new Set()).add(chainName(each.chain)));
   }
   const pages = new Set(registered.map((each) => each.shaped.page.file));
+  // A layout wraps every page below it: the roots it renders are the same for each of them, where
+  // the chain around them is the page's own.
+  const imported = new Map<string, ReturnType<typeof rootsImported>>();
+  const rootsOf = (file: string): ReturnType<typeof rootsImported> => {
+    const known = imported.get(file) ?? rootsImported({ file }, modules);
+    imported.set(file, known);
+    return known;
+  };
   // A page in a private folder (`_folder`) is no route Next.js serves.
   const served = layout.pages.filter((page) =>
     page.directory.split('/').every((segment) => !segment.startsWith('_')),
@@ -174,7 +184,7 @@ function checkChains(registered: readonly Registered[], checking: Checking): voi
       }),
     ];
     for (const entry of rendered) {
-      checkRenderedRoots(entry, { chain, chains, first, pages }, checking);
+      checkRenderedRoots(entry, { chain, chains, first, pages, rootsOf }, checking);
     }
   }
 }

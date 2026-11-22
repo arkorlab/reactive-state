@@ -1,44 +1,44 @@
 import {
   type Expression,
-  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isBigIntLiteral,
   isBinaryExpression,
-  isBindingElement,
   isCallExpression,
   isClassExpression,
   isComputedPropertyName,
   isConditionalExpression,
-  isElementAccessExpression,
   isFunctionExpression,
+  isGetAccessorDeclaration,
   isIdentifier,
   isNewExpression,
-  isObjectBindingPattern,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectLiteralExpression,
-  isPropertyAccessExpression,
   isPropertyAssignment,
   isRegularExpressionLiteral,
+  isSetAccessorDeclaration,
   isShorthandPropertyAssignment,
   isSpreadAssignment,
+  isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
-  isVariableDeclaration,
   type NewExpression,
   type Node,
+  type ObjectLiteralElementLike,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { literalName, unwrapped } from './bounded.ts';
-import { globalPathOf, patternKey } from './code-globals.ts';
-import { initializerOf } from './framed.ts';
+import { globalPathOf } from './code-globals.ts';
 import { constantValue } from './numbers.ts';
+import { platformInitializer } from './platform-inputs.ts';
+import { peelPlatform, platformPathsOf } from './platform-uses.ts';
+import { eventReadsClock } from './timed-events.ts';
 
-/**
- * What of a shared module's code reads the time through what the platform makes (`settled.ts`): a
- * `File` made of no `lastModified`, which it takes of now, and an event's `timeStamp`, of when the
- * event was made.
- */
+export { eventReadsClock } from './timed-events.ts';
+
+/** Argument index of the options bag on `new File(bits, name, options)`. */
+const FILE_OPTIONS_INDEX = 2;
 
 /**
  * What of `node` reads the time through what the platform makes: `new File(…)` of no
@@ -54,15 +54,9 @@ export function timedMaking(node: Node): string | undefined {
     : undefined;
 }
 
-/** Whether `node` reads the creation time of an event the code makes. */
-export function eventReadsClock(node: Node): boolean {
-  const read = memberRead(node);
-  return read?.name === 'timeStamp' && isEvent(unwrapped(read.of), new Set());
-}
-
-/** Whether `node` names the global class `name`. */
+/** Whether `node` names or aliases the global class `name`. */
 function isClass(node: Expression, name: string): boolean {
-  return globalPathOf(unwrapped(node))?.join('.') === name;
+  return platformPathsOf(node).includes(name);
 }
 
 /**
@@ -70,9 +64,16 @@ function isClass(node: Expression, name: string): boolean {
  * or variables around it are declared of, of no spread, whose last `lastModified` is shown defined.
  */
 function isDated(made: NewExpression): boolean {
-  const options = made.arguments?.[2];
-  const value = options === undefined ? undefined : declaredValue(options);
-  if (value === undefined || !isObjectLiteralExpression(value)) {
+  if (made.arguments?.some((each) => isSpreadElement(each)) === true) {
+    return false;
+  }
+  const options = made.arguments?.[FILE_OPTIONS_INDEX];
+  const value = options === undefined ? undefined : declaredValue(options, made);
+  if (
+    value === undefined ||
+    !isObjectLiteralExpression(value) ||
+    value.properties.some((each) => readsOptionsCode(each))
+  ) {
     return false;
   }
   let dated = false;
@@ -84,67 +85,99 @@ function isDated(made: NewExpression): boolean {
     if (key === undefined) {
       dated = false;
     } else if (key === 'lastModified') {
-      dated =
-        (isPropertyAssignment(property) && definedValue(property.initializer)) ||
-        (isShorthandPropertyAssignment(property) &&
-          isIdentifier(property.name) &&
-          definedValue(property.name));
+      dated = propertyDated(property);
     }
   }
   return dated;
 }
 
+/** Accessors or a custom prototype whose option reads may alter `lastModified`. */
+function readsOptionsCode(property: ObjectLiteralElementLike): boolean {
+  return (
+    isGetAccessorDeclaration(property) ||
+    isSetAccessorDeclaration(property) ||
+    (isPropertyAssignment(property) && keyOf(property.name) === '__proto__')
+  );
+}
+
+/** Whether a `lastModified` property writes a timestamp shown defined where the entry runs. */
+function propertyDated(property: ObjectLiteralElementLike): boolean {
+  if (isPropertyAssignment(property)) {
+    return definedValue(property.initializer);
+  }
+  return (
+    isShorthandPropertyAssignment(property) &&
+    isIdentifier(property.name) &&
+    definedValue(property.name)
+  );
+}
+
 /** The name of an entry the code writes: of a name, or text; none of another. */
 function keyOf(name: Node): string | undefined {
-  if (isIdentifier(name) || isStringLiteral(name)) {
+  if (
+    isIdentifier(name) ||
+    isStringLiteral(name) ||
+    isNoSubstitutionTemplateLiteral(name) ||
+    isNumericLiteral(name)
+  ) {
     return name.text;
   }
   const key = isComputedPropertyName(name)
-    ? constantValue(name.expression, initializerOf)
+    ? constantValue(name.expression, (value) => platformInitializer(value, value))
     : undefined;
-  return typeof key === 'string' ? key : undefined;
+  return key === undefined ? undefined : String(key);
 }
 
-/** What a variable around a value is declared of, in turn, without following an alias twice. */
-function declaredValue(node: Expression): Expression {
-  let value = unwrapped(node);
+/** What an unchanged variable is declared of at `before` (or at each read site), without looping. */
+function declaredValue(node: Expression, before?: Node): Expression {
+  let value = peelPlatform(node);
   const seen = new Set<Expression>();
   while (isIdentifier(value) && !seen.has(value)) {
     seen.add(value);
-    const declared = initializerOf(value);
+    const declared = platformInitializer(value, before ?? value);
     if (declared === undefined) {
       break;
     }
-    value = unwrapped(declared);
+    value = peelPlatform(declared);
   }
   return value;
 }
 
-/** Whether a timestamp expression is shown defined, so a File cannot default it to the current time. */
-function definedValue(node: Expression, seen = new Set<Expression>()): boolean {
+/**
+ * Whether a timestamp expression is shown defined — and non-null where `nullable` is false — so a
+ * File cannot default `lastModified` to the current time across `??` fallbacks.
+ */
+function definedValue(node: Expression, seen = new Set<Expression>(), nullable = true): boolean {
   const value = declaredValue(node);
   if (seen.has(value)) {
     return false;
   }
   const following = new Set([...seen, value]);
-  if (constantValue(value, initializerOf) !== undefined) {
+  if (constantValue(value, (name) => platformInitializer(name, name)) !== undefined) {
     return true;
   }
   if (isConditionalExpression(value)) {
-    return definedValue(value.whenTrue, following) && definedValue(value.whenFalse, following);
+    return (
+      definedValue(value.whenTrue, following, nullable) &&
+      definedValue(value.whenFalse, following, nullable)
+    );
   }
   if (isBinaryExpression(value)) {
-    return definedBinary(value, following);
+    return definedBinary(value, following, nullable);
   }
   if (isCallExpression(value)) {
     return ['Boolean', 'Number', 'String'].includes(
-      globalPathOf(unwrapped(value.expression))?.join('.') ?? '',
+      globalPathOf(peelPlatform(value.expression))?.join('.') ?? '',
     );
   }
+  return definedLiteral(value, nullable);
+}
+
+/** Literals and constructions that always supply a value, excluding `null` when `!nullable`. */
+function definedLiteral(value: Expression, nullable: boolean): boolean {
   return (
-    [SyntaxKind.FalseKeyword, SyntaxKind.NullKeyword, SyntaxKind.TrueKeyword].includes(
-      value.kind,
-    ) ||
+    (nullable && value.kind === SyntaxKind.NullKeyword) ||
+    [SyntaxKind.FalseKeyword, SyntaxKind.TrueKeyword].includes(value.kind) ||
     isBigIntLiteral(value) ||
     isArrayLiteralExpression(value) ||
     isObjectLiteralExpression(value) ||
@@ -158,52 +191,14 @@ function definedValue(node: Expression, seen = new Set<Expression>()): boolean {
 }
 
 /** Whether an expression selecting a value has no branch that may answer undefined. */
-function definedBinary(value: Expression, seen: Set<Expression>): boolean {
+function definedBinary(value: Expression, seen: Set<Expression>, nullable: boolean): boolean {
   if (!isBinaryExpression(value)) {
     return false;
   }
   if (value.operatorToken.kind === SyntaxKind.QuestionQuestionToken) {
-    return definedValue(value.left, seen) || definedValue(value.right, seen);
+    return definedValue(value.left, seen, false) || definedValue(value.right, seen, nullable);
   }
-  return value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen);
-}
-
-/**
- * What `node` reads a member of, by the member's name: `event.timeStamp`, `event['timeStamp']`,
- * `const { timeStamp } = event`; none of another node.
- */
-function memberRead(node: Node): { readonly name: string; readonly of: Expression } | undefined {
-  if (isPropertyAccessExpression(node)) {
-    return { name: node.name.text, of: node.expression };
-  }
-  if (isElementAccessExpression(node)) {
-    const name = literalName(node);
-    return name === undefined ? undefined : { name, of: node.expression };
-  }
-  if (!isBindingElement(node) || !isObjectBindingPattern(node.parent)) {
-    return undefined;
-  }
-  const declaration = node.parent.parent;
-  const name = patternKey(node);
-  return name !== undefined &&
-    isVariableDeclaration(declaration) &&
-    declaration.initializer !== undefined
-    ? { name, of: declaration.initializer }
-    : undefined;
-}
-
-/**
- * Whether `node` is an event the code makes: `new Event('x')`, or what a variable around it is
- * declared of (`initializerOf`), in turn.
- */
-function isEvent(node: Expression, seen: Set<Identifier>): boolean {
-  if (isNewExpression(node)) {
-    return isClass(node.expression, 'Event');
-  }
-  if (!isIdentifier(node) || seen.has(node)) {
-    return false;
-  }
-  seen.add(node);
-  const declared = initializerOf(node);
-  return declared !== undefined && isEvent(unwrapped(declared), seen);
+  return (
+    value.operatorToken.kind === SyntaxKind.BarBarToken && definedValue(value.right, seen, nullable)
+  );
 }

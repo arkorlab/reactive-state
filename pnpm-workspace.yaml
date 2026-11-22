@@ -85,6 +85,14 @@ patchedDependencies:
 # A `pnpm run` installs nothing behind the caller's back.
 verifyDepsBeforeRun: false
 
+# `picomatch` up to 4.0.7 (GHSA-fc5q-39xc-vjpf, a ReDoS through repeated extglobs) has no patched
+# release. It is reached only through development tools (knip, tinyglobby, ESLint, Vitest) that
+# match this repository's own file patterns, never a pattern somebody else writes, and nothing the
+# package ships depends on it. Drop the entry once a patched `picomatch` is out.
+auditConfig:
+  ignoreGhsas:
+    - GHSA-fc5q-39xc-vjpf
+
 # Supply-chain cooldown: a release installs once it is a day old, so that a compromised release is
 # caught by somebody else first.
 minimumReleaseAge: 1440

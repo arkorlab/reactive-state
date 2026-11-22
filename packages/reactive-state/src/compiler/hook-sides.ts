@@ -17,13 +17,14 @@ import {
 
 import type { OwnedState, TopLevel } from './analyze.ts';
 import type { Fail } from './errors.ts';
+import { argumentAt, spreadThrough } from './frames.ts';
 import { type Held, heldThroughHooks, itemOf, itemsOf } from './hook-items.ts';
 import type { Fed, HookModule, Item } from './hooks.ts';
 import { INTRINSIC } from './imports.ts';
 import { checkParameterKinds } from './kinds.ts';
 import type { Modules } from './modules.ts';
 import { checkBrowserNode } from './reads.ts';
-import { declaredWithin, type Space, walk } from './scope.ts';
+import { bindingIdentifiers, declaredWithin, type Space, walk } from './scope.ts';
 import { functionOf } from './statements.ts';
 import { constantType, rewrittenType, startedType, type TypeScope } from './types.ts';
 import { collectWrites, type UpdaterSite, updaterId, type Writes } from './updaters.ts';
@@ -87,10 +88,13 @@ export function hookSides(input: HookInput): HookSides {
     }
     const key = state.value.text;
     const declared = fed.get(key);
+    const set = updaterId(input.owner, key, 'set');
     // A local state's setter is React's, which the page alone applies: called from a handler alone,
-    // as any setter is, it registers nothing.
-    if (declared !== undefined) {
-      const set = updaterId(input.owner, key, 'set');
+    // as any setter is, it registers nothing. So is the setter of a state no parameter feeds, which
+    // the hook starts itself — `useReactiveState(0)` — and the authority never holds.
+    if (declared === undefined) {
+      held.setters.set(state.setter.text, { key, local: true, set, site: key, type: undefined });
+    } else {
       const setter = { key, set, site: key, type: declared.type };
       held.setters.set(
         state.setter.text,
@@ -145,7 +149,9 @@ function scopeOf(input: HookInput): HookScope {
     (statement) => statement.declarationList.declarations,
   );
   for (const declaration of declarations) {
-    declaring.add(declaration.name);
+    for (const identifier of bindingIdentifiers(declaration.name)) {
+      declaring.add(identifier);
+    }
   }
   return { declared, declaring };
 }
@@ -202,8 +208,9 @@ function feedsOf(input: HookInput): ReadonlyMap<number, Feed> {
       continue;
     }
     for (const [index, key] of state.hook.feeds) {
-      const argument = state.call.arguments[index];
-      const parameter = parameterIn(argument, names);
+      // A refusal points at the spread that displaces the argument, which is what to change.
+      const argument = spreadThrough(state.call.arguments, index) ?? state.call.arguments[index];
+      const parameter = parameterIn(argumentAt(state.call.arguments, index), names);
       if (parameter === undefined) {
         fail(
           `\`${state.callee.text}\` declares a state with this argument as it is, which the authority evaluates for the browser: within a hook, that is one of the hook's own parameters, given as it is.`,

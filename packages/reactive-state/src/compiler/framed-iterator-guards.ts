@@ -74,6 +74,12 @@ export interface IteratorBoundary {
   readonly acquisition: CallExpression;
   readonly next: CallExpression;
   readonly method: string;
+  /**
+   * The list written out that the first argument of the source's constructor stands for, where the
+   * caller has followed that argument, a name, through whole constant aliases to it and shown that
+   * nothing else touches the list before the construction: iterating it runs no application code.
+   */
+  readonly written?: ArrayLiteralExpression;
 }
 
 /** The native default symbol retains its identity through whole const aliases and lexical shadows. */
@@ -89,7 +95,8 @@ export function iteratorMemberName(member: Expression): string | undefined {
 
 /**
  * Every ignored invocation argument still executes before a native iterator answers its first value. A
- * collection built from a name iterates what the name holds as it is built: that is application code.
+ * collection built from a name iterates what the name holds as it is built: that is application code,
+ * unless the caller has followed the name to a list written out (`written`).
  */
 export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   const { source, acquisition, next } = boundary;
@@ -98,12 +105,24 @@ export function iteratorBoundaryQuiet(boundary: IteratorBoundary): boolean {
   if (!iteratorPrefixQuiet(acquisition, next)) return false;
   if (!iteratorPrefixQuiet(source.value, acquisition, boundary)) return false;
   if (isObjectLiteralExpression(unwrapped(source.value))) return false;
-  const values = isNewExpression(source.value) ? (source.value.arguments ?? []) : [source.value];
-  return (
-    values.every((each) => !(isNewExpression(source.value) && isIdentifier(unwrapped(each)))) &&
-    (!isNewExpression(source.value) || iterableWritten(source.value)) &&
-    iteratorQuietValues(values)
+  if (isNewExpression(source.value)) return constructionQuiet(source.value, boundary.written);
+  return iteratorQuietValues([source.value]);
+}
+
+/**
+ * Whether building a source runs no application code: none of its arguments is a name, and a
+ * collection's is a list written out. The first argument is taken for the list `written`, where the
+ * caller has followed it to one.
+ */
+function constructionQuiet(
+  source: NewExpression,
+  written: ArrayLiteralExpression | undefined,
+): boolean {
+  const values = source.arguments ?? [];
+  const named = values.some(
+    (each, index) => isIdentifier(unwrapped(each)) && (index > 0 || written === undefined),
   );
+  return !named && iterableWritten(source, written) && iteratorQuietValues(values);
 }
 
 /** The constructors of a map, which read the first two slots of each entry they are built from. */
@@ -117,12 +136,16 @@ const COLLECTIONS: ReadonlySet<string> = new Set(['Map', 'Set', 'WeakMap', 'Weak
  * its argument has, reads the next step of it, and, for a map, the first two slots of each entry:
  * an argument that is a name, a call or an object, which inherits an iterator through `__proto__`
  * or has none, may run application code; only a list, a text or none at all does not, and a map's
- * entries are lists in turn. Any other constructor does not iterate its argument.
+ * entries are lists in turn. Any other constructor does not iterate its argument. Where the caller has
+ * followed the first argument to a list written out (`written`), that list is the one read.
  */
-function iterableWritten(source: NewExpression): boolean {
+function iterableWritten(
+  source: NewExpression,
+  written: ArrayLiteralExpression | undefined,
+): boolean {
   if (!framedNativeConstructor(source.expression, COLLECTIONS)) return true;
   const [first] = source.arguments ?? [];
-  const list = first === undefined ? undefined : unwrapped(first);
+  const list = first === undefined ? undefined : (written ?? unwrapped(first));
   if (list === undefined || list.kind === SyntaxKind.NullKeyword) return true;
   const map = framedNativeConstructor(source.expression, MAPS);
   if (!isArrayLiteralExpression(list))

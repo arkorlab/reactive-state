@@ -14,7 +14,7 @@ import {
 import { hostname, tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   abandoned,
@@ -300,6 +300,30 @@ describe('compileProject', () => {
     expect(existsSync(leftBehind)).toBe(false);
   });
 
+  it('reads where the pages are again once it has the lock, and compiles them where they moved while it waited', async () => {
+    const dir = application({ 'app/page.tsx': PAGE });
+    rmSync(path.join(dir, 'src', 'app'), { recursive: true });
+    await compileProject({ projectDir: dir });
+    // Something to compile, and another process holding the lock.
+    writeFileSync(path.join(dir, 'src/components/world.reactive.tsx'), HELLO);
+    const holding = lockedBy(dir, 0);
+
+    const waiting = compileProject({ projectDir: dir });
+    await delay(HELD_MS / 2);
+    // The page moves to `src/app` while the compile waits.
+    mkdirSync(path.join(dir, 'src', 'app'));
+    renameSync(path.join(dir, 'app/page.tsx'), path.join(dir, 'src/app/page.tsx'));
+    rmSync(holding);
+
+    await expect(waiting).resolves.toMatchObject({
+      appDir: path.join(dir, 'src', 'app'),
+      compiled: true,
+    });
+    expect(existsSync(path.join(dir, 'src/app/api/reactive-state/[...path]/route.ts'))).toBe(true);
+    // Next.js reads an `app` in the root while one is there at all: none is left.
+    expect(existsSync(path.join(dir, 'app'))).toBe(false);
+  });
+
   it('takes at once a lock whose holder, a process of this host, is gone, and waits for one whose holder is not', async () => {
     const left = application();
     const held = application();
@@ -384,9 +408,15 @@ describe('compileProject', () => {
     const dir = application();
     const lock = lockedBy(dir, LOCK_STALE_MS, 'holder\n');
     const stop = beating(lock, 'holder\n', HELD_MS / 10);
+    // Its thread is up once it has beaten the lock once.
+    await vi.waitFor(() => {
+      expect(Date.now() - statSync(lock).mtimeMs).toBeLessThan(LOCK_STALE_MS / 2);
+    });
 
+    // Aged again, and this thread held from then until the lock is read, no timer of its own run
+    // in between: what beats the lock meanwhile is a thread of its own.
+    lockedBy(dir, LOCK_STALE_MS, 'holder\n');
     holdThread(HELD_MS);
-    await delay(HELD_MS / 10);
     const beaten = Date.now() - statSync(lock).mtimeMs;
     await stop();
     // Let go of: its lock aged again, and left so.
@@ -455,6 +485,71 @@ describe('compileProject', () => {
     expect(existsSync(path.join(dir, 'app/api/reactive-state/[...path]/route.ts'))).toBe(true);
     expect(existsSync(path.join(dir, 'src/app/api'))).toBe(false);
     expect(readFileSync(path.join(dir, 'src/app/notes.md'), 'utf8')).toBe('Moved to app.\n');
+  });
+
+  it('takes away the folders the pages left empty in the `app` they moved from, and `app` with them', async () => {
+    const dir = application({ 'app/(site)/docs/page.tsx': PAGE });
+    rmSync(path.join(dir, 'src', 'app'), { recursive: true });
+    await compileProject({ projectDir: dir });
+    // The page moves to `src/app`, file by file: its folders are left behind, empty.
+    mkdirSync(path.join(dir, 'src/app/(site)/docs'), { recursive: true });
+    renameSync(
+      path.join(dir, 'app/(site)/docs/page.tsx'),
+      path.join(dir, 'src/app/(site)/docs/page.tsx'),
+    );
+
+    const moved = await compileProject({ projectDir: dir });
+
+    expect(moved).toMatchObject({ appDir: path.join(dir, 'src', 'app'), compiled: true });
+    // Next.js reads an `app` in the root while one is there at all, its pages or none.
+    expect(existsSync(path.join(dir, 'app'))).toBe(false);
+    await expect(compileProject({ projectDir: dir })).resolves.toMatchObject({
+      appDir: path.join(dir, 'src', 'app'),
+      changed: false,
+      compiled: false,
+    });
+  });
+
+  it('takes nothing away where it refuses: the route it wrote where the pages moved from stays until a compile is accepted', async () => {
+    const dir = application({ 'app/page.tsx': PAGE });
+    rmSync(path.join(dir, 'src', 'app'), { recursive: true });
+    await compileProject({ projectDir: dir });
+    const digest = readFileSync(path.join(dir, '.reactive', DIGEST_FILE), 'utf8');
+    // The page moves to `src/app`, and a component the compile refuses comes with it.
+    mkdirSync(path.join(dir, 'src', 'app'));
+    renameSync(path.join(dir, 'app/page.tsx'), path.join(dir, 'src/app/page.tsx'));
+    writeFileSync(path.join(dir, 'src/components/broken.reactive.tsx'), NO_COMPONENT);
+
+    await expect(compileProject({ projectDir: dir })).rejects.toThrow('refused to compile');
+
+    expect(existsSync(path.join(dir, 'app/api/reactive-state/[...path]/route.ts'))).toBe(true);
+    expect(readFileSync(path.join(dir, '.reactive', DIGEST_FILE), 'utf8')).toBe(digest);
+
+    rmSync(path.join(dir, 'src/components/broken.reactive.tsx'));
+    const accepted = await compileProject({ projectDir: dir });
+
+    expect(accepted).toMatchObject({
+      appDir: path.join(dir, 'src', 'app'),
+      changed: true,
+      compiled: true,
+    });
+    expect(existsSync(path.join(dir, 'app'))).toBe(false);
+    expect(existsSync(path.join(dir, 'src/app/api/reactive-state/[...path]/route.ts'))).toBe(true);
+  });
+
+  it('leaves the folders of an `app` directory it is told to read no pages from, where a file of the application’s is among them', async () => {
+    const dir = application({ 'src/app/(site)/notes.md': 'Kept.\n' });
+    await compileProject({ projectDir: dir });
+    mkdirSync(path.join(dir, 'src/app/(empty)'));
+    // The pages move to `web/app`, which the build is told: no directory Next.js finds by itself.
+    mkdirSync(path.join(dir, 'web'));
+    renameSync(path.join(dir, 'src/app/page.tsx'), path.join(dir, 'web/page.tsx'));
+
+    await compileProject({ app: 'web', projectDir: dir });
+
+    expect(existsSync(path.join(dir, 'src/app/api'))).toBe(false);
+    expect(existsSync(path.join(dir, 'src/app/(empty)'))).toBe(true);
+    expect(readFileSync(path.join(dir, 'src/app/(site)/notes.md'), 'utf8')).toBe('Kept.\n');
   });
 
   it('refuses to write over a file of the application’s where it writes its route, and writes nothing', async () => {

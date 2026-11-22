@@ -1,0 +1,294 @@
+import type { Node } from 'typescript/ast';
+import type { API } from 'typescript/sync';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { LOCAL_TIME } from '../src/compiler/local-date-inputs.ts';
+import { renderDateConversion } from '../src/compiler/render-date-conversions.ts';
+import { renderDateText } from '../src/compiler/render-date-text.ts';
+import { renderLocalInput } from '../src/compiler/render-local-inputs.ts';
+import { isTypeOnly } from '../src/compiler/scope.ts';
+import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
+
+const DATE_TEXT = 'writes a date as text of the time zone where it runs';
+
+/** Factory-produced and unresolved call-result template tags retain native String.raw Date coercion inputs. */
+const CASES = [
+  {
+    id: 'function-declaration-factory-String-raw-const-date',
+    source: `export function Widget(){function makeRaw(){return String.raw;}const raw=makeRaw();const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: LOCAL_TIME,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'arrow-factory-String-raw-typed-date-parameter',
+    source: `export function Widget(date:Date){const makeRaw=()=>String.raw;const raw=makeRaw();return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'inline-IIFE-String-raw-direct-new-date',
+    source: `export function Widget(){return <p>{(()=>String.raw)()\`\${new Date(0)}\`}</p>;}`,
+    conversion: LOCAL_TIME,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'function-factory-String-raw-stored-holder-date',
+    source: `export function Widget(){function makeRaw(){return String.raw;}const raw=makeRaw();const holder={date:new Date(0)};return <p>{raw\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'arrow-factory-String-raw-date-array-substitution',
+    source: `export function Widget(){const makeRaw=()=>String.raw;const raw=makeRaw();const dates=[new Date(0)];return <p>{raw\`\${dates}\`}</p>;}`,
+    conversion: LOCAL_TIME,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'arrow-factory-String-raw-direct-call-date-array',
+    source: `export function Widget(){const makeRaw=()=>String.raw;const raw=makeRaw();const dates=[new Date(0)];return <p>{raw({raw:["",""]},dates)}</p>;}`,
+    conversion: LOCAL_TIME,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'object-method-factory-String-raw-stored-holder-date',
+    source: `export function Widget(){const kit={makeRaw(){return String.raw;}};const holder={date:new Date(0)};return <p>{kit.makeRaw()\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'factory-returning-object-container-String-raw',
+    source: `export function Widget(){function makeTags(){return {raw:String.raw};}const holder={date:new Date(0)};return <p>{makeTags().raw\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'factory-returning-tuple-destructured-String-raw',
+    source: `export function Widget(){const makePair=()=>[String.raw] as const;const [raw]=makePair();const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'factory-returning-forwarding-wrapper-stored-holder-date',
+    source: `export function Widget(){function makeWrapper(){return (s:TemplateStringsArray,...v:unknown[])=>String.raw(s,...v);}const raw=makeWrapper();const holder={date:new Date(0)};return <p>{raw\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'factory-returning-wrapper-capturing-param-stored-holder-date',
+    source: `export function Widget(){function makeWrapper(tag:typeof String.raw){return (s:TemplateStringsArray,...v:unknown[])=>tag(s,...v);}const holder={date:new Date(0)};return <p>{makeWrapper(String.raw)\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'factory-default-referencing-earlier-param-const-date',
+    source: `export function Widget(){function make(tag:typeof String.raw,chosen=tag){return chosen;}const date=new Date(0);return <p>{make(String.raw)\`\${date}\`}</p>;}`,
+    conversion: LOCAL_TIME,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'factory-default-referencing-earlier-param-stored-holder-date',
+    source: `export function Widget(){function make(tag:typeof String.raw,chosen=tag){return chosen;}const holder={date:new Date(0)};return <p>{make(String.raw)\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'parameterized-identity-factory-forwarding-String-raw',
+    source: `export function Widget(){const id=<T,>(tag:T):T=>tag;const raw=id(String.raw);const holder={date:new Date(0)};return <p>{raw\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: LOCAL_TIME,
+    local: LOCAL_TIME,
+  },
+  {
+    id: 'conditional-branch-factory-returning-String-raw-or-custom',
+    source: `export function Widget({flag}:{flag:boolean}){const epoch=(_s:TemplateStringsArray,d:Date)=>String(d.getTime());function pickTag(rawMode:boolean){if(rawMode)return String.raw;return epoch;}const raw=pickTag(flag);const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'Reflect-apply-and-bound-factory-returning-String-raw',
+    source: `export function Widget(){function makeRaw(tag:typeof String.raw){return tag;}const boundMake=makeRaw.bind(null,String.raw);const raw=Reflect.apply(boundMake,null,[]);const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'unresolved-parameter-factory-retains-direct-date-diagnostic',
+    source: `export function Widget({makeTag}:{makeTag:()=>(s:TemplateStringsArray,d:Date)=>string}){const raw=makeTag();const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'unresolved-imported-factory-retains-direct-date-diagnostic',
+    source: `import { makeTag } from "./tag-factory";export function Widget(){const raw=makeTag();const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'function-factory-returning-ISO-custom-tag-pin',
+    source: `export function Widget(){function makeSafe(){return (_s:TemplateStringsArray,d:Date)=>d.toISOString();}const tag=makeSafe();const date=new Date(0);return <p>{tag\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'object-method-factory-returning-epoch-custom-tag-pin',
+    source: `export function Widget(){const kit={makeSafe(){return (_s:TemplateStringsArray,d:Date)=>String(d.getTime());}};const holder={date:new Date(0)};return <p>{kit.makeSafe()\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'parameterized-identity-factory-with-custom-tag-pin',
+    source: `export function Widget(){const id=<T,>(tag:T):T=>tag;const custom=(_s:TemplateStringsArray,d:Date)=>d.toUTCString();const tag=id(custom);const date=new Date(0);return <p>{tag\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'factory-default-referencing-earlier-custom-ISO-param-pin',
+    source: `export function Widget(){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();function make(tag:typeof iso,chosen=tag){return chosen;}const date=new Date(0);return <p>{make(iso)\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'factory-returning-object-container-with-custom-raw-pin',
+    source: `export function Widget(){function makeTags(){return {raw:(_s:TemplateStringsArray,d:Date)=>d.toISOString()};}const date=new Date(0);return <p>{makeTags().raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'factory-returning-shadowed-String-raw-pin',
+    source: `export function Widget(){const String={raw:(_s:TemplateStringsArray,..._v:unknown[])=>"fixed"};function makeRaw(){return String.raw;}const raw=makeRaw();const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'side-effecting-factory-rewriting-Date-prototype-stored-date-pin',
+    source: `export function Widget(){function makeRaw(){Date.prototype.toString=()=>"fixed";return String.raw;}const raw=makeRaw();const dates=[new Date(0)];return <p>{raw\`\${dates}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'factory-erased-this-parameter-custom-tag-stored-holder-date-pin',
+    source: `export function Widget(){function make(this:void,tag:typeof String.raw,_unused:typeof String.raw){return tag;}const raw=make(()=>"fixed",String.raw);const holder={date:new Date(0)};return <p>{raw\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'factory-erased-this-parameter-native-raw-stored-holder-date',
+    source: `export function Widget(){function make(this:void,tag:typeof String.raw,_unused:typeof String.raw){return tag;}const raw=make(String.raw,()=>"fixed");const holder={date:new Date(0)};return <p>{raw\`\${holder.date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: 'Date.localTime',
+    local: 'Date.localTime',
+  },
+  {
+    id: 'factory-parameter-default-referencing-overridden-earlier-param-pin',
+    source: `export function Widget(){function pick(first:typeof String.raw=String.raw,second=first){return second;}const raw=pick(()=>"fixed");const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'conditional-outer-factory-sharing-inner-helper-String-raw-branch',
+    source: `export function Widget(flag:boolean){const noop=(_s:TemplateStringsArray,_d:Date)=>"safe";const passthrough=<T,>(fn:T):T=>fn;const outer=<T,>(fn:T):T=>passthrough(fn);const date=new Date(0);return <p>{(flag?outer(String.raw):outer(noop))\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'conditional-outer-factory-sharing-inner-default-param-String-raw',
+    source: `export function Widget(flag:boolean){const noop=(_s:TemplateStringsArray,_d:Date)=>"safe";const inner=(tag:typeof String.raw,chosen=tag)=>chosen;const outer=(tag:typeof String.raw)=>inner(tag);const date=new Date(0);return <p>{(flag?outer(String.raw):outer(noop))\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'bound-factory-callee-sharing-inner-helper-across-branches',
+    source: `export function Widget(flag:boolean){const noop=(_s:TemplateStringsArray,_d:Date)=>"safe";const id=<T,>(v:T):T=>v;const makeBoundId=<T,>(x:T)=>id.bind(null,x);const invoke=<T,>(fn:T):T=>makeBoundId(fn)();const date=new Date(0);return <p>{(flag?invoke(String.raw):invoke(noop))\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'bound-factory-callee-preserving-inner-parameter-env-with-ISO-tag',
+    source: `export function Widget(){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();const id=<T,>(v:T):T=>v;const run=(helper:typeof id)=>{const makeBound=(x:typeof iso)=>helper.bind(null,x);return makeBound(iso)();};const raw=run(id);const date=new Date(0);return <p>{raw\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+  {
+    id: 'recursive-factory-rotating-params-retains-String-raw-date',
+    source: `export function Widget(n:number){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();function rotate(a:typeof String.raw,b:typeof String.raw,c:typeof String.raw,steps:number):typeof String.raw{return steps>0?rotate(b,c,a,steps-1):a;}const date=new Date(0);return <p>{rotate(iso,iso,String.raw,n)\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: DATE_TEXT,
+  },
+  {
+    id: 'recursive-factory-helper-with-safe-ISO-tag-terminates-pin',
+    source: `export function Widget(n:number){const iso=(_s:TemplateStringsArray,d:Date)=>d.toISOString();function loop(fn:typeof iso,steps:number):typeof iso{return steps>0?loop(fn,steps-1):fn;}const date=new Date(0);return <p>{loop(iso,n)\`\${date}\`}</p>;}`,
+    conversion: undefined,
+    dateText: undefined,
+    local: undefined,
+  },
+] as const;
+
+describe('factory-produced and unresolved call-result raw template tags', () => {
+  let api: API;
+
+  beforeAll(() => {
+    api = openTypeScript();
+  });
+
+  afterAll(() => {
+    api[Symbol.dispose]();
+  });
+
+  it.each(CASES)('$id', ({ source, conversion, dateText, local }) => {
+    expect({
+      conversion: firstReaderInput(api, source, renderDateConversion),
+      dateText: firstReaderInput(api, source, renderDateText),
+      local: firstReaderInput(api, source, renderLocalInput),
+    }).toStrictEqual({ conversion, dateText, local });
+  });
+});
+
+function firstReaderInput(
+  api: API,
+  source: string,
+  reader: (node: Node) => string | undefined,
+): string | undefined {
+  using parsed = parseModule(api, 'render-factory-raw-tags.tsx', source);
+  const pending: Node[] = [parsed.sourceFile];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isTypeOnly(node)) continue;
+    const found = reader(node);
+    if (found !== undefined) return found;
+    const children: Node[] = [];
+    node.forEachChild((child) => {
+      children.push(child);
+    });
+    pending.push(...children.toReversed());
+  }
+  return undefined;
+}

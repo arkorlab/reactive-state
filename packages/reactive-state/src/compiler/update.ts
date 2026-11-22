@@ -4,24 +4,32 @@ import {
   type FunctionExpression,
   type Identifier,
   isAwaitExpression,
+  isCallExpression,
   isIdentifier,
   isLiteralExpression,
+  isNewExpression,
   isPostfixUnaryExpression,
   isPrefixUnaryExpression,
   isPrivateIdentifier,
+  isPropertyAccessExpression,
   isShorthandPropertyAssignment,
+  isTaggedTemplateExpression,
   isTemplateLiteralToken,
+  isVariableDeclarationList,
   isYieldExpression,
   type Node,
   type SourceFile,
   SyntaxKind,
+  type VariableDeclarationList,
 } from 'typescript/ast';
 
 import type { TopLevel } from './analyze.ts';
 import type { Fail } from './errors.ts';
 import type { ImportBinding } from './imports.ts';
+import { isJsx } from './jsx.ts';
 import { isTypeOnly, readsBinding, walk } from './scope.ts';
 import { functionOf } from './statements.ts';
+import { useOf } from './uses.ts';
 
 /**
  * An update a setter is given — `current => addEstimate(current, step)` — as both sides run it: the
@@ -102,6 +110,12 @@ export function readUpdate(fn: ArrowFunction | FunctionExpression, scope: Update
         ) {
           fail(ONLY, node);
         }
+        if (isJsx(node)) {
+          fail(
+            `An update makes the field's next value of the current one, and JSX is rendered, not held: ${ONLY}`,
+            node,
+          );
+        }
       },
       read: (identifier, space) => {
         readName(identifier, space, { captures, imports, scope });
@@ -171,7 +185,35 @@ function readName(identifier: Identifier, space: 'type' | 'value', reading: Read
   }
 }
 
-/** A value of the owner's an update reads, which its call captures: never a function. */
+/** The members of a function that a call goes through: `onSave.call(…)`. */
+const CALLING: ReadonlySet<string> = new Set(['apply', 'bind', 'call']);
+
+/**
+ * Whether the update calls what `identifier` names — `onSave()`, `onSave?.()`, `new onSave()`, a
+ * template it tags, `onSave.call(…)` — within parentheses, `!`, `satisfies` and casts (`useOf`). What is called is a
+ * function, whatever type its owner gives it: an alias or an interface that a component or a hook
+ * imports is no type this compile reads, and its member, or the parameter, may be one.
+ */
+function isCalled(identifier: Identifier): boolean {
+  const { at, parent } = useOf(identifier);
+  if (isPropertyAccessExpression(parent) && parent.expression === at) {
+    const member = useOf(parent);
+    return (
+      CALLING.has(parent.name.text) &&
+      isCallExpression(member.parent) &&
+      member.parent.expression === member.at
+    );
+  }
+  return (
+    ((isCallExpression(parent) || isNewExpression(parent)) && parent.expression === at) ||
+    (isTaggedTemplateExpression(parent) && parent.tag === at)
+  );
+}
+
+/**
+ * A value of the owner's an update reads, which its call captures: never a function, whether the
+ * owner's code says so — a function declared, a function type written — or the update calls it.
+ */
 function capture(
   identifier: Identifier,
   entry: TopLevel,
@@ -184,7 +226,7 @@ function capture(
       identifier,
     );
   }
-  if (scope.holdsFunction(identifier)) {
+  if (scope.holdsFunction(identifier) || isCalled(identifier)) {
     scope.fail(
       `\`${identifier.text}\` is a function, which an update does not capture: ${ONLY}`,
       identifier,
@@ -210,7 +252,9 @@ interface Forming {
  * text of a template's parts between its substitutions, and a private name, among them, which no
  * child of theirs holds. Types are no part of it, nor how a node is spelled. A shorthand property
  * is both its key and its value, and the value is `$` or a capture: its key is a part of the form
- * as well, or `left => ({ left })` and `right => ({ right })` would be one update.
+ * as well, or `left => ({ left })` and `right => ({ right })` would be one update; and so is the kind
+ * of a declaration, `let` or `const` or `var`, which `{ let r = n; { let r = 0; } return r; }` is
+ * another update of than the same with `var`.
  */
 function formOf(node: Node, forming: Forming): string {
   if (isIdentifier(node)) {
@@ -219,10 +263,7 @@ function formOf(node: Node, forming: Forming): string {
   if (isLiteralExpression(node) || isTemplateLiteralToken(node) || isPrivateIdentifier(node)) {
     return `${formatSyntaxKind(node.kind)}:${JSON.stringify(node.text)}`;
   }
-  const parts: string[] =
-    isShorthandPropertyAssignment(node) && isIdentifier(node.name)
-      ? [`name:${node.name.text}`]
-      : [];
+  const parts: string[] = [...besideChildren(node)];
   node.forEachChild((child) => {
     if (!isTypeOnly(child)) {
       parts.push(formOf(child, forming));
@@ -233,6 +274,19 @@ function formOf(node: Node, forming: Forming): string {
       ? `:${formatSyntaxKind(node.operator)}`
       : '';
   return `${formatSyntaxKind(node.kind)}${operator}(${parts.join(',')})`;
+}
+
+/** What a node is beside its children: a shorthand property's key, and the kind of a declaration list. */
+function besideChildren(node: Node): readonly string[] {
+  if (isShorthandPropertyAssignment(node) && isIdentifier(node.name)) {
+    return [`name:${node.name.text}`];
+  }
+  return isVariableDeclarationList(node) ? [`declares:${declaresWith(node)}`] : [];
+}
+
+/** What a list declares with — `let`, `const`, `var` or `using`: the first word of its text, which no child of the list holds. */
+function declaresWith(list: VariableDeclarationList): string {
+  return /^[a-z]+/u.exec(list.getText(list.getSourceFile()))?.[0] ?? '';
 }
 
 function identifierForm(identifier: Identifier, forming: Forming): string {

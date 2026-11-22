@@ -15,27 +15,32 @@ import {
 import { unwrapped } from './bounded.ts';
 import { framedKeyNames } from './framed-keys.ts';
 
-/** Written own data entries, without executing accessor bodies or inferring an input's shape. */
+/**
+ * Written own data entries, without executing accessor bodies or inferring an input's shape. A name
+ * written by a computed key that only may be it (`[flag ? 'writable' : 'configurable']`, a key
+ * declared as a union) keeps what an earlier entry of the name wrote, as `framedDescriptorChoices`
+ * does: only a key that is the name alone replaces it.
+ */
 export function framedDescriptorEntries(
   node: Expression,
   names: readonly string[] | undefined,
 ): readonly Expression[] | undefined {
   const value = unwrapped(node);
   if (!isObjectLiteralExpression(value)) return undefined;
-  const entries = new Map<string, Expression | undefined>();
+  const entries = new Map<string, readonly Expression[]>();
   for (const property of value.properties) {
     if (isSpreadAssignment(property)) return undefined;
     const keys = entryKeys(property.name);
     if (keys === undefined) return undefined;
     const entry = entryValue(property);
-    for (const key of keys) entries.set(key, entry);
+    for (const key of keys) {
+      const kept = keys.length === 1 ? [] : (entries.get(key) ?? []);
+      entries.set(key, entry === undefined ? kept : [...kept, entry]);
+    }
   }
   const values: Expression[] = [];
   const selected = names ?? entries.keys();
-  for (const name of selected) {
-    const entry = entries.get(name);
-    if (entry !== undefined) values.push(entry);
-  }
+  for (const name of selected) values.push(...(entries.get(name) ?? []));
   return values;
 }
 

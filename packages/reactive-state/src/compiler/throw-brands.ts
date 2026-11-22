@@ -579,7 +579,7 @@ function isNoObject(kind: Kind | undefined): boolean {
   return kind !== undefined && PRIMITIVES.has(kind);
 }
 
-/** Whether what is of `kind` is no function: no object, an array, an object written there. */
+/** Whether what is of `kind` is no function: no object, an array, an object or a pattern written there. */
 function isNoFunction(kind: Kind | undefined): boolean {
-  return isNoObject(kind) || kind === 'array' || kind === 'object';
+  return isNoObject(kind) || kind === 'array' || kind === 'object' || kind === 'new RegExp';
 }

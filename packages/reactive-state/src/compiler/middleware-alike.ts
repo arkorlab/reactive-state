@@ -3,6 +3,7 @@ import {
   type BindingName,
   type Expression,
   type Identifier,
+  isArrayBindingPattern,
   isArrayLiteralExpression,
   isBinaryExpression,
   isComputedPropertyName,
@@ -27,6 +28,7 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
+import { mayMakeCollection } from './collection-values.ts';
 import type { Fail } from './errors.ts';
 import type { ContextParameter } from './middleware-reads.ts';
 import { mutatedCollection, mutatedSharedConstant } from './middleware-shared-writes.ts';
@@ -268,6 +270,8 @@ interface Binding {
   readonly collected: boolean;
   /** Whether the element binds an object the context hands, its own prop: `params`, `request`. */
   readonly handed: boolean;
+  /** Whether an array's pattern the element is within is written whole into each part that reads a name of it, as both do. */
+  readonly whole: boolean;
   readonly readBy: ContextReaders;
   readonly fail: Fail;
 }
@@ -282,12 +286,9 @@ function writtenTwice(name: string): string {
   return `A default of the context's pattern, \`${name}\`, read by the guard — which the authority runs — and by what the host runs around each request, holds an object or an array the middleware writes, or hands to a call that may write it: each part binds a copy of its own, so a write by one is absent from the other. Read it on one side alone, or copy its primitive value before the guard.`;
 }
 
-/** Whether `node`, a default, is an object or an array written there, whose identity each part makes anew. */
+/** Whether `node`, a default, may make an object or an array there, whose identity each part makes anew. */
 function collection(node: Expression | undefined): boolean {
-  const value = node === undefined ? undefined : unwrapped(node);
-  return (
-    value !== undefined && (isObjectLiteralExpression(value) || isArrayLiteralExpression(value))
-  );
+  return node !== undefined && mayMakeCollection(node);
 }
 
 /**
@@ -303,8 +304,9 @@ function checkBound(element: BindingElement, binding: Binding): void {
   }
   const bound = bindingIdentifiers(name).map((identifier) => identifier.text);
   const shared =
-    bound.some((each) => binding.readBy.guard(each)) &&
-    bound.some((each) => binding.readBy.host(each));
+    binding.whole ||
+    (bound.some((each) => binding.readBy.guard(each)) &&
+      bound.some((each) => binding.readBy.host(each)));
   const computed = key !== undefined && isComputedPropertyName(key) ? key.expression : undefined;
   for (const value of [computed, element.initializer]) {
     if (value !== undefined && shared && !isAlike(value, binding.alike)) {
@@ -320,6 +322,7 @@ function checkBound(element: BindingElement, binding: Binding): void {
     ...binding,
     collected: binding.collected || collection(element.initializer),
     handed: false,
+    whole: binding.whole || (shared && isArrayBindingPattern(name)),
   };
   for (const inner of name.elements) {
     if (!isOmittedExpression(inner)) {
@@ -382,6 +385,14 @@ export function checkContextDefaults(
   for (const element of context.pattern.elements) {
     const key = element.propertyName ?? element.name;
     const params = key !== undefined && isIdentifier(key) && key.text === 'params';
-    checkBound(element, { alike, collected: false, fail, handed: true, params, readBy });
+    checkBound(element, {
+      alike,
+      collected: false,
+      fail,
+      handed: true,
+      params,
+      readBy,
+      whole: false,
+    });
   }
 }

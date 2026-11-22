@@ -60,10 +60,7 @@ export function consumedIteratorFunction(
   if (!isCallExpression(node) && !isNewExpression(node)) {
     return undefined;
   }
-  const follow: Resolve = (name) => {
-    const held = resolve?.(name) ?? metadataInitializer(name);
-    return held === undefined || calleeUncertain(held, node) ? undefined : held;
-  };
+  const follow = followedResolver(node, resolve);
   const names = globalCalleePath(node.expression, follow) ?? [];
   const path = names.join('.');
   const typedFactory = names.length === 2 && names[1] === 'from' && isTypedKind(names[0] ?? '');
@@ -86,6 +83,17 @@ export function consumedIteratorFunction(
         invalid: nonCallableIterator(fn, source, node, resolve),
         resumes: path !== 'Iterator.from' && synchronousGenerator(fn),
       };
+}
+
+/**
+ * The names a native call reads as what `resolve` answers or their constant initializers hold, but
+ * of none the code may change before the call.
+ */
+export function followedResolver(node: Expression, resolve: Resolve | undefined): Resolve {
+  return (name) => {
+    const held = resolve?.(name) ?? metadataInitializer(name);
+    return held === undefined || calleeUncertain(held, node) ? undefined : held;
+  };
 }
 
 /** Later argument evaluation preserves the selected native consumer and its iterator. */

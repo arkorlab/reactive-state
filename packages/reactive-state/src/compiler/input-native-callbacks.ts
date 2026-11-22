@@ -1,10 +1,12 @@
 import {
   type CallExpression,
   type Expression,
+  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isAwaitExpression,
   isBlock,
+  isExpression,
   isExpressionStatement,
   isFunctionDeclaration,
   isFunctionExpression,
@@ -25,6 +27,7 @@ import { unwrapped } from './bounded.ts';
 import { declarationOf, parameterOf } from './framed.ts';
 import { metadataParameters } from './input-bindings.ts';
 import { metadataCallee, metadataInitializer } from './input-callees.ts';
+import { targetsOf } from './kept.ts';
 import { constantValue } from './numbers.ts';
 import { interveningEvaluation } from './written-evaluation.ts';
 import { writtenBy } from './written.ts';
@@ -133,7 +136,7 @@ export function settlesPromise(call: CallExpression, executor: Answering | undef
     return false;
   }
   const parameter = parameterOf(callee);
-  if (parameter === undefined) {
+  if (parameter === undefined || parameter.dotDotDotToken !== undefined) {
     return false;
   }
   const index = metadataParameters(executor).indexOf(parameter);
@@ -154,12 +157,30 @@ export function settlesPromise(call: CallExpression, executor: Answering | undef
 function parameterWritten(parameter: ParameterDeclaration, executor: Answering): boolean {
   const visit = (node: Node): boolean => {
     const written = writtenBy(node);
-    if (written !== undefined && isIdentifier(written) && parameterOf(written) === parameter) {
+    if (
+      written !== undefined &&
+      writtenTargets(written).some(
+        (target) => declarationOf(target) === undefined && parameterOf(target) === parameter,
+      )
+    ) {
       return true;
     }
     return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
   };
-  return executor.body !== undefined && visit(executor.body);
+  return visit(executor);
+}
+
+/** Identifier leaves targeted by a direct, parenthesized or destructuring write. */
+function writtenTargets(node: Node): readonly Identifier[] {
+  const current = isExpression(node) ? unwrapped(node) : node;
+  if (isIdentifier(current)) {
+    return [current];
+  }
+  const children = targetsOf(current);
+  if (children.length === 1 && children[0] === current) {
+    return [];
+  }
+  return children.flatMap((child) => writtenTargets(child));
 }
 
 /** A known malformed JSON input throws before a reviver can execute. */

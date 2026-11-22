@@ -25,9 +25,9 @@ import { declarationOf, isLanguageType, type TypeReading, type TypeSite } from '
  * JSON (`json-types.ts`) read them: a type literal's, an interface's with what it extends, an
  * alias's followed — and those the language's own types make of their arguments, as TypeScript
  * maps them: `Partial<T>`, each left out; `Required<T>`, none; `Readonly<T>`, as they are;
- * `Pick<T, K>`, those `K` names; `Omit<T, K>`, the others; each of these without what calls or
- * constructs `T`, which a mapped type keeps none of; and `Record<K, V>`, one of each name of text
- * `K` holds, or an index.
+ * `Pick<T, K>`, those `K` names, none where `K` names what `T` has no member of; `Omit<T, K>`, the
+ * others; each of these without what calls or constructs `T`, which a mapped type keeps none of;
+ * and `Record<K, V>`, one of each name of text `K` holds, or an index.
  */
 
 /** A member of an object's type, and the type of its values, each where it is written. */
@@ -122,7 +122,8 @@ function languageMembers(
   const mapped = members.filter(({ shape }) => !shape.called);
   if (name === 'Pick' || name === 'Omit') {
     const keys = second === undefined ? undefined : textKeys(second, at, reading);
-    return keys === undefined
+    // A key `Pick` is given that names no member is one an index supplies, which is not read.
+    return keys === undefined || (name === 'Pick' && !namesAll(keys, mapped))
       ? undefined
       : mapped.filter(
           ({ shape }) => (shape.name !== undefined && keys.has(shape.name)) === (name === 'Pick'),
@@ -135,6 +136,11 @@ function languageMembers(
     const { shape } = member;
     return { ...member, shape: { ...shape, optional: name === 'Partial' && !shape.textIndex } };
   });
+}
+
+/** Whether each of `keys` is the name of one of `members`. */
+function namesAll(keys: ReadonlySet<string>, members: readonly ObjectMember[]): boolean {
+  return [...keys].every((key) => members.some(({ shape }) => shape.name === key));
 }
 
 /**

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url';
 import type { NextAdapter, NextConfig } from 'next';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { SHARING_OFF } from '../src/compiler/emit-host.ts';
+import { givenHost, hostOf } from '../src/compiler/host.ts';
 import { PAGE_EXTENSIONS } from '../src/compiler/page-extensions.ts';
 import { createReactiveAdapter, ROUTE_GATES_ENV } from '../src/next/adapter.ts';
 import type * as CompileOnBuild from '../src/next/compile-on-build.ts';
@@ -351,6 +353,89 @@ async function configReason(
   }
 }
 
+/** What the compile's host reads of options that say nothing of a session or a prefetch. */
+const NOTHING = { prefetch: undefined, session: undefined };
+
+/** What `withReactiveState` is told, what the compile is handed of it, and what its host reads. */
+const TOLD = [
+  { compile: {}, host: NOTHING, id: 'nothing-said', options: {} },
+  {
+    compile: { share: false },
+    host: { ...NOTHING, share: false },
+    id: 'share-off',
+    options: { share: false },
+  },
+  { compile: {}, host: NOTHING, id: 'share-on', options: { share: true } },
+  {
+    compile: { session: '@/session#session' },
+    host: { ...NOTHING, session: { name: 'session', specifier: '@/session' } },
+    id: 'session',
+    options: { session: '@/session#session' },
+  },
+  {
+    compile: { prefetch: '30/60/300' },
+    host: { ...NOTHING, prefetch: { expire: 300, revalidate: 60, stale: 30 } },
+    id: 'prefetch',
+    options: { prefetch: '30/60/300' },
+  },
+  {
+    compile: { database: '@/data#store' },
+    host: NOTHING,
+    id: 'database',
+    options: { database: '@/data#store' },
+  },
+  {
+    compile: {
+      database: '@/data#store',
+      prefetch: '30/60/300',
+      session: '@/session#session',
+      share: false,
+    },
+    host: {
+      prefetch: { expire: 300, revalidate: 60, stale: 30 },
+      session: { name: 'session', specifier: '@/session' },
+      share: false,
+    },
+    id: 'every-option',
+    options: {
+      database: '@/data#store',
+      prefetch: '30/60/300',
+      session: '@/session#session',
+      share: false,
+    },
+  },
+] as const;
+
+/** A component, and a page of a route of one param that renders it of the param alone. */
+const GREETING = {
+  'src/app/greet/[name]/page.tsx': [
+    "import Hello from '@/components/hello.reactive';",
+    '',
+    'export default async function Page({ params }: { params: Promise<{ name: string }> }) {',
+    '  const { name } = await params;',
+    '  return <Hello name={name} />;',
+    '}',
+    '',
+  ].join('\n'),
+  'src/components/hello.reactive.tsx': [
+    'export default function Hello({ name }: { readonly name: string }) {',
+    '  return <p>Hello, {name}</p>;',
+    '}',
+    '',
+  ].join('\n'),
+  'tsconfig.json': JSON.stringify({
+    compilerOptions: { jsx: 'react-jsx', paths: { '@/*': ['./src/*'] } },
+  }),
+};
+
+/** What the compile registered of the greeting's route in `dir`'s manifest, as it wrote it. */
+function greeting(dir: string): unknown {
+  const manifest = JSON.parse(
+    readFileSync(path.join(dir, '.reactive', 'manifest.json'), 'utf8'),
+  ) as { readonly routes: readonly { readonly route: string }[] };
+  return manifest.routes.find(({ route: each }) => each === '/greet/[name]');
+}
+
 describe('the reactive-state adapter', () => {
   beforeEach(() => {
     vi.mocked(compileProject).mockClear();
@@ -435,6 +520,49 @@ describe('the reactive-state adapter', () => {
         projectDir: dir,
         src: 'reactive',
       });
+    });
+
+    it.each(TOLD)('hands the compile what withReactiveState was told: $id', async (row) => {
+      const dir = project();
+      const wrapped = withReactiveState({}, { root: dir, ...row.options });
+
+      await modified(dir, completeConfig(wrapped));
+
+      expect(compileProject).toHaveBeenCalledExactlyOnceWith({
+        out: '.reactive',
+        projectDir: dir,
+        src: 'src',
+        ...row.compile,
+      });
+
+      // As the compile reads its host's options: each one given kept, and read as what it names.
+      const given = givenHost(row.compile);
+
+      expect(given).toStrictEqual(row.compile);
+      expect(hostOf(given)).toStrictEqual(row.host);
+    });
+
+    it('builds a route unshared once withReactiveState is told `share: false`, the compile itself run', async () => {
+      const { compileProject: compile } = await vi.importActual<typeof CompileOnBuild>(
+        '../src/next/compile-on-build.ts',
+      );
+      vi.mocked(compileProject)
+        .mockImplementationOnce((options) => compile(options))
+        .mockImplementationOnce((options) => compile(options));
+      const dir = project();
+      for (const [file, text] of Object.entries(GREETING)) {
+        mkdirSync(path.dirname(path.join(dir, file)), { recursive: true });
+        writeFileSync(path.join(dir, file), text);
+      }
+
+      await modified(dir, completeConfig(withReactiveState({}, { root: dir })));
+
+      expect(greeting(dir)).toMatchObject({ shared: true });
+
+      // The build that shared it is on disk: turned off, sharing compiles the application again.
+      await modified(dir, completeConfig(withReactiveState({}, { root: dir, share: false })));
+
+      expect(greeting(dir)).toMatchObject({ private: SHARING_OFF, shared: false });
     });
 
     it('refuses a rule of the application’s own for the components’ sources', async () => {
@@ -598,8 +726,8 @@ describe('the reactive-state adapter', () => {
       expect(
         instantLoader(`const blocking = false;\nexport { blocking as instant };\n${page}`),
       ).not.toContain('export const instant = false');
-      expect(instantLoader(`const instant = 1;\nexport { instant as other };\n${page}`)).toContain(
-        'export const instant = false',
+      expect(instantLoader(`const instant = 1;\nexport { instant as other };\n${page}`)).toBe(
+        `const instant = 1;\nexport { instant as other };\n${page}\nconst instant$1 = false;\nexport { instant$1 as instant };\n`,
       );
     });
 

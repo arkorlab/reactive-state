@@ -174,8 +174,20 @@ type Setup = Awaited<ReturnType<typeof opened>>;
 type Orm = Setup['orm'];
 
 /**
+ * A row's write that failed, before the log was read or anything rendered: the row's failure, by a
+ * message of its own that no row expects of a render, whatever the write failed with (its `cause`).
+ */
+class WriteFailedError extends Error {
+  constructor(cause: unknown) {
+    super('The write a row makes before it renders again failed.', { cause });
+    this.name = 'WriteFailedError';
+  }
+}
+
+/**
  * A component that renders what `read` reads, rendered once; and whether a write renders it again,
- * once the log told of it.
+ * once the log told of it. The write succeeds, or the row fails by it (`WriteFailedError`): what a
+ * row expects a render to fail with is no write's failure.
  */
 async function watching(
   read: (orm: Orm, setup: Setup) => Promise<unknown>,
@@ -198,9 +210,14 @@ async function watching(
   return {
     orm: setup.orm,
     pg: setup.pg,
+    render,
     renders: async (write: () => Promise<unknown>): Promise<boolean> => {
       const before = evaluate.mock.calls.length;
-      await write();
+      try {
+        await write();
+      } catch (error) {
+        throw new WriteFailedError(error);
+      }
       await engine.poke();
       await render();
       return evaluate.mock.calls.length > before;
@@ -250,19 +267,18 @@ function asApp(granted: string) {
 }
 
 /**
- * Whether `write` renders the read `renders` watches again, or fails it as it renders it again:
- * whether the read is not kept as it was.
+ * A view of the labels, `all_labels`, that the role `reporter` owns and `app` may read: its rows
+ * are those its owner's rights and policies show, none of them until a policy names the owner.
  */
-async function changes(
-  renders: (write: () => Promise<unknown>) => Promise<boolean>,
-  write: () => Promise<unknown>,
-): Promise<boolean> {
-  try {
-    return await renders(write);
-  } catch {
-    return true;
-  }
-}
+const OWNED_VIEW = `
+  CREATE ROLE admins;
+  CREATE ROLE reporter;
+  GRANT SELECT ON labels TO reporter;
+  CREATE POLICY seen ON labels FOR SELECT TO admins USING (true);
+  CREATE VIEW all_labels AS SELECT id FROM labels;
+  ALTER VIEW all_labels OWNER TO reporter;
+  GRANT SELECT ON all_labels TO app;
+`;
 
 /** A view of the log's own schema, `reactive_state.chosen`, of the tasks of `project`. */
 function logViewOf(project: string): string {
@@ -675,8 +691,13 @@ describe(
         );
       };
 
-      await expect(renders(() => chosen('p2'))).resolves.toBe(true);
-      await expect(renders(() => chosen('p1'))).resolves.toBe(true);
+      // Both before the store reads the log again: it never sees the schema as other than it was.
+      await expect(
+        renders(async () => {
+          await chosen('p2');
+          await chosen('p1');
+        }),
+      ).resolves.toBe(true);
       await expect(
         renders(() => orm.insert(tasks).values({ projectId: 'p1', title: 'mine' })),
       ).resolves.toBe(true);
@@ -1345,27 +1366,38 @@ describe(
     it.each([
       ['granted one a policy names', 'GRANT admins TO reporter'],
       ['let past every policy', 'ALTER ROLE reporter BYPASSRLS'],
-      ['refused its table', 'REVOKE SELECT ON labels FROM reporter'],
-    ])('renders a read of a view again once its owner is %s', async (_what, changed) => {
+    ])(
+      'renders a read of a view again once its owner is %s, of the rows it sees now',
+      async (_what, changed) => {
+        const { pg, render, renders } = await watching(
+          (db) => db.execute(sql`SELECT id FROM all_labels`),
+          asApp(OWNED_VIEW),
+        );
+
+        await expect(render()).resolves.toContain('"rows":[]');
+
+        await expect(
+          renders(async () => {
+            await pg.exec(`RESET ROLE; ${changed}; SET ROLE app;`);
+            await sleep(PAST_DIGEST_MS);
+          }),
+        ).resolves.toBe(true);
+        await expect(render()).resolves.toContain('"rows":[{"id":"l1"},{"id":"l2"}]');
+      },
+    );
+
+    it('fails a read of a view once its owner is refused its table', async () => {
       const { pg, renders } = await watching(
         (db) => db.execute(sql`SELECT id FROM all_labels`),
-        asApp(`
-          CREATE ROLE admins;
-          CREATE ROLE reporter;
-          GRANT SELECT ON labels TO reporter;
-          CREATE POLICY seen ON labels FOR SELECT TO admins USING (true);
-          CREATE VIEW all_labels AS SELECT id FROM labels;
-          ALTER VIEW all_labels OWNER TO reporter;
-          GRANT SELECT ON all_labels TO app;
-        `),
+        asApp(OWNED_VIEW),
       );
 
       await expect(
-        changes(renders, async () => {
-          await pg.exec(`RESET ROLE; ${changed}; SET ROLE app;`);
+        renders(async () => {
+          await pg.exec('RESET ROLE; REVOKE SELECT ON labels FROM reporter; SET ROLE app;');
           await sleep(PAST_DIGEST_MS);
         }),
-      ).resolves.toBe(true);
+      ).rejects.toThrow(/permission denied for table labels/u);
     });
 
     it('fails a read once its role is refused a column it reads', async () => {
@@ -1494,29 +1526,33 @@ describe(
       ).resolves.toBe(true);
     });
 
-    it("renders a read again once a temporary table of a type's name it names stands before it", async () => {
+    it("fails a read once a temporary table of a type's name it names stands before the type", async () => {
       const { pg, renders } = await watching((db) =>
         db.execute(sql`SELECT count(*) AS n FROM tasks WHERE status = 'open'::status`),
       );
 
+      // Read again, of the table's row type: the read of the enum is not kept as it was.
       await expect(
-        changes(renders, () => pg.query('CREATE TEMPORARY TABLE status (x int)')),
-      ).resolves.toBe(true);
+        renders(() => pg.query('CREATE TEMPORARY TABLE status (x int)')),
+      ).rejects.toThrow(/malformed record literal/u);
     });
 
-    it('renders a read again once a domain it names is constrained, where the digest alone tells', async () => {
+    it('fails a read once a domain it names is constrained, where the digest alone tells', async () => {
       const { pg, renders } = await watching(
         (db) => db.execute(sql`SELECT count(*) AS n FROM tasks WHERE title = 'one'::short_text`),
         (setup) => setup.query('CREATE DOMAIN short_text AS text'),
       );
       await withoutEventTriggers({ pg, renders });
 
+      // Read again, of a value the domain takes no more: the read is not kept as it was.
       await expect(
-        changes(renders, async () => {
+        renders(async () => {
           await pg.query('ALTER DOMAIN short_text ADD CONSTRAINT short CHECK (length(VALUE) < 3)');
           await sleep(PAST_DIGEST_MS);
         }),
-      ).resolves.toBe(true);
+      ).rejects.toMatchObject({
+        cause: { message: expect.stringContaining('violates check constraint "short"') },
+      });
     });
 
     it("follows no condition of a statement that reads a view of an alias of a space that names a table's columns", async () => {
@@ -1672,9 +1708,32 @@ describe(
 
     it('prunes the log where a publication of all tables publishes its deletes', async () => {
       const setup = await opened();
+      const store = setup.follow.store(setup.pg);
+      const counted = async (log: 'changes' | 'ddl') => {
+        const { rows } = await setup.pg.query<{ n: string }>(
+          `SELECT count(*)::text AS n FROM reactive_state.${log}`,
+        );
+        return rows[0]?.n;
+      };
+      // Two commands the schema's count takes a row each of, and a followed row the log takes an
+      // entry of.
       await setup.pg.query('CREATE PUBLICATION everything FOR ALL TABLES');
+      await setup.pg.query('CREATE TABLE published (id text)');
+      await setup.orm.insert(tasks).values({ projectId: 'p1', title: 'published' });
+      const before = await store.changes(0, 10);
 
-      await expect(setup.follow.prune(setup.pg, Date.now())).resolves.toBeUndefined();
+      expect(before.changes).toHaveLength(1);
+      await expect(counted('changes')).resolves.toBe('1');
+      await expect(counted('ddl')).resolves.toBe('2');
+
+      await setup.follow.prune(setup.pg, Date.now() + PAST_DIGEST_MS);
+      const after = await store.changes(0, 10);
+
+      // The entry and the count's rows are deleted, the rows folded into one of their sum: the head
+      // and the count go on as they were.
+      await expect(counted('changes')).resolves.toBe('0');
+      await expect(counted('ddl')).resolves.toBe('1');
+      expect(after).toStrictEqual({ ...before, changes: [], floor: before.head + 1 });
     });
 
     it("keeps no key's value in the log, but its digest", async () => {

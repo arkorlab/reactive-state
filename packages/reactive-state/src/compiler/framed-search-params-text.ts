@@ -20,7 +20,11 @@ import { selectedError } from './framed-array-selections.ts';
 import { arrayError } from './framed-arrays.ts';
 import { frameTypeOf } from './framed-bindings.ts';
 import { framedPrimitiveParameterIterable } from './framed-parameter-iterables.ts';
-import { framedChangedRecord, type RecordFields } from './framed-record-changes.ts';
+import {
+  framedChangedRecord,
+  framedFormRecord,
+  type RecordFields,
+} from './framed-record-changes.ts';
 import { framedRecordOrigin } from './framed-record-origins.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
@@ -90,7 +94,7 @@ function recordWords(
   words: ParameterWords,
 ): boolean | undefined {
   const origin = framedRecordOrigin(expression, call, true);
-  if (origin === undefined) return undefined;
+  if (origin === undefined) return formWords(expression, call, words);
   if (origin.unchanged && framedPrimitiveParameterIterable(expression, origin.record, call))
     return false;
   const fields = recordFields(origin.record);
@@ -98,6 +102,21 @@ function recordWords(
     ? fields
     : framedChangedRecord(expression, fields, call, (record) => recordFields(record));
   return fieldValues(settled).some((value) => converted(value, [], call, words));
+}
+
+/**
+ * A record a native call builds or copies, or a conditional chooses, holds what any value it is made
+ * of may; where none is an Error the form is read as no record, and its entries are read on.
+ */
+function formWords(
+  expression: Expression,
+  call: NewExpression,
+  words: ParameterWords,
+): true | undefined {
+  const form = framedFormRecord(expression, call, (record) => recordFields(record));
+  return form !== undefined && fieldValues(form).some((value) => converted(value, [], call, words))
+    ? true
+    : undefined;
 }
 
 /** Every value a record's fields may hold. */
@@ -140,7 +159,14 @@ function spreadRecord(
   record: { readonly pending: RecordField[]; readonly entries: RecordEntries },
 ): void {
   const source = framedRecordOrigin(property.expression, property);
-  if (source === undefined || ancestors.has(source.record)) return;
+  if (source === undefined) {
+    const form = framedFormRecord(property.expression, property, (each) =>
+      ancestors.has(each) ? { named: new Map(), unknown: [] } : recordFields(each, ancestors),
+    );
+    if (form !== undefined) record.entries.unknown.push(...form.unknown);
+    return;
+  }
+  if (ancestors.has(source.record)) return;
   const next = new Set([...ancestors, source.record]);
   if (source.unchanged) {
     for (const child of source.record.properties.toReversed())

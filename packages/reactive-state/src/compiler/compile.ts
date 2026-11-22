@@ -1,7 +1,9 @@
 import {
   type Identifier,
   isFunctionTypeNode,
+  isIdentifier,
   isPropertySignatureDeclaration,
+  isStringLiteral,
   isTypeLiteralNode,
 } from 'typescript/ast';
 
@@ -147,12 +149,15 @@ function holdsFunction(identifier: Identifier, component: Component, held: Held)
   if (entry?.kind === 'constant') {
     return functionOf(entry.declaration) !== undefined;
   }
-  const { propsType, sourceFile } = component;
+  const { propsType } = component;
   if (propsType !== undefined && entry?.kind === 'prop' && isTypeLiteralNode(propsType)) {
-    const member = propsType.members.find(
-      (each) =>
-        isPropertySignatureDeclaration(each) && each.name.getText(sourceFile) === entry.prop.name,
-    );
+    const member = propsType.members.find((each) => {
+      return (
+        isPropertySignatureDeclaration(each) &&
+        (isIdentifier(each.name) || isStringLiteral(each.name)) &&
+        each.name.text === entry.prop.name
+      );
+    });
     return (
       member !== undefined &&
       isPropertySignatureDeclaration(member) &&

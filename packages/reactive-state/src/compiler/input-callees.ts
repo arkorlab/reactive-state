@@ -34,7 +34,7 @@ import { unwrapped } from './bounded.ts';
 import { calleeUncertain } from './callee-evaluation.ts';
 import { globalPathOf } from './code-globals.ts';
 import { declarationOf } from './framed.ts';
-import { rootOf } from './kept.ts';
+import { rootOf, targetsOf } from './kept.ts';
 import { writtenBy } from './written.ts';
 
 /** Source call targets and their actual arguments, for metadata dependence on input writes. */
@@ -186,7 +186,8 @@ function declarationWritten(target: FunctionDeclaration | ClassDeclaration): boo
       return;
     }
     const written = writtenBy(node);
-    found = written !== undefined && isIdentifier(written) && declarationOf(written) === target;
+    const targets = written === undefined ? [] : targetsOf(written);
+    found = targets.some((each) => isIdentifier(each) && declarationOf(each) === target);
     if (!found) {
       node.forEachChild(visit);
     }
@@ -244,8 +245,11 @@ function callableWritten(target: Node): boolean {
       return;
     }
     const written = writtenBy(node);
-    const root = written === undefined ? undefined : rootOf(written);
-    found = root !== undefined && metadataCallee(root) === target;
+    const targets = written === undefined ? [] : targetsOf(written);
+    found = targets.some((each) => {
+      const root = rootOf(each);
+      return root !== undefined && metadataCallee(root) === target;
+    });
     if (!found) {
       node.forEachChild(visit);
     }

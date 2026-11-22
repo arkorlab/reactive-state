@@ -32,9 +32,9 @@ import { framedAccessorTakes, framedLiteralAccessor } from './framed-member-acce
 import {
   framedHeldVariable,
   framedMemberDeletes,
-  framedMemberWrites,
+  framedMemberWritesOf,
   framedPrototypeWrites,
-  framedVariableWrites,
+  framedVariableWritesOf,
   type MemberDelete,
   type MemberWrite,
 } from './framed-member-writes.ts';
@@ -66,10 +66,14 @@ export interface HeldValues {
   readonly held: readonly Held[];
 }
 
-/** A source-written change reaching a read: where it stands and what it leaves on the path. */
+/**
+ * A source-written change reaching a read: where it stands and what it leaves on the path. The
+ * writes of one call stand at one node and run in turn, in the order of their `order`.
+ */
 interface Change {
   readonly node: Node;
   readonly held: Held;
+  readonly order: number;
 }
 
 /** The settings a definite change is looked for in. */
@@ -143,6 +147,7 @@ export function framedHeldValues(
     return {
       node: each.value,
       held: { value: each.value, keys: [...each.keys, ...path] },
+      order: 0,
     };
   });
   const { initializer } = selected.binding;
@@ -155,6 +160,14 @@ export function framedHeldValues(
   }
   const holder = framedHeldVariable(selected.binding);
   const changes = [...assigned, ...memberChanges(name, holder, path, point)];
+  const made = capturedFrom(selected.binding, holder);
+  const captured = made === undefined ? undefined : framedHeldValues(made, path, made);
+  if (captured !== undefined) {
+    return {
+      initial: captured.initial,
+      held: [...captured.held, ...changes.map((each) => each.held)],
+    };
+  }
   const direct = holder === selected.binding;
   const cut =
     direct || constantVariable(holder)
@@ -165,7 +178,7 @@ export function framedHeldValues(
       holder.initializer === undefined ? undefined : { value: holder.initializer, keys: path };
     return { initial, held: changes.map((each) => each.held) };
   }
-  const later = changes.filter((each) => !replacedBy(each.node, cut.node, point));
+  const later = changes.filter((each) => !replacedBy(each, cut, point));
   return { initial: undefined, held: [cut.held, ...later.map((each) => each.held)] };
 }
 
@@ -182,14 +195,34 @@ export function framedHeldFields(
   const holder = framedHeldVariable(selected.binding);
   const names = assignedFieldNames(name);
   const unknown: Held[] = [];
-  for (const write of framedMemberWrites(name.getSourceFile())) {
-    if (write.holder !== holder || write.path.length !== 1 || !reaches(write.node, name, point))
-      continue;
+  const made = capturedFrom(selected.binding, holder);
+  const captured = made === undefined ? undefined : framedHeldFields(made, made);
+  if (captured !== undefined) {
+    for (const each of captured.names) names.add(each);
+    unknown.push(...captured.unknown);
+  }
+  for (const write of framedMemberWritesOf(name.getSourceFile(), holder)) {
+    if (write.path.length !== 1 || !reaches(write.node, name, point)) continue;
     const [first] = write.path;
     if (first === undefined) unknown.push({ value: write.value, keys: [] });
     else for (const each of first) names.add(each);
   }
   return { names, unknown };
+}
+
+/**
+ * Where a constant alias takes its object from a variable that is assigned again, the alias holds
+ * what that variable held where the alias was made, which is read there: its initializer, what was
+ * assigned to it before, and what code wrote into it. The identifier the alias names is returned.
+ */
+function capturedFrom(
+  alias: VariableDeclaration,
+  holder: VariableDeclaration,
+): Identifier | undefined {
+  if (alias === holder || alias.initializer === undefined || constantVariable(holder))
+    return undefined;
+  const made = unwrapped(alias.initializer);
+  return isIdentifier(made) ? made : undefined;
 }
 
 /**
@@ -290,14 +323,16 @@ function memberChanges(
   path: readonly string[],
   point: Node,
 ): readonly Change[] {
+  if (path.length === 0) return [];
   const reached: Change[] = [];
-  for (const write of framedMemberWrites(name.getSourceFile())) {
-    if (write.holder !== holder || write.path.length > path.length) continue;
+  for (const [order, write] of framedMemberWritesOf(name.getSourceFile(), holder).entries()) {
+    if (write.path.length > path.length) continue;
     if (write.path.some((names, index) => names?.includes(path[index] ?? '') === false)) continue;
     if (!reaches(write.node, name, point)) continue;
     reached.push({
       node: write.node,
       held: { value: write.value, keys: path.slice(write.path.length) },
+      order,
     });
   }
   return reached;
@@ -319,7 +354,7 @@ function lastDefinite(search: DefiniteSearch): Change | undefined {
   const candidates: readonly Change[] = [...reassignments(search), ...overwrites(search)];
   for (const candidate of candidates) {
     if (!definitelyBefore(candidate.node, search.point)) continue;
-    if (last === undefined || candidate.node.pos > last.node.pos) last = candidate;
+    if (last === undefined || stands(candidate, last)) last = candidate;
   }
   return last;
 }
@@ -327,24 +362,22 @@ function lastDefinite(search: DefiniteSearch): Change | undefined {
 /** Plain assignments of the variable read directly, each replacing the object it holds. */
 function reassignments({ holder, path, point, direct }: DefiniteSearch): readonly Change[] {
   if (!direct) return [];
-  return framedVariableWrites(point.getSourceFile())
-    .filter((write) => write.binding === holder)
-    .map((write) => ({ node: write.node, held: { value: write.value, keys: path } }));
+  const writes = framedVariableWritesOf(point.getSourceFile(), holder);
+  return writes.map(({ node, value }) => ({ node, held: { value, keys: path }, order: 0 }));
 }
 
 /** Member writes on the path into the fresh ordinary object a variable assigned nothing anew holds. */
 function overwrites({ holder, path, point, assigned }: DefiniteSearch): readonly Change[] {
   const { initializer } = holder;
   if (initializer === undefined || assigned > 0 || !ordinaryObject(initializer)) return [];
-  const writes = framedMemberWrites(point.getSourceFile()).filter(
-    (write) => write.holder === holder,
-  );
-  return writes
-    .filter((write) => exactPrefix(write, path) && replacesMember(initializer, write, writes))
-    .map((write) => {
+  const writes = framedMemberWritesOf(point.getSourceFile(), holder);
+  return [...writes.entries()]
+    .filter(([, write]) => exactPrefix(write, path) && replacesMember(initializer, write, writes))
+    .map(([order, write]) => {
       return {
         node: write.node,
         held: { value: write.value, keys: path.slice(write.path.length) },
+        order,
       };
     });
 }
@@ -390,8 +423,9 @@ function plainMember(literal: ObjectLiteralExpression, key: string): Expression 
   if (framedLiteralAccessor(literal, key)) return undefined;
   let found: Expression | undefined;
   for (const property of literal.properties) {
-    if (isSpreadAssignment(property)) found = undefined;
-    else if (writtenArrayKey(property.name) === key)
+    const name = isSpreadAssignment(property) ? undefined : writtenArrayKey(property.name);
+    if (name === undefined) found = undefined;
+    else if (name === key)
       found = isPropertyAssignment(property) ? property.initializer : undefined;
   }
   if (found === undefined) return undefined;
@@ -399,10 +433,14 @@ function plainMember(literal: ObjectLiteralExpression, key: string): Expression 
   return isObjectLiteralExpression(value) || isArrayLiteralExpression(value) ? value : undefined;
 }
 
-/** A plain assignment, `Object.assign` entry or definition of known names on the read path. */
+/**
+ * A plain assignment, `Object.assign` entry or definition of known names on the read path, that
+ * nothing the walk cannot read in its own call may write over.
+ */
 function exactPrefix(write: MemberWrite, path: readonly string[]): boolean {
   const { node } = write;
   return (
+    !write.reopened &&
     write.path.length <= path.length &&
     write.path.every((names, index) => names?.length === 1 && names[0] === path[index]) &&
     (isCallExpression(node) ||
@@ -438,11 +476,18 @@ function definitelyBefore(change: Node, point: Node): boolean {
   return false;
 }
 
-/** The definite change itself, and same-function changes before it, do not reach past it. */
-function replacedBy(change: Node, cut: Node, point: Node): boolean {
-  return (
-    change === cut || (change.pos < cut.pos && executionOwner(change) === executionOwner(point))
-  );
+/** Whether a definite change comes after another: later in the file, or later in one call. */
+function stands(change: Change, other: Change): boolean {
+  return change.node === other.node ? change.order > other.order : change.node.pos > other.node.pos;
+}
+
+/**
+ * The definite change itself, the writes of its own call that ran before it, and same-function
+ * changes before it, do not reach past it; what the same call writes after it does.
+ */
+function replacedBy(change: Change, cut: Change, point: Node): boolean {
+  if (change.node === cut.node) return change.order <= cut.order;
+  return change.node.pos < cut.node.pos && executionOwner(change.node) === executionOwner(point);
 }
 
 /** Whether a variable is declared whole with `const`, which nothing assigns anew. */
