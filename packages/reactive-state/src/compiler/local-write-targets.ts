@@ -27,6 +27,7 @@ import {
   unreplacedAt,
   writtenAt,
 } from './local-write-paths.ts';
+import { lockedAt } from './throw-deletes.ts';
 
 /**
  * Target slot classification, deletions, `Object.assign` sources, and direct assignments on local
@@ -160,13 +161,18 @@ export function checkedSlotOf(target: Target): SlotKind {
   return slotEntryKind(container, last, target);
 }
 
-/** `delete target.prop`: safe only when the container at `keys.slice(0, -1)` is a plain object literal. */
+/**
+ * `delete target.prop`: safe where the container at `keys.slice(0, -1)` is a plain object literal,
+ * and where the code shows the property locked there (`lockedAt`): a strict deletion of it throws,
+ * as the checks of what throws tell (`deletesLocked`), and takes nothing away.
+ */
 export function deletedAt(target: Target): Writes {
   if (target.keys.length === 0) return NONE;
   const container = containerAt(target, target.keys.slice(0, -1));
-  return container !== undefined && isObjectLiteralExpression(unwrapped(container))
-    ? NONE
-    : CHANGED;
+  if (container === undefined) return CHANGED;
+  if (isObjectLiteralExpression(unwrapped(container))) return NONE;
+  const last = target.keys.at(-1);
+  return last !== undefined && lockedAt(container, last, target.resolve) ? NONE : CHANGED;
 }
 
 /** `Reflect.deleteProperty(target, key)`: safe only on an unreplaced plain object literal. */
