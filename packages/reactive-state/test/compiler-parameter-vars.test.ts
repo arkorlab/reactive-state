@@ -22,8 +22,6 @@ describe('shared factory parameter mutations', () => {
   it.each([
     "function make(value: {id: string; bad?: unknown}) { var value = {id: 'fresh'}; return value; } export const payload = make({id: 'safe'});",
     "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); var value = {id: 'fresh'}; return value; } export const payload = make({id: 'safe'});",
-    "function make(value: {id: string; bad?: unknown}) { var value; value.id = 'fresh'; return value; } export const payload = make({id: 'safe'});",
-    "function make(value: {id: string}) { var value; value.id = value.id; return value; } export const payload = make({id: 'safe'});",
     "function make(value: {id: string; bad?: unknown}) { var value; value.bad = new Date(0); return value.id; } export const payload = make({id: 'safe'});",
     "function make(value: string) { Array.prototype.includes.call(['safe'], value); return value; } export const payload = make('safe');",
     "function make(value: {id: string}) { function unrelated(value: {bad?: unknown}) { var value; value.bad = new Date(0); } return value; } export const payload = make({id: 'safe'});",
@@ -33,6 +31,18 @@ describe('shared factory parameter mutations', () => {
     apps.push(app);
 
     expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  // A member write is an entry of an object only where the object is one the code writes out; a
+  // parameter the function returns is none, whatever is written into it.
+  it.each([
+    "function make(value: {id: string; bad?: unknown}) { var value; value.id = 'fresh'; return value; } export const payload = make({id: 'safe'});",
+    "function make(value: {id: string}) { var value; value.id = value.id; return value; } export const payload = make({id: 'safe'});",
+  ])('refuses a member write into a returned parameter: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
   });
 });
 

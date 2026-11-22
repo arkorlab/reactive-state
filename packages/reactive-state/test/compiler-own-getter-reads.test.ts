@@ -24,8 +24,8 @@ describe('ordinary own getter reads', () => {
     { expression: '({get value(){return decodeURIComponent("%");}}.value,"ok")' },
     { expression: '(({get value(){throw new Error("bad");}} as any).value(),"ok")' },
     {
-      declaration: 'const box={get value(){throw new Error("bad");},set value(value:unknown){}};',
-      expression: '(box.value+=1,"ok")',
+      expression:
+        '(({get value(){throw new Error("bad");},set value(value:unknown){}} as any).value+=1,"ok")',
     },
   ])('refuses a read that invokes the selected throwing getter: $expression', async (row) => {
     const app = await fixture(row);

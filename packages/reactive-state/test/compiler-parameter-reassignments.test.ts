@@ -11,13 +11,23 @@ describe('shared factory parameter replacements', () => {
     "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); value = {id: 'fresh'}; return value; }",
     "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); (value as {id: string}) = {id: 'fresh'}; return value; }",
     "function make(value: {id: string; bad?: unknown}) { const fresh = {id: 'fresh'}; value.bad = new Date(0); value = fresh; return value; }",
-    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); value = {id: 'fresh'}; value.id = 'safe'; return value; }",
-    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); var value = {id: 'fresh'}, ignored = (value.id = 'safe'); return value; }",
   ])('keeps a returned fresh value after a definite replacement: %s', async (source) => {
     const app = await fixture(source);
     apps.push(app);
 
     expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  // A member write is an entry of an object only where the object is one the code writes out and
+  // has not replaced; a parameter that was replaced is none, though what replaced it is fresh.
+  it.each([
+    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); value = {id: 'fresh'}; value.id = 'safe'; return value; }",
+    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); var value = {id: 'fresh'}, ignored = (value.id = 'safe'); return value; }",
+  ])('refuses a member write into a parameter after its replacement: %s', async (source) => {
+    const app = await fixture(source);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
   });
 
   it.each([
