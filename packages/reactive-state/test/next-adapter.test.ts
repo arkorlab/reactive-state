@@ -534,9 +534,12 @@ describe('the reactive-state adapter', () => {
         src: 'src',
         ...row.compile,
       });
+
       // As the compile reads its host's options: each one given kept, and read as what it names.
-      expect(givenHost(row.compile)).toStrictEqual(row.compile);
-      expect(hostOf(row.compile)).toStrictEqual(row.host);
+      const given = givenHost(row.compile);
+
+      expect(given).toStrictEqual(row.compile);
+      expect(hostOf(given)).toStrictEqual(row.host);
     });
 
     it('builds a route unshared once withReactiveState is told `share: false`, the compile itself run', async () => {
