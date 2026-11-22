@@ -381,7 +381,7 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
       typescript: compilerTypeScript(),
     }),
   );
-  const roots = [...inputRoots(layout), { name: 'compiler', root: PACKAGE_SOURCES }];
+  const roots = [...inputRoots(layout, NOT_SOURCES), { name: 'compiler', root: PACKAGE_SOURCES }];
   const skipped = new Set([layout.outDir]);
   for (const { name, root } of roots) {
     const files = sourceFiles(root, skipped)

@@ -23,20 +23,36 @@ function isWithin(directory: string, file: string): boolean {
 }
 
 /**
- * The directories whose files a compile of `layout` reads that the digest of its inputs holds: the
- * application's root and, where either is not under it, the components' directory and the app's —
- * as a monorepo's shared `components` is not: a file added to one is no change of the root's, and no
- * file an earlier compile read. One inside another is listed once.
+ * Whether the walk of `root` reads `directory`: it is `root` or under it, and no folder on the way
+ * down to it is one the walk leaves out by its name (`unread`), as it leaves out `node_modules`.
  */
-export function inputRoots(layout: Layout): readonly Root[] {
+function isRead(root: string, directory: string, unread: ReadonlySet<string>): boolean {
+  return (
+    isWithin(root, directory) &&
+    path
+      .relative(root, directory)
+      .split(path.sep)
+      .every((name) => !unread.has(name))
+  );
+}
+
+/**
+ * The directories whose files a compile of `layout` reads that the digest of its inputs holds: the
+ * application's root and, where the walk of the root does not read either, the components'
+ * directory and the app's — one that is not under the root, as a monorepo's shared `components` is
+ * not, or one under a folder of it the walk leaves out by its name (`unread`): a file added to one
+ * is no change of what the root's walk reads, and no file an earlier compile read. One the walk of
+ * another reads is listed once.
+ */
+export function inputRoots(layout: Layout, unread: ReadonlySet<string>): readonly Root[] {
   const outside = [
     { name: 'src', root: layout.srcDir },
     { name: 'app', root: layout.appDir },
-  ].filter((directory) => !isWithin(layout.projectDir, directory.root));
+  ].filter((directory) => !isRead(layout.projectDir, directory.root, unread));
   return [
     { name: 'project', root: layout.projectDir },
     ...outside.filter((directory, index) =>
-      outside.slice(0, index).every((earlier) => !isWithin(earlier.root, directory.root)),
+      outside.slice(0, index).every((earlier) => !isRead(earlier.root, directory.root, unread)),
     ),
   ];
 }
