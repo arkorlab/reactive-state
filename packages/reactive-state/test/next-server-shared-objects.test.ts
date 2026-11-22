@@ -119,7 +119,7 @@ describe('a value of objects that hold each other many times over', () => {
 
   describe('sent as what an update captured', () => {
     it('is refused past what a request carries, the session unread and the authority unasked', async () => {
-      // Nineteen objects: 2 ** 18 places of the last, five million characters of JSON.
+      // Nineteen objects: 2 ** 18 places of the last, three million characters of JSON.
       await expect(
         updateField({ binding: 'b', captures: doubled(18), operationId: 'op', updaterId: 'u' }),
       ).resolves.toMatchObject({ code: 'INVALID_OPERATION', ok: false, status: 400 });

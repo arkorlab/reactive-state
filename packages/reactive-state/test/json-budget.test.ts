@@ -54,7 +54,7 @@ describe('the bound a value is copied within', () => {
   });
 
   it('refuses nineteen objects that come to more JSON than a request carries', () => {
-    // 2 ** 18 places of the leaf: five million characters of JSON, of nineteen objects.
+    // 2 ** 18 places of the leaf: three million characters of JSON, of nineteen objects.
     expect(() => toJson(doubled(18))).toThrow(TypeError);
     expect(() => toJson(doubled(18), 'The view')).toThrow(
       /^The view(?:\.[ab])+ is past the 1048576 characters of JSON one request carries\.$/u,
