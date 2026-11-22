@@ -22,7 +22,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){function collect(errors:Error[],prepare:()=>void){prepare();return errors.filter(async()=>false)[0]!.stack;}return collect([error],()=>{Object.assign(error,{stack:"fixed"});});}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'receiver-iife-data',
@@ -50,21 +50,21 @@ const CASES: readonly Case[] = [
     source:
       'function frames(_error:Error,errors:Error[]=[]){return errors.filter(async()=>false)[0]?.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'captured-receiver-data',
     source:
       'function frames(error:Error){const errors=[error];function collect(){return errors.filter(async()=>false)[0]!.stack;}Object.assign(error,{stack:"fixed"});return collect();}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'getter-bridge-async-false',
     source:
       'function frames(error:Error){function collect(input:{errors:Error[]}){return input.errors.filter(async()=>false)[0]!.stack;}return collect({get errors(){Object.assign(error,{stack:"fixed"});return[error];}});}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'getter-bridge-async-true-legacy',

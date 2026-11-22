@@ -189,7 +189,10 @@ const CASES: readonly Case[] = [
       'function frames(errors:(Error&{marker:number})[]){return errors.find(async({marker})=>false)!.stack;}',
     invocation:
       '(()=>{const error=new Error("ours")as Error&{marker:number};Object.defineProperty(error,"marker",{get(){Object.assign(error,{stack:"fixed"});return 1;}});return frames([error]);})()',
-    refused: false,
+    // The file that calls it names `Object.defineProperty`, which may give an array another
+    // prototype, and so a `find` of its own; `frames` alone is read as before.
+    refused: true,
+    reader: false,
   },
   {
     id: 'find-opaque-tail-iterator',
@@ -197,7 +200,10 @@ const CASES: readonly Case[] = [
       'function frames(errors:Error[],tail:unknown[]){return(errors.find as(...args:unknown[])=>Error)(async()=>false,...tail).stack;}',
     invocation:
       '(()=>{const error=new Error("ours");const tail:unknown[]=[];Object.assign(tail,{[Symbol.iterator]:function*(){Object.assign(error,{stack:"fixed"});yield 0;}});return frames([error],tail);})()',
-    refused: false,
+    // The file that calls it writes an object by a key the compile does not read
+    // (`[Symbol.iterator]`), which may be `find`; `frames` alone is read as before.
+    refused: true,
+    reader: false,
   },
   {
     id: 'find-saved-result-data',

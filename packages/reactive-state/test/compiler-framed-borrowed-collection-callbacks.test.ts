@@ -188,7 +188,7 @@ const CASES = [
     id: 'set-own-for-each',
     source:
       'function frames(error:Error){const items=new Set([error]);items.forEach=()=>{};return items.forEach(value=>value.stack!.includes("Firefox"));}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
     group: 'collection',
   },
@@ -196,7 +196,7 @@ const CASES = [
     id: 'map-own-for-each',
     source:
       'function frames(error:Error){const items=new Map([["key",error]]);items.forEach=()=>{};return items.forEach(value=>value.stack!.includes("Firefox"));}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
     group: 'collection',
   },
@@ -204,7 +204,7 @@ const CASES = [
     id: 'local-set-shadow',
     source:
       'function frames(error:Error){const Set=class{constructor(_items:unknown){}forEach(_callback:(value:any)=>unknown){}};return new Set([error]).forEach(value=>value.stack!.includes("Firefox"));}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
     group: 'collection',
   },
@@ -212,7 +212,7 @@ const CASES = [
     id: 'local-map-shadow',
     source:
       'function frames(error:Error){const Map=class{constructor(_items:unknown){}forEach(_callback:(value:any)=>unknown){}};return new Map([["key",error]]).forEach(value=>value.stack!.includes("Firefox"));}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
     group: 'collection',
   },

@@ -162,7 +162,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(){const input={filter(_predicate:(value:Error)=>Promise<boolean>){return[{stack:"fixed"}];}};return input.filter(async()=>false)[0]!.stack;}',
     invocation: 'frames()',
-    refused: false,
+    refused: true,
   },
 ];
 

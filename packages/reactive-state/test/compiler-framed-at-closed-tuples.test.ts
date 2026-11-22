@@ -28,7 +28,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values=[error,{stack:"fixed"}];return values["at"](...([1] as const))!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'whole-constant-tuple',
@@ -161,7 +161,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values=[error,{stack:"fixed"}];values.at=()=>({stack:"fixed"});return values.at(...([0] as const))!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'borrowed-apply-literal-pin',
@@ -203,7 +203,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values={at(_index:number){return {stack:"fixed"};}};return values.at(...([1] as const)).stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'spread-index-default-source',

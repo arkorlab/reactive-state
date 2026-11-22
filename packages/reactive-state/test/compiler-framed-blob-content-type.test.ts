@@ -250,8 +250,8 @@ const CASES = [
     source:
       'function words(error:Error){const type=Object.assign([error],{toString(){return "fixed";}});return new Blob([],{type:type as never}).type;}',
     invocation: 'words(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
 ] as const;
 
