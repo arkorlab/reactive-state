@@ -117,7 +117,7 @@ const CASES = [
     id: 'with-default-source-other',
     source:
       'function frames(error:Error){const values=[error];const other=[0];const {a=(values.with as (index:number,value?:Error)=>Array<Error|undefined>)(0)[0]?.stack ?? "fixed"}=(other.with=()=>[0],{} as {a?:string});return a;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
 ] as const;
