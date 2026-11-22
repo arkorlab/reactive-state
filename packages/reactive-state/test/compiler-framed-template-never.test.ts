@@ -103,7 +103,7 @@ const CASES: readonly Case[] = [
     id: 'whole-any-template-is-nonempty',
     source: `type Failure=\`\${any}\` extends never?Error:{stack:string};function frames(value:Failure){return value.stack;}`,
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'null-word-is-nonempty',

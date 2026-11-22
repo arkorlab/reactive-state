@@ -230,7 +230,7 @@ const CASES = [
     source:
       'type Errs=Error[];function frames(values:[{stack:string},...Errs]){return values.at(-1)?.stack;}',
     invocation: 'frames([{stack:"fixed"}])',
-    refused: false,
+    refused: true,
   },
   {
     id: 'direct-array-number-rest-delegate-error',

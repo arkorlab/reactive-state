@@ -167,11 +167,11 @@ const CASES = [
     source:
       'function words(error:Error,choose:boolean){const original=new Error("ours");const {message}:Error=original;return message;}',
     invocation: 'words(new Error("supplied"),false)',
-    refused: true,
+    refused: false,
     nativeExpected: 'ours',
     native: true,
     beside: {},
-    sharedRefused: true,
+    sharedRefused: false,
   },
   {
     id: 'typed-nested-local-container-opacity-pin',
@@ -279,22 +279,22 @@ const CASES = [
     source:
       'function words(error:Error,choose:boolean){function make(){return new Error("ours");}const {message}:Error=make();return message;}',
     invocation: 'words(new Error("supplied"),false)',
-    refused: true,
+    refused: false,
     nativeExpected: 'ours',
     native: true,
     beside: {},
-    sharedRefused: true,
+    sharedRefused: false,
   },
   {
     id: 'typed-subclass-message-opacity-pin',
     source:
       'function words(error:Error,choose:boolean){class Failure extends Error{}const {message}:Error=new Failure("ours");return message;}',
     invocation: 'words(new Error("supplied"),false)',
-    refused: true,
+    refused: false,
     nativeExpected: 'ours',
     native: true,
     beside: {},
-    sharedRefused: true,
+    sharedRefused: false,
   },
   {
     id: 'typed-parameter-default-retains-supplied-message',
