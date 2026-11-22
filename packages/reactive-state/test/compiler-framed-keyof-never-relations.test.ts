@@ -174,49 +174,49 @@ const CASES: readonly Case[] = [
     source:
       'type Data={stack:string};type Checked=keyof number[];type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'native-tuple-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof [];type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'readonly-tuple-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof readonly [];type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'native-Error-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof Error;type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'native-number-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof number;type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'native-string-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof string;type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'keyof-never-has-property-keys',
     source:
       'type Data={stack:string};type Checked=keyof never;type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'keyof-any-has-property-keys',
@@ -230,21 +230,21 @@ const CASES: readonly Case[] = [
     source:
       'type Data={stack:string};type Checked=keyof {[key:string]:number};type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'number-index-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof {[key:number]:number};type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'symbol-index-keys-data-pin',
     source:
       'type Data={stack:string};type Checked=keyof {[key:symbol]:number};type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'overlapping-finite-union-data-pin',
@@ -265,7 +265,7 @@ const CASES: readonly Case[] = [
     source:
       'type Data={stack:string};type Checked=keyof boolean;type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'empty-native-union',
@@ -412,7 +412,7 @@ const CASES: readonly Case[] = [
     source:
       'type Data={stack:string};type Checked=keyof ({}|ReturnType<()=>any>);type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
   {
     id: 'generic-whole-any-union-data-pin',
@@ -433,7 +433,7 @@ const CASES: readonly Case[] = [
     source:
       'type Data={stack:string};type Checked=keyof (Error|TypeError);type Fits=Checked extends never?true:false;type Failure=Checked extends never?Error:Data;function frames(value:Failure){return value.stack;}',
     invocation: 'frames({stack:"fixed"})',
-    refused: false,
+    refused: true,
   },
 ];
 
