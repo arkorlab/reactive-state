@@ -148,8 +148,8 @@ const CASES = [
     id: 'captured-own-Date-data',
     source:
       'export function Widget(){const dates=[new Date(0)];function text(prepare:()=>void){prepare();return dates.toString();}return <p>{text(()=>{dates[0]!.toString=()=>"fixed";})}</p>;}',
-    input: false,
-    private: false,
+    input: true,
+    private: true,
   },
   {
     id: 'existing-explicit-join-private',

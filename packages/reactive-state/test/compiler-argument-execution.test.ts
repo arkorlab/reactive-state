@@ -14,6 +14,7 @@ describe('metadata argument execution', () => {
     'actions.change()',
     'defaults()',
     'defaults(undefined)',
+    'deferred()',
   ])('refuses a constructor argument executing a write: %s', async (expression) => {
     const app = await fixture(expression);
     apps.push(app);
@@ -26,7 +27,6 @@ describe('metadata argument execution', () => {
   it.each([
     '(() => 0)()',
     'pure()',
-    'deferred()',
     '() => { argument.value = items; }',
     'Number("0")',
     'local()',
