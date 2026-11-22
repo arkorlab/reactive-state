@@ -687,10 +687,12 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
     return { ...layout, changed: removed, compiled: false };
   }
   const held = await lock(path.join(layout.outDir, LOCK_DIRECTORY));
-  // Beaten from the moment it is held, however long what follows takes — reading the sources again
-  // as well as the compile — a holder alive.
-  const stop = beating(held.file, held.holder);
+  let stop: (() => Promise<void>) | undefined;
   try {
+    // Beaten from the moment it is held, however long what follows takes — reading the sources again
+    // as well as the compile — a holder alive. Started in here: a lock whose beat could not start is
+    // let go like any other, not left to a process that lives on and never beats it.
+    stop = beating(held.file, held.holder);
     // Another process may have compiled while this one waited, or the sources changed meanwhile.
     const inputs = inputDigest(layout, options);
     if (isCurrent(layout, inputs)) {
@@ -699,7 +701,10 @@ export async function compileProject(options: ProjectOptions): Promise<ProjectCo
     const changed = compileLocked(layout, options, inputs);
     return { ...layout, changed: changed || removed, compiled: true };
   } finally {
-    await stop();
-    unlock(held.file);
+    try {
+      await stop?.();
+    } finally {
+      unlock(held.file);
+    }
   }
 }
