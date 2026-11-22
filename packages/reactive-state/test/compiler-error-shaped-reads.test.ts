@@ -80,6 +80,8 @@ describe('error shapes read while rendering a route', () => {
     'function read(box: { error: Error }) { return box.error.stack ?? ""; } export function shown() { return read({ error: new Error("banner") }); }',
     'const field = "stack"; function read(error: Error) { return error[field] ?? ""; } export function shown() { return read(new Error("banner")); }',
     'function read(error: Error) { return [error].join(","); } export function shown() { return read(new Error("banner")); }',
+    'function read(error: Error) { const values = [error]; values.join = () => "banner"; return Array.prototype.toString.call(values); } export function shown() { return read(new Error("banner")); }',
+    'function read(error: Error) { const values = [error]; values.join = 0; return Array.prototype.toString.call(values); } export function shown() { return read(new Error("banner")); }',
   ])('keeps an explicit error read private: %s', async (code) => {
     await expect(board(code)).resolves.toMatchObject({ shared: false });
   });
@@ -93,8 +95,6 @@ describe('error shapes read while rendering a route', () => {
     'const NativeError = class { stack = "banner"; }; export function shown() { return new NativeError().stack; }',
     'const Reflect = { get(data: { stack: string }, _key: string) { return data.stack; } }; export function shown() { return Reflect.get({ stack: "banner" }, "stack"); }',
     'export function shown() { return Error.prototype.toString.call(new Error("banner")); }',
-    'function read(error: Error) { const values = [error]; values.join = () => "banner"; return Array.prototype.toString.call(values); } export function shown() { return read(new Error("banner")); }',
-    'function read(error: Error) { const values = [error]; values.join = 0; return Array.prototype.toString.call(values); } export function shown() { return read(new Error("banner")); }',
     'function read(error: Error & { data: string }, field: "data") { return error[field]; } export function shown() { return read({ data: "banner" } as Error & { data: string }, "data"); }',
     'function read(flag: boolean) { return (flag ? new Error("a") : new TypeError("b")).message; } export function shown() { return read(true); }',
     'export function shown() { return "".concat(...["ban", "ner"]); }',
