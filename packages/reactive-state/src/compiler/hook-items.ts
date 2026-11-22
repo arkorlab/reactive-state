@@ -2,6 +2,7 @@ import {
   type ArrowFunction,
   type Expression,
   type FunctionExpression,
+  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isAsExpression,
@@ -18,6 +19,7 @@ import {
   type Node,
   type ObjectLiteralElementLike,
   type ReturnStatement,
+  type VariableDeclaration,
 } from 'typescript/ast';
 
 import type { HookCall, OwnedState, TopLevel } from './analyze.ts';
@@ -32,6 +34,24 @@ import type { Setter, UpdaterSite, Uses, Writes } from './updaters.ts';
  * the code that calls the hook holds through it.
  */
 
+/**
+ * Whether an item is the value of a state a parameter feeds, its setter, or a function that writes
+ * one: what a caller reads from a hook it binds whole must not do. A state the hook starts itself
+ * is the hook's own; its setter and its functions are followed only where the caller names them
+ * one by one, and a hook bound whole stays untracked, as it was.
+ */
+function holdsFed(item: Item, fed: ReadonlyMap<string, Fed>): boolean {
+  if (item.value !== undefined || (item.setter !== undefined && fed.has(item.setter.key))) {
+    return true;
+  }
+  for (const keys of item.uses.values()) {
+    if (keys.some((key) => fed.has(key))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** What each name a hook's call binds is, item by item. */
 function boundItems(call: HookCall): ReadonlyMap<string, Item> {
   const found = new Map<string, Item>();
@@ -41,7 +61,7 @@ function boundItems(call: HookCall): ReadonlyMap<string, Item> {
     const whole = hook.items.get('whole');
     let writes = false;
     for (const item of hook.items.values()) {
-      writes ||= item.setter !== undefined || item.uses.size > 0 || item.value !== undefined;
+      writes ||= holdsFed(item, hook.fed);
     }
     if (whole !== undefined) {
       found.set(binding.name.text, whole);
@@ -210,5 +230,66 @@ export function itemOf(node: Node, context: ItemContext): Item {
     };
   }
   const fn = entry.kind === 'constant' ? functionOf(entry.declaration) : undefined;
-  return fn === undefined ? plain : { ...plain, uses: context.writes.usesOf(fn) };
+  if (fn !== undefined) {
+    return { ...plain, uses: context.writes.usesOf(fn) };
+  }
+  // A constant that is another name of a setter, or of a function that writes: `const reset = setCount`.
+  const alias =
+    entry.kind === 'constant' ? aliasedName(entry.declaration, context.names) : undefined;
+  return alias === undefined ? plain : { ...plain, ...keptUnder(alias, context) };
+}
+
+/**
+ * What a name that another is a name of is held as: a setter, a function the hook holds that writes,
+ * or a constant function of the hook's own, which writes what its body does.
+ */
+function keptUnder(name: Identifier, context: ItemContext): Pick<Item, 'setter' | 'uses'> {
+  const entry = context.names.get(name.text);
+  const fn = entry?.kind === 'constant' ? functionOf(entry.declaration) : undefined;
+  return {
+    setter: context.held.setters.get(name.text),
+    uses:
+      fn === undefined
+        ? (context.held.writing.get(name.text) ?? new Map())
+        : context.writes.usesOf(fn),
+  };
+}
+
+/**
+ * The name a constant is another name of, through parentheses and casts: `const reset = setCount`.
+ * A pattern binds a part of what it is given, which is not another name of it.
+ */
+function aliasOf(declaration: VariableDeclaration): Identifier | undefined {
+  let value = declaration.initializer;
+  while (
+    value !== undefined &&
+    (isParenthesizedExpression(value) || isAsExpression(value) || isSatisfiesExpression(value))
+  ) {
+    value = value.expression;
+  }
+  return value !== undefined && isIdentifier(value) && isIdentifier(declaration.name)
+    ? value
+    : undefined;
+}
+
+/**
+ * The name a chain of constants ends at, each another name of the next: `const a = setCount; const b
+ * = a`. A name is followed once, so a chain that turns back on itself ends.
+ */
+function aliasedName(
+  declaration: VariableDeclaration,
+  names: ReadonlyMap<string, TopLevel>,
+): Identifier | undefined {
+  const seen = new Set<string>();
+  let name = aliasOf(declaration);
+  while (name !== undefined) {
+    seen.add(name.text);
+    const entry = names.get(name.text);
+    const next = entry?.kind === 'constant' ? aliasOf(entry.declaration) : undefined;
+    if (next === undefined || seen.has(next.text)) {
+      break;
+    }
+    name = next;
+  }
+  return name;
 }

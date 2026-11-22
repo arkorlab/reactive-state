@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import type { API } from 'typescript/sync';
@@ -282,7 +290,7 @@ function byPath(a: readonly string[], b: readonly string[]): number {
   return byCodeUnits(a[0] ?? '', b[0] ?? '');
 }
 
-/** Whether a directory holds no component of the application's: packages, and what is hidden. */
+/** Whether a directory or a file is no component of the application's: packages, and what is hidden. */
 function isHidden(name: string): boolean {
   return name === 'node_modules' || name.startsWith('.');
 }
@@ -294,8 +302,10 @@ function componentFiles(srcDir: string, outDir: string): readonly string[] {
     const entries = readdirSync(directory, { withFileTypes: true });
     for (const entry of entries) {
       const full = path.join(directory, entry.name);
-      const skipped = full === outDir || isHidden(entry.name);
-      if (!skipped && entry.isDirectory()) {
+      if (full === outDir || isHidden(entry.name)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
         visit(full);
       } else if (entry.isFile() && entry.name.endsWith(COMPONENT_SUFFIX)) {
         found.push(full);
@@ -371,21 +381,33 @@ interface Emitting {
   readonly appDir: string;
 }
 
-/** Every file of the build, by its path. */
+/**
+ * Every file of the build, by its path. No two are one file: not by their paths, nor by their
+ * paths in lower case, which a file system that keeps no case (macOS, Windows) writes one over the
+ * other — a module of the application's named as a file the compile names itself, `Elements.ts`
+ * beside `elements.ts`, or two components whose ids differ in case alone — whichever the system the
+ * compile runs on.
+ */
 function emitAll(emitting: Emitting): Map<string, string> {
   const { app, appDir, outDir } = emitting;
   const outputs = new Map<string, string>();
+  /** Each path put, by its lower case: what a file system that keeps no case calls the file. */
+  const folded = new Map<string, string>();
   const put = (file: string, text: string): void => {
-    if (outputs.has(file)) {
-      throw new ReactiveCompileError(
-        `Two of what the compile writes are \`${path.relative(outDir, file)}\`: rename the module of the application's that takes the name.`,
-        {
-          fileName: path.relative(outDir, file),
-          position: { character: 0, line: 0 },
-        },
-      );
+    const taken = folded.get(file.toLowerCase());
+    if (taken !== undefined) {
+      const name = path.relative(outDir, file);
+      const message =
+        taken === file
+          ? `Two of what the compile writes are \`${name}\`: rename the module of the application's that takes the name.`
+          : `Two of what the compile writes, \`${path.relative(outDir, taken)}\` and \`${name}\`, are one file where the file system keeps no case (macOS, Windows): rename the module of the application's that takes the name.`;
+      throw new ReactiveCompileError(message, {
+        fileName: name,
+        position: { character: 0, line: 0 },
+      });
     }
     outputs.set(file, text);
+    folded.set(file.toLowerCase(), file);
   };
   const outputOf = (from: string) => {
     return (target: ModuleClass): string | undefined => {
@@ -454,7 +476,12 @@ export interface WriteOptions {
 /**
  * Writes `outputs`, or with `check`, says which of them are stale. A file the compile wrote into
  * `outDir` before — one that opens as what it writes does — that it no longer writes is stale too,
- * and a write removes it.
+ * and a write removes it, and the directories it leaves empty, before it writes anything: where the
+ * file system keeps no case (macOS, Windows), a file of a name that differs from an output's in
+ * case alone is that output's, and a write over it would update it in place under the old spelling,
+ * after which it would be taken for what the compile no longer writes and removed; removed first,
+ * the output is written afresh, under its own spelling. A check removes nothing, and takes the old
+ * spelling for stale, which it is: it is not the name the compile writes.
  */
 export function writeOutputs(
   outputs: ReadonlyMap<string, string>,
@@ -462,6 +489,14 @@ export function writeOutputs(
   options: WriteOptions = {},
 ): readonly Output[] {
   const check = options.check === true;
+  const root = path.resolve(outDir);
+  const leftovers = generatedFiles(root).filter((file) => !outputs.has(file));
+  if (!check) {
+    for (const file of leftovers) {
+      rmSync(file);
+      removeEmptyDirectories(path.dirname(file), root);
+    }
+  }
   const written = [...outputs].map(([file, text]): Output => {
     const current = readIfPresent(file) === text;
     if (!current && !check) {
@@ -470,22 +505,36 @@ export function writeOutputs(
     }
     return { current, leftover: false, path: file };
   });
-  const leftovers = generatedFiles(path.resolve(outDir)).filter((file) => !outputs.has(file));
-  for (const file of leftovers) {
-    if (!check) {
-      rmSync(file);
-    }
-  }
   return [...written, ...leftovers.map((file) => ({ current: false, leftover: true, path: file }))];
 }
 
-/** The files under `directory` that a compile wrote. */
+/** Removes `directory`, and each directory above it below `root`, while it is empty. */
+function removeEmptyDirectories(directory: string, root: string): void {
+  for (
+    let each = directory;
+    each !== root && each.startsWith(`${root}${path.sep}`);
+    each = path.dirname(each)
+  ) {
+    try {
+      rmdirSync(each);
+    } catch {
+      // One that is not empty holds what is not the compile's: it stays, and so does what it is in.
+      return;
+    }
+  }
+}
+
+/** The files under `directory` that a compile wrote: none where there is no `directory`. */
 function generatedFiles(directory: string): readonly string[] {
   let entries;
   try {
     entries = readdirSync(directory, { recursive: true, withFileTypes: true });
-  } catch {
-    return [];
+  } catch (error) {
+    // Only a directory that is not there holds none; one that cannot be read may hold stale files.
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+      return [];
+    }
+    throw error;
   }
   return entries
     .filter((entry) => entry.isFile())

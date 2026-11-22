@@ -4,10 +4,11 @@ import { prototypeMayChange } from '../src/compiler/framed-prototype-changes.ts'
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * A holder (`Object`, `Array`, `Reflect`, a global object, a constructor) may be tested, not handed
- * on. The right of an `instanceof` is read for its `Symbol.hasInstance` and given the left: a holder
- * on the left is given to the hook the right holds, so it is a use that may reach a prototype. A
- * comparison and `typeof` take no part in it, of a global object (`typeof window`) as of any holder.
+ * A holder (`Object`, `Array`, `Reflect`, a global object, a constructor) may be tested by `typeof`
+ * and as the right of an `instanceof`, not handed on. The right of an `instanceof` is read for its
+ * `Symbol.hasInstance` and given the left: a holder on the left is given to the hook the right holds,
+ * so it is a use that may reach a prototype, and so is a holder in a comparison. `typeof` takes no
+ * part in it, of a global object (`typeof window`) as of any holder.
  */
 const CASES = [
   {
@@ -76,24 +77,24 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'instanceof-pin-constructor-on-the-right',
+    id: 'instanceof-pin-constructor-on-the-right-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object) { void (helper instanceof a.constructor); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'instanceof-pin-global-holder-on-the-right',
+    id: 'instanceof-pin-global-holder-on-the-right-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object) { void (a instanceof globalThis.Array); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'comparison-pin-holder-on-the-left',
+    id: 'comparison-pin-holder-on-the-left-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object) { void (Array === helper); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'comparison-pin-holder-on-the-right',
+    id: 'comparison-pin-holder-on-the-right-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object) { void (helper !== Object); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'typeof-pin-holder',
@@ -141,14 +142,14 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'typeof-a-global-object-of-a-global-object-pin',
+    id: 'typeof-a-global-object-of-a-global-object-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object) { void (typeof globalThis.window !== 'undefined'); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'typeof-a-holder-of-a-global-object-pin',
+    id: 'typeof-a-holder-of-a-global-object-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object) { void (typeof window.Array); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'window-bare-refused',

@@ -10,20 +10,26 @@ import {
   isArrowFunction,
   isBindingElement,
   isCallExpression,
+  isExpressionWithTypeArguments,
   isFunctionExpression,
   isIdentifier,
   isObjectBindingPattern,
   isOmittedExpression,
   isParenthesizedExpression,
+  isTypeAssertion,
   isVariableStatement,
+  type Node,
+  NodeFlags,
   type SourceFile,
   type Statement,
   type VariableDeclaration,
   type VariableStatement,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import type { Fail } from './errors.ts';
 import { INTRINSIC } from './imports.ts';
+import { forEachSynchronousCall } from './statement-calls.ts';
 
 /**
  * The statements that declare state, in a component or in a custom hook: `useReactiveState` itself,
@@ -75,6 +81,12 @@ export interface Reading {
 const STATE_ALONE =
   'State is declared on its own, with `const`: `const [value, setValue] = useReactiveState(initial)`, or `const [value] = …` where the state is read alone.';
 
+interface CalledState {
+  readonly call: CallExpression;
+  readonly callee: Identifier;
+  readonly intrinsic: boolean;
+}
+
 /**
  * The state `statement` declares, or `null` where it declares none. A statement that declares one in
  * any other form is refused.
@@ -88,23 +100,79 @@ export function stateStatementOf(
     return null;
   }
   const [declaration, ...others] = statement.declarationList.declarations;
-  const call = declaration?.initializer;
+  const direct =
+    declaration !== undefined && others.length === 0 && isConstant(statement)
+      ? directStateCall(declaration.initializer, reading)
+      : undefined;
+  const nested = nestedStateCall(statement.declarationList, reading, direct?.call);
+  if (nested !== undefined) {
+    return fail(nested.intrinsic ? STATE_ALONE : hookAlone(nested.callee.text), statement);
+  }
+  return direct === undefined || declaration === undefined
+    ? null
+    : declaredStateOf(statement, declaration, direct, fail);
+}
+
+/** The state or custom-hook call an initializer writes directly: `useReactiveState(…)` or `useHook(…)`. */
+function directStateCall(
+  initializer: Expression | undefined,
+  reading: Reading,
+): CalledState | undefined {
   if (
-    declaration === undefined ||
-    call === undefined ||
-    !isCallExpression(call) ||
-    !isIdentifier(call.expression)
+    initializer === undefined ||
+    !isCallExpression(initializer) ||
+    initializer.questionDotToken !== undefined
   ) {
-    return null;
+    return undefined;
   }
-  const callee = call.expression;
+  const { expression } = initializer;
+  if (!isIdentifier(expression)) {
+    return undefined;
+  }
+  const intrinsic = expression.text === INTRINSIC;
+  return intrinsic || reading.isHook(expression)
+    ? { call: initializer, callee: expression, intrinsic }
+    : undefined;
+}
+
+/** Any synchronous state or custom-hook call within `root`, other than `allowed` itself. */
+function nestedStateCall(
+  root: Node,
+  reading: Reading,
+  allowed: CallExpression | undefined,
+): CalledState | undefined {
+  let found: CalledState | undefined;
+  forEachSynchronousCall(root, (call) => {
+    if (call === allowed) {
+      return false;
+    }
+    found = calledState(call, reading);
+    return found !== undefined;
+  });
+  return found;
+}
+
+/** The state or custom-hook call `call` makes, unwrapping parentheses or assertions on its callee. */
+function calledState(call: CallExpression, reading: Reading): CalledState | undefined {
+  let callee = unwrapped(call.expression);
+  while (isExpressionWithTypeArguments(callee) || isTypeAssertion(callee)) {
+    callee = unwrapped(callee.expression);
+  }
+  if (!isIdentifier(callee)) {
+    return undefined;
+  }
   const intrinsic = callee.text === INTRINSIC;
-  if (!intrinsic && !reading.isHook(callee)) {
-    return null;
-  }
-  if (others.length > 0 || !isConstant(statement, reading.sourceFile)) {
-    return fail(intrinsic ? STATE_ALONE : hookAlone(callee.text), statement);
-  }
+  return intrinsic || reading.isHook(callee) ? { call, callee, intrinsic } : undefined;
+}
+
+/** The validated `StateStatement` of a single `const` declarator whose initializer is `direct`. */
+function declaredStateOf(
+  statement: VariableStatement,
+  declaration: VariableDeclaration,
+  direct: CalledState,
+  fail: Fail,
+): StateStatement {
+  const { call, callee, intrinsic } = direct;
   if (!intrinsic) {
     return {
       binding: hookBindingOf(declaration.name, callee.text, fail),
@@ -127,8 +195,11 @@ function hookAlone(name: string): string {
 }
 
 /** Whether a statement declares with `const`. */
-export function isConstant(statement: VariableStatement, sourceFile: SourceFile): boolean {
-  return /^const\s/u.test(statement.declarationList.getText(sourceFile));
+export function isConstant(statement: VariableStatement, sourceFile?: SourceFile): boolean;
+export function isConstant(statement: VariableStatement): boolean {
+  const { flags } = statement.declarationList;
+  // eslint-disable-next-line no-bitwise -- TypeScript says `const` in these flags (`AwaitUsing` sets `Const | Using`).
+  return (flags & NodeFlags.Const) !== 0 && (flags & NodeFlags.Using) === 0;
 }
 
 function pairOf(

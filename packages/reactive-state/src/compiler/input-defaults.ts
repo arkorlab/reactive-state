@@ -10,17 +10,19 @@ import {
   isPropertyAssignment,
   isSpreadElement,
   isStringLiteral,
-  type ParameterDeclaration,
   type Node,
+  type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
 import {
+  definedArgument,
   metadataParameters,
   type MetadataSource,
   omittedArgument,
   parameterSources,
+  presentParameterArray,
   selected,
 } from './input-bindings.ts';
 import { metadataInitializer } from './input-callees.ts';
@@ -32,6 +34,7 @@ interface Selection {
   readonly unknown: boolean;
   readonly present?: boolean;
   readonly entries?: readonly Expression[];
+  readonly template?: boolean;
 }
 interface Reading {
   readonly bindings: MetadataSource['bindings'];
@@ -46,19 +49,44 @@ export function metadataDefaults(
   bindings: MetadataSource['bindings'],
 ): Expression[] {
   const found: Expression[] = [];
+  const reading: Reading = { bindings, found };
   for (const parameter of metadataParameters(fn)) {
-    const actual = bindings.get(parameter);
-    if (parameter.initializer !== undefined && actual === parameter.initializer) {
-      found.push(actual);
-    }
-    if (
-      actual !== undefined &&
-      !bindingDefaults(parameter.name, defaultValue(actual, bindings), { bindings, found })
-    ) {
+    const selectedValue = withDefault(
+      parameterSelection(parameter, bindings),
+      parameter.initializer,
+      reading,
+    );
+    if (!bindingDefaults(parameter.name, selectedValue, reading)) {
       break;
     }
   }
   return found;
+}
+
+/** A parameter's pre-default selection, keeping present rest and template string arrays. */
+function parameterSelection(
+  parameter: ParameterDeclaration,
+  bindings: MetadataSource['bindings'],
+): Selection {
+  const array = presentParameterArray(bindings, parameter);
+  if (array !== undefined) {
+    const { entries: items, template } = array;
+    return {
+      entries: items,
+      present: true,
+      template: template === true,
+      unknown: false,
+      value: undefined,
+    };
+  }
+  const actual = bindings.get(parameter);
+  if (
+    actual === undefined ||
+    (parameter.initializer !== undefined && actual === parameter.initializer)
+  ) {
+    return { unknown: false, value: undefined };
+  }
+  return defaultValue(actual, bindings);
 }
 
 /** A pattern's selected fields or entries, stopping before nested nullish destructuring throws. */
@@ -99,6 +127,17 @@ function nullishSelection(actual: Selection, bindings: MetadataSource['bindings'
   return !value.unknown && value.value?.kind === SyntaxKind.NullKeyword;
 }
 
+/** Whether a selected value is proven defined so its binding fallback cannot run. */
+function definedSelection(value: Selection, bindings: MetadataSource['bindings']): boolean {
+  if (value.present === true || value.entries !== undefined) {
+    return true;
+  }
+  if (value.unknown) {
+    return false;
+  }
+  return definedArgument(value.value, bindings);
+}
+
 /** A missing binding selects its fallback; an unknown selection may execute that fallback too. */
 function withDefault(
   value: Selection,
@@ -106,11 +145,23 @@ function withDefault(
   reading: Reading,
 ): Selection {
   const omitted =
-    value.present !== true && !value.unknown && omittedArgument(value.value, reading.bindings);
-  if (initializer !== undefined && (omitted || (value.unknown && value.present !== true))) {
-    reading.found.push(initializer);
+    value.present !== true &&
+    value.entries === undefined &&
+    !value.unknown &&
+    omittedArgument(value.value, reading.bindings);
+  if (omitted) {
+    if (initializer !== undefined) {
+      reading.found.push(initializer);
+    }
+    return initializer === undefined
+      ? { unknown: false, value: undefined }
+      : defaultValue(initializer, reading.bindings);
   }
-  return omitted ? { unknown: false, value: initializer } : value;
+  if (initializer === undefined || definedSelection(value, reading.bindings)) {
+    return value;
+  }
+  reading.found.push(initializer);
+  return UNKNOWN;
 }
 
 /** A known own selection, or a present language-inherited member whose value is not interpreted. */
@@ -127,21 +178,7 @@ function selectedDefault(
     actual.entries ??
     (value !== undefined && isArrayLiteralExpression(value) ? value.elements : undefined);
   if (array !== undefined) {
-    if (array.some((entry) => isSpreadElement(entry))) {
-      return UNKNOWN;
-    }
-    if (
-      key === 'length' ||
-      Object.hasOwn(Array.prototype, key) ||
-      Object.hasOwn(Object.prototype, key)
-    ) {
-      return PRESENT;
-    }
-    const entry = array[Number(key)];
-    return {
-      unknown: false,
-      value: entry === undefined || isOmittedExpression(entry) ? undefined : entry,
-    };
+    return arraySelection(actual, array, key);
   }
   const picked = selected(actual.value, key);
   if (
@@ -157,6 +194,29 @@ function selectedDefault(
     return PRESENT;
   }
   return picked;
+}
+
+/** An indexed or inherited property read from a known array or template strings list. */
+function arraySelection(actual: Selection, array: readonly Expression[], key: string): Selection {
+  if (array.some((entry) => isSpreadElement(entry))) {
+    return UNKNOWN;
+  }
+  if (key === 'raw' && actual.template === true) {
+    return { entries: array, present: true, unknown: false, value: undefined };
+  }
+  if (
+    key === 'length' ||
+    Object.hasOwn(Array.prototype, key) ||
+    Object.hasOwn(Object.prototype, key)
+  ) {
+    return PRESENT;
+  }
+  const index = Number(key);
+  const entry = String(index) === key ? array[index] : undefined;
+  return {
+    unknown: false,
+    value: entry === undefined || isOmittedExpression(entry) ? undefined : entry,
+  };
 }
 
 /** Rest arrays retain their known entries for nested patterns without pretending entries are fresh. */
@@ -187,8 +247,11 @@ function defaultValue(node: Expression, bindings: MetadataSource['bindings']): S
     }
     seen.add(value);
     const parameter = parameterSources(value, { bindings, value });
-    const next =
-      parameter === undefined ? metadataInitializer(value) : parameter.sources?.[0]?.value;
+    if (parameter?.present === true) {
+      return PRESENT;
+    }
+    const only = parameter?.sources?.length === 1 ? parameter.sources[0]?.value : undefined;
+    const next = parameter === undefined ? metadataInitializer(value) : only;
     if (next === undefined) {
       return UNKNOWN;
     }

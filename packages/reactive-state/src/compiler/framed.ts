@@ -17,11 +17,9 @@ import {
   isIdentifier,
   isNewExpression,
   isObjectBindingPattern,
-  isParameterDeclaration,
   isPropertyAccessExpression,
   isSourceFile,
   isSetAccessorDeclaration,
-  isTemplateExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
   isVariableStatement,
@@ -37,15 +35,14 @@ import { isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
 import { framedAbortReason } from './framed-abort-reasons.ts';
-import { framedArrayCallbackError } from './framed-array-callback-errors.ts';
 import { framedArrayResult } from './framed-array-results.ts';
-import { framedArrayString, framedArrayText, framedArrayWrittenWords } from './framed-arrays.ts';
 import {
-  frameBindingOf,
-  frameDeclarationOf,
-  framedInputName,
-  frameTypeOf,
-} from './framed-bindings.ts';
+  framedArrayOperand,
+  framedArrayString,
+  framedArrayText,
+  framedArrayWrittenWords,
+} from './framed-arrays.ts';
+import { frameDeclarationOf, framedInputName, frameTypeOf } from './framed-bindings.ts';
 import { observedErrorAt, type ErrorObservation } from './framed-callback-observations.ts';
 import { framedClonedObjectData } from './framed-cloned-object-data.ts';
 import { framedIteratorResult } from './framed-collection-iterators.ts';
@@ -71,7 +68,6 @@ import { framedLiteralObject } from './framed-literal-data.ts';
 import { framedMapResult } from './framed-map-results.ts';
 import { framedNativeObjectResult } from './framed-native-object-results.ts';
 import { framedObjectData } from './framed-object-data.ts';
-import { framedPatternDefaults } from './framed-pattern-defaults.ts';
 import { framedPlatformText } from './framed-platform-text.ts';
 import { framedPropertyKey } from './framed-property-keys.ts';
 import {
@@ -85,12 +81,17 @@ import { framedReflectedObjectValues } from './framed-reflected-objects.ts';
 import { framedRegExpText } from './framed-regexp-text.ts';
 import { framedSourceValues } from './framed-sources.ts';
 import { framedObservedNames } from './framed-symbol-keys.ts';
+import { framedTemplateText } from './framed-template-text.ts';
 import { framedStringText } from './framed-text.ts';
 import { framedCallReturns, framedValueShape } from './framed-values.ts';
-import { framedAssignedSources } from './framed-writes.ts';
+import {
+  framedNamedError,
+  framedWrittenErrorInitializer,
+  framedWrittenErrorVariable,
+} from './framed-written-error-bindings.ts';
 import { namesLocalMemberArrayType, namesLocalMemberType } from './local-type-reading.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
-import { bindingIdentifiers, freeReads, isBlockScoped } from './scope.ts';
+import { bindingIdentifiers, isBlockScoped } from './scope.ts';
 
 export { namesType, parameterOf } from './framed-type-queries.ts';
 
@@ -115,9 +116,6 @@ const WORDED: ReadonlySet<string> = new Set(['message', 'toString']);
 
 /** The operators that make text of an error beside them: `+`, `+=`. */
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
-
-/** A catch body's free reads name its catch binding, not declarations in its nested scopes. */
-const CAUGHT_READS = new WeakMap<Node, ReadonlySet<Identifier>>();
 
 /** A member an error is read of, by its name, and the error — or one a `catch` takes apart. */
 interface ErrorRead {
@@ -234,7 +232,9 @@ function errorRead(node: Node): ErrorRead | undefined {
     isVariableDeclaration(declaration) &&
     keys.length === 0 &&
     initializer !== undefined &&
-    framedNativeErrorCreation(unwrapped(initializer), ERRORS, false);
+    framedWrittenErrorInitializer(initializer, (each, local) =>
+      isError(each, local, new Set(), { point: node }),
+    );
   return { names, keys, type: nativeWords ? undefined : declaration.type, of: initializer };
 }
 
@@ -247,24 +247,35 @@ function thrownText(node: Node, textValue: ErrorObservation['words']): boolean {
   if (framedRegExpText(node, textValue, arrayErrorType)) return true;
   if (framedErrorMessage(node, ERRORS, textValue, arrayErrorType)) return true;
   if (framedErrorComparison(node, ERRORS, textValue)) return true;
-  if (framedArrayText(node, { error: textValue, typed: arrayErrorType })) return true;
+  const words = { error: textValue, typed: arrayErrorType };
+  if (framedArrayText(node, words)) return true;
   if (framedStringText(node, textValue, arrayErrorType)) return true;
+  return convertedTextAt(node, words);
+}
+
+/** Explicit `String(...)` reads every array; template spans and `+` / `+=` the arrays they can follow. */
+function convertedTextAt(
+  node: Node,
+  words: {
+    readonly error: ErrorObservation['words'];
+    readonly typed: (value: Expression) => boolean;
+  },
+): boolean {
   if (
     (isCallExpression(node) || isNewExpression(node)) &&
     globalPathOf(unwrapped(node.expression))?.join('.') === 'String'
   ) {
-    return (
-      textValue(node.arguments?.[0]) ||
-      framedArrayString(node.arguments?.[0], { error: textValue, typed: arrayErrorType }, node)
-    );
+    return words.error(node.arguments?.[0]) || framedArrayString(node.arguments?.[0], words, node);
   }
-  if (isTemplateExpression(node)) {
-    return node.templateSpans.some((span) => textValue(span.expression));
+  const converts = (value: Expression | undefined): boolean =>
+    words.error(value) || framedArrayOperand(value, words, node);
+  if (framedTemplateText(node, converts)) {
+    return true;
   }
   return (
     isBinaryExpression(node) &&
     ADDING.has(node.operatorToken.kind) &&
-    (textValue(node.left) || textValue(node.right))
+    (converts(node.left) || converts(node.right))
   );
 }
 
@@ -299,8 +310,27 @@ function isError(node: Expression, made: boolean, seen: Set<Node>, at: ErrorAt =
     if (result !== undefined) return result;
   }
 
-  const followed = sourceError(value, made, seen, { keys, point });
-  if (followed !== undefined) return followed;
+  return (
+    sourceError(value, made, seen, { keys, point }) ??
+    typedOrNamedError({ assertions, value }, made, seen, { keys, point })
+  );
+}
+
+/** Written error assertions, annotations, and lexical bindings after direct sources are checked. */
+function typedOrNamedError(
+  shape: ReturnType<typeof framedValueShape>,
+  made: boolean,
+  seen: Set<Node>,
+  at: { readonly keys: readonly string[]; readonly point?: Node | undefined },
+): boolean {
+  const { assertions, value } = shape;
+  const { keys, point } = at;
+  if (
+    framedWrittenErrorVariable(value, { keys, made }, (each, local) =>
+      isError(each, local, new Set(seen), { point }),
+    )
+  )
+    return false;
   if (assertions.some((each) => namesLocalMemberType(each.type, [...each.keys, ...keys], ERRORS)))
     return true;
   const selected = frameTypeOf(value) ?? framedThisType(value);
@@ -309,8 +339,18 @@ function isError(node: Expression, made: boolean, seen: Set<Node>, at: ErrorAt =
     namesLocalMemberType(selected.type, [...selected.keys, ...keys], ERRORS)
   )
     return true;
-  if (keys.length > 0 || !isIdentifier(value)) return false;
-  return namedError(value, made, seen, point);
+  return (
+    keys.length === 0 &&
+    isIdentifier(value) &&
+    framedNamedError(
+      value,
+      { errors: ERRORS, made },
+      {
+        branch: (each, local, path) => isError(each, local, new Set(seen), { keys: path, point }),
+        chain: (each, local, path) => isError(each, local, seen, { keys: path, point }),
+      },
+    )
+  );
 }
 
 /** Native selections and written factory results retain the selected error and its own words. */
@@ -329,28 +369,6 @@ function selectedResultError(
         framedMapResult(call, made, ERRORS, error) ??
         factoryError(call, made, seen, point))
     : undefined;
-}
-
-/** A lexical error value or alias, after explicit receiver syntax has been inspected. */
-function namedError(value: Identifier, made: boolean, seen: Set<Node>, point?: Node): boolean {
-  if (isCaught(value)) return true;
-  const declared = frameDeclarationOf(value);
-  if (declared === undefined) return false;
-  if (!isVariableDeclaration(declared) && !isParameterDeclaration(declared)) return false;
-  const defaults = framedPatternDefaults(value, declared);
-  const keys = defaults === undefined ? [] : (frameBindingOf(value)?.keys ?? []);
-  return (
-    framedArrayCallbackError(value, made, ERRORS, (each, local, path) =>
-      isError(each, local, new Set(seen), { keys: path, point }),
-    ) ||
-    namesLocalMemberType(declared.type, keys, ERRORS) ||
-    framedAssignedSources(value).some((each) =>
-      isError(each.value, made, new Set(seen), { keys: each.keys, point }),
-    ) ||
-    defaults?.some((each) => isError(each, made, new Set(seen), { point })) === true ||
-    (declared.initializer !== undefined &&
-      isError(declared.initializer, made, seen, { keys, point }))
-  );
 }
 
 /** Possible source receivers retain error observations and locally constructed words. */
@@ -432,24 +450,6 @@ function factoryError(
   )
     return false;
   return undefined;
-}
-
-/** Whether `name` is what a `catch` around it takes. */
-function isCaught(name: Identifier): boolean {
-  for (let at: Node = name.parent; !isSourceFile(at); at = at.parent) {
-    if (isCatchClause(at) && at.variableDeclaration !== undefined) {
-      const caught = bindingIdentifiers(at.variableDeclaration.name);
-      if (caught.some((each) => each.text === name.text)) {
-        let reads = CAUGHT_READS.get(at.block);
-        if (reads === undefined) {
-          reads = new Set(freeReads(at.block));
-          CAUGHT_READS.set(at.block, reads);
-        }
-        return reads.has(name);
-      }
-    }
-  }
-  return false;
 }
 
 /** What declares a name in a block or at a module's top level: a variable, a function, a class. */

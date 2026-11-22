@@ -5,20 +5,15 @@ import {
   isArrayLiteralExpression,
   isCallExpression,
   isElementAccessExpression,
-  isLiteralTypeNode,
   isIdentifier,
   isVoidExpression,
-  isNoSubstitutionTemplateLiteral,
-  isParenthesizedTypeNode,
   isPropertyAccessExpression,
   isSpreadElement,
-  isStringLiteral,
   isTemplateExpression,
   isVariableDeclaration,
   isVariableStatement,
   type Node,
   SyntaxKind,
-  type TypeNode,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -26,7 +21,7 @@ import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { framedArrayTextArguments } from './framed-array-text-inputs.ts';
 import { arrayError } from './framed-arrays.ts';
-import { frameBindingOf, frameMemberName, frameTypeOf } from './framed-bindings.ts';
+import { frameBindingOf, frameMemberName } from './framed-bindings.ts';
 import { framedGenericErrorText } from './framed-generic-error-text.ts';
 import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { framedNativeErrorInput } from './framed-native-error-inputs.ts';
@@ -39,6 +34,7 @@ import { framedQuietOwnerPrefix } from './framed-native-prefix.ts';
 import { framedNativeRaw, framedNativeRawApply } from './framed-native-raw.ts';
 import { framedReplacementCallback } from './framed-replacement-callbacks.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
+import { framedStringTypeReceiver } from './framed-string-receivers.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { constantValue } from './numbers.ts';
 
@@ -392,23 +388,23 @@ function paddingArguments(
   if ((hasSize || !prefix.unknown) && !paddingRequired(receiver, size)) return false;
   if (!prefix.unknown) {
     const fill = prefix.values[1];
-    return fill !== undefined && words.error(fill);
+    return fill !== undefined && concatArguments([fill], words, call);
   }
   const values = framedConsumedArguments(call, args, 2);
   return concatArguments(hasSize ? values.filter((each) => each !== first) : values, words, call);
 }
 
-/** A literal padding apply list retains positions; opaque lists keep a possible error fill. */
+/** A resolved padding apply list retains positions; opaque lists keep a possible error fill. */
 function paddingApply(
   expression: Expression,
   words: TextWords,
   call: CallExpression,
   receiver: Expression,
 ): boolean {
-  const value = unwrapped(expression);
-  return isArrayLiteralExpression(value)
-    ? paddingArguments(value.elements, words, call, receiver)
-    : arrayError(value, words, call);
+  const applied = framedAppliedArguments(call, expression);
+  return applied === undefined
+    ? arrayError(unwrapped(expression), words, call)
+    : paddingArguments(applied, words, call, receiver);
 }
 
 /** A known nonpositive length or a source-proven sufficiently long receiver avoids fill conversion. */
@@ -449,8 +445,7 @@ function stringReceiver(node: Expression): boolean {
   if (isTemplateExpression(value)) return true;
   if (isCallExpression(value) && globalPathOf(unwrapped(value.expression))?.join('.') === 'String')
     return true;
-  const selected = frameTypeOf(value);
-  return selected?.keys.length === 0 && writtenString(selected.type);
+  return framedStringTypeReceiver(node);
 }
 
 /** Only a whole const binding can retain its primitive initializer as the receiver. */
@@ -464,15 +459,4 @@ function constantInitializer(name: Identifier): Expression | undefined {
     /^const\s/u.test(statement.declarationList.getText(statement.getSourceFile()))
     ? binding.initializer
     : undefined;
-}
-
-/** An explicit primitive string type, with literal and parenthesized spellings preserved. */
-function writtenString(type: TypeNode): boolean {
-  let value = type;
-  while (isParenthesizedTypeNode(value)) value = value.type;
-  return (
-    value.kind === SyntaxKind.StringKeyword ||
-    (isLiteralTypeNode(value) &&
-      (isStringLiteral(value.literal) || isNoSubstitutionTemplateLiteral(value.literal)))
-  );
 }

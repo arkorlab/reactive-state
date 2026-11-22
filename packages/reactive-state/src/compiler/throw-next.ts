@@ -23,7 +23,11 @@ import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import type { Resolve } from './numbers.ts';
 import { globalCalleePath } from './throw-callees.ts';
-import { consumedIteratorFunction, iteratorFunctionOf } from './throw-iteration.ts';
+import {
+  consumedIteratorFunction,
+  followedResolver,
+  iteratorFunctionOf,
+} from './throw-iteration.ts';
 import { enumerationKey } from './throw-keys.ts';
 import { writtenOf } from './throw-shapes.ts';
 
@@ -71,7 +75,8 @@ function consumedSource(node: Node): Expression | undefined {
 function merelyObtained(node: Node, resolve: Resolve | undefined): boolean {
   return (
     (isCallExpression(node) &&
-      globalCalleePath(node.expression, resolve)?.join('.') === 'Iterator.from') ||
+      globalCalleePath(node.expression, followedResolver(node, resolve))?.join('.') ===
+        'Iterator.from') ||
     (isVariableDeclaration(node) &&
       isArrayBindingPattern(node.name) &&
       node.name.elements.length === 0)

@@ -17,7 +17,7 @@ import {
 } from 'typescript/ast';
 
 import { checkComputedOnce, checkContextDefaults } from './middleware-alike.ts';
-import { checkBeforeGuard } from './middleware-order.ts';
+import { checkBeforeGuard, checkResources } from './middleware-order.ts';
 import {
   contextReads,
   declaredBy,
@@ -29,6 +29,7 @@ import {
   type StatementReads,
   unionOf,
 } from './middleware-reads.ts';
+import { checkReassigned } from './middleware-reassigned.ts';
 import { type GuardAnswers, guardAnswers } from './middleware-response.ts';
 import type { ModuleKind } from './modules.ts';
 import { checkServerNode } from './prefix.ts';
@@ -203,7 +204,7 @@ function closureOf(
 }
 
 /** Refuses an import made at run time anywhere in the middleware, and its module's own URL. */
-function checkRunTime(statements: readonly Statement[], names: MiddlewareNames): void {
+function checkRunTime(nodes: readonly Node[], names: MiddlewareNames): void {
   const visit = (node: Node): void => {
     if (
       (isCallExpression(node) && node.expression.kind === SyntaxKind.ImportKeyword) ||
@@ -213,8 +214,8 @@ function checkRunTime(statements: readonly Statement[], names: MiddlewareNames):
     }
     node.forEachChild(visit);
   };
-  for (const statement of statements) {
-    visit(statement);
+  for (const node of nodes) {
+    visit(node);
   }
 }
 
@@ -409,6 +410,7 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
   if (split.index < 0) {
     return { after: undefined, before: undefined, guard: undefined };
   }
+  checkResources(statements.slice(0, split.index), names);
   const { classified, suffix } = sortedOf(assembling);
   const of = (role: Role): readonly Classified[] => classified.filter((each) => each.role === role);
   const [pure, guards, envelopes] = [of('pure'), of('guard'), of('envelope')];
@@ -417,21 +419,45 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
     pure,
   );
   const hostSeeds = [...envelopes, ...suffix];
-  const elsewhere = closureOf(
+  const readByHost = closureOf(
     hostSeeds.map((each) => each.reads),
     pure,
+  );
+  // A constant of the params alone that nothing reads runs where the request is, as written, and
+  // the constants it reads are written there as well.
+  const unread = pure.filter((each) => !inGuard.has(each) && !readByHost.has(each));
+  // What the host runs of the middleware's own statements: its envelope's and after `next`, and these.
+  const hostRuns = [...hostSeeds, ...unread];
+  const elsewhere = closureOf(
+    hostRuns.map((each) => each.reads),
+    pure,
+  );
+  // An unread constant is written ahead of the guard (`checkBeforeGuard`), where it reads the context's
+  // names as the guard does, so what it reads is not among what the host reads of the names the guard assigns.
+  const hostReads = unionOf(
+    ...[...hostSeeds, ...elsewhere].map((each) => each.reads.values.keys()),
+  );
+  const before = inOrder([...envelopes, ...elsewhere, ...unread]);
+  const guardReads = inOrder([...guards, ...inGuard]);
+  checkReassigned(
+    {
+      after: suffix.map((each) => each.statement),
+      guard: guardReads.map((each) => each.statement),
+      host: before.map((each) => each.statement),
+      hostReads,
+    },
+    names,
   );
   // What both read is written into both: only what each computes alike.
   checkComputedOnce(
     pure,
     {
       both: (each) => inGuard.has(each) && elsewhere.has(each),
-      host: (name) => hostSeeds.some((each) => each.reads.values.has(name)),
+      host: (name) => hostRuns.some((each) => each.reads.values.has(name)),
     },
     names.context,
     names.fail,
   );
-  const guardReads = inOrder([...guards, ...inGuard]);
   const envelopeNames = new Set(envelopes.flatMap((each) => each.declares));
   for (const read of guardReads) {
     checkGuard(read, names, envelopeNames);
@@ -447,9 +473,6 @@ export function assembleParts(assembling: Assembling): MiddlewareParts {
       checkAfter(read, names, { guard: guardNames, response });
     }
   }
-  // A constant of the params alone that nothing reads runs where the request is, as written.
-  const unread = pure.filter((each) => !inGuard.has(each) && !elsewhere.has(each));
-  const before = inOrder([...envelopes, ...elsewhere, ...unread]);
   checkBeforeGuard(
     before.map((each) => each.statement),
     guards.map((each) => each.statement),
@@ -565,10 +588,12 @@ function beforeOf(
 
 /**
  * Refuses a default of the context's pattern the host binds — before `next`, for each request —
- * that reads what runs on the authority alone, or renders: a statement that reads either is the
- * guard's, or refused, and a default is bound where the part that reads its name runs.
+ * that imports at run time or reads its module's URL, as a statement of the middleware may not, that
+ * reads what runs on the authority alone, or that renders: a statement that reads either of the last
+ * two is the guard's, or refused, and a default is bound where the part that reads its name runs.
  */
 function checkEnvelopeDefault(read: Checked, names: MiddlewareNames): void {
+  checkRunTime([read.statement], names);
   const authority = importRead(read.reads, names, AUTHORITY_ONLY);
   if (authority !== undefined) {
     names.fail(

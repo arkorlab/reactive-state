@@ -49,6 +49,20 @@ export interface Catalog {
    * other tables too, which the policy's own conditions — of the role that reads — may scan.
    */
   readonly hidden: ReadonlySet<string>;
+  /**
+   * The partitioned tables and the partitions among the followed tables, and the partitions of a
+   * followed partitioned table, by `relationKey`: a plan names a partitioned table's partitions, and
+   * a write to the table is logged as the table's, so nothing follows either. Not known, as of no
+   * catalog, is none.
+   */
+  readonly partitioned?: ReadonlySet<string>;
+  /**
+   * The followed tables that inherit from another table (`INHERITS`), and those that inherit from
+   * them, by `relationKey` — partitions are `partitioned`'s: a write through a table's parent
+   * changes its rows and is logged as the parent's, which a render that read the table alone is not
+   * told of. Not known, as of no catalog, is none.
+   */
+  readonly inherited?: ReadonlySet<string>;
 }
 
 /** No condition followed: every read of a table is of the table whole. */
@@ -65,9 +79,10 @@ function literal(text: string): string {
 
 /**
  * The statement that asks of the followed tables of `followed`: the server's version, and of each
- * table, by its schema and name, its kind, whether it is a partition or its rows are hidden by a
- * policy, and of each column, its type, the kind of type, and whether its collation is
- * deterministic.
+ * table, by its schema and name, its kind, whether it is a partition, inherits from another table
+ * or its rows are hidden by a policy, and of each column, its type, the kind of type, and whether
+ * its collation is deterministic. The tables that inherit from a followed table, partitions
+ * included, are asked of the same way.
  */
 export function catalogSql(followed: Followed): string {
   const relations = followed.relations.map(
@@ -93,7 +108,12 @@ export function catalogSql(followed: Followed): string {
   const kept = `SELECT r.ev_action::text AS tree FROM pg_rewrite AS r JOIN pg_class AS c ON c.oid = r.ev_class JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND ${others} UNION ALL SELECT p.prosqlbody::text FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE p.prosqlbody IS NOT NULL AND ${others}`;
   const trees = `(WITH "kept" AS MATERIALIZED (${kept}) SELECT coalesce(json_agg(k.tree), '[]'::json) FROM "kept" AS k WHERE k.tree ~ ${aliasList})`;
   const bodies = `(SELECT coalesce(json_agg(p.prosrc), '[]'::json) FROM pg_proc AS p JOIN pg_language AS l ON l.oid = p.prolang JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE l.lanname = 'sql' AND p.prosqlbody IS NULL AND ${others})`;
-  return `SELECT current_setting('server_version_num')::int AS "version", current_setting('standard_conforming_strings') = 'on' AS "conforming", getdatabaseencoding() = 'UTF8' AS "utf8", ${operators} AS "operators", ${trees} AS "trees", ${bodies} AS "bodies", coalesce((SELECT json_agg(json_build_object('schema', n.nspname, 'name', c.relname, 'kind', c.relkind, 'partition', c.relispartition, 'hidden', c.relrowsecurity, 'columns', ${columns})) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${listed})), '[]'::json) AS "tables"`;
+  // The tables, at any depth, that inherit from a followed table, its partitions among them
+  // (`pg_inherits` holds both): a plan of a table names them, and a plan of a partitioned table
+  // names them alone.
+  const descendantsOfListed = `WITH RECURSIVE "tree"("oid") AS (SELECT p.oid FROM pg_class AS p JOIN pg_namespace AS pn ON pn.oid = p.relnamespace WHERE (pn.nspname, p.relname) IN (${listed}) UNION SELECT i.inhrelid FROM pg_inherits AS i JOIN "tree" AS t ON i.inhparent = t."oid") SELECT "oid" FROM "tree"`;
+  const inherits = `EXISTS (SELECT 1 FROM pg_inherits AS h WHERE h.inhrelid = c.oid)`;
+  return `SELECT current_setting('server_version_num')::int AS "version", current_setting('standard_conforming_strings') = 'on' AS "conforming", getdatabaseencoding() = 'UTF8' AS "utf8", ${operators} AS "operators", ${trees} AS "trees", ${bodies} AS "bodies", coalesce((SELECT json_agg(json_build_object('schema', n.nspname, 'name', c.relname, 'kind', c.relkind, 'partition', c.relispartition, 'inherits', ${inherits}, 'hidden', c.relrowsecurity, 'columns', ${columns})) FROM pg_class AS c JOIN pg_namespace AS n ON n.oid = c.relnamespace WHERE (n.nspname, c.relname) IN (${listed}) OR c.oid IN (${descendantsOfListed})), '[]'::json) AS "tables"`;
 }
 
 /** `value` as a record of fields, where it is an object of JSON's. */
@@ -186,6 +206,30 @@ function keysOfTable(
   return usable;
 }
 
+/** The tables of `tables`, the rows of `catalogSql`'s list, that are partitioned or are partitions. */
+function partitionedIn(tables: readonly unknown[]): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const each of tables) {
+    const table = recordOf(each) ?? {};
+    if (table['kind'] === 'p' || table['partition'] === true) {
+      found.add(relationKey({ name: String(table['name']), schema: String(table['schema']) }));
+    }
+  }
+  return found;
+}
+
+/** The tables of `tables` that inherit from another and are no partitions. */
+function inheritedIn(tables: readonly unknown[]): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const each of tables) {
+    const table = recordOf(each) ?? {};
+    if (table['inherits'] === true && table['kind'] !== 'p' && table['partition'] !== true) {
+      found.add(relationKey({ name: String(table['name']), schema: String(table['schema']) }));
+    }
+  }
+  return found;
+}
+
 /** What the rows `catalogSql` answered say, of the tables `followed` follows. */
 export function catalogOf(rows: unknown, followed: Followed): Catalog {
   const [first] = Array.isArray(rows) ? (rows as unknown[]) : [];
@@ -193,13 +237,17 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
   const version = row['version'];
   const conforming = row['conforming'] === true;
   const utf8 = row['utf8'] === true;
+  const partitioned = partitionedIn(listOf(row['tables']));
+  const inherited = inheritedIn(listOf(row['tables']));
   if (
     typeof version !== 'number' ||
     version < CONDITIONS_SINCE ||
     row['operators'] !== false ||
     renamesIn(row['trees'], row['bodies'], conforming)
   ) {
-    return NO_CONDITIONS;
+    // No condition is followed, but which tables are partitioned or inherit is not a condition's
+    // fact.
+    return { ...NO_CONDITIONS, inherited, partitioned };
   }
   const keys = new Map<string, ReadonlySet<string>>();
   const types = new Map<string, ReadonlyMap<string, string>>();
@@ -225,5 +273,5 @@ export function catalogOf(rows: unknown, followed: Followed): Catalog {
     oids.set(declared, usable.oids);
     if (table['hidden'] !== false) hidden.add(declared);
   }
-  return { conforming, hidden, keys, oids, types };
+  return { conforming, hidden, inherited, keys, oids, partitioned, types };
 }

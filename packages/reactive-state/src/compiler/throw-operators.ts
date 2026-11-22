@@ -93,7 +93,8 @@ function invalidFunctionTarget(
     quietClass;
   return (
     object &&
-    ((isExpression(target) && lacksFunctionPrototype(target, right)) || isMethodDeclaration(target))
+    ((isExpression(target) && lacksFunctionPrototype(target, right)) ||
+      (isMethodDeclaration(target) && target.asteriskToken === undefined))
   );
 }
 
@@ -167,25 +168,34 @@ function hookFunction(
   return undefined;
 }
 
-/** A plain noncallable object's final own hook, or its ordinary prototype's lack of one. */
+/**
+ * A plain noncallable object's final own hook, which an explicit prototype before it does not
+ * shadow, or its ordinary prototype's lack of one.
+ */
 function lacksInstanceHook(
   value: ObjectLiteralExpression,
   operation: Node,
   resolve: Resolve | undefined,
 ): boolean {
+  let inherited = false;
   for (const property of value.properties.toReversed()) {
     if (isSpreadAssignment(property)) {
       return false;
     }
     const kind = instanceKey(property.name, resolve);
-    if (kind === 'unknown' || hasInstancePrototype(property, resolve)) {
+    if (kind === 'unknown') {
       return false;
+    }
+    if (hasInstancePrototype(property, resolve)) {
+      inherited = true;
+      continue;
     }
     if (kind === 'hook') {
       return invalidInstanceHook(property, resolve);
     }
   }
   return (
+    !inherited &&
     !includesApplication(value) &&
     (hasNullPrototype(value, resolve) || !earlierInstanceHook(operation, resolve))
   );
@@ -253,7 +263,8 @@ function unrelatedIntrinsic(node: Expression, resolve: Resolve | undefined): boo
   const path = globalCalleePath(node.expression, resolve)?.join('.');
   if (path?.startsWith('Math.') === true) {
     return node.arguments.every(
-      (each) => primitiveOf(writtenOf(each, resolve), resolve) !== undefined,
+      (each) =>
+        primitiveOf(writtenOf(each, resolve), resolve) !== undefined && !includesApplication(each),
     );
   }
   if (!DEFINING.has(path ?? '')) {

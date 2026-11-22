@@ -16,6 +16,7 @@ import {
   isPropertyAssignment,
   isReturnStatement,
   isShorthandPropertyAssignment,
+  isSpreadElement,
   isStringLiteral,
   isTemplateExpression,
   type Node,
@@ -392,7 +393,13 @@ function headerName(name: Node, fail: Fail): string {
 
 /** An element of a list of pairs, as a header: its name where it is a literal; none for no pair. */
 function listedPair(element: Expression, sourceFile: SourceFile): HeaderPair | undefined {
-  if (!isArrayLiteralExpression(element) || element.elements.length !== 2) {
+  // A spread makes as many items at run time as its array holds, which `Headers` counts: not two
+  // where the pair is written of two elements and one is a spread.
+  if (
+    !isArrayLiteralExpression(element) ||
+    element.elements.length !== 2 ||
+    element.elements.some((each) => isSpreadElement(each))
+  ) {
     return undefined;
   }
   const [name, value] = element.elements;
@@ -432,8 +439,9 @@ function headersOf(headers: Expression, sourceFile: SourceFile, fail: Fail): rea
   const named = new Set<string>();
   return value.properties.map((property): HeaderPair => {
     if (isShorthandPropertyAssignment(property)) {
-      // `{ __proto__ }` is a property of its own, as no `__proto__: …` is; a name twice is not.
-      const name = property.name.getText(sourceFile);
+      // `{ __proto__ }` is a property of its own, as no `__proto__: …` is; a name twice is not. The
+      // name is the one the identifier decodes to (`{ \u0076ary }` is `vary`), which the value reads.
+      const name = headerName(property.name, fail);
       if (named.has(name)) {
         return fail(HEADERS_OWN, property);
       }
@@ -683,7 +691,7 @@ function computedDescriptor(
   const handed = [body.getText(sourceFile), ...order.map((key) => values[key])];
   const making = makingOf(made, WRITTEN_NAMES, named);
   const text = `if (typeof body === 'string') { ${computedText(given, context)} }`;
-  const none = "if (body === null || body === undefined) { return { body: '', status, headers }; }";
+  const none = "if (body === null || body === void 0) { return { body: '', status, headers }; }";
   const thrown = `throw new ${named('TypeError')}(${literal(NOT_TEXT_THROWN)});`;
   return `((${parameters.join(', ')}) => { ${making}${text} ${none} ${thrown} })(${handed.join(', ')})`;
 }

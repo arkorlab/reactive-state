@@ -10,6 +10,7 @@ import {
   isNoSubstitutionTemplateLiteral,
   isParenthesizedExpression,
   isPropertyAccessExpression,
+  isSourceFile,
   isSpreadElement,
   isStringLiteral,
   type Node,
@@ -24,11 +25,12 @@ import { fixedDateInput, fixedDateText } from './dated.ts';
 import { framedRead } from './framed.ts';
 import { functionRead } from './function-reads.ts';
 import { handedGlobal } from './handed-globals.ts';
-import { methodsOf, writesThis } from './held-methods.ts';
 import { inputMetadata } from './input-metadata.ts';
-import { isKept, readsKeptIterator, rootOf, runsPerCall, targetsOf } from './kept.ts';
+import { isKept, readsKeptIterator, runsPerCall } from './kept.ts';
 import { dateText, LOCAL_METHODS, localRead } from './local-reads.ts';
 import { platformOtherwise } from './platform-otherwise.ts';
+import { keptRootOf, keptTargetsOf, nestedKeptMethodWrite } from './settled-receivers.ts';
+import { keptCallParameterWrite } from './settled-writes.ts';
 import { sharedProxyOrigin } from './shared-proxies.ts';
 import { timedMaking } from './timed.ts';
 import { CHANGING_FUNCTIONS, methodOf, writtenArgumentBy, writtenBy } from './written.ts';
@@ -92,6 +94,16 @@ const GLOBAL_HOLDERS: ReadonlySet<string> = new Set(['global', 'globalThis', 'se
 
 /** The methods of an object that test whether it holds an entry of its own, by the name given. */
 const OWNING: ReadonlySet<string> = new Set(['hasOwnProperty', 'propertyIsEnumerable']);
+
+/** Static built-ins that test or read a property of their first argument by key. */
+const STATIC_PROBES: ReadonlySet<string> = new Set([
+  'Object.getOwnPropertyDescriptor',
+  'Object.hasOwn',
+  'Object.prototype.hasOwnProperty.call',
+  'Object.prototype.propertyIsEnumerable.call',
+  'Reflect.getOwnPropertyDescriptor',
+  'Reflect.has',
+]);
 
 /** The functions of globals each engine answers of its own: `Atomics.isLockFree` of most sizes. */
 const ENGINE_ANSWERS: ReadonlySet<string> = new Set(['Atomics.isLockFree']);
@@ -265,20 +277,12 @@ function outerOf(node: Node): Node {
  * written there (`isAlike`).
  */
 function probedHolder(node: Node): string | undefined {
-  let tested: { readonly holder: Expression; readonly key: Node | undefined } | undefined;
-  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.InKeyword) {
-    tested = { holder: node.right, key: node.left };
-  } else if (isCallExpression(node)) {
-    const callee = unwrapped(node.expression);
-    if (isPropertyAccessExpression(callee) && OWNING.has(callee.name.text)) {
-      tested = { holder: callee.expression, key: node.arguments[0] };
-    }
-  }
+  const tested = testedHolder(node);
   const held = tested === undefined ? undefined : globalPathOf(unwrapped(tested.holder));
   if (held?.length !== 1 || !GLOBAL_HOLDERS.has(held[0] ?? '')) {
     return undefined;
   }
-  const key = tested?.key;
+  const key = tested?.key === undefined ? undefined : unwrapped(tested.key);
   const name =
     key !== undefined && (isStringLiteral(key) || isNoSubstitutionTemplateLiteral(key))
       ? key.text
@@ -288,6 +292,43 @@ function probedHolder(node: Node): string | undefined {
   }
   const what = name === undefined ? 'a name it computes' : `\`${name}\``;
   return `tests whether the global object holds ${what}, which tells where it runs`;
+}
+
+/** Extracts the target holder and key expression from an ownership or presence probe. */
+function testedHolder(
+  node: Node,
+): { readonly holder: Expression; readonly key: Expression | undefined } | undefined {
+  if (isBinaryExpression(node) && node.operatorToken.kind === SyntaxKind.InKeyword) {
+    return { holder: node.right, key: node.left };
+  }
+  if (!isCallExpression(node)) {
+    return undefined;
+  }
+  const callee = unwrapped(node.expression);
+  const path = globalPathOf(callee)?.join('.');
+  if (path !== undefined && STATIC_PROBES.has(path)) {
+    const [first, second] = node.arguments;
+    if (first === undefined || isSpreadElement(first)) {
+      return undefined;
+    }
+    return {
+      holder: first,
+      key: second === undefined || isSpreadElement(second) ? undefined : second,
+    };
+  }
+  const method = methodOf(node);
+  if (
+    method !== undefined &&
+    OWNING.has(method) &&
+    (isPropertyAccessExpression(callee) || isElementAccessExpression(callee))
+  ) {
+    const [first] = node.arguments;
+    return {
+      holder: callee.expression,
+      key: first === undefined || isSpreadElement(first) ? undefined : first,
+    };
+  }
+  return undefined;
 }
 
 /**
@@ -337,48 +378,33 @@ function isTypeOfExpression(node: Node | undefined): boolean {
  * The name `node` writes, where it is a write a function makes each time it is called — an
  * assignment, `++`, `delete`, a method or a global's function that changes what it is given, or
  * locks it — of a name the module holds once, as it loads (`isKept`): its own, an import's, a
- * global's, what a call it keeps declared; none of another.
+ * global's, what a call it keeps declared; none of another. None of a source file either, which a
+ * walk of every node hands in first: it writes nothing, and has no parent for `runsPerCall` to read.
  */
 export function keptWrite(node: Node): Identifier | undefined {
-  const written = writtenBy(node);
-  const argument = writtenArgumentBy(node);
-  if ((written === undefined && argument.length === 0) || !runsPerCall(node)) {
+  if (isSourceFile(node) || !runsPerCall(node)) {
     return undefined;
   }
+  const written = writtenBy(node);
+  const argument = writtenArgumentBy(node);
   for (const changed of [written, ...argument]) {
     if (changed === undefined) {
       continue;
     }
-    for (const target of targetsOf(changed)) {
-      const root = rootOf(target);
+    for (const target of keptTargetsOf(changed)) {
+      const root = keptRootOf(target);
       if (root !== undefined && isKept(root, writtenBy)) {
         return root;
       }
     }
   }
-  return undefined;
+  return keptCallParameterWrite(node);
 }
 
 /**
  * The name the module holds once a call of a method of writes through `this` (`writesThis`) each
- * time a function of its calls it — `counter.bump()` of `const counter = { n: 0, bump() { return
- * ++this.n; } }`, of what a class of its makes there, of what a function of its answers there, or
- * of a class's own — none of another.
+ * time a function of its calls it — `counter.bump()` or `store.counter.bump()` — none of another.
  */
 export function keptMethodWrite(node: Node): Identifier | undefined {
-  const method = isCallExpression(node) ? methodOf(node) : undefined;
-  if (method === undefined || !isCallExpression(node) || !runsPerCall(node)) {
-    return undefined;
-  }
-  const callee = unwrapped(node.expression);
-  const receiver =
-    isPropertyAccessExpression(callee) || isElementAccessExpression(callee)
-      ? unwrapped(callee.expression)
-      : undefined;
-  return receiver !== undefined &&
-    isIdentifier(receiver) &&
-    isKept(receiver, writtenBy) &&
-    writesThis(methodsOf(receiver), method, writtenBy, { seen: new Set(), call: node })
-    ? receiver
-    : undefined;
+  return nestedKeptMethodWrite(node);
 }

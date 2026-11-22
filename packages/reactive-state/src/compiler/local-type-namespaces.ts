@@ -26,6 +26,7 @@ import {
 } from 'typescript/ast';
 
 import type { LocalTypeBinding } from './local-type-aliases.ts';
+import { isAmbient } from './type-syntax.ts';
 
 /** The local declarations behind a qualified type name, through lexical namespaces alone. */
 
@@ -219,18 +220,6 @@ function exportedStatements(namespaces: readonly ModuleDeclaration[]): readonly 
   });
 }
 
-/** Whether a namespace is ambient, by its own declaration, an enclosing one or its declaration file. */
-function isAmbient(namespace: ModuleDeclaration): boolean {
-  for (let at: Node = namespace; ; at = at.parent) {
-    if (carries(at, SyntaxKind.DeclareKeyword)) {
-      return true;
-    }
-    if (isSourceFile(at)) {
-      return at.isDeclarationFile;
-    }
-  }
-}
-
 /** Whether a declaration carries a modifier, where that kind of node can hold modifiers. */
 function carries(node: Node, modifier: SyntaxKind): boolean {
   return (
@@ -298,7 +287,10 @@ function isExported(alias: ImportEqualsDeclaration): boolean {
 /**
  * Whether a namespace declares a value, as TypeScript emits it: one of types alone — interfaces,
  * aliases, namespaces of them, an alias it does not export, an empty body — emits none, and the
- * name it shares with a value around it is that value's.
+ * name it shares with a value around it is that value's. An ambient namespace's values emit
+ * nothing either, but they are what its declaration says exists, and a class base is read through
+ * them (`localNamespaceValue`), so they count here; a scope that names the bindings that run leaves
+ * an ambient declaration out (`isAmbient`, `namesOf` of `code-globals.ts`).
  */
 export function holdsValues(namespace: ModuleDeclaration): boolean {
   let { body } = namespace;

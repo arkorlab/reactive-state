@@ -26,7 +26,8 @@ export interface Locality {
  * application's shared modules, and what the server part declares with `const` of these alone, and
  * awaits nothing. A field reaches a state through a module only the authority runs, or through what
  * the server part computes of one, which may make the state a binding of it — or what it writes
- * into a prop or a constant (`writtenIn`): one written to is no value of the page's.
+ * into a prop, a constant or an export of a shared module (`writtenIn`): one written to is no value
+ * of the page's.
  */
 export function holdsPageValue(input: Node, context: Locality, seen = new Set<string>()): boolean {
   if (holdsAwait(input)) {
@@ -40,10 +41,10 @@ export function holdsPageValue(input: Node, context: Locality, seen = new Set<st
         return;
       }
       const entry = entryOf(state, identifier);
-      if (entry.kind === 'import') {
-        page = entry.binding.module.target.kind === 'shared';
-      } else if (writtenIn(state.component).has(identifier.text)) {
+      if (writtenIn(state.component).has(identifier.text)) {
         page = false;
+      } else if (entry.kind === 'import') {
+        page = entry.binding.module.target.kind === 'shared';
       } else if (entry.kind === 'server') {
         page = serverValueIsPage(identifier.text, context, seen);
       } else {

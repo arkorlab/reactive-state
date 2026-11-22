@@ -230,6 +230,9 @@ export function switchEnding(
   if (plan.statements !== undefined) {
     return ending(plan.statements, resolve);
   }
-  // Any clause may be the one that runs: a return in one may end the function.
-  return conditionalReturn(node.caseBlock, resolve, () => true) ? 'returns' : 'runs';
+  // Any clause may be the one that runs: a return in one may end the function, unless what it
+  // returns throws first.
+  const answers = (returned: ReturnStatement): boolean =>
+    returned.expression === undefined || check(returned.expression, resolve) === undefined;
+  return conditionalReturn(node.caseBlock, resolve, answers) ? 'returns' : 'runs';
 }

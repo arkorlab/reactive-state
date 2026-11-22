@@ -1,6 +1,8 @@
 import {
   type Identifier,
   isCallExpression,
+  isInterfaceDeclaration,
+  isTypeAliasDeclaration,
   isTypeReferenceNode,
   type Node,
   type ParameterDeclaration,
@@ -100,6 +102,7 @@ export function emitHookModule(input: HookCopyInput): string {
   for (const { wrapper } of typed.values()) {
     wrappers.add(wrapper);
   }
+  refuseWrapperNames(module, wrappers);
   const runtime = [
     wrappers.has('LocalStateInput') ? 'type LocalStateInput' : undefined,
     wrappers.has('StateInput') ? 'type StateInput' : undefined,
@@ -117,6 +120,29 @@ export function emitHookModule(input: HookCopyInput): string {
     body,
     '',
   ].join('\n');
+}
+
+/**
+ * Refuses a name the copy writes a wrapper by — `StateInput`, `LocalStateInput` — that the module
+ * declares too, as a hook's type parameter or a type of its own: the wrapper, written inside the
+ * hook or beside the type, would name that, and the copy would not type-check.
+ */
+function refuseWrapperNames(module: HookModule, wrappers: ReadonlySet<string>): void {
+  const names: Identifier[] = [...module.definitions.values()].flatMap(
+    (definition) => definition.declaration.typeParameters?.map((parameter) => parameter.name) ?? [],
+  );
+  for (const statement of module.statements) {
+    if (isTypeAliasDeclaration(statement) || isInterfaceDeclaration(statement)) {
+      names.push(statement.name);
+    }
+  }
+  const taken = names.find((name) => wrappers.has(name.text));
+  if (taken !== undefined) {
+    module.fail(
+      `\`${taken.text}\` is a name the copy of this module writes a parameter's type by, which a state of a hook is declared with as it is: declare the type under another name.`,
+      taken,
+    );
+  }
 }
 
 /** What the copy imports of the module's imports: what its code reads, and the types it names. */

@@ -4,14 +4,13 @@ import { prototypeMayChange } from '../src/compiler/framed-prototype-changes.ts'
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
- * A member of a native prototype is read, not called with the prototype as its `this`:
- * `Array.prototype.valueOf()` answers the prototype itself, which the code may then give to
- * `Object.defineProperty`, and `Array.prototype.push(fn)` writes it. Any direct call of such a
- * member (through a cast, parentheses, `?.()`, a tagged template or `new`, on `Array.prototype`,
- * `Object.prototype`, `Function.prototype`, a helper's `prototype` or the answer of
- * `getPrototypeOf`) is a use that may reach a prototype, the answer used or not. Through `call`,
- * `apply` and `bind` a member is called on what the code gives, and `valueOf` of a date or an array
- * is no prototype's.
+ * A member of a native prototype, read or called with the prototype as its `this`
+ * (`Array.prototype.valueOf()` answers the prototype itself, which the code may then give to
+ * `Object.defineProperty`, and `Array.prototype.push(fn)` writes it), is a use that may reach a
+ * prototype, through a cast, parentheses, `?.()`, a tagged template or `new`, on `Array.prototype`,
+ * `Object.prototype`, `Function.prototype`, a helper's `prototype` or the answer of `getPrototypeOf`,
+ * the answer used or not. Through `call`, `apply` and `bind` a member is called on what the code
+ * gives, and `valueOf` of a date or an array is no prototype's.
  */
 const CASES = [
   {
@@ -125,34 +124,34 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'array-prototype-value-of-called-on-an-array-pin',
+    id: 'array-prototype-value-of-called-on-an-array-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void Array.prototype.valueOf.call(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-join-called-on-an-array-pin',
+    id: 'array-prototype-join-called-on-an-array-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void Array.prototype.join.call(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-slice-applied-pin',
+    id: 'array-prototype-slice-applied-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void Array.prototype.slice.apply(a, [0]); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-join-bound-pin',
+    id: 'array-prototype-join-bound-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void Array.prototype.join.bind(a); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-prototype-has-own-property-called-pin',
+    id: 'object-prototype-has-own-property-called-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void Object.prototype.hasOwnProperty.call(source, 'x'); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-value-of-read-pin',
+    id: 'array-prototype-value-of-read-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void Array.prototype.valueOf; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'date-value-of-pin',
@@ -175,14 +174,14 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'prototype-answer-compared-pin',
+    id: 'prototype-answer-compared-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void (Object.getPrototypeOf(a) === Array.prototype); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'prototype-answer-member-read-pin',
+    id: 'prototype-answer-member-read-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void (Object.getPrototypeOf(a) as any).join; }`,
-    changes: false,
+    changes: true,
   },
 ] as const;
 

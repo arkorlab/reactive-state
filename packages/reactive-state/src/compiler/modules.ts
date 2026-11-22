@@ -16,9 +16,6 @@ import {
   isJsxElement,
   isJsxFragment,
   isJsxSelfClosingElement,
-  isNamedExports,
-  isNamespaceImport,
-  isNoSubstitutionTemplateLiteral,
   isStringLiteral,
   type Node,
   type SourceFile,
@@ -34,6 +31,7 @@ import {
   resolveAliasFiles,
 } from '../authority/aliases.ts';
 import { isErased, readsCodeGlobal } from './code-globals.ts';
+import { literalSpecifier } from './load-specifiers.ts';
 import { moduleFile, type ModuleResolution } from './module-resolutions.ts';
 import { browserMapped, packageFiles, type Side } from './packages.ts';
 import { unsettledIn } from './settled.ts';
@@ -449,36 +447,29 @@ function directiveOf(sourceFile: SourceFile): keyof typeof DIRECTED | undefined 
   return undefined;
 }
 
-/** What an import declaration brings: a module, and whether types alone. */
+/**
+ * What an import declaration brings: a module, and whether types alone — only a declaration of
+ * `import type` brings types alone. With `verbatimModuleSyntax`, `import { type T } from './x'` is
+ * written `import {} from './x'` and the module runs, so inline `type` specifiers do not make one.
+ */
 function importDependency(statement: ImportDeclaration): Dependency | undefined {
   if (!isStringLiteral(statement.moduleSpecifier)) {
     return undefined;
   }
-  const clause = statement.importClause;
-  const named = clause?.namedBindings;
-  const typedNames =
-    clause?.name === undefined &&
-    named !== undefined &&
-    !isNamespaceImport(named) &&
-    named.elements.length > 0 &&
-    named.elements.every((element) => element.isTypeOnly);
-  const typeOnly =
-    clause !== undefined && (clause.phaseModifier === SyntaxKind.TypeKeyword || typedNames);
+  const typeOnly = statement.importClause?.phaseModifier === SyntaxKind.TypeKeyword;
   return { specifier: statement.moduleSpecifier.text, typeOnly };
 }
 
-/** What an export of another module's brings: a module, and whether types alone. */
+/**
+ * What an export of another module's brings: a module, and whether types alone — only a declaration
+ * of `export type` does, as of an import (`importDependency`).
+ */
 function exportDependency(statement: ExportDeclaration): Dependency | undefined {
-  const { exportClause, moduleSpecifier } = statement;
+  const { moduleSpecifier } = statement;
   if (moduleSpecifier === undefined || !isStringLiteral(moduleSpecifier)) {
     return undefined;
   }
-  const typedNames =
-    exportClause !== undefined &&
-    isNamedExports(exportClause) &&
-    exportClause.elements.length > 0 &&
-    exportClause.elements.every((element) => element.isTypeOnly);
-  return { specifier: moduleSpecifier.text, typeOnly: statement.isTypeOnly || typedNames };
+  return { specifier: moduleSpecifier.text, typeOnly: statement.isTypeOnly };
 }
 
 /** Each module a module imports or exports from, and whether it brings types alone. */
@@ -518,20 +509,18 @@ function isRuntimeLoad(node: Node): node is CallExpression {
 }
 
 /**
- * What a module loads as it runs, where the specifier is written as it is — `import('./x')`,
- * `require('./x')` — which the compile reads as it reads an import, so that what it loads is in the
- * build's id too. One the code computes is none the compile can name.
+ * What a module loads as it runs, where the specifier is written as a literal (`literalSpecifier`):
+ * `import('./x')`, `require('./x')`, past the parentheses and assertions around it. The compile reads
+ * it as it reads an import, so that what it loads is in the build's id too. One the code computes is
+ * none the compile can name.
  */
 function runtimeLoads(sourceFile: SourceFile): readonly Dependency[] {
   const loads: Dependency[] = [];
   const visit = (node: Node): void => {
     if (isRuntimeLoad(node)) {
-      const [specifier] = node.arguments;
-      if (
-        specifier !== undefined &&
-        (isStringLiteral(specifier) || isNoSubstitutionTemplateLiteral(specifier))
-      ) {
-        loads.push({ specifier: specifier.text, typeOnly: false });
+      const specifier = literalSpecifier(node.arguments[0]);
+      if (specifier !== undefined) {
+        loads.push({ specifier, typeOnly: false });
       }
     }
     node.forEachChild(visit);

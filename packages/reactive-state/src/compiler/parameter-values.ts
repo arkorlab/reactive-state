@@ -4,21 +4,25 @@ import {
   isBinaryExpression,
   isBlock,
   isCallExpression,
+  isDoStatement,
   isElementAccessExpression,
   isExpressionStatement,
   isForInStatement,
   isForOfStatement,
+  isForStatement,
   isIdentifier,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isShorthandPropertyAssignment,
+  isTypeAssertion,
   isVariableStatement,
+  isWhileStatement,
   type Node,
   type Statement,
   SyntaxKind,
 } from 'typescript/ast';
 
-import { type Answering, standsIn } from './answers.ts';
+import { type Answering, parametersOf, standsIn } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { readsOf } from './local-module-reads.ts';
 import { hoistedIn, isBlockScoped, withinFunction } from './scope.ts';
@@ -28,6 +32,15 @@ import { writtenBy } from './written.ts';
 export interface ParameterValue {
   readonly value: Expression;
   readonly statement: Statement;
+}
+
+/** Peels parentheses and TypeScript assertion wrappers, including `<T>expr`. */
+function peelValue(node: Expression): Expression {
+  let current = unwrapped(node);
+  while (isTypeAssertion(current)) {
+    current = unwrapped(current.expression);
+  }
+  return current;
 }
 
 /** A plain assignment or `var` initializer that certainly ran before `name` was read. */
@@ -73,11 +86,11 @@ function replacementIn(statement: Statement, name: string): Expression | undefin
   if (!isExpressionStatement(statement)) {
     return undefined;
   }
-  const expression = unwrapped(statement.expression);
+  const expression = peelValue(statement.expression);
   if (!isBinaryExpression(expression) || expression.operatorToken.kind !== SyntaxKind.EqualsToken) {
     return undefined;
   }
-  const target = unwrapped(expression.left);
+  const target = peelValue(expression.left);
   return isIdentifier(target) && target.text === name ? expression.right : undefined;
 }
 
@@ -95,8 +108,7 @@ function uncertainReplacement(
       (declaration.initializer !== undefined ||
         isForInStatement(declaration.parent.parent) ||
         isForOfStatement(declaration.parent.parent)) &&
-      declaration.pos >= replacement.value.end &&
-      declaration.pos < name.pos
+      precedesRead(declaration, name, replacement, fn)
     );
   });
   if (laterVar) {
@@ -104,15 +116,63 @@ function uncertainReplacement(
   }
   const visit = (node: Node): boolean => {
     const target = isCallExpression(node) ? undefined : writtenBy(node);
-    if (target !== undefined && assignsBinding(target, isRead)) {
-      const later = node.pos >= replacement.value.end && node.pos < name.pos;
-      if (later || withinFunction(node, fn)) {
-        return true;
-      }
+    if (
+      target !== undefined &&
+      assignsBinding(target, isRead) &&
+      (precedesRead(node, name, replacement, fn) || withinFunction(node, fn))
+    ) {
+      return true;
     }
     return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
   };
-  return fn.body !== undefined && visit(fn.body);
+  return (
+    parametersOf(fn).some((parameter) => visit(parameter)) ||
+    (fn.body !== undefined && visit(fn.body))
+  );
+}
+
+/** Whether `write` can run after `replacement` and before `read`, including an earlier iteration. */
+function precedesRead(
+  write: Node,
+  read: Identifier,
+  replacement: ParameterValue,
+  fn: Answering,
+): boolean {
+  return (
+    write.pos >= replacement.value.end && (write.pos < read.pos || repeatsBefore(write, read, fn))
+  );
+}
+
+/** Whether an enclosing loop can carry `write` into a subsequent execution of `read`. */
+function repeatsBefore(write: Node, read: Node, fn: Answering): boolean {
+  for (let each = read; each !== fn; each = each.parent) {
+    const parent = each.parent;
+    if (!isLoop(parent) || write.pos < parent.pos || write.end > parent.end) {
+      continue;
+    }
+    const once =
+      (isForStatement(parent) &&
+        parent.initializer?.pos === each.pos &&
+        parent.initializer.end === each.end) ||
+      ((isForOfStatement(parent) || isForInStatement(parent)) &&
+        parent.expression.pos === each.pos &&
+        parent.expression.end === each.end);
+    if (!once) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether `node` is a loop statement. */
+function isLoop(node: Node): boolean {
+  return (
+    isForStatement(node) ||
+    isForOfStatement(node) ||
+    isForInStatement(node) ||
+    isWhileStatement(node) ||
+    isDoStatement(node)
+  );
 }
 
 /** A direct binding write, including destructuring targets, but no write through a member. */

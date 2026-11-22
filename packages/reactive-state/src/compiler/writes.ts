@@ -513,10 +513,7 @@ function namesRead(node: Node, frozen: ReadonlySet<string>): readonly string[] {
  */
 function writtenRoots(node: Node, known: Reading): readonly string[] {
   if (isBinaryExpression(node)) {
-    const operator = node.operatorToken.kind;
-    return operator >= SyntaxKind.FirstAssignment && operator <= SyntaxKind.LastAssignment
-      ? rootsOf(targetsOf(node.left))
-      : [];
+    return isAssignment(node.operatorToken.kind) ? rootsOf(targetsOf(node.left)) : [];
   }
   // `for (options.title of items)`: the loop writes each item to what its head names.
   if (
@@ -576,10 +573,11 @@ function calledRoots(
   const global = globalOf(target);
   if (name !== undefined && global !== undefined && READING_GLOBALS.has(global)) {
     const changed = global === 'Object' && OBJECT_MUTATORS.has(name);
-    // `Array.from(items, mapping)` hands what it calls each element of what it is given first.
+    // `Array.from(items, mapping, receiver)` hands what it calls each element of what it is given
+    // first, and the receiver of the call, its third, which the mapping may change as `this`.
     const calling = CALLING_GLOBALS.get(global)?.has(name) === true;
     return changed || (calling && !isSeenFunction(given[1], known, global === 'JSON'))
-      ? handedRoots(given.slice(0, 1), known)
+      ? handedRoots(handedTo(global, given), known)
       : [];
   }
   if (name !== undefined && READING_METHODS.has(name)) {
@@ -589,6 +587,11 @@ function calledRoots(
     name !== undefined && MUTATORS.has(name) ? [target] : [target, ...given],
     known,
   );
+}
+
+/** What a function of the language's globals that calls its second argument is handed: its first, and `Array.from`'s third, the receiver of its calls. */
+function handedTo(global: string, given: readonly Expression[]): readonly Expression[] {
+  return global === 'Array' ? given.filter((_, index) => index !== 1) : given.slice(0, 1);
 }
 
 /**

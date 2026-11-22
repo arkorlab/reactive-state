@@ -15,7 +15,6 @@ import {
   isSpreadAssignment,
   isSpreadElement,
   isVariableDeclaration,
-  isVariableDeclarationList,
   type NewExpression,
   type Node,
   type ObjectLiteralExpression,
@@ -30,6 +29,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { frameDeclarationOf } from './framed-bindings.ts';
 import { framedDescriptorEntries } from './framed-descriptor-entries.ts';
 import { framedArgumentPrefix, framedKeyNames, framedMemberNames } from './framed-keys.ts';
+import { isConstantDeclaration, sourceChanged } from './framed-source-changes.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** What a module's code writes into the members of its variables, read once a module. */
@@ -54,6 +54,11 @@ export interface MemberWrite {
   readonly holder: VariableDeclaration;
   readonly path: readonly (readonly string[] | undefined)[];
   readonly value: Expression;
+  /**
+   * A later part of the same call, one the walk cannot read, may write the same name again: a
+   * source it does not follow, a spread it does not expand. The write is then no definite last one.
+   */
+  readonly reopened: boolean;
 }
 
 /** The member writes of each module, read once. */
@@ -92,6 +97,18 @@ export interface VariableWrite {
 
 /** The plain variable assignments of each module, read once. */
 const ASSIGNED_OF = new WeakMap<SourceFile, readonly VariableWrite[]>();
+
+/** Member writes grouped by canonical holder declaration for each module. */
+const HOLDER_WRITES_OF = new WeakMap<
+  SourceFile,
+  ReadonlyMap<VariableDeclaration, readonly MemberWrite[]>
+>();
+
+/** Plain variable assignments grouped by target declaration for each module. */
+const BINDING_WRITES_OF = new WeakMap<
+  SourceFile,
+  ReadonlyMap<VariableDeclaration, readonly VariableWrite[]>
+>();
 
 /** Each member write of a module, by the variable it writes into through whole constant aliases. */
 export function framedMemberWrites(file: SourceFile): readonly MemberWrite[] {
@@ -199,7 +216,7 @@ function prototypeSet(node: CallExpression): readonly MemberWrite[] {
   const written = target === undefined ? undefined : writtenPath(target);
   return written === undefined || prototype === undefined
     ? []
-    : [{ node, ...written, value: prototype }];
+    : [{ node, ...written, value: prototype, reopened: false }];
 }
 
 /** `holder.member = value`, and its logical forms, of a variable's member path. */
@@ -207,36 +224,96 @@ function assignedMember(node: BinaryExpression): readonly MemberWrite[] {
   const target = unwrapped(node.left);
   if (!isPropertyAccessExpression(target) && !isElementAccessExpression(target)) return [];
   const written = writtenPath(target);
-  return written === undefined ? [] : [{ node, ...written, value: node.right }];
+  return written === undefined ? [] : [{ node, ...written, value: node.right, reopened: false }];
 }
 
-/** `Object.assign(holder, { member: value })`: each literal source's own written entries. */
+/**
+ * `Object.assign(holder, { member: value })`: each literal source's own written entries, in the
+ * order the call writes them. What the walk cannot read of the call (a source that is not a
+ * literal, a spread, an accessor, the arguments a spread it cannot follow ends) may write any name
+ * after the entries before it, which are then no definite last write.
+ */
 function assignedEntries(node: Expression): readonly MemberWrite[] {
   if (
     !isCallExpression(node) ||
     globalPathOf(unwrapped(node.expression))?.join('.') !== 'Object.assign'
   )
     return [];
-  const [target, ...sources] = framedArgumentPrefix(node, node.arguments, Infinity).values;
+  const prefix = framedArgumentPrefix(node, node.arguments, Infinity);
+  const [target, ...sources] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined) return [];
-  return sources.flatMap((source) => {
-    const object = unwrapped(source);
-    if (!isObjectLiteralExpression(object)) return [];
-    return object.properties.flatMap((property) => {
-      const entry = writtenEntry(property);
-      return entry === undefined
-        ? []
-        : [
-            {
-              node,
-              holder: written.holder,
-              path: [...written.path, entry.names],
-              value: entry.value,
-            },
-          ];
-    });
-  });
+  const entries = sources.flatMap((source) => sourceEntries(source));
+  if (prefix.unknown) entries.push(undefined);
+  const writes: MemberWrite[] = [];
+  let reopened = false;
+  for (const entry of entries.toReversed()) {
+    if (entry === undefined) reopened = true;
+    else
+      writes.push({
+        node,
+        holder: written.holder,
+        path: [...written.path, entry.names],
+        value: entry.value,
+        reopened,
+      });
+  }
+  return writes.toReversed();
+}
+
+/**
+ * The entries of an `Object.assign` source in the order it writes them: those of a literal, or of
+ * the literal a whole constant alias chain ends in, and of the literals it spreads, each read once
+ * (a second spread of one is a part the walk does not read). A part it cannot read is `undefined`,
+ * and so is the end of a constant that code may have changed (`sourceChanged`): it may hold other
+ * entries than its literal wrote.
+ */
+function sourceEntries(source: Expression): readonly (WrittenEntry | undefined)[] {
+  const first = constantLiteral(source);
+  if (first === undefined) return [undefined];
+  const entries: (WrittenEntry | undefined)[] = [];
+  const seen = new Set([first.literal]);
+  const pending = [{ properties: first.literal.properties.values(), changed: first.changed }];
+  for (let at = pending.at(-1); at !== undefined; at = pending.at(-1)) {
+    const next = at.properties.next();
+    if (next.done === true) {
+      pending.pop();
+      if (at.changed) entries.push(undefined);
+      continue;
+    }
+    const property = next.value;
+    if (!isSpreadAssignment(property)) {
+      entries.push(writtenEntry(property));
+      continue;
+    }
+    const spread = constantLiteral(property.expression);
+    if (spread === undefined || seen.has(spread.literal)) {
+      entries.push(undefined);
+    } else {
+      seen.add(spread.literal);
+      pending.push({ properties: spread.literal.properties.values(), changed: spread.changed });
+    }
+  }
+  return entries;
+}
+
+/** An object literal a source is, with whether code may have changed the constant it was named by. */
+interface SourceLiteral {
+  readonly literal: ObjectLiteralExpression;
+  readonly changed: boolean;
+}
+
+/** The object literal an expression is, or a whole constant alias chain of it ends in. */
+function constantLiteral(expression: Expression): SourceLiteral | undefined {
+  const value = unwrapped(expression);
+  if (isObjectLiteralExpression(value)) return { literal: value, changed: false };
+  const declared = isIdentifier(value) ? frameDeclarationOf(value) : undefined;
+  if (declared === undefined || !isVariableDeclaration(declared)) return undefined;
+  const holder = framedHeldVariable(declared);
+  const initial = holder.initializer === undefined ? undefined : unwrapped(holder.initializer);
+  if (initial === undefined || !isObjectLiteralExpression(initial)) return undefined;
+  if (!isIdentifier(holder.name) || !isConstantDeclaration(holder)) return undefined;
+  return { literal: initial, changed: sourceChanged(holder) };
 }
 
 /** `Object.defineProperty(holder, key, { value })`: the descriptor's written value under the key. */
@@ -256,6 +333,7 @@ function definedEntry(node: CallExpression): readonly MemberWrite[] {
       holder: written.holder,
       path: [...written.path, names],
       value,
+      reopened: false,
     };
   });
 }
@@ -280,6 +358,44 @@ export function framedVariableWrites(file: SourceFile): readonly VariableWrite[]
   return writes;
 }
 
+/** Member writes in `file` targeting `holder`, indexed once per module. */
+export function framedMemberWritesOf(
+  file: SourceFile,
+  holder: VariableDeclaration,
+): readonly MemberWrite[] {
+  let byHolder = HOLDER_WRITES_OF.get(file);
+  if (byHolder === undefined) {
+    const grouped = new Map<VariableDeclaration, MemberWrite[]>();
+    for (const write of framedMemberWrites(file)) {
+      const existing = grouped.get(write.holder);
+      if (existing === undefined) grouped.set(write.holder, [write]);
+      else existing.push(write);
+    }
+    byHolder = grouped;
+    HOLDER_WRITES_OF.set(file, byHolder);
+  }
+  return byHolder.get(holder) ?? [];
+}
+
+/** Plain whole-variable assignments in `file` targeting `binding`, indexed once per module. */
+export function framedVariableWritesOf(
+  file: SourceFile,
+  binding: VariableDeclaration,
+): readonly VariableWrite[] {
+  let byBinding = BINDING_WRITES_OF.get(file);
+  if (byBinding === undefined) {
+    const grouped = new Map<VariableDeclaration, VariableWrite[]>();
+    for (const write of framedVariableWrites(file)) {
+      const existing = grouped.get(write.binding);
+      if (existing === undefined) grouped.set(write.binding, [write]);
+      else existing.push(write);
+    }
+    byBinding = grouped;
+    BINDING_WRITES_OF.set(file, byBinding);
+  }
+  return byBinding.get(binding) ?? [];
+}
+
 /** The variable a plain `name = value` assigns. */
 function assignedVariable(node: BinaryExpression): VariableDeclaration | undefined {
   if (node.operatorToken.kind !== SyntaxKind.EqualsToken) return undefined;
@@ -289,9 +405,15 @@ function assignedVariable(node: BinaryExpression): VariableDeclaration | undefin
 }
 
 /** A literal's data entry: its possible names, none of a computed one unread, and its value. */
+interface WrittenEntry {
+  readonly names: readonly string[] | undefined;
+  readonly value: Expression;
+}
+
+/** The data entry a literal's property writes; a spread, an accessor or a method is not one. */
 function writtenEntry(
   property: ObjectLiteralExpression['properties'][number],
-): { readonly names: readonly string[] | undefined; readonly value: Expression } | undefined {
+): WrittenEntry | undefined {
   let value: Expression | undefined;
   if (isPropertyAssignment(property)) value = property.initializer;
   else if (isShorthandPropertyAssignment(property) && isIdentifier(property.name))
@@ -327,8 +449,7 @@ export function framedHeldVariable(declared: VariableDeclaration): VariableDecla
       value === undefined ||
       !isIdentifier(value) ||
       !isIdentifier(holder.name) ||
-      !isVariableDeclarationList(holder.parent) ||
-      !/^const\s/u.test(holder.parent.getText(holder.getSourceFile()))
+      !isConstantDeclaration(holder)
     )
       return holder;
     const next = frameDeclarationOf(value);

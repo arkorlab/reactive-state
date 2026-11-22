@@ -52,7 +52,7 @@ import {
   nativeStringReplacement,
   STRING_REPLACEMENT_FIELDS,
 } from './render-date-string-replacement.ts';
-import { renderDateConversionSource } from './render-date-text.ts';
+import { quietNativeRawTarget, renderDateConversionSource } from './render-date-text.ts';
 import { bindingIdentifiers, hoistedIn, isBlockScoped } from './scope.ts';
 
 /** Quiet native String and finite native array text retain source-known Date text inputs. */
@@ -77,8 +77,6 @@ const BORROWED_FIELDS = new Set([
   'String.bind',
 ]);
 const ARRAY_JOIN = new Set([ARRAY_JOIN_PATH]);
-const RAW = new Set(['String.raw']);
-const RAW_FIELDS = new Set(['Date', 'String', 'String.raw']);
 
 interface BorrowedArrayText {
   readonly receiver: Expression;
@@ -206,11 +204,9 @@ function rawInputsQuiet(
   consumer: Expression,
 ): boolean {
   return (
-    framedNativeConstructor(target, RAW) &&
-    dateCoowned(target, consumer) &&
+    quietNativeRawTarget(target, consumer, dateCoowned) &&
     inputs.every((value) => dateCoowned(value, consumer)) &&
-    dateInputsQuiet(inputs, consumer, DATES) &&
-    framedQuietTextPrefix(consumer, RAW_FIELDS)
+    dateInputsQuiet(inputs, consumer, DATES)
   );
 }
 

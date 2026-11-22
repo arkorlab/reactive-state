@@ -203,6 +203,15 @@ function awaited(expression: Expression): Expression {
   return inner;
 }
 
+/** `expression`, but for the parentheses around it. */
+function withoutParentheses(expression: Expression): Expression {
+  let inner = expression;
+  while (isParenthesizedExpression(inner)) {
+    inner = inner.expression;
+  }
+  return inner;
+}
+
 /** Whether `expression` calls `next` with nothing, awaited or not. */
 function callsNext(expression: Expression | undefined, next: string): boolean {
   if (expression === undefined) {
@@ -244,7 +253,7 @@ function splitAt(
     initializer !== undefined &&
     more.length === 0 &&
     isIdentifier(declaration.name) &&
-    isAwaitExpression(initializer) &&
+    isAwaitExpression(withoutParentheses(initializer)) &&
     callsNext(initializer, next)
     ? { response: declaration.name }
     : undefined;

@@ -198,7 +198,7 @@ class WriteReader {
     const may =
       call === undefined
         ? local ||
-          handlerAttributeOf(value) !== undefined ||
+          handlerAttributeOf(answered(value)) !== undefined ||
           this.#isItem(reference) ||
           this.#inHandler(reference)
         : this.#inHandler(call);
@@ -278,7 +278,7 @@ class WriteReader {
     }
     // Anywhere else — under another name, as an argument, in an array — it could be called while the
     // JSX is built, past the check on its calls above, and write again on every render a write brings.
-    if (!this.#inHandler(reference) && !isComponentHandlerValue(reference)) {
+    if (!this.#inHandler(reference) && !isComponentHandlerValue(answered(reference))) {
       this.#fail(
         `\`${reference.text}\` is called from the handler of an event a person's action dispatches, or handed as it is to such an attribute of a component's — \`onChange={${reference.text}}\` — and read nowhere else: under another name, or as a value, it could be called as the JSX is built.`,
         reference,
@@ -345,7 +345,12 @@ class WriteReader {
       return this.#fail('The setter takes one argument: an update, or a value.', call);
     }
     let argument = input;
-    while (isParenthesizedExpression(argument)) {
+    while (
+      isParenthesizedExpression(argument) ||
+      isAsExpression(argument) ||
+      isSatisfiesExpression(argument) ||
+      isNonNullExpression(argument)
+    ) {
       argument = argument.expression;
     }
     let fn: ArrowFunction | FunctionExpression | undefined;
@@ -454,7 +459,7 @@ class WriteReader {
     for (let parent = node.parent; parent !== this.#owner.declaration; parent = parent.parent) {
       if (
         (isArrowFunction(parent) || isFunctionExpression(parent)) &&
-        (handlerAttributeOf(parent) !== undefined ||
+        (handlerAttributeOf(answered(parent)) !== undefined ||
           this.#isConstant(parent) ||
           this.#isItem(parent))
       ) {
@@ -585,6 +590,18 @@ function handedToCall(reference: Expression): boolean {
     return parent.arguments?.some((each) => each === at) === true;
   }
   return isTemplateSpan(parent) && isTaggedTemplateExpression(parent.parent.parent);
+}
+
+/**
+ * `node`, or what it stands in while that answers it as it is (`standsAsItIs`): the value an
+ * attribute is given, where a condition selects `node` — `onClick={ready ? () => … : undefined}`.
+ */
+function answered(node: Node): Node {
+  let outer = node;
+  while (standsAsItIs(outer)) {
+    outer = outer.parent;
+  }
+  return outer;
 }
 
 /** Whether the parent of `node` answers it as it is, or may: parentheses, a cast, a condition, `&&`, `||`, `??`. */

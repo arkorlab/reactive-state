@@ -12,10 +12,20 @@
  * Each entry's number is taken from one counter row, which the writing transaction holds until it
  * commits: two transactions that write followed tables commit in the order of their numbers, so a
  * follower that has read an entry has read every entry before it. That orders those writers as
- * PostgreSQL orders writes of one row. The log notifies its channel (`channelOf`) as it commits, for
- * a host to read it then rather than at its next interval. A table followed by the logs of two
- * namespaces holds the triggers of each, named by its namespace; a trigger of the application's of
- * one of those names is replaced, so a namespace is one of the log's own.
+ * PostgreSQL orders writes of one row. The row is taken as the statement that first writes a
+ * followed table ends, after that statement's own rows, and held to the end of the transaction: a
+ * transaction whose later statement writes a row that another transaction's statement has written
+ * meanwhile can deadlock with it where, without the capture, it would only have waited for it.
+ * PostgreSQL ends one of the two with `40P01`, and an application retries that transaction as it
+ * retries any deadlock. The log notifies its channel (`channelOf`) as it commits, for a host to
+ * read it then rather than at its next interval. A table followed by the logs of two namespaces
+ * holds the triggers of each, named by its namespace; a trigger of the application's of one of
+ * those names is replaced, so a namespace is one of the log's own.
+ *
+ * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`: they
+ * run as the role that made the log, so a role that writes a followed table needs no right to the
+ * log's schema, and only the role that made it may call `note` itself or attach one of them to a
+ * table. Their search path stays `pg_catalog, pg_temp`.
  */
 
 /** A table of the application's, as PostgreSQL names it. */
@@ -182,6 +192,27 @@ function literal(text: string): string {
 }
 
 /**
+ * `create`, a statement that makes a function the role that made the log alone may execute, with
+ * what every other role is given of it taken away (`signature` names it), as one statement: a `DO`
+ * block runs them in the transaction of its one statement, so that no committed state has the
+ * function executable by a role but its owner — not between two statements, which a role that may
+ * use the log's schema could meet, and not where an installation stops after the first. Executable
+ * by another role it would be by `PUBLIC`, which `CREATE OR REPLACE` keeps for a function an
+ * installation made before made so; by a role named in the installer's default privileges
+ * (`ALTER DEFAULT PRIVILEGES … GRANT EXECUTE ON FUNCTIONS TO app`), which a function is made with;
+ * or by one granted it since, which `CREATE OR REPLACE` keeps as well. So `PUBLIC`'s execution is
+ * revoked, and each named role's that is not the owner, each with `CASCADE`, which also takes away
+ * what a role with the grant option granted on (an owner's `REVOKE` takes away its own grants
+ * alone). What is left is no entry of the function's ACL: a superuser, and a role that is a member
+ * of the owner, which has the owner's rights. The function's own body is quoted by `$$`, the block
+ * by another tag.
+ */
+function restricted(create: string, signature: string): string {
+  const named = literal(signature);
+  return `DO $restricted$ DECLARE "who" text; BEGIN ${create}; REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC CASCADE; FOR "who" IN SELECT DISTINCT x.grantee::pg_catalog.regrole::text FROM pg_catalog.pg_proc AS p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) AS x WHERE p.oid = ${named}::pg_catalog.regprocedure AND x.grantee NOT IN (0, p.proowner) LOOP EXECUTE pg_catalog.format('REVOKE EXECUTE ON FUNCTION %s FROM %s CASCADE', ${named}, "who"); END LOOP; END $restricted$`;
+}
+
+/**
  * The statements of each trigger a followed table holds: one each of the events it logs, named
  * `<namespace>_<event>`, so that the triggers of another namespace's log stay as they are. Each
  * names the table's key columns to the function it runs, as its arguments.
@@ -231,7 +262,7 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
         logged(side, TRANSITION[side], side === 'after' ? '"before_rows"' : '0::bigint'),
       )
       .join('; ');
-    return `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ #variable_conflict use_variable\nDECLARE "before_rows" bigint := 0; "after_rows" bigint := 0; "changed" bigint; "total" bigint; "last" bigint; "image" text; BEGIN ${counted}; "changed" := greatest("before_rows", "after_rows"); IF "changed" = 0 THEN RETURN NULL; END IF; IF TG_NARGS = 0 OR "changed" > ${String(ROWS.logged)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END IF; "total" := "before_rows" + "after_rows"; "image" := ${schema}."image_sql"(TG_RELID, TG_ARGV); UPDATE ${head} SET "seq" = "seq" + "total" RETURNING "seq" INTO "last"; ${inserts}; PERFORM pg_notify(${channel}, "last"::text); RETURN NULL; END $$`;
+    return `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ #variable_conflict use_variable\nDECLARE "before_rows" bigint := 0; "after_rows" bigint := 0; "changed" bigint; "total" bigint; "last" bigint; "image" text; BEGIN ${counted}; "changed" := greatest("before_rows", "after_rows"); IF "changed" = 0 THEN RETURN NULL; END IF; IF TG_NARGS = 0 OR "changed" > ${String(ROWS.logged)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END IF; "total" := "before_rows" + "after_rows"; "image" := ${schema}."image_sql"(TG_RELID, TG_ARGV); UPDATE ${head} SET "seq" = "seq" + "total" RETURNING "seq" INTO "last"; ${inserts}; PERFORM pg_notify(${channel}, "last"::text); RETURN NULL; END $$`;
   };
   return [
     // The expression of a row's image, `r`: an object of the text of each key the table still
@@ -245,9 +276,10 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
     // Of each writer, which the trigger's function calls it as, though the database's default
     // privileges keep functions from `PUBLIC`: it reads the catalog's attributes alone.
     `GRANT EXECUTE ON FUNCTION ${schema}."image_sql"(oid, text[]) TO PUBLIC`,
-    made('capture_inserted', ['after']),
-    made('capture_deleted', ['before']),
-    made('capture_updated', ['before', 'after']),
+    // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
+    restricted(made('capture_inserted', ['after']), `${schema}."capture_inserted"()`),
+    restricted(made('capture_deleted', ['before']), `${schema}."capture_deleted"()`),
+    restricted(made('capture_updated', ['before', 'after']), `${schema}."capture_updated"()`),
   ];
 }
 
@@ -375,10 +407,19 @@ function ddlCounterOf(namespace: string): readonly string[] {
 
 /**
  * The statements that make the log in `namespace` and the triggers of each of `relations`, each to
- * be run by itself, in order. Every statement leaves what it makes as it is when it is there
- * already: a host may run them each time it starts, after the application's migrations, which may
- * have made a followed table again without its triggers. A table no longer followed keeps its
- * triggers until the application drops them.
+ * be run by itself, in order, as the role that made the log, which may create triggers on the
+ * followed tables: once, or each time a host starts, after the application's migrations, which may
+ * have made a followed table again without its triggers. Each may be run again: the log's tables
+ * keep their rows and gain what an installation made before lacks (the column `n` of `ddl` and its
+ * `FULL` replica identity, the columns `side` and `image` of `changes`), and its functions and
+ * triggers are made anew, which brings an installation made before up to date. Another role's run
+ * fails at the first function it would replace (`must be owner of function`), by PostgreSQL's rule
+ * for `CREATE OR REPLACE FUNCTION`. A function that only the role that made the log may execute is
+ * made in the one statement that takes every other role's execution from it (`restricted`), so
+ * that a run that stops anywhere leaves none executable by a role that may use the log's schema. A role that
+ * only writes followed tables needs nothing of the log's schema, and a host that only reads the log
+ * runs none of them: it needs `USAGE` on the schema and `SELECT` on `head` and `changes`. A table
+ * no longer followed keeps its triggers until the application drops them.
  */
 export function changeCaptureSql(
   relations: readonly FollowedRelation[],
@@ -394,8 +435,17 @@ export function changeCaptureSql(
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
     `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname = 'image' AND NOT attisdropped) THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
-    `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
-    `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+    // Of the role that made the log alone, of which the functions run: any other that may use the
+    // log's schema could else append an entry that renders what read a table again, or attach a
+    // trigger function to a table of its own.
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::text); END $$`,
+      `${schema}."note"(text, text)`,
+    ),
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+      `${schema}."capture_all"()`,
+    ),
     ...rowFunctionsOf(namespace, channel),
     ...ddlCounterOf(namespace),
     ...relations.flatMap((relation) => triggersOf(relation, namespace)),

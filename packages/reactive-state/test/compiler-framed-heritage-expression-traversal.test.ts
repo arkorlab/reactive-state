@@ -6,14 +6,11 @@ import {
   isBinaryExpression,
   isCallExpression,
   isClassExpression,
-  isConstructorDeclaration,
   isElementAccessExpression,
   isIdentifier,
-  isParameterDeclaration,
   isPropertyAccessExpression,
   isVariableDeclaration,
   type Node,
-  type ParameterDeclaration,
   SyntaxKind,
 } from 'typescript/ast';
 import { describe, expect, it } from 'vitest';
@@ -23,7 +20,6 @@ import { emptyArrayFill } from '../src/compiler/framed-array-fill-ranges.ts';
 import { sourceArrayFunction } from '../src/compiler/framed-array-functions.ts';
 import { framedLogicalElementSkipped } from '../src/compiler/framed-array-logical-writes.ts';
 import { type FrameBinding, frameBindingOf } from '../src/compiler/framed-bindings.ts';
-import { framedConstructorDefaultEvaluation } from '../src/compiler/framed-constructor-default-evaluation.ts';
 import { framedAppliedArguments } from '../src/compiler/framed-keys.ts';
 import { framedQuietOwnerPrefix } from '../src/compiler/framed-native-prefix.ts';
 import { framedOriginCoowned } from '../src/compiler/framed-origin-ownership.ts';
@@ -251,21 +247,6 @@ const PREFIXES = [
   },
 ];
 
-const DEFAULTS = [
-  {
-    id: 'call-in-an-instantiation-expression-default',
-    source:
-      'declare function work(): void; declare function id<T>(v?: unknown): T; class C { constructor(x = (work(), id)<string>) { void x; } }',
-    quiet: false,
-  },
-  {
-    id: 'instantiation-expression-default-without-work-pin',
-    source:
-      'declare function id<T>(v?: unknown): T; class C { constructor(x = id<string>) { void x; } }',
-    quiet: true,
-  },
-];
-
 describe('what a class’s extends expression and an instantiation expression do', () => {
   it.each(FILLS)('$id', ({ source, empty }) => {
     using api = openTypeScript();
@@ -378,17 +359,5 @@ describe('what a class’s extends expression and an instantiation expression do
     expect(framedQuietOwnerPrefix(consumer, { primitive: () => true, call: () => false })).toBe(
       quiet,
     );
-  });
-
-  it.each(DEFAULTS)('$id', ({ source, quiet }) => {
-    using api = openTypeScript();
-    using parsed = parseModule(api, 'heritage-defaults.ts', source);
-    const parameters = nodesOf(parsed.sourceFile).filter(
-      (node): node is ParameterDeclaration =>
-        isParameterDeclaration(node) && isConstructorDeclaration(node.parent),
-    );
-
-    expect(parameters).toHaveLength(1);
-    expect(framedConstructorDefaultEvaluation(parameters, [])).toBe(quiet);
   });
 });

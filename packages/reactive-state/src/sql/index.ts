@@ -119,7 +119,12 @@ export interface DrizzleFollow<S> {
   readonly channel: string;
   /** The statements that make the log and each table's triggers, each run by itself, in order. */
   readonly captureSql: () => readonly string[];
-  /** `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client. */
+  /**
+   * `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client. A
+   * serializer the application gave it (`PGlite.create({ serializers })`) answers the same text of
+   * the same value each time it is called, and changes nothing as it is: a render's condition is
+   * followed by the text it answers, which is asked before the value is bound.
+   */
   readonly client: <C extends Connection>(client: C) => C;
   /** The store the host gives the authority, which reads the log through `client`. */
   readonly store: (client: Queryable) => ExternalStore;
@@ -147,6 +152,13 @@ export function followDrizzle<S extends Readonly<Record<string, unknown>>>(
       name: config.name,
       schema: config.schema ?? 'public',
     };
+    // A plan names no relation of the log's own schema (`planReads`), so a render that read such a
+    // table would note nothing but the schema's change.
+    if (relation.schema === namespace) {
+      throw new TypeError(
+        `followDrizzle(): \`${name}\` is a table of \`${namespace}\`, the schema the change log is kept in: keep the application's tables out of it.`,
+      );
+    }
     // The keys' values of each changed row, as the log keeps them: what a render's conditions name.
     tables[name] = table(Object.fromEntries(keys.map((key) => [key.field, text()])), {
       external: storeName,

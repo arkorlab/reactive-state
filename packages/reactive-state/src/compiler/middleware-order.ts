@@ -1,4 +1,10 @@
-import type { Node, SourceFile, Statement } from 'typescript/ast';
+import {
+  isVariableStatement,
+  type Node,
+  NodeFlags,
+  type SourceFile,
+  type Statement,
+} from 'typescript/ast';
 
 import type { Fail } from './errors.ts';
 import { boundBeforeNext } from './middleware-bound-defaults.ts';
@@ -21,6 +27,29 @@ const EXCERPT_LENGTH = 60;
 function excerpt(node: Node, sourceFile: SourceFile): string {
   const [line = ''] = node.getText(sourceFile).split('\n', 1);
   return line.length > EXCERPT_LENGTH ? `${line.slice(0, EXCERPT_LENGTH)}…` : line;
+}
+
+/**
+ * Refuses a `using` or `await using` declaration the middleware makes before `next`, at the scope of
+ * its own body (`before`): the source disposes its resource as the middleware returns, after the
+ * route has run, where the guard written for it returns before the route starts and the host's part
+ * before `next` returns ahead of it. One within a block that ends before `next` is disposed there,
+ * where the source disposes it, and is no part's.
+ */
+export function checkResources(
+  before: readonly Statement[],
+  context: { readonly sourceFile: SourceFile; readonly fail: Fail },
+): void {
+  const held = before.find(
+    // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
+    (each) => isVariableStatement(each) && (each.declarationList.flags & NodeFlags.Using) !== 0,
+  );
+  if (held !== undefined) {
+    context.fail(
+      `\`${excerpt(held, context.sourceFile)}\` holds a resource until the middleware returns, after the route has run: the guard it would be written into returns before the route starts, and the part the host runs before \`next\` returns ahead of it, so the resource would be disposed early. Declare it within a block that ends before \`next\`, or release it where it is no longer needed.`,
+      held,
+    );
+  }
 }
 
 /**

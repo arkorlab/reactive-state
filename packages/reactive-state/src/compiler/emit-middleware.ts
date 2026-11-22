@@ -279,19 +279,21 @@ function afterLines(split: MiddlewareSplit): readonly string[] {
     return [];
   }
   const { sourceFile } = split.names;
+  const declared = (name: string): boolean =>
+    split.names.names.topLevel.has(name) || split.names.declared.has(name);
+  // The response keeps the middleware's name where the part reads it; where it does not, the
+  // parameter is one of the emitter's own, by a name the middleware declares nowhere.
   const response = after.values.has(after.response.text)
     ? after.response.text
-    : `_${after.response.text}`;
+    : unusedName(`_${after.response.text}`, declared);
+  const handedName = (base: string): string =>
+    unusedName(base, (each) => each === response || declared(each));
   const signature = (locals: string): string =>
     `export ${after.awaits ? 'async ' : ''}function after(${locals}: Readonly<Record<string, unknown>>, ${response}: Response): ${after.awaits ? 'Promise<void>' : 'void'} {`;
   if (after.locals.length === 0) {
-    return [signature('_locals'), bodyOf(after.statements, sourceFile), '}'];
+    return [signature(handedName('_locals')), bodyOf(after.statements, sourceFile), '}'];
   }
-  const locals = unusedName(
-    'locals',
-    (each) =>
-      each === response || split.names.names.topLevel.has(each) || split.names.declared.has(each),
-  );
+  const locals = handedName('locals');
   const handed = ownName(split, 'Handed');
   return [
     `type ${handed} = Awaited<ReturnType<typeof before>>;`,

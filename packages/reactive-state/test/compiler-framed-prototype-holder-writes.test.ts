@@ -5,10 +5,11 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
  * A member of a holder that the language names and that reaches no prototype (`Object.assign`,
- * `Object.keys`, `Reflect.set`, `Reflect.getPrototypeOf`, `Array.from`) is a use only while it is
- * the native: a member the code writes, deletes or steps (assigned, compound-assigned, a pattern's
- * place, a loop head, through a cast, parentheses or a global object) is another function from there
- * on, and each call of it that the file reads as a safe one runs what the code made.
+ * `Object.keys`, `Array.from`) is a use only while it is the native, called by its name: a member
+ * the code writes, deletes or steps (assigned, compound-assigned, a pattern's place, a loop head,
+ * through a cast, parentheses or a global object) is another function from there on, and each call
+ * of it that the file reads as a safe one runs what the code made. A member the list does not name
+ * (`Reflect.set`, `Reflect.apply`, `Object.defineProperty`) is no use at all.
  */
 const CASES = [
   {
@@ -212,39 +213,39 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'object-assign-held-pin',
+    id: 'object-assign-held-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { const copy = Object.assign; void copy; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-given-to-a-call-pin',
+    id: 'object-assign-given-to-a-call-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { helper(Object.assign); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-in-a-list-pin',
+    id: 'object-assign-in-a-list-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void [Object.assign]; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-called-through-call-pin',
+    id: 'object-assign-called-through-call-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { Object.assign.call(null, a, {}); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-apply-called-pin',
+    id: 'reflect-apply-called-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { Reflect.apply(fn, null, []); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-typeof-pin',
+    id: 'object-assign-typeof-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void (typeof Object.assign); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-define-property-called-pin',
+    id: 'object-define-property-called-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { Object.defineProperty(source, 'x', { value: 1 }); }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-keys-called-pin',
@@ -252,54 +253,54 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'object-assign-compared-pin',
+    id: 'object-assign-compared-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void (Object.assign === helper); }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-an-element-read-in-a-pattern-source-pin',
+    id: 'object-assign-an-element-read-in-a-pattern-source-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { const [first] = [Object.assign]; void first; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-negated-pin',
+    id: 'object-assign-negated-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !Object.assign; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-negated-in-a-condition-pin',
+    id: 'object-assign-negated-in-a-condition-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { if (!Object.assign) { void a; } }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'reflect-set-negated-pin',
+    id: 'reflect-set-negated-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !Reflect.set; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-negated-through-a-cast-pin',
+    id: 'object-assign-negated-through-a-cast-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !(Object as any).assign; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-minus-pin',
+    id: 'object-assign-minus-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void -Object.assign; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-plus-pin',
+    id: 'object-assign-plus-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void +Object.assign; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'object-assign-complemented-pin',
+    id: 'object-assign-complemented-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void ~Object.assign; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'array-prototype-join-negated-pin',
+    id: 'array-prototype-join-negated-refused',
     source: `function frames(helper: any, a: unknown[], key: string, p: object, fn: () => void, date: Date, source: object, list: (() => void)[]) { void !Array.prototype.join; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-assign-stepped-before-in-parentheses-refused',

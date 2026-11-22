@@ -129,9 +129,9 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'object-as-the-base-of-a-class-pin',
+    id: 'object-as-the-base-of-a-class-refused',
     source: `${HEAD} class Unused extends Object {} return a; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'object-as-the-this-of-a-call-refused-pin',
@@ -139,9 +139,9 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'object-in-a-comma-as-the-base-of-a-class-pin',
+    id: 'object-in-a-comma-as-the-base-of-a-class-refused',
     source: `${HEAD} class Unused extends ((a.length, Object)) {} return a; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'array-prototype-method-assigned',
@@ -224,24 +224,24 @@ const CASES = [
     changes: true,
   },
   {
-    id: 'native-prototype-member-read-pin',
+    id: 'native-prototype-member-read-refused',
     source: `${HEAD} void Array.prototype.join; return a; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-prototype-member-called-pin',
+    id: 'native-prototype-member-called-refused',
     source: `${HEAD} Array.prototype.join.call(a); return a; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-prototype-member-read-by-text-pin',
+    id: 'native-prototype-member-read-by-text-refused',
     source: `${HEAD} void Array.prototype['join']; return a; }`,
-    changes: false,
+    changes: true,
   },
   {
-    id: 'native-prototype-member-given-as-a-value-pin',
+    id: 'native-prototype-member-given-as-a-value-refused',
     source: `${HEAD} Object.assign(a, { join: Array.prototype.join }); return a; }`,
-    changes: false,
+    changes: true,
   },
   {
     id: 'prototype-of-another-class-read-refused-pin',
@@ -314,9 +314,9 @@ const CASES = [
     changes: false,
   },
   {
-    id: 'prototype-of-a-native-read-pin',
+    id: 'prototype-of-a-native-read-refused',
     source: `${HEAD} Array.prototype.join.call(a); return a; }`,
-    changes: false,
+    changes: true,
   },
 ] as const;
 

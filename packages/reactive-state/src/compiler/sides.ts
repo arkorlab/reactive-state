@@ -14,6 +14,7 @@ import {
 import { type Component, DOLLAR, type HookCall, type OwnedState } from './analyze.ts';
 import { Derivation } from './derive.ts';
 import { checkJson } from './json-values.ts';
+import { isIntrinsicTag } from './jsx.ts';
 import { holdsPageValue } from './locality.ts';
 import type { ModuleKind, Modules } from './modules.ts';
 import { canOmit } from './omitted-work.ts';
@@ -482,7 +483,8 @@ function isReactive(component: Component, element: Node): boolean {
     return false;
   }
   const tag = isJsxElement(element) ? element.openingElement.tagName : element.tagName;
-  if (!isIdentifier(tag)) {
+  // A tag React takes for the browser's own is none of a component's, whatever the name imports.
+  if (!isIdentifier(tag) || isIntrinsicTag(tag.text)) {
     return false;
   }
   const entry = component.names.get(tag.text);

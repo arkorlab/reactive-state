@@ -193,18 +193,26 @@ function sourceValue(node: Expression | undefined, resolve: Resolve): Selection 
   return { unknown: false, value };
 }
 
-/** Only a proven omitted or undefined value selects a default; unknown values retain runtime checks. */
+/**
+ * Only a proven omitted or undefined value selects a default; unknown values retain runtime checks,
+ * and a default they may select forgets the parameters it writes.
+ */
 function withDefault(
   value: Selection,
   initializer: Expression | undefined,
   reading: Reading,
 ): Selection {
-  if (
-    initializer === undefined ||
-    value.unknown ||
-    value.present === true ||
-    !omittedArgument(value.value, reading.bindings)
-  ) {
+  if (initializer === undefined || value.present === true) {
+    return value;
+  }
+  if (value.unknown) {
+    // The default may run, so what it writes is no longer what the parameters held; it is not
+    // recorded as run, and the value stays unknown.
+    forgetWrittenParameters(initializer, reading);
+    reading.resolve = initializedResolve(new Map(reading.bindings), reading.resolve);
+    return value;
+  }
+  if (!omittedArgument(value.value, reading.bindings)) {
     return value;
   }
   const resolve = reading.resolve;
@@ -355,6 +363,7 @@ function bindingInitializers(binding: BindingName, actual: Selection, reading: R
   if (bindingFailure(binding, actual, reading.resolve)) {
     return false;
   }
+  const members = readsIterator(binding, actual, reading.resolve) ? UNKNOWN : actual;
   for (const [index, element] of binding.elements.entries()) {
     if (!isBindingElement(element) || element.name === undefined) {
       continue;
@@ -364,7 +373,7 @@ function bindingInitializers(binding: BindingName, actual: Selection, reading: R
       : propertyName(element.propertyName ?? element.name);
     const value =
       element.dotDotDotToken === undefined
-        ? selectedValue(actual, key, reading.resolve)
+        ? selectedValue(members, key, reading.resolve)
         : restValue(actual, index, reading.resolve);
     const chosen = withDefault(value, element.initializer, reading);
     if (!bindingInitializers(element.name, chosen, reading)) {
@@ -372,6 +381,15 @@ function bindingInitializers(binding: BindingName, actual: Selection, reading: R
     }
   }
   return true;
+}
+
+/** Whether an array pattern is written over an object literal, whose iterator it reads, not its numbers. */
+function readsIterator(binding: BindingName, actual: Selection, resolve: Resolve): boolean {
+  return (
+    isArrayBindingPattern(binding) &&
+    actual.value !== undefined &&
+    isObjectLiteralExpression(writtenOf(actual.value, resolve))
+  );
 }
 
 /** A statically missing, nullish or non-iterable pattern source. */
@@ -386,9 +404,12 @@ function bindingFailure(binding: BindingName, actual: Selection, resolve: Resolv
   );
 }
 
-/** A literal member or a known inherited member, without reading a getter or unknown prototype. */
+/**
+ * A literal member or a known inherited member, without reading a getter or unknown prototype; the
+ * key `__proto__` reads the prototype where a literal writes one, so it stays unproven.
+ */
 function selectedValue(actual: Selection, key: string | undefined, resolve: Resolve): Selection {
-  if (key === undefined || actual.unknown) {
+  if (key === undefined || key === '__proto__' || actual.unknown) {
     return UNKNOWN;
   }
   const value = actual.value === undefined ? undefined : sourceValue(actual.value, resolve);
@@ -404,19 +425,28 @@ function selectedValue(actual: Selection, key: string | undefined, resolve: Reso
     return selectedArray(entries, key, resolve);
   }
   const picked = selected(value?.value, key);
-  if (
-    value?.value !== undefined &&
-    isObjectLiteralExpression(value.value) &&
-    picked.value === undefined &&
-    !picked.unknown &&
-    Object.hasOwn(Object.prototype, key) &&
-    !value.value.properties.some(
-      (property) => isPropertyAssignment(property) && propertyName(property.name) === '__proto__',
-    )
-  ) {
+  if (inheritsMember(value?.value, picked, key)) {
     return PRESENT;
   }
   return picked.unknown ? UNKNOWN : sourceValue(picked.value, resolve);
+}
+
+/** Whether an object literal that writes no prototype inherits `key` from `Object.prototype`. */
+function inheritsMember(
+  literal: Expression | undefined,
+  picked: Pick<Selection, 'unknown' | 'value'>,
+  key: string,
+): boolean {
+  return (
+    literal !== undefined &&
+    isObjectLiteralExpression(literal) &&
+    picked.value === undefined &&
+    !picked.unknown &&
+    Object.hasOwn(Object.prototype, key) &&
+    !literal.properties.some(
+      (property) => isPropertyAssignment(property) && propertyName(property.name) === '__proto__',
+    )
+  );
 }
 
 /** A stored array entry, a hole or an inherited member that does not select its fallback. */
@@ -431,7 +461,8 @@ function selectedArray(entries: readonly Expression[], key: string, resolve: Res
   ) {
     return PRESENT;
   }
-  const entry = entries[Number(key)];
+  const index = Number(key);
+  const entry = String(index) === key ? entries[index] : undefined;
   return sourceValue(
     entry === undefined || isOmittedExpression(entry) ? undefined : entry,
     resolve,

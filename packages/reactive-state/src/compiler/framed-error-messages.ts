@@ -6,6 +6,7 @@ import {
   type Node,
 } from 'typescript/ast';
 
+import { unwrapped } from './bounded.ts';
 import { arrayError, framedArrayString } from './framed-arrays.ts';
 import { framedBoundErrorMessage } from './framed-bound-error-messages.ts';
 import { framedSelectedMembers, framedSelectedValues } from './framed-forwarded-selections.ts';
@@ -39,10 +40,14 @@ export function framedErrorMessage(
   const words = { error, typed };
   // A message converts as `String` does: an array's text holds the words of the errors it holds.
   const converted = (value: Expression) => error(value) || framedArrayString(value, words, node);
+  const convertedField = (field: Expression) =>
+    isSpreadElement(field) ? arrayError(field.expression, words, node) : converted(field);
   const forwarded = framedSubclassMessages(node, names);
   if (forwarded !== undefined) {
     // A selected field converts as a whole argument does, once its written value is resolved.
-    return forwarded.some(({ value, keys, any, continued }) => {
+    return forwarded.some(({ value, keys, any, continued, unfollowed, refused }) => {
+      if (refused === true) return true;
+      if (unfollowed === true && nestedConversion(value, node, convertedField)) return true;
       if (continued !== true && keys.length > 0 && error(value, keys)) return true;
       const selected =
         any === true
@@ -52,9 +57,7 @@ export function framedErrorMessage(
         if (each.keys.length > 0) return continued !== true && error(each.value, each.keys);
         const field = each.value;
         if (continued === true && !continuedInput(field, node, names, error)) return false;
-        return isSpreadElement(field)
-          ? arrayError(field.expression, words, node)
-          : converted(field);
+        return convertedField(field);
       });
     });
   }
@@ -79,6 +82,27 @@ export function framedErrorMessage(
       return isSpreadElement(value) ? arrayError(value.expression, words, node) : converted(value);
     });
   });
+}
+
+/**
+ * Whether a value, or a member it holds at any depth, converts as a message does: what a
+ * construction the compile could not follow may pass on, the `Error` a wrapper holds included.
+ */
+function nestedConversion(
+  value: Expression,
+  point: Node,
+  converted: (value: Expression) => boolean,
+): boolean {
+  const seen = new Set<Node>();
+  const pending: Expression[] = [value];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const node = unwrapped(each);
+    if (seen.has(node)) continue;
+    seen.add(node);
+    if (converted(node)) return true;
+    for (const member of framedSelectedMembers(node, [], point)) pending.push(member.value);
+  }
+  return false;
 }
 
 /** New default-path origins preserve own conversion hooks at the actual native consumer. */

@@ -3,7 +3,6 @@ import {
   isShorthandPropertyAssignment,
   type Node,
   type SourceFile,
-  type Statement,
 } from 'typescript/ast';
 
 import { PROTOCOL_VERSION } from '../program.ts';
@@ -14,7 +13,7 @@ import type { SiteInput } from './frames.ts';
 import { type ImportBinding, importDeclarations, type ImportLine } from './imports.ts';
 import { isJsx, type Rendering, rendered, typeOfTag } from './jsx.ts';
 import type { ModuleKind } from './modules.ts';
-import { readsBinding } from './scope.ts';
+import { freeReads, readsBinding } from './scope.ts';
 import { reads, type Sides } from './sides.ts';
 import { accessed, guardOf, operand, type Site, type SiteList } from './sites.ts';
 import {
@@ -27,6 +26,15 @@ import {
   textOf,
   unusedName,
 } from './splice.ts';
+import {
+  namesHeld,
+  ownText,
+  OWN_NAMES,
+  refuseRedeclared,
+  refuseShadowing,
+  renders,
+  reservedNames,
+} from './update-globals.ts';
 import type { ApplySite, Registered } from './updaters.ts';
 
 /**
@@ -74,23 +82,6 @@ const BY_REFERENCE: ReadonlySet<ModuleKind> = new Set([
   'operations',
 ]);
 
-/** The names a program declares itself, which an import it writes for an update may not take. */
-const OWN_NAMES: ReadonlySet<string> = new Set([
-  'actionRef',
-  'buildId',
-  'component',
-  'componentRef',
-  'evaluate',
-  'moduleRef',
-  'ProgramUpdater',
-  'protocolVersion',
-  'RenderScope',
-  'States',
-  'StatesOf',
-  'updaters',
-  'writable',
-]);
-
 /**
  * The imports a program writes: what its code reads of the component's imports — at run time, or in
  * a type — and what its updates read of the application's shared modules, a hook's among them,
@@ -101,7 +92,8 @@ class ImportPlan {
   /** The program's own names, and each one it imports, by the import that takes it. */
   readonly #taken = new Map<string, string>();
 
-  constructor(component: Component, sides: Sides, propTypes: ReadonlySet<string>) {
+  constructor(input: AuthorityInput) {
+    const { component, propTypes, sides, updaters } = input;
     for (const name of OWN_NAMES) {
       this.#taken.set(name, '');
     }
@@ -112,20 +104,27 @@ class ImportPlan {
         this.#taken.set(name, '');
       }
     }
-    // What the code written into a site's function declares, or reads as a global (`derive.ts`).
-    for (const name of sides.derivation.taken) {
+    // What the program writes as it is reads as globals, and what the code written into a site's
+    // function declares or reads as a global (`derive.ts`): no import takes any of them.
+    for (const name of reservedNames(component, sides, updaters)) {
       this.#taken.set(name, '');
     }
     const { refs } = sides;
+    const own = ownText(component, updaters);
+    refuseRedeclared(component, own, component.fail);
     const bindings = component.modules.flatMap((module) => module.bindings);
     for (const binding of bindings) {
       const name = binding.name.text;
       if (refs.components.has(name) || refs.modules.has(name) || refs.actions.has(name)) {
+        refuseShadowing(binding.name, own, component.fail);
         this.#taken.set(name, '');
         continue;
       }
       const byReference = BY_REFERENCE.has(binding.module.target.kind);
       const value = !byReference && !binding.typeOnly && sides.authority.values.has(name);
+      if (value) {
+        refuseShadowing(binding.name, own, component.fail);
+      }
       if (value || sides.authority.types.has(name) || propTypes.has(name)) {
         this.#add(binding, !value);
       }
@@ -144,14 +143,21 @@ class ImportPlan {
     });
   }
 
-  /** An import with a name available in derived code, reused only for compatible type/value reads. */
-  #require(binding: ImportBinding, typeOnly: boolean): string {
+  /**
+   * An import with a name available in derived code, reused only for compatible type/value reads —
+   * and, for an update's, under another name than the update writes it by, where the update holds
+   * none (`held`): its own declaration of the name would take the read.
+   */
+  #require(binding: ImportBinding, typeOnly: boolean, held?: ReadonlySet<string>): string {
     const identity = identityOf(binding);
+    const own = binding.name.text;
     const existing = this.#lines.find((line) => {
+      const local = line.local ?? line.binding.name.text;
       return (
         (typeOnly || !line.typeOnly) &&
         identityOf(line.binding) === identity &&
-        this.#taken.get(line.local ?? line.binding.name.text) === identity
+        this.#taken.get(local) === identity &&
+        (held === undefined || local === own || !held.has(local))
       );
     });
     if (existing !== undefined) {
@@ -165,9 +171,12 @@ class ImportPlan {
     return name;
   }
 
-  /** The name the program reads `binding`, a shared module's import, by: its own, or another. */
-  require(binding: ImportBinding): string {
-    return this.#require(binding, false);
+  /**
+   * The name the program reads `binding`, a shared module's import, by: its own, or another — as
+   * a type alone, where it is read as one.
+   */
+  require(binding: ImportBinding, held?: ReadonlySet<string>, typeOnly = false): string {
+    return this.#require(binding, typeOnly, held);
   }
 
   /** The name the program reads `binding`, an import of a type a hook's module imports, by. */
@@ -180,16 +189,20 @@ class ImportPlan {
   }
 }
 
-/** What an import is, whatever it is named: its module, as written, and its export. */
+/**
+ * What an import is, whatever it is named: its module, as written, and its export — or the module
+ * whole, which no export of any name is.
+ */
 function identityOf(binding: ImportBinding): string {
-  return `${binding.module.written}#${binding.exported}`;
+  const exported = binding.form === 'namespace' ? 'namespace' : `export:${binding.exported}`;
+  return `${binding.module.written}#${exported}`;
 }
 
 export function emitAuthority(input: AuthorityInput): string {
   const { component, sides } = input;
   const { refs } = sides;
   const stateful = component.returned !== undefined;
-  const lines = new ImportPlan(component, sides, input.propTypes);
+  const lines = new ImportPlan(input);
   const updaterLines = updaterEntries(input, lines);
   const values = [
     refs.components.size > 0 ? 'componentRef' : undefined,
@@ -241,21 +254,6 @@ function programImport(values: readonly string[], types: readonly string[]): str
   }
   const named = [...values, ...types.map((type) => `type ${type}`)];
   return `import { ${named.join(', ')} } from '${PROGRAM}';`;
-}
-
-/** Whether the server part holds JSX, which it renders with `$`. */
-function renders(statements: readonly Statement[]): boolean {
-  let found = false;
-  const visit = (node: Node): void => {
-    found ||= isJsx(node);
-    if (!found) {
-      node.forEachChild(visit);
-    }
-  };
-  for (const statement of statements) {
-    visit(statement);
-  }
-  return found;
 }
 
 /** The constant a reference the authority renders or binds by is declared as. */
@@ -554,8 +552,11 @@ function applyOf(site: ApplySite, key: string, lines: ImportPlan): string {
   const { update } = site;
   const type = site.type ?? `States[${literal(key)}]`;
   const renames = new Map<string, string>();
+  const held = namesHeld(update);
+  // An import the update reads in a type position alone is written as a type, erased with the types.
+  const values = new Set(freeReads(update.fn).map((read) => read.text));
   for (const binding of update.imports) {
-    const local = lines.require(binding);
+    const local = lines.require(binding, held, !values.has(binding.name.text));
     if (local !== binding.name.text) {
       renames.set(binding.name.text, local);
     }

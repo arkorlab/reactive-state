@@ -2,7 +2,6 @@ import {
   type FunctionDeclaration,
   isExportDeclaration,
   isFunctionDeclaration,
-  isIdentifier,
   isNamedExports,
   isStringLiteral,
   isVariableStatement,
@@ -12,6 +11,7 @@ import {
 } from 'typescript/ast';
 
 import type { Modules } from './modules.ts';
+import { bindingIdentifiers } from './scope.ts';
 import { isScript } from './typescript.ts';
 
 /**
@@ -23,11 +23,15 @@ import { isScript } from './typescript.ts';
 /**
  * Whether `statement`, a declaration of a module's top level, is exported by its own name:
  * `export`, not `export default`, which exports it as the module's default — nothing Next.js asks a
- * segment for by name.
+ * segment for by name — and not `export declare`, which TypeScript erases.
  */
 function exportsByName(statement: FunctionDeclaration | VariableStatement): boolean {
   const kinds = new Set(statement.modifiers?.map((modifier) => modifier.kind));
-  return kinds.has(SyntaxKind.ExportKeyword) && !kinds.has(SyntaxKind.DefaultKeyword);
+  return (
+    kinds.has(SyntaxKind.ExportKeyword) &&
+    !kinds.has(SyntaxKind.DefaultKeyword) &&
+    !kinds.has(SyntaxKind.DeclareKeyword)
+  );
 }
 
 /**
@@ -37,13 +41,15 @@ function exportsByName(statement: FunctionDeclaration | VariableStatement): bool
  */
 function namesExport(statement: Statement, name: string): boolean {
   if (isFunctionDeclaration(statement)) {
-    return exportsByName(statement) && statement.name?.text === name;
+    return (
+      statement.body !== undefined && exportsByName(statement) && statement.name?.text === name
+    );
   }
   if (isVariableStatement(statement)) {
     return (
       exportsByName(statement) &&
-      statement.declarationList.declarations.some(
-        (declaration) => isIdentifier(declaration.name) && declaration.name.text === name,
+      statement.declarationList.declarations.some((declaration) =>
+        bindingIdentifiers(declaration.name).some((bound) => bound.text === name),
       )
     );
   }

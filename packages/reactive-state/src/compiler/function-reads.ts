@@ -1,33 +1,54 @@
 import {
+  type BinaryExpression,
+  type ElementAccessExpression,
   type Expression,
+  isArrayLiteralExpression,
   isArrowFunction,
+  isBigIntLiteral,
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
   isClassExpression,
-  isConstructorTypeNode,
+  isConditionalExpression,
+  isDeleteExpression,
   isElementAccessExpression,
   isFunctionExpression,
-  isFunctionTypeNode,
   isIdentifier,
-  isMethodDeclaration,
+  isNoSubstitutionTemplateLiteral,
+  isNumericLiteral,
   isObjectBindingPattern,
   isObjectLiteralExpression,
+  isPostfixUnaryExpression,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
-  isPropertyAssignment,
-  isShorthandPropertyAssignment,
+  isRegularExpressionLiteral,
   isStringLiteral,
   isTemplateExpression,
+  isTypeOfExpression,
   isVariableDeclaration,
+  isVoidExpression,
   type Node,
-  type PropertyName,
   SyntaxKind,
-  type TypeNode,
 } from 'typescript/ast';
 
 import { literalName, unwrapped } from './bounded.ts';
 import { globalPathOf, patternKey } from './code-globals.ts';
-import { declarationOf, namesType, parameterOf } from './framed.ts';
+import {
+  arraySlotEntryKind,
+  containerDynamicEntryKind,
+  containerMemberEntryKind,
+  identifierEntryKind,
+  isGuaranteedUndefined,
+  mutableSpreadReachesFunction,
+} from './function-binding-entries.ts';
+import { elementEntryKey } from './function-entry-writes.ts';
+import {
+  combineBranchKinds,
+  type EntryKind,
+  type FunctionKind,
+  type ScanContext,
+  withBranch,
+} from './function-table-entries.ts';
 
 /**
  * What of a shared module's code reads what each side's bundle writes otherwise of a function of its
@@ -38,37 +59,45 @@ import { declarationOf, namesType, parameterOf } from './framed.ts';
 /** The members of a function each side's bundle writes otherwise: its source, its name. */
 const BUNDLED: ReadonlySet<string> = new Set(['name', 'toString']);
 
-/** The types a parameter is said to be a function of by their names: `Function`, and its kin. */
-const FUNCTION_TYPES: ReadonlySet<string> = new Set([
-  'CallableFunction',
-  'Function',
-  'NewableFunction',
-]);
-
 /** The operators that make text of a function beside them: `+`, `+=`. */
 const ADDING: ReadonlySet<SyntaxKind> = new Set([SyntaxKind.PlusEqualsToken, SyntaxKind.PlusToken]);
 
+/** The operators that answer their left or their right operand: `||`, `??`. */
+const EITHER_OPERAND: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.BarBarToken,
+  SyntaxKind.QuestionQuestionToken,
+]);
+
+/** The operators that answer their right operand, or a falsy left one: `&&`, `,`, `=`. */
+const RIGHT_OPERAND: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandToken,
+  SyntaxKind.CommaToken,
+  SyntaxKind.EqualsToken,
+]);
+
+const EXPRESSION_ENTRY_KINDS = new WeakMap<Expression, EntryKind>();
+
 /**
  * What of `node` reads what each side's bundle writes otherwise of a function the code shows it
- * writes (`isFunction`): its source — `toString` of it, `String(pick)`, a template, `pick + ''` — or
- * the name it is declared by, `pick.name`; none of another, nor of a value the code shows no
- * function of, nor the name of an entry of an object, which no bundle shortens. `Function`'s own,
- * `Function.prototype.toString`, makes code of text besides, which no shared module reads
- * (`code-globals.ts`).
+ * writes (`functionKind`): its source — `toString` of it, `String(pick)`, a template, `pick + ''` —
+ * or a `.name` that comes from a declaration, variable or named expression rather than a static
+ * object entry key.
  */
 export function functionRead(node: Node): string | undefined {
   const read = memberRead(node);
   if (read !== undefined) {
-    const of = unwrapped(read.of);
-    const named = read.name === 'name' && isPropertyAccessExpression(of);
-    return !named && BUNDLED.has(read.name) && isFunction(of, new Set())
-      ? `reads \`${read.name}\` of a function, which each side's bundle writes otherwise`
-      : undefined;
+    if (!BUNDLED.has(read.name)) {
+      return undefined;
+    }
+    const kind = functionKind(unwrapped(read.of), new Set());
+    return kind === undefined || (kind === 'entry' && read.name === 'name')
+      ? undefined
+      : `reads \`${read.name}\` of a function, which each side's bundle writes otherwise`;
   }
   const written = textOf(node);
-  return written !== undefined && isFunction(unwrapped(written), new Set())
-    ? "writes a function as text, which each side's bundle writes otherwise"
-    : undefined;
+  return written === undefined || functionKind(unwrapped(written), new Set()) === undefined
+    ? undefined
+    : "writes a function as text, which each side's bundle writes otherwise";
 }
 
 /**
@@ -101,90 +130,132 @@ function textOf(node: Node): Expression | undefined {
     return node.arguments[0];
   }
   if (isTemplateExpression(node)) {
-    return node.templateSpans.find((span) => isFunction(unwrapped(span.expression), new Set()))
-      ?.expression;
+    return node.templateSpans.find(
+      (span) => functionKind(unwrapped(span.expression), new Set()) !== undefined,
+    )?.expression;
   }
   if (!isBinaryExpression(node) || !ADDING.has(node.operatorToken.kind)) {
     return undefined;
   }
-  return isFunction(unwrapped(node.left), new Set()) ? node.left : node.right;
+  return functionKind(unwrapped(node.left), new Set()) === undefined ? node.right : node.left;
 }
 
-/**
- * Whether `node` is a function the code shows it writes: an arrow, a function, a class; an entry of
- * an object it writes, `helpers.pick` of `const helpers = { pick() { … } }`; what a name around it
- * is declared of — a function, a class, a variable of one (`declarationOf`), in turn — or a
- * parameter said to be one, `(pick: () => string)`.
- */
-function isFunction(node: Expression, seen: Set<Node>): boolean {
+/** Classifies `node` as an object-entry-named function, a minifiable function, or neither. */
+function functionKind(node: Expression, seen: Set<Node>): FunctionKind | undefined {
+  const kind = expressionEntryKind(node, {
+    classifyExpression: expressionEntryKind,
+    hitCycle: false,
+    mutableSpreadReachesFunction,
+    seen,
+  });
+  return kind === 'entry' || kind === 'renamed' ? kind : undefined;
+}
+
+/** Cycle-aware worker classifying `node` as `'entry'`, `'renamed'`, `'non-function'`, or `'unknown'`. */
+function expressionEntryKind(node: Expression, context: ScanContext): EntryKind {
   if (isArrowFunction(node) || isFunctionExpression(node) || isClassExpression(node)) {
-    return true;
+    return 'renamed';
+  }
+  if (isNonFunctionSyntax(node)) {
+    return 'non-function';
+  }
+  if (isIdentifier(node)) {
+    return identifierEntryKind(node, context);
+  }
+  const cached = EXPRESSION_ENTRY_KINDS.get(node);
+  if (cached !== undefined) {
+    return cached;
+  }
+  return withBranch(context, (branch) => {
+    const kind = computeComplexExpressionEntryKind(node, branch);
+    if (!branch.hitCycle) {
+      EXPRESSION_ENTRY_KINDS.set(node, kind);
+    }
+    return kind;
+  });
+}
+
+/** Classifies conditional and member/element access expressions inside `context`. */
+function computeComplexExpressionEntryKind(node: Expression, context: ScanContext): EntryKind {
+  if (isConditionalExpression(node)) {
+    const left = withBranch(context, (branch) =>
+      expressionEntryKind(unwrapped(node.whenTrue), branch),
+    );
+    const right = withBranch(context, (branch) =>
+      expressionEntryKind(unwrapped(node.whenFalse), branch),
+    );
+    return combineBranchKinds(left, right);
   }
   if (isPropertyAccessExpression(node)) {
-    return isEntryFunction(unwrapped(node.expression), node.name.text, seen);
+    return containerMemberEntryKind(unwrapped(node.expression), node.name.text, context);
   }
-  if (!isIdentifier(node)) {
-    return false;
+  if (isElementAccessExpression(node)) {
+    return elementEntryKind(node, context);
   }
-  const declared = declarationOf(node);
-  if (declared === undefined) {
-    return isFunctionType(parameterOf(node)?.type);
-  }
-  if (seen.has(declared)) {
-    return false;
-  }
-  seen.add(declared);
-  return (
-    !isVariableDeclaration(declared) ||
-    isFunctionType(declared.type) ||
-    (declared.initializer !== undefined && isFunction(unwrapped(declared.initializer), seen))
-  );
-}
-
-/** Whether `holder`, a name of an object the code writes, holds a function as its entry `name`. */
-function isEntryFunction(holder: Expression, name: string, seen: Set<Node>): boolean {
-  const declared = isIdentifier(holder) ? declarationOf(holder) : undefined;
-  if (
-    declared === undefined ||
-    !isVariableDeclaration(declared) ||
-    declared.initializer === undefined ||
-    seen.has(declared)
-  ) {
-    return false;
-  }
-  seen.add(declared);
-  const value = unwrapped(declared.initializer);
-  return (
-    isObjectLiteralExpression(value) &&
-    value.properties.some((property) => {
-      if (isMethodDeclaration(property)) {
-        return keyOf(property.name) === name;
-      }
-      if (isPropertyAssignment(property)) {
-        return keyOf(property.name) === name && isFunction(unwrapped(property.initializer), seen);
-      }
-      return (
-        isShorthandPropertyAssignment(property) &&
-        isIdentifier(property.name) &&
-        property.name.text === name &&
-        isFunction(property.name, seen)
-      );
-    })
-  );
-}
-
-/** The name of an entry the code writes: of a name, or text; none of another. */
-function keyOf(name: PropertyName): string | undefined {
-  return isIdentifier(name) || isStringLiteral(name) ? name.text : undefined;
+  return isBinaryExpression(node) ? operandEntryKind(node, context) : 'unknown';
 }
 
 /**
- * Whether `type`, written, says a function: a function's type, `() => string`, a class's,
- * `new () => object`, or `Function`'s and its kin's (`FUNCTION_TYPES`), in a union too.
+ * Classifies an operator that answers one of its operands: `a && b` answers `b` or something falsy,
+ * which no function is; `a || b` and `a ?? b` answer either; `(a, b)` and `a = b` answer `b`.
  */
-function isFunctionType(type: TypeNode | undefined): boolean {
+function operandEntryKind(node: BinaryExpression, context: ScanContext): EntryKind {
+  const operator = node.operatorToken.kind;
+  const right = withBranch(context, (branch) => expressionEntryKind(unwrapped(node.right), branch));
+  if (EITHER_OPERAND.has(operator)) {
+    const left = withBranch(context, (branch) => expressionEntryKind(unwrapped(node.left), branch));
+    return combineBranchKinds(left, right);
+  }
+  return RIGHT_OPERAND.has(operator) ? right : 'unknown';
+}
+
+/** Classifies a bracket entry read on an object or array holder, with static or dynamic key. */
+function elementEntryKind(node: ElementAccessExpression, context: ScanContext): EntryKind {
+  const holder = unwrapped(node.expression);
+  const key = elementEntryKey(node);
+  if (key === undefined) {
+    return containerDynamicEntryKind(holder, context);
+  }
+  const fromMember = containerMemberEntryKind(holder, key, context);
+  if (fromMember !== 'unknown' || !/^\d+$/u.test(key)) {
+    return fromMember;
+  }
+  return arraySlotEntryKind(holder, Number(key), context);
+}
+
+/** Whether `node` is a container literal, primitive/regex literal, primitive unary operator, or `undefined`. */
+function isNonFunctionSyntax(node: Expression): boolean {
   return (
-    type !== undefined &&
-    (isFunctionTypeNode(type) || isConstructorTypeNode(type) || namesType(type, FUNCTION_TYPES))
+    isObjectLiteralExpression(node) ||
+    isArrayLiteralExpression(node) ||
+    isPrimitiveOrRegexLiteral(node) ||
+    isPrimitiveOperatorExpression(node) ||
+    isGuaranteedUndefined(node)
+  );
+}
+
+/** Whether `node` is a primitive, template, or regular-expression literal. */
+function isPrimitiveOrRegexLiteral(node: Expression): boolean {
+  return (
+    isStringLiteral(node) ||
+    isNoSubstitutionTemplateLiteral(node) ||
+    isTemplateExpression(node) ||
+    isNumericLiteral(node) ||
+    isBigIntLiteral(node) ||
+    isRegularExpressionLiteral(node) ||
+    node.kind === SyntaxKind.TrueKeyword ||
+    node.kind === SyntaxKind.FalseKeyword ||
+    node.kind === SyntaxKind.NullKeyword
+  );
+}
+
+/** Whether `node` applies a unary operator whose runtime result is always a primitive. */
+function isPrimitiveOperatorExpression(node: Expression): boolean {
+  return (
+    isVoidExpression(node) ||
+    isTypeOfExpression(node) ||
+    isDeleteExpression(node) ||
+    isPrefixUnaryExpression(node) ||
+    isPostfixUnaryExpression(node)
   );
 }

@@ -2,10 +2,8 @@ import {
   type BindingElement,
   type Expression,
   type Identifier,
-  isArrayBindingPattern,
   isArrayLiteralExpression,
   isArrowFunction,
-  isBindingElement,
   isCallExpression,
   isComputedPropertyName,
   isConstructorDeclaration,
@@ -38,10 +36,19 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { globalPathOf, patternKey } from './code-globals.ts';
-import { declarationOf, initializerOf } from './framed.ts';
+import { globalPathOf } from './code-globals.ts';
+import { initializerOf } from './framed.ts';
 import { runsPerCall } from './kept.ts';
-import { freeReads } from './scope.ts';
+import { changedThroughReads } from './receiver-changes.ts';
+import {
+  advanceRestStep,
+  bindingSteps,
+  type DefaultWalk,
+  finalizeRestPath,
+  isNonNegativeIndex,
+  shiftedStepKey,
+  unchangedLocalInitializer,
+} from './this-rest-defaults.ts';
 
 /** A missing property differs from a getter or an unproven member. */
 const MISSING = { kind: 'missing' } as const;
@@ -70,28 +77,25 @@ export function freshReceiverDefault(
   path: readonly (string | undefined)[],
 ): boolean {
   const steps = bindingSteps(name);
-  if (steps.every((step) => step.initializer === undefined)) {
+  if (steps.every((step) => step.initializer === undefined) || changedThroughReads(name)) {
     return false;
   }
-  let value = receiverLiteral(source);
-  let chosen = false;
+  const walk: DefaultWalk = {
+    chosen: false,
+    excluded: undefined,
+    offset: 0,
+    value: receiverLiteral(source),
+  };
   for (const step of steps) {
-    const key = patternName(step);
-    const selected = value === undefined || key === undefined ? undefined : selectedOf(value, key);
-    if (selected === undefined) {
+    if (!advanceStep(step, walk, name)) {
       return false;
     }
-    if (selected.kind === MISSING.kind || undefinedValue(selected)) {
-      if (step.initializer === undefined) {
-        return false;
-      }
-      value = step.initializer;
-      chosen = true;
-    } else {
-      value = selected;
-    }
   }
-  return chosen && value !== undefined && freshValue(value, path, name);
+  if (!walk.chosen || walk.value === undefined) {
+    return false;
+  }
+  const adjusted = finalizeRestPath(name, walk, path);
+  return adjusted !== undefined && freshValue(walk.value, adjusted, name);
 }
 
 /** The member a reference selects without evaluating a computed key. */
@@ -104,22 +108,33 @@ export function receiverKey(node: Node): string | undefined {
     : undefined;
 }
 
-/** Binding projections in their evaluation order, including defaults at outer pattern levels. */
-function bindingSteps(name: Identifier): readonly BindingElement[] {
-  const steps: BindingElement[] = [];
-  for (let at: Node = name; !isVariableDeclaration(at); at = at.parent) {
-    if (isBindingElement(at)) {
-      steps.unshift(at);
-    }
+/** Advances `walk` across one destructuring `BindingElement`, handling defaults and rest patterns. */
+function advanceStep(step: BindingElement, walk: DefaultWalk, name: Identifier): boolean {
+  const current =
+    walk.chosen && walk.value !== undefined ? projectedValue(walk.value, [], name) : walk.value;
+  if (current === undefined) {
+    return false;
   }
-  return steps;
-}
-
-/** An object binding's written key or an array binding's position. */
-function patternName(step: BindingElement): string | undefined {
-  return isArrayBindingPattern(step.parent)
-    ? String(step.parent.elements.indexOf(step))
-    : patternKey(step);
+  if (step.dotDotDotToken !== undefined) {
+    return advanceRestStep(step, unwrapped(current), walk);
+  }
+  const key = shiftedStepKey(step, walk.offset);
+  const selected = key === undefined ? undefined : selectedOf(current, key);
+  if (selected === undefined) {
+    return false;
+  }
+  walk.offset = 0;
+  walk.excluded = undefined;
+  if (selected.kind === MISSING.kind || undefinedValue(selected)) {
+    if (step.initializer === undefined) {
+      return false;
+    }
+    walk.value = step.initializer;
+    walk.chosen = true;
+    return true;
+  }
+  walk.value = selected;
+  return true;
 }
 
 /** A receiver's unchanged written object, including a projection of one of its data members. */
@@ -164,10 +179,7 @@ function receiverLiteral(source: Expression): Expression | undefined {
 function selectedOf(node: Expression, key: string): Selection {
   const value = unwrapped(node);
   if (isArrayLiteralExpression(value) && !value.elements.some((each) => isSpreadElement(each))) {
-    const index = Number(key);
-    return Number.isSafeInteger(index) && index >= 0 && String(index) === key
-      ? (value.elements[index] ?? MISSING)
-      : undefined;
+    return isNonNegativeIndex(key) ? (value.elements[Number(key)] ?? MISSING) : undefined;
   }
   return isObjectLiteralExpression(value) ? objectMember(value, key) : undefined;
 }
@@ -247,18 +259,14 @@ function projectedValue(
   while (!seen.has(value)) {
     seen.add(value);
     if (isIdentifier(value)) {
-      const declared = declarationOf(value);
-      if (
-        local === undefined ||
-        declared === undefined ||
-        !isVariableDeclaration(declared) ||
-        declared.initializer === undefined ||
-        functionOf(declared) !== functionOf(local) ||
-        !/^const\s/u.test(declared.parent.getText(declared.getSourceFile()))
-      ) {
+      const initializer =
+        local === undefined
+          ? undefined
+          : unchangedLocalInitializer(value, functionOf(local), functionOf);
+      if (initializer === undefined) {
         return undefined;
       }
-      value = unwrapped(declared.initializer);
+      value = unwrapped(initializer);
       continue;
     }
     if (index >= path.length) {
@@ -293,53 +301,19 @@ function functionOf(node: Node): Node | undefined {
   return undefined;
 }
 
-/** Passing a receiver to application code leaves its later member set unproven. */
+/** Handing a receiver on, or assigning into its members, anywhere leaves its later member set unproven. */
 function escapes(object: ObjectLiteralExpression): boolean {
   const cached = ESCAPED.get(object);
   if (cached !== undefined) {
     return cached;
   }
-  if (!isVariableDeclaration(object.parent)) {
-    return true;
-  }
-  let found = false;
-  const visit = (node: Node): void => {
-    if (found) {
-      return;
-    }
-    const given = isCallExpression(node) || isNewExpression(node) ? node.arguments : undefined;
-    if (given !== undefined) {
-      found = given.some((argument) => referencesObject(argument, object));
-    } else if (isTaggedTemplateExpression(node)) {
-      found = referencesObject(node.template, object);
-    }
-    if (!found) {
-      node.forEachChild(visit);
-    }
-  };
-  visit(object.getSourceFile());
+  const declared = object.parent;
+  const found =
+    !isVariableDeclaration(declared) ||
+    !isIdentifier(declared.name) ||
+    changedThroughReads(declared.name);
   ESCAPED.set(object, found);
   return found;
-}
-
-/** A direct or constant-aliased reference to the receiver in an application's argument. */
-function referencesObject(node: Node, object: ObjectLiteralExpression): boolean {
-  for (const read of freeReads(node)) {
-    const seen = new Set<Expression>();
-    let value: Expression = read;
-    while (isIdentifier(value) && !seen.has(value)) {
-      seen.add(value);
-      const held = initializerOf(value);
-      if (held === undefined) {
-        break;
-      }
-      value = unwrapped(held);
-    }
-    if (value === object) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Module-load application code can add a receiver member before any later method call. */

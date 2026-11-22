@@ -79,7 +79,10 @@ export const LOCALE_TAKERS: ReadonlyMap<string, Taking> = new Map([
     ];
   }),
   ['Intl.getCanonicalLocales', LOCALES_FIRST],
-  ['Intl.Locale', (given, resolve) => tagThrows(given[0], resolve)],
+  [
+    'Intl.Locale',
+    (given, resolve) => tagThrows(given[0], resolve) || localeMadeThrows(given, resolve),
+  ],
 ]);
 
 /**
@@ -219,6 +222,18 @@ function madeThrows(
   } catch {
     return true;
   }
+}
+
+/**
+ * Whether `Intl.Locale` throws of the options the code writes with the tag it writes, tried as `Intl`
+ * takes them: `new Intl.Locale('en', { calendar: 'gregorian' })`. A tag the code does not write leaves
+ * it unproven, since the class takes none of nothing, and so do options the code does not write whole.
+ */
+function localeMadeThrows(given: readonly Expression[], resolve: Resolve | undefined): boolean {
+  return (
+    writtenLocales(given[0], resolve) !== undefined &&
+    madeThrows('Intl.Locale', given[0], given[1], resolve)
+  );
 }
 
 /** The locales the code writes, as they are given — text, an array of text; none of another. */
