@@ -69,8 +69,8 @@ const CASES = [
     source:
       "export function Widget(){const dates=[new Date(0)];const render=()=>dates.join('');dates[0]!.toString=()=> 'fixed';return <p>{render()}</p>;}",
     owner: false,
-    input: false,
-    private: false,
+    input: true,
+    private: true,
   },
   {
     id: 'replaced-element-before-call',
@@ -85,8 +85,8 @@ const CASES = [
     source:
       "export function Widget(){const dates=[new Date(0)];const render=(..._ignored:unknown[])=>dates.join('');return <p>{render((dates[0]!.toString=()=> 'fixed'))}</p>;}",
     owner: false,
-    input: false,
-    private: false,
+    input: true,
+    private: true,
   },
   {
     id: 'application-callback-not-called',
