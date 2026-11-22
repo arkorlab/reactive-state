@@ -80,6 +80,20 @@ function delivered(headers: Readonly<Record<string, string>>): Promise<Response>
   });
 }
 
+/** A gate that lets the token through as a generation's, and any other read on to the page. */
+function gate(): void {
+  hoisted.client.gate.mockImplementation(
+    (question: { readonly headers: Readonly<Record<string, string>> }) => {
+      return Promise.resolve({
+        ok: true,
+        value: Object.hasOwn(question.headers, GENERATION_HEADER)
+          ? { generation: true, kind: 'pass' }
+          : { kind: 'pass' },
+      });
+    },
+  );
+}
+
 describe('a generation’s token on a request whose `Connection` names headers', () => {
   beforeEach(() => {
     hoisted.client.gate.mockReset();
@@ -93,20 +107,6 @@ describe('a generation’s token on a request whose `Connection` names headers',
     vi.unstubAllEnvs();
   });
 
-  /** A gate that lets the token through as a generation's, and any other read on to the page. */
-  function gate(): void {
-    hoisted.client.gate.mockImplementation(
-      (question: { readonly headers: Readonly<Record<string, string>> }) => {
-        return Promise.resolve({
-          ok: true,
-          value: Object.hasOwn(question.headers, GENERATION_HEADER)
-            ? { generation: true, kind: 'pass' }
-            : { kind: 'pass' },
-        });
-      },
-    );
-  }
-
   it.each(['x-reactive-generation', 'keep-alive, X-Reactive-Generation'])(
     'is no authority’s request’s where `Connection: %s` takes it off the page’s: the read is delivered in its envelopes, as any visitor’s',
     async (connection) => {
@@ -114,6 +114,10 @@ describe('a generation’s token on a request whose `Connection` names headers',
 
       const response = await delivered({ connection, [GENERATION_HEADER]: 'g.token' });
       const [page] = hoisted.fetched;
+      /** The method of each question the gate was asked. */
+      const asked = hoisted.client.gate.mock.calls.map(
+        (call) => (call[0] as { readonly method: string }).method,
+      );
 
       await expect(response.text()).resolves.toBe('page');
       expect(page?.headers.get(GENERATION_HEADER)).toBeNull();
@@ -122,11 +126,7 @@ describe('a generation’s token on a request whose `Connection` names headers',
       expect(response.headers.get('x-envelope')).toBe('after');
       expect(response.headers.get('cache-control')).toBe('private');
       // The gate is asked the visitor's question alone, and nothing of the token.
-      expect(
-        hoisted.client.gate.mock.calls.map((call) => {
-          return (call[0] as { readonly method: string }).method;
-        }),
-      ).toStrictEqual(['GET']);
+      expect(asked).toStrictEqual(['GET']);
     },
   );
 

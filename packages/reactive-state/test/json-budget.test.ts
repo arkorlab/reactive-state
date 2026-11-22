@@ -123,7 +123,7 @@ describe('the bound a value is copied within', () => {
   });
 
   it.each([
-    ['text of escapes', 'a"b\\c\nd\u0000'],
+    ['text of escapes', 'a"b\\c\nd\0'],
     ['text beyond ASCII', '済 😀'],
     ['a number', -12.5e-7],
     ['a boolean', false],

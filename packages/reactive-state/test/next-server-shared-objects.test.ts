@@ -57,6 +57,13 @@ vi.mock(import('../src/next/authority.ts'), async (importOriginal) => {
 const ELEMENTS: Elements = { actions: {}, build: BUILD, clients: {}, modules: {} };
 const FRAME = frameAt(3, {});
 const PAST = /is past the 1048576 characters of JSON one request carries\.$/u;
+/** The authority's answer to a render or a view of a root the session may not see. */
+const HIDDEN = { ok: true, value: { frame: FRAME, status: 'forbidden', tree: null } };
+/** The authority's answer to an operation that ran. */
+const OPERATED = {
+  ok: true,
+  value: { committedRevision: 4, deduplicated: false, operationId: 'op', result: null },
+};
 
 const update = (): Promise<Result<FieldReceipt>> => Promise.reject(new Error('Not called here.'));
 const viewAgain = (): Promise<Result<ViewAnswer>> => Promise.reject(new Error('Not called here.'));
@@ -99,19 +106,10 @@ describe('a value of objects that hold each other many times over', () => {
   beforeEach(() => {
     hoisted.sessions.read = 0;
     hoisted.client = {
-      operate: vi.fn(() =>
-        Promise.resolve({
-          ok: true,
-          value: { committedRevision: 4, deduplicated: false, operationId: 'op', result: null },
-        }),
-      ),
-      render: vi.fn(() =>
-        Promise.resolve({ ok: true, value: { frame: FRAME, status: 'forbidden', tree: null } }),
-      ),
+      operate: vi.fn(() => Promise.resolve(OPERATED)),
+      render: vi.fn(() => Promise.resolve(HIDDEN)),
       update: vi.fn(() => Promise.resolve({ ok: true, value: { committedRevision: 2 } })),
-      view: vi.fn(() =>
-        Promise.resolve({ ok: true, value: { frame: FRAME, status: 'forbidden', tree: null } }),
-      ),
+      view: vi.fn(() => Promise.resolve(HIDDEN)),
     };
   });
 
