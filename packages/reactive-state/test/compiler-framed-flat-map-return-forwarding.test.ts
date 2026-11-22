@@ -192,16 +192,16 @@ const CASES = [
     id: 'overridden-spread-iterator-data',
     source:
       'function frames(error:Error){const values=[error];values[Symbol.iterator]=()=>[{stack:"fixed"}as Error][Symbol.iterator]();return[0].flatMap(()=>[...values])[0]!.stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'source-own-flatmap-data',
     source:
       'function frames(error:Error){const values={flatMap(_callback:()=>Error[]){return[{stack:"fixed"}];}};return values.flatMap(()=>[...[error]])[0]!.stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {

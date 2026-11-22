@@ -244,7 +244,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.flatMap=()=>[{stack:"fixed"}]as never;return values.flatMap((value:Error)=>value)[0]!.stack;}',
     reader: false,
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {

@@ -179,8 +179,8 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values=[[error]];values.flat=()=>[[{stack:"fixed"}]]as never;return values.flat(...([0]as const))[0]![0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'flat-depth-local-words-data',
@@ -227,8 +227,8 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values={flat(_depth:number){return[[{stack:"fixed"}]];}};return values.flat(...([0]as const))[0]![0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'flat-depth-uniform-domain-data',
