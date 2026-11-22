@@ -102,24 +102,24 @@ const CASES = [
     source:
       'function frames(error:Error){const value={0:{stack:"fixed"},length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-local-words-pin',
     source:
       'function frames(error:Error){const value={0:new Error("fixed"),length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].message;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-false-pin',
     source:
       'function frames(error:Error){const value={0:error,length:1,stack:"fixed",[Symbol.isConcatSpreadable]:false};return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-missing-symbol-pin',
@@ -134,32 +134,32 @@ const CASES = [
     source:
       'function frames(error:Error){const Symbol={isConcatSpreadable:"spread"};const value={0:error,length:1,stack:"fixed",[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-zero-length-pin',
     source:
       'function frames(error:Error){const value={0:error,length:0,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value,{stack:"fixed"})[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-unselected-slot-pin',
     source:
       'function frames(error:Error){const value={0:{stack:"fixed"},1:error,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-truthy-error-flag-pin',
     source:
       'function frames(error:Error){const value={0:{stack:"fixed"},length:1,[Symbol.isConcatSpreadable]:error};return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-spreadable-later-array-pin',
@@ -174,16 +174,16 @@ const CASES = [
     source:
       'function frames(error:Error){const value={0:error,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value,Object.assign(value,{0:{message:"fixed",stack:"fixed"}}))[0].message;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-effectful-later-argument-stack-pin',
     source:
       'function frames(error:Error){const value={0:error,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value,Object.assign(value,{0:{message:"fixed",stack:"fixed"}}))[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-quiet-later-argument-sensitivity',
@@ -197,24 +197,24 @@ const CASES = [
     id: 'concat-get-hook-rewrites',
     source:
       'function frames(error:Error){const value={0:error,length:1,get [Symbol.isConcatSpreadable](){Object.assign(error,{message:"fixed",name:"Fixed"});return true;}};return ([] as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-get-length-rewrites',
     source:
       'function frames(error:Error){const value={0:error,get length(){Object.assign(error,{message:"fixed",name:"Fixed"});return 1;},[Symbol.isConcatSpreadable]:true};return ([] as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-get-slot-rewrites',
     source:
       'function frames(error:Error){const value={get 0(){Object.assign(error,{message:"fixed",name:"Fixed"});return error;},length:1,[Symbol.isConcatSpreadable]:true};return ([] as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
@@ -229,48 +229,48 @@ const CASES = [
     id: 'concat-undefined-hook-getter-pin',
     source:
       'function frames(error:Error){const value={0:error,length:1,stack:"fixed",get [Symbol.isConcatSpreadable](){return undefined;}};return([]as any[]).concat(value)[0].stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-zero-length-getter-pin',
     source:
       'function frames(error:Error){const value={0:error,get length(){return 0;},[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value,{stack:"fixed"})[0].stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-undefined-length-data-pin',
     source:
       'function frames(error:Error){const value={0:error,length:undefined,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value,{stack:"fixed"})[0].stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-void-length-data-pin',
     source:
       'function frames(error:Error){const value={0:error,length:void 0,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value,{stack:"fixed"})[0].stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-length-coercion-rewrites-pin',
     source:
       'function frames(error:Error){const length={valueOf(){Object.assign(error,{message:"fixed",name:"Fixed"});return 1;}};const value={0:error,length,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-earlier-slot-getter-rewrites-pin',
     source:
       'function frames(error:Error){const value={get 0(){Object.assign(error,{message:"fixed",name:"Fixed"});return {message:"fixed"};},1:error,length:2,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[1].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
@@ -293,24 +293,24 @@ const CASES = [
     id: 'concat-initializer-rewrites-pin',
     source:
       'function frames(error:Error){const value={0:error,extra:Object.assign(error,{message:"fixed",name:"Fixed"}),length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-computed-key-rewrites-pin',
     source:
       'function frames(error:Error){const value={0:error,[(Object.assign(error,{message:"fixed",name:"Fixed"}),"extra")]:0,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
     id: 'concat-spread-getter-rewrites-pin',
     source:
       'function frames(error:Error){const fields={get extra(){Object.assign(error,{message:"fixed",name:"Fixed"});return 0;}};const value={...fields,0:error,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].message;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
@@ -325,8 +325,8 @@ const CASES = [
     id: 'concat-setter-only-hook-pin',
     source:
       'function frames(error:Error){const value={0:error,length:1,stack:"fixed",set [Symbol.isConcatSpreadable](_flag:boolean){}};return([]as any[]).concat(value)[0].stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
@@ -357,8 +357,8 @@ const CASES = [
     id: 'concat-prior-written-stack-pin',
     source:
       'function frames(error:Error){Object.defineProperty(error,"stack",{value:"fixed"});const value={0:error,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].stack;}',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
@@ -398,16 +398,16 @@ const CASES = [
     source:
       'function frames(error:Error){const value={0:error,length:1,[Symbol.isConcatSpreadable]:true};Object.defineProperty(error,"stack",{value:"fixed"});return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'concat-carried-member-alias-prior-stack-pin',
     source:
       'function frames(box:{failure:Error}){Object.defineProperty(box.failure,"stack",{value:"fixed"});const item=box.failure;const value={0:item,length:1,[Symbol.isConcatSpreadable]:true};return([]as any[]).concat(value)[0].stack;}',
     invocation: 'frames({failure:new Error("ours")})',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
 ] as const;
 

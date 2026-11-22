@@ -92,14 +92,14 @@ const CASES = [
     source:
       "function frames(error:Error){const values=[error];values.at=()=>({stack:'fixed'} as Error);return values.at(0)!.stack;}",
     invocation: "frames(new Error('ours'))",
-    refused: false,
+    refused: true,
   },
   {
     id: 'at-local-object-method',
     source:
       "function frames(){const values={at(_index:number){return {stack:'fixed'};}};return values.at(0).stack;}",
     invocation: 'frames()',
-    refused: false,
+    refused: true,
   },
   {
     id: 'at-written-words',

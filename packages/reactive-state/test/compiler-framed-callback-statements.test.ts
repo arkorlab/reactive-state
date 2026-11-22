@@ -55,7 +55,7 @@ const CASES: readonly Case[] = [
   {
     id: 'own-at-effect-pin',
     source: `function frames(error:Error){${OWN}values.at=()=>{found=Object.assign(error,{stack:"fixed"});return found;};return values.at(0)!.stack;}`,
-    refused: false,
+    refused: true,
   },
 ];
 

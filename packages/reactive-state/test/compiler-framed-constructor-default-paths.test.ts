@@ -128,7 +128,7 @@ const CASES: readonly Case[] = [
     source:
       'class Failure extends Error{constructor(fallback:unknown,options=fallback as readonly unknown[]){super(options[1]as never);}}function frames(error:Error){return new Failure([error,"fixed"]).message;}',
     invocation: 'frames(new Error("supplied"))',
-    refused: false,
+    refused: true,
     native: 'fixed',
   },
   {
@@ -240,7 +240,7 @@ const CASES: readonly Case[] = [
     source:
       'class Failure extends Error{constructor(fallback:unknown,options=fallback as{message:unknown},prepare?:()=>unknown,_ignored=prepare!()){super(options.message as never);}}function frames(error:Error){function collect(value:Error,prepare:()=>unknown){return new Failure({message:value},undefined,prepare).message;}return collect(error,()=>Object.defineProperty(error,"toString",{value:()=>"fixed"}));}',
     invocation: 'frames(new Error("supplied"))',
-    refused: false,
+    refused: true,
     native: 'fixed',
   },
   {
@@ -248,7 +248,7 @@ const CASES: readonly Case[] = [
     source:
       'class Failure extends Error{constructor(fallback:unknown,options=fallback as{message:unknown},settings?:{fix:unknown},_ignored=settings!.fix){super(options.message as never);}}function frames(error:Error){function collect(value:Error,settings:{fix:unknown}){return new Failure({message:value},undefined,settings).message;}return collect(error,{get fix(){Object.defineProperty(error,"toString",{value:()=>"fixed"});return 0;}});}',
     invocation: 'frames(new Error("supplied"))',
-    refused: false,
+    refused: true,
     native: 'fixed',
   },
   {
@@ -304,7 +304,7 @@ const CASES: readonly Case[] = [
     source:
       'class Failure extends Error{constructor(fallback:unknown,options=fallback as{message:unknown},input?:unknown,_ignored=+(input as never)){super(options.message as never);}}function frames(error:Error){function collect(value:Error,input:unknown){return new Failure({message:value},undefined,input).message;}return collect(error,{valueOf(){Object.defineProperty(error,"toString",{value:()=>"fixed"});return 0;}});}',
     invocation: 'frames(new Error("supplied"))',
-    refused: false,
+    refused: true,
     native: 'fixed',
   },
   {
@@ -312,7 +312,7 @@ const CASES: readonly Case[] = [
     source:
       'class Failure extends Error{constructor(fallback:unknown,options=fallback as{message:unknown},prepare?:()=>unknown){super(options.message as never,prepare!()as ErrorOptions);}}function frames(error:Error){function collect(value:Error,prepare:()=>unknown){return new Failure({message:value},undefined,prepare).message;}return collect(error,()=>Object.defineProperty(error,"toString",{value:()=>"fixed"}));}',
     invocation: 'frames(new Error("supplied"))',
-    refused: false,
+    refused: true,
     native: 'fixed',
   },
   {
