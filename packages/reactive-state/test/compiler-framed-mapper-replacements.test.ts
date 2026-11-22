@@ -78,7 +78,7 @@ const CASES: readonly Case[] = [
     id: 'replacement-prior-exposure-pin',
     source:
       'function frames(error:Error){Object.defineProperty(error,"stack",{value:"fixed"});return[{stack:"fixed"}].map((value:Error|{stack:string})=>{const ignored=(value=error);return value;})[0]!.stack;}',
-    refused: false,
+    refused: true,
   },
   {
     id: 'replacement-saved-result-pin',

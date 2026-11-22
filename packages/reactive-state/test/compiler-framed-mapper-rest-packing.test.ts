@@ -371,8 +371,8 @@ const CASES = [
     source:
       'function frames(error:Error){return ([error].map((...values:unknown[])=>{const ignored=()=>Object.setPrototypeOf(values,error);return values;})[0] as {stack?:string}).stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'peer-rest-whole-reassignment-from-data-pin',

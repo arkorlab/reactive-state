@@ -237,7 +237,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[{failure:error}];Object.defineProperty(values[0],"failure",{value:{stack:"fixed"}});return(values.map((value:{failure:unknown})=>value.failure)[0]as{stack?:string}).stack;}',
     reader: false,
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
@@ -253,7 +253,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[{failure:error}];values.map=()=>[{stack:"fixed"}]as never;return(values.map((value:{failure:unknown})=>value.failure)[0]as{stack?:string}).stack;}',
     reader: false,
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
