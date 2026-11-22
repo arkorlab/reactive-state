@@ -598,8 +598,8 @@ describe('the reactive-state adapter', () => {
       expect(
         instantLoader(`const blocking = false;\nexport { blocking as instant };\n${page}`),
       ).not.toContain('export const instant = false');
-      expect(instantLoader(`const instant = 1;\nexport { instant as other };\n${page}`)).toContain(
-        'export const instant = false',
+      expect(instantLoader(`const instant = 1;\nexport { instant as other };\n${page}`)).toBe(
+        `const instant = 1;\nexport { instant as other };\n${page}\nconst instant$1 = false;\nexport { instant$1 as instant };\n`,
       );
     });
 
