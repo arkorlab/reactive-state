@@ -205,7 +205,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.reduce=()=>({stack:"fixed"}as never);return values.reduce(...([(acc:Error)=>error,error]as const)).stack;}',
     reader: false,
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
   },
   {
