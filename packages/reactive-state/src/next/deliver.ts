@@ -704,7 +704,9 @@ export async function deliver(
  * else, it lets nothing through as a prefetch where it is told of none, and it answers no body to
  * the question. A view it found the request's it lets every request through, a token or not: the
  * page has the authority judge the token then, which renders nothing for one it did not sign. Any
- * other request is asked nothing more.
+ * other request is asked nothing more — one whose `Connection` names the generation's header
+ * among them: the page is asked without what `Connection` names (`forwardedOf`), so it would be
+ * handed no token, and render the request as a visitor's outside the route's envelopes.
  */
 async function isAuthorityRequest(
   request: Request,
@@ -713,6 +715,10 @@ async function isAuthorityRequest(
 ): Promise<boolean> {
   const generation = request.headers.get(GENERATION_HEADER);
   if (generation === null || isPlainRoute(route) || !route.shared || !isRead(request)) {
+    return false;
+  }
+  // Asked of a request that names a generation alone: no other has its headers copied for it.
+  if (!forwardedOf(request.headers).has(GENERATION_HEADER)) {
     return false;
   }
   const answer = await authority().gate({
