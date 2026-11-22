@@ -450,12 +450,29 @@ function forwardedOf(headers: Headers): Headers {
   return forwarded;
 }
 
+/** A member of an `Accept-Encoding` a page may answer in `zstd` for: the coding's name, or any (`*`). */
+const MAY_BE_ZSTD = /^\s*(?:zstd|\*)\s*(?:;|$)/iu;
+
+/**
+ * `accepted`, a request's `Accept-Encoding`, without the members a page may answer in `zstd` for
+ * (`MAY_BE_ZSTD`), the rest as they came. Node's `fetch` undoes that coding from Node 24.4 on; an
+ * earlier one hands the body on as it came, and `isDecoded` cannot tell the two apart: the page's
+ * answer would leave coded, named as of no coding, and unread for the build's key. So no page is
+ * asked for it, whichever Node runs this. `identity` where no member is left: no coding, as the
+ * visitor took none of those a page is asked for.
+ */
+function withoutZstd(accepted: string): string {
+  const kept = accepted.split(',').filter((member) => !MAY_BE_ZSTD.test(member));
+  return kept.length === 0 ? 'identity' : kept.join(',');
+}
+
 /**
  * The page, asked for again as the request asked for it, past the rewrite (`key`): of the
- * request's own headers (`forwardedOf`), whichever of its copies the envelopes left it as; with a
- * generation's token where the request is the authority's for an artifact (`generation`), and with
- * none it carried otherwise; and given up as the request is (its `signal`), where its asker goes
- * away — a visitor, or the authority past an artifact's deadline — rather than rendered for nobody.
+ * request's own headers (`forwardedOf`), whichever of its copies the envelopes left it as, but
+ * `zstd` among the codings it takes (`withoutZstd`); with a generation's token where the request is
+ * the authority's for an artifact (`generation`), and with none it carried otherwise; and given up
+ * as the request is (its `signal`), where its asker goes away — a visitor, or the authority past an
+ * artifact's deadline — rather than rendered for nobody.
  */
 async function pageFor(
   request: Request,
@@ -464,9 +481,13 @@ async function pageFor(
   options: { readonly generation: boolean; readonly admission?: string | undefined },
 ): Promise<Response> {
   const { admission, generation } = options;
-  // The visitor's `Accept-Encoding` as it came, as the page would read it asked directly: an answer
-  // in a coding the platform's `fetch` does not undo is refused (`readsAsWritten`).
+  // The visitor's `Accept-Encoding` as it came but for `zstd`, as the page would read it asked
+  // directly: an answer in a coding `fetch` is known not to undo is refused (`readsAsWritten`).
   const headers = forwardedOf(request.headers);
+  const accepted = headers.get('accept-encoding');
+  if (accepted !== null) {
+    headers.set('accept-encoding', withoutZstd(accepted));
+  }
   headers.delete(ADMISSION_HEADER);
   if (!generation && admission !== undefined) {
     headers.set(ADMISSION_HEADER, admission);
