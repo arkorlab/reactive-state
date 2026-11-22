@@ -26,13 +26,23 @@ describe('proxy origins through source arguments', () => {
   });
 
   it.each([
+    'function choose(...xs:any[]){xs[0]={value:"safe"};return xs[0];}export function helper(text:string){return choose(new Proxy({value:text},{}));}',
+    'function repair(values:any[]){values[0]={value:"safe"};}function choose(...xs:any[]){repair(xs);return xs[0];}export function helper(text:string){return choose(new Proxy({value:text},{}));}',
+  ])('refuses a Proxy handed to a rest array the code writes a place of: %s', async (domain) => {
+    const app = await fixture(domain);
+    apps.push(app);
+
+    expect(compile(app).refusals.map((refusal) => refusal.reason)).toStrictEqual([
+      expect.stringContaining('Proxy'),
+    ]);
+  });
+
+  it.each([
     'function choose(...xs:any[]){return xs[0];}export function helper(text:string){return choose({value:text},new Proxy({},{}));}',
     'function choose(value:any){return value;}export function helper(text:string){return choose(...[{value:text},new Proxy({},{})]);}',
     'function count(...xs:any[]){return xs.length;}export function helper(text:string){return {value:String(count(new Proxy({},{})))};}',
     'function choose(value:any){return value;}export function helper(text:string){const values=[new Proxy({value:text},{})];values[0]={value:text};return choose(...values);}',
     'function choose(value:any){return value;}export function helper(text:string){const values=[new Proxy({value:text},{})];const alias=values;alias[0]={value:text};return choose(...values);}',
-    'function choose(...xs:any[]){xs[0]={value:"safe"};return xs[0];}export function helper(text:string){return choose(new Proxy({value:text},{}));}',
-    'function repair(values:any[]){values[0]={value:"safe"};}function choose(...xs:any[]){repair(xs);return xs[0];}export function helper(text:string){return choose(new Proxy({value:text},{}));}',
     'function choose(_ignored:any,value:any){return value;}export function helper(text:string){const values=text.split("").map(value=>({value}));return choose(...values,new Proxy({value:text},{}));}',
     'function choose(...xs:any[]){return xs[0];}export function helper(text:string){return {value:String(choose(...[new Proxy({toString(){return text;}},{})]))};}',
     'function choose(...xs:any[]){return xs[0].value;}export function helper(text:string){return {value:choose({value:text},new Proxy({},{}))};}',
