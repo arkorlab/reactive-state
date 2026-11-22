@@ -457,6 +457,44 @@ describe('compileProject', () => {
     expect(readFileSync(path.join(dir, 'src/app/notes.md'), 'utf8')).toBe('Moved to app.\n');
   });
 
+  it('takes away the folders the pages left empty in the `app` they moved from, and `app` with them', async () => {
+    const dir = application({ 'app/(site)/docs/page.tsx': PAGE });
+    rmSync(path.join(dir, 'src', 'app'), { recursive: true });
+    await compileProject({ projectDir: dir });
+    // The page moves to `src/app`, file by file: its folders are left behind, empty.
+    mkdirSync(path.join(dir, 'src/app/(site)/docs'), { recursive: true });
+    renameSync(
+      path.join(dir, 'app/(site)/docs/page.tsx'),
+      path.join(dir, 'src/app/(site)/docs/page.tsx'),
+    );
+
+    const moved = await compileProject({ projectDir: dir });
+
+    expect(moved).toMatchObject({ appDir: path.join(dir, 'src', 'app'), compiled: true });
+    // Next.js reads an `app` in the root while one is there at all, its pages or none.
+    expect(existsSync(path.join(dir, 'app'))).toBe(false);
+    await expect(compileProject({ projectDir: dir })).resolves.toMatchObject({
+      appDir: path.join(dir, 'src', 'app'),
+      changed: false,
+      compiled: false,
+    });
+  });
+
+  it('leaves the folders of an `app` directory it is told to read no pages from, where a file of the application’s is among them', async () => {
+    const dir = application({ 'src/app/(site)/notes.md': 'Kept.\n' });
+    await compileProject({ projectDir: dir });
+    mkdirSync(path.join(dir, 'src/app/(empty)'));
+    // The pages move to `web/app`, which the build is told: no directory Next.js finds by itself.
+    mkdirSync(path.join(dir, 'web'));
+    renameSync(path.join(dir, 'src/app/page.tsx'), path.join(dir, 'web/page.tsx'));
+
+    await compileProject({ app: 'web', projectDir: dir });
+
+    expect(existsSync(path.join(dir, 'src/app/api'))).toBe(false);
+    expect(existsSync(path.join(dir, 'src/app/(empty)'))).toBe(true);
+    expect(readFileSync(path.join(dir, 'src/app/(site)/notes.md'), 'utf8')).toBe('Kept.\n');
+  });
+
   it('refuses to write over a file of the application’s where it writes its route, and writes nothing', async () => {
     const own = "export function GET() {\n  return new Response('mine');\n}\n";
     const dir = application({ 'src/app/api/reactive-state/[...path]/route.ts': own });

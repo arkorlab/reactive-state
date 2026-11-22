@@ -239,26 +239,47 @@ function removeEmpty(directory: string, top: string): void {
 }
 
 /**
+ * Takes away the directories under `top`, and `top` with them, where no file is left under it: the
+ * folders an application's pages left empty as they moved away. A link is no directory of its own.
+ */
+function removeHollow(top: string): void {
+  try {
+    const entries = readdirSync(top, { recursive: true, withFileTypes: true });
+    if (entries.every((entry) => entry.isDirectory())) {
+      // Listed from the top down: taken away from the bottom up.
+      for (const entry of entries.toReversed()) {
+        rmdirSync(pathOf(entry));
+      }
+      rmdirSync(top);
+    }
+  } catch {
+    // Gone already, or something was put into one meanwhile: what is left stays.
+  }
+}
+
+/**
  * Takes away what a compile wrote into an `app` directory the compile no longer writes into — `app`
  * in the application's root, or `src/app`, whichever `layout`'s is not, as its pages moved from one
- * to the other — and each directory that leaves empty, up to that `app` directory: Next.js reads an
- * `app` directory in the root wherever it is there at all, its pages or none, before `src/app`.
- * Nothing the compile did not write: a file only where it opens as what the compile writes, and a
- * directory only where nothing is left in it. Answers whether it took anything away.
+ * to the other — and each directory that leaves empty, up to that `app` directory; and, where no
+ * file is left under that `app` directory then, the folders the pages left empty in it as they were
+ * moved file by file, and the directory with them (`removeHollow`): Next.js reads an `app`
+ * directory in the root wherever it is there at all, its pages or none, before `src/app`. Nothing
+ * the compile did not write: a file only where it opens as what the compile writes, and a directory
+ * only where nothing is left in it. Answers whether it took anything away.
  */
 function removeStaleRoutes(layout: ProjectLayout): boolean {
   let removed = false;
   const { appDir, projectDir } = layout;
   for (const directory of [path.join(projectDir, 'app'), path.join(projectDir, 'src', 'app')]) {
-    if (directory === appDir) {
-      continue;
+    const written =
+      directory === appDir ? [] : entriesUnder(directory).filter((entry) => isGenerated(entry));
+    for (const entry of written) {
+      rmSync(pathOf(entry), { force: true });
+      removeEmpty(entry.parentPath, directory);
     }
-    for (const entry of entriesUnder(directory)) {
-      if (isGenerated(entry)) {
-        rmSync(pathOf(entry), { force: true });
-        removeEmpty(entry.parentPath, directory);
-        removed = true;
-      }
+    if (written.length > 0) {
+      removeHollow(directory);
+      removed = true;
     }
   }
   return removed;
