@@ -14,7 +14,7 @@ interface Root {
 }
 
 /** Whether `file` is `directory` or something under it. */
-function isWithin(directory: string, file: string): boolean {
+export function isWithin(directory: string, file: string): boolean {
   const relative = path.relative(directory, file);
   return (
     relative === '' ||
