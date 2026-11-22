@@ -157,6 +157,21 @@ describe('a compile skipped for what it read, and the folders its inputs’ walk
       });
     });
 
+    it.each(['build', 'public', 'vendor', '.well-known'])(
+      'registers a page added under `app/%s`, a name the inputs’ walk never left out, as before',
+      async (name) => {
+        const dir = application();
+        await compileProject({ projectDir: dir });
+
+        put(dir, { [`src/app/${name}/page.tsx`]: PAGE });
+
+        await expect(compileProject({ projectDir: dir })).resolves.toMatchObject({
+          compiled: true,
+        });
+        expect(routesOf(dir)).toContainEqual([`/${name}`, ['']]);
+      },
+    );
+
     it('compiles again where a middleware is added under one of those folders', async () => {
       const dir = application({ 'src/app/node_modules/inner/page.tsx': PAGE });
       await compileProject({ projectDir: dir });
