@@ -86,7 +86,7 @@ const CASES = [
     source:
       'const Array={prototype:{push:{call:(_values:unknown[],_error:Error)=>0}}};function frames(error:Error){const values:unknown[]=[];Array.prototype.push.call(values,error);return values.join();}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
 ];
 

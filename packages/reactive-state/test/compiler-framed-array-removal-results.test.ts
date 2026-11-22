@@ -51,14 +51,14 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.pop=()=>({stack:"fixed",name:"fixed",message:"fixed"});return values.pop()!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'own-shift-data',
     source:
       'function frames(error:Error){const values=[error];values.shift=()=>({stack:"fixed",name:"fixed",message:"fixed"});return values.shift()!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'own-pop-error',

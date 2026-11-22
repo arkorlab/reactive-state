@@ -198,7 +198,7 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const input:{stack?:string}[]=[error];input.filter=(()=>[{stack:"fixed"}])as typeof input.filter;return input.filter(()=>true)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'own-filter-error-pin',
@@ -212,14 +212,14 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const result=[,error].filter(()=>true);Object.assign(error,{stack:"fixed"});return result[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'boundary-evaluated-tail',
     source:
       'function frames(error:Error){const input=[,error];return(input.filter as(...args:unknown[])=>Error[])(()=>true,Object.assign(error,{stack:"fixed"}))[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'async-alias',
@@ -279,42 +279,42 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){Object.defineProperty(error,"marker",{get(){Object.assign(error,{stack:"fixed"});return 0;}});return[,error].filter(({marker}:Error&{marker?:number}=error)=>true)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'boundary-getter-async',
     source:
       'function frames(error:Error){Object.defineProperty(error,"marker",{get(){Object.assign(error,{stack:"fixed"});return 0;}});return[error].filter(async({marker}:Error&{marker?:number}=error)=>false)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'boundary-earlier-captured-write',
     source:
       'function frames(error:Error){function prepare(){Object.assign(error,{stack:"fixed"});}prepare();return[,error].filter(()=>true)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'boundary-defined-stack',
     source:
       'function frames(error:Error){Object.defineProperty(error,"stack",{value:"fixed"});return[,error].filter(()=>true)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'boundary-async-tail',
     source:
       'function frames(error:Error){return[error].filter(async()=>false,Object.assign(error,{stack:"fixed"}))[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'boundary-async-saved-result',
     source:
       'function frames(error:Error){const result=[error].filter(async()=>false);Object.assign(error,{stack:"fixed"});return result[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
 ];
 

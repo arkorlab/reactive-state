@@ -106,7 +106,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[0];values.map=()=>[{stack:"fixed"}] as never;return(values.map(()=>error)as {stack:string}[])[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'map-sparse-hole-skips',

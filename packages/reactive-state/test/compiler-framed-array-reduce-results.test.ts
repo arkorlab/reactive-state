@@ -65,7 +65,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.reduce=()=>({stack:"fixed"}as any);return values.reduce(()=>error).stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     group: 'reduce',

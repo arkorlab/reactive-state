@@ -111,7 +111,7 @@ const CASES = [
     source:
       "function frames(error:Error){const values:unknown[]=[];values.join=()=> 'fixed';values.push(error);return values.join(',');}",
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'own-error-words',

@@ -121,21 +121,21 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.at=()=>({stack:"fixed"} as Error);return values.at(0)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'custom-at-written-words',
     source:
       'function frames(error:Error){const values=[error];values.at=()=>new Error("ours");return values.at(0)!.message;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'custom-at-function-data',
     source:
       'function frames(error:Error){const values=[error];function own(){return {stack:"fixed"} as Error;}values.at=own;return values.at(0)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'borrowed-shadowed-array',
@@ -163,7 +163,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.at=()=>error;values.at=()=>({stack:"fixed"} as Error);return values.at(0)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'custom-at-unknown-not-proof',
@@ -184,7 +184,7 @@ const CASES = [
     source:
       'function frames(error:Error){const values=[error];values.at=false?()=>error:()=>({stack:"fixed"} as Error);return values.at(0)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'apply-list-prior-entry-write',
