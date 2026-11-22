@@ -427,9 +427,12 @@ export const updaters = Object.freeze({});
       "import { useTodoFilter } from '../hooks/use-todo-filter';\nimport { useTodoPanels } from '../hooks/use-todo-panels';",
       '  const { choices } = part.props as { readonly choices: readonly { readonly id: string; readonly title: string }[] };',
       "  const [workspaceMemo, setWorkspaceMemo] = useReactiveState('');",
-      '  const { filter, setFilter } = useTodoFilter(localOf<States["useTodoFilter#0.filter"]>(part, "useTodoFilter#0.filter"));',
+      '  const { filter, setFilter, effectiveFilter } = useTodoFilter(localOf<States["useTodoFilter#0.filter"]>(part, "useTodoFilter#0.filter"));',
       '  const { panels, openPanel, openMany, closePanel, closeAll, movePanel, replaceTodo } = useTodoPanels(localOf<States["useTodoPanels#0.panels"]>(part, "useTodoPanels#0.panels"));',
       '  const sites = useSites(part);',
+      // A constant that reads a name stays where only a site reads it, since reading a name may
+      // run or throw, and is read once so that the name it declares is used.
+      '  const renderedFilter = effectiveFilter;\n  void renderedFilter;',
       '        {sites.of("d0", { "useTodoFilter#0.filter": filter })}',
       [
         '          {panels.map(panel => (',
@@ -443,14 +446,8 @@ export const updaters = Object.freeze({});
       expect(client).toContain(line);
     }
 
-    // What only the sites read, the authority computes again: the browser computes none of it.
-    for (const absent of [
-      'TodoResults',
-      'TodoDetails',
-      'children',
-      'effectiveFilter',
-      'renderedFilter',
-    ]) {
+    // What only the sites render, the authority renders again: the browser holds none of it.
+    for (const absent of ['TodoResults', 'TodoDetails', 'children']) {
       expect(client).not.toContain(absent);
     }
   });
