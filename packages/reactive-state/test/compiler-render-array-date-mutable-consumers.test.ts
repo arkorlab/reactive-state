@@ -248,9 +248,9 @@ const CASES = [
     id: 'var-redeclaration',
     source:
       'export function Widget(){var dates:unknown=[new Date(0)];var dates:unknown=["fixed"];return <p>{String(dates)}</p>;}',
-    input: false,
+    input: true,
     owner: false,
-    private: false,
+    private: true,
   },
   {
     id: 'captured-own-conversion',
