@@ -164,7 +164,7 @@ describe('a value of objects that hold each other many times over', () => {
         ok: false,
         status: 400,
       });
-      // Half a million places in the value; the bound has room for a hundred thousand objects.
+      // Half a million places in the value; the bound has room for fewer than a hundred thousand.
       expect(reads()).toBeLessThan(104_858);
       expect(hoisted.client['view']).not.toHaveBeenCalled();
       expect(hoisted.sessions.read).toBe(0);
@@ -219,7 +219,7 @@ describe('a value of objects that hold each other many times over', () => {
       const dozen = Array.from({ length: 12 }, () => each);
 
       await expect(operate('actions/todos', 'createTodo', dozen, BUILD)).rejects.toThrow(
-        /^Argument 11(?:\.[ab])+ is past the 1048576 characters of JSON one request carries\.$/u,
+        /^Argument 10(?:\.[ab])+ is past the 1048576 characters of JSON one request carries\.$/u,
       );
       expect(hoisted.client['operate']).toHaveBeenCalledTimes(1);
       expect(hoisted.sessions.read).toBe(1);
@@ -268,6 +268,35 @@ describe('a value of objects that hold each other many times over', () => {
           view: viewAgain,
         }),
       ).rejects.toThrow(PAST);
+      expect(hoisted.client['render']).not.toHaveBeenCalled();
+      expect(hoisted.sessions.read).toBe(0);
+    });
+
+    it('is refused where an object of properties that are left out stands in many places, read no more often than the bound has room for', async () => {
+      const none: Record<string, undefined> = {};
+      for (let index = 0; index < 1024; index += 1) {
+        none[`k${String(index)}`] = undefined;
+      }
+      let reads = 0;
+      const held = new Proxy(none, {
+        getPrototypeOf: (target) => {
+          reads += 1;
+          return Reflect.getPrototypeOf(target);
+        },
+      });
+
+      await expect(
+        renderRoot({
+          component: 'components/project',
+          elements: ELEMENTS,
+          props: { rows: Array.from({ length: 2048 }, () => held) },
+          update,
+          view: viewAgain,
+        }),
+      ).rejects.toThrow(
+        'The props components/project is rendered with.rows[1020] is past the 1048576 characters of JSON one request carries.',
+      );
+      expect(reads).toBe(1021);
       expect(hoisted.client['render']).not.toHaveBeenCalled();
       expect(hoisted.sessions.read).toBe(0);
     });
