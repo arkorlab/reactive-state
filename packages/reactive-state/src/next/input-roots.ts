@@ -42,17 +42,22 @@ function isRead(root: string, directory: string, unread: ReadonlySet<string>): b
  * directory and the app's — one that is not under the root, as a monorepo's shared `components` is
  * not, or one under a folder of it the walk leaves out by its name (`unread`): a file added to one
  * is no change of what the root's walk reads, and no file an earlier compile read. One the walk of
- * another reads is listed once.
+ * the other reads is not listed, whichever of the two holds the other: its files are read once.
  */
 export function inputRoots(layout: Layout, unread: ReadonlySet<string>): readonly Root[] {
   const outside = [
     { name: 'src', root: layout.srcDir },
     { name: 'app', root: layout.appDir },
   ].filter((directory) => !isRead(layout.projectDir, directory.root, unread));
+  const isListed = (directory: Root, index: number): boolean => {
+    return outside.every((other, at) => {
+      // One directory for both: the first of the two is the one listed.
+      const isFirst = other.root === directory.root && at > index;
+      return at === index || isFirst || !isRead(other.root, directory.root, unread);
+    });
+  };
   return [
     { name: 'project', root: layout.projectDir },
-    ...outside.filter((directory, index) =>
-      outside.slice(0, index).every((earlier) => !isRead(earlier.root, directory.root, unread)),
-    ),
+    ...outside.filter((directory, index) => isListed(directory, index)),
   ];
 }

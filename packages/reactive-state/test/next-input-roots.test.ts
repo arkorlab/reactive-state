@@ -9,7 +9,8 @@ import { inputRoots } from '../src/next/input-roots.ts';
  * and the components' directory and the app's wherever the walk of the root does not read them —
  * outside it, or under a folder of it the walk leaves out by its name, as it leaves out
  * `node_modules`. A file added to a directory no walk reads is in no digest, and the compile after
- * it is skipped.
+ * it is skipped. A directory the walk of another reads is listed once, whichever of the two holds
+ * the other.
  */
 
 const ROOT = path.resolve('/repository/application');
@@ -58,6 +59,24 @@ describe('the directories the digest of a compile’s inputs walks', () => {
       app: '../shared/node_modules/site/app',
       id: 'pages-under-an-unread-folder-of-the-components',
       roots: ['project:', 'src:../shared', 'app:../shared/node_modules/site/app'],
+      src: '../shared',
+    },
+    {
+      app: '../shared/app',
+      id: 'pages-in-the-components-outside-the-root',
+      roots: ['project:', 'src:../shared'],
+      src: '../shared',
+    },
+    {
+      app: '../shared/app',
+      id: 'components-in-the-pages-outside-the-root',
+      roots: ['project:', 'app:../shared/app'],
+      src: '../shared/app/components',
+    },
+    {
+      app: '../shared',
+      id: 'one-directory-outside-the-root-for-both',
+      roots: ['project:', 'src:../shared'],
       src: '../shared',
     },
   ])('$id', ({ app, roots, src }) => {
