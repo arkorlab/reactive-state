@@ -22,7 +22,7 @@ import { Worker } from 'node:worker_threads';
 
 import { GENERATED, isGeneratedFile } from '../compiler/app-route.ts';
 import { givenHost } from '../compiler/host.ts';
-import { compileApp, writeOutputs } from '../compiler/index.ts';
+import { compileApp } from '../compiler/index.ts';
 import {
   isModuleResolutions,
   type ModuleResolution,
@@ -31,6 +31,7 @@ import {
 } from '../compiler/module-resolutions.ts';
 import { byCodeUnits } from '../compiler/splice.ts';
 import { inputRoots } from './input-roots.ts';
+import { writeCompiled, writeWhole } from './write-compiled.ts';
 
 /**
  * The compile a build runs before Next.js reads the application (`./adapter.ts`), and a platform's
@@ -125,8 +126,6 @@ const LOCK_BEAT_MS = 10_000;
 /** How often a process waiting for the lock looks again. */
 const LOCK_POLL_MS = 50;
 
-/** The manifest, which a compile writes last. */
-const MANIFEST = 'manifest.json';
 /** The files a compile may read: code, and the JSON of a `tsconfig.json` or a `package.json`. */
 const SOURCE_EXTENSIONS: ReadonlySet<string> = new Set([
   '.cjs',
@@ -468,44 +467,6 @@ function isCurrent(layout: ProjectLayout, inputs: string): boolean {
     holds(layout, record.reads) &&
     moduleResolutionsHold(layout.projectDir, record.resolutions)
   );
-}
-
-/** Writes `text` to `file` whole: beside it first, then in its place in one rename. */
-function writeWhole(file: string, text: string): void {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = path.join(
-    path.dirname(file),
-    `.${path.basename(file)}.${String(process.pid)}.${randomUUID()}.tmp`,
-  );
-  try {
-    writeFileSync(temporary, text);
-    renameSync(temporary, file);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
-}
-
-/**
- * Writes what the compile wrote that is not on disk already, each file whole; takes away the files
- * an earlier compile wrote that this one does not; then the manifest, last. Answers whether it
- * changed anything.
- */
-function writeCompiled(outputs: ReadonlyMap<string, string>, outDir: string): boolean {
-  const manifest = path.join(outDir, MANIFEST);
-  const stale = writeOutputs(outputs, outDir, { check: true }).filter((output) => !output.current);
-  const ordered = stale.toSorted(
-    (left, right) => Number(left.path === manifest) - Number(right.path === manifest),
-  );
-  for (const output of ordered) {
-    const text = outputs.get(output.path);
-    if (text === undefined || output.leftover) {
-      rmSync(output.path, { force: true });
-    } else {
-      writeWhole(output.path, text);
-    }
-  }
-  return stale.length > 0;
 }
 
 /** The code of a system error; none of anything else. */
