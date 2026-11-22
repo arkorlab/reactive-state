@@ -247,7 +247,7 @@ const CASES = [
     invocation:
       'frames(Object.assign([new Error("ours")] as [Error],{[Symbol.iterator]:function*(){yield {name:"Fixed",message:"fixed",stack:"fixed"}}}))',
     reader: false,
-    refused: false,
+    refused: true,
   },
   {
     id: 'executed-rest-default-keeps-data',
