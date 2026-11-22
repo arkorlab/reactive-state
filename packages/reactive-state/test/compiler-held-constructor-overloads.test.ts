@@ -7,7 +7,12 @@ const BASE = 'class Base { n = 0; bump() { return ++this.n; } }';
 const PURE = 'super(); return { n: 0, bump() { return 0; } } as Child;';
 const WRITES = 'super(); return { n: 0, bump() { return ++this.n; } } as Child;';
 
-/** Erased signatures do not replace a retained instance's implementation or returned methods. */
+/**
+ * Erased signatures do not replace a retained instance's implementation or returned methods. A
+ * constructor that returns another object runs no write of the instance, but the class's own
+ * methods are read for a retained instance as well as what the constructor returns, so the base's
+ * writer stays and the pure implementations are refused beside the writing ones.
+ */
 describe('retained constructor overload implementations', () => {
   const { apps, compile } = compilerApplications();
 
@@ -46,14 +51,14 @@ describe('retained constructor overload implementations', () => {
       declaration: `const Child = class extends Base { constructor(); constructor() { ${PURE} } }; const Factory = Child;`,
       made: 'new Factory()',
     },
-  ])('accepts the pure implementation beneath signatures: $declaration', async (test) => {
-    await expect(refusalsOf(test.declaration, test.made)).resolves.toStrictEqual([]);
+  ])('refuses the pure implementation beneath signatures: $declaration', async (test) => {
+    await expect(refusalsOf(test.declaration, test.made)).resolves.not.toStrictEqual([]);
   });
 
-  it('keeps the equivalent pure implementation without an overload accepted', async () => {
+  it('refuses the equivalent pure implementation without an overload', async () => {
     await expect(
       refusalsOf(`class Child extends Base { constructor() { ${PURE} } }`),
-    ).resolves.toStrictEqual([]);
+    ).resolves.not.toStrictEqual([]);
   });
 
   it.each([
