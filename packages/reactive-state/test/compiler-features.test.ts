@@ -4325,9 +4325,12 @@ describe('dynamic sites, and the nodes a component is given', () => {
         'const read = makeReader();',
         'function makeLookup() {',
         '  const index: Record<string, boolean> = {};',
-        '  FILTERS.forEach((item) => {',
+        // A loop, not a callback written in a call of `forEach`: this file writes a member by a key
+        // the compile does not read (`index[item]`), which may be a method of an array, so what
+        // `forEach` hands such a callback is no longer taken for the array's own text.
+        '  for (const item of FILTERS) {',
         '    index[item] = true;',
-        '  });',
+        '  }',
         '  return (id: string) => index[id] === true;',
         '}',
         'const has = makeLookup();',
@@ -6876,6 +6879,10 @@ describe('borrowed Date parser render admission', () => {
   });
 });
 
+/** What a route middleware is refused for where it copies a collection both of its parts read. */
+const COPIED_BY_BOTH =
+  'read by both the guard and the host is mutated or passed to a call that may mutate it';
+
 describe('readonly native slice middleware', () => {
   const { apps, compile } = compilerApplications();
 
@@ -6886,7 +6893,9 @@ describe('readonly native slice middleware', () => {
     });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    expect(compile(app).refusals.map((item) => item.reason)).toStrictEqual([
+      expect.stringContaining(COPIED_BY_BOTH),
+    ]);
   });
 });
 
@@ -7067,21 +7076,23 @@ describe('readonly native reordering middleware', () => {
       id: 'reversed-fresh-wrapper-slot-write',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.toReversed()[0]={allowed:true};\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
     {
       id: 'readonly-toSorted-quiet-two-items',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false},{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toSorted();\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
-  ])('$id', async ({ source: middlewareSource }) => {
+  ])('$id', async ({ refused, source: middlewareSource }) => {
     const app = await application({ 'app/boards/[projectId]/middleware.ts': middlewareSource });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    const copied = compile(app).refusals.map((item) => item.reason.includes(COPIED_BY_BOTH));
+
+    expect(copied).toStrictEqual(refused ? [true] : []);
   });
 });
 
@@ -7287,21 +7298,23 @@ describe('readonly native toSpliced middleware', () => {
       id: 'spliced-readonly-copy-pin',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nvoid decision.toSpliced()[0]!.allowed;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
     {
       id: 'spliced-fresh-slot-pin',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\nconst copy=decision.toSpliced();copy[0]={allowed:true};\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
-  ])('$id', async ({ source: middlewareSource }) => {
+  ])('$id', async ({ refused, source: middlewareSource }) => {
     const app = await application({ 'app/boards/[projectId]/middleware.ts': middlewareSource });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    const copied = compile(app).refusals.map((item) => item.reason.includes(COPIED_BY_BOTH));
+
+    expect(copied).toStrictEqual(refused ? [true] : []);
   });
 });
 
@@ -7313,7 +7326,7 @@ describe('readonly native copied middleware', () => {
       id: 'concat-fresh-argument-slot',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\n\nawait requirePublishedProject(params.projectId);\ndecision.concat([{allowed:false}])[1]!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
     {
@@ -7324,11 +7337,13 @@ describe('readonly native copied middleware', () => {
       originalPayloadExpectedToChange: false,
       refused: false,
     },
-  ])('$id', async ({ source: middlewareSource }) => {
+  ])('$id', async ({ refused, source: middlewareSource }) => {
     const app = await application({ 'app/boards/[projectId]/middleware.ts': middlewareSource });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    const copied = compile(app).refusals.map((item) => item.reason.includes(COPIED_BY_BOTH));
+
+    expect(copied).toStrictEqual(refused ? [true] : []);
   });
 });
 
@@ -7450,21 +7465,23 @@ describe('readonly native iterator middleware', () => {
       id: 'fresh-result-value-replacement',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nconst result=decision.values().next();result.value={allowed:false};result.value!.allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
     {
       id: 'readonly-native-result',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nvoid decision.values().next().value!.allowed;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
-  ])('$id', async ({ source: middlewareSource }) => {
+  ])('$id', async ({ refused, source: middlewareSource }) => {
     const app = await application({ 'app/boards/[projectId]/middleware.ts': middlewareSource });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    const copied = compile(app).refusals.map((item) => item.reason.includes(COPIED_BY_BOTH));
+
+    expect(copied).toStrictEqual(refused ? [true] : []);
   });
 });
 
@@ -7476,21 +7493,23 @@ describe('readonly native entry iterator middleware', () => {
       id: 'fresh-entry-payload-replacement',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nconst pair=decision.entries().next().value!;pair[1]={allowed:false};pair[1].allowed=true;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
     {
       id: 'readonly-whole-entry-pair',
       source:
         "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];\nawait requirePublishedProject(params.projectId);\nconst pair=decision.entries().next().value!;void pair;\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-      refused: false,
+      refused: true,
       nativeExpected: 'false',
     },
-  ])('$id', async ({ source: middlewareSource }) => {
+  ])('$id', async ({ refused, source: middlewareSource }) => {
     const app = await application({ 'app/boards/[projectId]/middleware.ts': middlewareSource });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    const copied = compile(app).refusals.map((item) => item.reason.includes(COPIED_BY_BOTH));
+
+    expect(copied).toStrictEqual(refused ? [true] : []);
   });
 });
 
