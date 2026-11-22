@@ -97,16 +97,16 @@ const CASES = [
     source:
       "function frames(error:Error){const values=[error,'data'];values.sort=()=>[];return values.sort().length;}",
     invocation: 'frames(new Error("ours"))',
-    refused: false,
-    sharedRefused: false,
+    refused: true,
+    sharedRefused: true,
   },
   {
     id: 'own-toSorted-data',
     source:
       "function frames(error:Error){const values=[error,'data'];values.toSorted=()=>[];return values.toSorted().length;}",
     invocation: 'frames(new Error("ours"))',
-    refused: false,
-    sharedRefused: false,
+    refused: true,
+    sharedRefused: true,
   },
   {
     id: 'constructed-error-words',
