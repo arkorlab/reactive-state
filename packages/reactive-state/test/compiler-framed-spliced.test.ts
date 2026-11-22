@@ -111,14 +111,14 @@ const CASES = [
     source:
       'function frames(error:Error){const list=[error];list.toSpliced=(()=>[{stack:"fixed"}]) as never;return list.toSpliced(1,0)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'to-spliced-own-descriptor-method-pin',
     source:
       'function frames(error:Error){const list=[error];Object.defineProperty(list,"toSpliced",{value:()=>[{stack:"fixed"}]});return list.toSpliced(1,0)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'to-spliced-removed-stable-alias-pin',

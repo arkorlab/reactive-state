@@ -76,6 +76,72 @@ describe('shared helpers with written error observations', () => {
       invocation: "new Error('x')",
       reason: 'writes an error it did not make as text',
     },
+    {
+      source:
+        'function frames(error: Error): string { const values = [error]; values.join = () => "fixed"; return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const values = [error]; Object.assign(values, { join: () => "fixed" }); return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const values = [error]; Object.assign(values, { toString: () => "fixed" }); return values.toString(); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const values = [error]; Object.defineProperty(values, "join", { value: () => "fixed" }); return values.toString(); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const own = () => "fixed"; const values = [error]; values.join = own; return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { function own() { return "fixed"; } const values = [error]; values.join = own; return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const methods = { join() { return "fixed"; } }; const own = methods.join; const values = [error]; values.join = own; return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { function own() { return "fixed"; } own(); own(); const values = [error]; values.join = own; return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const methods = { join() { return "fixed"; } }; methods.join(); methods.join(); const values = [error]; values.join = methods.join; return values.join(","); }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { function own() { return "fixed"; } const captured = own; restore(); const values = [error]; values.join = captured; return values.join(","); function restore() { own = Array.prototype.join; } }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
+    {
+      source:
+        'function frames(error: Error): string { const methods = { join() { return "fixed"; } }; const captured = methods.join; restore(); const values = [error]; values.join = captured; return values.join(","); function restore() { methods.join = Array.prototype.join; } }',
+      invocation: "new Error('x')",
+      reason: 'writes an error it did not make as text',
+    },
   ])('refuses the selected engine observation: $source', async (test) => {
     const app = await fixture(test.source, test.invocation);
     apps.push(app);
@@ -100,61 +166,6 @@ describe('shared helpers with written error observations', () => {
       source:
         'const field = "stack"; function frames(error: { stack: string }): string { return error[field]; }',
       invocation: '{ stack: "data" }',
-    },
-    {
-      source:
-        'function frames(error: Error): string { const values = [error]; values.join = () => "fixed"; return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const values = [error]; Object.assign(values, { join: () => "fixed" }); return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const values = [error]; Object.assign(values, { toString: () => "fixed" }); return values.toString(); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const values = [error]; Object.defineProperty(values, "join", { value: () => "fixed" }); return values.toString(); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const own = () => "fixed"; const values = [error]; values.join = own; return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { function own() { return "fixed"; } const values = [error]; values.join = own; return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const methods = { join() { return "fixed"; } }; const own = methods.join; const values = [error]; values.join = own; return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { function own() { return "fixed"; } own(); own(); const values = [error]; values.join = own; return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const methods = { join() { return "fixed"; } }; methods.join(); methods.join(); const values = [error]; values.join = methods.join; return values.join(","); }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { function own() { return "fixed"; } const captured = own; restore(); const values = [error]; values.join = captured; return values.join(","); function restore() { own = Array.prototype.join; } }',
-      invocation: "new Error('x')",
-    },
-    {
-      source:
-        'function frames(error: Error): string { const methods = { join() { return "fixed"; } }; const captured = methods.join; restore(); const values = [error]; values.join = captured; return values.join(","); function restore() { methods.join = Array.prototype.join; } }',
-      invocation: "new Error('x')",
     },
   ])('preserves data, shadowing and an own array override: $source', async (test) => {
     const app = await fixture(test.source, test.invocation);

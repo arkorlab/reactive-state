@@ -26,13 +26,25 @@ describe('shared module framed lexical bindings', () => {
     },
   );
 
+  // A parameter written again as a whole — here by a `var` of its name — is a name nothing says the
+  // start of: `String(...)` of it reads what may be an array, whatever it is written with.
+  it.each([
+    "function stamp(date: Date | string) { var date = 'fixed'; return String(date); } export function label(value: string) { return value + stamp(new Date(0)); }",
+  ])('refuses the text of a parameter a var of its name writes again: %s', async (source) => {
+    const app = await fixture(source);
+    apps.push(app);
+
+    expect(compile(app).refusals.map((refusal) => refusal.reason)).toStrictEqual([
+      expect.stringContaining('a shared module that answers otherwise'),
+    ]);
+  });
+
   it.each([
     "export function label(value: string) { try { JSON.parse(value); } catch (error) { return [{message: value}].map((error) => error.message).join(''); } return value; }",
     'export function label(value: string) { try { JSON.parse(value); } catch (error) { function read(error: {message: string}) { return error.message; } return read({message: value}); } return value; }',
     'export function label(value: string) { try { JSON.parse(value); } catch (error) { { const error = {message: value}; return error.message; } } return value; }',
     'export function label(value: string) { try { JSON.parse(value); } catch (error) { function read() { var error = {message: value}; return error.message; } return read(); } return value; }',
     'function stamp(date: Date) { var date; return date.toISOString(); } export function label(value: string) { return value + stamp(new Date(0)); }',
-    "function stamp(date: Date | string) { var date = 'fixed'; return String(date); } export function label(value: string) { return value + stamp(new Date(0)); }",
     'function stamp(date: Date) { function read() { let date; return String(date); } return read(); } export function label(value: string) { return value + stamp(new Date(0)); }',
     'function stamp(date: Date) { function read() { var date; return String(date); } return read(); } export function label(value: string) { return value + stamp(new Date(0)); }',
   ])('keeps lexical shadows and explicit stable text: %s', async (source) => {

@@ -97,7 +97,7 @@ const CASES = [
     source:
       'function frames(){const values:unknown[]=[];values.pop=()=>new Error("fixed");return(values.pop()as Error).message;}',
     invocation: 'frames()',
-    refused: false,
+    refused: true,
   },
   {
     id: 'own-map-literal-data-asserted-words',

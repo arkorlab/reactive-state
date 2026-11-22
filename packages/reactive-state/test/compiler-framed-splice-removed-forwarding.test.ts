@@ -265,16 +265,16 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const values:{stack?:string}[]=[error];values.splice=()=>[{stack:"fixed"}];return values.splice(0,1)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-prior-field-rewrite-pin',
     source:
       'function frames(error:Error){Object.defineProperty(error,"stack",{value:"fixed"});return[error].splice(0,1)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-insertion-effect-pin',
