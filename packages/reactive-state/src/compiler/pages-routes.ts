@@ -28,7 +28,7 @@ const EXTENSIONS: ReadonlySet<string> = new Set(
 const OWN_FILES: ReadonlySet<string> = new Set(['_app', '_document', '_error']);
 
 /** The Pages Router's directory beside the app directory `appDir`. */
-function pagesDirOf(appDir: string): string {
+export function pagesDirOf(appDir: string): string {
   return path.join(path.dirname(appDir), 'pages');
 }
 
