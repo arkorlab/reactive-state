@@ -192,8 +192,11 @@ function plainDescriptor(node: Expression, resolve: Resolve | undefined): boolea
   );
 }
 
-/** Whether a chain of known locking and defining operations leaves this own property locked. */
-function lockedAt(node: Expression, key: string, resolve: Resolve | undefined): boolean {
+/**
+ * Whether a chain of known locking and defining operations leaves this own property locked. It
+ * stays so whatever the code does since: nothing unlocks a property, or takes a locked one away.
+ */
+export function lockedAt(node: Expression, key: string, resolve: Resolve | undefined): boolean {
   let current = node;
   let locked = false;
   const seen = new Set<Expression>();
