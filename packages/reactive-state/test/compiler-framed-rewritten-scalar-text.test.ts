@@ -140,9 +140,114 @@ const scalars: readonly Row[] = [
     invocation: "frames(value, value === 'done')",
     reader: false,
   },
+  {
+    id: 'call-on-an-asserted-name-given',
+    source:
+      "function frames(input: unknown) { let text = ''; text = (input as string).trim(); return String(text); }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
+  {
+    id: 'element-given-under-a-non-null-mark',
+    source:
+      "function frames(name: string) { let text = ''; text = name.split(',')[0]!; return String(text); }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
+  {
+    id: 'asserted-assignment-of-a-literal-given',
+    source:
+      "function frames(name: string) { let cached = name; let text = ''; text = (cached = 'fixed') as string; return String(text) + cached; }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
+  {
+    id: 'checked-name-given',
+    source:
+      "function frames(name: string) { let text = ''; text = name satisfies string; return String(text); }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
 ];
 
 const lists: readonly Row[] = [
+  {
+    id: 'asserted-assignment-of-a-list-given',
+    source:
+      'function frames(error: Error, text: string) { let cached: unknown; text = (cached = [error]) as never; return String(text); }',
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'asserted-sequence-ending-at-an-assignment',
+    source:
+      'function frames(error: Error, text: string) { let cached: unknown; text = (0, (cached = [error])) as never; return String(text); }',
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'asserted-assignment-in-a-choice',
+    source:
+      "function frames(error: Error, text: string, flag: boolean) { let cached: unknown; text = flag ? ((cached = [error]) as never) : 'fixed'; return String(text); }",
+    invocation: 'frames(new Error("ours"), value, value === \'done\')',
+    reader: true,
+  },
+  {
+    id: 'asserted-logical-assignment-of-a-list',
+    source:
+      'function frames(error: Error, text: string) { let cached: unknown; text = (cached ??= [error]) as never; return String(text); }',
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'asserted-call-result-given',
+    source:
+      'function listed(error: Error) { return [error]; } function frames(error: Error, text: string) { text = listed(error) as never; return String(text); }',
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'asserted-member-given',
+    source:
+      'function frames(bag: { errors: Error[] }, text: string) { text = bag.errors as never; return String(text); }',
+    invocation: 'frames({ errors: [new Error("ours")] }, value)',
+    reader: true,
+  },
+  {
+    id: 'angle-asserted-list-given',
+    source:
+      'function frames(error: Error, text: string) { text = <never>[error]; return String(text); }',
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'part-of-an-asserted-pattern-source',
+    source:
+      'function frames(error: Error, text: string) { const pair = [[error]]; [text] = pair as never; return String(text); }',
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'part-an-object-pattern-gives',
+    source:
+      "function frames() { let pick = 'first'; ({ pick } = { pick: 'second' }); return String(pick); }",
+    invocation: 'frames()',
+    reader: true,
+  },
+  {
+    id: 'part-a-loop-head-gives',
+    source:
+      "function frames(name: string) { let last = ''; for (last of name.split(',')) { if (last === '') break; } return String(last); }",
+    invocation: 'frames(value)',
+    reader: true,
+  },
+  {
+    id: 'asserted-parsed-text-given',
+    source:
+      "function frames(raw: string) { let text = ''; text = JSON.parse(raw) as string; return String(text); }",
+    invocation: 'frames(value)',
+    reader: true,
+  },
   {
     id: 'alias-of-a-name-given-a-cast-list',
     source:
@@ -338,6 +443,13 @@ const lists: readonly Row[] = [
 ];
 
 const taken: readonly Row[] = [
+  {
+    id: 'asserted-literal-and-sum-given',
+    source:
+      "function frames(count: number, flag: boolean) { let text = ''; text = flag ? ('fixed' as string) : (String(count + 1) + '!' as string); return String(text); }",
+    invocation: "frames(value.length, value === 'done')",
+    reader: false,
+  },
   {
     id: 'defaulted-parameter-added-to',
     source: 'function frames(count = 0) { count += 1; return String(count); }',

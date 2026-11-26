@@ -3,18 +3,22 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
+  isAsExpression,
   isBindingElement,
   isBinaryExpression,
   isConditionalExpression,
   isGetAccessorDeclaration,
   isIdentifier,
+  isNonNullExpression,
   isObjectLiteralExpression,
   isOmittedExpression,
   isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAssignment,
+  isSatisfiesExpression,
   isSpreadAssignment,
   isSpreadElement,
+  isTypeAssertion,
   type Node,
   type ObjectLiteralElementLike,
   SyntaxKind,
@@ -49,24 +53,77 @@ export function mayBecomeArray(binding: FrameBinding): boolean {
 }
 
 /**
- * What a name the code writes as a scalar is shown to hold all the same: the lists and the names that
- * what it starts as, and each value it is given as a whole, end at, through parentheses, casts and
- * choices (`text = [error] as never`, `text = flag ? list : 'none'`). A list refuses, and a name is
- * followed as any name is. The written type vouches for every other value alone, which the compile
- * cannot follow: a call's result, a member, what an operator makes, a part a pattern or a loop gives.
+ * What a name the code writes as a scalar is shown to hold all the same, read from what it starts as
+ * and from each value it is given as a whole. Type-checked code cannot write a list to such a name
+ * but under a type assertion, so the written type vouches for a value only where no assertion stands
+ * over it. A part a pattern or a loop head gives is a value the reader of whole writes does not keep
+ * (`givenValues` knows none), so no assertion over its source would be seen: it is answered as a
+ * value that is not known, which refuses. Parentheses, `!` and `satisfies` change no type and are
+ * looked through; `as` and `<T>` are looked through and remembered. A conditional's branches, the
+ * operands of `||`, `&&` and `??`, the last of a sequence and what an assignment gives (its right, or
+ * either side of a logical one) are each read in turn. At the end of those:
+ *
+ * - a written list refuses, and a name is followed as any name is, asserted or not;
+ * - a value that is no list by its syntax (a literal, a template, what an operator makes, a function,
+ *   an object) is none;
+ * - any other value (a call's result, a member, an element, `await`, `new`) is what the written type
+ *   vouches for, unless an assertion stands over it: then nothing says it is no list, and it is
+ *   answered as a value that is not known (`undefined`), which refuses.
  */
-function shownOf(binding: FrameBinding): readonly Expression[] {
-  const shown: Expression[] = [];
-  const pending = [binding.initializer, ...givenValues(binding)];
-  while (pending.length > 0) {
-    const value = pending.pop();
-    if (value === undefined) continue;
-    const written = unwrapped(value);
-    const ends = endsOf(written);
-    if (ends !== undefined) pending.push(...ends);
-    else if (isArrayLiteralExpression(written) || isIdentifier(written)) shown.push(written);
+function shownOf(binding: FrameBinding): readonly (Expression | undefined)[] {
+  const given = givenValues(binding);
+  const shown: (Expression | undefined)[] = given.includes(undefined) ? [undefined] : [];
+  const pending = [binding.initializer, ...given].map((value) => ({ isAsserted: false, value }));
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (each.value === undefined) continue;
+    const { isAsserted, value } = withoutWrapping(each.value, each.isAsserted);
+    const ends = endsOf(value) ?? assignedOf(value);
+    if (ends !== undefined) pending.push(...ends.map((end) => ({ isAsserted, value: end })));
+    else if (isArrayLiteralExpression(value) || isIdentifier(value)) shown.push(value);
+    else if (isAsserted && !isNoArray(value)) shown.push(undefined);
   }
   return shown;
+}
+
+/**
+ * `node` within what wraps it, and whether a type assertion (`as`, `<T>`) is among the wrappers or
+ * stood over them already: parentheses, `!` and `satisfies` assert no other type.
+ */
+function withoutWrapping(
+  node: Expression,
+  isAsserted: boolean,
+): { readonly isAsserted: boolean; readonly value: Expression } {
+  let value = node;
+  let asserted = isAsserted;
+  for (;;) {
+    if (isAsExpression(value) || isTypeAssertion(value)) asserted = true;
+    else if (
+      !isParenthesizedExpression(value) &&
+      !isNonNullExpression(value) &&
+      !isSatisfiesExpression(value)
+    )
+      return { isAsserted: asserted, value };
+    value = value.expression;
+  }
+}
+
+/** The assignments that answer the name's old value or the right: `||=`, `&&=` and `??=`. */
+const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/**
+ * What a binary expression `endsOf` does not read answers: the right of an assignment, either side
+ * of a logical one, and none for the compound ones, which make a number or a text; undefined of what
+ * is no binary expression.
+ */
+function assignedOf(value: Expression): readonly Expression[] | undefined {
+  if (!isBinaryExpression(value)) return undefined;
+  const { kind } = value.operatorToken;
+  if (kind === SyntaxKind.EqualsToken) return [value.right];
+  return LOGICAL_ASSIGNMENTS.has(kind) ? [value.left, value.right] : [];
 }
 
 /**

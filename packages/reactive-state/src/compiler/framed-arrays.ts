@@ -283,7 +283,8 @@ export function arrayMethodMayBeOverridden(call: Node, method: string): boolean 
  * cannot follow, a parameter nothing says the start of and a call's result included (`count += 1`,
  * `text = text.trim()`): it is read as a name that was never written again is, unless the code shows
  * it a list or a name that may hold one (`text = [error] as never`), directly or through the names
- * it is given.
+ * it is given, or writes it under a type assertion a value nothing shows to be no list, or a part a
+ * pattern gives (`shownOf`).
  */
 function rewrittenArray(binding: FrameBinding): boolean {
   return writtenAsWhole(binding) && (mayStartAsArray(binding) || mayBecomeArray(binding));
