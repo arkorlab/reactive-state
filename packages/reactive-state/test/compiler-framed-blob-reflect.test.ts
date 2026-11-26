@@ -384,41 +384,41 @@ const CASES = [
     id: 'own-text-do-condition-data',
     source:
       'function frames(error:Error){const parts=["fixed"];let size=0;let i=0;do{size=Reflect.construct(Blob,[parts]).size;}while((Object.defineProperty(parts,"toString",{value(){return "fixed";},configurable:true}),i++<1));return size;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
-    reader: false,
+    reader: true,
   },
   {
     id: 'own-text-for-update-data',
     source:
       'function frames(error:Error){const parts=["fixed"];let size=0;for(let i=0;(size=Reflect.construct(Blob,[parts]).size,i<2);i++,Object.defineProperty(parts,"toString",{value(){return "fixed";},configurable:true})){}return size;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
-    reader: false,
+    reader: true,
   },
   {
     id: 'own-text-comma-data',
     source:
       'function frames(error:Error){const parts=["fixed"];return (Object.defineProperty(parts,"toString",{value(){return "fixed";},configurable:true}),Reflect.construct(Blob,[parts]).size);}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
-    reader: false,
+    reader: true,
   },
   {
     id: 'own-text-branch-data',
     source:
       'function frames(error:Error){const parts=["fixed"];if(parts.length>0)Object.defineProperty(parts,"toString",{value(){return "fixed";},configurable:true});return Reflect.construct(Blob,[parts]).size;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
-    reader: false,
+    reader: true,
   },
   {
     id: 'own-text-loop-body-data',
     source:
       'function frames(error:Error){const parts=["fixed"];let size=0;for(let i=0;i<2;i++){size=Reflect.construct(Blob,[parts]).size;Object.defineProperty(parts,"toString",{value(){return "fixed";},configurable:true});}return size;}',
-    refused: false,
+    refused: true,
     invocation: 'frames(new Error("ours"))',
-    reader: false,
+    reader: true,
   },
 ];
 
