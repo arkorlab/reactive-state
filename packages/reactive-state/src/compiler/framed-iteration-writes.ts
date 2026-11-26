@@ -172,18 +172,25 @@ export function framedMethodsWritten(
  */
 function aliasesOf(bindings: ReadonlySet<FrameBinding>, file: SourceFile): Set<FrameBinding> {
   const aliases = new Set(bindings);
+  // The file's declarations and assignments, read once and in the order they are written: a chain
+  // of aliases written forward is then followed in one pass, not in a walk of the file for each.
+  const made: Node[] = [];
+  const pending: Node[] = [file];
+  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    if (isVariableDeclaration(node) || isBinaryExpression(node)) made.push(node);
+    node.forEachChild((child) => {
+      pending.push(child);
+    });
+  }
+  made.sort((left, right) => left.pos - right.pos);
   for (let grown = true; grown;) {
     grown = false;
-    const pending: Node[] = [file];
-    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+    for (const node of made) {
       const alias = aliasMade(node, aliases);
       if (alias !== undefined && !aliases.has(alias)) {
         aliases.add(alias);
         grown = true;
       }
-      node.forEachChild((child) => {
-        pending.push(child);
-      });
     }
   }
   return aliases;
