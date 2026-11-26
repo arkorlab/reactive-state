@@ -10,6 +10,7 @@ import {
   isIdentifier,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAssignment,
   isSpreadAssignment,
@@ -23,6 +24,7 @@ import { unwrapped } from './bounded.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { givenValues } from './framed-array-identity.ts';
 import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
+import { isScalarType } from './framed-scalar-types.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /**
@@ -64,7 +66,8 @@ function mayBeArray(given: Expression | undefined, binding: FrameBinding): boole
 /**
  * The values a value leads to, none where it may be an array: a name leads to what it starts as and to what
  * it is given as a whole, once for each part of a pattern it names; a value that is none of an array, a name
- * or a scalar the compile knows is one.
+ * or a scalar the compile knows is one. A whole name the code writes as a scalar leads nowhere: it holds no
+ * array whatever it starts as, a parameter included (`let text = name` of a `name: string`).
  */
 function leadsOf(
   value: Expression,
@@ -75,6 +78,7 @@ function leadsOf(
   if (!isIdentifier(start)) return isNoArray(start) ? [] : undefined;
   const selected = frameBindingOf(start);
   if (selected === undefined) return start.text === 'undefined' ? [] : undefined;
+  if (selected.keys.length === 0 && writtenScalar(selected.binding)) return [];
   if (!firstVisit(seen, selected.binding, selected.keys)) return [];
   if (defaultMayBeArray(start)) return undefined;
   return [
@@ -201,6 +205,19 @@ const SCALAR_KINDS: ReadonlySet<SyntaxKind> = new Set([
  */
 export function isScalarValue(value: Expression): boolean {
   return endsAtKinds(value, SCALAR_KINDS, { strip: withoutParentheses, typed: true });
+}
+
+/**
+ * Whether the code writes a name as a text, a number, a boolean or a bigint: its annotation says so,
+ * or, with none, it starts as a literal or an operator's scalar. TypeScript refuses to give such a
+ * name an array, as the compile trusts a written type that excludes an error, so what it is given
+ * is no array, a call result included (`text = JSON.stringify(value)`). A rest parameter is a list
+ * whatever its annotation says, and is none.
+ */
+export function writtenScalar(binding: FrameBinding): boolean {
+  if (isParameterDeclaration(binding) && binding.dotDotDotToken !== undefined) return false;
+  if (binding.type !== undefined) return isScalarType(binding.type);
+  return binding.initializer !== undefined && isScalarValue(binding.initializer);
 }
 
 /** `node` within the parentheses that wrap it. */

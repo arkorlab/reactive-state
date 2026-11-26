@@ -11,7 +11,8 @@ import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
  * assigned. A name they cannot follow, a parameter assigned as a whole (`count += 1`), a name a swap,
  * `[a, b] = [b, a]`, or a loop, `for (last of words)`, writes, an array written through one of its
  * elements, is read as the program shows it: an operand is far oftener text or a number than a list.
- * `String(name)` keeps reading every array, and refuses such a name as it did.
+ * `String(name)` keeps reading every array, and refuses such a name unless the code writes it as a
+ * scalar (`text: string`), which holds no array whatever it is given.
  */
 
 /**
@@ -92,9 +93,14 @@ const CASES = [
       "export function p(): string { let a = 'x'; let b = 'y'; [a, b] = [b, a]; return String(a); }",
   },
   {
-    framed: true,
-    id: 'assigned-text-parameter-string-refused-before',
+    framed: false,
+    id: 'assigned-text-parameter-string-taken',
     source: "export function p(text: string): string { text += 'a'; return String(text); }",
+  },
+  {
+    framed: true,
+    id: 'assigned-unknown-parameter-string-refused',
+    source: "export function p(text: unknown): string { text = 'a'; return String(text); }",
   },
   {
     framed: true,
