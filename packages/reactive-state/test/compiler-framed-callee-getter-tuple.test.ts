@@ -43,7 +43,12 @@ const SPREAD = [
     id: 'callee-getter-of-a-nested-holder',
     source: `const outer = { holder: { ${GETTER} } }; ${TUPLE} outer.holder.get(...tuple);`,
     callee: 'outer.holder.get',
-    prefix: { values: ['{}'], unknown: true, alternatives: ["new Error('changed')"] },
+    // Past work the call runs first the prefix keeps what the spread may hold as alternatives.
+    prefix: {
+      values: [],
+      unknown: true,
+      alternatives: ['{}', "'message'", "new Error('changed')"],
+    },
   },
   {
     id: 'callee-class-getter',

@@ -87,7 +87,7 @@ const CASES = [
     id: 'own-next-kept-in-loop-condition',
     source:
       "import type {RouteMiddleware} from '@arkorlab/reactive-state/server';\nimport {requirePublishedProject} from '@/publication';\nexport default (async({params},next)=>{\nconst decision=[{allowed:false}];const iterator=decision.values();iterator.next=()=>({value:{allowed:false},done:false});const spare:{next?:number}={next:0};\nawait requirePublishedProject(params.projectId);\nlet i=0;do{iterator.next().value!.allowed=true;}while((Reflect.deleteProperty(spare,'next'),i++<1));\nconst response=await next();\nresponse.headers.set('X-Decision',String(decision[0]!.allowed));\nreturn response;\n}) satisfies RouteMiddleware<{projectId:string}>;\n",
-    refused: false,
+    refused: true,
     nativeExpected: 'false',
   },
 ];
