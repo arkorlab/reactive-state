@@ -8,6 +8,7 @@ import type {
 import type { Where } from '../authority/query.ts';
 import type { Value } from '../program.ts';
 import { type AnyDatabase, definitionOf, type FieldDefinition } from '../server/schema.ts';
+import { changeLogSql } from './d1-log.ts';
 
 /**
  * An application's own D1 database as a store its external tables are read through (`d1Store`), and
@@ -436,13 +437,7 @@ export function changeCaptureSql(
   store: string,
   tables: D1Tables = {},
 ): readonly string[] {
-  const statements = [
-    `CREATE TABLE IF NOT EXISTS ${META} (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL)`,
-    `DELETE FROM ${META} WHERE key = 'epoch' AND NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '${LOG}')`,
-    `CREATE TABLE IF NOT EXISTS ${LOG} (seq INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, tbl TEXT NOT NULL, id TEXT NOT NULL, before TEXT, after TEXT, at INTEGER NOT NULL)`,
-    `CREATE INDEX IF NOT EXISTS _rs_changes_at ON ${LOG} (at)`,
-    `INSERT OR IGNORE INTO ${META} (key, value) VALUES ('epoch', lower(hex(randomblob(16))))`,
-  ];
+  const statements = [...changeLogSql()];
   for (const [declared, table] of definitionOf(database).tables) {
     if (table.external !== store) {
       continue;
