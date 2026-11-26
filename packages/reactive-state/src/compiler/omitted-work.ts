@@ -1,4 +1,5 @@
 import {
+  type Block,
   type Expression,
   isArrayLiteralExpression,
   isArrowFunction,
@@ -13,12 +14,13 @@ import {
   isSourceFile,
   isVariableStatement,
   NodeFlags,
+  type SourceFile,
   type Statement,
   SyntaxKind,
   type VariableStatement,
 } from 'typescript/ast';
 
-import { isAnswering } from './answers.ts';
+import { type Answering, isAnswering } from './answers.ts';
 import { importedValues, unwrapped } from './bounded.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -77,7 +79,8 @@ export function canOmit(statement: VariableStatement): boolean {
  * declaration throws. Of a statement that stands elsewhere — in a block, at a module's top level —
  * and of every other name — a global, whose getter may run, a name nothing declares, a constant of
  * the module, which a call made as the module loads may read before its declaration — the code
- * shows nothing.
+ * shows nothing. What a body declares is read once of the body (`namesOf`), so each statement of
+ * it is answered by looking a name up.
  */
 function shownAt(statement: VariableStatement): Shown {
   const body = statement.parent;
@@ -85,22 +88,59 @@ function shownAt(statement: VariableStatement): Shown {
   if (!isBlock(body) || !isAnswering(fn) || fn.body !== body) {
     return () => false;
   }
-  const before = new Set<string>();
+  const names = namesOf(fn, body);
+  const at = statement.pos;
+  return (name) => {
+    const last = names.declared.get(name);
+    return last === undefined ? names.given.has(name) : last < at;
+  };
+}
+
+/** What a function's body shows of the names read in it. */
+interface BodyNames {
+  /** Each name a statement of the body declares, by where the last statement that declares it starts. */
+  readonly declared: ReadonlyMap<string, number>;
+  /** What the body is given before it runs: the parameters' names, and the module's value imports. */
+  readonly given: ReadonlySet<string>;
+}
+
+/** What each function's body shows of its names, read once. */
+const BODIES = new WeakMap<Block, BodyNames>();
+
+/** What each module imports as a value, read once. */
+const IMPORTED = new WeakMap<SourceFile, ReadonlySet<string>>();
+
+/** What the body of `fn` shows of its names (`BodyNames`), read once of each body. */
+function namesOf(fn: Answering, body: Block): BodyNames {
+  const known = BODIES.get(body);
+  if (known !== undefined) {
+    return known;
+  }
+  const given = new Set(isSourceFile(fn.parent) ? importedBy(fn.parent) : []);
   for (const parameter of fn.parameters) {
     for (const name of bindingIdentifiers(parameter.name)) {
-      before.add(name.text);
+      given.add(name.text);
     }
   }
-  const after = new Set<string>();
-  let declared = before;
+  const declared = new Map<string, number>();
   for (const each of body.statements) {
-    declared = each === statement ? after : declared;
     for (const name of declaredBy(each)) {
-      declared.add(name);
+      declared.set(name, each.pos);
     }
   }
-  const imported = new Set(isSourceFile(fn.parent) ? importedValues(fn.parent) : []);
-  return (name) => !after.has(name) && (before.has(name) || imported.has(name));
+  const names = { declared, given };
+  BODIES.set(body, names);
+  return names;
+}
+
+/** What `file` imports as a value (`importedValues`), read once of each file. */
+function importedBy(file: SourceFile): ReadonlySet<string> {
+  let imported = IMPORTED.get(file);
+  if (imported === undefined) {
+    imported = new Set(importedValues(file));
+    IMPORTED.set(file, imported);
+  }
+  return imported;
 }
 
 /** The names a statement declares where it stands: a variable's, a pattern's, a function's, a class's. */

@@ -221,6 +221,31 @@ describe('whether a constant’s initialization may be left out, by the names it
   it.each([...KEPT, NESTED])('keeps what the code does not show initialised: $id', (row) => {
     expect(omitted(row)).toBe(false);
   });
+
+  it('answers each statement of one body by where it stands, the body read once', () => {
+    using parsed = api.createSourceFile(
+      'omitted-initialised-names.ts',
+      [
+        "import { LABEL } from './label';",
+        'export function frames(source: unknown) {',
+        '  const early = later;',
+        '  const later = source;',
+        '  const after = later;',
+        '  const all = [early, after, later, LABEL];',
+        '  const LABEL = all;',
+        '  const last = LABEL;',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    const answers = ['early', 'later', 'after', 'all', 'LABEL', 'last'].map((name) => {
+      const found = declaring(parsed.sourceFile, name);
+      return found !== undefined && canOmit(found);
+    });
+
+    // `later` is read before its declaration and after it; `LABEL` is the body's, not the import's.
+    expect(answers).toStrictEqual([false, true, true, false, true, true]);
+  });
 });
 
 /** The first variable statement within `root` one of whose declarations is named `name`. */
