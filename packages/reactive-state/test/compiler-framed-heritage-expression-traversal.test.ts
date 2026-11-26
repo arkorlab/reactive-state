@@ -174,13 +174,15 @@ const APPLIED = [
   {
     id: 'tuple-beside-an-argument-class-without-a-write-pin',
     source: "const tuple = [{}, 'stack']; Reflect.get.apply(class extends Object {}, tuple);",
-    entries: ['{}', "'stack'"],
+    // A class is no quiet value here (`readInOrder`): the tuple is not read as written.
+    entries: undefined,
   },
   {
     id: 'tuple-named-only-in-a-type-pin',
     source:
       "function define() { let kept: typeof tuple | undefined; void kept; return kept; } const tuple = [{}, 'stack']; Reflect.get.apply(define(), tuple);",
-    entries: ['{}', "'stack'"],
+    // A call is no quiet value here (`readInOrder`): the tuple is not read as written.
+    entries: undefined,
   },
 ];
 
