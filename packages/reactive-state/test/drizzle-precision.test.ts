@@ -302,6 +302,50 @@ describe(
   "reads of Drizzle tables followed by the rows their plans' conditions name",
   { timeout: TEST_TIMEOUT_MS },
   () => {
+    it('follows a constant of a schema-qualified enum by that enum alone', async () => {
+      const { orm, renders } = await watching(
+        (db) => db.execute(sql`SELECT title FROM tasks WHERE status = 'open'::app.status`),
+        async (pg) => {
+          await pg.query('CREATE SCHEMA app');
+          await pg.query('ALTER TYPE public.status SET SCHEMA app');
+          await pg.query("UPDATE tasks SET status = 'closed' WHERE project_id = 'p2'");
+        },
+      );
+
+      await expect(
+        renders(() => orm.update(tasks).set({ title: 'other' }).where(eq(tasks.projectId, 'p2'))),
+      ).resolves.toBe(false);
+      await expect(
+        renders(() => orm.update(tasks).set({ title: 'changed' }).where(eq(tasks.projectId, 'p1'))),
+      ).resolves.toBe(true);
+      await expect(
+        renders(() => orm.update(tasks).set({ status: 'open' }).where(eq(tasks.projectId, 'p2'))),
+      ).resolves.toBe(true);
+    });
+
+    it('follows a constant of an enum whose schema and type need quoting', async () => {
+      const { orm, renders } = await watching(
+        (db) => {
+          return db.execute(
+            sql`SELECT title FROM tasks WHERE status = 'open'::"odd.schema"."Status""Name"`,
+          );
+        },
+        async (pg) => {
+          await pg.query('CREATE SCHEMA "odd.schema"');
+          await pg.query('ALTER TYPE public.status RENAME TO "Status""Name"');
+          await pg.query('ALTER TYPE "Status""Name" SET SCHEMA "odd.schema"');
+          await pg.query("UPDATE tasks SET status = 'closed' WHERE project_id = 'p2'");
+        },
+      );
+
+      await expect(
+        renders(() => orm.update(tasks).set({ title: 'other' }).where(eq(tasks.projectId, 'p2'))),
+      ).resolves.toBe(false);
+      await expect(
+        renders(() => orm.update(tasks).set({ status: 'closed' }).where(eq(tasks.projectId, 'p1'))),
+      ).resolves.toBe(true);
+    });
+
     it('renders a read of one project again for its rows, not for those of another', async () => {
       const { orm, renders } = await watching((db) => launchTasks(db));
 

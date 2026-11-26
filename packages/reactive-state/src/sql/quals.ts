@@ -15,7 +15,7 @@
  */
 export type Operand =
   | { readonly parameter: number }
-  | { readonly constant: string; readonly type?: string };
+  | { readonly constant: string; readonly type?: string; readonly schema?: string };
 
 /** A term of a scan's conditions: its column equal to one of `operands`. */
 export interface Condition {
@@ -246,6 +246,18 @@ function columnAt(
   return undefined;
 }
 
+/** A schema-qualified type from `at`, where PostgreSQL writes two identifiers around a dot. */
+function qualifiedTypeAt(
+  tokens: readonly Token[],
+  at: number,
+): { readonly schema: string; readonly type: string; readonly end: number } | undefined {
+  const schema = tokens[at];
+  const name = tokens[at + 2];
+  return schema?.kind === 'name' && isPunct(tokens[at + 1], '.') && name?.kind === 'name'
+    ? { end: at + COLUMN.length, schema: schema.text, type: name.text }
+    : undefined;
+}
+
 /** A parameter or a constant, as `tokens` from `at` write it, and where it ends. */
 function operandAt(
   tokens: readonly Token[],
@@ -272,6 +284,13 @@ function operandAt(
     return { end, operand: { constant: token.text } };
   }
   end += 1;
+  const qualified = qualifiedTypeAt(tokens, end);
+  if (qualified !== undefined) {
+    return {
+      end: qualified.end,
+      operand: { constant: token.text, schema: qualified.schema, type: qualified.type },
+    };
+  }
   const words: string[] = [];
   // A collation after the type is no part of it: the term goes on, and is left out.
   for (

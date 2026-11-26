@@ -50,13 +50,20 @@ interface Typed {
   readonly oid?: number | undefined;
   readonly key: KeyColumn;
   readonly type: string | undefined;
+  readonly schema: string | undefined;
 }
 
 /**
  * The text of a constant a plan names, of the type it was written of, for `typed`: of no type, or of
  * one that compares as the key does — the key's own (an enum's), or the language's of its kind.
  */
-function constantOf(constant: string, type: string | undefined, typed: Typed): string | undefined {
+function constantOf(
+  { constant, schema, type }: Extract<Operand, { readonly constant: string }>,
+  typed: Typed,
+): string | undefined {
+  if (schema !== undefined && (schema !== typed.schema || type !== typed.type)) {
+    return undefined;
+  }
   if (type !== undefined && type !== typed.type && !CONSTANT_TYPES[typed.key.kind].has(type)) {
     return undefined;
   }
@@ -79,7 +86,7 @@ function operandText(
   bound: Bound,
 ): string | null | undefined {
   if ('constant' in operand) {
-    return constantOf(operand.constant, operand.type, typed);
+    return constantOf(operand, typed);
   }
   if (operand.parameter < 1 || operand.parameter > values.length) {
     return undefined;
@@ -136,6 +143,7 @@ export interface Run {
 interface Usable {
   readonly types: ReadonlyMap<string, string>;
   readonly oids: ReadonlyMap<string, number>;
+  readonly schemas: ReadonlyMap<string, string>;
 }
 
 /** The queries one scan's read is noted as: each set of its followed conditions' values. */
@@ -149,7 +157,12 @@ function wheresOf(
   for (const condition of scan.conditions) {
     const key = keys.get(condition.column);
     if (key === undefined || !usable.types.has(key.column)) continue;
-    const typed = { key, oid: usable.oids.get(key.column), type: usable.types.get(key.column) };
+    const typed = {
+      key,
+      oid: usable.oids.get(key.column),
+      schema: usable.schemas.get(key.column),
+      type: usable.types.get(key.column),
+    };
     if (!takes(condition, key, typed.type)) continue;
     // A key one condition already names: the rows hold both, so the first names more of them.
     if (wheres.some((where) => Object.hasOwn(where, key.field))) continue;
@@ -189,6 +202,7 @@ export function readsOf(
     );
     const usable: Usable = {
       oids: catalog.oids?.get(scan.table) ?? new Map<string, number>(),
+      schemas: catalog.typeSchemas?.get(scan.table) ?? new Map<string, string>(),
       types: whole
         ? new Map<string, string>()
         : (catalog.types.get(scan.table) ?? new Map<string, string>()),

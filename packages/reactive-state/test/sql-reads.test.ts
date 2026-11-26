@@ -54,6 +54,7 @@ const catalog: Catalog = {
       ]),
     ],
   ]),
+  typeSchemas: new Map([['tasks', new Map([['status', 'app']])]]),
 };
 
 function constant(column: string, text: string, type?: string): Condition {
@@ -70,6 +71,20 @@ function scanOf(table: string, ...conditions: readonly Condition[]): TableScan {
 }
 
 describe("a statement's reads", () => {
+  it.each<readonly [string, Readonly<Record<string, string>>]>([
+    ['app', { k_status: keyDigest('open') }],
+    ['other', {}],
+  ])('matches a qualified enum by its schema too: %s', (schema, where) => {
+    const condition: Condition = {
+      ...constant('status', 'open', 'status'),
+      operands: [{ constant: 'open', schema, type: 'status' }],
+    };
+
+    expect(readsOf([scanOf('tasks', condition)], { values: [] }, followed, catalog)).toStrictEqual([
+      { table: 'tasks', where },
+    ]);
+  });
+
   it.each<readonly [string, Condition, Readonly<Record<string, string>>]>([
     [
       'a constant of the key own enum',
