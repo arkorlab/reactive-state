@@ -99,6 +99,21 @@ const CASES = [
     input: true,
     private: false,
   },
+  // An argument the compile cannot read may be any value; those after it still become text.
+  {
+    id: 'unread-earlier-argument',
+    source: `export function Widget(){const render=(label:string)=>''.concat(label,[new Date(0)] as unknown as string);return <p>{render('x')}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unread-earlier-argument-data',
+    source: `export function Widget(){const render=(label:string)=>''.concat(label,['x'] as unknown as string);return <p>{render('x')}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('native string concat Date owner boundaries', () => {

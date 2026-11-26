@@ -79,6 +79,19 @@ const CASES = [
     input: null,
     private: false,
   },
+  // A substitution the compile cannot read may be any value; the later ones still become text.
+  {
+    id: 'unread-earlier-substitution',
+    source: `export function Widget(props:{label?:string}){return <p>{\`\${props.label}\${[new Date(0)]}\`}</p>;}`,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unread-earlier-substitution-data',
+    source: `export function Widget(props:{label?:string}){return <p>{\`\${props.label}\${['x']}\`}</p>;}`,
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('date implicit array conversion readers', () => {

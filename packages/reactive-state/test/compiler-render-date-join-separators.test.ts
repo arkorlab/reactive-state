@@ -239,6 +239,35 @@ const CASES = [
     input: null,
     private: false,
   },
+  // The elements render whatever the separator: one the compile reads but cannot prove written —
+  // a call, a member read — adds no Date text of its own, and takes none away.
+  {
+    id: 'coowned-call-separator',
+    source:
+      "export function Widget(){const sep=()=>'-';return <p>{[new Date(0)].join(sep())}</p>;}",
+    input: true,
+    private: true,
+  },
+  {
+    id: 'member-read-separator',
+    source:
+      "export function Widget(){const box={sep:'-'};return <p>{[new Date(0)].join(box.sep)}</p>;}",
+    input: true,
+    private: true,
+  },
+  {
+    id: 'coowned-call-separator-data',
+    source: "export function Widget(){const sep=()=>'-';return <p>{['a','b'].join(sep())}</p>;}",
+    input: false,
+    private: false,
+  },
+  {
+    id: 'member-read-separator-data',
+    source:
+      "export function Widget(){const box={sep:'-'};return <p>{['a','b'].join(box.sep)}</p>;}",
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('native join Date separator readers', () => {
