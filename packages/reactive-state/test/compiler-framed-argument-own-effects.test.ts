@@ -147,6 +147,18 @@ const CASES: readonly Case[] = [
     source: `function frames(error:Error){${INNER}const args:[PropertyDescriptor]=[{value:error}];Object.defineProperty(box,(ignore(),'inner'),...args);return box.inner!.stack;${IGNORE}}`,
     refused: true,
   },
+  // A target that is a member read is no quiet value, so the spread after it is unresolved and the
+  // key it holds is not shown: the write is under any name, of each value the spread may supply.
+  {
+    id: 'define-key-past-member-target',
+    source: `function frames(error:Error){const holder:{box:{failure?:{stack?:string}}}={box:{failure:{stack:'fixed'}}};const args=['failure',{value:error}] as const;Object.defineProperty(holder.box,...args);return holder.box.failure!.stack;}`,
+    refused: true,
+  },
+  {
+    id: 'define-key-past-member-target-data-pin',
+    source: `function frames(error:Error){void error;const holder:{box:{failure?:{stack?:string}}}={box:{failure:{stack:'fixed'}}};const args=['failure',{value:{stack:'other'}}] as const;Object.defineProperty(holder.box,...args);return holder.box.failure!.stack;}`,
+    refused: false,
+  },
   {
     id: 'assign-source-quiet-pin',
     source: `function frames(error:Error){${INNER}const args=[{inner:{stack:'fixed'}}];Object.assign(box,{},...args);return box.inner!.stack;}`,
