@@ -57,13 +57,14 @@ const CASES = [
     reader: false,
     refused: false,
   },
+  // Through a set that answers another WeakMap, the get reads the declared value type.
   {
     id: 'weak-own-set-pin',
     source:
       'function frames(error:Error){const key={};const values=new WeakMap<object,{stack?:string}>();values.set=function(){return new WeakMap([[key,{stack:"fixed"}]]);};return values.set(key,error).get(key)!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'weak-own-set-borrows-call',
@@ -113,13 +114,14 @@ const CASES = [
     reader: true,
     refused: true,
   },
+  // Re-pinned: `this` handed to a borrowed native get inside an own method escapes (round 4).
   {
     id: 'weak-own-get-borrows-data-pin',
     source:
       'function frames(error:Error){void error;const key={};const weak=new WeakMap<object,{message:string}>([[key,{message:"fixed"}]]);weak.get=function(k:object){return WeakMap.prototype.get.call(this,k);};weak.set(key,{message:"fixed"});return weak.get(key)!.message;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'weak-unknown-get-other-key-write',
@@ -273,13 +275,14 @@ const CASES = [
     reader: false,
     refused: false,
   },
+  // A set the reader cannot prove answers the WeakMap leaves the get the declared value type.
   {
     id: 'weak-own-set-returns-self-pin',
     source:
       'function frames(error:Error){const key={};const values=new WeakMap<object,{message:string}>([[key,{message:"fixed"}]]);values.set=()=>values;return values.set(key,error).get(key)!.message;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'weak-later-write-pin',

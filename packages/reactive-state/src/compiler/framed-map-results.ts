@@ -1,26 +1,28 @@
 import {
-  type CallExpression,
   type BinaryExpression,
+  type CallExpression,
   type Expression,
   type Identifier,
-  type NewExpression,
-  type TypeNode,
   isArrayLiteralExpression,
   isBinaryExpression,
   isBlock,
   isCallExpression,
-  isExpressionStatement,
-  isIfStatement,
   isElementAccessExpression,
+  isExpressionStatement,
   isIdentifier,
+  isIfStatement,
+  isMethodDeclaration,
   isNewExpression,
   isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
   isVariableDeclaration,
   isVariableDeclarationList,
+  type MethodDeclaration,
+  type NewExpression,
   type Node,
   SyntaxKind,
+  type TypeNode,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -34,13 +36,28 @@ import {
   frameTypeOf,
   type FrameBinding,
 } from './framed-bindings.ts';
+import {
+  framedInstalledMethods,
+  framedMutatorsInstalled,
+  framedReceiverInstalled,
+  type InstalledMethod,
+} from './framed-collection-prototypes.ts';
+import { framedDeclaredAdmitted } from './framed-declared-collections.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
+import { framedMethodsWritten } from './framed-iteration-writes.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedLiteralObject } from './framed-literal-data.ts';
 import { framedMapChainValues } from './framed-map-chain-values.ts';
-import { framedMapChain, framedMapMutations, framedMapSet } from './framed-map-mutations.ts';
+import {
+  framedMapChain,
+  framedMapChainSets,
+  framedMapMutations,
+  framedMapSet,
+} from './framed-map-mutations.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
+import { framedQuietSource } from './framed-native-evaluation.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
+import { framedUnreadInput } from './framed-unread-inputs.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { namesLocalMemberType, namesLocalTypeArgument } from './local-type-reading.ts';
 import { constantValue } from './numbers.ts';
@@ -49,6 +66,9 @@ import { isTypeOnly, readsBinding } from './scope.ts';
 const MAP_TYPES = new Set(['Map', 'ReadonlyMap', 'WeakMap']);
 const MAP_CONSTRUCTORS = new Set(['Map', 'WeakMap']);
 const NATIVE_GETTERS = new Set(['Map.prototype.get', 'WeakMap.prototype.get']);
+const WEAK_MAPS = new Set(['WeakMap']);
+/** The native collections a get may be any of. */
+const MAP_KINDS: readonly string[] = ['Map', 'WeakMap'];
 
 interface MapReading {
   readonly construction: NewExpression | undefined;
@@ -80,8 +100,10 @@ type GetterAnswer = 'closed' | 'entries' | 'error' | 'native' | 'unread';
 
 /**
  * Native get results retain a selected entry or a directly written native Map value type; an own
- * get that acts on the Map may answer any entry, whatever the key, and an unread one leaves no
- * data proof.
+ * get that acts on the Map may answer any entry, whatever the key. Where a replacement the reader
+ * cannot read may answer or store instead (`unseenChange`), or a set chain may answer another
+ * receiver than the Map (`elsewhereResult`), any entry may answer and no data proof stands, and the
+ * get may answer an Error wherever the declared value type admits one.
  */
 export function framedMapResult(
   call: CallExpression,
@@ -93,32 +115,158 @@ export function framedMapResult(
   if (selection === undefined) return undefined;
   const selected = nativeMap(selection.receiver);
   if (selected === undefined) return undefined;
-  const own: OwnReading = selection.borrowed
-    ? { result: undefined, entries: false, unread: false }
-    : ownResult(call, selected.bindings, (value) => error(value, made));
-  const reading = mapValues(call, selected, own.entries ? undefined : selection.key, own.entries);
+  if (!framedMapChain(selected, nativeMap).certain)
+    return elsewhereResult(call, selection, selected, {
+      names,
+      error: (value) => error(value, made),
+    });
+  const own = ownResult(
+    call,
+    selection.borrowed ? new Set<FrameBinding>() : selected.bindings,
+    (value) => error(value, made),
+    installedGetters(call, mapKinds(selected)),
+  );
+  if (own.result === true) return true;
+  const change = unseenChange(call, selected, own.result === false);
+  const unseen = own.unread || change !== undefined;
+  const anyEntry = own.entries || unseen;
+  const reading = mapValues(call, selected, anyEntry ? undefined : selection.key, anyEntry);
+  // A definite own get answers itself where only what the Map holds may have changed.
+  if (change !== 'getter' && own.result === false && reading?.sameReceiver === true) return false;
+  if (unseen)
+    return unseenResult(reading, selected, { names, error: (value) => error(value, made) });
   if (reading === undefined) return undefined;
-  if (own.result === true || (own.result === false && reading.sameReceiver)) return own.result;
   const { values } = reading;
   if (values?.some((value) => error(value, made)) === true) return true;
-  const proven = !made && !own.unread && reading.complete;
+  const proven = !made && reading.complete;
   if (proven && knownData(values, (value) => error(value, true))) return false;
-  return declaredMapError(selected, reading.unread, names);
+  return declaredError(selected, reading.unread, names);
 }
 
 /**
- * What the Map's declared value type says of what it holds: an Error where it names one. A value
- * the compile cannot read (`unread`) is read by that type alone, and as any value with none.
+ * What a get answers through a set chain that may answer another receiver than the Map
+ * (`framedMapChain`): an Error any collection's installed get may answer, or the Map's own get
+ * where the chain may answer the Map itself, which only a set answering a collection of its own
+ * making rules out (`freshChain`); else what a replacement the reader cannot read leaves
+ * (`unseenResult`): the declared value type, or anything.
  */
-function declaredMapError(
+function elsewhereResult(
+  call: CallExpression,
+  selection: MapSelection,
+  selected: MapReading,
+  context: {
+    readonly names: ReadonlySet<string>;
+    readonly error: (value: Expression) => boolean;
+  },
+): boolean | undefined {
+  const own = !selection.borrowed && !freshChain(selected);
+  const readings = [
+    ownResult(call, new Set<FrameBinding>(), context.error, installedGetters(call, MAP_KINDS)),
+    ...(own ? [ownResult(call, selected.bindings, context.error, [])] : []),
+  ];
+  if (readings.some((reading) => reading.result === true)) return true;
+  return unseenResult(mapValues(call, selected, undefined, true), selected, context);
+}
+
+/**
+ * Whether a set chain surely answers a native Map or WeakMap its set makes itself: each own set it
+ * runs instead of the native one (`framedMapChainSets`) returns such a construction directly
+ * (`framedAtMethod`), which holds none of the Map's own methods. One that may return anything else,
+ * its receiver among it, does not.
+ */
+function freshChain(selected: MapReading): boolean {
+  const sets = framedMapChainSets(selected, nativeMap);
+  return (
+    sets.length > 0 &&
+    sets.every((value) => framedAtMethod(value, (returned) => !freshMap(returned)) === false)
+  );
+}
+
+/** A native Map or WeakMap constructed in place. */
+function freshMap(value: Expression): boolean {
+  const actual = unwrapped(value);
+  return isNewExpression(actual) && framedNativeConstructor(actual.expression, MAP_CONSTRUCTORS);
+}
+
+/**
+ * What a get a replacement the reader cannot read may answer instead (`unseenChange`)
+ * answers: an Error a value it may still answer holds, and one wherever the declared value type
+ * admits one (`unseenAdmits`), else what the declared type says (`declaredError`); never data.
+ */
+function unseenResult(
+  reading: MapValueReading | undefined,
+  selected: MapReading,
+  context: {
+    readonly names: ReadonlySet<string>;
+    readonly error: (value: Expression) => boolean;
+  },
+): boolean | undefined {
+  if (reading?.values?.some((value) => context.error(value)) === true) return true;
+  return unseenAdmits(selected)
+    ? true
+    : declaredError(selected, reading?.unread === true, context.names);
+}
+
+/**
+ * The scope `unseenChange` reads writes of the get itself in, on the Map; what a plain own get or
+ * set does with the Map, the reader reads with it.
+ */
+const GETTER_SCOPE = {
+  members: new Set(['__proto__', 'get']),
+  attributed: new Set(['get', 'set']),
+};
+/** The scope `unseenChange` reads writes of a mutator in, on the Map. */
+const MUTATOR_SCOPE = {
+  members: new Set(['clear', 'delete', 'set']),
+  attributed: new Set(['set']),
+};
+
+/**
+ * What a replacement the reader cannot read may change. `'getter'`, the get itself: a write of it
+ * or of the Map's prototype on the Map, or a use that hands the Map on (`framedMethodsWritten`);
+ * for a definite own get, also a prototype method that may write the Map's own members when
+ * called on it (`framedReceiverInstalled`). `'contents'`, what the Map holds alone: a mutator the
+ * prototype may be given (`framedMutatorsInstalled`) or the Map's own replaced unseen, a plain own
+ * set, which the reader reads itself, excepted. When in doubt, the getter.
+ */
+function unseenChange(
+  call: CallExpression,
+  selected: MapReading,
+  definite: boolean,
+): 'contents' | 'getter' | undefined {
+  const file = call.getSourceFile();
+  const kinds = mapKinds(selected);
+  if (framedMethodsWritten(selected.bindings, call, GETTER_SCOPE)) return 'getter';
+  if (definite && kinds.some((kind) => framedReceiverInstalled(file, kind))) return 'getter';
+  if (kinds.some((kind) => framedMutatorsInstalled(file, kind))) return 'contents';
+  return framedMethodsWritten(selected.bindings, call, MUTATOR_SCOPE) ? 'contents' : undefined;
+}
+
+/**
+ * Whether the Map's declared value type admits an Error, as one none is declared for does: its
+ * construction's own argument, else the value argument of the annotation of the name it is read
+ * through, past local aliases (`framedDeclaredAdmitted`).
+ */
+function unseenAdmits(selected: MapReading): boolean {
+  const written = selected.construction?.typeArguments;
+  return framedDeclaredAdmitted({ written, annotation: selected.type }, 'Map', 1);
+}
+
+/**
+ * What a Map's declared value type says where no written value answers: a construction given an
+ * input the compile cannot read (`unreadEntries`), or a write of a value it cannot read
+ * (`unread`), may hold an Error where that type admits one (`unseenAdmits`), as any value where
+ * none is declared; and a written native value type that names one does.
+ */
+function declaredError(
   selected: MapReading,
   unread: boolean,
   names: ReadonlySet<string>,
 ): boolean | undefined {
+  if (unreadEntries(selected) || (unread && unseenAdmits(selected))) return true;
   const explicit = selected.construction?.typeArguments?.[1];
   if (explicit !== undefined && namesLocalMemberType(explicit, [], names)) return true;
-  if (typedMapError(selected.type, names)) return true;
-  return unread && explicit === undefined && selected.type === undefined ? true : undefined;
+  return typedMapError(selected.type, names) ? true : undefined;
 }
 
 /**
@@ -153,6 +301,15 @@ function mapValues(
     sameReceiver: mutation?.sameReceiver ?? true,
     unread: mutation?.unread === true,
   };
+}
+
+/**
+ * A written construction given an input the compile cannot read (`framedUnreadInput`) may hold an
+ * Error where its declared value type admits one (`unseenAdmits`).
+ */
+function unreadEntries(selected: MapReading): boolean {
+  const input = selected.construction?.arguments?.[0];
+  return input !== undefined && framedUnreadInput(input, true) && unseenAdmits(selected);
 }
 
 /** Only wholly known data or locally constructed Error words establish a data result. */
@@ -261,13 +418,17 @@ function mapInitializer(binding: FrameBinding): Expression | undefined {
     : undefined;
 }
 
-/** Exact written entry keys select the last matching value; unknown keys retain all entry values. */
+/**
+ * Exact written entry keys select the last matching value; unknown keys retain all entry values.
+ * The entries are read past a quiet comma and through unexposed whole `const` aliases
+ * (`framedQuietSource`).
+ */
 function selectedValues(
   node: Expression,
   key: Expression | undefined,
 ): readonly Expression[] | undefined {
-  const value = unwrapped(node);
-  if (!isArrayLiteralExpression(value)) return undefined;
+  const value = framedQuietSource(node);
+  if (value === undefined || !isArrayLiteralExpression(value)) return undefined;
   const wanted = key === undefined ? undefined : constantValue(unwrapped(key));
   const values: Expression[] = [];
   let exact = wanted !== undefined;
@@ -310,6 +471,7 @@ function ownResult(
   call: CallExpression,
   bindings: ReadonlySet<FrameBinding>,
   error: (value: Expression) => boolean,
+  inherited: readonly InstalledMethod[],
 ): OwnReading {
   const owner = executionOwner(call);
   const assignments = ownGetters(call, bindings);
@@ -317,10 +479,14 @@ function ownResult(
   for (const node of assignments)
     if (definiteBefore(node, call, owner) && (definite === undefined || node.pos > definite.pos))
       definite = node;
+  // A definite own get answers itself, whatever the prototype holds.
+  const installed = [
+    ...assignments.filter((node) => !hiddenGetter(node, definite, owner)).map((node) => node.right),
+    ...(definite === undefined ? inherited : []),
+  ];
   const answers = new Set<GetterAnswer>();
-  for (const node of assignments) {
-    if (hiddenGetter(node, definite, owner)) continue;
-    const answer = getterAnswer(node.right, bindings, error);
+  for (const value of installed) {
+    const answer = value === undefined ? 'unread' : getterAnswer(value, bindings, error);
     if (answer === 'error') return { result: true, entries: false, unread: false };
     answers.add(answer);
   }
@@ -331,16 +497,36 @@ function ownResult(
 }
 
 /**
+ * What the file may install as the get the prototype of each of the collection kinds holds
+ * (`framedInstalledMethods`).
+ */
+function installedGetters(
+  call: CallExpression,
+  kinds: readonly string[],
+): readonly InstalledMethod[] {
+  const file = call.getSourceFile();
+  return kinds.flatMap((kind) => framedInstalledMethods(file, kind, 'get'));
+}
+
+/** The native collections a Map reading may be: its construction's, or either for a type alone. */
+function mapKinds(selected: MapReading): readonly string[] {
+  const { construction } = selected;
+  if (construction === undefined) return MAP_KINDS;
+  return [framedNativeConstructor(construction.expression, WEAK_MAPS) ? 'WeakMap' : 'Map'];
+}
+
+/**
  * How an installed get answers: as the native get, which reads the selected key; with a possible
  * error; unread, a body the compile cannot read or a method the source does not show; through the
  * Map it acts on (`entries`); or with its own closed result.
  */
 function getterAnswer(
-  value: Expression,
+  value: Expression | MethodDeclaration,
   bindings: ReadonlySet<FrameBinding>,
   error: (value: Expression) => boolean,
 ): GetterAnswer {
-  if (framedNativeConstructor(value, NATIVE_GETTERS)) return 'native';
+  if (!isMethodDeclaration(value) && framedNativeConstructor(value, NATIVE_GETTERS))
+    return 'native';
   const result = framedAtMethod(value, error);
   if (result === true) return 'error';
   if (result === undefined) return 'unread';

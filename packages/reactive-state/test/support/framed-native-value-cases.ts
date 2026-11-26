@@ -202,6 +202,15 @@ export const framedNativeValueCases = [
     source:
       "function frames(error:Error){const row=['failure',error] as const;const entries=[row] as const;(row as unknown as [string,{stack:string}])[1]={stack:'fixed'};return Object.fromEntries(entries).failure.stack;}",
     invocation: 'frames(new Error())',
+    // The written tuple is exposed, so its entries are unread and no type keeps an Error out: an
+    // overwrite with an Error reads alike, which main read as readable through that hole.
+    refused: true,
+  },
+  {
+    id: 'entries-packed-tuple-overwritten-typed',
+    source:
+      "function frames(error:Error){const row=['failure',error] as const;const entries=[row] as const;(row as unknown as [string,{stack:string;title:string}])[1]={stack:'fixed',title:'t'};return Object.fromEntries<{stack:string;title:string}>(entries as never).failure.stack;}",
+    invocation: 'frames(new Error())',
     refused: false,
   },
   {

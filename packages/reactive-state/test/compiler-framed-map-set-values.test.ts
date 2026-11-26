@@ -409,13 +409,14 @@ const CASES = [
     reader: true,
     refused: true,
   },
+  // Through a set that answers another Map, the get reads the declared value type: it admits one.
   {
     id: 'chain-own-set-other-result-pin',
     source:
       'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=()=>new Map([["x",{message:"fixed"}]]);return values.set("x",error).get("x")!.message;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'chain-own-get-data-pin',
@@ -678,8 +679,9 @@ const CASES = [
     source:
       'function frames(error:Error){void error;const values=new Map<string,{message:string}>([["x",{message:"fixed"}],["y",{message:"fixed"}]]);const methods=[function(this:Map<string,{message:string}>,key:string){void key;return Map.prototype.get.call(this,"y");}];values.get=methods[0]!;values.set("y",{message:"fixed"});return values.get("x")!.message;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    // An own get the compile cannot read may answer anything the declared value type admits.
+    reader: true,
+    refused: true,
   },
   {
     id: 'native-get-reinstalled-pin',
