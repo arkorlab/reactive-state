@@ -4,6 +4,7 @@ import {
   isElementAccessExpression,
   isNoSubstitutionTemplateLiteral,
   isPropertyAccessExpression,
+  isSpreadElement,
   isStringLiteral,
   SyntaxKind,
 } from 'typescript/ast';
@@ -14,6 +15,7 @@ import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { framedAppliedArguments } from './framed-keys.ts';
 import { framedQuietSource } from './framed-native-evaluation.ts';
+import { framedConsumedArguments } from './framed-text-arguments.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
 
 /** Source-known native string concatenation converts original operands only after quiet evaluation. */
@@ -30,6 +32,12 @@ export const STRING_CONCAT_FIELDS: ReadonlySet<string> = new Set([
   'String.prototype.concat.call',
 ]);
 
+/** A native concat call's receiver and what it is given, where the code shows a list of it. */
+interface ConcatOperands {
+  readonly receiver: Expression;
+  readonly given: readonly Expression[] | undefined;
+}
+
 interface ConcatWords {
   readonly coowned: (value: Expression) => boolean;
   readonly inputs: (values: readonly Expression[]) => boolean;
@@ -38,21 +46,32 @@ interface ConcatWords {
   readonly quiet: (value: Expression) => boolean;
 }
 
-/** Native direct or borrowed concat retains its converted receiver and every consumed argument. */
+/**
+ * Native direct or borrowed concat retains its converted receiver and every consumed argument. A
+ * spread or a list the compile cannot read, or one carried across an execution owner, gives values
+ * of unknown provenance in its place, and the values after it still become text.
+ */
 export function nativeStringConcat(call: CallExpression, words: ConcatWords): boolean {
   const selected = concatOperands(call);
   if (selected === undefined) return false;
   const inputs = [selected.receiver, ...call.arguments];
+  const written = inputs.filter((value) => !isSpreadElement(value));
   if (
     !words.coowned(call.expression) ||
-    inputs.some((value) => !words.coowned(value)) ||
-    !words.inputs(inputs) ||
+    written.some((value) => !words.coowned(value)) ||
     !framedQuietTextPrefix(call, STRING_CONCAT_FIELDS)
   )
     return false;
-  const given = words.arguments(selected.given);
-  if (given === undefined) return false;
-  for (const value of [selected.receiver, ...given]) {
+  const exposed = call.arguments.some((value) => isSpreadElement(value) && !words.coowned(value));
+  const given =
+    exposed || selected.given === undefined ? undefined : words.arguments(selected.given);
+  if (given === undefined && !words.inputs(written)) return false;
+  if (given !== undefined && !words.inputs(inputs)) return false;
+  const values =
+    given ??
+    (selected.given === undefined ? [] : framedConsumedArguments(call, selected.given, Infinity));
+  for (const value of [selected.receiver, ...values]) {
+    if (isSpreadElement(value)) continue;
     if (words.date(value)) return true;
     if (!words.quiet(value)) return false;
   }
@@ -60,9 +79,7 @@ export function nativeStringConcat(call: CallExpression, words: ConcatWords): bo
 }
 
 /** Direct literal text and unchanged whole constant aliases select the native member. */
-function concatOperands(
-  call: CallExpression,
-): { readonly receiver: Expression; readonly given: readonly Expression[] } | undefined {
+function concatOperands(call: CallExpression): ConcatOperands | undefined {
   const member = unwrapped(call.expression);
   if (
     (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
@@ -82,5 +99,5 @@ function concatOperands(
     globalPathOf(source ?? applied)?.join('.') === 'undefined';
   if (nullish && globalPathOf(member)?.join('.') === 'Reflect.apply') return undefined;
   const given = nullish ? [] : framedAppliedArguments(call, applied);
-  return given === undefined ? undefined : { receiver: borrowed.receiver, given };
+  return { receiver: borrowed.receiver, given };
 }

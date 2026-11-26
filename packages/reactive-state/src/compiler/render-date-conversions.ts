@@ -6,15 +6,12 @@ import {
   isBinaryExpression,
   isCallExpression,
   isElementAccessExpression,
-  isIdentifier,
   isNewExpression,
   isOmittedExpression,
   isPropertyAccessExpression,
   isSpreadElement,
   isTaggedTemplateExpression,
   isTemplateExpression,
-  isVariableDeclaration,
-  isVariableDeclarationList,
   type NewExpression,
   type Node,
   SyntaxKind,
@@ -25,8 +22,7 @@ import {
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
-import { argumentArrayExposed } from './framed-array-selections.ts';
-import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
+import { frameMemberName } from './framed-bindings.ts';
 import { framedBoundErrorArguments } from './framed-bound-errors.ts';
 import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
@@ -36,7 +32,6 @@ import {
   framedQuietPrimitive,
   framedQuietSource,
 } from './framed-native-evaluation.ts';
-import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedNativeRaw } from './framed-native-raw.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedQuietTextPrefix } from './framed-text-prefix.ts';
@@ -46,6 +41,9 @@ import { localDateInvocation } from './render-date-local-invocations.ts';
 import {
   conversionLocalSource,
   dateCoowned,
+  dateInputsQuiet,
+  dateSource,
+  dateStringArguments,
   unknownValue,
   unreadArgument,
   writesWhenEvaluated,
@@ -97,6 +95,13 @@ interface ArrayText {
   readonly read: Expression;
 }
 
+/** A native String invocation: its target, the inputs it is given, and whether it constructs. */
+interface NativeStringCall {
+  readonly target: Expression;
+  readonly args: readonly Expression[] | undefined;
+  readonly constructed: boolean;
+}
+
 /** A native array text call whose arguments the compile cannot read whole, as they are written. */
 interface UnreadArrayText extends Omit<ArrayText, 'given'> {
   readonly given: readonly Expression[] | undefined;
@@ -136,6 +141,7 @@ function paddedDate(call: CallExpression): boolean {
     arguments: (values) => dateStringArguments(call, values),
     date: (value) => rawDateSource(value, call),
     quiet: (value) => quietRawSubstitution(value, call),
+    unread: (value) => unknownValue(value),
   });
 }
 
@@ -147,6 +153,7 @@ function replacedDate(call: CallExpression): boolean {
     arguments: (values) => dateStringArguments(call, values),
     date: (value) => rawDateSource(value, call),
     quiet: (value) => quietRawSubstitution(value, call),
+    unread: (value) => unknownValue(value),
   });
 }
 
@@ -230,10 +237,15 @@ function rawInputsQuiet(
   );
 }
 
-/** Borrowed native String converts its consumed input, independently of the ignored supplied receiver. */
+/**
+ * Borrowed native String converts its first consumed input, independently of the ignored supplied
+ * receiver and of the inputs after it, but for one whose evaluation writes as the code shows
+ * (`writesWhenEvaluated`); a `call` whose receiver and first input are written before any spread
+ * reads that input whatever the spread holds (`writtenStringCall`).
+ */
 function borrowedStringDate(call: CallExpression): boolean {
   const bound = framedBoundErrorArguments(call, STRINGS);
-  const selected = bound ?? framedNativeArguments(call, STRINGS);
+  const selected = bound ?? framedNativeArguments(call, STRINGS) ?? writtenStringCall(call);
   if (
     selected === undefined ||
     selected.constructed ||
@@ -242,16 +254,31 @@ function borrowedStringDate(call: CallExpression): boolean {
   )
     return false;
   if (!borrowedInputsQuiet(call, selected.target, bound?.bound)) return false;
-  const prefix = framedArgumentPrefix(call, selected.args, Infinity);
-  if (prefix.unknown || prefix.alternatives !== undefined) return false;
-  const [first, ...remaining] = prefix.values;
+  const head = framedArgumentPrefix(call, selected.args, 1);
+  if (head.unknown || head.alternatives !== undefined) return false;
+  const [first] = head.values;
   const read = bound?.bound ?? call;
   return (
     first !== undefined &&
-    remaining.every((argument) => framedQuietPrimitive(argument)) &&
+    selected.args.slice(1).every((argument) => !writesWhenEvaluated(argument)) &&
     dateCoowned(first, call) &&
     (renderDateConversionSource(first, read) || arrayDateSource(first, read))
   );
+}
+
+/** A `call` of the native String whose receiver and first input are written before any spread. */
+function writtenStringCall(call: CallExpression): NativeStringCall | undefined {
+  const callee = unwrapped(call.expression);
+  if (
+    (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) ||
+    frameMemberName(callee) !== 'call' ||
+    !framedNativeConstructor(callee.expression, STRINGS)
+  )
+    return undefined;
+  const [receiver, first] = call.arguments;
+  if ([receiver, first].some((value) => value === undefined || isSpreadElement(value)))
+    return undefined;
+  return { target: callee.expression, args: call.arguments.slice(1), constructed: false };
 }
 
 /** Every original wrapper input remains coowned and quiet before native text conversion. */
@@ -348,7 +375,7 @@ function additionArrayDate(node: BinaryExpression): boolean {
   if (operation !== SyntaxKind.PlusToken && operation !== SyntaxKind.PlusEqualsToken) return false;
   const left =
     conversionLocalSource(node.left, node) ??
-    (operation === SyntaxKind.PlusToken ? node.left : undefined);
+    (operation === SyntaxKind.PlusToken || unknownValue(node.left) ? node.left : undefined);
   if (left === undefined) return false;
   const right = conversionLocalSource(node.right, node) ?? node.right;
   return (
@@ -360,61 +387,6 @@ function additionArrayDate(node: BinaryExpression): boolean {
 /** Whether a value beside a converted array leaves its elements to become text (`unknownValue`). */
 function accompanying(value: Expression): boolean {
   return framedQuietPrimitive(value) || unknownValue(value);
-}
-
-/** Selected mutable array data keeps the same owner and original conversion read point. */
-function dateSource(value: Expression, consumer: Expression): Expression | undefined {
-  const original = framedQuietSource(value);
-  if (original !== undefined) return original;
-  const aliases = new Set<FrameBinding>();
-  let source = unwrapped(value);
-  let read = consumer;
-  while (isIdentifier(source)) {
-    const selected = frameBindingOf(source);
-    if (selected === undefined || selected.keys.length > 0 || aliases.has(selected.binding))
-      return undefined;
-    const { binding } = selected;
-    const local = conversionLocalSource(source, read);
-    if (local !== undefined) {
-      aliases.add(binding);
-      return argumentArrayExposed(value, aliases) ? undefined : framedQuietSource(local);
-    }
-    if (
-      !isVariableDeclaration(binding) ||
-      !isIdentifier(binding.name) ||
-      !isVariableDeclarationList(binding.parent) ||
-      binding.initializer === undefined ||
-      binding.end >= read.pos ||
-      !framedPrefixSameOwner(binding, read) ||
-      !/^const\b/u.test(binding.parent.getText(binding.getSourceFile()))
-    )
-      return undefined;
-    aliases.add(binding);
-    source = unwrapped(binding.initializer);
-    read = source;
-  }
-  return undefined;
-}
-
-/** Every raw wrapper input is evaluated; only finite array entries gain the local source option. */
-function dateInputsQuiet(
-  inputs: readonly Expression[],
-  consumer: Expression,
-  natives: ReadonlySet<string>,
-): boolean {
-  const pending = [...inputs];
-  const seen = new Set<Expression>();
-  for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
-    if (seen.has(value)) continue;
-    seen.add(value);
-    if (framedQuietInputs([value], natives)) continue;
-    const source = dateSource(value, consumer);
-    if (source === undefined) return false;
-    if (isArrayLiteralExpression(source)) pending.push(...source.elements);
-    else if (isSpreadElement(source)) pending.push(source.expression);
-    else return false;
-  }
-  return true;
 }
 
 /**
@@ -463,26 +435,6 @@ function stringDateInput(first: Expression, node: CallExpression | NewExpression
     dateCoowned(first, node) &&
     (renderDateConversionSource(first, node) || arrayDateSource(first, node))
   );
-}
-
-/** Finite spreads reuse native argument selection; local mutable tuples use original literal entries. */
-function dateStringArguments(
-  node: CallExpression | NewExpression,
-  given: readonly Expression[],
-): readonly Expression[] | undefined {
-  const values: Expression[] = [];
-  for (const argument of given) {
-    let selected = [argument];
-    if (isSpreadElement(argument)) {
-      const source = conversionLocalSource(argument.expression, node);
-      const array = source === undefined ? undefined : framedQuietSource(source);
-      if (array !== undefined && isArrayLiteralExpression(array)) selected = [...array.elements];
-    }
-    const prefix = framedArgumentPrefix(node, selected, Infinity);
-    if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
-    values.push(...prefix.values);
-  }
-  return values;
 }
 
 /**

@@ -134,6 +134,35 @@ const CASES = [
     input: true,
     private: false,
   },
+  // pad the text: the fill's Date text stays.
+  {
+    id: 'unread-width-Date-fill',
+    source: `export function Widget(){const render=(width:number)=>'x'.padStart(width,[new Date(0)] as unknown as string);return <p>{render(40)}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unread-width-text-fill-data',
+    source: `export function Widget(){const render=(width:number)=>'x'.padStart(width,'-');return <p>{render(40)}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
+  {
+    id: 'unresolved-spread-Date-fill',
+    source: `export function Widget(){const render=(head:readonly number[])=>'x'.padEnd(...(head as [number]),[new Date(0)] as unknown as string);return <p>{render([40])}</p>;}`,
+    owner: true,
+    input: true,
+    private: true,
+  },
+  {
+    id: 'unresolved-spread-text-fill-data',
+    source: `export function Widget(){const render=(head:readonly number[])=>'x'.padEnd(...(head as [number]),'-');return <p>{render([40])}</p>;}`,
+    owner: false,
+    input: false,
+    private: false,
+  },
 ] as const;
 
 describe('native string padding Date owner boundaries', () => {
