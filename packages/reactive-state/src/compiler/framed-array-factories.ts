@@ -17,6 +17,7 @@ import {
   isVariableDeclaration,
   isVariableDeclarationList,
   SyntaxKind,
+  type TypeNode,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
@@ -33,9 +34,9 @@ const OF = new Set(['Array.of']);
 const FROM = new Set(['Array.from']);
 
 /**
- * A known native of stores each argument; an unmapped from copies source elements, which may be
- * Errors where no reader reads the source and the declared element type admits one
- * (`framedCopiedUnread`).
+ * A known native of stores each argument; an unmapped from copies source elements. Either may copy
+ * from what no reader reads — from's source, of's unresolved spread — whose elements may be Errors
+ * where the declared element type admits one (`framedCopiedUnread`).
  */
 export function arrayFactoryViews(
   call: CallExpression,
@@ -52,7 +53,17 @@ export function arrayFactoryViews(
     return undefined;
   return ownIterator(call, source, stable)
     ? undefined
-    : [{ value: source, index, capture: call, copiedFrom: { call, depth: 0 } }];
+    : [{ value: source, index, capture: call, copied: fromCopied(call) }];
+}
+
+/** What a native factory copies, under its own type argument, read from its outermost array. */
+function fromCopied(call: CallExpression): {
+  readonly declared: TypeNode | undefined;
+  readonly follow: boolean;
+  readonly depth: number;
+  readonly own: boolean;
+} {
+  return { declared: call.typeArguments?.[0], follow: true, depth: 0, own: true };
 }
 
 /** Fixed positions exclude arguments beyond the selected prefix or before a selected suffix. */
@@ -97,7 +108,11 @@ interface ArgumentWork {
   readonly seen: ReadonlySet<Node>;
 }
 
-/** Unresolved positions retain later possibilities while excluding every definitely earlier value. */
+/**
+ * Unresolved positions retain later possibilities while excluding every definitely earlier value;
+ * an unresolved spread's elements are each possible, followed under the call's declared element
+ * type (`copied`).
+ */
 function possibleArguments(call: CallExpression, earlier: number): readonly ArrayElementView[] {
   const pending: ArgumentWork[] = call.arguments
     .toReversed()
@@ -115,7 +130,7 @@ function possibleArguments(call: CallExpression, earlier: number): readonly Arra
     const literal = at.seen.has(spread) ? undefined : framedAppliedArguments(call, spread);
     if (literal === undefined) {
       remaining = 0;
-      found.push({ value: spread, index: undefined, capture: call });
+      found.push({ value: spread, index: undefined, capture: call, copied: fromCopied(call) });
     } else {
       const seen = new Set(at.seen).add(spread);
       pending.push(...literal.toReversed().map((each) => ({ value: each, seen })));
@@ -130,7 +145,7 @@ function ownIterator(
   source: Expression,
   stable: (value: Expression, at?: Expression) => boolean,
 ): boolean {
-  const array = literalSource(source);
+  const array = framedWrittenArray(source);
   const statement = closedStatement(call);
   if (array === undefined || statement === undefined || !isBlock(statement.parent)) return false;
   const statements = statement.parent.statements;
@@ -143,7 +158,7 @@ function ownIterator(
   return (
     isElementAccessExpression(member) &&
     globalPathOf(unwrapped(member.argumentExpression))?.join('.') === 'Symbol.iterator' &&
-    literalSource(member.expression) === array &&
+    framedWrittenArray(member.expression) === array &&
     sourceArrayFunction(assignment.right) &&
     stable(source, assignment)
   );
@@ -153,7 +168,7 @@ function ownIterator(
  * Whole constant aliases, past quiet commas (`framedQuietOperand`), retain a fresh native array
  * identity without guessing arbitrary objects.
  */
-function literalSource(node: Expression): ArrayLiteralExpression | undefined {
+export function framedWrittenArray(node: Expression): ArrayLiteralExpression | undefined {
   let value = framedQuietOperand(node);
   const seen = new Set<FrameBinding>();
   while (isIdentifier(value)) {

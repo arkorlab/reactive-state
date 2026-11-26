@@ -148,6 +148,20 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'pattern-parameter-element-retains',
+    source:
+      'function read([rows]:{stack?:string}[][]){return Array.from(rows)[0]!.stack;}function frames(error:Error){return read([[error]]);}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'whole-parameter-element-quiet',
+    source:
+      "function read(rows:{stack?:string;title:string}[]){return Array.from(rows)[0]!.stack;}function frames(error:Error){void error;return read([{stack:'fixed',title:'t'}]);}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('native Array.from runtime parameters readers', () => {

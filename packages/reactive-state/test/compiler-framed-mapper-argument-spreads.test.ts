@@ -245,6 +245,48 @@ const CASES = [
     refused: false,
     invocation: 'frames(new Error("ours"))',
   },
+  {
+    id: 'map-call-mapper',
+    source:
+      'function mappers(e:Error):[()=>Error]{return [()=>e];}function frames(error:Error){return [0].map(...mappers(error))[0]!.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'map-call-mapper-titled-pin',
+    source:
+      "function mappers():[()=>{stack?:string;title:string}]{return [()=>({stack:'fixed',title:'t'})];}function frames(error:Error){void error;return [0].map<{stack?:string;title:string}>(...mappers())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'flat-map-call-mapper',
+    source:
+      'function mappers(e:Error):[()=>Error[]]{return [()=>[e]];}function frames(error:Error){return [0].flatMap(...mappers(error))[0]!.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'flat-map-call-mapper-titled-pin',
+    source:
+      "function mappers():[()=>{stack?:string;title:string}[]]{return [()=>[{stack:'fixed',title:'t'}]];}function frames(error:Error){void error;return [0].flatMap<{stack?:string;title:string}>(...mappers())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'flat-map-empty-call-mapper-pin',
+    source:
+      'function mappers(e:Error):[()=>Error[]]{return [()=>[e]];}function frames(error:Error){return ([] as number[]).flatMap(...mappers(error))[0]?.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'flat-map-hole-call-mapper-pin',
+    source:
+      'function mappers(e:Error):[()=>Error[]]{return [()=>[e]];}function frames(error:Error){return new Array<number>(2).flatMap(...mappers(error))[0]?.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('mapper argument spread readers', () => {

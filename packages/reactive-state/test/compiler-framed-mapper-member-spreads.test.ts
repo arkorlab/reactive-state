@@ -72,6 +72,20 @@ const CASES = [
     refused: false,
     invocation: 'frames(new Error("ours"))',
   },
+  {
+    id: 'map-call-member-mapper',
+    source:
+      'function mappers():[(value:{failure:unknown})=>unknown]{return [(value)=>value.failure];}function frames(error:Error){return ([{failure:error}].map(...mappers())[0] as {stack?:string}).stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'map-call-member-titled-pin',
+    source:
+      "function mappers():[(value:{failure:{stack?:string;title:string}})=>{stack?:string;title:string}]{return [(value)=>value.failure];}function frames(error:Error){void error;return [{failure:{stack:'fixed',title:'t'}}].map<{stack?:string;title:string}>(...mappers())[0]!.stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('composed mapper member spread readers', () => {

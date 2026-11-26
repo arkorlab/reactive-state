@@ -10,22 +10,33 @@ import {
   isIdentifier,
   isNoSubstitutionTemplateLiteral,
   isNumericLiteral,
+  isParameterDeclaration,
   isStringLiteral,
   isPropertyAccessExpression,
   isReturnStatement,
   isSpreadElement,
+  isVariableDeclaration,
+  isVariableDeclarationList,
   isVoidExpression,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { frameMemberName, frameTypeOf } from './framed-bindings.ts';
-import { framedArgumentPrefix } from './framed-keys.ts';
+import { argumentArrayExposed } from './framed-array-selections.ts';
+import {
+  frameBindingOf,
+  type FrameBinding,
+  frameMemberName,
+  frameTypeOf,
+} from './framed-bindings.ts';
+import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { framedPromiseBatchResult } from './framed-promise-batches.ts';
+import { framedRunsNoCode } from './framed-quiet-operands.ts';
 import { framedRaceResult } from './framed-race-results.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedValueShape } from './framed-values.ts';
+import { framedAssignedValues } from './framed-writes.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
 import { constantValue } from './numbers.ts';
 
@@ -72,7 +83,8 @@ function forwardedReceiver(call: CallExpression): Expression | undefined {
   if (!isPropertyAccessExpression(method) && !isElementAccessExpression(method)) return undefined;
   const callback = call.arguments[0];
   const name = frameMemberName(method);
-  if ((name === 'then' || name === 'finally') && !quietTrailingArguments(call)) return undefined;
+  if (name === 'then' && !quietTrailingArguments(call, 2)) return undefined;
+  if (name === 'finally' && !quietTrailingArguments(call, 1)) return undefined;
   if (name === 'catch' && call.arguments.slice(1).some((argument) => !quietVoidOperand(argument)))
     return undefined;
   if (name === 'then' || name === 'catch')
@@ -95,17 +107,78 @@ function ignoredFinalizer(node: Expression): boolean {
   );
 }
 
-/** Ignored trailing operands are evaluated before a native handler is installed. */
-function quietTrailingArguments(call: CallExpression): boolean {
+/**
+ * Ignored trailing operands are evaluated before a native handler is installed. A spread the
+ * compile cannot read may lie past the `read` parameters the native reads, which written ones
+ * cover, only where it and every argument after it run no code (`unreadTailQuiet`); otherwise
+ * what its evaluation may change keeps the boundary.
+ */
+function quietTrailingArguments(call: CallExpression, read: number): boolean {
   const given = framedArgumentPrefix(call, call.arguments, Infinity, false);
   return (
-    !given.unknown &&
+    (!given.unknown || (given.values.length >= read && unreadTailQuiet(call))) &&
     (given.alternatives?.length ?? 0) === 0 &&
-    given.values.slice(1).every((argument) => {
-      const value = unwrapped(argument);
-      return quietVoidOperand(value) || isArrowFunction(value) || isFunctionExpression(value);
-    })
+    given.values.slice(1).every((argument) => quietTrailingOperand(argument))
   );
+}
+
+/** A trailing operand that runs no code: a void binding read or literal, or a written function. */
+function quietTrailingOperand(argument: Expression): boolean {
+  const value = unwrapped(argument);
+  return quietVoidOperand(value) || isArrowFunction(value) || isFunctionExpression(value);
+}
+
+/**
+ * Whether the arguments from the first spread the compile cannot expand on run no code: that
+ * spread and each later one a read whose evaluation and iteration run none (`quietUnreadSpread`),
+ * each other argument a quiet operand (`quietTrailingOperand`).
+ */
+function unreadTailQuiet(call: CallExpression): boolean {
+  const at = call.arguments.findIndex(
+    (each) => isSpreadElement(each) && framedAppliedArguments(call, each.expression) === undefined,
+  );
+  return (
+    at !== -1 &&
+    call.arguments
+      .slice(at)
+      .every((each) =>
+        isSpreadElement(each) ? quietUnreadSpread(each.expression) : quietTrailingOperand(each),
+      )
+  );
+}
+
+/**
+ * A spread value whose evaluation and iteration run no code: a read of a rest parameter, a fresh
+ * native array, through whole `const` aliases, none of them assigned again, nor used before the
+ * spread (`argumentArrayExposed`) — a member written, a definition or a hand-off may replace its
+ * iterator, which the spread runs.
+ */
+function quietUnreadSpread(expression: Expression): boolean {
+  let value = unwrapped(expression);
+  const seen = new Set<FrameBinding>();
+  while (isIdentifier(value) && framedRunsNoCode(value)) {
+    const selected = frameBindingOf(value);
+    if (
+      selected === undefined ||
+      selected.keys.length > 0 ||
+      seen.has(selected.binding) ||
+      framedAssignedValues(value).length > 0
+    )
+      return false;
+    const { binding } = selected;
+    seen.add(binding);
+    if (isParameterDeclaration(binding))
+      return binding.dotDotDotToken !== undefined && !argumentArrayExposed(expression, seen);
+    if (
+      !isVariableDeclaration(binding) ||
+      !isVariableDeclarationList(binding.parent) ||
+      !/^const\b/u.test(binding.parent.getText(binding.getSourceFile())) ||
+      binding.initializer === undefined
+    )
+      return false;
+    value = unwrapped(binding.initializer);
+  }
+  return false;
 }
 
 /** Only a source-known absent fulfillment handler forwards without running application code. */
@@ -138,7 +211,7 @@ function resolveArgument(call: CallExpression): Expression | undefined {
     frameMemberName(method) === 'resolve' &&
     framedNativeConstructor(method.expression, PROMISES) &&
     !isSpreadElement(argument) &&
-    quietTrailingArguments(call)
+    quietTrailingArguments(call, 1)
     ? argument
     : undefined;
 }

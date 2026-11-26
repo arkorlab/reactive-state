@@ -248,6 +248,19 @@ const CASES = [
     refused: false,
     invocation: 'frames(new Error("ours"))',
   },
+  {
+    id: 'reduce-call-args',
+    source: `function reducers(e:Error):[(acc:{stack?:string})=>{stack?:string},{stack?:string}]{return [()=>e,{stack:'fixed'}];}function frames(error:Error){return ([{stack:"fixed"}] as {stack?:string}[]).reduce(...reducers(error)).stack;}`,
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'reduce-call-args-titled-pin',
+    source:
+      "function reducers():[(acc:{stack?:string;title:string})=>{stack?:string;title:string},{stack?:string;title:string}]{return [(acc)=>acc,{stack:'fixed',title:'t'}];}function frames(error:Error){void error;return ([{stack:'fixed',title:'t'}]as{stack?:string;title:string}[]).reduce<{stack?:string;title:string}>(...reducers()).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('native reduction spread readers', () => {

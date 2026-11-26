@@ -162,6 +162,34 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'then-rest-tail',
+    source:
+      'type Then=(fulfilled?:undefined,rejected?:undefined,...tail:unknown[])=>Promise<Error>;async function frames(error:Error,...tail:unknown[]){return(await (Promise.resolve(error).then as Then)(undefined,undefined,...tail)).stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'then-rest-tail-data-pin',
+    source:
+      "type Then=(fulfilled?:undefined,rejected?:undefined,...tail:unknown[])=>Promise<{stack?:string}>;async function frames(error:Error,...tail:unknown[]){void error;return(await (Promise.resolve({stack:'fixed'}).then as Then)(undefined,undefined,...tail)).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'then-tail-effect-pin',
+    source:
+      "type Then=(fulfilled?:undefined,rejected?:undefined,...tail:unknown[])=>Promise<Error>;function tails(e:Error):unknown[]{Object.assign(e,{stack:'fixed'});return [];}async function frames(error:Error){return(await (Promise.resolve(error).then as Then)(undefined,undefined,...tails(error))).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'then-rest-iterator-pin',
+    source:
+      "type Then=(fulfilled?:undefined,rejected?:undefined,...tail:unknown[])=>Promise<Error>;async function frames(error:Error,...tail:unknown[]){tail[Symbol.iterator]=function*(){Object.assign(error,{stack:'fixed'});};return(await (Promise.resolve(error).then as Then)(undefined,undefined,...tail)).stack;}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ] as const;
 
 describe('native Promise trailing evaluation readers', () => {

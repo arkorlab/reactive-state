@@ -42,6 +42,7 @@ import {
   frameTypeOf,
 } from './framed-bindings.ts';
 import { concatSource } from './framed-concat-properties.ts';
+import { framedUnreadCallback } from './framed-copied-inputs.ts';
 import { flatReturnAlternatives } from './framed-flat-alternatives.ts';
 import {
   flatMapOwnedSource,
@@ -81,11 +82,14 @@ export function arrayProjectedViews(
   const mapping = { ...selected, memberViews };
   const at = stable(selected.receiver) ? index : undefined;
   if (selected.method === 'flatMap') {
+    // A source of holes alone calls no callback: the result is empty wherever it is read.
+    if (emptyMapPosition(selected.receiver, undefined)) return [];
     const views = flatMappedViews(mapping, at, call, stable);
-    return mapperResultViews(views, mapping, call);
+    return framedUnreadCallback(call, selected) ?? mapperResultViews(views, mapping, call);
   }
   if (emptyMapPosition(selected.receiver, at)) return [];
-  if (selected.callback === undefined || !unchangedMapper(selected.callback)) return undefined;
+  if (selected.callback === undefined || !unchangedMapper(selected.callback))
+    return framedUnreadCallback(call, selected);
   const found: ArrayElementView[] = [];
   const known = framedAtMethod(selected.callback, (returned) => {
     found.push(...mappedReturns(returned, { ...mapping, index: at, capture: call, stable }));

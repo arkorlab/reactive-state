@@ -9,10 +9,12 @@
 import { type Node, SyntaxKind, type TypeNode } from 'typescript/ast';
 import {
   type Checker,
+  ElementFlags,
   IndexKind,
   SignatureKind,
   type Symbol,
   SymbolFlags,
+  type TupleTypeReference,
   type Type,
   TypeFlags,
 } from 'typescript/sync';
@@ -44,6 +46,67 @@ export function framedMemberAdmitted(type: TypeNode | undefined, keys: readonly 
   if (checked === undefined) return true;
   const declared = checked.checker.getTypeFromTypeNode(checked.node as TypeNode);
   return framedAdmittedAt(checked, declared, keys);
+}
+
+/**
+ * Whether what an array of the declared type holds at an index, any where it is unknown, and then
+ * at a member path admits an Error, as the checker reads the type (`elementAdmitted`); none
+ * declared does, and so does one the checker cannot read.
+ */
+export function framedElementAdmitted(
+  type: TypeNode | undefined,
+  index: number | undefined,
+  keys: readonly string[],
+): boolean {
+  if (type === undefined) return true;
+  const checked = framedChecked(type);
+  if (checked === undefined) return true;
+  const declared = checked.checker.getTypeFromTypeNode(checked.node as TypeNode);
+  return elementAdmitted(checked, declared, { index, keys });
+}
+
+/**
+ * Whether an element of the type admits an Error at the read keys: an array's element at any
+ * index, one counted from its end (`at(-1)`) too; a tuple's at a whole index, or at one counted
+ * from its end against a fixed length (`tuplePosition`), and each element where the index cannot
+ * be placed so, none of an empty one; of another type, the member the index names
+ * (`framedAdmittedAt`); of each member of a union but `null` and `undefined`, whose read throws.
+ */
+function elementAdmitted(
+  at: AdmissionChecker,
+  type: Type,
+  read: { readonly index: number | undefined; readonly keys: readonly string[] },
+): boolean {
+  const { index, keys } = read;
+  if (nullish(type)) return false;
+  if (open(type)) return true;
+  if (type.isUnionType()) return type.getTypes().some((each) => elementAdmitted(at, each, read));
+  const { checker } = at;
+  if (type.isTupleType()) {
+    const position = index === undefined ? undefined : tuplePosition(type, index);
+    if (position !== undefined) return framedAdmittedAt(at, type, [String(position), ...keys]);
+    return checker.getTypeArguments(type).some((each) => framedAdmittedAt(at, each, keys));
+  }
+  if (checker.isArrayType(type) && type.isTypeReference()) {
+    const [element] = checker.getTypeArguments(type);
+    return element === undefined || framedAdmittedAt(at, element, keys);
+  }
+  return framedAdmittedAt(at, type, [String(index ?? 0), ...keys]);
+}
+
+/**
+ * The position a tuple's index reads: a whole one as it is; one counted from the end, against the
+ * tuple's length where no optional, rest or variadic element leaves it open; none where it falls
+ * before the first.
+ */
+function tuplePosition(tuple: TupleTypeReference, index: number): number | undefined {
+  if (index >= 0) return index;
+  const flags = tuple.getTarget().elementFlags;
+  const variable = flags.some((each) =>
+    flagged(each, ElementFlags.Optional, ElementFlags.Rest, ElementFlags.Variadic),
+  );
+  const position = flags.length + index;
+  return variable || position < 0 ? undefined : position;
 }
 
 /**
