@@ -386,14 +386,18 @@ interface Emitting {
  * paths in lower case, which a file system that keeps no case (macOS, Windows) writes one over the
  * other — a module of the application's named as a file the compile names itself, `Elements.ts`
  * beside `elements.ts`, or two components whose ids differ in case alone — whichever the system the
- * compile runs on.
+ * compile runs on. The outputs of route middleware are held against the other outputs, not against
+ * each other: each is written at the path of its route, and two routes that differ in case alone
+ * are two directories of the application's own — one directory where no case is kept, so no two
+ * files there. Which routes are one to a request is Next.js's to say and the adapter's to refuse
+ * (`caseShadowsOf`), not the compile's.
  */
 function emitAll(emitting: Emitting): Map<string, string> {
   const { app, appDir, outDir } = emitting;
   const outputs = new Map<string, string>();
   /** Each path put, by its lower case: what a file system that keeps no case calls the file. */
   const folded = new Map<string, string>();
-  const put = (file: string, text: string): void => {
+  const put = (file: string, text: string, folds = true): void => {
     const taken = folded.get(file.toLowerCase());
     if (taken !== undefined) {
       const name = path.relative(outDir, file);
@@ -407,7 +411,9 @@ function emitAll(emitting: Emitting): Map<string, string> {
       });
     }
     outputs.set(file, text);
-    folded.set(file.toLowerCase(), file);
+    if (folds) {
+      folded.set(file.toLowerCase(), file);
+    }
   };
   const outputOf = (from: string) => {
     return (target: ModuleClass): string | undefined => {
@@ -449,8 +455,10 @@ function emitAll(emitting: Emitting): Map<string, string> {
   put(path.join(outDir, 'server-functions.ts'), emitServerFunctions(session !== undefined));
   put(path.join(outDir, 'authority.mts'), emitRegistry(app));
   const routing = app.routing ?? NO_ROUTING;
+  // Held against every output before them, and nothing against them: both of two routes that differ
+  // in case alone are written, and nothing put after them is named under `middleware/`.
   for (const [file, text] of middlewareOutputs(routing, outDir, app.buildId)) {
-    put(file, text);
+    put(file, text, false);
   }
   put(path.join(outDir, ROUTES_MODULE), emitRoutesModule(routing));
   put(path.join(outDir, 'manifest.json'), `${JSON.stringify(manifestOf(app), null, 2)}\n`);

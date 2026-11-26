@@ -23,6 +23,7 @@
     "@eslint/js": "catalog:",
     "@oxlint/migrate": "catalog:",
     "@types/node": "catalog:",
+    "@types/react": "catalog:",
     "@vitest/eslint-plugin": "catalog:",
     "eslint": "catalog:",
     "eslint-config-prettier": "catalog:",
@@ -43,6 +44,7 @@
     "oxfmt": "catalog:",
     "oxlint": "catalog:",
     "oxlint-tsgolint": "catalog:",
+    "react": "catalog:",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
     "vitest": "catalog:"
