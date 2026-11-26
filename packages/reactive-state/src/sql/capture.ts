@@ -369,12 +369,14 @@ function ddlCounterOf(namespace: string): readonly string[] {
     return `DO $$ BEGIN IF ${owned} THEN BEGIN CREATE EVENT TRIGGER ${trigger} ON ${event} EXECUTE FUNCTION ${schema}.${quoted(run)}(); EXCEPTION WHEN duplicate_object THEN NULL; END; ALTER EVENT TRIGGER ${trigger} ENABLE ALWAYS; END IF; EXCEPTION WHEN insufficient_privilege OR feature_not_supported THEN NULL; END $$`;
   };
   // As the role that made it, of no search path the caller set: a role of no right to the log
-  // changes the schema as it may, and is counted; nothing of the count fails a command but a cancel
-  // (`statement_timeout`), which `OTHERS` catches not. Of no lock timeout the caller set either
-  // (`lock_timeout`), whose error would leave the command uncounted: it waits for the lock on the
-  // count, which only a migration of the log, an operator or a vacuum's truncation holds.
+  // changes the schema as it may, and is counted; no fault of the count's fails a command. A lock
+  // the count may not have does, as any lock would: past the session's `lock_timeout`, which bounds
+  // how long a command holds its own, or in a deadlock; and so does a cancel (`statement_timeout`),
+  // which `OTHERS` catches not. A command that went on would go uncounted, and one that fails
+  // leaves nothing to count, but what a command of several transactions committed before it
+  // (`DETACH PARTITION … CONCURRENTLY`, which the digest tells of, and `FINALIZE` ends).
   const counted = (name: string, body: string): string =>
-    `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS event_trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp SET lock_timeout = 0 AS $$ BEGIN ${body} EXCEPTION WHEN OTHERS THEN NULL; END $$`;
+    `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS event_trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN ${body} EXCEPTION WHEN lock_not_available OR deadlock_detected THEN RAISE; WHEN OTHERS THEN NULL; END $$`;
   const note = `INSERT INTO ${ddl} DEFAULT VALUES;`;
   const application = `(an.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', ${own}) AND an.nspname !~ '^pg_(toast_)?temp_')`;
   // A relation or a type of the application's of the name `name`, which a temporary one of it

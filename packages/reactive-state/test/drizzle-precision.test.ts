@@ -309,6 +309,27 @@ async function installed(pg: Setup['pg'], follow: { captureSql: () => readonly s
   for (const statement of follow.captureSql()) await pg.query(statement);
 }
 
+/**
+ * A count whose insert fails of `condition`, wherever `when` holds, as a lock would: PGlite's one
+ * session waits behind no lock, and no timeout of its fires.
+ */
+async function countRefused(pg: Setup['pg'], condition: string, when = 'true') {
+  await pg.exec(`
+    CREATE FUNCTION public.refused() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF ${when} THEN
+        RAISE EXCEPTION 'refused' USING ERRCODE = '${condition}';
+      END IF;
+      RETURN NEW;
+    END $$;
+    CREATE TRIGGER refused BEFORE INSERT ON reactive_state.ddl FOR EACH ROW EXECUTE FUNCTION public.refused();
+  `);
+}
+
+/** A count whose insert fails wherever a lock timeout stands, as a lock held past it would. */
+async function countTimedOut(pg: Setup['pg']) {
+  await countRefused(pg, 'lock_not_available', "current_setting('lock_timeout') <> '0'");
+}
+
 /** A read of the tasks of the first project, `p1`. */
 async function launchTasks(orm: Orm) {
   return orm.select().from(tasks).where(eq(tasks.projectId, 'p1'));
@@ -2025,31 +2046,103 @@ describe(
       await expect(countOf(setup.pg)).resolves.toBe(before);
     });
 
-    it('counts a change of the schema whatever lock timeout its session set, and keeps that', async () => {
+    it.each([
+      ['a lock timeout', 'lock_not_available', '55P03'],
+      ['a deadlock', 'deadlock_detected', '40P01'],
+    ])(
+      'fails a command the count meets %s for, which leaves nothing to count',
+      async (_what, condition, code) => {
+        const setup = await opened();
+        await countRefused(setup.pg, condition);
+        const before = await countOf(setup.pg);
+
+        await expect(
+          setup.pg.query('CREATE VIEW counted AS SELECT 1 AS one'),
+        ).rejects.toMatchObject({ code });
+        await expect(setup.pg.query('DROP VIEW chosen_tasks')).rejects.toMatchObject({ code });
+
+        await expect(countOf(setup.pg)).resolves.toBe(before);
+        await expect(
+          setup.pg.query<{ made: string | null; kept: string | null }>(
+            "SELECT to_regclass('counted')::text AS made, to_regclass('chosen_tasks')::text AS kept",
+          ),
+        ).resolves.toMatchObject({ rows: [{ kept: 'chosen_tasks', made: null }] });
+      },
+    );
+
+    it("fails no command over a fault of the count's own", async () => {
       const setup = await opened();
-      // PGlite's one session waits behind no lock: this fails the count as a lock held past the
-      // session's timeout would, wherever a timeout stands as the count takes its lock.
-      await setup.pg.exec(`
-        CREATE FUNCTION public.timed_out() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
-          IF current_setting('lock_timeout') <> '0' THEN
-            RAISE EXCEPTION 'canceling statement due to lock timeout' USING ERRCODE = 'lock_not_available';
-          END IF;
-          RETURN NEW;
-        END $$;
-        CREATE TRIGGER timed_out BEFORE INSERT ON reactive_state.ddl FOR EACH ROW EXECUTE FUNCTION public.timed_out();
-        SET lock_timeout = '1s';
-      `);
+      await countRefused(setup.pg, 'insufficient_privilege');
+
+      await expect(setup.pg.query('CREATE VIEW counted AS SELECT 1 AS one')).resolves.toBeDefined();
+      await expect(setup.pg.query('DROP VIEW counted')).resolves.toBeDefined();
+    });
+
+    it.each([
+      ['a comment', "COMMENT ON TABLE tasks IS 'the tasks'"],
+      ['a grant', 'GRANT SELECT ON tasks TO PUBLIC'],
+      ['an index', 'CREATE INDEX tasks_title ON tasks (title)'],
+      ['an index built again', 'REINDEX TABLE tasks'],
+      ['a staging table', 'CREATE TEMP TABLE staging (id text)'],
+      ['a command that changed nothing', 'CREATE TABLE IF NOT EXISTS tasks (id text)'],
+    ])('fails no command the count leaves out, for its lock: %s', async (_what, command) => {
+      const setup = await opened();
+      await countRefused(setup.pg, 'lock_not_available');
+
+      await expect(setup.pg.query(command)).resolves.toBeDefined();
+    });
+
+    it("fails none of the log's statements as they run again, for the count's lock", async () => {
+      const setup = await opened();
+      await countRefused(setup.pg, 'lock_not_available');
+
+      await expect(installed(setup.pg, setup.follow)).resolves.toBeUndefined();
+    });
+
+    it('fails a command past the lock timeout its session set', async () => {
+      const setup = await opened();
+      await countTimedOut(setup.pg);
+      await setup.pg.query("SET lock_timeout = '1s'");
+
+      await expect(setup.pg.query('CREATE VIEW counted AS SELECT 1 AS one')).rejects.toMatchObject({
+        code: '55P03',
+      });
+    });
+
+    it('counts a command of a session that set no lock timeout', async () => {
+      const setup = await opened();
+      await countTimedOut(setup.pg);
       const before = await countOf(setup.pg);
 
       await setup.pg.query('CREATE VIEW counted AS SELECT 1 AS one');
-      const made = await countOf(setup.pg);
-      await setup.pg.query('DROP VIEW counted');
 
-      expect(made).not.toBe(before);
-      await expect(countOf(setup.pg)).resolves.not.toBe(made);
+      await expect(countOf(setup.pg)).resolves.not.toBe(before);
+    });
+
+    it('renders a read again by the digest, once a command that failed left a detach pending', async () => {
+      const { pg, renders } = await watching(
+        (db) => launchTasks(db),
+        (setup) => {
+          // A partition whose own constraint implies its bounds, of which a detach adds none.
+          return setup.exec(`
+            CREATE TABLE parted (id int NOT NULL) PARTITION BY RANGE (id);
+            CREATE TABLE high (id int NOT NULL, CHECK (id >= 100 AND id < 200));
+            ALTER TABLE parted ATTACH PARTITION high FOR VALUES FROM (100) TO (200);
+          `);
+        },
+      );
+      await countRefused(pg, 'lock_not_available');
+      await renders(() => sleep(PAST_DIGEST_MS));
+
       await expect(
-        setup.pg.query<{ lock_timeout: string }>('SHOW lock_timeout'),
-      ).resolves.toMatchObject({ rows: [{ lock_timeout: '1s' }] });
+        renders(async () => {
+          await expect(
+            pg.query('ALTER TABLE parted DETACH PARTITION high CONCURRENTLY'),
+          ).rejects.toMatchObject({ code: '55P03' });
+
+          await sleep(PAST_DIGEST_MS);
+        }),
+      ).resolves.toBe(true);
     });
 
     it("runs none of a function another role made on a writer's search path, as it logs a write", async () => {

@@ -254,8 +254,9 @@ function relationParts(own: string): readonly string[] {
     // A column's default and a generated column's expression: one set again rewrites its rows.
     `SELECT concat_ws(':', 'd', d.adrelid, d.adnum, ${hashed('pg_get_expr(d.adbin, d.adrelid)')}) FROM pg_attrdef AS d ${related('d.adrelid')}`,
     // A table that inherits from one of the application's — a temporary one too — whose rows a
-    // statement that reads it reads besides.
-    `SELECT concat_ws(':', 'i', i.inhrelid, i.inhparent, i.inhseqno) FROM pg_inherits AS i ${related('i.inhparent')}`,
+    // statement that reads it reads besides; and a detach left pending, whose rows it reads no more
+    // and of which no count may tell, as a command that failed at its last step left it so.
+    `SELECT concat_ws(':', 'i', i.inhrelid, i.inhparent, i.inhseqno, i.inhdetachpending) FROM pg_inherits AS i ${related('i.inhparent')}`,
     `SELECT concat_ws(':', 'k', k.oid, k.conrelid, k.contype, ${hashed('pg_get_constraintdef(k.oid)')}) FROM pg_constraint AS k ${related('k.conrelid')}`,
     // A unique index (`uniqueIndexRow`).
     `SELECT ${uniqueIndexRow('u')} FROM pg_index AS x JOIN pg_class AS ci ON ci.oid = x.indexrelid ${related('x.indrelid')} AND x.indisunique`,
