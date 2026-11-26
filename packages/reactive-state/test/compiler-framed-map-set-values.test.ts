@@ -338,6 +338,70 @@ const CASES = [
     refused: true,
   },
   {
+    id: 'own-set-heritage-this',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){class Base{}class Holder extends (Map.prototype.set.call(this,key,value),Base){}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'own-set-member-name-this',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){class Holder{[String(Map.prototype.set.call(this,key,value))](){return 0;}}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'own-set-member-body-this',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){void key;void value;class Base{}class Holder extends Base{write(){return Map.prototype.set.call(this,"x",undefined);}}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'own-set-parameter-decorator-this',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){const mark=(_target:object,_name:string|symbol|undefined,_index:number)=>undefined;class Holder{take(@(Map.prototype.set.call(this,key,value),mark) input:unknown){return input;}}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'own-set-constructor-decorator-this',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){const mark=(_target:object,_name:string|symbol|undefined,_index:number)=>undefined;class Holder{constructor(@(Map.prototype.set.call(this,key,value),mark) input:unknown){void input;}}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'own-set-parameter-decorator-other',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);const other=new Map<string,unknown>();values.set=function(key:string,value:{message:string}){const mark=(_target:object,_name:string|symbol|undefined,_index:number)=>undefined;class Holder{take(@(Map.prototype.set.call(other,key,value),mark) input:unknown){return input;}}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'own-set-implements-type',
+    source:
+      'type values={};function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){void key;void value;class Holder implements values{}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'own-set-implements-extends-write',
+    source:
+      'type values={};function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);values.set=function(key:string,value:{message:string}){class Base{}class Holder extends (Map.prototype.set.call(values,key,value),Base) implements values{}void Holder;return this;};values.set("x",error);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
     id: 'own-get-borrows-call-on-this',
     source:
       'function frames(error:Error){const values=new Map<string,{message:string}>([["x",error]]);values.get=function(key:string){return Map.prototype.get.call(this,key);};return values.get("x")!.message;}',
