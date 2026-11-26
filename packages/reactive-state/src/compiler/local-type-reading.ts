@@ -159,7 +159,7 @@ export function localArrayIterationKeys(
 }
 
 /** Whether any selected reading names a requested native type. */
-function namesReadings(
+export function namesReadings(
   readings: readonly Reading[],
   names: ReadonlySet<string>,
   argument?: NativeArgumentSelection,
@@ -249,13 +249,13 @@ function indexedReadings(
 }
 
 /** Transparent operands of a selected member, keeping each result's actual argument environment. */
-function operandReadings(at: Reading, names: ReadonlySet<string>, intersections = true): Reading[] {
+export function operandReadings(at: Reading, names: ReadonlySet<string>, split = true): Reading[] {
   const result: Reading[] = [];
   const pending = [at];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
     const read = operandOf(each, true);
     if (read === undefined) continue;
-    if (!intersections && isIntersectionTypeNode(read.type)) {
+    if (!split && isIntersectionTypeNode(read.type)) {
       result.push(read);
       continue;
     }

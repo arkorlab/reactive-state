@@ -9,9 +9,9 @@ import { unwrapped } from './bounded.ts';
 import { framedArrayReduction } from './framed-array-reductions.ts';
 import { framedArrayRemoval } from './framed-array-removals.ts';
 import { framedArrayAt, framedArrayFind } from './framed-array-selections.ts';
-import { frameBindingOf, frameTypeOf } from './framed-bindings.ts';
+import { frameBindingOf } from './framed-bindings.ts';
+import { namesTypedElements } from './framed-iterated-types.ts';
 import { framedLiteralObject } from './framed-literal-data.ts';
-import { namesLocalMemberArrayType } from './local-type-reading.ts';
 
 /** Native array selectors retain the selected error and the origin of its words. */
 export function framedArrayResult(
@@ -30,12 +30,7 @@ export function framedArrayResult(
   };
   const selected = classify({
     error: (each, keys) => error(each, made, keys),
-    typed: (each, index) => {
-      const type = frameTypeOf(each);
-      return (
-        type !== undefined && namesLocalMemberArrayType(type.type, type.keys, names, { index })
-      );
-    },
+    typed: (each, index) => namesTypedElements(each, index, names),
   });
   if (selected === true) return true;
   if (

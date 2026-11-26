@@ -10,11 +10,10 @@ import {
 import { unwrapped } from './bounded.ts';
 import type { ArrayElementView } from './framed-array-rest.ts';
 import { selectedError } from './framed-array-selections.ts';
-import { frameTypeOf } from './framed-bindings.ts';
+import { namesTypedElements } from './framed-iterated-types.ts';
 import { framedKeyNames } from './framed-keys.ts';
 import { mapSpreadViews } from './framed-map-spreads.ts';
 import { setSpreadViews } from './framed-set-spreads.ts';
-import { namesLocalMemberArrayType } from './local-type-reading.ts';
 
 /** An array index retains selected possible elements without converting nested arrays to text. */
 export function framedDynamicArrayResult(
@@ -26,10 +25,8 @@ export function framedDynamicArrayResult(
   const value = unwrapped(node);
   if (!isElementAccessExpression(value)) return undefined;
   const indexes = possibleIndexes(value);
-  const typed = (each: Expression, index: number | undefined) => {
-    const type = frameTypeOf(each);
-    return type !== undefined && namesLocalMemberArrayType(type.type, type.keys, names, { index });
-  };
+  const typed = (each: Expression, index: number | undefined) =>
+    namesTypedElements(each, index, names);
   const selected = indexes.some((index) => {
     return selectedError(
       value.expression,
