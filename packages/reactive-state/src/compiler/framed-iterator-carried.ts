@@ -4,7 +4,6 @@ import {
   type Identifier,
   isIdentifier,
   isParameterDeclaration,
-  isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
   type Node,
@@ -18,6 +17,7 @@ import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedAssignedValues, framedPossibleBranch, repeatedBodyRead } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
+import { isTypeErased } from './type-erased.ts';
 
 /** Native iterator slots preserve carried bindings only before their fields can be exposed. */
 
@@ -33,7 +33,7 @@ export function iteratorCarriedUnexposed(
   const modeled = [...roots, ...selected.map(({ value }) => value)];
   const pending: Node[] = [capture.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeErased(node)) continue;
     if (isIdentifier(node) && exposedUse(node, modeled, capture, bindings)) return false;
     node.forEachChild((child) => {
       pending.push(child);
@@ -49,7 +49,7 @@ function carriedBindings(
   const bindings = new Set<FrameBinding>();
   const pending: Node[] = selected.map(({ value }) => value);
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeNode(node)) continue;
+    if (isTypeErased(node)) continue;
     if (isIdentifier(node) && readsBinding(node) && !addBinding(node, bindings)) return undefined;
     node.forEachChild((child) => {
       pending.push(child);

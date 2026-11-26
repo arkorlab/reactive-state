@@ -126,6 +126,20 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: true,
   },
+  {
+    id: 'heritage-push-error',
+    source:
+      "function frames(error:Error){const values:unknown[]=[];class Base{}class Holder extends (values.push(error),Base){}void Holder;return values.join(',');}",
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'heritage-other-push',
+    source:
+      "function frames(error:Error){const values:unknown[]=['fixed'];const other:unknown[]=[];class Base{}class Holder extends (other.push(error),Base){}void Holder;return values.join(',');}",
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ] as const;
 
 describe('array element writes readers', () => {

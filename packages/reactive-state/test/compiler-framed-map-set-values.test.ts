@@ -657,6 +657,22 @@ const CASES = [
     reader: false,
     refused: false,
   },
+  {
+    id: 'statement-heritage-write',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);class Base{}class Holder extends (values.set("x",error),Base){}void Holder;return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'statement-heritage-other-map',
+    source:
+      'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);const other=new Map<string,unknown>();class Base{}class Holder extends (other.set("x",error),Base){}void Holder;return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
 ] as const;
 
 describe('native Map set value words', () => {

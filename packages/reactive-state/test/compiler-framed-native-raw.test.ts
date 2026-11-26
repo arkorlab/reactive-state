@@ -148,6 +148,48 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
   },
   {
+    id: 'holder-interface-heritage',
+    source:
+      'function frames(error:Error){const Date={raw:[error as never]};interface Derived extends Date{};return String.raw(Date);}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
+    id: 'holder-implements',
+    source:
+      'function frames(error:Error){const Date={raw:[error as never]};class Derived implements Date{getTime(){return 0;}}void Derived;return String.raw(Date);}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
+    id: 'holder-interface-same-name',
+    source:
+      'function frames(error:Error){const Raw={raw:[error as never]};interface Raw{raw:never[]}return String.raw(Raw);}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
+    id: 'holder-alias-same-name',
+    source:
+      'function frames(error:Error){const Raw={raw:[error as never]};type Raw={raw:never[]};return String.raw(Raw);}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
+    id: 'holder-extends-written',
+    source:
+      "function frames(error:Error){const template={raw:['fixed']};class Base{}class Derived extends ((template.raw=['','']),Base){}void Derived;return String.raw(template,error as never);}",
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
+    id: 'holder-extends-other-written',
+    source:
+      "function frames(error:Error){const template={raw:['fixed']};const other={raw:['fixed']};class Base{}class Derived extends ((other.raw=['','']),Base){}void Derived;return String.raw(template,error as never);}",
+    refused: false,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
     id: 'segment-written',
     source:
       "function frames(error:Error){const segments:unknown[]=['fixed'];segments[0]=error;return String.raw({raw:segments as never});}",

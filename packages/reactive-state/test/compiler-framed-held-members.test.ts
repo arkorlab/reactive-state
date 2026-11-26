@@ -263,6 +263,27 @@ const CASES: readonly Case[] = [
     invocation: 'frames(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'member-heritage-write',
+    source:
+      'function frames(error:Error){const box:Record<string,any>={x:{stack:"fixed"}};class Base{}class Holder extends (box.x=error,Base){}void Holder;return box.x.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'member-heritage-other',
+    source:
+      'function frames(error:Error){const box:Record<string,any>={x:{stack:"fixed"}};const other:Record<string,any>={};class Base{}class Holder extends (other.x=error,Base){}void Holder;return box.x.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'member-instantiation-write',
+    source:
+      'function pick<T>(value:T){return value;}function frames(error:Error){const box:Record<string,any>={x:{stack:"fixed"}};const picked=(box.x=error,pick)<string>;void picked;return box.x.stack;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
 ];
 
 describe('held member readers', () => {
