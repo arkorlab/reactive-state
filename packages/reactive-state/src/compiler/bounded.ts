@@ -69,7 +69,7 @@ export function globalOf(node: Node): string | undefined {
  * The names `file`'s imports bind a value to: none of an import of a type alone (`import type`,
  * `import { type T }`), which binds nothing that runs — a read of that name is the global's.
  */
-function importedValues(file: SourceFile): readonly string[] {
+export function importedValues(file: SourceFile): readonly string[] {
   const names: string[] = [];
   for (const statement of file.statements) {
     const clause = isImportDeclaration(statement) ? statement.importClause : undefined;
