@@ -141,7 +141,7 @@ class Follower {
     while (!this.#ended) {
       // A session's expiry comes before another commit's render: a root that changes on and on
       // would otherwise keep a stream of a session open past it.
-      if (Date.now() > this.#expiresAt) {
+      if (Date.now() >= this.#expiresAt) {
         await this.#expire(controller);
         return;
       }
@@ -163,9 +163,15 @@ class Follower {
   async #expire(controller: ReadableStreamDefaultController<Uint8Array>): Promise<void> {
     if (assertedSessionOf(this.#following.sessionId) === undefined) {
       await this.#render(controller);
+      this.#finish(controller);
     } else {
-      this.#say(controller, event('renew', {}));
+      this.#renew(controller);
     }
+  }
+
+  /** An asserted stream's renewal, which closes it before its page asks the application again. */
+  #renew(controller: ReadableStreamDefaultController<Uint8Array>): void {
+    this.#say(controller, event('renew', {}));
     this.#finish(controller);
   }
 
@@ -233,6 +239,7 @@ class Follower {
    */
   async #render(controller: ReadableStreamDefaultController<Uint8Array>): Promise<boolean> {
     const { engine, sessionId, subscription } = this.#following;
+    const asserted = assertedSessionOf(sessionId);
     let watched: Watched;
     this.#rendering = true;
     try {
@@ -248,6 +255,11 @@ class Follower {
     } finally {
       this.#rendering = false;
     }
+    // A watch admitted before the deadline may finish after it; no late frame is sent.
+    if (asserted !== undefined && Date.now() >= this.#expiresAt) {
+      this.#renew(controller);
+      return true;
+    }
     this.#rendered = watched.revision;
     this.#dependsOn = watched.dependsOn;
     // A reader that went away while the root was rendered is sent nothing: its stream is cancelled.
@@ -259,11 +271,9 @@ class Follower {
    * own expiry has come, which `renew`s. The render waited in the engine's queue, and the engine
    * refuses a session from the instant it expires as it refuses one that ended; the clock tells
    * them apart, and the page asks the application whether the session stands in either case. The
-   * session's `expires` decides, by the engine's own clock (`engineNow`), the one it
-   * refused by, which is not always `Date.now`: not `#expiresAt`, which is the `expiresIn` the
-   * engine sampled added to this isolate's clock when the stream opened, so it comes later than the
-   * session's expiry by what passed between, and earlier where the page asks again before the
-   * session ends.
+   * session's `expires` decides, by the engine's own clock (`engineNow`), the one it refused by,
+   * which is not always `Date.now`: not `#expiresAt`, the stream's own deadline, a time of this
+   * isolate's clock that comes earlier where the page asks again before the session ends.
    */
   #refused(error: AuthorityError): string {
     const { engine, sessionId } = this.#following;
@@ -300,7 +310,16 @@ class Follower {
     this.#rendered = initial.revision;
     this.#dependsOn = initial.dependsOn;
     this.#shown = initial.issued;
-    this.#expiresAt = Date.now() + expiresIn;
+    const startedAt = Date.now();
+    const { engine, sessionId } = this.#following;
+    const asserted = assertedSessionOf(sessionId);
+    // The session's own `expires` is a time of the engine's clock, which is not always this
+    // isolate's: what is left of it is added to the clock now, as `expiresIn` is.
+    const left =
+      asserted === undefined
+        ? expiresIn
+        : Math.min(expiresIn, asserted.expires - engineNow(engine));
+    this.#expiresAt = startedAt + left;
     this.#following.open.add(this);
     return new ReadableStream<Uint8Array>({
       cancel: () => {
@@ -309,7 +328,11 @@ class Follower {
       pull: async (controller) => this.#pull(controller),
       start: (controller) => {
         this.#say(controller, OPENING);
-        this.#show(controller, initial);
+        if (asserted !== undefined && startedAt >= this.#expiresAt) {
+          this.#renew(controller);
+        } else {
+          this.#show(controller, initial);
+        }
       },
     });
   }
