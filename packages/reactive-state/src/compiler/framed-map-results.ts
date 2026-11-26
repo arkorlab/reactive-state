@@ -61,6 +61,8 @@ interface MapValueReading {
   readonly values: readonly Expression[] | undefined;
   readonly complete: boolean;
   readonly sameReceiver: boolean;
+  /** Whether a possible write stores a value the compile cannot read. */
+  readonly unread: boolean;
 }
 
 /**
@@ -101,9 +103,22 @@ export function framedMapResult(
   if (values?.some((value) => error(value, made)) === true) return true;
   const proven = !made && !own.unread && reading.complete;
   if (proven && knownData(values, (value) => error(value, true))) return false;
+  return declaredMapError(selected, reading.unread, names);
+}
+
+/**
+ * What the Map's declared value type says of what it holds: an Error where it names one. A value
+ * the compile cannot read (`unread`) is read by that type alone, and as any value with none.
+ */
+function declaredMapError(
+  selected: MapReading,
+  unread: boolean,
+  names: ReadonlySet<string>,
+): boolean | undefined {
   const explicit = selected.construction?.typeArguments?.[1];
   if (explicit !== undefined && namesLocalMemberType(explicit, [], names)) return true;
-  return typedMapError(selected.type, names) ? true : undefined;
+  if (typedMapError(selected.type, names)) return true;
+  return unread && explicit === undefined && selected.type === undefined ? true : undefined;
 }
 
 /**
@@ -128,6 +143,7 @@ function mapValues(
           values: framedMapChainValues(call, selected.sets),
           complete: false,
           sameReceiver: chain.certain,
+          unread: false,
         }
       : undefined;
   }
@@ -135,6 +151,7 @@ function mapValues(
     values: mutation?.values ?? initial,
     complete: mutation === undefined || mutation.complete,
     sameReceiver: mutation?.sameReceiver ?? true,
+    unread: mutation?.unread === true,
   };
 }
 

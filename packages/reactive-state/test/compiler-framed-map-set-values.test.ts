@@ -50,6 +50,110 @@ const CASES = [
     refused: true,
   },
   {
+    id: 'unread-spread-pair',
+    source:
+      'function store(pair:[string,Error]){const values=new Map([["x",{message:"fixed"}]]);values.set(...pair);return values.get("x")!.message;}function frames(error:Error){return store(["x",error]);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'unread-rest-value',
+    source:
+      'function store(...rest:[Error]){const values=new Map([["x",{message:"fixed"}]]);values.set("x",...rest);return values.get("x")!.message;}function frames(error:Error){return store(error);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'unread-apply-list',
+    source:
+      'function store(args:[string,Error]){const values=new Map([["x",{message:"fixed"}]]);Map.prototype.set.apply(values,args);return values.get("x")!.message;}function frames(error:Error){return store(["x",error]);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'unread-reflect-list',
+    source:
+      'function store(args:[string,Error]){const values=new Map([["x",{message:"fixed"}]]);Reflect.apply(Map.prototype.set,values,args);return values.get("x")!.message;}function frames(error:Error){return store(["x",error]);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'unread-call-spread',
+    source:
+      'function store(pair:[string,Error]){const values=new Map([["x",{message:"fixed"}]]);Map.prototype.set.call(values,...pair);return values.get("x")!.message;}function frames(error:Error){return store(["x",error]);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'unread-chain-spread',
+    source:
+      'function store(pair:[string,Error]){const values=new Map([["x",{message:"fixed"}]]);values.set("y",{message:"other"}).set(...pair);return values.get("x")!.message;}function frames(error:Error){return store(["x",error]);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'unread-typed-error-spread',
+    source:
+      'function store(pair:[string,Error]){const values=new Map<string,Error|{message:string}>([["x",{message:"fixed"}]]);values.set(...pair);return values.get("x")!.message;}function frames(error:Error){return store(["x",error]);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'read-spread-pair',
+    source:
+      'function frames(error:Error){void error;const values=new Map([["x",{message:"fixed"}]]);const pair:[string,{message:string}]=["x",{message:"other"}];values.set(...pair);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'read-apply-list',
+    source:
+      'function frames(error:Error){void error;const values=new Map([["x",{message:"fixed"}]]);Map.prototype.set.apply(values,["x",{message:"other"}]);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'read-reflect-list',
+    source:
+      'function frames(error:Error){void error;const values=new Map([["x",{message:"fixed"}]]);Reflect.apply(Map.prototype.set,values,["x",{message:"other"}]);return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'read-call-arguments',
+    source:
+      'function frames(error:Error){void error;const values=new Map([["x",{message:"fixed"}]]);Map.prototype.set.call(values,"x",{message:"other"});return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'read-chain-values',
+    source:
+      'function frames(error:Error){void error;const values=new Map([["x",{message:"fixed"}]]);values.set("y",{message:"other"}).set("x",{message:"other"});return values.get("x")!.message;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
+    id: 'unread-rest-other-key',
+    source:
+      'function store(...rest:[Error]){const values=new Map([["x",{message:"fixed"}]]);values.set("y",...rest);return values.get("x")!.message;}function frames(error:Error){return store(error);}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
+  {
     id: 'statement-constant-key-alias',
     source:
       'function frames(error:Error){const values=new Map<string,{message:string}>([["x",{message:"fixed"}]]);const key="x";values.set(key,error);return values.get("x")!.message;}',

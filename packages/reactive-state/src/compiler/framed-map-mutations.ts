@@ -31,7 +31,7 @@ import {
   type MapValues,
   type MapWrite,
 } from './framed-map-stores.ts';
-import { framedNativeArguments } from './framed-native-arguments.ts';
+import { framedNativeArguments, framedUnresolvedCall } from './framed-native-arguments.ts';
 import { framedCondition, framedNativeConstructor } from './framed-sources.ts';
 import { weakMapWritesQuiet } from './framed-weak-map-guards.ts';
 import { framedMutationKey } from './framed-weak-map-keys.ts';
@@ -114,6 +114,10 @@ export function framedMapSet(call: CallExpression): SetSource | undefined {
     const prefix = args === undefined ? undefined : framedArgumentPrefix(call, args);
     return setSource(receiver, prefix, true);
   }
+  const unresolved =
+    native === undefined && wrapper ? framedUnresolvedCall(call, SETTERS) : undefined;
+  if (unresolved !== undefined)
+    return setSource(unresolved.receiver, framedArgumentPrefix(call, unresolved.args), true);
   if (
     (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) ||
     frameMemberName(member) !== 'set'
@@ -201,7 +205,7 @@ function possibleWrites(context: WriteContext): readonly MapWrite[] {
 function possibleWrite(call: CallExpression, context: WriteContext): MapWrite | undefined {
   const { read, selected, wanted, exact, identity } = context;
   const source = framedMapSet(call);
-  if (!knownMapWrite(source, context.weak)) return undefined;
+  if (!mapWrite(source, context.weak)) return undefined;
   const at = identity(source.receiver);
   if (
     at === undefined ||
@@ -226,6 +230,7 @@ function possibleWrite(call: CallExpression, context: WriteContext): MapWrite | 
     value: source.value,
     open: native.open,
     custom: !native.certain,
+    unread: source.value === undefined && !source.omittedValue,
     definite:
       exact &&
       chain.certain &&
@@ -236,9 +241,14 @@ function possibleWrite(call: CallExpression, context: WriteContext): MapWrite | 
   };
 }
 
-/** Native Map omission is a known write; weak values keep their existing explicit-value proof. */
-function knownMapWrite(source: SetSource | undefined, weak: boolean): source is SetSource {
-  return source !== undefined && (source.value !== undefined || (source.omittedValue && !weak));
+/**
+ * Every set the compile reads writes: one whose value it cannot read, of an argument list it
+ * cannot resolve, as an unread write (`MapWrite.unread`), a value of any key where the key is
+ * unread too. Native Map omission is a known write; weak values keep their existing explicit-value
+ * proof.
+ */
+function mapWrite(source: SetSource | undefined, weak: boolean): source is SetSource {
+  return source !== undefined && !(weak && source.omittedValue);
 }
 
 /** Every consumed set link must permit the native same-receiver result. */
