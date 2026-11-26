@@ -133,7 +133,7 @@ function shapeCall(call: CallExpression): ShapeCall | undefined {
     const kind = target === undefined ? undefined : shapeKind(target);
     return kind === undefined || receiver === undefined
       ? undefined
-      : { kind, receiver, args: appliedPrefix(call, applied) };
+      : { kind, receiver, args: appliedPrefix(call, applied, prefix.unknown) };
   }
   if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return undefined;
   const method = frameMemberName(callee);
@@ -143,7 +143,8 @@ function shapeCall(call: CallExpression): ShapeCall | undefined {
   const prefix = framedArgumentPrefix(call, call.arguments, limit);
   const [receiver, applied] = prefix.values;
   if (receiver === undefined) return undefined;
-  const args = method === 'call' ? afterReceiver(prefix) : appliedPrefix(call, applied);
+  const args =
+    method === 'call' ? afterReceiver(prefix) : appliedPrefix(call, applied, prefix.unknown);
   return { kind, receiver, args, alternatives: prefix.alternatives };
 }
 
@@ -157,12 +158,15 @@ function afterReceiver(prefix: Prefix): Prefix {
 
 /**
  * An unchanged applied tuple keeps its entries, and one past code the call may run first what it was
- * written with (`framedAppliedPrefix`); an opaque list leaves the key possible.
+ * written with (`framedAppliedPrefix`); an opaque list leaves the key possible, and so does a list
+ * the call's prefix ends before (`unknown`): it is not shown, where one never handed on is absent.
  */
-function appliedPrefix(call: CallExpression, applied: Expression | undefined): Prefix {
-  return applied === undefined
-    ? { values: [], unknown: false }
-    : framedAppliedPrefix(call, applied);
+function appliedPrefix(
+  call: CallExpression,
+  applied: Expression | undefined,
+  unknown: boolean,
+): Prefix {
+  return applied === undefined ? { values: [], unknown } : framedAppliedPrefix(call, applied);
 }
 
 /** Whole immutable aliases retain an unshadowed native reflection operation. */
