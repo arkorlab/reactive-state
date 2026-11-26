@@ -25,13 +25,18 @@ import { sourceArrayFunction } from './framed-array-functions.ts';
 import type { ArrayElementView } from './framed-array-rest.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
+import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 
 /** Native array factories preserve the supplied values before a later numeric selection. */
 const OF = new Set(['Array.of']);
 const FROM = new Set(['Array.from']);
 
-/** A known native of stores each argument; an unmapped from copies source elements. */
+/**
+ * A known native of stores each argument; an unmapped from copies source elements, which may be
+ * Errors where no reader reads the source and the declared element type admits one
+ * (`framedCopiedUnread`).
+ */
 export function arrayFactoryViews(
   call: CallExpression,
   index: number | undefined,
@@ -45,7 +50,9 @@ export function arrayFactoryViews(
   const mapper = prefix.values[1];
   if (mapper !== undefined && globalPathOf(unwrapped(mapper))?.join('.') !== 'undefined')
     return undefined;
-  return ownIterator(call, source, stable) ? undefined : [{ value: source, index, capture: call }];
+  return ownIterator(call, source, stable)
+    ? undefined
+    : [{ value: source, index, capture: call, copiedFrom: { call, depth: 0 } }];
 }
 
 /** Fixed positions exclude arguments beyond the selected prefix or before a selected suffix. */
@@ -142,9 +149,12 @@ function ownIterator(
   );
 }
 
-/** Whole constant aliases retain a fresh native array identity without guessing arbitrary objects. */
+/**
+ * Whole constant aliases, past quiet commas (`framedQuietOperand`), retain a fresh native array
+ * identity without guessing arbitrary objects.
+ */
 function literalSource(node: Expression): ArrayLiteralExpression | undefined {
-  let value = unwrapped(node);
+  let value = framedQuietOperand(node);
   const seen = new Set<FrameBinding>();
   while (isIdentifier(value)) {
     const selected = frameBindingOf(value);
@@ -159,7 +169,7 @@ function literalSource(node: Expression): ArrayLiteralExpression | undefined {
     )
       return undefined;
     seen.add(binding);
-    value = unwrapped(binding.initializer);
+    value = framedQuietOperand(binding.initializer);
   }
   return isArrayLiteralExpression(value) ? value : undefined;
 }

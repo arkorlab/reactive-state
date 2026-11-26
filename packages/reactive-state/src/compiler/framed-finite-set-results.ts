@@ -27,6 +27,7 @@ import { framedMapKey } from './framed-map-keys.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
 import { framedOriginCoowned } from './framed-origin-ownership.ts';
 import { framedOriginPrefix } from './framed-origin-prefix.ts';
+import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { finiteSetPositions } from './framed-set-positions.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
@@ -95,7 +96,7 @@ function immediateSetMember(value: Expression): boolean {
 
 /** Whole const aliases and native add links keep their original construction and insertion order. */
 function setSource(expression: Expression, read: Invocation): SetSource | undefined {
-  let value = unwrapped(expression);
+  let value = framedQuietOperand(expression);
   const bindings = new Set<FrameBinding>();
   const added: (Expression | undefined)[] = [];
   const roots: Expression[] = [];
@@ -144,7 +145,7 @@ function constantValue(name: Identifier, bindings: Set<FrameBinding>): Expressio
   )
     return undefined;
   bindings.add(binding);
-  return unwrapped(binding.initializer);
+  return framedQuietOperand(binding.initializer);
 }
 
 /** The native Set constructor consumes a finite unchanged literal array, including materialized holes. */
@@ -155,7 +156,7 @@ function initialValues(
   if (input === undefined) return [];
   const key = framedMapKey(input);
   if (key === 'null' || key === 'undefined') return [];
-  let value = unwrapped(input);
+  let value = framedQuietOperand(input);
   const bindings = new Set<FrameBinding>();
   while (isIdentifier(value)) {
     const next = constantValue(value, bindings);

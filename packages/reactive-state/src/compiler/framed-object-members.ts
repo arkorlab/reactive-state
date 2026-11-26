@@ -26,6 +26,7 @@ import { globalPathOf } from './code-globals.ts';
 import type { AssignedFrameSource } from './framed-assignment-patterns.ts';
 import { frameMemberName } from './framed-bindings.ts';
 import { framedEntriesCall, framedEntryValues } from './framed-entry-values.ts';
+import { framedMemberAdmitted } from './framed-error-admission.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
 import { framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
 
@@ -35,7 +36,25 @@ export function framedObjectMember(
   keys: readonly string[],
   error: (value: Expression, path: readonly string[]) => boolean,
 ): boolean {
-  return framedObjectSources(node, keys)?.some((each) => error(each.value, each.keys)) === true;
+  return (
+    framedObjectSources(node, keys)?.some(
+      (each) => unreadEntries(each) || error(each.value, each.keys),
+    ) === true
+  );
+}
+
+/**
+ * A native `Object.fromEntries` whose input no reader reads holds at a selected key a value of its
+ * declared type, which may be an Error where that type admits one at the keys read on
+ * (`framedMemberAdmitted`).
+ */
+function unreadEntries(source: AssignedFrameSource): boolean {
+  const value = unwrapped(source.value);
+  return (
+    framedEntriesCall(value) &&
+    source.keys.length > 0 &&
+    framedMemberAdmitted(value.typeArguments?.[0], source.keys.slice(1))
+  );
 }
 
 /**

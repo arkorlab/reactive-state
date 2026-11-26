@@ -29,6 +29,7 @@ import { globalPathOf } from './code-globals.ts';
 import { argumentArrayExposed } from './framed-array-selections.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { framedNativeErrorInput } from './framed-native-error-inputs.ts';
+import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 
 /** Added native text consumers retain prior opacity when argument evaluation can run application work. */
@@ -59,7 +60,7 @@ export function framedWrittenSource(expression: Expression): Expression | undefi
 function quietAliasSource(
   expression: Expression,
 ): { readonly value: Expression; readonly bindings: ReadonlySet<FrameBinding> } | undefined {
-  let value = unwrapped(expression);
+  let value = framedQuietOperand(expression);
   const bindings = new Set<FrameBinding>();
   while (isIdentifier(value)) {
     const selected = frameBindingOf(value);
@@ -78,7 +79,7 @@ function quietAliasSource(
     )
       return undefined;
     bindings.add(binding);
-    value = unwrapped(binding.initializer);
+    value = framedQuietOperand(binding.initializer);
   }
   return { value, bindings };
 }

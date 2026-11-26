@@ -9,6 +9,7 @@ import {
 } from 'typescript/sync';
 
 import { ReactiveCompileError } from './errors.ts';
+import { defaultTypeSession, type TypeSession } from './type-checker.ts';
 
 /**
  * TypeScript 7's compiler, through the API 7.1 publishes: `typescript/sync` starts the native
@@ -43,10 +44,19 @@ export function isScript(file: string): boolean {
 /**
  * Parses a module of the application's: `fileName` names it, and its extension says how it is
  * parsed. The source file is held by the compiler process until the lease returned is disposed.
+ * Its text is recorded with `session`, a compile's, else the `API`'s own, whose program the checker
+ * reads the module's declared types in (`framedChecked`).
  */
-export function parseModule(api: API, fileName: string, source: string): RetainedSourceFile {
+export function parseModule(
+  api: API,
+  fileName: string,
+  source: string,
+  session: TypeSession = defaultTypeSession(api),
+): RetainedSourceFile {
   const kind = KINDS.get(path.extname(fileName)) ?? ScriptKind.TSX;
-  return api.createSourceFile(fileName, source, { scriptKind: kind });
+  const parsed = api.createSourceFile(fileName, source, { scriptKind: kind });
+  session.add(parsed.sourceFile, fileName, source);
+  return parsed;
 }
 
 /**

@@ -15,7 +15,8 @@ const INDEX = /^(?:0|[1-9]\d*)$/u;
 
 /**
  * Readings of the array an indexed element is read from, `rows` of `rows[0]` at a known inner
- * position: its element at each written outer index, read on by the inner position and keys.
+ * position: its element at each written outer index, read on by the inner position and keys. What
+ * the reading copies for (`copiedFrom`) carries on, one more leading key deep.
  */
 export function nestedArrayReadings(reading: ArrayElementView): readonly ArrayElementView[] {
   const value = unwrapped(reading.value);
@@ -25,9 +26,12 @@ export function nestedArrayReadings(reading: ArrayElementView): readonly ArrayEl
   if (keys === undefined) return [];
   const inner = [String(reading.index), ...(reading.keys ?? [])];
   const capture = reading.capture === undefined ? {} : { capture: reading.capture };
+  const { copiedFrom } = reading;
+  const copied =
+    copiedFrom === undefined ? {} : { copiedFrom: { ...copiedFrom, depth: copiedFrom.depth + 1 } };
   return keys.flatMap((key) => {
     return INDEX.test(key)
-      ? [{ value: value.expression, index: Number(key), keys: inner, ...capture }]
+      ? [{ value: value.expression, index: Number(key), keys: inner, ...capture, ...copied }]
       : [];
   });
 }

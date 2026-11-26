@@ -33,6 +33,7 @@ import {
   type FrameSelection,
 } from './framed-bindings.ts';
 import { constantKeys, framedKeyNames, TARGET_WRITES } from './framed-key-names.ts';
+import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedQuietCallee, framedQuietValue } from './framed-quiet-values.ts';
 import {
   APPLICATION_WORK,
@@ -365,20 +366,19 @@ function firstTupleEntry(target: Expression, aliases: ReadonlySet<FrameBinding>)
 }
 
 /**
- * Literal arrays and whole constant aliases, with mutable contents left unproven after exposure.
- * Where `reached`, for a reader that keeps every target of an exposed array, every use written before
- * the call counts, one in what a pattern around the call destructures, and one in a loop's condition
- * or update on the next pass. Otherwise, for a reader whose proof an exposure drops, only uses that
- * run before the call as written count — not one in a pattern whose source holds the call — and uses
- * in a loop body that repeats it.
- */
-function argumentArray(
+ * Literal arrays and whole constant aliases, past quiet commas (`framedQuietOperand`), with mutable
+ * contents left unproven after exposure. Where `reached`, for a reader that keeps every target of
+ * an exposed array, every use written before the call counts, one in what a pattern around the call
+ * destructures, and one in a loop's condition or update on the next pass. Otherwise, for a reader
+ * whose proof an exposure drops, only uses that run before the call as written count — not one in a
+ * pattern whose source holds the call — and uses in a loop body that repeats it.
+ */ function argumentArray(
   expression: Expression,
   previous: ReadonlySet<FrameBinding>,
   call: CallExpression | NewExpression,
   reached: boolean,
 ): ArgumentArray | undefined {
-  let value = unwrapped(expression);
+  let value = framedQuietOperand(expression);
   const seen = new Set(previous);
   let exposed = false;
   while (isIdentifier(value)) {
@@ -390,7 +390,7 @@ function argumentArray(
     const values = constantKeys(binding);
     if (values?.length !== 1 || binding.initializer === undefined) return undefined;
     exposed ||= arrayExposed(binding, call, seen, { reached, read: expression });
-    value = unwrapped(binding.initializer);
+    value = framedQuietOperand(binding.initializer);
   }
   return isArrayLiteralExpression(value) ? { array: value, seen, exposed } : undefined;
 }
