@@ -26,6 +26,14 @@ const ABSENT_KEYWORDS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.UndefinedKeyword,
 ]);
 
+/**
+ * Whether a member of a union is `undefined` or `null`: the keyword, or the literal type `null` is
+ * parsed as, which holds the keyword.
+ */
+function isAbsentType(member: TypeNode): boolean {
+  return ABSENT_KEYWORDS.has(isLiteralTypeNode(member) ? member.literal.kind : member.kind);
+}
+
 /** How many local aliases are followed to a scalar: a longer chain, or a cycle, is read as no scalar. */
 const ALIAS_DEPTH = 4;
 
@@ -42,8 +50,8 @@ export function isScalarType(written: TypeNode, depth = 0): boolean {
   if (isLiteralTypeNode(type)) return type.literal.kind !== SyntaxKind.NullKeyword;
   if (isUnionTypeNode(type)) {
     return (
-      type.types.some((member) => !ABSENT_KEYWORDS.has(member.kind)) &&
-      type.types.every((member) => ABSENT_KEYWORDS.has(member.kind) || isScalarType(member, depth))
+      type.types.some((member) => !isAbsentType(member)) &&
+      type.types.every((member) => isAbsentType(member) || isScalarType(member, depth))
     );
   }
   if (

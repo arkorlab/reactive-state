@@ -107,6 +107,19 @@ const scalars: readonly Row[] = [
     reader: false,
   },
   {
+    id: 'string-or-null-given-a-default',
+    source: "function frames(text: string | null) { text ??= 'fixed'; return String(text); }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
+  {
+    id: 'number-or-null-or-undefined-defaulted',
+    source:
+      'function frames(count: number | null | undefined) { count ??= 0; return String(count); }',
+    invocation: 'frames(value.length)',
+    reader: false,
+  },
+  {
     id: 'alias-of-names-given-scalars',
     source:
       "function frames(name: string) { let first = ''; let second = ''; second = name.trim(); let text = first; text = second; return String(text); }",
@@ -190,6 +203,13 @@ const lists: readonly Row[] = [
     id: 'string-name-given-an-unknown-name',
     source:
       "function frames(input: unknown) { let text = ''; if (typeof input === 'string') text = input; return String(text); }",
+    invocation: 'frames(value)',
+    reader: true,
+  },
+  {
+    id: 'string-or-null-or-error-list',
+    source:
+      "function frames(text: string | null | Error[]) { text ??= 'fixed'; return String(text); }",
     invocation: 'frames(value)',
     reader: true,
   },
