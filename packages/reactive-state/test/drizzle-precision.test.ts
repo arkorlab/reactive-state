@@ -298,6 +298,17 @@ function pickedOf(project: string): string {
   return `CREATE OR REPLACE FUNCTION pg_temp.picked() RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT '${project}' $$`;
 }
 
+/** How many changes of the schema the log of `namespace` counted, as its text. */
+async function countOf(pg: Setup['pg'], namespace = 'reactive_state') {
+  const { rows } = await pg.query<{ n: string }>(`SELECT "${namespace}".ddl_count()::text AS n`);
+  return rows[0]?.n;
+}
+
+/** The statements of the log `follow` makes, each run. */
+async function installed(pg: Setup['pg'], follow: { captureSql: () => readonly string[] }) {
+  for (const statement of follow.captureSql()) await pg.query(statement);
+}
+
 /** A read of the tasks of the first project, `p1`. */
 async function launchTasks(orm: Orm) {
   return orm.select().from(tasks).where(eq(tasks.projectId, 'p1'));
@@ -1792,20 +1803,254 @@ describe(
       "counts no change of the schema as the log's statements run again, of quote_all_identifiers %s",
       async (quoted) => {
         const setup = await opened();
-        const count = async () => {
-          const { rows } = await setup.pg.query<{ n: string }>(
-            'SELECT reactive_state.ddl_count()::text AS n',
-          );
-          return rows[0]?.n;
-        };
-        const before = await count();
+        const before = await countOf(setup.pg);
         await setup.pg.query(`SET quote_all_identifiers = ${quoted}`);
 
-        for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+        await installed(setup.pg, setup.follow);
 
-        await expect(count()).resolves.toBe(before);
+        await expect(countOf(setup.pg)).resolves.toBe(before);
       },
     );
+
+    it.each(['off', 'on'])(
+      "counts no drop of the log's own function, of quote_all_identifiers %s",
+      async (quoted) => {
+        const setup = await opened();
+        const before = await countOf(setup.pg);
+        await setup.pg.query(`SET quote_all_identifiers = ${quoted}`);
+
+        await setup.pg.query('DROP FUNCTION reactive_state.fold_ddl(double precision)');
+
+        await expect(countOf(setup.pg)).resolves.toBe(before);
+      },
+    );
+
+    it("counts no drop of the log's own function once its command's event trigger is gone", async () => {
+      const setup = await opened();
+      await setup.pg.query('DROP EVENT TRIGGER reactive_state_ddl');
+      const before = await countOf(setup.pg);
+
+      await setup.pg.query('DROP FUNCTION reactive_state.fold_ddl(double precision)');
+
+      await expect(countOf(setup.pg)).resolves.toBe(before);
+    });
+
+    it("counts no change of the schema as the log's statements make its tables again", async () => {
+      const setup = await opened();
+      await setup.pg.exec(`
+        ALTER TABLE reactive_state.changes DROP COLUMN side, DROP COLUMN image;
+        ALTER TABLE reactive_state.ddl REPLICA IDENTITY DEFAULT;
+      `);
+      const before = await countOf(setup.pg);
+
+      await installed(setup.pg, setup.follow);
+
+      await expect(countOf(setup.pg)).resolves.toBe(before);
+    });
+
+    it("counts no change of the schema as the log's statements run again over a table an operator partitioned", async () => {
+      const setup = await opened();
+      await setup.pg.exec(`
+        DROP TABLE reactive_state.changes;
+        CREATE TABLE reactive_state.changes (seq bigint PRIMARY KEY, schema_name text NOT NULL,
+          table_name text NOT NULL, at timestamptz NOT NULL DEFAULT clock_timestamp(), side text,
+          image jsonb) PARTITION BY RANGE (seq);
+      `);
+      const before = await countOf(setup.pg);
+
+      await installed(setup.pg, setup.follow);
+
+      await expect(countOf(setup.pg)).resolves.toBe(before);
+    });
+
+    it.each(['off', 'on'])(
+      "counts a table of the log's schema whose name is a log table's but for a quote, of quote_all_identifiers %s",
+      async (quoted) => {
+        const setup = await opened();
+        await setup.pg.query(`SET quote_all_identifiers = ${quoted}`);
+        const before = await countOf(setup.pg);
+
+        await setup.pg.query('CREATE TABLE reactive_state."he""ad" (id text)');
+
+        await expect(countOf(setup.pg)).resolves.not.toBe(before);
+      },
+    );
+
+    it.each(['off', 'on'])(
+      "counts a function of the log's schema whose name is a log function's but for a quote, of quote_all_identifiers %s",
+      async (quoted) => {
+        const setup = await opened();
+        await setup.pg.query(`SET quote_all_identifiers = ${quoted}`);
+        const before = await countOf(setup.pg);
+
+        await setup.pg.query(
+          'CREATE FUNCTION reactive_state."no""te"(a text, b text) RETURNS text LANGUAGE sql AS $$ SELECT a $$',
+        );
+        const made = await countOf(setup.pg);
+        await setup.pg.query('DROP FUNCTION reactive_state."no""te"(text, text)');
+
+        expect(made).not.toBe(before);
+        await expect(countOf(setup.pg)).resolves.not.toBe(made);
+      },
+    );
+
+    it.each(['log_two', 'user'])(
+      "counts none of another log's statements as they run again, of the namespace %s",
+      async (namespace) => {
+        const setup = await opened();
+        const other = followDrizzle(schema, { namespace });
+        await installed(setup.pg, other);
+        const before = [await countOf(setup.pg), await countOf(setup.pg, namespace)];
+
+        await installed(setup.pg, other);
+        await installed(setup.pg, setup.follow);
+
+        await expect(
+          Promise.all([countOf(setup.pg), countOf(setup.pg, namespace)]),
+        ).resolves.toStrictEqual(before);
+      },
+    );
+
+    it("renders nothing again as another log's statements run again", async () => {
+      const { pg, renders } = await watching((db) => launchTasks(db));
+      const other = followDrizzle(schema, { namespace: 'log_two' });
+      await renders(() => installed(pg, other));
+
+      await expect(renders(() => installed(pg, other))).resolves.toBe(false);
+    });
+
+    it('counts the statements of another log that made no event trigger', async () => {
+      const setup = await opened();
+      const other = followDrizzle(schema, { namespace: 'log_two' });
+      await installed(setup.pg, other);
+      await setup.pg.exec(`
+        DROP EVENT TRIGGER log_two_ddl;
+        DROP EVENT TRIGGER log_two_drop;
+      `);
+      const before = await countOf(setup.pg);
+
+      await installed(setup.pg, other);
+
+      await expect(countOf(setup.pg)).resolves.not.toBe(before);
+    });
+
+    it.each([
+      ['a view', 'CREATE VIEW log_two.chosen AS SELECT 1 AS one', 'DROP VIEW log_two.chosen'],
+      [
+        "a function of a log function's name and other arguments",
+        'CREATE FUNCTION log_two.note(n integer) RETURNS integer LANGUAGE sql AS $$ SELECT n $$',
+        'DROP FUNCTION log_two.note(integer)',
+      ],
+    ])("counts %s of the application's in another log's schema", async (_what, make, drop) => {
+      const setup = await opened();
+      await installed(setup.pg, followDrizzle(schema, { namespace: 'log_two' }));
+      const before = await countOf(setup.pg);
+
+      await setup.pg.query(make);
+      const made = await countOf(setup.pg);
+      await setup.pg.query(drop);
+
+      expect(made).not.toBe(before);
+      await expect(countOf(setup.pg)).resolves.not.toBe(made);
+    });
+
+    it.each(['app', 'public'])(
+      "counts a function of a log function's signature and a table beside it, in a schema of the log's tables: %s",
+      async (name) => {
+        const setup = await opened(`
+          CREATE SCHEMA IF NOT EXISTS ${name};
+          CREATE TABLE ${name}.head (id text);
+          CREATE TABLE ${name}.changes (id text);
+          CREATE TABLE ${name}.ddl (id text);
+        `);
+        const before = await countOf(setup.pg);
+
+        await setup.pg.query(
+          `CREATE FUNCTION ${name}.note(a text, b text) RETURNS text LANGUAGE sql AS $$ SELECT a $$`,
+        );
+        const made = await countOf(setup.pg);
+        await setup.pg.query(`ALTER TABLE ${name}.head ADD COLUMN note text`);
+
+        expect(made).not.toBe(before);
+        await expect(countOf(setup.pg)).resolves.not.toBe(made);
+      },
+    );
+
+    it.each([
+      ['another function', 'app.watch', 'app_ddl'],
+      ['another name', 'app.note_ddl', 'app_watch'],
+      ["another schema's function", 'public.note_ddl', 'app_ddl'],
+    ])(
+      "counts a function of a log function's signature in a schema whose event trigger is of %s",
+      async (_what, run, trigger) => {
+        const setup = await opened(`
+          CREATE SCHEMA app;
+          CREATE FUNCTION ${run}() RETURNS event_trigger LANGUAGE plpgsql AS $$ BEGIN NULL; END $$;
+          CREATE EVENT TRIGGER ${trigger} ON ddl_command_end EXECUTE FUNCTION ${run}();
+        `);
+        const before = await countOf(setup.pg);
+
+        await setup.pg.query(
+          'CREATE FUNCTION app.note(a text, b text) RETURNS text LANGUAGE sql AS $$ SELECT a $$',
+        );
+
+        await expect(countOf(setup.pg)).resolves.not.toBe(before);
+      },
+    );
+
+    it.each(['pg_tempdata', 'pg_temporary', 'pg_toast_tempdata'])(
+      "counts a change of the application's schema whose name begins as a temporary one's: %s",
+      async (name) => {
+        const setup = await opened(`CREATE SCHEMA ${name};`);
+        const before = await countOf(setup.pg);
+
+        await setup.pg.query(`CREATE VIEW ${name}.chosen AS SELECT 1 AS one`);
+        const made = await countOf(setup.pg);
+        await setup.pg.query(`DROP VIEW ${name}.chosen`);
+
+        expect(made).not.toBe(before);
+        await expect(countOf(setup.pg)).resolves.not.toBe(made);
+      },
+    );
+
+    it("counts no staging table of the session's temporary schema", async () => {
+      const setup = await opened();
+      const before = await countOf(setup.pg);
+
+      await setup.pg.exec(`
+        CREATE TEMP TABLE staging (id text, note text);
+        DROP TABLE staging;
+      `);
+
+      await expect(countOf(setup.pg)).resolves.toBe(before);
+    });
+
+    it('counts a change of the schema whatever lock timeout its session set, and keeps that', async () => {
+      const setup = await opened();
+      // PGlite's one session waits behind no lock: this fails the count as a lock held past the
+      // session's timeout would, wherever a timeout stands as the count takes its lock.
+      await setup.pg.exec(`
+        CREATE FUNCTION public.timed_out() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+          IF current_setting('lock_timeout') <> '0' THEN
+            RAISE EXCEPTION 'canceling statement due to lock timeout' USING ERRCODE = 'lock_not_available';
+          END IF;
+          RETURN NEW;
+        END $$;
+        CREATE TRIGGER timed_out BEFORE INSERT ON reactive_state.ddl FOR EACH ROW EXECUTE FUNCTION public.timed_out();
+        SET lock_timeout = '1s';
+      `);
+      const before = await countOf(setup.pg);
+
+      await setup.pg.query('CREATE VIEW counted AS SELECT 1 AS one');
+      const made = await countOf(setup.pg);
+      await setup.pg.query('DROP VIEW counted');
+
+      expect(made).not.toBe(before);
+      await expect(countOf(setup.pg)).resolves.not.toBe(made);
+      await expect(
+        setup.pg.query<{ lock_timeout: string }>('SHOW lock_timeout'),
+      ).resolves.toMatchObject({ rows: [{ lock_timeout: '1s' }] });
+    });
 
     it("runs none of a function another role made on a writer's search path, as it logs a write", async () => {
       const { orm, pg, renders } = await watching((db) => launchTasks(db));
