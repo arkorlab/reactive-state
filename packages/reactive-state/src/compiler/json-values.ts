@@ -305,6 +305,8 @@ interface Giving {
   readonly entry: boolean;
   /** Whether it gives the parameter at `index` what no JSON holds, as an entry's value where `entry`. */
   readonly gives: (index: number, entry?: boolean) => boolean;
+  /** What the call writes where the parameter at `index` stands, where it tells (`Given.written`). */
+  readonly written?: ((index: number) => Expression | undefined) | undefined;
   /**
    * Whether it may give the parameter at `index` nothing, or `undefined`, of which it takes the
    * default the code writes it (`Given.omits`); of none told, it may.
@@ -386,6 +388,7 @@ function answersCall(state: SideState, fn: Answering, given: Given, reading: Jso
     },
     omits: given.omits,
     outer: fn.getSourceFile() === state.component.sourceFile ? reading : undefined,
+    written: given.written,
   });
 }
 
@@ -483,7 +486,7 @@ function declaredAnswersNoJson(state: SideState, fn: Answering, giving: Giving):
     },
     scope: outer === undefined ? moduleScope(state.modules) : outer.scope,
   });
-  const checksParameter = changedParameters(fn, reading, isNonJson);
+  const checksParameter = changedParameters(fn, reading, isNonJson, giving.written);
 
   /** Whether a returned parameter is changed to hold what no JSON holds. */
   function changesParameter(name: Identifier): boolean {

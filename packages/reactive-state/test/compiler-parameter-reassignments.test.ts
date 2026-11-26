@@ -11,6 +11,8 @@ describe('shared factory parameter replacements', () => {
     "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); value = {id: 'fresh'}; return value; }",
     "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); (value as {id: string}) = {id: 'fresh'}; return value; }",
     "function make(value: {id: string; bad?: unknown}) { const fresh = {id: 'fresh'}; value.bad = new Date(0); value = fresh; return value; }",
+    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); value = {id: 'fresh'}; value.id = 'safe'; return value; }",
+    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); var value = {id: 'fresh'}, ignored = (value.id = 'safe'); return value; }",
   ])('keeps a returned fresh value after a definite replacement: %s', async (source) => {
     const app = await fixture(source);
     apps.push(app);
@@ -18,12 +20,13 @@ describe('shared factory parameter replacements', () => {
     expect(compile(app).refusals).toStrictEqual([]);
   });
 
-  // A member write is an entry of an object only where the object is one the code writes out and
-  // has not replaced; a parameter that was replaced is none, though what replaced it is fresh.
+  // A member write is an entry of an object only where the object is one the code writes out: the
+  // replacement is, in the rows above. A constant that replaces the parameter is another name's
+  // object, and an array holds no named member that JSON keeps.
   it.each([
-    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); value = {id: 'fresh'}; value.id = 'safe'; return value; }",
-    "function make(value: {id: string; bad?: unknown}) { value.bad = new Date(0); var value = {id: 'fresh'}, ignored = (value.id = 'safe'); return value; }",
-  ])('refuses a member write into a parameter after its replacement: %s', async (source) => {
+    "function make(value: {id: string; bad?: unknown}) { const fresh = {id: 'fresh'}; value.bad = new Date(0); value = fresh; value.id = 'safe'; return value; }",
+    "function make(value: {id?: string; bad?: unknown}) { value.bad = new Date(0); value = [] as {id?: string}; value.id = 'safe'; return value; }",
+  ])('refuses a member write into a parameter replaced by another value: %s', async (source) => {
     const app = await fixture(source);
     apps.push(app);
 

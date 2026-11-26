@@ -54,6 +54,12 @@ export interface Target {
   /** Whether the last key is a symbol the code writes. */
   readonly endsInSymbol?: boolean | undefined;
   readonly initializer: Expression | undefined;
+  /**
+   * Whether `declared`, which no `const` declares, holds what `initializer` writes at each read the
+   * walk reads all the same: a parameter of a function, of the object the call writes it or the
+   * function's own code replaces it with (`parameter-json.ts`).
+   */
+  readonly isHeld?: boolean | undefined;
   readonly inside?: Expression | undefined;
   readonly keys: readonly (string | undefined)[];
   readonly owner: Node;
@@ -493,13 +499,16 @@ export function anyAliasRead(
   return false;
 }
 
-/** Container expression at `containerKeys` when no write in `target.owner` replaces any prefix of it. */
+/**
+ * Container expression at `containerKeys` when no write in `target.owner` replaces any prefix of it:
+ * of a constant, or of a parameter that holds what it is read as holding (`Target.isHeld`).
+ */
 export function unreplacedAt(
   target: Target,
   containerKeys: readonly (string | undefined)[],
 ): Expression | undefined {
   const found = writtenAt(target.initializer, containerKeys, target.resolve);
-  if (found === undefined || !isConstIdentifier(target.declared)) {
+  if (found === undefined || (target.isHeld !== true && !isConstIdentifier(target.declared))) {
     return undefined;
   }
   if (containerKeys.length > 0 && anyAliasRead(target, containerKeys, checkPrefixRead)) {
