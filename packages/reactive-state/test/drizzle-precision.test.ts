@@ -285,6 +285,14 @@ function logViewOf(project: string): string {
   return `CREATE OR REPLACE VIEW reactive_state.chosen AS SELECT * FROM tasks WHERE project_id = '${project}'`;
 }
 
+/**
+ * A function of the application's in the log's schema, of a log function's name but other
+ * arguments, `reactive_state.note(integer)`, that answers `answer`.
+ */
+function noteOf(answer: string): string {
+  return `CREATE OR REPLACE FUNCTION reactive_state.note(n integer) RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT '${answer}' $$`;
+}
+
 /** A function of the session's temporary schema, `pg_temp.picked()`, that answers `project`. */
 function pickedOf(project: string): string {
   return `CREATE OR REPLACE FUNCTION pg_temp.picked() RETURNS text LANGUAGE sql IMMUTABLE AS $$ SELECT '${project}' $$`;
@@ -1734,20 +1742,70 @@ describe(
       ).resolves.toBe(true);
     });
 
-    it("counts no change of the schema as the log's statements run again", async () => {
+    it("fails a read of the log's own tables, which nothing follows", async () => {
       const setup = await opened();
-      const count = async () => {
-        const { rows } = await setup.pg.query<{ n: string }>(
-          'SELECT reactive_state.ddl_count()::text AS n',
-        );
-        return rows[0]?.n;
-      };
-      const before = await count();
+      const { render } = await engineOf(setup, async (_props, $) => {
+        const rows = await setup.orm.execute(sql`SELECT seq FROM reactive_state.head`);
+        return $.h('p', null, JSON.stringify(rows));
+      });
 
-      for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
-
-      await expect(count()).resolves.toBe(before);
+      await expect(render()).rejects.toThrow(/does not follow/u);
     });
+
+    it("fails a read once a table of the log's schema inherits from its table", async () => {
+      const { pg, renders } = await watching((db) => launchTasks(db));
+
+      await expect(
+        renders(() => {
+          return pg.exec(`
+            CREATE TABLE reactive_state.kid () INHERITS (tasks);
+            INSERT INTO reactive_state.kid (project_id, title) VALUES ('p1', 'from the child');
+          `);
+        }),
+      ).rejects.toThrow(/does not follow/u);
+    });
+
+    it.each(['mood', 'head_pkey'])(
+      "renders a read again once a type of the application's in the log's schema is altered: %s",
+      async (name) => {
+        const { pg, renders } = await watching(
+          (db) => db.execute(sql.raw(`SELECT enum_range(NULL::reactive_state.${name})::text AS v`)),
+          (setup) => setup.query(`CREATE TYPE reactive_state.${name} AS ENUM ('a', 'b')`),
+        );
+
+        await expect(
+          renders(() => pg.query(`ALTER TYPE reactive_state.${name} RENAME VALUE 'a' TO 'c'`)),
+        ).resolves.toBe(true);
+      },
+    );
+
+    it("renders a read again once a function of the application's of a log function's name changes", async () => {
+      const { pg, renders } = await watching(
+        (db) => db.execute(sql`SELECT reactive_state.note(1) AS v`),
+        (setup) => setup.query(noteOf('one')),
+      );
+
+      await expect(renders(() => pg.query(noteOf('two')))).resolves.toBe(true);
+    });
+
+    it.each(['off', 'on'])(
+      "counts no change of the schema as the log's statements run again, of quote_all_identifiers %s",
+      async (quoted) => {
+        const setup = await opened();
+        const count = async () => {
+          const { rows } = await setup.pg.query<{ n: string }>(
+            'SELECT reactive_state.ddl_count()::text AS n',
+          );
+          return rows[0]?.n;
+        };
+        const before = await count();
+        await setup.pg.query(`SET quote_all_identifiers = ${quoted}`);
+
+        for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+        await expect(count()).resolves.toBe(before);
+      },
+    );
 
     it("runs none of a function another role made on a writer's search path, as it logs a write", async () => {
       const { orm, pg, renders } = await watching((db) => launchTasks(db));
