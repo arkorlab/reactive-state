@@ -324,10 +324,11 @@ function definedEntry(node: CallExpression): readonly MemberWrite[] {
   const prefix = framedArgumentPrefix(node, node.arguments, DEFINED.slots);
   const [target, key, descriptor] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
-  if (written === undefined || key === undefined) return [];
-  // A descriptor past a spread whose order is unknown is any value that spread may supply.
+  if (written === undefined || (key === undefined && !prefix.unknown)) return [];
+  // A descriptor past a spread whose order is unknown is any value that spread may supply; a key
+  // past one is not shown, and the write is then under any name.
   const descriptors = descriptor === undefined ? (prefix.alternatives ?? []) : [descriptor];
-  const names = framedKeyNames(key);
+  const names = key === undefined ? undefined : framedKeyNames(key);
   return descriptors.flatMap((each) => {
     return (framedDescriptorEntries(each, ['value']) ?? []).map((value) => {
       return {
