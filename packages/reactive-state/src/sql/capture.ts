@@ -354,7 +354,9 @@ function ddlCounterOf(namespace: string): readonly string[] {
   // over it, a function's argument or result, a composite type's attribute — of a dependency of its
   // own, which no staging table of `LIKE … INCLUDING ALL` has but its array's; or of a relation that
   // inherits from it, whose columns a change of it changes.
-  const kin = `WITH RECURSIVE "kin" ("oid") AS (SELECT t.oid UNION SELECT i.inhrelid FROM pg_inherits AS i JOIN "kin" AS k ON i.inhparent = k.oid)`;
+  // A relation that never had children has no descendants. The catalog flag may stay true after
+  // its last child goes, which only leaves the walk in place; false safely skips its scans.
+  const kin = `WITH RECURSIVE "kin" ("oid") AS (SELECT t.oid UNION SELECT i.inhrelid FROM pg_inherits AS i JOIN "kin" AS k ON i.inhparent = k.oid WHERE t.relhassubclass)`;
   const dependedOn = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c JOIN pg_class AS t ON t.oid = c.objid AND c.classid = 'pg_class'::regclass WHERE t.relpersistence = 't' AND EXISTS (${kin} SELECT 1 FROM "kin" AS k JOIN pg_class AS r ON r.oid = k.oid JOIN pg_type AS y ON y.oid = r.reltype JOIN pg_depend AS p ON p.refclassid = 'pg_type'::regclass AND p.refobjid IN (y.oid, y.typarray) AND p.deptype = 'n'))`;
   // An object a statement names, or a relation one is of: counted, but no other relation's change
   // after it, which changes what no name of `pg_temp`'s means — the session's flag is a relation's

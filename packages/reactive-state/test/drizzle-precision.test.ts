@@ -1246,6 +1246,22 @@ describe(
       ).resolves.toBe(true);
     });
 
+    it('renders a read again once a temporary ancestor of a named row type is altered', async () => {
+      const { pg, renders } = await watching(
+        (db) => launchTasks(db),
+        async (setup) => {
+          await setup.query('CREATE TEMP TABLE ancestor (x text, y text)');
+          await setup.query('CREATE TEMP TABLE middle () INHERITS (ancestor)');
+          await setup.query('CREATE TEMP TABLE youngest () INHERITS (middle)');
+          await setup.query('CREATE DOMAIN pg_temp.paired AS pg_temp.youngest[]');
+        },
+      );
+
+      await expect(
+        renders(() => pg.query('ALTER TABLE pg_temp.ancestor RENAME COLUMN x TO z')),
+      ).resolves.toBe(true);
+    });
+
     it('renders a read again once a temporary table a domain is of is altered, where the digest alone tells', async () => {
       const { pg, renders } = await watching(
         (db) => launchTasks(db),
