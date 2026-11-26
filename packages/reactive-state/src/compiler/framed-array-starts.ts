@@ -34,16 +34,39 @@ import { bindingIdentifiers } from './scope.ts';
  * object) starts as none.
  */
 export function mayStartAsArray(binding: FrameBinding): boolean {
-  return mayBeArray(binding.initializer, binding);
+  return !writtenScalar(binding) && mayBeArray(binding.initializer, binding);
 }
 
 /**
  * Whether a name that is written as a whole elsewhere may be given an array there: the right of an
  * assignment, read as the initializer is, or a pattern or a loop head, whose value is not read. A name
- * that starts as a number or a text and is given a list holds the list afterwards.
+ * that starts as a number or a text and is given a list holds the list afterwards. Of a name the code
+ * writes as a scalar, only what it is shown to hold all the same is read (`shownOf`).
  */
 export function mayBecomeArray(binding: FrameBinding): boolean {
-  return givenValues(binding).some((value) => value === undefined || mayBeArray(value, binding));
+  const given = writtenScalar(binding) ? shownOf(binding) : givenValues(binding);
+  return given.some((value) => value === undefined || mayBeArray(value, binding));
+}
+
+/**
+ * What a name the code writes as a scalar is shown to hold all the same: the lists and the names that
+ * what it starts as, and each value it is given as a whole, end at, through parentheses, casts and
+ * choices (`text = [error] as never`, `text = flag ? list : 'none'`). A list refuses, and a name is
+ * followed as any name is. The written type vouches for every other value alone, which the compile
+ * cannot follow: a call's result, a member, what an operator makes, a part a pattern or a loop gives.
+ */
+function shownOf(binding: FrameBinding): readonly Expression[] {
+  const shown: Expression[] = [];
+  const pending = [binding.initializer, ...givenValues(binding)];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (value === undefined) continue;
+    const written = unwrapped(value);
+    const ends = endsOf(written);
+    if (ends !== undefined) pending.push(...ends);
+    else if (isArrayLiteralExpression(written) || isIdentifier(written)) shown.push(written);
+  }
+  return shown;
 }
 
 /**
@@ -66,8 +89,9 @@ function mayBeArray(given: Expression | undefined, binding: FrameBinding): boole
 /**
  * The values a value leads to, none where it may be an array: a name leads to what it starts as and to what
  * it is given as a whole, once for each part of a pattern it names; a value that is none of an array, a name
- * or a scalar the compile knows is one. A whole name the code writes as a scalar leads nowhere: it holds no
- * array whatever it starts as, a parameter included (`let text = name` of a `name: string`).
+ * or a scalar the compile knows is one. A whole name the code writes as a scalar leads to what it is shown to
+ * hold all the same (`shownOf`), and to nothing else: no array, whatever it starts as, a parameter included
+ * (`let text = name` of a `name: string`).
  */
 function leadsOf(
   value: Expression,
@@ -78,8 +102,9 @@ function leadsOf(
   if (!isIdentifier(start)) return isNoArray(start) ? [] : undefined;
   const selected = frameBindingOf(start);
   if (selected === undefined) return start.text === 'undefined' ? [] : undefined;
-  if (selected.keys.length === 0 && writtenScalar(selected.binding)) return [];
   if (!firstVisit(seen, selected.binding, selected.keys)) return [];
+  if (selected.keys.length === 0 && writtenScalar(selected.binding))
+    return shownOf(selected.binding);
   if (defaultMayBeArray(start)) return undefined;
   return [
     selectedValue(selected.binding.initializer, selected.keys),

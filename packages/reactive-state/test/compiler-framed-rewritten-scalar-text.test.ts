@@ -106,9 +106,93 @@ const scalars: readonly Row[] = [
     invocation: "frames(value, 'fixed')",
     reader: false,
   },
+  {
+    id: 'alias-of-names-given-scalars',
+    source:
+      "function frames(name: string) { let first = ''; let second = ''; second = name.trim(); let text = first; text = second; return String(text); }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
+  {
+    id: 'three-names-given-scalars',
+    source:
+      "function frames(name: string) { let first = ''; first = name.trim(); let second = ''; second = first; let text = ''; text = second; return String(text); }",
+    invocation: 'frames(value)',
+    reader: false,
+  },
+  {
+    id: 'choice-of-scalars-given',
+    source:
+      "function frames(name: string, flag: boolean) { let text = ''; text = flag ? name.trim() : 'fixed'; return String(text); }",
+    invocation: "frames(value, value === 'done')",
+    reader: false,
+  },
 ];
 
 const lists: readonly Row[] = [
+  {
+    id: 'alias-of-a-name-given-a-cast-list',
+    source:
+      "function frames(error: Error) { let first = ''; let second = ''; second = [error] as never; let text = first; text = second; return String(text); }",
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+  },
+  {
+    id: 'alias-starting-as-a-cast-list-name',
+    source:
+      "function frames(error: Error) { let first = ''; first = [error] as never; let second = ''; let text = first; text = second; return String(text); }",
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+  },
+  {
+    id: 'three-names-to-a-cast-list',
+    source:
+      "function frames(error: Error) { let first = ''; first = [error] as never; let second = ''; second = first; let third = ''; let text = third; text = second; return String(text); }",
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+  },
+  {
+    id: 'pattern-part-of-a-cast-list-name',
+    source:
+      "function frames(error: Error) { let second = ''; second = [error] as never; const [part] = [second]; let text = ''; text = part; return String(text); }",
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+  },
+  {
+    id: 'cast-list-in-a-choice',
+    source:
+      "function frames(error: Error, flag: boolean) { let text: string = 'safe'; text = flag ? ([error] as never) : 'fixed'; return String(text); }",
+    invocation: 'frames(new Error("ours"), value === \'done\')',
+    reader: true,
+  },
+  {
+    id: 'cast-list-in-a-choice-of-an-alias',
+    source:
+      "function frames(error: Error, flag: boolean) { let second = ''; second = flag ? ([error] as never) : 'fixed'; let text = ''; text = second; return String(text); }",
+    invocation: 'frames(new Error("ours"), value === \'done\')',
+    reader: true,
+  },
+  {
+    id: 'cast-list-beside-a-logical-or',
+    source:
+      "function frames(error: Error, name: string) { let text = ''; text = name || ([error] as never); return String(text); }",
+    invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'cast-list-choice-a-typed-name-starts-as',
+    source:
+      "function frames(error: Error, flag: boolean) { let text: string = flag ? ([error] as never) : 'safe'; text = 'fixed'; return String(text); }",
+    invocation: 'frames(new Error("ours"), value === \'done\')',
+    reader: true,
+  },
+  {
+    id: 'string-name-given-an-unknown-name',
+    source:
+      "function frames(input: unknown) { let text = ''; if (typeof input === 'string') text = input; return String(text); }",
+    invocation: 'frames(value)',
+    reader: true,
+  },
   {
     id: 'array-parameter-sliced',
     source:

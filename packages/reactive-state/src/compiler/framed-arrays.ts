@@ -279,20 +279,19 @@ export function arrayMethodMayBeOverridden(call: Node, method: string): boolean 
  * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
  * ends at a value that is no array (a scalar, a function, an object) is no array the compile started
  * from, but a name that is given an array elsewhere holds it afterwards, and is refused alike. A name
- * the code writes as a scalar (`count: number`) holds no array whatever it is given, a parameter
- * nothing says the start of and a call's result included (`count += 1`, `text = text.trim()`): what
- * it is written with does not matter, and it is read as a name that was never written again is.
+ * the code writes as a scalar (`count: number`) holds no array whatever it is given that the compile
+ * cannot follow, a parameter nothing says the start of and a call's result included (`count += 1`,
+ * `text = text.trim()`): it is read as a name that was never written again is, unless the code shows
+ * it a list or a name that may hold one (`text = [error] as never`), directly or through the names
+ * it is given.
  */
 function rewrittenArray(binding: FrameBinding): boolean {
-  if (!writtenAsWhole(binding) || writtenScalar(binding)) return false;
-  return mayStartAsArray(binding) || mayBecomeArray(binding);
+  return writtenAsWhole(binding) && (mayStartAsArray(binding) || mayBecomeArray(binding));
 }
 
 /**
  * Initializer traversal still requires whole binding identity after the selected type was checked: a
- * name written as a whole elsewhere may hold another array than its initializer, and is refused. One
- * the code writes as a scalar is read on, by what it starts as and by each value the code shows it
- * given: a list written there under a cast (`text = [error] as never`) is still a list.
+ * name written as a whole elsewhere may hold another array than its initializer, and is refused.
  */
 function bindingArrayWords(
   value: Expression,
@@ -311,8 +310,6 @@ function bindingArrayWords(
   if (writtenElementErrors(value, call, words, { pending, reading })) return true;
   if (reading === 'followed' && !followedGivens(binding)) return true;
   if (binding.initializer !== undefined) pending.push(binding.initializer);
-  if (reading === 'refused' && writtenScalar(binding))
-    pending.push(...givenValues(binding).filter((given) => given !== undefined));
   return false;
 }
 
