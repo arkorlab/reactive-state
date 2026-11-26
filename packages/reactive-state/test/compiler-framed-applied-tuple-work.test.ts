@@ -11,6 +11,10 @@ import { framedAppliedArguments, framedArgumentPrefix } from '../src/compiler/fr
 import { openTypeScript, parseModule } from '../src/compiler/typescript.ts';
 
 /**
+ * A prefix that ends at a spread past work the call runs first (`readInOrder`,
+ * `reorderedArgumentPrefix`) keeps what the positions from the spread may hold as its alternatives,
+ * and a reader of the prefix takes each as a possible value: the three spread rows below say so.
+ *
  * A call evaluates its callee and its arguments before it reads a list it is given, and the
  * arguments before a spread before the spread reads its entries: what that work writes into a
  * captured tuple, or what a function it runs may write there, is what the call then reads. Work
@@ -109,14 +113,22 @@ const SPREAD = [
     id: 'reviewed-spread-key-write',
     source: "const keys = ['safe']; Reflect.get((keys[0] = 'toString', target), ...keys);",
     callee: 'Reflect.get',
-    prefix: { values: ["(keys[0] = 'toString', target)"], unknown: true, alternatives: [] },
+    prefix: {
+      values: ["(keys[0] = 'toString', target)"],
+      unknown: true,
+      alternatives: ["'safe'", "'toString'"],
+    },
   },
   {
     id: 'spread-after-receiver-write',
     source:
       "const tuple = [{}, 'stack']; Reflect.get.call((tuple[0] = new Error(), null), ...tuple);",
     callee: 'Reflect.get.call',
-    prefix: { values: ['(tuple[0] = new Error(), null)'], unknown: true, alternatives: [] },
+    prefix: {
+      values: ['(tuple[0] = new Error(), null)'],
+      unknown: true,
+      alternatives: ['{}', "'stack'", 'new Error()'],
+    },
   },
   {
     id: 'spread-before-write-pin',
@@ -129,7 +141,7 @@ const SPREAD = [
     id: 'listed-spread-receiver-write',
     source: "const tuple = [{}, 'stack']; Reflect.get.apply((tuple[0] = new Error()), [...tuple]);",
     callee: 'Reflect.get.apply',
-    prefix: { values: ['{}'], unknown: true, alternatives: ['new Error()'] },
+    prefix: { values: [], unknown: true, alternatives: ['{}', "'stack'", 'new Error()'] },
   },
   {
     id: 'construction-in-callee-pin',
