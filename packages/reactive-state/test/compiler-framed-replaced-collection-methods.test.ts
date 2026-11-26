@@ -151,6 +151,7 @@ const CASES = [
       "function frames(error:Error){(Map.prototype as unknown as {get:unknown}).get=()=>error;const values=new Map<string,{stack?:string}>([['x',{stack:'fixed'}]]);(values as unknown as {get:unknown}).get=()=>({stack:'fixed'});return values.get('x')!.stack;}",
     invocation: 'frames(new Error("ours"))',
     refused: false,
+    kept: true,
   },
   {
     id: 'handed-local-map-retains',
@@ -229,6 +230,7 @@ const CASES = [
       "function frames(error:Error){void error;(Map.prototype as unknown as {clear:unknown}).clear=function(){};const values=new Map<string,{stack?:string}>();(values as unknown as {get:unknown}).get=()=>({stack:'fixed'});return values.get('x')!.stack;}",
     invocation: 'frames(new Error("ours"))',
     refused: false,
+    kept: true,
   },
   {
     id: 'proto-get-own-conditional-retains',
@@ -285,6 +287,7 @@ const CASES = [
       "function frames(error:Error){(Map.prototype as unknown as {describe:unknown}).describe=()=>error;return new Map<string,{stack?:string}>([['safe',{stack:'fixed'}]]).get('safe')!.stack;}",
     invocation: 'frames(new Error("ours"))',
     refused: false,
+    kept: true,
   },
   {
     id: 'proto-local-class-quiet',
@@ -292,6 +295,7 @@ const CASES = [
       "class Box{get(){return {stack:'fixed'};}}function frames(error:Error){(Box.prototype as unknown as {get:unknown}).get=()=>error;return new Map<string,{stack?:string}>([['safe',{stack:'fixed'}]]).get('safe')!.stack;}",
     invocation: 'frames(new Error("ours"))',
     refused: false,
+    kept: true,
   },
   {
     id: 'proto-array-get-quiet',
@@ -299,6 +303,7 @@ const CASES = [
       "function frames(error:Error){(Array.prototype as unknown as {get:unknown}).get=()=>error;return new Map<string,{stack?:string}>([['safe',{stack:'fixed'}]]).get('safe')!.stack;}",
     invocation: 'frames(new Error("ours"))',
     refused: false,
+    kept: true,
   },
   {
     id: 'proto-compared-quiet',
@@ -492,7 +497,7 @@ describe('replaced collection method readers', () => {
 describe('shared replaced collection method results', () => {
   const { apps, compile } = compilerApplications();
 
-  it.each(CASES)('$id', async ({ source, invocation, refused, beside }) => {
+  it.each(CASES)('$id', async ({ source, invocation, refused, kept, beside }) => {
     const app = await application({
       ...beside,
       'domain/todo-filter.ts': [
@@ -504,7 +509,8 @@ describe('shared replaced collection method results', () => {
     apps.push(app);
     const reasons = compile(app).refusals.map((item) => item.reason);
     const shared = expect.stringContaining('a shared module that answers otherwise');
-    const expected = refused ? [shared] : [];
+    // A write into a global's prototype, through a cast or not, is what the module keeps between calls.
+    const expected = refused || kept === true ? [shared] : [];
 
     expect(reasons).toStrictEqual(expected);
   });
