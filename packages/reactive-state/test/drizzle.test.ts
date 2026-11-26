@@ -238,6 +238,46 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     });
   });
 
+  it.each(['side', 'image'])(
+    'explains how to upgrade a log missing its %s column',
+    async (column) => {
+      const setup = await opened();
+      const store = setup.follow.store(setup.pg);
+      const before = await store.changes(0, 10);
+      await setup.pg.query(`ALTER TABLE reactive_state.changes DROP COLUMN "${column}"`);
+
+      await expect(store.changes(0, 10)).rejects.toThrow('follow.captureSql()');
+
+      for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+      await expect(store.changes(0, 10)).resolves.toMatchObject({ head: before.head });
+    },
+  );
+
+  it('explains how to upgrade a log missing its schema-count function', async () => {
+    const setup = await opened();
+    const store = setup.follow.store(setup.pg);
+    const before = await store.changes(0, 10);
+    await setup.pg.query('DROP FUNCTION reactive_state.ddl_count()');
+
+    await expect(store.changes(0, 10)).rejects.toThrow('follow.captureSql()');
+
+    for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+    await expect(store.changes(0, 10)).resolves.toMatchObject({ head: before.head });
+  });
+
+  it('explains how to upgrade a log missing its schema-fold function', async () => {
+    const setup = await opened();
+    await setup.pg.query('DROP FUNCTION reactive_state.fold_ddl(double precision)');
+
+    await expect(setup.follow.prune(setup.pg, Date.now())).rejects.toThrow('follow.captureSql()');
+
+    for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
+
+    await expect(setup.follow.prune(setup.pg, Date.now())).resolves.toBeUndefined();
+  });
+
   it.each([
     {
       what: 'a write',

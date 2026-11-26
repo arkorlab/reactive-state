@@ -436,7 +436,7 @@ export function changeCaptureSql(
     `CREATE TABLE IF NOT EXISTS ${changes} ("seq" bigint PRIMARY KEY, "schema_name" text NOT NULL, "table_name" text NOT NULL, "at" timestamptz NOT NULL DEFAULT clock_timestamp())`,
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
-    `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname = 'image' AND NOT attisdropped) THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
+    `DO $$ BEGIN IF (SELECT count(*) FROM pg_attribute WHERE attrelid = ${literal(changes)}::regclass AND attname IN ('side', 'image') AND NOT attisdropped) < 2 THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
     // Of the role that made the log alone, of which the functions run: any other that may use the
     // log's schema could else append an entry that renders what read a table again, or attach a
     // trigger function to a table of its own.
