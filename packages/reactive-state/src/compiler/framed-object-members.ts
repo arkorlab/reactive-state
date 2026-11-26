@@ -13,6 +13,7 @@ import {
   isShorthandPropertyAssignment,
   isSetAccessorDeclaration,
   isSpreadAssignment,
+  isSpreadElement,
   isStringLiteral,
   type ObjectLiteralExpression,
   type PropertyName,
@@ -28,7 +29,7 @@ import { frameMemberName } from './framed-bindings.ts';
 import { framedEntriesCall, framedEntryValues } from './framed-entry-values.ts';
 import { framedMemberAdmitted } from './framed-error-admission.ts';
 import { framedFactoryReturns } from './framed-factory-returns.ts';
-import { framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
+import { framedArgumentPrefix, framedKeyNames, framedPossibleArguments } from './framed-keys.ts';
 
 /** Source-written literal property selections retain their possible Error values. */
 export function framedObjectMember(
@@ -127,7 +128,10 @@ function selectedEntries(
   const entries = framedEntryValues(value, key);
   if (entries !== undefined) return entries;
   const sources = assignedSources(value);
-  return sources === undefined ? undefined : assignedEntries(sources, key);
+  if (sources === undefined) return undefined;
+  // What may be a source in no known order is copied on its own: it hides no other source's field.
+  const possible = sources.possible.flatMap((each) => assignedEntries([each], key));
+  return [...assignedEntries(sources.ordered, key), ...possible];
 }
 
 /** The keys the setters of the prototypes installed so far answer, or that one cannot be read. */
@@ -284,17 +288,34 @@ function prototypeName(name: PropertyName): boolean {
   return (isIdentifier(name) || isStringLiteral(name)) && name.text === '__proto__';
 }
 
-/** A fresh empty native assign target has no source-written setter that could intercept a copy. */
-function assignedSources(value: Expression): readonly Expression[] | undefined {
+/**
+ * The sources of a native assign into a fresh empty target, which has no source-written setter that
+ * could intercept a copy: those in the order written, and, where a spread ends that order, those
+ * that stay possible past it (`framedPossibleArguments`) — a source written after a spread the
+ * compile cannot read is still copied, whatever the spread holds. What the call spreads is then a
+ * possible source as well, one no reader follows: the field stays unread there, not absent, as for
+ * a single source that is no literal.
+ */
+function assignedSources(value: Expression): AssignedSources | undefined {
   if (!isCallExpression(value) || globalPathOf(value.expression)?.join('.') !== 'Object.assign')
     return undefined;
   const prefix = framedArgumentPrefix(value, value.arguments, Infinity);
-  if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
   const target = prefix.values[0];
   const object = target === undefined ? undefined : unwrapped(target);
-  return object !== undefined && isObjectLiteralExpression(object) && object.properties.length === 0
-    ? prefix.values.slice(1)
-    : undefined;
+  if (object === undefined || !isObjectLiteralExpression(object) || object.properties.length > 0)
+    return undefined;
+  const ordered = prefix.values.slice(1);
+  if (!prefix.unknown && prefix.alternatives === undefined) return { ordered, possible: [] };
+  const spread = value.arguments.flatMap((each) =>
+    isSpreadElement(each) ? [each.expression] : [],
+  );
+  return { ordered, possible: [...framedPossibleArguments(prefix), ...spread] };
+}
+
+/** The sources of a native assign: those in the order written, and those possible in no known order. */
+interface AssignedSources {
+  readonly ordered: readonly Expression[];
+  readonly possible: readonly Expression[];
 }
 
 /** One literal's own descriptor state, before a spread copies its values as ordinary data. */

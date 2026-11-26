@@ -77,6 +77,12 @@ interface ArgumentPrefix {
   readonly values: readonly Expression[];
   readonly unknown: boolean;
   readonly alternatives?: readonly Expression[];
+  /**
+   * What is written past the place the prefix ends at, where that is a spread the compile cannot
+   * read or one of an array other code may have changed (`writtenPast`): its value is known, its
+   * position is not. None where nothing is written there.
+   */
+  readonly past?: readonly Expression[];
 }
 
 interface ArgumentArray {
@@ -92,8 +98,10 @@ interface ArgumentArray {
  * next pass — and an exposed prefix keeps its original and written targets. A spread past code the
  * call itself may run first ends the prefix (`readInOrder`), since that code may change the array in
  * any way, and keeps what the positions from it may hold as alternatives
- * (`reorderedArgumentPrefix`). A reader whose proof an exposure drops passes `reached` false, to
- * count only uses that run before it as written or in a body that repeats it.
+ * (`reorderedArgumentPrefix`). A prefix that ends at a spread the compile cannot read, or at an
+ * exposed one, keeps what is written past it (`past`): `Object.assign(box, ...sources, { inner })`
+ * still writes `inner`, whatever `sources` holds. A reader whose proof an exposure drops passes
+ * `reached` false, to count only uses that run before it as written or in a body that repeats it.
  */
 export function framedArgumentPrefix(
   call: CallExpression | NewExpression,
@@ -133,7 +141,8 @@ function argumentPrefix(
     }
     const { expression } = each.node;
     const selected = argumentArray(expression, each.seen, call, context.reached);
-    if (selected === undefined) return { values, unknown: true };
+    if (selected === undefined)
+      return endedPrefix({ values, unknown: true }, writtenPast(call, pending, context.reached));
     if (context.ordered && !readInOrder(call, each.node, expression, context.reached)) {
       const rest = [...selected.array.elements, ...pending.toReversed().map((work) => work.node)];
       return reorderedArgumentPrefix(values, rest, call, {
@@ -142,11 +151,54 @@ function argumentPrefix(
         spread: each.node,
       });
     }
-    if (selected.exposed) return exposedArgumentPrefix(values, selected, call, each.node);
+    if (selected.exposed) {
+      const ended = { call, spread: each.node, pending, reached: context.reached };
+      return exposedArgumentPrefix(values, selected, ended);
+    }
     for (const node of selected.array.elements.toReversed())
       pending.push({ node, seen: selected.seen });
   }
   return { values, unknown: false };
+}
+
+/**
+ * What is written past the place a prefix ends at: each argument still `pending` there, and what
+ * the array of a later spread was written with — the rest of an exposed array first. A spread among
+ * them that the compile cannot read supplies nothing it can name, and a hole writes nothing. What a
+ * spread before them holds comes first, so none of them stands at a known position.
+ */
+function writtenPast(
+  call: CallExpression | NewExpression,
+  pending: ArgumentWork[],
+  reached: boolean,
+): readonly Expression[] {
+  const past: Expression[] = [];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (isOmittedExpression(each.node)) continue;
+    if (!isSpreadElement(each.node)) {
+      past.push(each.node);
+      continue;
+    }
+    const selected = argumentArray(each.node.expression, each.seen, call, reached);
+    if (selected === undefined) continue;
+    const written = selected.array.elements.toReversed();
+    for (const node of written) pending.push({ node, seen: selected.seen });
+  }
+  return past;
+}
+
+/** A prefix that ends early, with what is written past its end where anything is. */
+function endedPrefix(prefix: ArgumentPrefix, past: readonly Expression[]): ArgumentPrefix {
+  return past.length === 0 ? prefix : { ...prefix, past };
+}
+
+/**
+ * What the positions past a prefix's end may hold, as far as the source writes it: its alternatives,
+ * and what is written past a spread it ends at (`past`). A reader for which a position decides the
+ * meaning — a key, an index, a descriptor — takes each as possible there.
+ */
+export function framedPossibleArguments(prefix: ArgumentPrefix): readonly Expression[] {
+  return [...(prefix.alternatives ?? []), ...(prefix.past ?? [])];
 }
 
 interface ReorderedContext {
@@ -171,7 +223,7 @@ function reorderedArgumentPrefix(
   const later = argumentPrefix(call, rest, Infinity, { reached: context.reached, ordered: false });
   const alternatives = [
     ...later.values,
-    ...(later.alternatives ?? []),
+    ...framedPossibleArguments(later),
     ...tupleTargetWrites(context.aliases, call, context.spread),
   ];
   return { values, unknown: true, alternatives };
@@ -288,17 +340,37 @@ function quietArgument(
   return !argumentPrefix(call, [node], Infinity, { reached, ordered: false }).unknown;
 }
 
-/** An exposed array retains its original and written replacement targets, but proves no key. */
+interface ExposedContext {
+  readonly call: CallExpression | NewExpression;
+  /** The spread the prefix ends at. */
+  readonly spread: Node;
+  /** The arguments past that spread, which the prefix did not reach. */
+  readonly pending: ArgumentWork[];
+  readonly reached: boolean;
+}
+
+/**
+ * An exposed array retains its original and written replacement targets, but proves no key. What
+ * it was written with beside that target, and each argument past it, stays possible in no known
+ * position (`writtenPast`).
+ */
 function exposedArgumentPrefix(
   values: Expression[],
   selected: ArgumentArray,
-  call: CallExpression | NewExpression,
-  spread: Node,
+  context: ExposedContext,
 ): ArgumentPrefix {
-  const alternatives = values.length === 0 ? tupleTargetWrites(selected.seen, call, spread) : [];
-  const first = selected.array.elements[0];
-  if (first !== undefined && values.length === 0 && !isSpreadElement(first)) values.push(first);
-  return { values, unknown: true, alternatives };
+  const { call, pending } = context;
+  const alternatives =
+    values.length === 0 ? tupleTargetWrites(selected.seen, call, context.spread) : [];
+  const [first, ...others] = selected.array.elements;
+  let unplaced: readonly Expression[] = selected.array.elements;
+  if (first !== undefined && values.length === 0 && !isSpreadElement(first)) {
+    values.push(first);
+    unplaced = others;
+  }
+  for (const node of unplaced.toReversed()) pending.push({ node, seen: selected.seen });
+  const past = writtenPast(call, pending, context.reached);
+  return endedPrefix({ values, unknown: true, alternatives }, past);
 }
 
 /**

@@ -1,7 +1,7 @@
 import type { CallExpression, Expression } from 'typescript/ast';
 
 import { executionOwner } from './framed-array-mutations.ts';
-import { framedArgumentPrefix } from './framed-keys.ts';
+import { framedArgumentPrefix, framedPossibleArguments } from './framed-keys.ts';
 
 /** What the possible writes of a Map's selected key leave stored there. */
 
@@ -84,10 +84,11 @@ export function framedUnprovenValues(
 
 /**
  * A native write's value, or every argument an open own method may store — past a spread whose order
- * is unknown, each value that spread may supply too.
+ * is unknown, each value that spread may supply too, and past one the compile cannot read, each
+ * argument written after it.
  */
 function writtenValues(write: MapWrite): readonly Expression[] {
   if (!write.open) return write.value === undefined ? [] : [write.value];
   const given = framedArgumentPrefix(write.call, undefined, Infinity);
-  return [...given.values, ...(given.alternatives ?? [])];
+  return [...given.values, ...framedPossibleArguments(given)];
 }
