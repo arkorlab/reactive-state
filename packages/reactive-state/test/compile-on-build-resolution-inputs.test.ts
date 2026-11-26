@@ -239,6 +239,39 @@ describe('external module resolution cache inputs', () => {
     await expect(compileProject({ projectDir: app })).resolves.toMatchObject({ compiled: false });
   });
 
+  it('recompiles when a type the checker read through an external alias changes', async () => {
+    const root = project({
+      'shared/greeting.ts': SAFE,
+      'shared/item.ts': 'export type Item = { title: string; stack?: string };\n',
+      'app/src/domain/label.ts': [
+        "import type { Item } from '@shared/item';",
+        "function entries(name: string): [string, Item][] { return [[name, { title: name, stack: 'fixed' }]]; }",
+        'export function label(name: string): string {',
+        '  return new Map<string, Item>(entries(name)).get(name)?.stack ?? name;',
+        '}',
+      ].join('\n'),
+    });
+    write(
+      root,
+      'app/src/components/hello.reactive.tsx',
+      [
+        'import { GREETING } from "@shared/greeting";',
+        'import { label } from "@/domain/label";',
+        'export default function Hello({ name }: { readonly name: string }) {',
+        '  return <p>{GREETING}, {label(name)}</p>;',
+        '}',
+      ].join('\n'),
+    );
+    const app = await initial(root);
+    const before = JSON.parse(readFileSync(path.join(app, '.reactive/manifest.json'), 'utf8')) as {
+      readonly routes: readonly RouteAdmission[];
+    };
+    write(root, 'shared/item.ts', 'export type Item = Error;\n');
+
+    expect(before.routes[0]).toMatchObject({ shared: true });
+    await expect(recompiledRoute(app)).resolves.toMatchObject({ shared: false });
+  });
+
   it('recompiles when the formerly selected file is removed', async () => {
     const root = project({ 'shared/greeting.ts': SAFE, 'shared/greeting.tsx': UNSAFE });
     const app = await initial(root);
