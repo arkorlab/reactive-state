@@ -282,8 +282,8 @@ export const arrayResultCases: readonly ArrayResultCase[] = [
     source:
       'function frames(error:Error){const values=[error];values.flat=()=>[{stack:"fixed"}]as never;return values.flat()[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     group: 'flat',
@@ -291,8 +291,8 @@ export const arrayResultCases: readonly ArrayResultCase[] = [
     source:
       'function frames(error:Error){const values=[error];values.flatMap=()=>[{stack:"fixed"}]as never;return values.flatMap(value=>[value])[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     group: 'flat',
