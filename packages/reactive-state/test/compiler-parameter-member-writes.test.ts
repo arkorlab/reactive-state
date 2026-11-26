@@ -30,6 +30,10 @@ describe('shared factory parameter member writes', () => {
     `const DEFAULTS = {id: 'default'}; function make(value: {id: string} = DEFAULTS) { value.id = 'fresh'; return value; }${PAYLOAD}`,
     `const shared = {id: 'shared'}; ${MAKE} export const other = make(shared);${PAYLOAD}`,
     `function make(value: {id: string}) { value = {id: 'fresh'}; value.id = 'safe'; return value; }${PAYLOAD}`,
+    "function make(value: {id: string; count: number}) { value.count *= 2; return value; } export const payload = make({id: 'safe', count: 1});",
+    "function make(value: {id: string; count: number}) { value.count++; return value; } export const payload = make({id: 'safe', count: 1});",
+    "function make(value: {id: string; count: number}) { value.count += value.count; return value; } export const payload = make({id: 'safe', count: 1});",
+    "function make(value: {id: string}) { value.id += '!'; return value; } export const payload = make({id: 'safe'});",
     `const make = (value: {id: string}) => { value.id = 'fresh'; return value; };${PAYLOAD}`,
     `function make(value: {id: string; size?: number}) { value.size ??= 10; return value; }${PAYLOAD}`,
   ])('keeps a member write into the object the parameter holds: %s', async (module) => {
@@ -80,9 +84,27 @@ describe('shared factory parameter member writes', () => {
     `function make(value: {id: string; self?: unknown}) { value.self = value; return value; }${PAYLOAD}`,
     `function make(value: {id: string; bad?: unknown}) { Object.assign(value, {bad: new Date(0)}); return value; }${PAYLOAD}`,
     `function make(value: {id: string}) { Object.defineProperty(value, 'id', {value: 'fresh'}); return value; }${PAYLOAD}`,
-    "function make(value: {id: string; count: number}) { value.count *= 2; return value; } export const payload = make({id: 'safe', count: 1});",
     `let kept: unknown; function make(value: {id: string}) { kept = value; value.id = 'fresh'; return value; }${PAYLOAD}`,
   ])('refuses what the write may leave that no JSON holds: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  // A sum or a product is taken of a parameter as of a constant where it is the only write of its
+  // member and the code shows a finite result. One that repeats, or stands beside another write of
+  // the member, is left to the authority of a constant; of a parameter it is refused.
+  it.each([
+    'function make(value: {n: number}) { value.n += 1e308; return value; } export const payload = make({n: 1e308});',
+    'function make(value: {n: number}) { value.n -= 1e308; return value; } export const payload = make({n: -1e308});',
+    'function make(value: {n: number}) { value.n *= 2; return value; } export const payload = make({n: 1e308});',
+    'function make(value: {n: number}) { value = {n: 1e308}; value.n += 1e308; return value; } export const payload = make({n: 1});',
+    'function make(value: {n: number}) { value.n += 1; value = {n: 1e308}; value.n += 1e308; return value; } export const payload = make({n: 1});',
+    'function make(value: {n: number}) { value.n += 1e308; value.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { for (let at = 0; at < 2; at += 1) { value.n += 1e308; } return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const add = () => { value.n += 1e308; }; add(); add(); return value; } export const payload = make({n: 0});',
+  ])('refuses a sum or a product that is not shown finite: %s', async (module) => {
     const app = await fixture(module);
     apps.push(app);
 

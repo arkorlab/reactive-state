@@ -500,6 +500,14 @@ export function anyAliasRead(
 }
 
 /**
+ * Whether `target.declared` holds what `target.initializer` writes wherever it is read: a constant,
+ * or a parameter the walk reads as holding it (`Target.isHeld`).
+ */
+export function holdsInitializer(target: Target): boolean {
+  return target.isHeld === true || isConstIdentifier(target.declared);
+}
+
+/**
  * Container expression at `containerKeys` when no write in `target.owner` replaces any prefix of it:
  * of a constant, or of a parameter that holds what it is read as holding (`Target.isHeld`).
  */
@@ -508,7 +516,7 @@ export function unreplacedAt(
   containerKeys: readonly (string | undefined)[],
 ): Expression | undefined {
   const found = writtenAt(target.initializer, containerKeys, target.resolve);
-  if (found === undefined || (target.isHeld !== true && !isConstIdentifier(target.declared))) {
+  if (found === undefined || !holdsInitializer(target)) {
     return undefined;
   }
   if (containerKeys.length > 0 && anyAliasRead(target, containerKeys, checkPrefixRead)) {
