@@ -38,7 +38,7 @@ const CASES = [
       'function read() { const items = [{ a: 1 }, { a: 2 }, { a: 3 }]; const fresh = { a: 4 }; const copy = items.map((item) => item, items.pop()); copy[1] = fresh; return /*read*/ copy.at(-2); }',
   },
   {
-    expected: { origins: ['items:', 'fresh:'], single: false },
+    expected: { origins: ['items:', '1:', 'fresh:'], single: false },
     id: 'with-apply-wrapper-tail-mutates-receiver',
     source:
       'function read() { const items = [{ a: 1 }, { a: 2 }, { a: 3 }]; const fresh = { a: 4 }; return /*read*/ Array.prototype.with.apply(items, [1, fresh], items.shift())[0]; }',
