@@ -71,8 +71,12 @@ export function framedUnprovenValues(
   };
 }
 
-/** A native write's value, or every argument an open own method may store. */
+/**
+ * A native write's value, or every argument an open own method may store — past a spread whose order
+ * is unknown, each value that spread may supply too.
+ */
 function writtenValues(write: MapWrite): readonly Expression[] {
-  if (write.open) return framedArgumentPrefix(write.call, undefined, Infinity).values;
-  return write.value === undefined ? [] : [write.value];
+  if (!write.open) return write.value === undefined ? [] : [write.value];
+  const given = framedArgumentPrefix(write.call, undefined, Infinity);
+  return [...given.values, ...(given.alternatives ?? [])];
 }

@@ -240,9 +240,11 @@ function assignedEntries(node: Expression): readonly MemberWrite[] {
   )
     return [];
   const prefix = framedArgumentPrefix(node, node.arguments, Infinity);
-  const [target, ...sources] = prefix.values;
+  const [target, ...given] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined) return [];
+  // Past a spread whose order is unknown, each value it may supply may be a source.
+  const sources = [...given, ...(prefix.alternatives ?? [])];
   const entries = sources.flatMap((source) => sourceEntries(source));
   if (prefix.unknown) entries.push(undefined);
   const writes: MemberWrite[] = [];
@@ -319,22 +321,23 @@ function constantLiteral(expression: Expression): SourceLiteral | undefined {
 /** `Object.defineProperty(holder, key, { value })`: the descriptor's written value under the key. */
 function definedEntry(node: CallExpression): readonly MemberWrite[] {
   if (globalPathOf(unwrapped(node.expression))?.join('.') !== 'Object.defineProperty') return [];
-  const [target, key, descriptor] = framedArgumentPrefix(
-    node,
-    node.arguments,
-    DEFINED.slots,
-  ).values;
+  const prefix = framedArgumentPrefix(node, node.arguments, DEFINED.slots);
+  const [target, key, descriptor] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
-  if (written === undefined || key === undefined || descriptor === undefined) return [];
+  if (written === undefined || key === undefined) return [];
+  // A descriptor past a spread whose order is unknown is any value that spread may supply.
+  const descriptors = descriptor === undefined ? (prefix.alternatives ?? []) : [descriptor];
   const names = framedKeyNames(key);
-  return (framedDescriptorEntries(descriptor, ['value']) ?? []).map((value) => {
-    return {
-      node,
-      holder: written.holder,
-      path: [...written.path, names],
-      value,
-      reopened: false,
-    };
+  return descriptors.flatMap((each) => {
+    return (framedDescriptorEntries(each, ['value']) ?? []).map((value) => {
+      return {
+        node,
+        holder: written.holder,
+        path: [...written.path, names],
+        value,
+        reopened: false,
+      };
+    });
   });
 }
 

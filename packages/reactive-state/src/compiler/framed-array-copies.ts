@@ -239,7 +239,8 @@ function sliced(
 
 /**
  * All evaluated arguments must keep an earlier array-like source unchanged before native copying;
- * source-known argument spreads expand first, an unresolved one keeping the written list.
+ * source-known argument spreads expand first, an unresolved one keeping the written list and what
+ * it may supply in an unknown order (the prefix's alternatives) as further arguments.
  */
 function nativeConcatenated(
   copy: CopyCall,
@@ -247,7 +248,10 @@ function nativeConcatenated(
   stable: (value: Expression) => boolean,
 ): readonly ArrayElementView[] {
   const args = framedArgumentPrefix(copy.call, copy.given, Infinity);
-  const given = args.unknown || args.alternatives !== undefined ? copy.given : args.values;
+  const given =
+    args.unknown || args.alternatives !== undefined
+      ? [...copy.given, ...(args.alternatives ?? [])]
+      : args.values;
   const quiet =
     copy.unknownArguments !== true &&
     concatQuietArguments([copy.receiver, ...given, ...copy.wrapperTail], stable);

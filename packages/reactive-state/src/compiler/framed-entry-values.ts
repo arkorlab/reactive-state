@@ -117,7 +117,10 @@ interface EntrySelection {
   readonly values: AssignedFrameSource[];
 }
 
-/** An unknown entry key may replace the selected field, but cannot erase an earlier possible value. */
+/**
+ * An unknown entry key may replace the selected field, but cannot erase an earlier possible value.
+ * Past a spread whose order is unknown, each value it may supply may be the entry's value.
+ */
 function entryValue(call: CallExpression, entry: Expression, key: string): EntrySelection {
   const written = argumentTupleWrites(call, entry);
   const opaque = { definite: false, values: [{ value: entry, keys: ['1'] }, ...written.values] };
@@ -126,7 +129,10 @@ function entryValue(call: CallExpression, entry: Expression, key: string): Entry
   const prefix = framedArgumentPrefix(call, tuple);
   const name = prefix.values[0];
   const value = prefix.values[1];
-  if (name === undefined || value === undefined || prefix.unknown) return opaque;
+  if (name === undefined || value === undefined || prefix.unknown) {
+    const possible = (prefix.alternatives ?? []).map((each) => ({ value: each, keys: [] }));
+    return { ...opaque, values: [...opaque.values, ...possible] };
+  }
   const names = written.key ? undefined : framedKeyNames(name);
   if (names !== undefined && !names.includes(key)) return { definite: false, values: [] };
   return { definite: names?.length === 1, values: [{ value, keys: [] }, ...written.values] };
