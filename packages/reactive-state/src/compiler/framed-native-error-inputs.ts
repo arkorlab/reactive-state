@@ -15,7 +15,7 @@ import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch, reachedLoopRead } from './framed-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Native Error string conversion needs an unchanged input, independently of its message origin. */
@@ -34,18 +34,22 @@ interface ErrorInput {
   readonly reads: FramedNativeErrorReads | undefined;
 }
 
-/** Prior possible Error uses retain opacity for own toString, primitive conversion and unknown exposure. */
+/**
+ * Prior possible Error uses retain opacity for own toString, primitive conversion and unknown exposure.
+ * A reader whose proof an exposure drops passes `reached` false, to count only a loop body's uses.
+ */
 export function framedNativeErrorInput(
   source: Expression,
   consumer: Expression,
   reads?: FramedNativeErrorReads,
+  reached = true,
 ): boolean {
   const input = errorInput(source, consumer, reads?.consumer === consumer ? reads : undefined);
   if (input === undefined) return false;
   const pending: Node[] = [source.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (isIdentifier(node) && exposedErrorInput(node, input)) return false;
+    if (isIdentifier(node) && exposedErrorInput(node, input, reached)) return false;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -87,7 +91,7 @@ function errorInput(
 }
 
 /** Selected holder/getter reads remain lexical sources; all other prior possible uses can change conversion. */
-function exposedErrorInput(name: Identifier, input: ErrorInput): boolean {
+function exposedErrorInput(name: Identifier, input: ErrorInput, reached: boolean): boolean {
   if (!readsBinding(name) || input.selected.has(name)) return false;
   if (input.reads?.unconverted.has(name) === true || input.reads?.consumed.has(name) === true)
     return false;
@@ -103,7 +107,7 @@ function exposedErrorInput(name: Identifier, input: ErrorInput): boolean {
   if (owner === reader) {
     if (
       (name.pos >= input.consumer.pos || destructuredFirst(input.consumer, name)) &&
-      !repeatedFrameRead(name, input.consumer, reading.binding, reader)
+      !reachedLoopRead(reached)(name, input.consumer, reading.binding, reader)
     )
       return false;
   } else if (unreferencedLocalFunction(owner, reader)) return false;

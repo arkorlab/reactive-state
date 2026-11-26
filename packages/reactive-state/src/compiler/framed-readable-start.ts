@@ -107,7 +107,7 @@ function quietStrategy(expression: Expression): boolean {
 
 /** A literal finite nonnegative queue limit lets native construction reach start. */
 function validHighWaterMark(expression: Expression): boolean {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   if (value === undefined) return false;
   if (isNumericLiteral(value)) return Number.isFinite(Number(value.text));
   if (!isPrefixUnaryExpression(value) || value.operator !== SyntaxKind.PlusToken) return false;

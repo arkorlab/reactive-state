@@ -80,6 +80,7 @@ export function framedDefinitionUnchanged(definition: Definition): boolean {
       projectionAliases(each, definition),
       (name) =>
         nativeTargetUse(name, definition) || framedDefinitionDataWrite(name, each, definition),
+      true,
     );
   });
 }

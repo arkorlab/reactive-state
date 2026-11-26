@@ -157,8 +157,8 @@ const CASES = [
     source:
       'function frames(error:Error){function collect(value:Error,head:unknown){const parts=[value as never];parts.unshift(head as never);return Reflect.construct(Blob,[parts]).size;}return collect(error,{toString(){Object.assign(error,{name:"Fixed",message:"fixed"});return"part";}});}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
-    reader: false,
+    refused: true,
+    reader: true,
   },
   {
     id: 'blob-fixed-data-control',
@@ -188,8 +188,8 @@ const CASES = [
     source:
       'function frames(error:Error){function collect(value:Error,head:unknown){const parts=[value as never];const same=Object.defineProperty(parts,"toString",{value(){return "fixed";}});same.unshift(head as never);return Reflect.construct(Blob,[parts]).size;}return collect(error,{toString(){Object.assign(error,{name:"Fixed",message:"fixed"});return"part";}});}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
 ];
 

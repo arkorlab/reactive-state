@@ -85,7 +85,7 @@ export function framedArrayFromResult(
   const returned = fn === undefined ? undefined : mapperReturn(fn);
   if (fn === undefined || returned === undefined || !quietArguments(call.arguments, callback))
     return false;
-  const literal = framedQuietSource(source);
+  const literal = framedQuietSource(source, false);
   if (literal === undefined || !isArrayLiteralExpression(literal)) return false;
   const values = framedAppliedArguments(call, literal);
   const slots = values === undefined ? [] : mappedSlots(values, selected.index);
@@ -306,7 +306,7 @@ function quietArguments(args: readonly Expression[], callback: Expression): bool
   for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
     if (value === callback || unwrapped(value) === unwrapped(callback)) continue;
     if (framedQuietInputs([value], NATIVES)) continue;
-    const source = framedQuietSource(isSpreadElement(value) ? value.expression : value);
+    const source = framedQuietSource(isSpreadElement(value) ? value.expression : value, false);
     if (source === undefined || seen.has(source) || !isArrayLiteralExpression(source)) return false;
     seen.add(source);
     pending.push(...source.elements);
@@ -317,7 +317,7 @@ function quietArguments(args: readonly Expression[], callback: Expression): bool
 /** Original inputs and fresh native Error constructions retain their own words and source owner. */
 function originalError(source: Expression, consumer: Expression): boolean {
   if (!framedOriginCoowned(source, consumer)) return false;
-  if (framedNativeErrorInput(source, consumer)) return true;
+  if (framedNativeErrorInput(source, consumer, undefined, false)) return true;
   const value = unwrapped(source);
   return (
     (isCallExpression(value) || isNewExpression(value)) &&

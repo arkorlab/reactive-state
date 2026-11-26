@@ -125,28 +125,28 @@ const CASES: readonly Case[] = [
     source:
       'function frames(errors:Error[]){return errors.find(async()=>false,Object.assign(errors[0]!,{stack:"fixed"}))!.stack;}',
     invocation: 'frames([new Error("ours")])',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-last-ignored-tail-data',
     source:
       'function frames(errors:Error[]){return errors.findLast(async()=>false,Object.assign(errors[0]!,{stack:"fixed"}))!.stack;}',
     invocation: 'frames([new Error("ours")])',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-owner-prefix-data',
     source:
       'function frames(error:Error){function collect(errors:Error[],prepare:()=>void){prepare();return errors.find(async()=>false)!.stack;}return collect([error],()=>{Object.assign(error,{stack:"fixed"});});}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-getter-bridge-data',
     source:
       'function frames(error:Error){function collect(input:{errors:Error[]}){return input.errors.find(async()=>false)!.stack;}return collect({get errors(){Object.assign(error,{stack:"fixed"});return[error];}});}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-receiver-iife-data',
@@ -167,21 +167,21 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const errors=[error];function collect(){return errors.find(async()=>false)!.stack;}Object.assign(error,{stack:"fixed"});return collect();}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-owner-default-data',
     source:
       'function frames(_error:Error,errors:Error[]=[]){return errors.find(async()=>false)?.stack??"fixed";}',
     invocation: 'frames(new Error("ours"))',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-callback-default-data',
     source:
       'function frames(errors:Error[]){return errors.find(async(value:Error=new Error("fixed"))=>false)?.stack??"fixed";}',
     invocation: 'frames([undefined as unknown as Error])',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-callback-getter-data',
@@ -189,10 +189,7 @@ const CASES: readonly Case[] = [
       'function frames(errors:(Error&{marker:number})[]){return errors.find(async({marker})=>false)!.stack;}',
     invocation:
       '(()=>{const error=new Error("ours")as Error&{marker:number};Object.defineProperty(error,"marker",{get(){Object.assign(error,{stack:"fixed"});return 1;}});return frames([error]);})()',
-    // The file that calls it names `Object.defineProperty`, which may give an array another
-    // prototype, and so a `find` of its own; `frames` alone is read as before.
     refused: true,
-    reader: false,
   },
   {
     id: 'find-opaque-tail-iterator',
@@ -200,17 +197,14 @@ const CASES: readonly Case[] = [
       'function frames(errors:Error[],tail:unknown[]){return(errors.find as(...args:unknown[])=>Error)(async()=>false,...tail).stack;}',
     invocation:
       '(()=>{const error=new Error("ours");const tail:unknown[]=[];Object.assign(tail,{[Symbol.iterator]:function*(){Object.assign(error,{stack:"fixed"});yield 0;}});return frames([error],tail);})()',
-    // The file that calls it writes an object by a key the compile does not read
-    // (`[Symbol.iterator]`), which may be `find`; `frames` alone is read as before.
     refused: true,
-    reader: false,
   },
   {
     id: 'find-saved-result-data',
     source:
       'function frames(errors:Error[]){const found=errors.find(async()=>false);Object.assign(found??{},{stack:"fixed"});return found?.stack??"fixed";}',
     invocation: 'frames([new Error("ours")])',
-    refused: false,
+    refused: true,
   },
 ];
 

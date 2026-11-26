@@ -72,7 +72,7 @@ export function mapperReturnedMemberViews(
   if (read.method === 'flatMap' && !isArrayLiteralExpression(useOf(returned).parent)) return [];
   const input = inputMemberKeys(returned, owner);
   if (input === undefined || !plainOtherParameters(owner, input.parameter)) return [];
-  const source = concatSource(read.receiver, read.stable);
+  const source = concatSource(read.receiver, read.stable, false);
   if (
     source === undefined ||
     !isArrayLiteralExpression(source) ||
@@ -104,7 +104,7 @@ function quietArguments(
   read: MemberRead,
   input: InputMember,
 ): readonly Expression[] | undefined {
-  const given = framedArgumentPrefix(read.capture, read.capture.arguments, Infinity);
+  const given = framedArgumentPrefix(read.capture, read.capture.arguments, Infinity, false);
   if (
     input.parameter.initializer !== undefined ||
     given.unknown ||

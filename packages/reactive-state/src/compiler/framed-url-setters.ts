@@ -62,14 +62,14 @@ export function framedUrlSetterText(node: Node, words: ConvertedWords): boolean 
   if (
     source === undefined ||
     component === undefined ||
-    argumentArrayExposed(member.expression, source.bindings) ||
+    argumentArrayExposed(member.expression, source.bindings, undefined, false) ||
     !assignmentRuns(node, source.construction, component)
   )
     return false;
   if (node.operatorToken.kind === SyntaxKind.EqualsToken)
     return words.error(node.right) || arrayError(node.right, words, node);
   return (
-    (framedNativeErrorInput(node.right, node) && words.error(node.right)) ||
+    (framedNativeErrorInput(node.right, node, undefined, false) && words.error(node.right)) ||
     (framedQuietArrayWords(node.right, words.error, node) && arrayError(node.right, words, node))
   );
 }
@@ -116,7 +116,7 @@ function literalComponent(construction: NewExpression, component: string): strin
 
 /** String literals retain their exact spelling without executing a constant-value evaluator. */
 function literalText(expression: Expression): string | undefined {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   return value !== undefined && (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value))
     ? value.text
     : undefined;

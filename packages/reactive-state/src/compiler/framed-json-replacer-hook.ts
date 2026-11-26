@@ -154,7 +154,9 @@ function freshRoot(
     return undefined;
   const aliases = new Set([...source.aliases, ...target.aliases]);
   const allowed = new Set([unwrapped(receiver), unwrapped(root)]);
-  return argumentArrayExposed(consumer, aliases, (name) => allowed.has(name)) ? undefined : source;
+  return argumentArrayExposed(consumer, aliases, (name) => allowed.has(name), false)
+    ? undefined
+    : source;
 }
 
 /** A literal prototype field is evaluated once before the native assignment and remains unexposed. */
@@ -168,7 +170,7 @@ function sourcePrototype(
   const prototype = literalSource(field.initializer, consumer);
   if (prototype === undefined || !plainLiteral(prototype.value)) return undefined;
   const allowed = new Set([unwrapped(field.initializer)]);
-  return argumentArrayExposed(consumer, prototype.aliases, (name) => allowed.has(name))
+  return argumentArrayExposed(consumer, prototype.aliases, (name) => allowed.has(name), false)
     ? undefined
     : prototype;
 }

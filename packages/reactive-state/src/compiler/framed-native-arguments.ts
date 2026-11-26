@@ -80,7 +80,7 @@ function reflectedArguments(
   const applied = values?.[constructed ? 1 : 2];
   if (target === undefined || applied === undefined || !framedNativeConstructor(target, names))
     return undefined;
-  return { target, applied, args: framedAppliedArguments(call, applied), constructed };
+  return { target, applied, args: framedAppliedArguments(call, applied, false), constructed };
 }
 
 /**
@@ -89,7 +89,7 @@ function reflectedArguments(
  * cannot read, would give the native fewer arguments than it is called with.
  */
 function knownArguments(call: CallExpression, limit: number): readonly Expression[] | undefined {
-  const prefix = framedArgumentPrefix(call, call.arguments, limit);
+  const prefix = framedArgumentPrefix(call, call.arguments, limit, false);
   return prefix.unknown || (prefix.alternatives?.length ?? 0) > 0 ? undefined : prefix.values;
 }
 

@@ -131,5 +131,5 @@ function constantInitializer(name: Expression, read: Expression): Expression | u
     aliases.add(binding);
     value = unwrapped(binding.initializer);
   }
-  return argumentArrayExposed(read, aliases) ? undefined : value;
+  return argumentArrayExposed(read, aliases, undefined, false) ? undefined : value;
 }

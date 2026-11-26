@@ -51,7 +51,7 @@ export function framedReadableStreamResult(
   if (
     source === undefined ||
     !framedPrefixSameOwner(source.created, selected.call) ||
-    argumentArrayExposed(selected.call, source.bindings)
+    argumentArrayExposed(selected.call, source.bindings, undefined, false)
   )
     return undefined;
   const start = framedReadableStart(source.created);
@@ -157,7 +157,7 @@ function quietReadPrefix(call: CallExpression, created: NewExpression): boolean 
 
 /** The original Error input exposure proof remains separate from the selected queued member path. */
 function originalChunk(source: Expression, created: NewExpression): boolean {
-  if (framedNativeErrorInput(source, created)) return true;
+  if (framedNativeErrorInput(source, created, undefined, false)) return true;
   const value = unwrapped(source);
   return (
     (isNewExpression(value) || isCallExpression(value)) &&

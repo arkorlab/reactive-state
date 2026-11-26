@@ -122,7 +122,7 @@ function freshOwnNext(
   }
   return (
     installed &&
-    !argumentArrayExposed(receiver, aliases, (reference) => freshWriteRead(reference, call))
+    !argumentArrayExposed(receiver, aliases, (reference) => freshWriteRead(reference, call), true)
   );
 }
 

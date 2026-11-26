@@ -112,7 +112,7 @@ function selectedParse(
 
 /** Literal valid JSON necessarily calls the root reviver without application input conversion. */
 function validJson(source: Expression): boolean {
-  const value = framedQuietSource(source);
+  const value = framedQuietSource(source, false);
   if (value === undefined || (!isStringLiteral(value) && !isNoSubstitutionTemplateLiteral(value)))
     return false;
   try {
@@ -167,7 +167,7 @@ function returnedValue(fn: Callback): Expression | undefined {
 
 /** Provided/caught inputs keep the original exposure proof; fresh native Errors need quiet arguments. */
 function originalError(source: Expression, call: CallExpression): boolean {
-  if (framedNativeErrorInput(source, call)) return true;
+  if (framedNativeErrorInput(source, call, undefined, false)) return true;
   const value = unwrapped(source);
   return (
     (isCallExpression(value) || isNewExpression(value)) &&

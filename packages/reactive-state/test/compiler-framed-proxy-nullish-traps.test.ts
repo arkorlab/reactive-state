@@ -315,6 +315,20 @@ const CASES: readonly Case[] = [
     invocation: 'frames(new Error("ours"))',
     refused: true,
   },
+  {
+    id: 'nullish-loop-condition-use',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=new Proxy({x:error},{get:undefined} as never).x.stack;}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'nullish-loop-condition-data',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=new Proxy({x:error},{get:undefined,get(){return {stack:"fixed"};}} as never).x.stack;}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('nullish get trap readers', () => {

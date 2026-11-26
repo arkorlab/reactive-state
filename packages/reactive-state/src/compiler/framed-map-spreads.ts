@@ -90,7 +90,7 @@ function mapSource(expression: Expression, array: ArrayLiteralExpression): MapSo
     executionOwner(construction) !== executionOwner(array) ||
     !framedOriginPrefix(construction) ||
     !iteratorPrefixQuiet(construction, expression) ||
-    argumentArrayExposed(expression, bindings)
+    argumentArrayExposed(expression, bindings, undefined, false)
   )
     return undefined;
   const prefix = framedArgumentPrefix(construction, construction.arguments ?? [], Infinity);
@@ -112,7 +112,7 @@ function writtenEntries(input: Expression, construction: NewExpression): MapEntr
   if (
     literal === undefined ||
     !isArrayLiteralExpression(literal) ||
-    argumentArrayExposed(input, bindings)
+    argumentArrayExposed(input, bindings, undefined, false)
   )
     return undefined;
   const entries: MapEntry[] = [];

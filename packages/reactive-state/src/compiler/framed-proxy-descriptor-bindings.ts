@@ -51,7 +51,7 @@ export function framedProxyDescriptorBinding(node: Expression): readonly Express
     return undefined;
   if (!solePattern(binding.name) || !adjacentMemberReturn(binding.parent.parent, node))
     return undefined;
-  if (argumentArrayExposed(node, new Set([binding]), nonBindingName)) return undefined;
+  if (argumentArrayExposed(node, new Set([binding]), nonBindingName, false)) return undefined;
   const call = unwrapped(binding.initializer);
   if (!isCallExpression(call)) return undefined;
   const path = globalPathOf(unwrapped(call.expression))?.join('.');

@@ -128,6 +128,27 @@ const CASES = [
     refused: true,
   },
   {
+    id: 'status-loop-condition-use',
+    source:
+      'function words(error:Error){const options={statusText:error as never};let result:unknown;let i=0;do{result=new Response(null,options).statusText;}while((void options,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'event-loop-condition-write',
+    source:
+      'function words(error:Error){const event=new Event("x");let i=0;do{event.initEvent(error as never);}while(((error as {extra?:number}).extra=1,i++<1));return event.type;}',
+    invocation: 'words(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'status-loop-condition-data',
+    source:
+      'function words(error:Error){const options={statusText:"fixed"};let result:unknown;let i=0;do{result=new Response(null,options).statusText;}while((void options,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    refused: false,
+  },
+  {
     id: 'init-event-default-use',
     source:
       'function words(error:Error){const event=new Event("initial");const {a=typeof error}=(event.initEvent(error as never),{} as {a?:string});return event.type+a;}',

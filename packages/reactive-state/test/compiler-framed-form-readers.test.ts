@@ -196,6 +196,20 @@ const CASES = [
     invocation: 'words(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'form-loop-condition-use',
+    source:
+      'function words(error:Error){const form=new FormData();form.append("Error: ours","kept");let result:unknown;let i=0;do{result=form.get(error as never);}while((void error,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'form-loop-condition-data',
+    source:
+      'function words(error:Error){const form=new FormData();let result:unknown;let i=0;do{result=form.get("fixed");}while((void form,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('native FormData reader name conversions readers', () => {

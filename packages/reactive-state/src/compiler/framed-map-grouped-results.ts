@@ -70,7 +70,7 @@ export function framedMapGroupedResult(
   if (key === undefined || key !== framedMapKey(get.args[0])) return undefined;
   const index = read.keys[0];
   if (index === undefined || !/^(?:0|[1-9]\d*)$/u.test(index)) return undefined;
-  const selected = framedAppliedArguments(source, input);
+  const selected = framedAppliedArguments(source, input, false);
   if (selected === undefined) return undefined;
   const elements = argumentsOf(source, selected);
   if (elements === undefined || !iteratorQuietValues(elements)) return undefined;

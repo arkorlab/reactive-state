@@ -115,6 +115,20 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'from-entries-loop-write',
+    source:
+      'function frames(error:Error){const entry:[string,{stack?:string}]=["x",{stack:"fixed"}];let result:unknown;let i=0;do result=Object.fromEntries([entry]).x!.stack;while((entry[1]=error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'from-entries-loop-write-data',
+    source:
+      'function frames(error:Error){const entry:[string,{stack?:string}]=["x",{stack:"fixed"}];let result:unknown;let i=0;do result=Object.fromEntries([entry]).x!.stack;while((entry[1]={stack:"later"},i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('literal object member readers', () => {

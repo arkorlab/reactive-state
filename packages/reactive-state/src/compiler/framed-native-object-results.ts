@@ -21,7 +21,7 @@ import { unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { sourceArrayFunction } from './framed-array-functions.ts';
-import { argumentArrayExposed, selectedError } from './framed-array-selections.ts';
+import { argumentArrayReached, selectedError } from './framed-array-selections.ts';
 import { framedAtMethod } from './framed-at-methods.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { framedArgumentPrefix, framedKeyNames } from './framed-keys.ts';
@@ -174,7 +174,7 @@ function priorOwnValueOf(
   const target = nativeSource(member.expression, names);
   if (target?.value !== source.value) return undefined;
   const bindings = new Set([...source.bindings, ...target.bindings]);
-  return argumentArrayExposed(assignment, bindings) ? undefined : assignment.right;
+  return argumentArrayReached(assignment, bindings) ? undefined : assignment.right;
 }
 
 /** The selected call is read before any additional application work in this statement. */

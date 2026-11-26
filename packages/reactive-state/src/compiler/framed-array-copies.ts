@@ -51,14 +51,16 @@ interface CopyCall {
 }
 
 /**
- * Known array-copy methods preserve selected source slots and their copy-time mutation boundary. A
- * method that the file may give an array of its own is read as the language's here: a reader of the
- * answer asks `arrayCopyMayBeOverridden` first.
+ * Known array-copy methods preserve selected source slots and their copy-time mutation boundary.
+ * `stable` proves a receiver unchanged at the copy; `proven`, for concat's quiet slots, whose proof an
+ * exposure drops, may count fewer earlier uses. A method that the file may give an array of its own
+ * is read as the language's here: a reader of the answer asks `arrayCopyMayBeOverridden` first.
  */
 export function arrayCopyViews(
   call: CallExpression,
   index: number | undefined,
-  stable: (receiver: Expression) => boolean,
+  proven: (receiver: Expression) => boolean,
+  stable: (receiver: Expression) => boolean = proven,
 ): readonly ArrayElementView[] | undefined {
   const selected = copyCall(call);
   if (selected === undefined) return undefined;
@@ -67,6 +69,7 @@ export function arrayCopyViews(
   if (selected.method === 'splice')
     return (
       removedArrayViews(selected, index, stable) ?? [
+        { value: selected.receiver, index: undefined },
         { value: selected.receiver, index: undefined, typeOnly: true },
       ]
     );
@@ -80,7 +83,8 @@ export function arrayCopyViews(
     );
   const at = index !== undefined && index < 0 ? undefined : index;
   const position = stable(selected.receiver) ? at : undefined;
-  return nativeCopies(selected, position, stable).map((view) => ({ ...view, capture: call }));
+  const views = nativeCopies(selected, position, stable, proven);
+  return views.map((view) => ({ ...view, capture: call }));
 }
 
 /**
@@ -163,6 +167,7 @@ function nativeCopies(
   copy: CopyCall,
   index: number | undefined,
   stable: (receiver: Expression) => boolean,
+  proven: (receiver: Expression) => boolean,
 ): readonly ArrayElementView[] {
   const base = { value: copy.receiver, index };
   switch (copy.method) {
@@ -170,7 +175,7 @@ function nativeCopies(
       return sliced(copy.receiver, copy.given, index);
     }
     case 'concat': {
-      return nativeConcatenated(copy, index, stable);
+      return nativeConcatenated(copy, index, proven);
     }
     case 'filter': {
       return filteredArrayViews(copy, index, stable);

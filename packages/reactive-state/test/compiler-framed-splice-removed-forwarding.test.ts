@@ -281,24 +281,24 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){return[error].splice(0,1,Object.assign(error,{stack:"fixed"}))[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-reflect-wrapper-tail-effect-pin',
     source:
       'function frames(error:Error){return(Reflect.apply as(...args:unknown[])=>{stack?:string}[])(Array.prototype.splice,[error],[0,1],Object.assign(error,{stack:"fixed"}))[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-apply-wrapper-tail-effect-pin',
     source:
       'function frames(error:Error){return(Array.prototype.splice.apply as(...args:unknown[])=>{stack?:string}[])([error],[0,1],Object.assign(error,{stack:"fixed"}))[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-reflect-spread-tail-effect-pin',
@@ -313,48 +313,62 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const start={valueOf(){Object.assign(error,{stack:"fixed"});return 0;}};return([error].splice as(...args:unknown[])=>{stack?:string}[])(start,1)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-changed-array-before-call-pin',
     source:
       'function frames(error:Error){const input:{stack?:string}[]=[error];input[0]={stack:"fixed"};return input.splice(0,1)[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-saved-array-input-write-pin',
     source:
       'function frames(error:Error){const removed=[error].splice(0,1);Object.assign(error,{stack:"fixed"});return removed[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-saved-element-write-pin',
     source:
       'function frames(error:Error){const value=[error].splice(0,1)[0]!;Object.assign(value,{stack:"fixed"});return value.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-saved-result-opaque-pin',
     source:
       'function frames(error:Error){const removed=[error].splice(0,1);return removed[0]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
-    refused: false,
+    reader: true,
+    refused: true,
   },
   {
     id: 'splice-selected-key-effect-pin',
     source:
       'function frames(error:Error){return[error].splice(0,1)[(Object.assign(error,{stack:"fixed"}),0)]!.stack;}',
     invocation: 'frames(new Error("ours"))',
-    reader: false,
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'splice-loop-push',
+    source:
+      'function frames(error:Error){const values:Error[]=[];let result:unknown;let i=0;do result=values.splice(0)[0]?.stack;while((values.push(error),i++<1));return result;}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+  },
+  {
+    id: 'splice-loop-push-data',
+    source:
+      'function frames(error:Error){const values:Error[]=[];const spare:Error[]=[];let result:unknown;let i=0;do result=values.splice(0)[0]?.stack;while((spare.push(error),i++<1));return result;}',
     refused: false,
+    invocation: 'frames(new Error("ours"))',
   },
 ];
 

@@ -113,7 +113,7 @@ function mayReturnPattern(
 
 /** Only own closed data fields establish a truthy native match marker and selected slots. */
 function patternFields(expression: Expression, consumer: Expression): PatternFields | undefined {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   if (
     value === undefined ||
     !isObjectLiteralExpression(value) ||
@@ -159,7 +159,7 @@ function convertedError(
   call: CallExpression | NewExpression,
   error: (value: Expression) => boolean,
 ): boolean {
-  return framedNativeErrorInput(expression, call) && error(expression);
+  return framedNativeErrorInput(expression, call, undefined, false) && error(expression);
 }
 
 /** A custom Reflect.construct new target can run an application-owned prototype getter. */
@@ -185,7 +185,7 @@ function quietValues(args: readonly Expression[]): boolean {
   const pending = [...args];
   const seen = new Set<Expression>();
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
-    const value = framedQuietSource(each);
+    const value = framedQuietSource(each, false);
     if (value === undefined) return false;
     if (seen.has(value)) continue;
     seen.add(value);
@@ -211,7 +211,7 @@ function quietValue(value: Expression, pending: Expression[]): boolean {
     });
   }
   if (isSpreadElement(value)) {
-    const spread = framedQuietSource(value.expression);
+    const spread = framedQuietSource(value.expression, false);
     if (spread === undefined || !isArrayLiteralExpression(spread)) return false;
     pending.push(spread);
     return true;

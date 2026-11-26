@@ -409,6 +409,22 @@ const CASES = [
     reader: true,
     refused: true,
   },
+  {
+    id: 'concat-loop-condition-use',
+    source:
+      'function frames(error:Error){const value={0:error,length:1,[Symbol.isConcatSpreadable]:true};let result:unknown;let i=0;do{result=([]as any[]).concat(value)[0].stack;}while((void value,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'concat-loop-condition-data',
+    source:
+      'function frames(error:Error){const value={0:{stack:"fixed"},length:1,[Symbol.isConcatSpreadable]:true};let result:unknown;let i=0;do{result=([]as any[]).concat(value)[0].stack;}while((void value,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
 ] as const;
 
 describe('native concat forwarding words', () => {

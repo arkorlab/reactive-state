@@ -140,7 +140,7 @@ function quietReceiver(call: CallExpression): boolean {
 
 /** A literal primitive or unchanged explicitly primitive input cannot invoke a conversion hook. */
 function quietReceiverValue(value: Expression, call: CallExpression): boolean {
-  const source = framedQuietSource(value);
+  const source = framedQuietSource(value, false);
   if (
     source === undefined ||
     source.kind === SyntaxKind.NullKeyword ||
@@ -165,6 +165,7 @@ function quietConvertedValue(
   if (isSpreadElement(value)) return framedQuietArrayWords(value.expression, words.error, call);
   return (
     framedQuietArrayWords(value, words.error, call) ||
-    (framedNativeErrorInput(value, call) && (words.error(value) || words.typed(value)))
+    (framedNativeErrorInput(value, call, undefined, false) &&
+      (words.error(value) || words.typed(value)))
   );
 }

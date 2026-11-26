@@ -153,11 +153,10 @@ function jsonToJSONReading(
 function jsonLiteralContainer(source: JsonValueSource, context: JsonReadingContext): boolean {
   const { names, pending } = context;
   if (isArrayLiteralExpression(source.value)) {
-    if (!source.exposed) appendJsonElements(source.value, context);
+    appendJsonElements(source.value, context);
     return true;
   }
   if (isObjectLiteralExpression(source.value)) {
-    if (source.exposed) return true;
     const memberReads = literalMemberReadsQuiet(source.value, context);
     for (const name of names) {
       const entries = framedObjectSources(source.value, [name]) ?? [];
@@ -176,7 +175,7 @@ function projectedMemberFrames(at: JsonReading, context: JsonReadingContext): bo
   if (name === undefined || !isCallExpression(context.call)) return false;
   const value = unwrapped(at.value);
   if (
-    !framedNativeErrorInput(value, context.call) &&
+    !framedNativeErrorInput(value, context.call, undefined, false) &&
     !(isNewExpression(value) && framedQuietInputs([value], NATIVE_INPUTS))
   )
     return false;
@@ -275,13 +274,11 @@ function jsonReceiverFrames(
   const { names, pending, call, proof, frames } = context;
   for (const name of names) {
     const own = jsonOwnMember(at.value, source, call, name);
-    if (own === null) continue;
-    if (own !== undefined) {
+    if (own !== undefined && own !== null) {
       pending.push(...own.map((value) => ({ value, keys: [], toJSON: true })));
       continue;
     }
     if (
-      !source.exposed &&
       !proof.data(at.value, [name]) &&
       !proof.data(source.value, [name]) &&
       selectedErrorFrames(at, [name], frames, proof)

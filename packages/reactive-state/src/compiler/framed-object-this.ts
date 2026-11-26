@@ -79,7 +79,8 @@ export function framedObjectThisMember(
     framedObjectSources(owner.parent, path)?.some((each) => {
       return (
         framedOriginCoowned(each.value, call) &&
-        (framedNativeErrorInput(each.value, call) || quietFreshError(each.value)) &&
+        (framedNativeErrorInput(each.value, call, undefined, false) ||
+          quietFreshError(each.value)) &&
         error(each.value, each.keys)
       );
     }) === true

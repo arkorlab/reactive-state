@@ -52,7 +52,12 @@ import {
   namedElsewhere,
   tupleBindingExposure,
 } from './framed-tuple-work.ts';
-import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import {
+  framedAssignedValues,
+  framedPossibleBranch,
+  repeatedBodyRead,
+  repeatedFrameRead,
+} from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -101,11 +106,19 @@ interface ArgumentArray {
   readonly exposed: boolean;
 }
 
-/** The first target and key of a native call, never shifting arguments past an unresolved spread. */
+/**
+ * The first target and key of a native call, never shifting arguments past an unresolved spread.
+ * Any use that may run before the call exposes a spread array — one written before it, one in what a
+ * destructuring pattern around the call destructures, or one in a loop's condition or update on the
+ * next pass — and an exposed prefix keeps its original and written targets. A reader whose proof an
+ * exposure drops passes `reached` false, to count only uses that run before it as written or in a
+ * body that repeats it.
+ */
 export function framedArgumentPrefix(
   call: CallExpression | NewExpression,
   given: readonly Expression[] = call.arguments ?? [],
   limit = 2,
+  reached = true,
 ): ArgumentPrefix {
   const values: Expression[] = [];
   const pending: ArgumentWork[] = [];
@@ -119,7 +132,7 @@ export function framedArgumentPrefix(
       values.push(each.node);
       continue;
     }
-    const selected = argumentArray(each.node.expression, each.seen, call);
+    const selected = argumentArray(each.node.expression, each.seen, call, reached);
     if (selected === undefined) return { values, unknown: true };
     if (selected.exposed) return exposedArgumentPrefix(values, selected, call, each.node);
     for (const node of selected.array.elements.toReversed())
@@ -128,12 +141,16 @@ export function framedArgumentPrefix(
   return { values, unknown: false };
 }
 
-/** An unchanged apply tuple retains its runtime entries through the existing argument-array proof. */
+/**
+ * An unchanged apply tuple retains its runtime entries through the existing argument-array proof.
+ * A reader whose proof an exposure drops passes `reached` false, as for `framedArgumentPrefix`.
+ */
 export function framedAppliedArguments(
   call: CallExpression,
   expression: Expression,
+  reached = true,
 ): readonly Expression[] | undefined {
-  const selected = argumentArray(expression, new Set(), call);
+  const selected = argumentArray(expression, new Set(), call, reached);
   return selected === undefined || selected.exposed ? undefined : selected.array.elements;
 }
 
@@ -214,11 +231,19 @@ function firstTupleEntry(target: Expression, aliases: ReadonlySet<FrameBinding>)
   return selected?.keys.length === 0 && aliases.has(selected.binding);
 }
 
-/** Literal arrays and whole constant aliases, with mutable contents left unproven after exposure. */
+/**
+ * Literal arrays and whole constant aliases, with mutable contents left unproven after exposure.
+ * Where `reached`, for a reader that keeps every target of an exposed array, every use written before
+ * the call counts, one in what a pattern around the call destructures, and one in a loop's condition
+ * or update on the next pass. Otherwise, for a reader whose proof an exposure drops, only uses that
+ * run before the call as written count — not one in a pattern whose source holds the call — and uses
+ * in a loop body that repeats it.
+ */
 function argumentArray(
   expression: Expression,
   previous: ReadonlySet<FrameBinding>,
   call: CallExpression | NewExpression,
+  reached: boolean,
 ): ArgumentArray | undefined {
   let value = unwrapped(expression);
   const seen = new Set(previous);
@@ -231,7 +256,7 @@ function argumentArray(
     seen.add(binding);
     const values = constantKeys(binding);
     if (values?.length !== 1 || binding.initializer === undefined) return undefined;
-    exposed ||= arrayExposed(binding, call, seen, expression);
+    exposed ||= arrayExposed(binding, call, seen, { reached, read: expression });
     value = unwrapped(binding.initializer);
   }
   return isArrayLiteralExpression(value) ? { array: value, seen, exposed } : undefined;
@@ -247,27 +272,28 @@ function arrayExposed(
   binding: FrameBinding,
   call: CallExpression | NewExpression,
   aliases: ReadonlySet<FrameBinding>,
-  read: Expression,
+  context: { readonly reached: boolean; readonly read: Expression },
 ): boolean {
-  let reachable: boolean | undefined;
-  const reached = (): boolean => {
-    reachable ??= namedElsewhere(binding, call);
-    return reachable;
+  const { reached, read } = context;
+  const later = reached ? repeatedFrameRead : repeatedBodyRead;
+  let named: boolean | undefined;
+  const namedAround = (): boolean => {
+    named ??= namedElsewhere(binding, call);
+    return named;
   };
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     const repeated =
       node.pos >= call.end &&
       executionOwner(node) === executionOwner(call) &&
-      (destructuredFirst(node, call) ||
-        ownerKeyFirst(node, call) ||
-        repeatedFrameRead(node, call, binding, executionOwner(call))) &&
+      ((reached && (destructuredFirst(node, call) || ownerKeyFirst(node, call))) ||
+        later(node, call, binding, executionOwner(call))) &&
       framedPossibleBranch(node);
     if (!repeated && node.pos >= call.pos) continue;
     if (
       node.pos >= binding.end &&
-      (repeated || node.end <= call.pos) &&
-      arrayExposure(node, binding, aliases, reached)
+      (repeated || (node.end <= call.pos && (reached || !destructuredFirst(call, node)))) &&
+      arrayExposure(node, binding, aliases, namedAround)
     )
       return true;
     node.forEachChild((child) => {

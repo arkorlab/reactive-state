@@ -39,7 +39,7 @@ export function framedProxyDescriptorCall(
     return undefined;
   if (creation === undefined) return value;
   const target = value.arguments[0];
-  const selected = target === undefined ? undefined : framedQuietSource(target);
+  const selected = target === undefined ? undefined : framedQuietSource(target, false);
   if (selected === undefined || selected !== creation || !isNewExpression(selected))
     return undefined;
   if (SINGULAR.has(path)) {
@@ -51,12 +51,12 @@ export function framedProxyDescriptorCall(
 
 /** Unexposed descriptor aliases and selected map members retain the original native call. */
 function observationCall(observation: Expression): CallExpression | undefined {
-  let value = framedQuietSource(observation);
+  let value = framedQuietSource(observation, false);
   if (value === undefined) return undefined;
   if (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     if (isElementAccessExpression(value) && !framedQuietPrimitive(value.argumentExpression))
       return undefined;
-    value = framedQuietSource(value.expression);
+    value = framedQuietSource(value.expression, false);
   }
   if (value === undefined || !isCallExpression(value)) return undefined;
   return value;
@@ -66,7 +66,7 @@ function observationCall(observation: Expression): CallExpression | undefined {
 function selectedPlural(creation: NewExpression, names: readonly string[] | undefined): boolean {
   if (names === undefined || names.length === 0) return false;
   const handler = creation.arguments?.[1];
-  const methods = handler === undefined ? undefined : framedQuietSource(handler);
+  const methods = handler === undefined ? undefined : framedQuietSource(handler, false);
   if (methods === undefined || !isObjectLiteralExpression(methods)) return false;
   let result: Expression | undefined;
   for (const property of methods.properties) {
@@ -74,11 +74,11 @@ function selectedPlural(creation: NewExpression, names: readonly string[] | unde
     if (framedProxyFieldName(property.name) === 'ownKeys')
       result = framedProxyTrapResult(property, 1);
   }
-  const array = result === undefined ? undefined : framedQuietSource(result);
+  const array = result === undefined ? undefined : framedQuietSource(result, false);
   if (array === undefined || !isArrayLiteralExpression(array)) return false;
   const keys: string[] = [];
   for (const element of array.elements) {
-    const value = framedQuietSource(element);
+    const value = framedQuietSource(element, false);
     if (value === undefined || (!isStringLiteral(value) && !isNoSubstitutionTemplateLiteral(value)))
       return false;
     keys.push(value.text);

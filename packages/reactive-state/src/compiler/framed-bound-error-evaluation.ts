@@ -82,7 +82,7 @@ function quietBoundPrefix(statement: Statement, bound: CallExpression): boolean 
     return (
       isIdentifier(declaration.name) &&
       initializer !== undefined &&
-      (framedQuietSource(initializer) === bound || framedQuietInputs([initializer], ERRORS))
+      (framedQuietSource(initializer, false) === bound || framedQuietInputs([initializer], ERRORS))
     );
   });
 }

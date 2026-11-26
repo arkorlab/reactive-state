@@ -20,7 +20,7 @@ import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bin
 import { quietListenerCallback, quietListenerInputs } from './framed-listener-inputs.ts';
 import { framedQuietData, framedQuietPrimitive } from './framed-native-evaluation.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedBodyRead } from './framed-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Fresh EventTarget identity survives only aliases and quiet native listener-registration prefixes. */
@@ -93,7 +93,7 @@ function exposedTarget(
   if (executionOwner(name) !== owner) return true;
   if (
     (name.pos >= call.pos || destructuredFirst(call, name)) &&
-    !repeatedFrameRead(name, call, reading.binding, owner)
+    !repeatedBodyRead(name, call, reading.binding, owner)
   )
     return false;
   if (!framedPossibleBranch(name)) return false;

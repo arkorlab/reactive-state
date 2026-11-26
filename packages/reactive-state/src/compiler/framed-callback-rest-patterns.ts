@@ -139,13 +139,13 @@ function bindingKey(field: BindingElement, index: number, array: boolean): strin
 
 /** Only written literal argument values establish nested binding data, never a tuple annotation. */
 function argumentSlots(source: NativeInput, parameter: number): MapperSlot[] | undefined {
-  const value = framedQuietSource(source.receiver);
+  const value = framedQuietSource(source.receiver, false);
   if (value === undefined) return undefined;
   if (isArrayLiteralExpression(value))
     return parameter === 0 ? literalSlots(value.elements) : undefined;
   if (source.borrowed || source.method !== 'forEach' || !isNewExpression(value)) return undefined;
   const first = value.arguments?.[0];
-  const entries = first === undefined ? undefined : framedQuietSource(first);
+  const entries = first === undefined ? undefined : framedQuietSource(first, false);
   if (entries === undefined || !isArrayLiteralExpression(entries)) return undefined;
   if (framedNativeConstructor(value.expression, SETS))
     return parameter <= 1 ? literalSlots(entries.elements) : undefined;

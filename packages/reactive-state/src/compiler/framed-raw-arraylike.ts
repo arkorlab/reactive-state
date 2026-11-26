@@ -78,7 +78,7 @@ export function rawArraylikeWords(
     if (!quietEarlierSubstitution(index, prefix, call)) return false;
     const value = source.entries.get(String(index));
     if (value === undefined) return false;
-    if (framedNativeErrorInput(value, call) && words.error(value)) return true;
+    if (framedNativeErrorInput(value, call, undefined, false) && words.error(value)) return true;
     if (arrayError(value, words, call) && framedQuietArrayWords(value, words.error, call))
       return true;
     if (!framedQuietPrimitive(value)) return false;

@@ -316,6 +316,48 @@ const CASES: readonly Case[] = [
     invocation: 'frames(new Error("ours"))',
     refused: true,
   },
+  {
+    id: 'filter-loop-condition-use',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=[,error].filter(()=>true)[0]!.stack;}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'filter-loop-condition-data',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=[,error,{stack:"fixed"}].filter(()=>true)[1]!.stack;}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'sparse-filter-loop-push',
+    source:
+      'function frames(error:Error){const values:(Error|undefined)[]=[,];let result:unknown;let i=0;do result=values.filter(()=>true)[0]?.stack;while((values.push(error),i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'sparse-filter-loop-push-data',
+    source:
+      'function frames(error:Error){const values:(Error|undefined)[]=[,];const spare:Error[]=[];let result:unknown;let i=0;do result=values.filter(()=>true)[0]?.stack;while((spare.push(error),i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
+    id: 'async-filter-loop-replace',
+    source:
+      'function frames(error:Error){const input:Array<{stack?:string}>=[{stack:"fixed"}];let result:unknown;let i=0;do result=input.filter(async()=>true)[0]!.stack;while((input[0]=error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'async-filter-loop-replace-data',
+    source:
+      'function frames(error:Error){const input:Array<{stack?:string}>=[{stack:"fixed"}];const spare:Array<{stack?:string}>=[];let result:unknown;let i=0;do result=input.filter(async()=>true)[0]!.stack;while((spare[0]=error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('native filter result readers', () => {

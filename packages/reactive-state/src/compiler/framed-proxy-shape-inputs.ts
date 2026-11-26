@@ -75,7 +75,7 @@ function quietSpread(
   call: CallExpression,
   creations: ReadonlySet<NewExpression>,
 ): boolean {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   return (
     value !== undefined &&
     isArrayLiteralExpression(value) &&

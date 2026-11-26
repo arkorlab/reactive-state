@@ -83,7 +83,7 @@ export function framedIteratorFromResult(
     if (
       source === undefined ||
       proof.own(source.bindings, DEFAULT_ITERATOR, current) ||
-      argumentArrayExposed(input, source.bindings) ||
+      argumentArrayExposed(input, source.bindings, undefined, false) ||
       !framedOriginPrefix(source.value)
     )
       return undefined;
@@ -171,7 +171,7 @@ function mapResult(
     input === undefined ||
     literal === undefined ||
     !isArrayLiteralExpression(literal.value) ||
-    argumentArrayExposed(input, literal.bindings) ||
+    argumentArrayExposed(input, literal.bindings, undefined, false) ||
     !quietValues([literal.value]) ||
     !iteratorPrefixQuiet(literal.value, at.call)
   )

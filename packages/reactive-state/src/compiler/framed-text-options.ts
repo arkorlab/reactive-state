@@ -28,7 +28,7 @@ export function framedTextOptions(
   expression: Expression,
   natives: ReadonlySet<string>,
 ): ReadonlyMap<string, Expression> | undefined {
-  const root = framedQuietSource(expression);
+  const root = framedQuietSource(expression, false);
   if (root === undefined || !isObjectLiteralExpression(root)) return undefined;
   const pending = root.properties
     .toReversed()
@@ -37,7 +37,7 @@ export function framedTextOptions(
   for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
     const { property, ancestors } = next;
     if (isSpreadAssignment(property)) {
-      const source = framedQuietSource(property.expression);
+      const source = framedQuietSource(property.expression, false);
       if (source === undefined || !isObjectLiteralExpression(source) || ancestors.has(source))
         return undefined;
       for (const child of source.properties.toReversed())

@@ -31,7 +31,7 @@ const NATIVES = new Set([
 
 /** Additional default origins cannot hide application work in void or ignored wrapper operands. */
 export function framedAbortUndefinedReason(value: Expression, call: CallExpression): boolean {
-  const source = framedQuietSource(value);
+  const source = framedQuietSource(value, false);
   if (source === undefined) return false;
   const native = globalPathOf(source)?.join('.') === 'undefined';
   const empty = isVoidExpression(source) && quietEvaluation([source.expression]);
@@ -47,7 +47,7 @@ function quietEvaluation(expressions: readonly Expression[]): boolean {
     if (isVoidExpression(value)) pending.push(value.expression);
     else if (isArrayLiteralExpression(value)) pending.push(...value.elements);
     else if (isSpreadElement(value)) {
-      const source = framedQuietSource(value.expression);
+      const source = framedQuietSource(value.expression, false);
       if (source === undefined || !isArrayLiteralExpression(source)) return false;
       pending.push(source);
     } else if (isOmittedExpression(value) || !framedQuietInputs([value], NATIVES)) return false;

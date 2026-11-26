@@ -38,7 +38,7 @@ export function quietListenerInputs(args: readonly Expression[]): boolean {
   const seen = new Set<Expression>();
   for (let value = pending.pop(); value !== undefined; value = pending.pop()) {
     if (isIdentifier(unwrapped(value)) || framedQuietInputs([value], LISTENER_NATIVES)) continue;
-    const source = framedQuietSource(isSpreadElement(value) ? value.expression : value);
+    const source = framedQuietSource(isSpreadElement(value) ? value.expression : value, false);
     if (source === undefined || seen.has(source)) return false;
     seen.add(source);
     if (isArrayLiteralExpression(source)) pending.push(...source.elements);

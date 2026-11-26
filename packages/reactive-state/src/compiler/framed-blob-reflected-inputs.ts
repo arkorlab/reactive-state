@@ -36,7 +36,7 @@ export function quietReflectedBlob(
   original: Original,
   error: (value: Expression) => boolean,
 ): boolean {
-  const outer = framedArgumentPrefix(call, call.arguments, Infinity);
+  const outer = framedArgumentPrefix(call, call.arguments, Infinity, false);
   return (
     !outer.unknown &&
     outer.alternatives === undefined &&

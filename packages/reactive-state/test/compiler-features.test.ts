@@ -5783,7 +5783,7 @@ describe('nested any field data admission', () => {
 describe('async find parameter fallback data boundary', () => {
   const { apps, compile } = compilerApplications();
 
-  it('keeps async find getter receiver data outside the parameter fallback', async () => {
+  it('refuses an async find through a getter receiver: its Promise keeps every element possible', async () => {
     const app = await application({
       'domain/todo-filter.ts': [
         "import type { TodoFilter } from '@/navigation';",
@@ -5793,7 +5793,9 @@ describe('async find parameter fallback data boundary', () => {
     });
     apps.push(app);
 
-    expect(compile(app).refusals).toStrictEqual([]);
+    expect(compile(app).refusals.map((item) => item.reason)).toStrictEqual([
+      expect.stringContaining('a shared module that answers otherwise'),
+    ]);
   });
 });
 

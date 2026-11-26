@@ -50,7 +50,7 @@ export function framedGenericErrorText(
   call: CallExpression,
   error: (value: Expression) => boolean,
 ): boolean {
-  const source = framedQuietSource(receiver);
+  const source = framedQuietSource(receiver, false);
   if (
     source === undefined ||
     !isObjectLiteralExpression(source) ||
@@ -103,7 +103,7 @@ function conversion(
   let words = false;
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (framedQuietPrimitive(at) || isOmittedExpression(at)) continue;
-    const value = framedQuietSource(at);
+    const value = framedQuietSource(at, false);
     if (value === undefined) return { quiet: false, words: false };
     if (seen.has(value)) continue;
     seen.add(value);
@@ -158,5 +158,5 @@ function unchangedErrorWords(
   error: (value: Expression) => boolean,
   reads: FramedNativeErrorReads,
 ): boolean {
-  return error(value) && framedNativeErrorInput(value, call, reads);
+  return error(value) && framedNativeErrorInput(value, call, reads, false);
 }

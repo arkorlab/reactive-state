@@ -41,7 +41,7 @@ import {
 } from './framed-native-evaluation.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
-import { repeatedFrameRead } from './framed-writes.ts';
+import { reachedLoopRead } from './framed-writes.ts';
 import { namesLocalMemberType } from './local-type-reading.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
@@ -126,7 +126,7 @@ export function framedParamMethodText(call: CallExpression, words: ParameterWord
     const value = spread ? argument.expression : argument;
     return (
       (!spread &&
-        (!selected.reader || framedNativeErrorInput(value, call)) &&
+        (!selected.reader || framedNativeErrorInput(value, call, undefined, false)) &&
         words.error(value)) ||
       ((!selected.reader || framedQuietArrayWords(value, words.error, call)) &&
         arrayError(value, words, call))
@@ -230,8 +230,15 @@ function readerReceiverExposed(
 ): boolean {
   const target = unwrapped(receiver);
   return source.form && isIdentifier(target)
-    ? exposedBefore({ call, receiver, target, bindings: source.bindings, formReader: true })
-    : argumentArrayExposed(receiver, source.bindings);
+    ? exposedBefore({
+        call,
+        receiver,
+        target,
+        bindings: source.bindings,
+        formReader: true,
+        reached: false,
+      })
+    : argumentArrayExposed(receiver, source.bindings, undefined, false);
 }
 
 /** Native mutator overloads retain each consumed input slot. */
@@ -349,6 +356,8 @@ function ownMethod(
 
 interface OwnContext {
   readonly formReader?: boolean;
+  /** A reader whose proof an exposure drops passes false, to count only a loop body's uses. */
+  readonly reached?: boolean;
   readonly call: CallExpression;
   readonly receiver: Expression;
   readonly target: Identifier;
@@ -383,7 +392,7 @@ function exposedRead(name: Identifier, context: OwnContext): boolean {
   if (executionOwner(name) !== owner) return true;
   if (
     (name.pos > context.call.end || destructuredFirst(context.call, name)) &&
-    !repeatedFrameRead(name, context.call, selected.binding, owner)
+    !reachedLoopRead(context.reached !== false)(name, context.call, selected.binding, owner)
   )
     return false;
   if (context.formReader === true && quietFormPrefix(name)) return false;

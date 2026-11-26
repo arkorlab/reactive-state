@@ -108,13 +108,13 @@ function quietMapping(call: CallExpression): Mapping | undefined {
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
   const name = quietMemberName(member);
   if (name !== 'map' && name !== 'flatMap') return undefined;
-  const source = framedQuietSource(member.expression);
+  const source = framedQuietSource(member.expression, false);
   if (source === undefined || !isArrayLiteralExpression(source)) return undefined;
   if (arrayMethodMayBeOverridden(call, name)) return { call, roots: [], overridden: true };
   const args = framedArgumentPrefix(call, call.arguments, Infinity);
   const callback = args.values[0];
   if (callback === undefined || args.unknown || args.alternatives !== undefined) return undefined;
-  const fn = framedQuietSource(callback);
+  const fn = framedQuietSource(callback, false);
   return fn !== undefined &&
     (isArrowFunction(fn) || isFunctionExpression(fn)) &&
     quietMapperFunction(fn, call, source, { evaluated: args.values })

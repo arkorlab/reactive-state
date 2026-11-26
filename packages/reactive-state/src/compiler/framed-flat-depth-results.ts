@@ -28,7 +28,7 @@ export function expandedFlatViews(
     return undefined;
   if (!framedOriginPrefix(copy.call) || !framedOriginCoowned(copy.receiver, copy.call))
     return undefined;
-  const args = framedArgumentPrefix(copy.call, copy.given, Infinity);
+  const args = framedArgumentPrefix(copy.call, copy.given, Infinity, false);
   if (args.unknown || args.alternatives !== undefined) return undefined;
   const depths = flatArgumentDepths(args.values[0]);
   const quiet = quietCopy(copy, args.values, stable);

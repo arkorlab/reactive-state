@@ -43,7 +43,7 @@ export function framedConcatSegment(
   stable: ConcatStable,
   capture: CallExpression,
 ): ConcatSegment | undefined {
-  const root = concatSource(value, stable);
+  const root = concatSource(value, stable, false);
   if (root === undefined || !isObjectLiteralExpression(root) || !concatQuietSource(root, stable))
     return undefined;
   const metadata = spreadMetadata(root, stable);

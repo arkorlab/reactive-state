@@ -91,7 +91,7 @@ function convertedStatusText(
 ): boolean {
   return (
     keys.length === 0 &&
-    ((framedNativeErrorInput(value, call) && words.error(value)) ||
+    ((framedNativeErrorInput(value, call, undefined, false) && words.error(value)) ||
       (framedQuietArrayWords(value, words.error, call) && framedArrayString(value, words, call)))
   );
 }
@@ -116,7 +116,7 @@ function responseOptions(expression: Expression): Expression | undefined {
     aliases.add(binding);
     value = unwrapped(binding.initializer);
   }
-  return argumentArrayExposed(expression, aliases) ? undefined : value;
+  return argumentArrayExposed(expression, aliases, undefined, false) ? undefined : value;
 }
 
 /** ResponseInit reads headers and status before converting statusText, including their native conversions. */
@@ -162,7 +162,7 @@ function quietHeaders(expression: Expression): boolean {
   const pending = [expression];
   const seen = new Set<Expression>();
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    const value = framedQuietSource(at);
+    const value = framedQuietSource(at, false);
     if (value === undefined || seen.has(value)) return false;
     seen.add(value);
     if (!quietHeaderValue(value, pending)) return false;
@@ -222,7 +222,7 @@ function quietHeaderField(field: ObjectLiteralExpression['properties'][number]):
 /** Primitive text cannot run application coercion or fail the earlier WebIDL ByteString conversion. */
 function quietByteString(expression: Expression): boolean {
   if (!framedQuietPrimitive(expression)) return false;
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   return (
     value !== undefined &&
     (!(isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) || byteText(value.text))
