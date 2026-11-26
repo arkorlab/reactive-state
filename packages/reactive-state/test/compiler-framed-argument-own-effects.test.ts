@@ -159,6 +159,14 @@ const CASES: readonly Case[] = [
     source: `function frames(error:Error){void error;const holder:{box:{failure?:{stack?:string}}}={box:{failure:{stack:'fixed'}}};const args=['failure',{value:{stack:'other'}}] as const;Object.defineProperty(holder.box,...args);return holder.box.failure!.stack;}`,
     refused: false,
   },
+  // The list an `apply` hands on stands past a spread the receiver's work leaves unresolved: it is
+  // not shown, and the key it may hold is any.
+  {
+    id: 'apply-list-past-receiver-work',
+    source:
+      "function frames(error:Error){const lists:[string[]]=[['stack']];return Object.prototype.hasOwnProperty.apply((work(),error),...lists);function work(){return 0;}}",
+    refused: true,
+  },
   {
     id: 'assign-source-quiet-pin',
     source: `function frames(error:Error){${INNER}const args=[{inner:{stack:'fixed'}}];Object.assign(box,{},...args);return box.inner!.stack;}`,
