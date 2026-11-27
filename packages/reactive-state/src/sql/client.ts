@@ -325,7 +325,7 @@ class Plans {
         this.#followed,
         catalog,
       ),
-      { table: this.#followed.schemaTable, where: {} },
+      { schema: true, table: this.#followed.schemaTable, where: {} },
     ];
   }
 }

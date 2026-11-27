@@ -21,6 +21,7 @@ import {
 import { verifySubscription } from './bindings.ts';
 import { Committer } from './commits.ts';
 import { Database } from './database.ts';
+import { Diagnostics } from './diagnostics.ts';
 import { assertId, refusal } from './errors.ts';
 import { timeoutOf } from './evaluation.ts';
 import { externalTailOf, readAfterOperation } from './external-engine.ts';
@@ -142,6 +143,7 @@ export class AuthorityEngine {
     updaterRuns: 0,
   };
   readonly #evaluatedBy = new Map<string, number>();
+  readonly #diagnostics: Diagnostics;
   readonly #core: Core;
   readonly #shared: SharedViews;
   /** What follows the change logs of the stores the external tables are read through. */
@@ -171,6 +173,7 @@ export class AuthorityEngine {
     this.#clock = options.clock ?? Date.now;
     CLOCKS.set(this, this.#clock);
     this.#memo = new Memo(this.#clock);
+    this.#diagnostics = new Diagnostics(this.#clock, options.diagnosticsEveryMs);
     const timeoutMs = timeoutOf(options.timeoutMs);
     this.#db = new Database(options.sql);
     this.#sessions = new Sessions(this.#db, this.#clock, options.sessions);
@@ -184,6 +187,7 @@ export class AuthorityEngine {
       commit: (commit) => this.#commits.commit(commit),
       db: this.#db,
       definition: this.#definition,
+      diagnostics: this.#diagnostics,
       evaluatedBy: this.#evaluatedBy,
       memo: this.#memo,
       metrics: this.#metrics,
@@ -259,6 +263,7 @@ export class AuthorityEngine {
     } finally {
       resolve(undefined);
       this.#tail.refreshLater();
+      this.#diagnostics.report();
     }
   }
 
@@ -565,9 +570,10 @@ export class AuthorityEngine {
       }
       const ended = endedResource(session);
       const { dependencies } = view;
+      const root = claims.root.component;
       return {
         dependsOn: (event) =>
-          event.changed.includes(ended) || dependencies?.changedBy(event.rows) === true,
+          event.changed.includes(ended) || this.#diagnostics.woken(root, dependencies, event.rows),
         digest: view.digest,
         issued: claims.digest,
         revision: view.revision,
@@ -646,6 +652,7 @@ export class AuthorityEngine {
         evaluationsByComponent: Object.fromEntries(
           [...this.#evaluatedBy].toSorted(([a], [b]) => (a < b ? -1 : Number(a > b))),
         ),
+        follow: this.#diagnostics.stats,
         memoEntries: this.#memo.size,
         operations: this.#db.operationCount(),
         revision: this.#db.revision(),

@@ -377,7 +377,7 @@ class SqlitePlans {
       return wheresOf(terms, values).map((where) => ({ table, where }));
     });
     // The schema's table too: a change of the schema renders the statement again.
-    return [...reads, { table: this.#followed.schemaTable, where: {} }];
+    return [...reads, { schema: true, table: this.#followed.schemaTable, where: {} }];
   }
 }
 

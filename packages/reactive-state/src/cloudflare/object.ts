@@ -1,5 +1,6 @@
 import { DurableObject } from 'cloudflare:workers';
 
+import { diagnosticsEveryOf } from '../authority/diagnostics.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import { AuthorityError } from '../authority/errors.ts';
 import type { ExternalStores } from '../authority/external.ts';
@@ -166,6 +167,7 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
       routes: setup.routes,
       ...(setup.sessions !== undefined && { sessions: setup.sessions }),
       ...(setup.shareViews !== undefined && { shareViews: setup.shareViews }),
+      diagnosticsEveryMs: diagnosticsEveryOf(env.REACTIVE_DIAGNOSTICS),
       externalPollMs: setup.externalPollMs,
       sql,
       stores: setup.stores?.(env as StoreEnv),

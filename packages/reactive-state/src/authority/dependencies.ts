@@ -16,6 +16,19 @@ export interface RowChange {
   readonly unknown?: 'fields' | 'table' | undefined;
 }
 
+/**
+ * Why a commit changed what was read: a record read by its id (`record`), a row a query's condition
+ * names (`row`), a change of a table a query read whole (`whole`), or a row that tells not which
+ * record it was (`table`). Only the first two say the read was of what changed.
+ */
+export type ChangeCause = 'record' | 'row' | 'table' | 'whole';
+
+/** A table a commit changed what was read of, and why. */
+export interface ChangedRead {
+  readonly table: string;
+  readonly cause: ChangeCause;
+}
+
 /** A record's fields a commit's row kept, before the commit or after it, with the record's id. */
 interface Image {
   readonly id: string;
@@ -196,6 +209,23 @@ export class Dependencies {
     return false;
   }
 
+  /** Of `#queriesChangedBy`, why: a row a condition names first, then what renders too much. */
+  #queryCause(changed: Changed): ChangedRead | undefined {
+    let loose: ChangedRead | undefined;
+    for (const [table, queries] of this.#queries) {
+      if (!changed.tables.has(table)) continue;
+      if (changed.uncertainTables.has(table)) loose ??= { table, cause: 'table' };
+      for (const where of queries.values()) {
+        const images = changed.candidates(table, where);
+        if (images.some((image) => matches(where, image.id, image.values))) {
+          if (Object.keys(where).length > 0) return { table, cause: 'row' };
+          loose ??= { table, cause: 'whole' };
+        }
+      }
+    }
+    return loose;
+  }
+
   record(table: string, id: string): void {
     this.#records.add(recordResource(table, id));
     this.#recordTables.add(table);
@@ -254,5 +284,25 @@ export class Dependencies {
   changedBy(rows: readonly RowChange[]): boolean {
     const changed = changedOf(rows);
     return this.#recordsChangedBy(changed) || this.#queriesChangedBy(changed);
+  }
+
+  /**
+   * Why a commit of `rows` changed what was read, where `changedBy` says it did: what was read of
+   * what changed before what renders too much, so that `whole` and `table` say a render need not
+   * have run. Asked of a commit that woke a stream alone, never of a render.
+   */
+  causeOf(rows: readonly RowChange[]): ChangedRead | undefined {
+    const changed = changedOf(rows);
+    for (const record of this.#records) {
+      if (!changed.records.has(record)) continue;
+      const table = resourceOf(record)?.table;
+      if (table !== undefined) return { table, cause: 'record' };
+    }
+    const query = this.#queryCause(changed);
+    if (query?.cause === 'row') return query;
+    for (const table of this.#recordTables) {
+      if (changed.unknownTables.has(table)) return { table, cause: 'table' };
+    }
+    return query;
   }
 }

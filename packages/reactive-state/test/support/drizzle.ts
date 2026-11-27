@@ -38,6 +38,7 @@ export interface Rendering {
 export type ProgramOptions = Partial<Pick<ComponentProgram, 'updaters' | 'writable'>> & {
   /** The database the engine is given, where it declares more than the followed tables. */
   readonly database?: AnyDatabase;
+  readonly diagnosticsEveryMs?: number;
   readonly timeoutMs?: number;
 };
 
@@ -78,7 +79,13 @@ export async function engineOf(
   operations: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {},
   options: ProgramOptions = {},
 ): Promise<Rendering> {
-  const { database: declared, timeoutMs, updaters = {}, writable = [] } = options;
+  const {
+    database: declared,
+    diagnosticsEveryMs,
+    timeoutMs,
+    updaters = {},
+    writable = [],
+  } = options;
   const component: ComponentProgram = {
     buildId: BUILD,
     component: COMPONENT,
@@ -95,6 +102,7 @@ export async function engineOf(
     programs: [component],
     stores: { [setup.follow.storeName]: setup.follow.store(setup.pg) },
     ...(timeoutMs !== undefined && { timeoutMs }),
+    ...(diagnosticsEveryMs !== undefined && { diagnosticsEveryMs }),
   });
   onTestFinished(async () => {
     await engine.close();
