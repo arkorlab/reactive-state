@@ -22,12 +22,3 @@ export {
 } from './http.ts';
 export { type Authority, type AuthorityOptions, startAuthority } from './start.ts';
 export { registerPaths } from './paths.ts';
-export type {
-  ExternalChange,
-  ExternalChanges,
-  ExternalQuery,
-  ExternalRecord,
-  ExternalStore,
-  ExternalStores,
-  ExternalTable,
-} from './external.ts';

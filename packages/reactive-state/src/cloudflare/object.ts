@@ -5,7 +5,6 @@ import { diagnosticsEveryOf } from '../authority/diagnostics.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import type { AuthorityErrorEvent, FaultOptions, OnError } from '../authority/error-hook.ts';
 import { AuthorityError, describeThrown } from '../authority/errors.ts';
-import type { ExternalStores } from '../authority/external.ts';
 import type { Application, AuthorityEngineOptions, Stats } from '../authority/model.ts';
 import { registryOf } from '../authority/programs.ts';
 import { fieldOperationOf, operationCallOf, rootOf, viewRequestOf } from '../authority/requests.ts';
@@ -70,8 +69,8 @@ export type AuthorityApplication = Application;
 export interface AuthorityObjectOptions extends Omit<FaultOptions, 'onError'> {
   /**
    * The application's hook for the authority's errors (`OnError`), given the object's environment
-   * as a third argument, the value `stores` receives: a reporter's key and host are there. A hook
-   * of two parameters is as before.
+   * as a third argument: a reporter's key and host are there. A hook of two parameters is as
+   * before.
    */
   readonly onError?: ObjectOnError | undefined;
   /**
@@ -86,21 +85,14 @@ export interface AuthorityObjectOptions extends Omit<FaultOptions, 'onError'> {
    * all.
    */
   readonly pages?: readonly PublicPage[];
-  /**
-   * The stores the application's external tables are read through, by the names the tables
-   * declare (`table(fields, { external })`), made of the object's environment as it starts: a
-   * follow's store of a D1 database it is bound to (`followDrizzle`), a service of the
-   * application's own.
-   */
-  readonly stores?: ((env: StoreEnv) => ExternalStores) | undefined;
   /** How often each store's change log is read while a stream follows: a second unless given. */
   readonly externalPollMs?: number | undefined;
 }
 
-/** The object's environment, as its stores are made of it: its bindings, whatever they are. */
+/** The object's environment, as its hook is told of it: its bindings, whatever they are. */
 type StoreEnv = AuthorityEnv & Readonly<Record<string, unknown>>;
 
-/** `OnError` of an object: it is also told the object's environment, as `stores` is. */
+/** `OnError` of an object: it is also told the object's environment. */
 type ObjectOnError = (
   error: unknown,
   event: AuthorityErrorEvent,
@@ -116,7 +108,6 @@ interface AuthoritySetup extends AuthorityApplication, Omit<FaultOptions, 'onErr
   readonly onError?: ObjectOnError | undefined;
   readonly deliveryDelayMs?: number | undefined;
   readonly pages: readonly PublicPage[];
-  readonly stores?: ((env: StoreEnv) => ExternalStores) | undefined;
   readonly externalPollMs?: number | undefined;
 }
 
@@ -229,7 +220,7 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   readonly #delivery: SiteDelivery;
   /** The object's one alarm, which its database's log is pruned at too. */
   readonly #alarm: ObjectAlarm;
-  /** What the application's database brings, of one of `reactiveDb`'s: its stores and its log. */
+  /** What the application's database brings, of one of `reactiveDb`'s: its log. */
   readonly #host: DatabaseHost | undefined;
   /** Whether the database's change log is made, and its making under way, and since when. */
   #open = false;
@@ -281,10 +272,6 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
       diagnosticsEveryMs: diagnosticsEveryOf(env.REACTIVE_DIAGNOSTICS),
       externalPollMs: setup.externalPollMs,
       sql,
-      stores:
-        host === undefined
-          ? setup.stores?.(env as StoreEnv)
-          : { ...host.stores(), ...setup.stores?.(env as StoreEnv) },
     };
     this.#engine = new AuthorityEngine(options);
     this.#engine.site(site);
@@ -557,7 +544,7 @@ export function authorityObject(
     registryOf({ buildId, operations, programs }),
   );
   const pages = pagesOf(options.pages ?? [], database);
-  const { deliveryDelayMs, externalPollMs, onError, stores } = options;
+  const { deliveryDelayMs, externalPollMs, onError } = options;
   const setup = {
     buildId,
     database,
@@ -571,7 +558,6 @@ export function authorityObject(
     routes,
     sessions,
     shareViews,
-    stores,
   };
   return class extends AuthorityObject {
     constructor(ctx: DurableObjectState, env: AuthorityEnv) {

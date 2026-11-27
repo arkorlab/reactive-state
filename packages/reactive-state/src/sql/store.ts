@@ -135,15 +135,6 @@ function pageSql(namespace: string): string {
   return `WITH ${log}, "page" AS (${page}), "folded" AS (${folded}) SELECT l."epoch", ${schema}."ddl_count"() AS "ddl", ${schema}."next_number"() AS "next", l."head", ${floor} AS "floor", coalesce(${rows}, ${tables}, '[]'::pg_catalog.json) AS "page" FROM "log" AS l`;
 }
 
-/** What `db.<table>` is answered for a table read by SQL: a fault, which names the way to read it. */
-function readBySql(table: string): Promise<never> {
-  return Promise.reject(
-    new Error(
-      `${table} is read by SQL: query it with the application's Drizzle, whose plan says what a render read, not through \`db.${table}\`.`,
-    ),
-  );
-}
-
 /**
  * The store of the tables `followed` names, whose log `client` reads in its namespace. Its epoch is
  * the log's and the schema's digest (`digest.ts`): a log read under another schema is another one,
@@ -196,9 +187,6 @@ export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
         head,
       };
     },
-    count: (table) => readBySql(table.name),
-    find: (table) => readBySql(table.name),
-    get: (table) => readBySql(table.name),
   };
 }
 

@@ -5,7 +5,6 @@ import { drizzle } from 'drizzle-orm/pglite';
 import { sqliteTable, text as sqliteText } from 'drizzle-orm/sqlite-core';
 import { describe, expect, expectTypeOf, it, onTestFinished, vi } from 'vitest';
 
-import type { ExternalStore, ExternalStores } from '../src/authority/external.ts';
 import { Engine } from '../src/authority/node-engine.ts';
 import {
   type ComponentProgram,
@@ -81,18 +80,13 @@ function programOf(evaluate: ComponentProgram['evaluate']): ComponentProgram {
   };
 }
 
-/** An engine of one component, of `database`, given `stores` alone of what a host may give. */
-async function engineOf(
-  db: AnyDatabase,
-  evaluate: ComponentProgram['evaluate'],
-  stores?: ExternalStores,
-) {
+/** An engine of one component, of `database`. */
+async function engineOf(db: AnyDatabase, evaluate: ComponentProgram['evaluate']) {
   const engine = new Engine({
     buildId: BUILD,
     database: db,
     externalPollMs: IDLE_POLL_MS,
     programs: [programOf(evaluate)],
-    ...(stores !== undefined && { stores }),
   });
   onTestFinished(async () => {
     await engine.close();
@@ -103,20 +97,8 @@ async function engineOf(
   return { engine, render: async () => textOf((await engine.render(session, root)).tree) };
 }
 
-/** What a store of the host's answers of its records: they are read by SQL. */
-const readBySql = (): Promise<never> => Promise.reject(new Error('Read by SQL.'));
-
-/** A store of the host's own, whose log tells of no change, and its reads of the log. */
-function quietStore() {
-  const changes = vi.fn<ExternalStore['changes']>(() =>
-    Promise.resolve({ changes: [], epoch: 'host', floor: 0, head: 0 }),
-  );
-  const store: ExternalStore = { changes, count: readBySql, find: readBySql, get: readBySql };
-  return { changes, store };
-}
-
 describe('a database of follows', { timeout: TEST_TIMEOUT_MS }, () => {
-  it('renders again a row its follow’s Drizzle changed, of no stores given', async () => {
+  it('renders again a row its follow’s Drizzle changed, by the store it brings', async () => {
     const setup = await opened({ tasks }, TASKS);
     const { engine, render } = await engineOf(followedDb(setup.follow), async (_props, $) => {
       const [task] = await setup.orm.select().from(tasks).where(eq(tasks.id, 't1'));
@@ -153,42 +135,6 @@ describe('a database of follows', { timeout: TEST_TIMEOUT_MS }, () => {
 
     await expect(render()).resolves.toBe('Renamed / Edited');
     expect(evaluate).toHaveBeenCalledTimes(3);
-  });
-
-  it('reads the store the host gives in place of the follow’s', async () => {
-    const setup = await opened({ tasks }, TASKS);
-    const host = quietStore();
-    const evaluate = vi.fn(async (_props: unknown, $: RenderScope) => {
-      const [task] = await setup.orm.select().from(tasks).where(eq(tasks.id, 't1'));
-      return $.h('p', null, task?.title);
-    });
-    const { engine, render } = await engineOf(followedDb(setup.follow), evaluate, {
-      sql: host.store,
-    });
-
-    await expect(render()).resolves.toBe('Write docs');
-
-    await setup.orm.update(tasks).set({ title: 'Renamed' }).where(eq(tasks.id, 't1'));
-    await engine.poke();
-
-    // The host's log tells of no change, and the follow's is not read.
-    await expect(render()).resolves.toBe('Write docs');
-    expect(evaluate).toHaveBeenCalledExactlyOnceWith({}, expect.anything());
-    expect(host.changes).toHaveBeenCalledTimes(2);
-  });
-
-  it('starts of a follow given no connection where the host gives its store', () => {
-    const engine = new Engine({
-      buildId: BUILD,
-      database: followedDb(followDrizzle({ tasks })),
-      programs: [programOf((_props, $) => $.h('p', null))],
-      stores: { sql: quietStore().store },
-    });
-    onTestFinished(async () => {
-      await engine.close();
-    });
-
-    expect(engine).toBeInstanceOf(Engine);
   });
 
   it('refuses at the authority’s start a follow given no connection', () => {
@@ -229,7 +175,7 @@ describe('what followedDb refuses', () => {
     ['a database of its tables', () => database(followInternals(follow).tables)],
   ])('refuses in place of a follow %s', (_, given) => {
     expect(() => followedDb(given() as never)).toThrow(
-      'followedDb(): argument 1 is not what `followDrizzle()` answered: give each follow itself, not its `tables` nor a database',
+      'followedDb(): argument 1 is not what `followDrizzle()` answered: give each follow itself, not a database',
     );
   });
 

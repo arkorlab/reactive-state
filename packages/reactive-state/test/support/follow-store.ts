@@ -4,8 +4,7 @@ import { type AnyDatabase, definitionOf } from '../../src/server/schema.ts';
 import { internalsOf } from '../../src/sql/follow-internals.ts';
 
 /**
- * What a test reads of a follow, and gives the authority of it, through the package's own seams,
- * which stay once the follow's `tables`, `store` and `storeName` and the host's `stores` are gone:
+ * What a test reads of a follow, and gives the authority of it, through the package's own seams:
  * what a follow keeps of its own (`follow-internals.ts`), and the stores the follows of a database
  * bring (`followed-stores.ts`).
  */
@@ -49,8 +48,8 @@ export function storeThrough(
 
 /**
  * `database`, whose follows' logs the authority reads through `stores`, by the stores' names, in
- * place of those the follows bring of the same names and beside the others: what a host's `stores`
- * gave, each made anew as an authority starts.
+ * place of those the follows bring of the same names and beside the others: a test's stand-in of a
+ * follow's store, each made anew as an authority starts.
  */
 export function readingThrough<D extends AnyDatabase>(
   database: D,
@@ -63,12 +62,7 @@ export function readingThrough<D extends AnyDatabase>(
   return database;
 }
 
-/** What a stand-in answers of a table's records: none, as a follow's tables are read by SQL. */
-function bySql(): Promise<never> {
-  return Promise.reject(new Error("A followed table is read by the application's SQL."));
-}
-
 /** A stand-in for a follow's store, whose log `changes` answers as the test writes it. */
 export function logStore(changes: ExternalStore['changes']): ExternalStore {
-  return { changes, count: bySql, find: bySql, get: bySql };
+  return { changes };
 }

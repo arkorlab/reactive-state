@@ -5,9 +5,10 @@ import type { ExternalStore } from './external.ts';
  * The stores the follows of a database bring (`followedDb`), by the database's declaration — the
  * one object `definitionOf` answers of it each time, which the engine reads its tables of: each the
  * store of one follow's log, by its name, made as an authority starts of the connection the
- * follow's `client` was last given. A store the host gives by the same name is read in its place
- * (`storesOf`). Unlike a database that holds its own connections (`database-host.ts`), the follows
- * bring the authority nothing to open, listen to or prune.
+ * follow's `client` was last given — or, of `reactiveDb`'s database, of the connection its host
+ * holds for the log (`hostedDb`). The authority reads no other (`storesOf`). Unlike a database
+ * that holds its own connections (`database-host.ts`), the follows bring the authority nothing to
+ * open, listen to or prune.
  */
 
 /** A store of each follow of a database, by its name: made anew at each call, or a fault. */

@@ -309,33 +309,6 @@ describe('reactiveDb', () => {
   );
 
   it(
-    "takes a store an authority is given over the database's own",
-    async () => {
-      const { db, orm } = await reactiveDb(schema);
-      await orm.execute(sql.raw(DDL));
-      const read = { changes: [], epoch: 'e', floor: 0, head: 0 };
-      const given = {
-        changes: vi.fn().mockResolvedValue(read),
-        count: vi.fn(),
-        find: vi.fn(),
-        get: vi.fn(),
-      };
-
-      const authority = await startAuthority({
-        buildId: BUILD,
-        database: db,
-        programs: [],
-        stores: { sql: given },
-      });
-      onTestFinished(() => authority.close());
-      await authority.engine.poke();
-
-      expect(given.changes).toHaveBeenCalledWith(expect.any(Number), expect.any(Number));
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     'goes on where the role may not make the log but may read it, and says so',
     async () => {
       const { db, orm } = await reactiveDb(schema);

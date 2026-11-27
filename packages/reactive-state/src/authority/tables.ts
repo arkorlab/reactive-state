@@ -3,13 +3,6 @@ import { type DatabaseDefinition, isRecordId, type Table } from '../server/schem
 import type { Database } from './database.ts';
 import type { Dependencies, RowChange } from './dependencies.ts';
 import {
-  externalCount,
-  externalFind,
-  externalGet,
-  type ExternalStore,
-  type ExternalTable,
-} from './external.ts';
-import {
   entryOf,
   type Found,
   type KeptValues,
@@ -32,12 +25,11 @@ export interface RowSource {
  * The committed records of each declared table, as the declaration reads them, kept in memory from
  * the first read of the table on: the authority is its database's one writer, and every commit
  * hands what it changed here (`apply`) once SQLite has it, so what is kept is what SQLite holds.
- * An external table's records are none of these: each read of one asks its store (`store`).
+ * An external table's records are none of these: the application's SQL reads them (`readTablesIn`).
  */
 export class Tables implements RowSource {
   readonly #db: Database;
   readonly #definition: DatabaseDefinition;
-  readonly #stores: ReadonlyMap<string, ExternalStore>;
   readonly #loaded = new Map<string, Map<string, KeptValues>>();
 
   readonly rows = (table: string): ReadonlyMap<string, KeptValues> => {
@@ -56,19 +48,9 @@ export class Tables implements RowSource {
 
   readonly get = (table: string, id: string): KeptValues | null => this.rows(table).get(id) ?? null;
 
-  constructor(
-    db: Database,
-    definition: DatabaseDefinition,
-    stores: ReadonlyMap<string, ExternalStore> = new Map(),
-  ) {
+  constructor(db: Database, definition: DatabaseDefinition) {
     this.#db = db;
     this.#definition = definition;
-    this.#stores = stores;
-  }
-
-  /** The store an external table is read through, by its name: none of a table the authority keeps. */
-  store(table: string): ExternalStore | undefined {
-    return this.#stores.get(table);
   }
 
   /** The declared table `name`; a fault for a table of another database than the authority's. */
@@ -103,23 +85,29 @@ export interface Reader {
   readonly track: Dependencies | undefined;
 }
 
+/**
+ * The declared table `table`, which `db.<table>` reads: a fault of a misspelled one, and of an
+ * external one, whose records the application's own SQL reads — whatever the read asks, before
+ * anything of it is checked or noted, so that no answer of it stands in for the refusal.
+ */
+function keptTable(reader: Reader, table: string): Table {
+  const declared = reader.tables.table(table);
+  if (declared.external !== undefined) {
+    throw new Error(
+      `${table} is read by SQL: query it with the application's Drizzle, whose plan says what a render read, not through \`db.${table}\`.`,
+    );
+  }
+  return declared;
+}
+
 /** `db.<table>.get(id)`: the record, or `null` — for an id no record could have too. */
-export function getIn(
-  reader: Reader,
-  table: string,
-  id: unknown,
-): Entry | null | Promise<Entry | null> {
+export function getIn(reader: Reader, table: string, id: unknown): Entry | null {
+  // A misspelled table is a fault even when the id could name no record.
+  keptTable(reader, table);
   if (!isRecordId(id)) {
-    // A misspelled table is a fault even when the id could name no record.
-    reader.tables.table(table);
     return null;
   }
-  const declared = reader.tables.table(table);
   reader.track?.record(table, id);
-  const store = reader.tables.store(table);
-  if (store !== undefined) {
-    return externalGet(store, { name: table, table: declared }, id);
-  }
   const values = reader.source.get(table, id);
   return values === null ? null : entryOf({ id, values });
 }
@@ -151,7 +139,7 @@ export function readTablesIn(reader: Reader, reads: readonly TableRead[]): void 
   const wheres: [string, Where][] = [];
   for (const read of reads) {
     const declared = reader.tables.table(read.table);
-    if (reader.tables.store(read.table) === undefined) {
+    if (declared.external === undefined) {
       throw new Error(
         `${read.table} is a table the authority keeps: read it through \`db.${read.table}\`, not by SQL.`,
       );
@@ -163,15 +151,13 @@ export function readTablesIn(reader: Reader, reads: readonly TableRead[]): void 
   }
 }
 
-/** A query of `table`, checked, and the store it is asked of where the table is external. */
+/** A query of `table`, checked: a fault of an external table, which the application's SQL reads. */
 function asked(reader: Reader, table: string, query: unknown, kind: 'count' | 'findMany') {
-  const declared = reader.tables.table(table);
-  const checked = queryOf(`db.${table}.${kind}`, declared, query, kind);
+  const checked = queryOf(`db.${table}.${kind}`, keptTable(reader, table), query, kind);
   if (checked.where !== null) {
     reader.track?.query(table, checked.where);
   }
-  const external: ExternalTable = { name: table, table: declared };
-  return { checked, external, store: reader.tables.store(table) };
+  return checked;
 }
 
 /** The records of a table the authority keeps that `where` names. */
@@ -186,18 +172,10 @@ function foundIn(reader: Reader, table: string, where: Where): Found[] {
 }
 
 /** `db.<table>.findMany(query)`. */
-export function findIn(
-  reader: Reader,
-  table: string,
-  query: unknown,
-): readonly Entry[] | Promise<readonly Entry[]> {
-  const { checked, external, store } = asked(reader, table, query, 'findMany');
-  const { limit, orderBy, select, where } = checked;
+export function findIn(reader: Reader, table: string, query: unknown): readonly Entry[] {
+  const { limit, orderBy, select, where } = asked(reader, table, query, 'findMany');
   if (where === null) {
     return Object.freeze([]);
-  }
-  if (store !== undefined) {
-    return externalFind(store, external, { limit, orderBy, where }, select);
   }
   const sorted = ordered(foundIn(reader, table, where), orderBy);
   const kept = limit === undefined ? sorted : sorted.slice(0, limit);
@@ -205,15 +183,7 @@ export function findIn(
 }
 
 /** `db.<table>.count(query)`. */
-export function countIn(reader: Reader, table: string, query: unknown): number | Promise<number> {
-  const { checked, external, store } = asked(reader, table, query, 'count');
-  const { where } = checked;
-  let counted: number | Promise<number> = 0;
-  if (where !== null) {
-    counted =
-      store === undefined
-        ? foundIn(reader, table, where).length
-        : externalCount(store, external, where);
-  }
-  return counted;
+export function countIn(reader: Reader, table: string, query: unknown): number {
+  const { where } = asked(reader, table, query, 'count');
+  return where === null ? 0 : foundIn(reader, table, where).length;
 }

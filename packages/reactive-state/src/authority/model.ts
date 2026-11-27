@@ -5,7 +5,6 @@ import type { Database } from './database.ts';
 import type { RowChange } from './dependencies.ts';
 import type { Diagnostics, FollowStats } from './diagnostics.ts';
 import type { FaultOptions, Report } from './error-hook.ts';
-import type { ExternalStores } from './external.ts';
 import type { Memo } from './memo.ts';
 import type { Registry } from './programs.ts';
 import type { RouteOptions, RouteRegistry } from './route-registry.ts';
@@ -34,12 +33,10 @@ export interface Application extends RouteOptions {
 }
 
 /**
- * The stores the external tables are read through, and how often their logs are read while
- * anything follows: the host's to give, which knows the application's own databases.
+ * How often the logs of the stores the external tables are read through are read while anything
+ * follows: the stores the follows of the application's database bring.
  */
 export interface ExternalOptions {
-  /** By the names the tables declare (`table(fields, { external })`). */
-  readonly stores?: ExternalStores | undefined;
   /** How often each store's change log is read while anything follows: a second unless given. */
   readonly externalPollMs?: number | undefined;
   /** How often what it follows is reported to the log, where the host asks (`diagnostics.ts`). */

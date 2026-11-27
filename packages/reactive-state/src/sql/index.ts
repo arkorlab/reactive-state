@@ -2,8 +2,8 @@ import { is, type SQL } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
 import { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import type { ExternalStore } from '../authority/external.ts';
-import { type Table, type TableRows, table, text } from '../server/schema.ts';
+import { followedTable } from '../server/followed-table.ts';
+import { type Table, type TableRows, text } from '../server/schema.ts';
 import {
   changeCaptureSql,
   channelOf,
@@ -12,7 +12,7 @@ import {
   relationKey,
 } from './capture.ts';
 import { type Connection, trackedClient } from './client.ts';
-import { withInternals } from './follow-internals.ts';
+import { type Declaring, withInternals } from './follow-internals.ts';
 import { generationOf } from './generations.ts';
 import { type KeyColumn, keysOf } from './keys.ts';
 import { postgresRows } from './postgres-rows.ts';
@@ -62,7 +62,7 @@ const DIGEST = {
 
 /**
  * The table of the schema of the store `storeName`: of its name where a table's may hold it, else
- * of a digest of it (`_` and 16 hexadecimal digits), whatever the host names its store; no two
+ * of a digest of it (`_` and 16 hexadecimal digits), whatever the follow names its store; no two
  * stores' names alike but in their digests make one table.
  */
 function schemaTableOf(storeName: string): string {
@@ -89,7 +89,10 @@ type FollowedTables<S> = Readonly<Record<`${typeof SCHEMA_TABLE}${string}`, Tabl
 };
 
 export interface FollowDrizzleOptions {
-  /** The store the tables are read through, as the authority's host gives it: `sql` unless given. */
+  /**
+   * The name of the store the tables' changes are followed through: `sql` unless given — of each
+   * follow of one database its own.
+   */
   readonly store?: string;
   /**
    * The schema the change log is kept in, of PostgreSQL alone: `reactive_state` unless given — none
@@ -108,14 +111,8 @@ export type OfSqlite<S> = true extends {
   ? true
   : false;
 
-export interface DrizzleFollow<S> {
-  /**
-   * The schema's tables, as the application's database declares them: `followedDb(follow)` declares
-   * them with the store, `database(follow.tables)` alone.
-   */
-  readonly tables: FollowedTables<S>;
-  /** The store's name, which the authority's host gives `store()` by. */
-  readonly storeName: string;
+/** What follows the tables of a schema of PostgreSQL's, which its database declares. */
+export interface DrizzleFollow<S> extends Declaring<FollowedTables<S>> {
   /**
    * What a host notifies its authority on, as the log commits — `LISTEN`, then `poke()`:
    * `<namespace>_changes`, `reactive_state_changes` unless the namespace is given.
@@ -136,12 +133,6 @@ export interface DrizzleFollow<S> {
    * condition is followed by the text it answers, which is asked before the value is bound.
    */
   readonly client: <C extends Connection>(client: C) => C;
-  /**
-   * The store the host gives the authority, which reads the log through `client`: of
-   * `followedDb(follow)`'s database, the follow's own, of the connection `client` was last given,
-   * unless the host gives one.
-   */
-  readonly store: (client: Queryable) => ExternalStore;
   /** Discards the log's entries written before `before`, a time in milliseconds. */
   readonly prune: (client: Queryable, before: number) => Promise<void>;
 }
@@ -210,10 +201,11 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
     };
     // The keys' values of each changed row, as the log keeps them: what a render's conditions name.
     const fields = keys.map((key) => [key.field, text()] as const);
-    tables[name] = Object.freeze({
-      ...table(Object.fromEntries(fields), { external: storeName }),
-      rows: postgresRows(value, keys, connected),
-    });
+    tables[name] = followedTable(
+      Object.fromEntries(fields),
+      storeName,
+      postgresRows(value, keys, connected),
+    );
     byRelation.set(relationKey(relation), name);
     keysByTable.set(name, keys);
     relations.push(relation);
@@ -232,7 +224,7 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
       `followDrizzle(): \`${schemaTable}\` is the name of the table a change of the schema is followed by, not a table of the schema's.`,
     );
   }
-  tables[schemaTable] = table({}, { external: storeName });
+  tables[schemaTable] = followedTable({}, storeName);
   const followed = {
     byRelation,
     keysByTable,
@@ -241,7 +233,6 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
     schema: generationOf(namespace),
     schemaTable,
   };
-  const declared = Object.freeze(tables);
   /** The connection `client` was last given, as it was given: what the follow's store reads. */
   let given: Connection | undefined;
   const follow = Object.freeze({
@@ -254,16 +245,13 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
       return tracked;
     },
     prune: (client: Queryable, before: number) => pruneSqlChanges(client, before, namespace),
-    store: (client: Queryable) => sqlStore(client, followed),
-    storeName,
-    tables: declared as FollowedTables<S>,
   });
-  // The log is read through the connection as the host gave it, as `follow.store(connection)` reads
-  // it: not through the client Drizzle is given, which follows a render's and an operation's
-  // statements.
+  // The log is read through the connection as the host gave it: not through the client Drizzle is
+  // given, which follows a render's and an operation's statements.
   return withInternals(follow, {
     store: () => (given === undefined ? undefined : sqlStore(given as Queryable, followed)),
     storeName,
-    tables: declared,
+    storeOf: (client) => sqlStore(client as Queryable, followed),
+    tables: Object.freeze(tables),
   });
 }

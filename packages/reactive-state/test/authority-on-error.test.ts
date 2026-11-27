@@ -132,8 +132,6 @@ async function hostedPoke(
     open: () => Promise.resolve(),
     prune: () => Promise.resolve(),
     seed: async (first) => first(),
-    // The follow's store, a stand-in, is the declaration's: the host brings none of its own.
-    stores: () => ({}),
   });
   const authority = await startAuthority({ ...application, database: hosted, onError });
   onTestFinished(async () => {

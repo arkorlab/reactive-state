@@ -147,7 +147,7 @@ export class AuthorityEngine {
     this.#registry = registryOf(options);
     const routes = routeRegistryOf(options, this.#registry);
     this.#definition = definitionOf(options.database);
-    const stores = storesOf(this.#definition, options.stores);
+    const stores = storesOf(this.#definition);
     this.#external = stores.size > 0;
     const externalPollMs = pollIntervalOf(options.externalPollMs);
     this.#publishes = publishes(this.#definition);
@@ -160,7 +160,7 @@ export class AuthorityEngine {
     this.#sessions = new Sessions(this.#db, this.#clock, options.sessions);
     seedDatabase(this.#db, this.#definition, this.#clock);
     this.#secret = this.#db.bindingSecret();
-    this.#tables = new Tables(this.#db, this.#definition, stores);
+    this.#tables = new Tables(this.#db, this.#definition);
     this.#public = new PublicViews(this.#db, this.#tables, this.#definition, this.#metrics);
     this.#core = {
       boot: randomBytes(BOOT_BYTES).toString('base64url'),

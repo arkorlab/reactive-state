@@ -1,5 +1,4 @@
 import type { AnyDatabase } from '../server/schema.ts';
-import type { ExternalStores } from './external.ts';
 
 /**
  * What a database that holds its own connections brings to the authority it is given to
@@ -10,11 +9,6 @@ import type { ExternalStores } from './external.ts';
 export interface DatabaseHost {
   /** Makes what the database's changes are followed by: the log, and each table's triggers. */
   readonly open: () => Promise<void>;
-  /**
-   * The stores that read the database, which an authority is made of at once, as a Durable Object's
-   * is in its constructor: what they read is there once `open` ended.
-   */
-  readonly stores: () => ExternalStores;
   /** Has `told` called as each change commits. */
   readonly listen: (told: () => void) => Promise<void>;
   /** Discards what the database keeps of changes past following. */

@@ -9,13 +9,7 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { Dependencies, type RowChange } from '../src/authority/dependencies.ts';
 import { ExternalTail } from '../src/authority/external-tail.ts';
-import {
-  type ExternalChange,
-  ExternalFollower,
-  externalFind,
-  externalGet,
-  type ExternalStore,
-} from '../src/authority/external.ts';
+import { type ExternalChange, ExternalFollower } from '../src/authority/external.ts';
 import { Engine } from '../src/authority/node-engine.ts';
 import { nextTurn } from '../src/authority/turns.ts';
 import { ObjectAlarm } from '../src/cloudflare/alarm.ts';
@@ -26,20 +20,12 @@ import {
   type RenderScope,
   type Json,
 } from '../src/program.ts';
-import { database, definitionOf, json, table, text } from '../src/server/schema.ts';
+import { database, definitionOf } from '../src/server/schema.ts';
 import { followDrizzle, followedDb } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { openedWith } from './support/drizzle.ts';
 import { followInternals, logStore, readingThrough } from './support/follow-store.ts';
 import { textOf } from './support/frames.ts';
-
-/** A table of records its store answers, which only `externalGet` and `externalFind` read. */
-const db = database({
-  items: table({ title: text(), group: text(), document: json() }, { external: 'remote' }),
-});
-const declared = definitionOf(db).tables.get('items');
-if (declared === undefined) throw new Error('The test declares items.');
-const ITEMS = { name: 'items', table: declared };
 
 /** The application's items, of a Drizzle schema, which its own database holds and logs. */
 const items = pgTable('items', {
@@ -121,50 +107,6 @@ function keysOf(id: string, group: string) {
   return { k_group: keyDigest(group), k_id: keyDigest(id) };
 }
 
-/** A store whose records and log the application changes without writing to the authority. */
-function remote() {
-  const records = new Map([
-    ['one', { title: 'first', group: 'a', document: { nested: ['original'] } }],
-  ]);
-  const changes: ExternalChange[] = [];
-  let epoch = 'initial';
-  let floor = 0;
-  let fail = false;
-  const readLog = vi.fn((since: number, limit: number) => {
-    if (fail) return Promise.reject(new Error('The remote store is unavailable.'));
-    return Promise.resolve({
-      changes: changes.filter((change) => change.seq > since).slice(0, limit),
-      epoch,
-      floor,
-      head: changes.at(-1)?.seq ?? 0,
-    });
-  });
-  const store: ExternalStore = {
-    changes: readLog,
-    count: () => Promise.resolve(records.size),
-    find: () => Promise.resolve([...records].map(([id, values]) => ({ id, values }))),
-    get: (_table, id) => {
-      const values = records.get(id);
-      return Promise.resolve(values === undefined ? null : { id, values });
-    },
-  };
-  return {
-    changes,
-    epoch: (value: string) => {
-      epoch = value;
-    },
-    fail: (value: boolean) => {
-      fail = value;
-    },
-    floor: (value: number) => {
-      floor = value;
-    },
-    readLog,
-    records,
-    store,
-  };
-}
-
 describe('external stores', () => {
   it('refuses a host without the store or with no interval before it opens the database', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'reactive-state-external-'));
@@ -179,10 +121,10 @@ describe('external stores', () => {
       "The store `remote` reads its follow's log through the connection `follow.client` was given",
     );
     // Of the follow's tables declared beside none, whose declaration no follow brought a store
-    // of: the authority's own refusal of a table whose store it was given none of.
+    // of: the authority's own refusal of a table whose store no follow brought.
     expect(
       () => new Engine({ ...opened, database: database(followInternals(follow).tables) }),
-    ).toThrow('`stores.remote`');
+    ).toThrow("the store `remote`, which no follow of the authority's database brought");
     expect(
       () => new Engine({ ...opened, database: readThrough(log()), externalPollMs: 0 }),
     ).toThrow('externalPollMs');
@@ -463,42 +405,6 @@ describe('external stores', () => {
     await tail.run();
 
     expect(ingest.mock.calls.at(-1)?.[0]).toMatchObject([{ id: 'one' }]);
-  });
-
-  it('copies and freezes documents without freezing the store-owned value', async () => {
-    const source = remote();
-    const read = await externalGet(source.store, ITEMS, 'one');
-    const owned = source.records.get('one');
-    owned?.document.nested.push('changed later');
-
-    expect(read?.['document']).toStrictEqual({ nested: ['original'] });
-    expect(Object.isFrozen(read?.['document'])).toBe(true);
-    expect(Object.isFrozen(owned?.document)).toBe(false);
-  });
-
-  it('defaults NULL fields but refuses other values outside the declaration', async () => {
-    const source = remote();
-    const nulls: ExternalStore = {
-      ...source.store,
-      get: () => Promise.resolve({ id: 'one', values: { title: null, document: null } }),
-    };
-
-    await expect(externalGet(nulls, ITEMS, 'one')).resolves.toMatchObject({
-      title: '',
-      group: '',
-      document: null,
-    });
-
-    const invalid: ExternalStore = {
-      ...source.store,
-      get: () => Promise.resolve({ id: 'one', values: { title: 1 } }),
-      find: () => Promise.resolve([{ id: 'one', values: { title: 1 } }]),
-    };
-
-    await expect(externalGet(invalid, ITEMS, 'one')).rejects.toThrow('external field title');
-    await expect(
-      externalFind(invalid, ITEMS, { where: {}, orderBy: [], limit: undefined }, undefined),
-    ).rejects.toThrow('external field title');
   });
 
   it('keeps memoized renders current without a connected stream', async () => {

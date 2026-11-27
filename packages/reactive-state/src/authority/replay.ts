@@ -30,16 +30,17 @@ import { type Child, type InstanceNode, isDescriptor, isNode, rendered } from '.
 /**
  * A write's binding, held to what the page's root renders now: the root is rendered again with the
  * props the binding names, and then each component along its path — the memo's rendering of each
- * where it holds one, and only that component evaluated where it does not — each found again where
- * it stands in what its parent renders now (its region, and its ordinal among those of its id and
- * key there), whatever its props are now; each dynamic site on the way rendered again with the
- * inputs it was rendered with when the binding was issued. The component whose state it is must
- * still be rendered with the props it was then, bind the state to the same field, and have a setter
- * for it. So a write is made under the application's own control flow as it is now: a component or
- * a parent of it that refuses the session refuses the write (403); one no longer rendered where it
- * was, one rendered with other props, or one whose state binds another field now — a record moved
- * elsewhere, a permission that renders another component in its place — leaves the write nothing to
- * write to (`changed`). A row a state binds is found as the component answered it: its condition's
+ * where it holds one, and only that component evaluated where it does not, or where what it holds
+ * read a store's table — each found again where it stands in what its parent renders now (its
+ * region, and its ordinal among those of its id and key there), whatever its props are now; each
+ * dynamic site on the way rendered again with the inputs it was rendered with when the binding was
+ * issued. The component whose state it is must still be rendered with the props it was then, bind
+ * the state to the same field, and have a setter for it. So a write is made under the application's
+ * own control flow as it is now: a component or a parent of it that refuses the session refuses the
+ * write (403); one no longer rendered where it was, one rendered with other props, or one whose
+ * state binds another field now — a record moved elsewhere, a permission that renders another
+ * component in its place — leaves the write nothing to write to (`changed`). A row a state binds is
+ * found as the component answered it, which a read of its row always evaluates: its condition's
  * values are what the application's code computed for this write, and no token carries them.
  */
 
@@ -52,7 +53,21 @@ type Found =
   | { readonly from: 'evaluation'; readonly answered: unknown; readonly digest: string }
   | { readonly from: 'memo'; readonly output: Output; readonly digest: string };
 
-/** A component of the path: as the memo holds it, or evaluated alone. A refusal is the session's. */
+/** The tables the renderer's database reads through a store, by their names. */
+function storeTables({ definition }: Renderer): ReadonlySet<string> {
+  const tables = new Set<string>();
+  for (const [name, table] of definition.tables) {
+    if (table.external !== undefined) tables.add(name);
+  }
+  return tables;
+}
+
+/**
+ * A component of the path: as the memo holds it, or evaluated alone. A refusal is the session's.
+ * What the memo holds of a store's table is as fresh as the log's last read, and a commit of the
+ * authority's lets go of what it read at once: a membership the log has not told of the end of
+ * would pass the write, so a rendering that read one is evaluated again.
+ */
 async function componentAt(
   renderer: Renderer,
   component: string,
@@ -65,7 +80,7 @@ async function componentAt(
   const digest = shortDigest(instance.props);
   // Bound to the request where what the rendering read was, as evaluating it would be.
   const kept = keptOf(renderer, memoKey(renderer, component, instance));
-  if (kept !== undefined) {
+  if (kept !== undefined && !kept.dependencies.reads(storeTables(renderer))) {
     return { digest, from: 'memo', output: kept.output };
   }
   try {

@@ -4,14 +4,16 @@ import path from 'node:path';
 import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 
-import { type DatabaseHost, hostDatabase, hostOf, LOG } from '../authority/database-host.ts';
+import { type DatabaseHost, hostOf, LOG } from '../authority/database-host.ts';
 import { describeThrown, messageOf } from '../authority/errors.ts';
-import { TAIL } from '../authority/external.ts';
-import { type AnyDatabase, type Database, database } from '../server/schema.ts';
+import { type ExternalStore, TAIL } from '../authority/external.ts';
+import type { AnyDatabase } from '../server/schema.ts';
 import { logOf, seededSql } from './capture.ts';
 import { codeOf } from './client-plans.ts';
 import { checkServer } from './compat.ts';
 import type { Queryable } from './digest.ts';
+import { ownInternals, type TablesOfFollow } from './follow-internals.ts';
+import { type FollowedDatabase, hostedDb } from './followed.ts';
 import {
   type DrizzleFollow,
   followDrizzle,
@@ -59,17 +61,26 @@ export interface ReactiveDbOptions extends FollowDrizzleOptions {
 
 /**
  * What `reactiveDb` answers: what reads and writes the tables, of PostgreSQL's Drizzle or of D1's as
- * the schema is, and what the authority is given.
+ * the schema is, and what the authority is given — of each table, as `followedDb`'s database, the
+ * row a condition names alone (`db.<table>.where(…)`).
  */
 export interface ReactiveDb<S extends Readonly<Record<string, unknown>>> {
   readonly orm: OfSqlite<S> extends true ? DrizzleD1Database<S> : PgDatabase<PgQueryResultHKT, S>;
-  readonly db: Database<
-    (OfSqlite<S> extends true ? DrizzleD1Follow<S> : DrizzleFollow<S>)['tables']
+  readonly db: FollowedDatabase<
+    TablesOfFollow<OfSqlite<S> extends true ? DrizzleD1Follow<S> : DrizzleFollow<S>>
   >;
 }
 
-/** A connection of `pg`'s, or of PGlite's, as the host reads and writes the log through it. */
-type Connected<S> = Readonly<{ orm: unknown; host: DatabaseHost; schema?: S }>;
+/**
+ * A connection of `pg`'s, or of PGlite's, as the host reads and writes the log through it, and the
+ * store that reads the log, of the connection the host holds for it.
+ */
+type Connected<S> = Readonly<{
+  orm: unknown;
+  host: DatabaseHost;
+  store: () => ExternalStore;
+  schema?: S;
+}>;
 
 /** The namespace of `follow`'s log. */
 function namespaceOf<S>(follow: DrizzleFollow<S>): string {
@@ -95,7 +106,7 @@ async function capture<S>(connection: Queryable, follow: DrizzleFollow<S>): Prom
   } catch (error) {
     if (codeOf(error) !== PRIVILEGE) throw error;
     try {
-      await follow.store(connection).changes(0, 1);
+      await ownInternals(follow).storeOf(connection).changes(0, 1);
     } catch (error_) {
       throw new Error(
         `This role may neither make the change log nor read it. Run ${OWNER_RUNS}, and grant this one \`USAGE\` of the schema \`${namespaceOf(follow)}\` and \`SELECT\` on its tables: ${messageOf(error_, QUOTED)}`,
@@ -192,9 +203,9 @@ async function inProcess<S extends Readonly<Record<string, unknown>>>(
       prune: () => follow.prune(pg, Date.now() - LOG.keptMs),
       alone: (work) => work(),
       seed: (first) => seedOnce(pg, follow, first),
-      stores: () => ({ [follow.storeName]: follow.store(pg) }),
     },
     orm,
+    store: () => ownInternals(follow).storeOf(pg),
   };
 }
 
@@ -281,9 +292,9 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
       },
       prune: () => follow.prune(queryable, Date.now() - LOG.keptMs),
       seed: (first) => seedOnce(queryable, follow, first),
-      stores: () => ({ [follow.storeName]: follow.store(reads) }),
     },
     orm,
+    store: () => ownInternals(follow).storeOf(reads),
   };
 }
 
@@ -314,6 +325,7 @@ async function onPublishedD1<S extends Readonly<Record<string, unknown>>>(
     },
     // A write answers its own changes, not the rows the log's triggers wrote beside them.
     orm: drizzle(follow.client(ownChanges(binding)) as never, { schema }),
+    store: () => ownInternals(follow).storeOf(binding),
   };
 }
 
@@ -335,15 +347,13 @@ export async function reactiveDb<S extends Readonly<Record<string, unknown>>>(
       published === undefined
         ? await inSqliteFile(schema, follow, LOG.keptMs)
         : await onPublishedD1(published, schema, follow);
-    const db = database(follow.tables);
-    hostDatabase(db, connected.host);
+    const db = hostedDb(follow, connected.host, connected.store);
     return { db, orm: connected.orm } as unknown as ReactiveDb<S>;
   }
   const url = process.env['DATABASE_URL'];
   const connected =
     url === undefined ? await inProcess(schema, follow) : await onServer(url, schema, follow);
-  const db = database(follow.tables);
-  hostDatabase(db, connected.host);
+  const db = hostedDb(follow, connected.host, connected.store);
   return { db, orm: connected.orm } as unknown as ReactiveDb<S>;
 }
 

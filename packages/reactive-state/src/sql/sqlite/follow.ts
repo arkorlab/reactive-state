@@ -1,10 +1,10 @@
 import { is, type SQL } from 'drizzle-orm';
 import { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
-import type { ExternalStore } from '../../authority/external.ts';
 import { d1Executor, pruneChanges } from '../../cloudflare/d1-store.ts';
-import { type Table, type TableRows, table, text } from '../../server/schema.ts';
-import { withInternals } from '../follow-internals.ts';
+import { followedTable } from '../../server/followed-table.ts';
+import { type Table, type TableRows, text } from '../../server/schema.ts';
+import { type Declaring, withInternals } from '../follow-internals.ts';
 import { generationOf } from '../generations.ts';
 import type { RowReferences } from '../rows.ts';
 import {
@@ -38,7 +38,7 @@ import { sqliteStore } from './store.ts';
  * const follow = followDrizzle(schema);
  * const orm = drizzle(follow.client(env.DB), { schema });
  * const db = followedDb(follow);
- * // The host: follow.captureSql() run in one D1 batch; the store is the follow's, of env.DB.
+ * // The host: follow.captureSql() run in one D1 batch; the follow's store reads env.DB's log.
  * ```
  */
 
@@ -52,14 +52,8 @@ type FollowedSqliteTables<S> = Readonly<Record<`reactive_state_schema_${string}`
   };
 };
 
-export interface DrizzleD1Follow<S> {
-  /**
-   * The schema's tables, as the application's database declares them: `followedDb(follow)` declares
-   * them with the store, `database(follow.tables)` alone.
-   */
-  readonly tables: FollowedSqliteTables<S>;
-  /** The store's name, which the authority's host gives `store()` by. */
-  readonly storeName: string;
+/** What follows the tables of a schema of SQLite's in D1, which its database declares. */
+export interface DrizzleD1Follow<S> extends Declaring<FollowedSqliteTables<S>> {
   /** The statements that make the log and each table's triggers: run them in one D1 batch. */
   readonly captureSql: () => readonly string[];
   /**
@@ -75,12 +69,6 @@ export interface DrizzleD1Follow<S> {
     <B extends D1Binding>(binding: B): B;
     <B extends D1Binding>(binding: BindingOfNow<B>): ForwardedD1<B>;
   };
-  /**
-   * The store the host gives the authority, which reads the log through `binding`: of
-   * `followedDb(follow)`'s database, the follow's own, of the binding `client` was last given,
-   * unless the host gives one.
-   */
-  readonly store: (binding: D1Binding) => ExternalStore;
   /** Discards the log's entries written before `before`, a time in milliseconds. */
   readonly prune: (binding: D1Binding, before: number) => Promise<void>;
 }
@@ -114,10 +102,11 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
     const entry = followedSqliteTable(name, value, keys);
     // The keys' text of each changed row, as the log keeps it: what a render's conditions name.
     const fields = keys.map((key) => [key.field, text()] as const);
-    tables[name] = Object.freeze({
-      ...table(Object.fromEntries(fields), { external: storeName }),
-      rows: sqliteRows(value, keys, connected),
-    });
+    tables[name] = followedTable(
+      Object.fromEntries(fields),
+      storeName,
+      sqliteRows(value, keys, connected),
+    );
     byName.set(entry.name, name);
     keysByTable.set(name, keys);
     uniques.set(name, entry.uniques);
@@ -126,11 +115,10 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
     triggers.set(name, sqliteTriggersOf(entry));
     followed.push(entry);
   }
-  tables[schemaTable] = table({}, { external: storeName });
+  tables[schemaTable] = followedTable({}, storeName);
   const generation = generationOf(`d1:${storeName}`);
   const reads = { byName, keysByTable, schema: generation, schemaTable };
   const store = { byName, keysByTable, partials, rowids, schema: generation, triggers, uniques };
-  const declared = Object.freeze(tables);
   /**
    * The binding `client` was last given, as it was given — or the function that answers it: what
    * the follow's store reads.
@@ -148,15 +136,13 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
     },
     prune: (binding: D1Binding, before: number) =>
       pruneChanges(d1Executor(binding as Parameters<typeof d1Executor>[0]), before),
-    store: (binding: D1Binding) => sqliteStore(binding, store),
-    storeName,
-    tables: declared as FollowedSqliteTables<S>,
   });
-  // The log is read through the binding as the host gave it, as `follow.store(binding)` reads it:
-  // not through the one Drizzle is given, which follows a render's and an operation's statements.
+  // The log is read through the binding as the host gave it: not through the one Drizzle is given,
+  // which follows a render's and an operation's statements.
   return withInternals(follow, {
     store: () => ownStoreOf(given, store),
     storeName,
-    tables: declared,
+    storeOf: (binding) => sqliteStore(binding as D1Binding, store),
+    tables: Object.freeze(tables),
   });
 }
