@@ -1,6 +1,6 @@
 import { env } from 'cloudflare:workers';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { type Evaluation, evaluate, type TableRead } from '../../src/server/context.ts';
 import { followDrizzle } from '../../src/sql/index.ts';
@@ -38,22 +38,27 @@ function sleep(): Promise<void> {
 
 /**
  * A D1 binding that answers each call of `db`'s after `DELAY_MS`, and tells in `events` when a plan's
- * batch and the application's statements were asked and answered. Its methods are its own: a D1
- * binding's are not callable on a proxy of it.
+ * batch and the application's statements were asked and answered. It refuses the first `refusing`
+ * `EXPLAIN`s it is asked — every one, of `Infinity` — as D1 in production may: a statement of a table
+ * no database holds in its place. Its methods are its own: a D1 binding's are not callable on a proxy
+ * of it.
  */
-function slow() {
+function slow(refusing = 0) {
   const events: Event[] = [];
+  let refused = 0;
   const real = new WeakMap<WeakKey, D1PreparedStatement>();
-  const statement = (own: D1PreparedStatement): D1PreparedStatement => {
+  const statement = (own: D1PreparedStatement, sql: string): D1PreparedStatement => {
+    // The probe of `EXPLAIN SELECT 1` is the follow's own call, not the application's statement.
+    const application = !sql.startsWith('EXPLAIN ');
     const made = {
       all: async () => {
-        events.push('query asked');
+        if (application) events.push('query asked');
         await sleep();
         const answer = await own.all();
-        events.push('query answered');
+        if (application) events.push('query answered');
         return answer;
       },
-      bind: (...values: unknown[]) => statement(own.bind(...values)),
+      bind: (...values: unknown[]) => statement(own.bind(...values), sql),
     } as unknown as D1PreparedStatement;
     real.set(made, own);
     return made;
@@ -66,7 +71,11 @@ function slow() {
       events.push('plan answered');
       return answers;
     },
-    prepare: (sql: string) => statement(db.prepare(sql)),
+    prepare: (sql: string) => {
+      const refuses = sql.startsWith('EXPLAIN ') && refused < refusing;
+      if (refuses) refused += 1;
+      return statement(db.prepare(refuses ? 'SELECT * FROM "refused EXPLAIN"' : sql), sql);
+    },
   } as unknown as D1Database;
   return { binding, events };
 }
@@ -90,9 +99,9 @@ async function render(read: () => Promise<unknown>) {
   return { fault, reads };
 }
 
-/** `sql`, run by a render of a fresh follow through a D1 that answers slowly. */
-async function renderedOf(sql: string) {
-  const { binding, events } = slow();
+/** `sql`, run by a render of a fresh follow through a D1 that answers slowly, and refuses `refusing` `EXPLAIN`s. */
+async function renderedOf(sql: string, refusing = 0) {
+  const { binding, events } = slow(refusing);
   const client = followDrizzle(schema).client(binding);
   const rendered = await render(() => client.prepare(sql).bind('p1').all());
   return { ...rendered, events };
@@ -105,6 +114,9 @@ function serialCallsBefore(events: readonly Event[]): number {
     ? -1
     : events.slice(0, asked).filter((each) => each.endsWith('answered')).length;
 }
+
+/** The followed tables, the schema's own among them, which a statement with no plan reads whole. */
+const EVERY_TABLE = ['projects', 'reactive_state_schema_sql', 'tasks'];
 
 /** A text that writes nothing by its words: each is sent beside its plan. */
 const BESIDE = [
@@ -120,6 +132,22 @@ const BESIDE = [
   ['SELECT with a line comment before it', '-- the page\nSELECT * FROM tasks WHERE project_id = ?'],
 ] as const;
 
+/** A `SELECT` a comment comes before: which no plan is needed to say reads. */
+const COMMENTED = [
+  ['SELECT after a block comment', '/* the page */ SELECT * FROM tasks WHERE project_id = ?'],
+  ['SELECT after a line comment', '-- the page\nSELECT * FROM tasks WHERE project_id = ?'],
+] as const;
+
+/** A statement that writes, a comment before it: which only its plan, or the lack of a read, refuses. */
+const WRITES = [
+  ['DELETE after a block comment', '/* the page */ DELETE FROM tasks WHERE project_id = ?'],
+  ['DELETE after a line comment', '-- the page\nDELETE FROM tasks WHERE project_id = ?'],
+  [
+    'WITH … DELETE after a block comment',
+    '/* the page */ WITH gone AS (SELECT id FROM tasks WHERE project_id = ?) DELETE FROM tasks WHERE id IN (SELECT id FROM gone)',
+  ],
+] as const;
+
 describe("a render's first run of a text, and its plan", () => {
   beforeEach(async () => {
     await db.batch(
@@ -131,6 +159,10 @@ describe("a render's first run of a text, and its plan", () => {
         "INSERT INTO tasks (id, project_id, title) VALUES (1, 'p1', 'one'), (2, 'p2', 'two')",
       ].map((statement) => db.prepare(statement)),
     );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it.each(BESIDE)('sends a %s beside its plan', async (_name, sql) => {
@@ -178,4 +210,62 @@ describe("a render's first run of a text, and its plan", () => {
 
     expect(results[0]?.n).toBe(2);
   });
+
+  it.each(COMMENTED)(
+    'reads every followed table of a %s where D1 answers no EXPLAIN, and refuses it not',
+    async (_name, sql) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {
+        // The warning of a D1 that answers no `EXPLAIN`, kept out of the output.
+      });
+      const { fault, reads } = await renderedOf(sql, Infinity);
+
+      expect(fault).toBeUndefined();
+      expect(reads.map((each) => each.table).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+        EVERY_TABLE,
+      );
+    },
+  );
+
+  it.each(COMMENTED)(
+    'reads every followed table of a %s whose plan D1 failed to answer once, and refuses it not',
+    async (_name, sql) => {
+      const { fault, reads } = await renderedOf(sql, 1);
+
+      expect(fault).toBeUndefined();
+      expect(reads.map((each) => each.table).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(
+        EVERY_TABLE,
+      );
+    },
+  );
+
+  it.each(WRITES)(
+    'refuses a %s where D1 answers no EXPLAIN, before it runs',
+    async (_name, sql) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {
+        // The warning of a D1 that answers no `EXPLAIN`, kept out of the output.
+      });
+      const { events, fault } = await renderedOf(sql, Infinity);
+
+      expect(String(fault)).toMatch(/writes nothing as it renders/u);
+      expect(events).not.toContain('query asked');
+
+      const { results } = await db.prepare('SELECT count(*) AS n FROM tasks').all<{ n: number }>();
+
+      expect(results[0]?.n).toBe(2);
+    },
+  );
+
+  it.each(WRITES)(
+    'refuses a %s whose plan D1 failed to answer once, before it runs',
+    async (_name, sql) => {
+      const { events, fault } = await renderedOf(sql, 1);
+
+      expect(String(fault)).toMatch(/refused EXPLAIN/u);
+      expect(events).not.toContain('query asked');
+
+      const { results } = await db.prepare('SELECT count(*) AS n FROM tasks').all<{ n: number }>();
+
+      expect(results[0]?.n).toBe(2);
+    },
+  );
 });

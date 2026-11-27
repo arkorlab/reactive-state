@@ -87,9 +87,10 @@ const STATEMENTS = new Set(['delete', 'insert', 'replace', 'select', 'update', '
 const READS_ONLY = /^\s*select\b/iu;
 
 /**
- * Whether `sql`, a render's statement past its refusals, writes nothing by its words, so that it
- * runs beside its plan: it begins with `SELECT`, past the comments before it too, or reads alone
- * (`WITH … SELECT`). Of any other, the plan says first whether it writes.
+ * Whether `sql`, a render's statement past its refusals, writes nothing by its words: it begins
+ * with `SELECT`, past the comments before it too, or reads alone (`WITH … SELECT`). Such a
+ * statement runs beside its plan, and is a read where no plan says it is not (D1 answers no
+ * `EXPLAIN`, or its batch failed). Of any other, the plan says first whether it writes.
  */
 function readsBesidePlan(sql: string): boolean {
   return READS_ONLY.test(sql) || leadingWord(sql) === 'select' || readsAlone(sql);
@@ -270,10 +271,10 @@ class SqlitePlans {
   }
 
   /**
-   * The plan of `sql`, which `binding` is asked of with `values`: of a statement that reads — one
-   * that begins with `SELECT`, or reads by its words — whose plan's batch failed, every followed
-   * table for a while; none, of one that reads while D1 answers no `EXPLAIN`, which then reads
-   * every followed table and is asked again the next time.
+   * The plan of `sql`, which `binding` is asked of with `values`: of a statement that reads by its
+   * words (`readsBesidePlan`) whose plan's batch failed, every followed table for a while; none,
+   * of one that reads while D1 answers no `EXPLAIN`, which then reads every followed table and is
+   * asked again the next time.
    */
   async #asked(
     sql: string,
@@ -282,7 +283,7 @@ class SqlitePlans {
   ): Promise<Plan | undefined> {
     if (this.#unexplained()) {
       // Of no plan, a statement is a read by its words alone: of none a statement that writes holds.
-      if (!READS_ONLY.test(sql) && !readsAlone(sql)) throw writes(sql);
+      if (!readsBesidePlan(sql)) throw writes(sql);
       return undefined;
     }
     const conditions = conditionsOf(sql);
@@ -296,10 +297,10 @@ class SqlitePlans {
       answers = await binding.batch(asked);
     } catch (error) {
       if (!(await this.#explains(binding))) return this.#asked(sql, values, binding);
-      // The statement's own failure, or the batch's: of one that writes nothing — a `SELECT`, or
-      // a read by its words (`WITH … SELECT`) — its run tells, and it reads every table for a
-      // while, so that its renders wait on no failing batch.
-      if (READS_ONLY.test(sql) || readsAlone(sql)) {
+      // The statement's own failure, or the batch's: of one that writes nothing by its words — a
+      // `SELECT`, comments before it too, or a `WITH … SELECT` — its run tells, and it reads every
+      // table for a while, so that its renders wait on no failing batch.
+      if (readsBesidePlan(sql)) {
         return { ...this.#everyTable(), until: Date.now() + LIMITS.unexplainedMs };
       }
       throw error;
