@@ -27,10 +27,17 @@ interface NativeFrameArguments {
   readonly constructed: boolean;
 }
 
-/** Direct calls and known call/apply/Reflect wrappers preserve the native target's lexical identity. */
+/**
+ * Direct calls and known call/apply/Reflect wrappers preserve the native target's lexical identity.
+ * A Reflect wrapper's argument tuple keeps the narrower loop rule, so that a use in a loop's condition
+ * or update leaves the entries a reader proved, and its refusal, in place. A reader that answers for
+ * an exposed tuple by what was written into it (`applied`) is `exempting` instead: a write there
+ * reaches the next pass's call, and the stale literal entries would be read as data.
+ */
 export function framedNativeArguments(
   node: Node,
   names: ReadonlySet<string>,
+  exempting = false,
 ): NativeFrameArguments | undefined {
   if (!isCallExpression(node) && !isNewExpression(node)) return undefined;
   if (framedNativeConstructor(node.expression, names))
@@ -40,7 +47,7 @@ export function framedNativeArguments(
       applied: undefined,
       constructed: isNewExpression(node),
     };
-  return isCallExpression(node) ? indirectArguments(node, names) : undefined;
+  return isCallExpression(node) ? indirectArguments(node, names, exempting) : undefined;
 }
 
 /**
@@ -64,11 +71,12 @@ export function framedUnresolvedCall(
 function indirectArguments(
   call: CallExpression,
   names: ReadonlySet<string>,
+  exempting: boolean,
 ): NativeFrameArguments | undefined {
   const callee = unwrapped(call.expression);
   const path = globalPathOf(callee)?.join('.');
   if (path === 'Reflect.apply' || path === 'Reflect.construct')
-    return reflectedArguments(call, names, path === 'Reflect.construct');
+    return reflectedArguments(call, names, path === 'Reflect.construct', exempting);
   if (!isPropertyAccessExpression(callee) && !isElementAccessExpression(callee)) return undefined;
   const method = frameMemberName(callee);
   if (
@@ -92,13 +100,14 @@ function reflectedArguments(
   call: CallExpression,
   names: ReadonlySet<string>,
   constructed: boolean,
+  exempting: boolean,
 ): NativeFrameArguments | undefined {
   const values = knownArguments(call, WRAPPER.slots);
   const target = values?.[0];
   const applied = values?.[constructed ? 1 : 2];
   if (target === undefined || applied === undefined || !framedNativeConstructor(target, names))
     return undefined;
-  return { target, applied, args: framedAppliedArguments(call, applied, false), constructed };
+  return { target, applied, args: framedAppliedArguments(call, applied, exempting), constructed };
 }
 
 /**

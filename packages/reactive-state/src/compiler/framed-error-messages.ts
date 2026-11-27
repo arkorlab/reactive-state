@@ -61,7 +61,7 @@ export function framedErrorMessage(
       });
     });
   }
-  const selected = framedNativeArguments(node, names);
+  const selected = framedNativeArguments(node, names, true);
   if (selected === undefined) return false;
   const slots = [framedNativeConstructor(selected.target, AGGREGATE) ? 1 : 0];
   if (framedNativeConstructor(selected.target, DOM)) {
