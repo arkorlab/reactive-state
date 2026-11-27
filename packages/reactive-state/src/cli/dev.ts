@@ -70,7 +70,24 @@ function recordOf(project: ProjectOptions): string {
  * `args`.
  */
 export async function dev(projectDir: string, args: readonly string[] = []): Promise<void> {
-  const read = await readProject(projectDir, args);
+  const reading = new AbortController();
+  // A signal before `next dev` runs ends what runs till then, the process that reads the config,
+  // and the command with it: nothing else is left to stop.
+  const early = (): void => {
+    reading.abort();
+  };
+  process.once('SIGINT', early);
+  process.once('SIGTERM', early);
+  let read: ProjectRead;
+  try {
+    read = await readProject(projectDir, args, reading.signal);
+  } catch (error) {
+    if (reading.signal.aborted) return;
+    throw error;
+  } finally {
+    process.off('SIGINT', early);
+    process.off('SIGTERM', early);
+  }
   await compileProject(read.project);
   // What the two processes find each other by: `.env`'s, or made, read once, for both. An empty
   // value is one left to be filled in.
@@ -101,7 +118,6 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
       // Nothing is followed yet.
     },
   };
-  const reading = new AbortController();
   const authority = new Supervisor(() => {
     const { outDir, srcDir } = layoutOf(running.read.project);
     return spawn(process.execPath, [AUTHORITY, outDir, srcDir], {
