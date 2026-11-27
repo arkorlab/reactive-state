@@ -18,6 +18,7 @@ import {
 import type { FieldReceipt, Frame, RenderStatus, Result, View } from '../program.ts';
 import { Follower } from '../runtime/follow.ts';
 import { canonicalJson } from '../runtime/json.ts';
+import type { KeptRoot } from '../runtime/kept-roots.ts';
 import { type Page, page } from '../runtime/page.ts';
 import type { StoreStatus } from '../runtime/store.ts';
 import { type ViewAnswer, ViewController, type ViewHost } from '../runtime/view.ts';
@@ -31,8 +32,13 @@ import { type Live, LiveContext } from './state.ts';
  * shown, of the same root, is let go of with the tree it came with, so the page never goes back to
  * a revision it has moved past, nor shows a tree with values of another revision than its own. A
  * root mounted with a frame older than one the page has shown since — a route the router kept, gone
- * back to, whose tree is as it was first rendered — is rendered again before it shows, the
- * navigation that brings it holding the page as it was meanwhile.
+ * back to, whose tree is as it was first rendered — shows at once what the page kept of that root as
+ * a root let it go (unmounted, hidden with its route, or another root key shown in its place),
+ * where it kept that: the render of a root a link's prefetch may carry, rendered for no site and
+ * holding no field, as new as anything the page showed of the root and as the page's own writes
+ * (`Page.kept`); and asks for the root again at once, whose answer takes its place a round trip
+ * later. Otherwise it is rendered again before it shows, the navigation that brings it holding the
+ * page as it was meanwhile.
  *
  * In the browser it follows the root's event stream, and renders the root again — itself, through
  * its `view` Server Function, for the sites the page shows (`useSites`) — once the frame shown was
@@ -66,7 +72,10 @@ export interface LiveRootProps {
    * Whether the root's render may come from a private cache a link's prefetch carried, older than
    * what the page was told of since (`'use cache: private'`): shown at once all the same, and set
    * right by its stream, unless the page showed this very root at a newer revision already, which it
-   * never goes back from.
+   * never goes back from — then what the page kept of the root shows at once in its place, where it
+   * kept that (`Page.kept`), the root asked for again at once, and the root is rendered again first
+   * where it did not. Only such a root's render is kept, where the route rendered it for the session
+   * (`status` `rendered`).
    */
   readonly prefetchable?: boolean | undefined;
 }
@@ -74,6 +83,8 @@ export interface LiveRootProps {
 interface Shown {
   readonly frame: Frame;
   readonly children: ReactNode;
+  /** Whether it is what the page kept of the root, shown at once: asked for again as it shows. */
+  readonly kept?: true;
 }
 
 /** What a root shows, and what the route rendered it with last. */
@@ -151,28 +162,55 @@ function catchUpKey(frame: Frame): string {
 }
 
 /**
- * What a root about to show `frame` — mounted with it, or shown in another root's place — waits for
- * before it shows: the root rendered again, where the frame is older than one the page has shown
- * since — the route the router kept, gone back to, whose tree is as it was first rendered. Nothing
- * for a frame the page has shown nothing newer than, nor on the server, nor for a root nobody's
- * session follows.
+ * What a root about to show an older frame shows in its place: what the page kept of it, at once —
+ * the root asked for again as it shows — or the root rendered again, once its catch-up is in.
  */
-function catchUpOf(
+type Instead = CatchUp | Shown;
+
+/** Whether a root waits for `instead` before it shows: a catch-up, not a render the page kept. */
+function waits(instead: Instead): instead is CatchUp {
+  return 'caught' in instead;
+}
+
+/** How a root about to show a frame is rendered again, and whether a prefetch may carry it. */
+interface InsteadOptions {
+  readonly view: ViewFunction;
+  readonly prefetchable: boolean | undefined;
+}
+
+/**
+ * What a root about to show `frame` — mounted with it, or shown in another root's place — shows
+ * first, where the frame is older than one the page has shown since — the route the router kept,
+ * gone back to, whose tree is as it was first rendered: what the page kept of that root as a root
+ * let it go, at once, marked `kept` to be asked for again as it shows, where a link's prefetch may
+ * carry the root and the page kept a render of it as new as anything it showed of it
+ * (`Page.kept`); otherwise the root rendered again, which it waits for. Nothing for a frame the page
+ * has shown nothing newer than, nor on the server, nor for a root nobody's session follows.
+ */
+function insteadOf(
   runtime: Page | null,
   frame: Frame,
-  view: ViewFunction,
-  prefetchable = false,
-): CatchUp | null {
+  options: InsteadOptions,
+): Instead | undefined {
   if (runtime === null || frame.subscription === '' || frame.revision >= runtime.newest) {
-    return null;
+    return undefined;
   }
-  // A frame a link's prefetch carried shows at once, older than the page's newest though it is,
-  // where the page showed nothing newer of this very root, and wrote nothing since: its stream, as
-  // it opens, sets it right.
-  if (prefetchable && frame.revision >= runtime.carriedFloor(frame.rootKey)) {
-    return null;
+  if (options.prefetchable === true) {
+    // A frame a link's prefetch carried shows at once, older than the page's newest though it is,
+    // where the page showed nothing newer of this very root, and wrote nothing since: its stream, as
+    // it opens, sets it right.
+    if (frame.revision >= runtime.carriedFloor(frame.rootKey)) {
+      return undefined;
+    }
+    // Where it showed newer, what it kept of the root as it let it go — newer than `frame`, then —
+    // shows at once in its place, and the root is asked for again as it shows.
+    const kept = runtime.kept(frame.rootKey);
+    if (kept !== undefined) {
+      return { children: kept.children as ReactNode, frame: kept.frame, kept: true };
+    }
   }
   const key = catchUpKey(frame);
+  const { view } = options;
   return { caught: runtime.catchUp(key, async () => caughtUpWith(view, frame)), key };
 }
 
@@ -245,16 +283,17 @@ function Notice({ status }: { readonly status: StoreStatus }): ReactNode {
 }
 
 export function LiveRoot(props: LiveRootProps): ReactNode {
-  const { events, frame, session, status = 'rendered', update, view } = props;
+  const { events, frame, prefetchable, session, status = 'rendered', update, view } = props;
   const router = useRouter();
   const runtime = usePage();
   const root = useId();
   // A root about to show a frame older than one the page showed since — mounted with it, or another
-  // root shown in its place, as a route the router kept and is gone back to is — is rendered again
-  // before it shows: the page never goes back to a revision it has moved past. React keeps the page
-  // as it was meanwhile, the navigation that brought the root a transition.
-  const [mounting] = useState(() => catchUpOf(runtime, frame, view, props.prefetchable));
-  const caught = mounting === null ? undefined : use(mounting.caught);
+  // root shown in its place, as a route the router kept and is gone back to is — shows at once what
+  // the page kept of it, where it kept that (`Page.kept`), and asks for it again as it shows; or is
+  // rendered again before it shows: the page never goes back to a revision it has moved past. React
+  // keeps the page as it was meanwhile, the navigation that brought the root a transition.
+  const [mounting] = useState(() => insteadOf(runtime, frame, { prefetchable, view }));
+  const caught = mounting !== undefined && waits(mounting) ? use(mounting.caught) : mounting;
   const [state, setState] = useState<RootState>(() => {
     const given = { children: props.children, frame };
     return { given, shown: caught ?? given };
@@ -309,13 +348,30 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
       );
     });
     if (current === given && given.frame.rootKey !== state.shown.frame.rootKey) {
-      const switching = catchUpOf(runtime, given.frame, view, props.prefetchable);
-      current = (switching === null ? undefined : use(switching.caught)) ?? given;
+      const switching = insteadOf(runtime, given.frame, { prefetchable, view });
+      current =
+        (switching !== undefined && waits(switching) ? use(switching.caught) : switching) ?? given;
     }
     setState({ given, shown: current });
   }
   // The frame shown, for the stream to open with the newest subscription.
   const latest = useRef(current.frame);
+  // What the root shows as each render commits — its tree may change without its frame (`adopt`)
+  // — for the page to keep as the root is let go of: where a link's prefetch may carry the root,
+  // and the route rendered it for the session (its `status` is `rendered`). Another root key
+  // shown in its place — a search parameter's navigation, which keeps the segment — lets the one
+  // before go as an unmount would: what it showed is kept, as this commit shows the other.
+  const showing = useRef<KeptRoot<ReactNode> | undefined>(undefined);
+  useEffect(() => {
+    const before = showing.current;
+    if (before !== undefined && before.frame.rootKey !== current.frame.rootKey) {
+      runtime?.keep(root, before);
+    }
+    showing.current =
+      prefetchable === true && status === 'rendered'
+        ? { children: current.children, frame: current.frame, session }
+        : undefined;
+  }, [current, prefetchable, root, runtime, session, status]);
   useEffect(() => {
     if (controller === null) {
       return;
@@ -328,6 +384,18 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
   useEffect(() => {
     controller?.show(current.frame);
   }, [controller, current.frame]);
+  // What the page kept, shown at once, is asked for again as soon as the controller shows it: the
+  // authority's answer as it is now — newer, or the root forbidden a reader whose access was taken
+  // away, with no tree — takes its place a round trip later, as a catch-up's would have. Asked for
+  // after it shows, not before: asked before, the page would wait for that answer as a catch-up
+  // does, which what the page kept is there to spare it. Once for each render shown so.
+  const reasked = useRef<Shown | undefined>(undefined);
+  useEffect(() => {
+    if (controller !== null && current.kept === true && reasked.current !== current) {
+      reasked.current = current;
+      controller.force();
+    }
+  }, [controller, current]);
   useEffect(() => {
     latest.current = current.frame;
     if (controller !== null) {
@@ -346,9 +414,11 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
       });
     }
   }, [controller, current.frame, root, router, runtime, session]);
+  // Let go of — unmounted, or hidden with its route in a hidden `<Activity>` — the root leaves the
+  // page what it showed last.
   useEffect(() => {
     return () => {
-      runtime?.detach(root);
+      runtime?.detach(root, showing.current);
     };
   }, [root, runtime]);
   // A render of the route the root does not show tells of its revision all the same.

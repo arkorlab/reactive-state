@@ -1,13 +1,14 @@
 import type { Frame } from '../program.ts';
 import { BUILD_MISMATCH } from '../status.ts';
+import { type KeptRoot, KeptRoots } from './kept-roots.ts';
 import { Refresher, type RefreshTarget } from './refresh.ts';
 import { PageStore, type StoreOptions } from './store.ts';
 
 /**
- * A page in the browser: its store of pending operations, and what its roots are told to render
- * again for. One per page, made the first time a root renders in the browser and never on the
- * server, where a module's state outlives the request — and kept under a registered symbol, so that
- * every copy of this package a bundle holds shares it.
+ * A page in the browser: its store of pending operations, what its roots are told to render again
+ * for, and what it keeps of the roots it shows no more. One per page, made the first time a root
+ * renders in the browser and never on the server, where a module's state outlives the request — and
+ * kept under a registered symbol, so that every copy of this package a bundle holds shares it.
  */
 
 interface PageOptions extends Omit<
@@ -27,8 +28,8 @@ interface RootView extends RefreshTarget {
 
 const RECOVERY_DELAY_MS = 1000;
 /**
- * The most answered catch-ups kept for roots that did not show: a navigation let go of before it
- * ended. One still under way is kept however many there are: its root waits on it.
+ * The most answered catch-ups held for roots that did not show: a navigation let go of before it
+ * ended. One still under way is held however many there are: its root waits on it.
  */
 const MAX_CATCH_UPS = 16;
 
@@ -37,7 +38,11 @@ interface CatchUp {
   readonly promise: Promise<unknown>;
   answered: boolean;
 }
-/** The most roots the page remembers the newest shown revision of (`carriedFloor`), the least recent let go. */
+/**
+ * The most roots the page remembers the newest shown revision of (`carriedFloor`), the least recent
+ * let go: a carried frame, or a kept render, of a root let go of shows at once at no older a
+ * revision than any root let go of showed at.
+ */
 const MAX_SHOWN_ROOTS = 256;
 
 export class Page {
@@ -52,8 +57,13 @@ export class Page {
   #forgotten = -Infinity;
   /** The newest revision a write of the page's own committed at. */
   #written = -Infinity;
-  /** What each root mounted with an older frame waits for before it shows, by its frame. */
+  /**
+   * What each root about to show an older frame waits for before it shows, by its frame: where the
+   * page kept no render of it to show at once (`#kept`).
+   */
   readonly #catchUps = new Map<string, CatchUp>();
+  /** What the page showed of each root key a root showed and shows no more (`keep`, `kept`). */
+  readonly #kept = new KeptRoots<unknown>();
   readonly store: PageStore;
 
   constructor(options: PageOptions = {}) {
@@ -100,12 +110,23 @@ export class Page {
     }
   }
 
-  /** A root shows `view.frame`: the first time it renders, and each time a render brings one. */
+  /**
+   * A root shows `view.frame`: the first time it renders, and each time a render brings one. What
+   * the root kept of that root key, it shows again, and it is kept no more. A frame that takes the
+   * page to another session forgets every render kept of the one before: shown, a frame of it newer
+   * than the page's newest of this one would take the page back, and drop this one's operations.
+   */
   attach(root: string, view: RootView): void {
     const { force, refresh, want } = view;
     this.saw(view.frame.revision);
     this.#showed(view.frame.rootKey, view.frame.revision);
+    const before = this.store.session;
     this.store.attach(root, view.frame, view.session);
+    if (this.store.session === before) {
+      this.#kept.shownAgain(root, view.frame.rootKey);
+    } else {
+      this.#kept.forget();
+    }
     this.#refresher.attach(root, { force, refresh, want });
   }
 
@@ -116,12 +137,37 @@ export class Page {
 
   /**
    * The oldest revision a frame of the root `rootKey` — its props, its session — that a link's
-   * prefetch carried shows at once at: the newest the page showed that root at, or at most showed a
-   * root it let go of the memory of; and the newest a write of the page's own committed at, which
-   * an older frame would show undone. None, and any frame does.
+   * prefetch carried, or a render the page kept of that root (`kept`), shows at once at: the newest
+   * the page showed that root at, or at most showed a root it let go of the memory of; and the
+   * newest a write of the page's own committed at, which an older frame would show undone. None,
+   * and any frame does.
    */
   carriedFloor(rootKey: string): number {
     return Math.max(this.#shown.get(rootKey) ?? this.#forgotten, this.#written);
+  }
+
+  /**
+   * What a root about to show a frame of the root `rootKey` older than `carriedFloor` — a route the
+   * router kept, gone back to — shows at once in its place, and asks for again as it shows: the
+   * render the page kept of that root as a root showed it no more (`keep`), where it is as new as
+   * anything the page showed of the root since and as a write of the page's own (`carriedFloor`),
+   * and of the session the page shows. None once the session ended, or the page's build is not the
+   * authority's.
+   */
+  kept(rootKey: string): KeptRoot<unknown> | undefined {
+    // The store's status, read as a root asks rather than listened to: a write the authority
+    // refused ends the session, or asks for a reload, inside the store, which tells the page of no
+    // reload asked for — and nothing kept is shown but through here, so a read here misses neither.
+    const { mismatched, revoked } = this.store.getStatus();
+    if (revoked || mismatched) {
+      this.#kept.forget();
+      return undefined;
+    }
+    const kept = this.#kept.of(rootKey);
+    if (kept === undefined || kept.session !== this.store.session) {
+      return undefined;
+    }
+    return kept.frame.revision >= this.carriedFloor(rootKey) ? kept : undefined;
   }
 
   /** The authority is at `revision` at least: a frame showed it, a commit or a stream told of it. */
@@ -131,8 +177,9 @@ export class Page {
 
   /**
    * What a root waits for before it shows a frame older than one the page showed since — a route
-   * the router kept, gone back to — `render`'s answer, asked for once for `key`: each render that
-   * waits is handed the same promise, as React's `use` asks, until the root has shown (`settled`).
+   * the router kept, gone back to — where the page kept no render of it to show at once (`kept`):
+   * `render`'s answer, asked for once for `key`: each render that waits is handed the same promise,
+   * as React's `use` asks, until the root has shown (`settled`).
    */
   catchUp<T>(key: string, render: () => Promise<T>): Promise<T> {
     const kept = this.#catchUps.get(key);
@@ -164,16 +211,35 @@ export class Page {
     this.#catchUps.delete(key);
   }
 
-  detach(root: string): void {
+  /**
+   * Keeps `shown`, what the root `root` showed of a root key it shows no more — let go of, or
+   * another root key shown in its place — where it was rendered for the session the page shows
+   * (`kept`).
+   */
+  keep(root: string, shown: KeptRoot<unknown>): void {
+    if (shown.session === this.store.session) {
+      this.#kept.keep(root, shown);
+    }
+  }
+
+  /**
+   * A root the page shows no more — unmounted, or hidden with its route — which showed `shown` as
+   * it was let go of: kept (`keep`).
+   */
+  detach(root: string, shown?: KeptRoot<unknown>): void {
     this.store.detach(root);
     this.#refresher.detach(root);
+    if (shown !== undefined) {
+      this.keep(root, shown);
+    }
   }
 
   /**
    * A root's stream says no more: the session ended, and nothing more is sent — or the page's
-   * build is not the authority's, and it is asked to reload.
+   * build is not the authority's, and it is asked to reload. Nothing kept is shown again.
    */
   revoked(message: string | undefined, code?: string): void {
+    this.#kept.forget();
     if (code === BUILD_MISMATCH) {
       this.store.mismatched();
     } else {
