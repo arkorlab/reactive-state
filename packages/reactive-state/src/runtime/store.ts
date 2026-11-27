@@ -2,6 +2,7 @@ import type { FieldOperation, FieldReceipt, Frame, Json, Result, Value } from '.
 import { BUILD_MISMATCH, HTTP_UNAUTHORIZED } from '../status.ts';
 import { carriedRecord } from './json.ts';
 import { type PendingOperation, type Predictor, reflects } from './operations.ts';
+import { Revocation } from './revocation.ts';
 import { isDefinitive, isReceipt, refusesBinding } from './store-answers.ts';
 
 /**
@@ -52,7 +53,11 @@ export interface StoreStatus {
   readonly error: string | null;
   /** Whether an operation's outcome stayed unknown through every send, and sending waits. */
   readonly offline: boolean;
-  /** Whether the session ended, after which nothing is sent until the page is another session's. */
+  /**
+   * Whether the session ended, after which nothing is sent until the page is another session's — or
+   * a root's own refusal stopped the page, which turns it false again within the session once that
+   * root is gone or shows another frame and a frame the page did not show then shows (`Revocation`).
+   */
   readonly revoked: boolean;
   /** Whether the page's code no longer matches the authority's: a reload is asked for. */
   readonly mismatched: boolean;
@@ -77,7 +82,11 @@ export interface StoreOptions {
   readonly onRefused?: () => void;
   /** An operation's outcome stayed unknown through every send: sending waits for `resume`. */
   readonly onOffline?: () => void;
-  /** The session ended, once: the page renders again for whoever it is now. */
+  /**
+   * The session ended, once — or a root's own refusal stopped the page, once for each root refused
+   * until it is let go of: the page renders again for whoever it is now, and the application draws
+   * the refusal there.
+   */
   readonly onRevoked?: () => void;
 }
 
@@ -201,7 +210,10 @@ export class PageStore {
   #sessionRevision = -Infinity;
   #error: string | null = null;
   #offline = false;
-  #revoked = false;
+  /** Whether the store is revoked, why, and what lets a root's own refusal go (`refuseRoot`). */
+  readonly #revocation = new Revocation(this, (root, message) =>
+    this.#end(message ?? REVOKED, false, root),
+  );
   #mismatched = false;
   #sending = false;
   /**
@@ -247,12 +259,12 @@ export class PageStore {
 
   #read(): StoreStatus {
     return Object.freeze({
-      error: this.#error,
+      error: this.#revocation.message ?? this.#error,
       mismatched: this.#mismatched,
       offline: this.#offline,
       pending: this.#operations.length,
       primary: this.#roots.keys().next().value,
-      revoked: this.#revoked,
+      revoked: this.#revocation.revoked,
     });
   }
 
@@ -366,7 +378,7 @@ export class PageStore {
 
   /** The next operation to send; none once the store is disposed, revoked or offline. */
   #next(): Operation | undefined {
-    if (this.#disposed || this.#revoked || this.#offline) {
+    if (this.#disposed || this.#revocation.revoked || this.#offline) {
       return undefined;
     }
     return this.#operations.find(
@@ -384,7 +396,8 @@ export class PageStore {
     } catch {
       answer = undefined;
     }
-    if (this.#disposed || this.#revoked) {
+    // Revoked for a root's own refusal alone, the store hears the answer, and sends nothing more.
+    if (this.#disposed || this.#revocation.ended) {
       return false;
     }
     const acknowledged = answer?.ok === true && isReceipt(answer.value) ? answer.value : undefined;
@@ -483,7 +496,7 @@ export class PageStore {
    * revocation keeps its own message.
    */
   #ready(): boolean {
-    return !this.#revoked && !this.#disposed;
+    return !this.#revocation.revoked && !this.#disposed;
   }
 
   #refuse(message: string): void {
@@ -527,29 +540,33 @@ export class PageStore {
     this.#remove((operation) => operation.target.session !== session);
     // Another session is another start: what the one before ran into is not this one's.
     if (!this.#mismatched) {
-      this.#revoked = false;
+      this.#revocation.clear();
       this.#offline = false;
       this.#error = null;
     }
   }
 
-  #end(message: string, mismatched: boolean): void {
+  /** Revokes the store; whether the page was told of it, and renders again for it (`Revocation`). */
+  #end(message: string, mismatched: boolean, refused?: string): boolean {
     if (this.#disposed) {
-      return;
+      return false;
     }
-    const first = !this.#revoked;
-    this.#revoked = true;
+    const told = this.#revocation.revoke({ message, mismatched, refused, roots: this.#roots });
     this.#mismatched ||= mismatched;
-    this.#remove(() => true);
-    // The first revocation says why the page stopped; a reload asked for says more than it.
-    if (first || mismatched) {
-      this.#error = message;
+    // A root's own refusal keeps the page's writes, sent once it is let go of: the session stands.
+    // What the store says of them, the revocation's message covers (`Revocation.message`) while it
+    // holds, and the page says again once it is let go of.
+    this.#remove(() => refused === undefined);
+    // A revocation that ended drops every write, so nothing waits on an outage any more. A hold keeps
+    // the outage it found, for the page's recovery to resume (`resume`), its writes' sends afresh.
+    if (this.#revocation.ended) {
+      this.#offline = false;
     }
-    this.#offline = false;
     this.#publish();
-    if (first && !mismatched) {
+    if (told && !mismatched) {
       this.#onRevoked();
     }
+    return told;
   }
 
   /**
@@ -597,12 +614,8 @@ export class PageStore {
     if (!this.#ready()) {
       return undefined;
     }
-    if (this.#offline) {
-      this.#refuse(OFFLINE);
-      return undefined;
-    }
-    if (this.#operations.length >= MAX_PENDING) {
-      this.#refuse(TOO_MANY);
+    if (this.#offline || this.#operations.length >= MAX_PENDING) {
+      this.#refuse(this.#offline ? OFFLINE : TOO_MANY);
       return undefined;
     }
     const captures = carriedRecord(write.captures, 'What the update captured');
@@ -617,8 +630,10 @@ export class PageStore {
   /**
    * A root shows `frame`, rendered for `session`. A newer frame of another session than the page
    * showed — the browser signed in again — takes the page to that session: the operations of the
-   * one before are dropped, never sent as the new one nor shown on its frames. A frame rendered while
-   * the store was offline says the server answers again, and the store resumes.
+   * one before are dropped, never sent as the new one nor shown on its frames. A frame the page did
+   * not show as a root's own refusal revoked it lets that go, where no root refused shows what it
+   * showed (`Revocation`). A frame rendered while the store was offline says the server answers
+   * again, and the store resumes.
    */
   attach(root: string, frame: Frame, session: string | undefined): void {
     if (this.#disposed) {
@@ -631,6 +646,7 @@ export class PageStore {
     } else if (session === this.#session) {
       this.#sessionRevision = Math.max(this.#sessionRevision, frame.revision);
     }
+    this.#revocation.lapse(this.#roots, this.#session);
     this.#settle();
     if (this.#offline && previous?.frame !== frame) {
       this.resume();
@@ -645,18 +661,25 @@ export class PageStore {
     return this.#session;
   }
 
-  /** A root the page no longer renders: its frame holds no operation back any more. */
+  /**
+   * A root the page no longer renders: its frame holds no operation back any more, nor, gone, a
+   * root's own refusal it was refused (`Revocation`), whose kept writes go once that is let go of.
+   */
   detach(root: string): void {
     if (!this.#roots.delete(root) || this.#disposed) {
       return;
     }
+    this.#revocation.lapse(this.#roots, this.#session);
     this.#settle();
     this.#publish();
+    this.#sendAll();
   }
 
   /** After an outage: sends again what was never acknowledged, and what was made offline. */
   resume(): void {
-    if (this.#revoked || this.#disposed) {
+    // A root's own refusal holding the store resumes it too, though it sends nothing until it is let
+    // go of (`#next`): a write gone offline meanwhile is sent then.
+    if (this.#revocation.ended || this.#disposed) {
       return;
     }
     // Only a store that was offline sends its operations again from their first attempt: one that

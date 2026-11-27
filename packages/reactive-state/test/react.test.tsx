@@ -1569,6 +1569,188 @@ describe('the browser’s half', () => {
       expect(opened[0]?.closed).toBe(true);
     });
 
+    it('says a root’s own refusal, renders the route again, and says it no more once another root of the session shows', async () => {
+      const update = unanswered();
+      const { rerender } = render(page({ frame: FIRST }, update));
+
+      act(() => {
+        opened[0]?.emit('revoked', { code: 'NOT_IN_TEAM', error: 'You left the team.' });
+      });
+      await settle();
+      fireEvent.change(titleInput(), { target: { value: 'Plan B' } });
+
+      expect(screen.getByRole('alert').textContent).toBe('You left the team.');
+      expect(update).not.toHaveBeenCalled();
+      expect(router.refresh).toHaveBeenCalledExactlyOnceWith();
+
+      // Another team's page, at the revision the page showed: the root rendered with other props.
+      rerender(page({ frame: frameAt(1, FIELDS, { rootKey: 'root:p2' }) }, update));
+      await settle();
+      fireEvent.change(titleInput(), { target: { value: 'Plan C' } });
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(sent(update).map(({ value }) => value)).toStrictEqual(['Plan C']);
+      expect(router.refresh).toHaveBeenCalledExactlyOnceWith();
+    });
+
+    it.each([
+      ['the session ended', 'UNAUTHENTICATED', 'The session ended.', 'The session ended.'],
+      [
+        'a subscription not the session’s',
+        'FORBIDDEN',
+        'Not yours to follow.',
+        'Not yours to follow.',
+      ],
+      ['another build', 'BUILD_MISMATCH', 'The application was updated.', 'Reload the page.'],
+    ])(
+      'keeps saying so through every frame of the session where %s',
+      async (_what, code, error, said) => {
+        const update = unanswered();
+        const { rerender } = render(page({ frame: FIRST }, update));
+
+        act(() => {
+          opened[0]?.emit('revoked', { code, error });
+        });
+        await settle();
+        rerender(page({ frame: frameAt(2, FIELDS, { rootKey: 'root:p2' }) }, update));
+        await settle();
+        fireEvent.change(titleInput(), { target: { value: 'Plan B' } });
+
+        expect(screen.getByRole('alert').textContent).toContain(said);
+        expect(update).not.toHaveBeenCalled();
+      },
+    );
+
+    it('keeps saying a root’s own refusal while that root shows what it showed, and no more once it is gone', async () => {
+      const shows = { filter: 'all', selectedId: 't1' } as const;
+      const active = { filter: 'active', selectedId: 't1' } as const;
+      const project = frameAt(2, FIELDS, { rootKey: 'root:project' });
+      const view = answering();
+      const update = unanswered();
+      /** The project's page beside the workspace's root, where it shows: two roots of the session. */
+      const beside = (frame: Frame, workspace: Frame | undefined): ReactNode => {
+        return (
+          <>
+            {page({ frame }, update)}
+            {workspace !== undefined &&
+              workspacePage(workspace, workspaceAt(workspace.revision, shows), view)}
+          </>
+        );
+      };
+      const { rerender } = render(
+        beside(frameAt(1, FIELDS, { rootKey: 'root:project' }), workspaceFrame(1, shows)),
+      );
+      await settle();
+      await filterBy('active');
+      await settle();
+      await answerWith(view, 0, workspaceAnswer(2, active));
+      await settle();
+      const followed = workspaceFrame(2, active).subscription;
+      const stream = opened.findLast((each) => each.subscription === followed && !each.closed);
+
+      // The workspace's stream, opened again after a commit closed the list, is refused as it opens
+      // with the application's code: a `refuse` of the site's render, of the inputs the page chose.
+      act(() => {
+        stream?.emit('revoked', { code: 'LIST_CLOSED', error: 'The list is closed.' });
+      });
+      await settle();
+
+      // Every root is asked to render again with the route: the workspace's view, refused at its
+      // site again, is refused for good, which revokes nothing more.
+      expect(view).toHaveBeenCalledTimes(2);
+
+      await answerWith(view, 1, refusal(422, 'LIST_CLOSED', 'The list is closed.'));
+      // The route renders again: of the states' first values the workspace's render passes, and the
+      // root keeps the frame it showed, which that one does not cover; the project renders anew.
+      rerender(beside(project, workspaceFrame(2, shows)));
+      await settle();
+      fireEvent.change(titleInput(), { target: { value: 'Plan B' } });
+
+      expect(screen.getByRole('alert').textContent).toBe('The list is closed.');
+      expect(shownText('list')).toBe('active@2');
+      expect(update).not.toHaveBeenCalled();
+      expect(view).toHaveBeenCalledTimes(2);
+
+      // The page leaves the workspace; the project's frame is one the page did not show then.
+      rerender(beside(project, undefined));
+      await settle();
+      fireEvent.change(titleInput(), { target: { value: 'Plan C' } });
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(sent(update).map(({ value }) => value)).toStrictEqual(['Plan C']);
+      expect(router.refresh).toHaveBeenCalledExactlyOnceWith();
+    });
+
+    it('lets a root’s own refusal go once the boundary took the root’s place, as a root showing a site of the newest revision renders again', async () => {
+      const shows = { filter: 'all', selectedId: 't1' } as const;
+      const active = { filter: 'active', selectedId: 't1' } as const;
+      const view = answering();
+      /** The project's page, or the boundary drawn in its place, beside the workspace's root. */
+      const beside = (project: Frame | undefined, workspace: Frame): ReactNode => {
+        return (
+          <>
+            {project === undefined ? <p>403</p> : page({ frame: project }, unanswered())}
+            {workspacePage(workspace, workspaceAt(workspace.revision, shows), view)}
+          </>
+        );
+      };
+      const { rerender } = render(
+        beside(frameAt(1, FIELDS, { rootKey: 'root:project' }), workspaceFrame(1, shows)),
+      );
+      await settle();
+      await filterBy('active');
+      await settle();
+      // The workspace shows the revision of the commit that refused the project to the reader.
+      await answerWith(view, 0, workspaceAnswer(2, active));
+      await settle();
+      const streamsBefore = opened.length;
+      const project = opened.find((each) => each.subscription === 'subscription:root:project:1');
+
+      act(() => {
+        project?.emit('revoked', { code: 'NOT_IN_TEAM', error: 'You left the team.' });
+      });
+      await settle();
+      // The route renders again: the project's render throws, and its boundary draws in its place;
+      // the workspace's render of its states' first values, at the same revision, does not cover
+      // what the page shows of it, and asks for nothing newer than it shows.
+      rerender(beside(undefined, workspaceFrame(2, shows)));
+      await settle();
+
+      expect(screen.getByRole('alert').textContent).toBe('You left the team.');
+      expect(view).toHaveBeenCalledTimes(2);
+
+      // Asked to render again, the workspace shows a frame the page did not show as the hold began.
+      await answerWith(view, 1, workspaceAnswer(2, active));
+      await settle();
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(shownText('list')).toBe('active@2');
+      expect(pageRuntime().store.getStatus()).toMatchObject({ error: null, revoked: false });
+      // And nothing more: no request, no refresh, no stream.
+      expect(view).toHaveBeenCalledTimes(2);
+      expect(router.refresh).toHaveBeenCalledExactlyOnceWith();
+      expect(opened).toHaveLength(streamsBefore);
+    });
+
+    it('says a root’s own refusal no more once a boundary took the root’s place and a later page’s root shows', async () => {
+      const update = unanswered();
+      const { rerender } = render(page({ frame: FIRST }, update));
+
+      act(() => {
+        opened[0]?.emit('revoked', { code: 'NOT_IN_TEAM', error: 'You left the team.' });
+      });
+      await settle();
+      // The route renders again, and the application's boundary draws the refusal in the root's place.
+      rerender(<p>403</p>);
+      await settle();
+      rerender(page({ frame: frameAt(1, FIELDS, { rootKey: 'root:p2' }) }, update));
+      await settle();
+      fireEvent.change(titleInput(), { target: { value: 'Plan C' } });
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(sent(update).map(({ value }) => value)).toStrictEqual(['Plan C']);
+    });
+
     it('drops the operations of the session before once the root is rendered for another', async () => {
       const update = unanswered();
       const { rerender } = render(page({ frame: FIRST }, update));

@@ -209,6 +209,67 @@ describe('a root kept in the deployment’s cache, in the browser', () => {
     expect(router.refresh).toHaveBeenCalledExactlyOnceWith();
   });
 
+  it('has the expiry render the route for a root’s own refusal, every root asked again, and lets the hold go once the refused root is gone', async () => {
+    const team = plainAt(1, 'root:team');
+    const board = plainAt(1, 'root:board');
+    const answer = deferred<Result<ViewAnswer<ReactNode>>>();
+    const boardView = vi.fn<ViewFunction>(async () => answer.promise);
+    /** The team's root, or the boundary drawn in its place, beside the board's: both kept. */
+    const shown = (refused: boolean): ReactNode => {
+      return (
+        <>
+          {refused ? <p>403</p> : keptAt(team, unanswered(), expire)}
+          {keptAt(board, boardView, expire)}
+        </>
+      );
+    };
+    const { rerender } = render(shown(false));
+    await settle();
+
+    act(() => {
+      opened
+        .find((each) => each.subscription === team.subscription)
+        ?.emit('revoked', { code: 'NOT_IN_TEAM', error: 'You left the team.' });
+    });
+    await settle();
+
+    // The route renders again through the expiry, the session's kept renders let go of first; and
+    // every root asks for its view again.
+    expect(expire).toHaveBeenCalledExactlyOnceWith();
+    expect(boardView).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('alert').textContent).toBe('You left the team.');
+
+    expiry.resolve(undefined);
+    await settle();
+    // The expiry's answer: the team's render throws, its boundary drawn in its place.
+    rerender(shown(true));
+    await settle();
+
+    expect(router.refresh).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert').textContent).toBe('You left the team.');
+
+    // The board's view, asked again: a frame the page did not show as the hold began.
+    await act(async () => {
+      answer.resolve({
+        ok: true,
+        value: {
+          children: <p data-testid="root:board">board</p>,
+          frame: plainAt(1, 'root:board'),
+          status: 'rendered',
+        },
+      });
+      await Promise.resolve();
+    });
+    await settle();
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(pageRuntime().store.getStatus()).toMatchObject({ error: null, revoked: false });
+    // And nothing more: one expiry, one view asked again, no refresh of the router's.
+    expect([expire, boardView, router.refresh].map((each) => each.mock.calls.length)).toStrictEqual(
+      [1, 1, 0],
+    );
+  });
+
   describe('what the page kept of a root it let go of', () => {
     it('shows it at once, and has the expiry render the route where asking for it again is refused', async () => {
       const view = refusing();

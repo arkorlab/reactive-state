@@ -47,7 +47,8 @@ import { type Live, LiveContext } from './state.ts';
  * tells of a revision newer than the frame's. A render of the route, which renders the root for the
  * sites its states' first values show, is shown while it shows every site the page shows; otherwise
  * it only tells of its revision. The route renders again (`router.refresh`) once the session ended
- * or changed — of a build whose roots the deployment's cache keeps, by the expiry of the session's
+ * or changed, or the root's own render was refused it (`Page.revoked`, which this root's stream
+ * names it to) — of a build whose roots the deployment's cache keeps, by the expiry of the session's
  * kept renders, whose answer renders it (`expire`). A root rendered with another key — the props it
  * was rendered with, or the session, changed — is followed anew.
  */
@@ -451,8 +452,9 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
         runtime.saw(revision);
         controller.want(revision);
       },
+      // Named by this root: a refusal of its own render holds the page while it shows what it showed.
       onRevoked: (message, code) => {
-        runtime.revoked(message, code);
+        runtime.revoked(message, code, root);
       },
       url: () => subscriptionUrl(events, latest.current.subscription),
     });
@@ -460,7 +462,7 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
     return () => {
       follower.stop();
     };
-  }, [controller, events, follows, runtime, viewKey]);
+  }, [controller, events, follows, root, runtime, viewKey]);
   const store = runtime?.store ?? null;
   const live = useMemo<Live>(
     () => ({ frame: current.frame, send: update, session, sites: controller, store }),

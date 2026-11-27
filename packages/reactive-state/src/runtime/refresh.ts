@@ -6,9 +6,10 @@
  * in time. The page tells every root: of the revision one of its writes committed at, which a frame
  * of each must reflect before the store lets the write go; and that a write was let go of whose
  * effect the page cannot show from what it holds, after which every root renders again whatever
- * revision it shows. The route itself renders again (`router.refresh`) once the session ended: once
- * for the page, through the root attached last — of a build whose roots the deployment's cache
- * keeps, by the expiry of the session's kept renders, whose answer renders it (`refreshExpired`).
+ * revision it shows. The route itself renders again (`router.refresh`) once the session ended, or a
+ * root's own refusal stopped the page: once for the page, through the root attached last — of a
+ * build whose roots the deployment's cache keeps, by the expiry of the session's kept renders, whose
+ * answer renders it (`refreshExpired`).
  */
 
 /** Has the route render again where `expire` fails: its own answer renders it otherwise. */
@@ -81,7 +82,7 @@ export class Refresher {
     }
   }
 
-  /** Renders the route again, every root of it: the session ended. */
+  /** Renders the route again, every root of it: the session ended, or a root's own refusal came. */
   refresh(): void {
     [...this.#roots.values()].at(-1)?.refresh();
   }

@@ -1,7 +1,9 @@
 import type { Frame } from '../program.ts';
+import { isApplicationCode } from '../refusal-codes.ts';
 import { BUILD_MISMATCH } from '../status.ts';
 import { type KeptRoot, KeptRoots } from './kept-roots.ts';
 import { Refresher, type RefreshTarget } from './refresh.ts';
+import { refuseRoot } from './revocation.ts';
 import { PageStore, type StoreOptions } from './store.ts';
 
 /**
@@ -89,7 +91,8 @@ export class Page {
       onRefused: () => {
         this.#refresher.force();
       },
-      // The session ended: the route renders again, for whoever the browser is now.
+      // The session ended, or a root's own refusal stopped the page: the route renders again, for
+      // whoever the browser is now, and the application draws a root's refusal in its place.
       onRevoked: () => {
         this.#refresher.refresh();
       },
@@ -151,8 +154,8 @@ export class Page {
    * router kept, gone back to — shows at once in its place, and asks for again as it shows: the
    * render the page kept of that root as a root showed it no more (`keep`), where it is as new as
    * anything the page showed of the root since and as a write of the page's own (`carriedFloor`),
-   * and of the session the page shows. None once the session ended, or the page's build is not the
-   * authority's.
+   * and of the session the page shows. None while the store is revoked — the session ended, or a
+   * root's own refusal holds it — nor once the page's build is not the authority's.
    */
   kept(rootKey: string): KeptRoot<unknown> | undefined {
     // The store's status, read as a root asks rather than listened to: a write the authority
@@ -236,12 +239,25 @@ export class Page {
 
   /**
    * A root's stream says no more: the session ended, and nothing more is sent — or the page's
-   * build is not the authority's, and it is asked to reload. Nothing kept is shown again.
+   * build is not the authority's, and it is asked to reload — or the root `root`, which heard it,
+   * was refused its render by the application, with a code of its own (`refuse(code)`): nothing is
+   * sent until that root is gone or shows another frame, and the page shows a frame of the session
+   * it did not show then (`Revocation`), for which every root renders again, as the route does.
+   * Nothing kept is shown again.
    */
-  revoked(message: string | undefined, code?: string): void {
+  revoked(message: string | undefined, code?: string, root?: string): void {
     this.#kept.forget();
     if (code === BUILD_MISMATCH) {
       this.store.mismatched();
+    } else if (root !== undefined && isApplicationCode(code)) {
+      // Told of a root refused anew, every root renders again, not the route alone: one showing a
+      // site the page opened, of the newest revision already, takes no render of the route's, which
+      // does not cover its view, and asks for nothing newer — its frame, shown as the hold began,
+      // would hold the page for good once the refused root is gone. A session's end forces none:
+      // each root's request would be refused, and render the route once more.
+      if (refuseRoot(this.store, root, message)) {
+        this.#refresher.force();
+      }
     } else {
       this.store.revoke(message);
     }
