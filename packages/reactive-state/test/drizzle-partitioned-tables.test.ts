@@ -9,6 +9,7 @@ import type { Json, RenderScope } from '../src/program.ts';
 import { catalogOf, NO_CONDITIONS } from '../src/sql/catalog.ts';
 import type { Followed } from '../src/sql/keys.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
+import { ownStore } from './support/follow-store.ts';
 
 /**
  * A partitioned table is no table the log follows: a plan names its partitions, and a write to it is
@@ -250,7 +251,7 @@ describe(
 
     it('logs a write through a declared partitioned table that no render reads', async () => {
       const setup = await openedWith({ parted }, PARTITIONED);
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const { head } = await store.changes(0, 10);
 
       await setup.orm.insert(parted).values({ id: 'b', region: 'us' });
