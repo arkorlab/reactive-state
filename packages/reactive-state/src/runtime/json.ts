@@ -27,6 +27,12 @@ export const MAX_JSON_LENGTH = 1_048_576;
 /** What JSON writes around a key: its two quotes, and the colon after it. */
 const KEY_MARKS = 3;
 
+/** How many values a copy may still make: each one of a copy writes a byte of JSON at least. */
+interface Values {
+  left: number;
+  readonly of: number;
+}
+
 /**
  * What is left of `MAX_JSON_LENGTH` as the values of one request are copied. Each value spends what
  * JSON writes of it at the least, where it stands and every time it stands there — a string or a
@@ -42,14 +48,26 @@ const KEY_MARKS = 3;
  * the same, at every place its object stands: it spends the comma a property that is written
  * spends. So the count is never more than the JSON a value comes to and one for each property left
  * out of it, and no property is read that was not counted first.
+ *
+ * A caller whose request the authority reads less of than that holds its values to a count beside
+ * it (`values`, `jsonBudget`'s `maxValues`): a value writes a character of JSON at least, so a copy
+ * of more values than the authority reads characters could never be accepted. Whichever is passed
+ * first refuses.
  */
 export interface JsonBudget {
   remaining: number;
+  readonly values: Values | undefined;
 }
 
-/** A budget of its own, whole: what the values of one request are copied within, together. */
-export function jsonBudget(): JsonBudget {
-  return { remaining: MAX_JSON_LENGTH };
+/**
+ * A budget of its own, whole: what the values of one request are copied within, together — and,
+ * with `maxValues`, within that many values, a shared object counted at each place it stands.
+ */
+export function jsonBudget(maxValues?: number): JsonBudget {
+  return {
+    remaining: MAX_JSON_LENGTH,
+    values: maxValues === undefined ? undefined : { left: maxValues, of: maxValues },
+  };
 }
 
 /** Takes `length` characters of `budget`; a `TypeError` naming `where` once it holds none. */
@@ -180,11 +198,22 @@ function namesBeside(value: readonly unknown[]): boolean {
   });
 }
 
+/** Counts one more value of the copy, which `values` refuses once it holds too many. */
+function spend(values: Values, where: string): void {
+  values.left -= 1;
+  if (values.left < 0) {
+    refuse(where, `more than ${String(values.of)} values, as many as the copy may make`);
+  }
+}
+
 /**
  * @returns `value`, copied as JSON, within what `budget` has left.
  */
 function copy(value: unknown, where: string, depth: number, budget: JsonBudget): Json {
   spendJson(budget, leastLength(value), where);
+  if (budget.values !== undefined) {
+    spend(budget.values, where);
+  }
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
     return value;
   }
@@ -223,20 +252,23 @@ function copy(value: unknown, where: string, depth: number, budget: JsonBudget):
 
 /**
  * `value`, copied as JSON; a `TypeError` naming `where` for what JSON would not carry as it is, or
- * for what takes more JSON than `budget` has left: a budget of its own unless the caller copies the
- * values of one request within one (`jsonBudget`).
+ * for what takes more JSON than a budget has left: a budget of its own unless the caller copies
+ * the values of one request within one (`jsonBudget`), which every copy that is given it spends,
+ * so that a list's items share one count. With a number, `within` is that many values in a budget
+ * of its own (`jsonBudget`'s `maxValues`): a value that holds more — a shared object counted at
+ * each place it stands, as JSON writes it — is refused as it is copied.
  */
-export function toJson(value: unknown, where = 'The value', budget = jsonBudget()): Json {
-  return copy(value, where, 0, budget);
+export function toJson(value: unknown, where = 'The value', within?: JsonBudget | number): Json {
+  return copy(value, where, 0, typeof within === 'object' ? within : jsonBudget(within));
 }
 
-/** A JSON object, copied; a `TypeError` for anything else. */
+/** A JSON object, copied, `within` what `toJson` copies a value within; a `TypeError` for anything else. */
 export function toJsonRecord(
   value: unknown,
   where = 'The value',
-  budget = jsonBudget(),
+  within?: JsonBudget | number,
 ): Readonly<Record<string, Json>> {
-  const copied = toJson(value, where, budget);
+  const copied = toJson(value, where, within);
   if (typeof copied !== 'object' || copied === null || Array.isArray(copied)) {
     return refuse(where, 'not an object');
   }

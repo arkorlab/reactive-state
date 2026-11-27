@@ -1,4 +1,4 @@
-import { sentAsWrite } from '../../server/context.ts';
+import { sentAsWrite, underway } from '../../server/context.ts';
 import { rejection } from '../client-objects.ts';
 import { provenCounts, provenEmpty } from './unwritten.ts';
 import {
@@ -177,6 +177,18 @@ export function sentToD1<T>(
   texts: readonly (string | undefined)[],
   send: () => T,
   whole = true,
+  unwritten?: (answered: unknown) => Promise<boolean>,
+): T {
+  // Counted as under way until D1 answers, a read too: a batch that D1 rolls back, or a statement
+  // not yet awaited, is not something a session change can follow.
+  return underway(() => sentTo(texts, send, whole, unwritten)) as T;
+}
+
+/** `sentToD1` of a call counted as under way. */
+function sentTo<T>(
+  texts: readonly (string | undefined)[],
+  send: () => T,
+  whole: boolean,
   unwritten?: (answered: unknown) => Promise<boolean>,
 ): T {
   if (texts.every((text) => text !== undefined && readsOnly(text))) return send();

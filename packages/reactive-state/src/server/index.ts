@@ -38,6 +38,7 @@ export {
   type Writable,
 } from './schema.ts';
 export type { FieldRef, Json, User, Value } from '../program.ts';
+export { changeSession } from './change-session.ts';
 export { refuse } from './refuse.ts';
 
 /**

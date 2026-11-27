@@ -84,6 +84,20 @@ export interface Evaluation {
    * kept — whose statements are sent no more. An operation's alone.
    */
   readonly externalWrite?: ((sql: string) => (ended: ExternalWriteEnd) => void) | undefined;
+  /**
+   * Takes the change of the application's own session that the operation asks for
+   * (`changeSession`), once: it throws where the operation asked already. An operation's alone.
+   */
+  readonly changeSession?: ((change: Json) => void) | undefined;
+  /**
+   * Told of a connection of the application's own tables the operation uses (`followDrizzle`'s
+   * PGlite, a connection checked out of its pool), with a probe of whether it is in a transaction
+   * now: one connection is one probe however often it is told. What it answers unregisters the
+   * probe. An operation's alone; it refuses `changeSession` while any probe says true.
+   */
+  readonly applicationConnection?:
+    | ((connection: WeakKey, inTransaction: () => boolean) => () => void)
+    | undefined;
 }
 
 /**
@@ -235,6 +249,59 @@ async function endedBy(
     ended(refused(error) ? 'none' : 'unknown');
     throw error;
   }
+}
+
+/**
+ * What takes the session change the operation under way asks for (`Evaluation.changeSession`):
+ * none outside an operation — a render, a shared view, a route's middleware, or no evaluation at
+ * all. The operation's own state says whether it still takes one.
+ */
+export function sessionChanger(): ((change: Json) => void) | undefined {
+  return storage().getStore()?.evaluation.changeSession;
+}
+
+/**
+ * Notes that the operation under way uses `connection`, one of the application's own tables, and
+ * how to tell it is in a transaction: what unregisters it — none outside an operation. The slot is
+ * read whether or not it is open: a connection the operation left running is still its own.
+ */
+export function usedConnection(
+  connection: WeakKey,
+  inTransaction: () => boolean,
+): (() => void) | undefined {
+  return storage().getStore()?.evaluation.applicationConnection?.(connection, inTransaction);
+}
+
+/**
+ * `run`, a statement or a transaction of the application's own tables the operation under way
+ * sends, counted as under way until it settles: a probe of the operation's that says so, however
+ * the connection's own state reads. Run as it is outside an operation. A promised answer ends it
+ * before whatever awaits it goes on.
+ */
+export function underway(run: () => unknown): unknown {
+  const over = usedConnection({}, () => true);
+  if (over === undefined) return run();
+  let answered: unknown;
+  try {
+    answered = run();
+  } catch (error) {
+    over();
+    throw error;
+  }
+  // One reaction for both outcomes, registered before the caller's: whatever awaits it goes on after.
+  // eslint-disable-next-line unicorn/prefer-then-catch -- a `.catch` would run a tick after a rejection
+  if (answered instanceof Promise) void answered.then(over, over);
+  else over();
+  return answered;
+}
+
+/**
+ * `callback`, bound to the context it is bound in: called later, by whatever code the callback was
+ * handed to, it reads the evaluation of the operation that bound it, as the code that made the call
+ * does — a pool serves a waiting checkout from the context that released a connection.
+ */
+export function inThisContext<F extends (...args: never[]) => unknown>(callback: F): F {
+  return AsyncLocalStorage.bind(callback);
 }
 
 /** Whether the render under way is an event stream's (`Evaluation.streamed`). */

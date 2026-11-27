@@ -272,6 +272,7 @@ describe('what a compile is given of a config', () => {
         prefetch: 'hours',
         root: '/app',
         session: '@/auth#session',
+        sessionChange: '@/auth#applySessionChange',
         share: 'off',
         src: 'src',
       }),
@@ -281,6 +282,7 @@ describe('what a compile is given of a config', () => {
       prefetch: 'hours',
       projectDir: '/app',
       session: '@/auth#session',
+      sessionChange: '@/auth#applySessionChange',
       share: false,
       src: 'src',
     });

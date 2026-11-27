@@ -8,7 +8,12 @@ import {
 } from '../status.ts';
 import { digest } from './canonical.ts';
 import { AuthorityError, isAuthorityError, messageOf, refusal } from './errors.ts';
-import { Call, operationEvaluation, transactionEvaluation } from './evaluation.ts';
+import {
+  Call,
+  operationEvaluation,
+  type OperationHooks,
+  transactionEvaluation,
+} from './evaluation.ts';
 import type { Core, Session } from './model.ts';
 import { operationResult } from './operation-results.ts';
 import { argumentsOf } from './requests.ts';
@@ -57,7 +62,13 @@ type Outcome =
         readonly message: string;
       };
     }
-  | { readonly receipt: { readonly committedRevision: number | null; readonly result: Json } }
+  | {
+      readonly receipt: {
+        readonly committedRevision: number | null;
+        readonly result: Json;
+        readonly sessionChange?: Json;
+      };
+    }
   /**
    * What its commit says of it, until its code settles: it committed — or, `external`, it was about
    * to write the application's own tables, at the authority's revision then.
@@ -135,6 +146,18 @@ class Running {
   #writing = 0;
   /** Whether a write of the application's own tables ended landed, or of an outcome unknown. */
   #wrote = false;
+  /** The change of the application's session the code asked for; it counts once it succeeds. */
+  #change: Json | undefined;
+  /** What it asked for inside its transaction: the run's once that commits, none if it rolls back. */
+  #pending: Json | undefined;
+  /** Whether its transaction (`db.transaction`) is under way. */
+  #inTransaction = false;
+  /** Whether its transaction ended in a rollback, which what its code asks for later goes with. */
+  #rolledBack = false;
+  /** Whether its transaction committed, which what its code asks for later stays the run's after. */
+  #transactionCommitted = false;
+  /** The connections of the application's own tables it uses, each with its probe of a transaction. */
+  readonly #connections = new Map<WeakKey, () => boolean>();
   /** What became of its answer: kept for a resend, or answered as of an outcome unknown. */
   #settled: 'abandoned' | 'kept' | undefined;
 
@@ -208,6 +231,94 @@ class Running {
     if (!isAuthorityError(error)) {
       const { module, name, operationId } = this.#call;
       this.#core.report(error, { kind: 'operation', module, name, operationId });
+    }
+  }
+
+  /**
+   * `changeSession`: takes the change the code asks for, once — one held, committed or pending,
+   * counts — while the run is under way, from the code of any of its transactions. Asked while
+   * `db.transaction` runs, by the transaction's own code, it is the transaction's, and the run's if
+   * that commits; refused while a connection of the application's own tables it uses is in a
+   * transaction, whose rollback it could not follow; and
+   * refused once the run has answered or timed out.
+   */
+  #changeSession(change: Json, fromTransaction: boolean): void {
+    if (this.#timer.settled) {
+      throw new TypeError(
+        'changeSession(change) was called after the server operation had settled or timed out — its code ended, and its answer is built: a change the authority does not see is not kept.',
+      );
+    }
+    if (this.#inTransactionOfTheApplication()) {
+      throw new TypeError(
+        "changeSession(change) is called while a statement or a transaction of the application's own tables is under way, which it cannot follow: call it once they have returned.",
+      );
+    }
+    if (fromTransaction && this.#rolledBack) {
+      throw new TypeError(
+        'changeSession(change) is called by the code of a transaction that rolled back: what it asked for went with it.',
+      );
+    }
+    if (this.#change !== undefined || this.#pending !== undefined) {
+      throw new TypeError('changeSession(change): a server operation changes the session once.');
+    }
+    if (fromTransaction && this.#inTransaction) {
+      this.#pending = change;
+    } else {
+      this.#change = change;
+    }
+  }
+
+  /**
+   * Whether a connection of the application's own tables it uses is in a transaction now, by the
+   * connection's own state; one whose probe throws counts as in one.
+   */
+  #inTransactionOfTheApplication(): boolean {
+    for (const probe of this.#connections.values()) {
+      let inTransaction: boolean;
+      try {
+        inTransaction = probe();
+      } catch {
+        inTransaction = true;
+      }
+      if (inTransaction) return true;
+    }
+    return false;
+  }
+
+  /** What a connection the operation uses is told: one probe for it, which the answer lets go of. */
+  #applicationConnection(connection: WeakKey, inTransaction: () => boolean): () => void {
+    this.#connections.set(connection, inTransaction);
+    return () => {
+      this.#connections.delete(connection);
+    };
+  }
+
+  /**
+   * What the code of either of the operation's evaluations tells it of; `fromTransaction` says
+   * whether it is the transaction's own evaluation that the code runs in.
+   */
+  #hooks(fromTransaction: boolean): OperationHooks {
+    return {
+      applicationConnection: (connection, inTransaction) =>
+        this.#applicationConnection(connection, inTransaction),
+      changeSession: (change) => {
+        this.#changeSession(change, fromTransaction);
+      },
+      externalWrite: (sql) => this.#externalWrite(sql),
+    };
+  }
+
+  /**
+   * The transaction committed: what the code asked for inside it is the run's, at once, and its
+   * hold ends with the commit — a call that follows is the run's, not a pending change that
+   * `#transaction` would let go of.
+   */
+  #adopt(): void {
+    this.#inTransaction = false;
+    this.#transactionCommitted = true;
+    if (this.#pending !== undefined) {
+      this.#change = this.#pending;
+      this.#pending = undefined;
     }
   }
 
@@ -330,6 +441,19 @@ class Running {
    * committed, should its answer be lost — or let go of when it throws.
    */
   async #transaction<T>(body: () => Promise<T>): Promise<T> {
+    this.#inTransaction = true;
+    try {
+      return await this.#transacting(body);
+    } finally {
+      // Not committed, what the code asked for inside the transaction is let go of.
+      this.#pending = undefined;
+      this.#inTransaction = false;
+      this.#rolledBack = !this.#transactionCommitted;
+    }
+  }
+
+  /** The transaction itself; its commit hands over its change (`#adopt`), as it lands. */
+  async #transacting<T>(body: () => Promise<T>): Promise<T> {
     const scope = scopeOf(this.#core, this.#timer, this.#session);
     this.#timer.answer(() => {
       if (typeof body !== 'function') {
@@ -342,7 +466,7 @@ class Running {
     });
     const transaction = new Transaction(this.#core.tables);
     const result = await evaluate(
-      transactionEvaluation(scope, transaction, (sql) => this.#externalWrite(sql)),
+      transactionEvaluation(scope, transaction, this.#hooks(true)),
       body,
     );
     // A fault the call's code raised is its outcome, though the code caught it: what the
@@ -355,6 +479,7 @@ class Running {
     this.#timer.answer(() => {
       transaction.check();
       if (!transaction.written) {
+        this.#adopt();
         return;
       }
       const event = this.#core.commit({
@@ -384,6 +509,7 @@ class Running {
         },
       });
       this.#committed = event.revision;
+      this.#adopt();
     });
     return result;
   }
@@ -394,18 +520,18 @@ class Running {
     const args = argumentsOf(this.#call.args);
     try {
       const returned = await timer.run(
-        operationEvaluation(
-          scope,
-          (body) => this.#transaction(body),
-          (sql) => this.#externalWrite(sql),
-        ),
+        operationEvaluation(scope, (body) => this.#transaction(body), this.#hooks(false)),
         // What the operation answers, though it be no promise: one it throws becomes the run's.
         () => Promise.resolve(operation(...args)),
       );
       if (timer.fault !== undefined) {
         throw timer.fault.error;
       }
-      const receipt = { committedRevision: this.#committed, result: operationResult(returned) };
+      const receipt = {
+        committedRevision: this.#committed,
+        result: operationResult(returned),
+        ...(this.#change !== undefined && { sessionChange: this.#change }),
+      };
       // Kept as the operation's code is answered: a storage that fails it is the call's fault.
       timer.answer(() => {
         this.#keep({ receipt });

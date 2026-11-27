@@ -88,6 +88,12 @@ export interface CompileOptions {
    */
   readonly session?: string;
   /**
+   * The module and the export that applies the change of the application's own session a server
+   * operation asks for (`SessionChange` of `./next`): `<specifier>#<export>`. Not given, a change
+   * is logged and left unapplied.
+   */
+  readonly sessionChange?: string;
+  /**
    * The private cache a root renders inside, for a link's prefetch to carry it: a `cacheLife`
    * profile of the application's config, or `<stale>/<revalidate>/<expire>` in seconds. Not given,
    * no root is cached.

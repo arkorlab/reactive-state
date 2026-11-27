@@ -1,4 +1,4 @@
-import { tableReads } from '../server/context.ts';
+import { tableReads, usedConnection } from '../server/context.ts';
 import type { Connection } from './client-plans.ts';
 
 /** What `result` settles to, the receiver's facade where it settles to the receiver. */
@@ -22,6 +22,98 @@ export function callbackOf(first: unknown, rest: readonly unknown[]): unknown {
   const beside = rest.find((each) => typeof each === 'function');
   if (beside !== undefined || typeof first !== 'object' || first === null) return beside;
   return Reflect.get(first, 'callback');
+}
+
+/** Whether `first` is a submittable (`pg`'s `Query`), which answers by its own events. */
+function submittable(
+  first: unknown,
+): first is { once: (...args: unknown[]) => unknown; constructor: unknown } {
+  return (
+    typeof first === 'object' &&
+    first !== null &&
+    typeof Reflect.get(first, 'submit') === 'function' &&
+    typeof Reflect.get(first, 'once') === 'function'
+  );
+}
+
+/** `callback`, wrapped to call `over` first and then run as it was: its receiver, arguments, answer. */
+function calling(callback: unknown, over: () => void): (...answer: unknown[]) => unknown {
+  return function calls(this: unknown, ...answer: unknown[]): unknown {
+    over();
+    return Reflect.apply(callback as (...all: unknown[]) => unknown, this, answer);
+  };
+}
+
+/**
+ * `args` of a `query` call with the callback it names — beside the text, or an object's own —
+ * wrapped once to call `over` just before it runs; the call's arguments as they are where it names
+ * none. A submittable's `end`, or its error as the emitter's monitor sees it, calls `over` instead,
+ * whichever comes first.
+ */
+function overAtAnswer(args: readonly unknown[], over: () => void): readonly unknown[] | undefined {
+  const [first, ...rest] = args;
+  if (submittable(first)) {
+    // First among the `end` listeners, the application's own, registered before this call, too.
+    const prepend: unknown = Reflect.get(first, 'prependOnceListener');
+    if (typeof prepend === 'function') Reflect.apply(prepend, first, ['end', over]);
+    else first.once('end', over);
+    // A statement with a callback of its own answers it, and on an error emits no `end`: pg reads
+    // `callback` as it answers, so a wrapper in its place runs first, as the callback would.
+    const own: unknown = Reflect.get(first, 'callback');
+    let sent = args;
+    if (typeof own === 'function') {
+      Reflect.set(first, 'callback', calling(own, over));
+    } else if (rest.some((each) => typeof each === 'function')) {
+      sent = [
+        first,
+        ...rest.map((each) => (typeof each === 'function' ? calling(each, over) : each)),
+      ];
+    }
+    // An `'error'` listener of ours would count as the application's handler, and swallow an error
+    // nothing else handles: the emitter's error monitor runs beside them and changes nothing. Read
+    // off the emitter's own class, so that no module of `node:events` is imported here; where it
+    // names none, the end alone releases the statement.
+    const emitter: unknown = first.constructor;
+    const monitor: unknown =
+      typeof emitter === 'function' ? Reflect.get(emitter, 'errorMonitor') : undefined;
+    if (typeof monitor === 'symbol') first.once(monitor, over);
+    return sent;
+  }
+  const callback = callbackOf(first, rest);
+  if (typeof callback !== 'function') return undefined;
+  const wrapped = (...answer: unknown[]): unknown => {
+    over();
+    return Reflect.apply(callback, undefined, answer);
+  };
+  if (rest.includes(callback))
+    return [first, ...rest.map((each) => (each === callback ? wrapped : each))];
+  return [{ ...(first as Record<string, unknown>), callback: wrapped }, ...rest];
+}
+
+/**
+ * `run`, a `query` of the application's own tables the operation under way sends with `args`,
+ * counted as under way until PostgreSQL answers it, in whatever form: a promise settling, a
+ * callback about to run, a submittable ending. Run as it is outside an operation.
+ */
+export function underwayQuery(
+  args: readonly unknown[],
+  run: (sent: readonly unknown[]) => unknown,
+): unknown {
+  const over = usedConnection({}, () => true);
+  if (over === undefined) return run(args);
+  const handed = overAtAnswer(args, over);
+  let answered: unknown;
+  try {
+    answered = run(handed ?? args);
+  } catch (error) {
+    over();
+    throw error;
+  }
+  // One reaction for both outcomes, registered before the caller's: whatever awaits it goes on after.
+  // eslint-disable-next-line unicorn/prefer-then-catch -- a `.catch` would run a tick after a rejection
+  if (answered instanceof Promise) void answered.then(over, over);
+  else if (handed === undefined) over();
+  return answered;
 }
 
 /** A rejection with `reason`, which no one need await: it is no unhandled rejection. */

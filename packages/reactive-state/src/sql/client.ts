@@ -1,4 +1,4 @@
-import { tableReads } from '../server/context.ts';
+import { tableReads, underway, usedConnection } from '../server/context.ts';
 import { facadeOf, guardedObjects, refusalOf, retainedReceiver } from './client-objects.ts';
 import {
   answerOf,
@@ -57,6 +57,30 @@ function rebinds(options: unknown): boolean {
   );
 }
 
+/** Whether `connection`, a PGlite, is in a transaction by the backend's own state. */
+function isInTransaction(connection: Connection): boolean {
+  const probe: unknown = Reflect.get(connection, 'isInTransaction');
+  return typeof probe === 'function' && Reflect.apply(probe, connection, []) === true;
+}
+
+/** Keeps as the run's state what `connection`, a PGlite, is in now: in a transaction or not. */
+function noteLeft(connection: Connection): void {
+  const left = isInTransaction(connection);
+  usedConnection(connection, () => left);
+}
+
+/** `answered`, a statement's answer, which keeps the state it left `connection` in as it settles. */
+function afterAnswer(answered: unknown, connection: Connection): unknown {
+  const record = (): void => {
+    noteLeft(connection);
+  };
+  // One reaction for both outcomes, ahead of the caller's: a `.catch` would run a tick after.
+  // eslint-disable-next-line unicorn/prefer-then-catch -- the caller must see the state at once
+  if (answered instanceof Promise) void answered.then(record, record);
+  else record();
+  return answered;
+}
+
 /**
  * `connection`, a PGlite or one of its transactions, its queries in a render noted by `plans`; of a
  * transaction, `writes` ends what an operation's statements in it write.
@@ -64,6 +88,12 @@ function rebinds(options: unknown): boolean {
 function tracked<C extends Connection>(connection: C, plans: Plans, writes?: TransactionWrites): C {
   const transaction = writes !== undefined;
   let client = connection;
+  // What the run's own last statement left the session in: PGlite runs one statement at a time, and
+  // another run's `transaction()` holds its lock, so a statement of this run completes only once
+  // that transaction ended. The session's state read right after it is this run's own; read in the
+  // first reaction to the answer, the caller sees it before it goes on.
+  const leaving = (answered: unknown): unknown =>
+    transaction ? answered : afterAnswer(answered, connection);
   const planner: Planner = {
     owner: connection,
     check: async (explain, values) => {
@@ -92,7 +122,7 @@ function tracked<C extends Connection>(connection: C, plans: Plans, writes?: Tra
     const answered = () => retainedReceiver(called(connection, name, args), connection, client);
     // A transaction's `rollback` leaves nothing it wrote, whatever it answers.
     if (name === 'rollback') writes?.ended('none');
-    const run = () => sentToPostgres(name, args, answered, writes);
+    const run = () => underway(() => leaving(sentToPostgres(name, args, answered, writes)));
     if (name === 'execProtocolRawSync') return plans.outsideContextNow(run);
     return raw || (text && plans.observesContext(`${opening}${sql}`))
       ? plans.outsideContext(run)
@@ -152,7 +182,9 @@ function tracked<C extends Connection>(connection: C, plans: Plans, writes?: Tra
           (error) => thrown !== undefined && thrown.error === error,
         );
       };
-      return tableReads() === undefined ? plans.outsideTransaction(call) : call();
+      return underway(() =>
+        leaving(tableReads() === undefined ? plans.outsideTransaction(call) : call()),
+      );
     },
   };
   const guarded = guardedObjects((name) => refusedCall(name));

@@ -1,6 +1,7 @@
 /**
  * What the host — its build, its command — tells the compile beside the application's sources: how
  * the application reads its own signed-in session, where it signs its users in itself (`--session`),
+ * how it applies a change of that session a server operation asks for (`--session-change`),
  * the private cache a root renders inside for a link's prefetch to carry it (`--prefetch`), and
  * whether anything is shared at all (`--no-share`). Each changes what the compile writes around the
  * components, and nothing of how it reads them: given none, it writes what it wrote before any was.
@@ -26,6 +27,8 @@ export type PrefetchLife =
 export interface HostOptions {
   /** The application's session source (`SessionSource` of `./next`), where it signs in itself. */
   readonly session?: Named | undefined;
+  /** The application's applier of a session change (`SessionChange` of `./next`). */
+  readonly sessionChange?: Named | undefined;
   /** The lifetime of a private root's cache, where its roots are to be carried by a prefetch. */
   readonly prefetch?: PrefetchLife | undefined;
   /**
@@ -50,7 +53,7 @@ export function namedOf(written: string): Named | undefined {
   return at <= 0 || !/^[$A-Z_a-z][\w$]*$/u.test(name) ? undefined : { name, specifier };
 }
 
-/** The output the application's session source is re-exported from, beside the elements. */
+/** The output the application's session source and session-change applier are re-exported from, beside the elements. */
 export const REQUEST_SESSION = 'request-session';
 
 /**
@@ -170,15 +173,24 @@ function prefetchLines(life: PrefetchLife): readonly string[] {
   return ["  'use cache: private';", `  cacheLife(${cacheLifeArgument(life)});`];
 }
 
+/** The line that re-exports the application's `named` export as `as`. */
+function reexport(named: Named, as: string): string {
+  return `export { ${named.name} as ${as} } from ${JSON.stringify(named.specifier)};`;
+}
+
 /**
- * The re-export of the application's session source (`<out>/request-session.ts`), which the
- * elements, the stubs and the route import it by: one name, whatever the application's is.
+ * The re-export of the application's session source and of its applier of a session change
+ * (`<out>/request-session.ts`), which the elements, the stubs and the route import them by: one name
+ * each, whatever the application's is.
  */
-export function emitRequestSession(session: Named, header: string): string {
-  const exported = session.name === 'default' ? 'default' : session.name;
+export function emitRequestSession(
+  host: Pick<HostOptions, 'session' | 'sessionChange'>,
+  header: string,
+): string {
   return [
     header,
-    `export { ${exported} as session } from ${JSON.stringify(session.specifier)};`,
+    ...(host.session === undefined ? [] : [reexport(host.session, 'session')]),
+    ...(host.sessionChange === undefined ? [] : [reexport(host.sessionChange, 'sessionChange')]),
     '',
   ].join('\n');
 }

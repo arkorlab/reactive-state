@@ -36,7 +36,7 @@ import { siteShape } from './site.ts';
 export { authority, requestSession, routeSession, type SessionSource } from './authority.ts';
 export { endSession, sessionKey } from './server-calls.ts';
 export { type AuthorityRefusal, authorityRefusal } from './refusals.ts';
-export { operate, OperationError } from './operate.ts';
+export { operate, OperationError, type SessionChange } from './operate.ts';
 export { type OperationRefusal, operationRefusal } from '../runtime/outcome.ts';
 export type { Elements } from './render.ts';
 

@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { Worker } from 'node:worker_threads';
 
 import { GENERATED, isGeneratedFile, proxyOf } from '../compiler/app-route.ts';
-import { givenHost } from '../compiler/host.ts';
+import { givenHost, type HostInput } from '../compiler/host.ts';
 import { compileApp } from '../compiler/index.ts';
 import {
   isModuleResolutions,
@@ -62,7 +62,7 @@ import { writeCompiled, writeWhole } from './write-compiled.ts';
  *   after it.
  */
 
-export interface ProjectOptions {
+export interface ProjectOptions extends HostInput {
   /** The application's root: where its `package.json` and `next.config` are. */
   readonly projectDir: string;
   /** Where its components are, from the root: `src` unless said. */
@@ -73,12 +73,6 @@ export interface ProjectOptions {
   readonly app?: string;
   /** The module and the export its database is: the compile's `@/db#db` unless said. */
   readonly database?: string;
-  /** The module and the export its own sessions are read by (`--session`), where it has one. */
-  readonly session?: string;
-  /** The private cache its roots render inside for a link's prefetch (`--prefetch`), where said. */
-  readonly prefetch?: string;
-  /** `false` where it shares nothing (`--no-share`). */
-  readonly share?: boolean;
 }
 
 /** Where an application's compile reads and writes, each directory by its absolute path. */
@@ -404,7 +398,7 @@ function inputDigest(layout: ProjectLayout, options: ProjectOptions): string {
     JSON.stringify({
       app: path.relative(layout.projectDir, layout.appDir),
       database: options.database,
-      host: [options.session ?? null, options.prefetch ?? null, options.share ?? null],
+      host: [options.session, options.prefetch, options.share, options.sessionChange],
       out: path.relative(layout.projectDir, layout.outDir),
       proxy: proxy === undefined ? null : path.basename(proxy),
       src: path.relative(layout.projectDir, layout.srcDir),
