@@ -87,6 +87,8 @@ interface Walk {
   readonly visiting: ReadonlySet<Identifier>;
   readonly reads?: ((name: Identifier) => boolean) | undefined;
   readonly resolve?: Resolve | undefined;
+  /** The parameter that holds what it is read as holding at each read (`Target.isHeld`); none else. */
+  readonly holds?: Identifier | undefined;
 }
 
 const CHANGING: ReadonlySet<string> = new Set([
@@ -258,6 +260,7 @@ function writesAt(
     endsInSymbol,
     initializer,
     inside: receiverOf(top),
+    isHeld: walk.holds === declared,
     keys,
     owner: walk.owner,
     resolve: walk.resolve,

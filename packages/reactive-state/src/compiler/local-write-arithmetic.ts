@@ -39,7 +39,7 @@ import {
   anyAliasRead,
   handedTo,
   handsToMutator,
-  isConstIdentifier,
+  holdsInitializer,
   isConstList,
   isWrapping,
   memberChain,
@@ -200,7 +200,7 @@ function checkCompetingWrite(
 /** Whether `soleTop` is the single non-loop write touching `target.keys` in `target.owner`. */
 function isSoleSlotWrite(soleTop: Expression, target: Target): boolean {
   if (
-    !isConstIdentifier(target.declared) ||
+    !holdsInitializer(target) ||
     target.keys.length === 0 ||
     target.keys.includes(undefined) ||
     standsInRepeatableScope(soleTop, target.owner)
@@ -302,7 +302,10 @@ function showsFinite(
  * write repeats, or that adds a page's value, is left to the authority, which refuses a number
  * that is not finite where it meets it: `+=` and `-=` of finite numbers reach no infinity but by a
  * loop of 1e308 steps. A product, a power or a quotient it repeats, or of an operand it cannot
- * read, is refused: a few steps overflow.
+ * read, is refused: a few steps overflow. Of a parameter read as holding an object (`Target.isHeld`)
+ * a sum is taken as the only write of its slot alone: the writes beside it are read of the whole
+ * function, the ones before a replacement too, so a sum that is not alone is not shown to be
+ * the repeated one, and is refused.
  */
 function arithmeticWrite(
   operator: SyntaxKind,
@@ -330,7 +333,7 @@ function arithmeticWrite(
     return CHANGED;
   }
   if (!isSoleSlotWrite(top, target)) {
-    return isAdditive ? put : CHANGED;
+    return isAdditive && target.isHeld !== true ? put : CHANGED;
   }
   const operand = typeof right === 'string' && !isPlus ? Number(right) : right;
   return showsFinite(compute, { isAdditive, left, right: operand }) ? put : CHANGED;

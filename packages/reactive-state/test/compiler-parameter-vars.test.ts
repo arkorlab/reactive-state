@@ -26,6 +26,8 @@ describe('shared factory parameter mutations', () => {
     "function make(value: string) { Array.prototype.includes.call(['safe'], value); return value; } export const payload = make('safe');",
     "function make(value: {id: string}) { function unrelated(value: {bad?: unknown}) { var value; value.bad = new Date(0); } return value; } export const payload = make({id: 'safe'});",
     "function make(value: {id: string}) { function unrelated() { var value: {bad?: unknown} = {}; value.bad = new Date(0); } return value; } export const payload = make({id: 'safe'});",
+    "function make(value: {id: string; bad?: unknown}) { var value; value.id = 'fresh'; return value; } export const payload = make({id: 'safe'});",
+    "function make(value: {id: string}) { var value; value.id = value.id; return value; } export const payload = make({id: 'safe'});",
   ])('keeps fresh reassignment and separate nested bindings: %s', async (module) => {
     const app = await fixture(module);
     apps.push(app);
@@ -33,12 +35,13 @@ describe('shared factory parameter mutations', () => {
     expect(compile(app).refusals).toStrictEqual([]);
   });
 
-  // A member write is an entry of an object only where the object is one the code writes out; a
-  // parameter the function returns is none, whatever is written into it.
+  // A member write is an entry of an object only where the object is one the code writes out: the
+  // call writes it where the parameter stands in the rows above. A constant the call hands is
+  // another name's object, which the `var` of the parameter's name does not make the function's.
   it.each([
-    "function make(value: {id: string; bad?: unknown}) { var value; value.id = 'fresh'; return value; } export const payload = make({id: 'safe'});",
-    "function make(value: {id: string}) { var value; value.id = value.id; return value; } export const payload = make({id: 'safe'});",
-  ])('refuses a member write into a returned parameter: %s', async (module) => {
+    "const shared = {id: 'shared'}; function make(value: {id: string; bad?: unknown}) { var value; value.id = 'fresh'; return value; } export const payload = make(shared);",
+    "function made() { return {id: 'safe'}; } function make(value: {id: string}) { var value; value.id = value.id; return value; } export const payload = make(made());",
+  ])('refuses a member write into a returned parameter the call hands: %s', async (module) => {
     const app = await fixture(module);
     apps.push(app);
 

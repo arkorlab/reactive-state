@@ -30,6 +30,12 @@ import { globalPath } from './global-answers.ts';
 export interface Given {
   (fn: Answering, index: number): readonly Expression[];
   readonly omits?: ((index: number) => boolean) | undefined;
+  /**
+   * What the call writes where the parameter at `index` stands: of a call of the function's name
+   * that spreads nothing, its argument there. None of `call`, `apply` or `bind`, whose arguments
+   * the compile reads as what any parameter may be given, nor past a spread.
+   */
+  readonly written?: ((index: number) => Expression | undefined) | undefined;
 }
 
 /**
@@ -44,7 +50,11 @@ export type Through =
 
 /** What `call` gives each parameter of what it calls, by its place (`givenAt`). */
 export function givenOf(call: CallExpression): Given {
-  return passedAs(call.arguments);
+  const passed = call.arguments;
+  const isPlaced = !passed.some((each) => isSpreadElement(each));
+  return Object.assign(passedAs(passed), {
+    written: (index: number) => (isPlaced ? passed[index] : undefined),
+  });
 }
 
 /** What `passed`, the arguments of a call by place, give each parameter (`Given`). */
