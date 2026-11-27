@@ -1,4 +1,5 @@
 import type { Json, OperationCall, OperationReceipt } from '../program.ts';
+import { argumentsOf } from '../runtime/operation-arguments.ts';
 import { evaluate, type ExternalWriteEnd } from '../server/context.ts';
 import {
   HTTP_CONFLICT,
@@ -16,7 +17,6 @@ import {
 } from './evaluation.ts';
 import type { Core, Session } from './model.ts';
 import { operationResult } from './operation-results.ts';
-import { argumentsOf } from './requests.ts';
 import { Transaction } from './transaction.ts';
 import { scopeOf } from './views.ts';
 
@@ -89,6 +89,8 @@ const SHOWN_STATEMENT = 80;
 
 /** What an operation is, which one operation id names: the function, and what it was sent. */
 function fingerprintOf(call: OperationCall): string {
+  // The preparation is left out: it is the application server's own context, as the session is,
+  // which keys the record of an operation rather than fingerprinting it.
   return digest(['operation', call.module, call.name, call.args]);
 }
 
@@ -327,6 +329,14 @@ export class Running {
         this.#changeSession(change, fromTransaction);
       },
       externalWrite: (sql) => this.#externalWrite(sql),
+      prepared: () => {
+        if (this.#timer.settled) {
+          throw new TypeError(
+            'prepared() was read after the server operation that started it had settled or timed out: its preparation belongs to that call alone, and code that outlives it is not handed it.',
+          );
+        }
+        return this.#call.prepared;
+      },
     };
   }
 

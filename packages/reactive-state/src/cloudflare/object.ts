@@ -422,7 +422,8 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
 
   /**
    * One server operation, as it crossed the RPC: the fields an operation names alone
-   * (`operationCallOf`), its arguments each a form's entries or JSON.
+   * (`operationCallOf`), its arguments each a form's entries or JSON, and the application's
+   * preparation of it (`prepared`) as JSON, which the object keeps nowhere.
    */
   async operate(session: SessionId, call: OperationCall): Promise<Result<OperationReceipt>> {
     return this.#committing(async () => this.#engine.operate(session, operationCallOf(call)));

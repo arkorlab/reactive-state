@@ -304,8 +304,15 @@ export function httpClient(options: HttpClientOptions): AuthorityClient {
       return answer.ok ? { ok: true, value: null } : answer;
     },
     // Only the operation's own fields, whatever else the object handed in carries.
-    operate: async (session, { args, build, module, name, operationId }) => {
-      const body = { args, build, module, name, operationId };
+    operate: async (session, { args, build, module, name, operationId, prepared }) => {
+      const body = {
+        args,
+        build,
+        module,
+        name,
+        operationId,
+        ...(prepared !== undefined && { prepared }),
+      };
       return json<OperationReceipt>('/api/operate', { body, method: 'POST', session });
     },
     publicView: async (table, id) => {

@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import { MAX_CARRIED_BYTES } from '../../src/authority/json-size.ts';
 import {
-  argumentsOf,
   fieldOperationOf,
   operationCallOf,
   rootOf,
   viewRequestOf,
 } from '../../src/authority/requests.ts';
+import { argumentsOf } from '../../src/runtime/operation-arguments.ts';
 
 /** Validated transport JSON is copied without consulting inherited serialization hooks. */
 describe('request normalization without inherited toJSON', () => {

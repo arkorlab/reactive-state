@@ -30,6 +30,8 @@ export interface HostOptions {
   readonly session?: Named | undefined;
   /** The application's applier of a session change (`SessionChange` of `./next`). */
   readonly sessionChange?: Named | undefined;
+  /** The application's hook that prepares an operation (`OperationPreparation` of `./next`). */
+  readonly prepareOperation?: Named | undefined;
   /** The lifetime of a private root's cache, where its roots are to be carried by a prefetch. */
   readonly prefetch?: PrefetchLife | undefined;
   /**
@@ -240,18 +242,21 @@ function reexport(named: Named, as: string): string {
 }
 
 /**
- * The re-export of the application's session source and of its applier of a session change
- * (`<out>/request-session.ts`), which the elements, the stubs and the route import them by: one name
- * each, whatever the application's is.
+ * The re-export of the application's session source, of its applier of a session change and of its
+ * hook that prepares an operation (`<out>/request-session.ts`), which the elements, the stubs and
+ * the route import them by: one name each, whatever the application's is.
  */
 export function emitRequestSession(
-  host: Pick<HostOptions, 'session' | 'sessionChange'>,
+  host: Pick<HostOptions, 'prepareOperation' | 'session' | 'sessionChange'>,
   header: string,
 ): string {
   return [
     header,
     ...(host.session === undefined ? [] : [reexport(host.session, 'session')]),
     ...(host.sessionChange === undefined ? [] : [reexport(host.sessionChange, 'sessionChange')]),
+    ...(host.prepareOperation === undefined
+      ? []
+      : [reexport(host.prepareOperation, 'prepareOperation')]),
     '',
   ].join('\n');
 }

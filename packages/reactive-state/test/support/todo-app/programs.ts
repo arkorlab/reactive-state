@@ -7,6 +7,7 @@ import {
   type OperationModule,
 } from '../../../src/program.ts';
 import { requireUser } from '../../../src/server/index.ts';
+import * as prepared from './actions/prepared.ts';
 import * as session from './actions/session.ts';
 import * as todos from './actions/todos.ts';
 import { BUILD, program, textOf } from './build.ts';
@@ -292,6 +293,7 @@ const programs: readonly ComponentProgram[] = [
 
 /** Every server operation module of the test application, by its id. */
 const operations: Readonly<Record<string, OperationModule>> = {
+  'actions/prepared': prepared,
   'actions/session': session,
   'actions/todos': todos,
 };

@@ -8,6 +8,7 @@ import {
   PROTOCOL_VERSION,
   type RenderScope,
 } from '../../src/program.ts';
+import * as prepared from './app/actions/prepared.ts';
 import * as session from './app/actions/session.ts';
 import * as todos from './app/actions/todos.ts';
 import { requireUser } from './app/auth.ts';
@@ -329,6 +330,7 @@ export const programs: readonly ComponentProgram[] = [
 
 /** Every server operation module of the test application, by its id. */
 export const operations: Readonly<Record<string, OperationModule>> = {
+  'actions/prepared': prepared,
   'actions/session': session,
   'actions/todos': todos,
 };

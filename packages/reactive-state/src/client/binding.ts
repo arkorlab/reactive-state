@@ -165,8 +165,15 @@ export function bindingClient(
     login: async (user) => call((authority) => authority.login(user)),
     logout: async (session) => call((authority) => authority.logout(crossing(session))),
     endSession: async (key) => call((authority) => authority.endSession(key)),
-    operate: async (session, { args, build, module, name, operationId }) => {
-      const call$ = { args, build, module, name, operationId };
+    operate: async (session, { args, build, module, name, operationId, prepared }) => {
+      const call$ = {
+        args,
+        build,
+        module,
+        name,
+        operationId,
+        ...(prepared !== undefined && { prepared }),
+      };
       return call((authority) => authority.operate(crossing(session), call$));
     },
     publicView: async (table, id) => call((authority) => authority.publicView(table, id)),

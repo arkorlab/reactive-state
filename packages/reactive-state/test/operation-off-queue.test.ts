@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { OperationCall, RenderScope } from '../src/program.ts';
+import { prepared } from '../src/server/index.ts';
 import { database, table, text as field } from '../src/server/schema.ts';
 import {
   inPglite,
@@ -143,6 +144,24 @@ describe.each([
       expect(answers[1]).toStrictEqual({ ...answers[0], deduplicated: true });
     },
   );
+
+  it('reads its preparation', { timeout: TEST_TIMEOUT_MS }, async () => {
+    const setup = await open();
+    const { engine, session } = await listing(setup, {
+      read: async (): Promise<unknown> => {
+        await setup.orm.select().from(tasks);
+        return prepared() ?? null;
+      },
+    });
+
+    const answered = await settled(
+      engine.operate(session, { ...callOf('read'), prepared: { account: 'octocat' } }),
+    );
+    const none = await settled(engine.operate(session, callOf('read')));
+
+    expect(answered.result).toStrictEqual({ account: 'octocat' });
+    expect(none.result).toBeNull();
+  });
 
   it('answers a refusal once to both calls of one id', { timeout: TEST_TIMEOUT_MS }, async () => {
     const setup = await open();

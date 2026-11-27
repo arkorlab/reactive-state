@@ -217,6 +217,23 @@ describe('bindingClient', () => {
     expect(events.mock.calls).toStrictEqual([['s1', 'subscription']]);
   });
 
+  it('sends the preparation of an operation where it has one, and no field where it has none', async () => {
+    const refused = { code: 'FORBIDDEN', message: 'No.', ok: false, status: 403 } as const;
+    const operate = vi.fn<AuthorityClient['operate']>().mockResolvedValue(refused);
+    const client = bindingClient(namespaceOf(stubOf({ operate })).namespace);
+    const extra = { onCommit: vi.fn<() => void>() };
+
+    await client.operate('s1', { ...CALL, ...extra, prepared: { account: 'octocat' } });
+    await client.operate('s1', { ...CALL, ...extra, prepared: null });
+    await client.operate('s1', { ...CALL, ...extra });
+
+    expect(operate.mock.calls).toStrictEqual([
+      ['s1', { ...CALL, prepared: { account: 'octocat' } }],
+      ['s1', { ...CALL, prepared: null }],
+      ['s1', CALL],
+    ]);
+  });
+
   it('keeps guard admission optional across the RPC request and answer boundary', async () => {
     const guardRoute = vi
       .fn<AuthorityClient['guardRoute']>()

@@ -84,6 +84,11 @@ export interface Evaluation {
    */
   readonly changeSession?: ((change: Json) => void) | undefined;
   /**
+   * What the application's own server prepared for the operation (`prepared`): the JSON it sent with
+   * the call, or none where it sent none. An operation's alone.
+   */
+  readonly prepared?: (() => Json | undefined) | undefined;
+  /**
    * Told of a connection of the application's own tables the operation uses (`followDrizzle`'s
    * PGlite, a connection checked out of its pool), with a probe of whether it is in a transaction
    * now: one connection is one probe however often it is told. What it answers unregisters the
@@ -252,6 +257,21 @@ async function endedBy(
  */
 export function sessionChanger(): ((change: Json) => void) | undefined {
   return storage().getStore()?.evaluation.changeSession;
+}
+
+/**
+ * What answers the preparation of the operation under way (`Evaluation.prepared`): none outside an
+ * operation — a render, a shared view, a route's middleware, or no evaluation at all. In an
+ * evaluation that has settled it is `'settled'`: code a library runs in the async context of an
+ * earlier run — a timer the operation left behind, a callback of a pooled socket — is not handed
+ * that run's preparation.
+ */
+export function preparation(): (() => Json | undefined) | 'settled' | undefined {
+  const slot = storage().getStore();
+  if (slot?.evaluation.prepared === undefined) {
+    return undefined;
+  }
+  return slot.open ? slot.evaluation.prepared : 'settled';
 }
 
 /**

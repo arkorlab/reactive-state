@@ -172,6 +172,36 @@ describe('httpClient', () => {
     expect(after.status).toBe('unauthenticated');
   });
 
+  it('sends the preparation of an operation, which the operation reads', async () => {
+    const authority = await start();
+    const client = httpClient({ token: authority.token, url: authority.url });
+    const alice = await signIn(client, 'alice');
+    const call = {
+      args: [],
+      build: BUILD,
+      module: 'actions/prepared',
+      name: 'echo',
+    };
+
+    const prepared = valueOf(
+      await client.operate(alice, {
+        ...call,
+        operationId: 'http-prepared',
+        prepared: { n: [1, 2] },
+      }),
+    );
+    const none = valueOf(await client.operate(alice, { ...call, operationId: 'http-none' }));
+    const large = await client.operate(alice, {
+      ...call,
+      operationId: 'http-large',
+      prepared: 'x'.repeat(4096),
+    });
+
+    expect(prepared.result).toStrictEqual({ n: [1, 2] });
+    expect(none.result).toBeNull();
+    expect(large).toMatchObject({ code: 'TOO_LARGE', ok: false, status: 413 });
+  });
+
   it('answers the authority’s refusals as failures, with its status, code and message', async () => {
     const authority = await start();
     const client = httpClient({ token: authority.token, url: authority.url });
