@@ -385,6 +385,12 @@ const TOLD = [
     options: { prefetch: '30/60/300' },
   },
   {
+    compile: { prefetchCache: 'private' },
+    host: NOTHING,
+    id: 'prefetch-cache-private',
+    options: { prefetchCache: 'private' },
+  },
+  {
     compile: { database: '@/data#store' },
     host: NOTHING,
     id: 'database',
@@ -394,12 +400,14 @@ const TOLD = [
     compile: {
       database: '@/data#store',
       prefetch: '30/60/300',
+      prefetchCache: 'remote',
       session: '@/session#session',
       sessionChange: '@/session#applySessionChange',
       share: false,
     },
     host: {
       prefetch: { expire: 300, revalidate: 60, stale: 30 },
+      prefetchCache: 'remote',
       session: { name: 'session', specifier: '@/session' },
       sessionChange: { name: 'applySessionChange', specifier: '@/session' },
       share: false,
@@ -408,6 +416,7 @@ const TOLD = [
     options: {
       database: '@/data#store',
       prefetch: '30/60/300',
+      prefetchCache: 'remote',
       session: '@/session#session',
       sessionChange: '@/session#applySessionChange',
       share: false,
