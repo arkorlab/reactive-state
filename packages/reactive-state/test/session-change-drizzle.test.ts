@@ -433,6 +433,40 @@ describe('a session change asked in PGlite’s own state', () => {
 });
 
 describe('a session change asked beside another run’s PGlite transaction', () => {
+  it('is taken by a run that is in none itself', { timeout: TEST_TIMEOUT_MS }, async () => {
+    const setup = await openedWith({ tasks }, DDL);
+    const used = Promise.withResolvers<undefined>();
+    const open = Promise.withResolvers<undefined>();
+    const gate = Promise.withResolvers<undefined>();
+    const { engine, session } = await engineOf(setup, (_props, $) => $.h('p', null, 'shown'), {
+      [MODULE]: {
+        holder: async (): Promise<void> => {
+          await used.promise;
+          await setup.orm.transaction(async (tx) => {
+            await tx.select().from(tasks);
+            open.resolve(undefined);
+            await gate.promise;
+          });
+        },
+        other: async (): Promise<string | null> => {
+          await setup.orm.select().from(tasks);
+          used.resolve(undefined);
+          await open.promise;
+          const refused = refusalOf();
+          gate.resolve(undefined);
+          return refused;
+        },
+      },
+    });
+
+    const holding = engine.operate(session, callOf('holder'));
+    const other = await engine.operate(session, callOf('other'));
+    await holding;
+
+    expect(other.result).toBeNull();
+    expect(other.sessionChange).toStrictEqual({ activeTeam: 'inside' });
+  });
+
   it(
     'is still refused by a run in its own raw BEGIN, and taken after its ROLLBACK',
     { timeout: TEST_TIMEOUT_MS },

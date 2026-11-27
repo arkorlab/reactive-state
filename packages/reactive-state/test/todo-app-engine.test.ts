@@ -1,5 +1,9 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
 import { and, eq } from 'drizzle-orm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 
 import type { CommitEvent, Engine } from '../src/authority/index.ts';
 import {
@@ -10,8 +14,8 @@ import {
   type Value,
 } from '../src/program.ts';
 import { clientOf, clientsIn, textOf } from './support/frames.ts';
-import { orm } from './support/todo-app/db.ts';
-import { opened } from './support/todo-app/engine.ts';
+import { connected, orm } from './support/todo-app/db.ts';
+import { opened, reopened } from './support/todo-app/engine.ts';
 import {
   ADD_ESTIMATE,
   application,
@@ -351,5 +355,24 @@ describe('the test application of Drizzle in D1, in an engine', () => {
     // Until the log is read, the render the engine holds is the one it answers.
     expect(before.frame.fields[fieldKey(todoRow('p1', 't1').title)]).toBe('一覧を作る');
     expect(after.frame.fields[fieldKey(todoRow('p1', 't1').title)]).toBe('Written apart');
+  });
+
+  it('reopens an authority’s file over the database connected, made anew by none', async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), 'reactive-state-todo-app-'));
+    onTestFinished(async () => {
+      await rm(dir, { force: true, recursive: true });
+    });
+    const filename = path.join(dir, 'authority.sqlite');
+    const first = await opened({ filename });
+    const { sessionId } = await first.login('alice');
+    const database = connected();
+    await orm.update(todos).set({ title: 'Kept' }).where(eq(todos.id, 't1'));
+    await first.close();
+
+    const again = await reopened({ filename });
+    const rendered = await render(again, sessionId);
+
+    expect(connected()).toBe(database);
+    expect(rendered.frame.fields[fieldKey(todoRow('p1', 't1').title)]).toBe('Kept');
   });
 });
