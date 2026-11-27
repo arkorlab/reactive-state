@@ -35,6 +35,9 @@ const ALONE_LOCK = 0x72_73_73_64;
 const CLOSE_MS = 5000;
 /** The most of what a server said that a start's refusal quotes. */
 const QUOTED = 500;
+/** SQLite's code of a lock another connection holds, and the step between it and its extended codes. */
+const BUSY = 5;
+const EXTENDED_STEP = 256;
 /** What an operator runs of a log a role may not make. */
 const OWNER_RUNS =
   'the statements of `followDrizzle(schema).captureSql()` as the role that owns the tables';
@@ -143,6 +146,32 @@ async function seedOnce<S>(
   await connection.query(`INSERT INTO ${logOf(namespace).seeded} DEFAULT VALUES`, []);
 }
 
+/**
+ * Takes a directory's lock, which is held until the process ends or `release` is called. PGlite is
+ * one process's: a second that opened the same directory would write over what the first keeps in
+ * memory, so that neither could open it again. A lock of SQLite's, of a file beside the directory,
+ * which the system lets go of as the process ends, however it ends. One of this process's own
+ * earlier evaluation of the application's `db` module (a hot reload) holds it as well.
+ */
+async function lockOf(directory: string): Promise<() => void> {
+  const { DatabaseSync } = await import('node:sqlite');
+  const lock = new DatabaseSync(`${directory}.lock`);
+  try {
+    lock.exec('BEGIN EXCLUSIVE');
+  } catch (error) {
+    lock.close();
+    const code: unknown = error instanceof Error ? Reflect.get(error, 'errcode') : undefined;
+    if (typeof code !== 'number' || code % EXTENDED_STEP !== BUSY) throw error;
+    throw new Error(
+      `PGlite's directory ${directory} is open already, by another process or by an earlier evaluation of this module, and it serves one at a time. End the other (a \`reactive dev\` still running?), or name another directory with \`PGLITE_DIR\`, or set \`DATABASE_URL\` to a server both reach.`,
+      { cause: error },
+    );
+  }
+  return () => {
+    if (lock.isOpen) lock.close();
+  };
+}
+
 /** PGlite, of one connection: what the store reads through, and `LISTEN` holds, besides. */
 async function inProcess<S extends Readonly<Record<string, unknown>>>(
   schema: S,
@@ -154,13 +183,32 @@ async function inProcess<S extends Readonly<Record<string, unknown>>>(
     import('drizzle-orm/pglite/migrator'),
   ]);
   const directory = process.env['PGLITE_DIR'] ?? PGLITE_DIR;
+  // A URL of PGlite's (`memory://`) is of no directory, and one open of it is of its own.
+  const onDisk = !directory.includes('://');
   // PGlite makes its own directory, not the directories above it.
-  if (!directory.includes('://')) mkdirSync(path.dirname(directory), { recursive: true });
-  const pg = await PGlite.create(directory);
+  if (onDisk) mkdirSync(path.dirname(directory), { recursive: true });
+  const release = onDisk
+    ? await lockOf(directory)
+    : () => {
+        // Of no directory, no lock.
+      };
+  let pg: InstanceType<typeof PGlite>;
+  try {
+    pg = await PGlite.create(directory);
+  } catch (error) {
+    release();
+    throw error;
+  }
   const orm = drizzle({ client: follow.client(pg), schema });
   return {
     host: {
-      close: () => pg.close(),
+      close: async () => {
+        try {
+          await pg.close();
+        } finally {
+          release();
+        }
+      },
       listen: async (told) => {
         await pg.listen(follow.channel, told);
       },
