@@ -26,6 +26,11 @@ import { compilerApplications } from './support/compiler-applications.ts';
  * global object, which has no getter to run, and are never absent. A prop only the site read beside
  * one of them (`{ credential, optional: undefined }`) is not sent to the browser.
  *
+ * A prefix `-` or `+` of a numeric literal, or of `Infinity` or `NaN`, converts nothing, `!` of an
+ * inert value or a name shown initialised is a boolean, and `typeof` of one a string, none of them
+ * running anything: `{ credential, offset: -1 }` sends no prop. `-label` and `+label` convert their
+ * operand, which calls its `valueOf` or `toString`, and are kept.
+ *
  * A name the code does not show initialised is kept, since reading it may run or throw: any other
  * global, whose getter may run or which may be absent; a name nothing declares; a `let`, a `const`
  * or a class read before its declaration; one of those three globals where a declaration of the
@@ -85,6 +90,11 @@ describe('a constant only a site reads, of names the code shows initialised', ()
       declaration: 'const shown = { credential: label, ratio: Infinity };',
       id: 'shown + selected',
       what: 'of a prop and `Infinity`, which is not sent',
+    },
+    {
+      declaration: 'const shown = { credential: label, offset: -1 };',
+      id: 'shown + selected',
+      what: 'of a prop and `-1`, which is not sent',
     },
   ])('is left out of the Client Component: $what', async ({ declaration, id }) => {
     const app = await application(siteOnly(declaration, id));
@@ -180,6 +190,18 @@ const SHOWN: readonly Row[] = [
     body: 'const unused = undefined;',
     id: 'undefined-imported',
   },
+  { body: 'const unused = -1;', id: 'negative-number' },
+  { body: 'const unused = +2;', id: 'positive-number' },
+  { body: 'const unused = -Infinity;', id: 'negated-infinity' },
+  { body: 'const unused = +NaN;', id: 'positive-nan' },
+  {
+    body: 'const unused = { credential: source, offset: -1 };',
+    id: 'prop-beside-a-negative-number',
+  },
+  { body: 'const unused = !source;', id: 'not-a-parameter' },
+  { body: 'const unused = !{ value: [source, -1] };', id: 'not-an-inert-value' },
+  { body: 'const unused = typeof source;', id: 'typeof-a-parameter' },
+  { body: 'const unused = [typeof { value: source }, !undefined];', id: 'typeof-an-inert-value' },
 ];
 
 /** Names the code does not show initialised, and reads that are more than a name's: kept. */
@@ -189,6 +211,22 @@ const KEPT: readonly Row[] = [
   { body: 'const unused = nothingDeclaresThis;', id: 'undeclared-name' },
   { body: 'const unused = Math;', id: 'another-global-of-the-global-object' },
   { body: 'const unused = [undefined, Math];', id: 'undefined-beside-another-global' },
+  { body: 'const unused = -source;', id: 'negated-parameter' },
+  { body: 'const unused = +source;', id: 'positive-parameter' },
+  { body: 'const unused = +1n;', id: 'positive-bigint' },
+  { body: 'const unused = !Math;', id: 'not-another-global' },
+  { body: 'const unused = typeof Math;', id: 'typeof-another-global' },
+  { body: 'const unused = void 0;', id: 'void-zero' },
+  { body: 'const unused = ++rest;', id: 'increment' },
+  {
+    body: 'const Infinity = make(); const unused = -Infinity;',
+    id: 'negated-infinity-declared-earlier',
+  },
+  {
+    before: 'const Infinity = { valueOf: () => 1 };',
+    body: 'const unused = -Infinity;',
+    id: 'negated-infinity-of-the-module',
+  },
   { body: 'const unused = undefined; const undefined = make();', id: 'undefined-declared-later' },
   { body: 'const unused = NaN; let NaN = 1;', id: 'nan-declared-later' },
   { before: 'const Infinity = 1;', body: 'const unused = Infinity;', id: 'infinity-of-the-module' },

@@ -2,6 +2,7 @@ import {
   type Block,
   type Expression,
   type Identifier,
+  type PrefixUnaryExpression,
   isArrayLiteralExpression,
   isArrowFunction,
   isBlock,
@@ -10,9 +11,12 @@ import {
   isFunctionDeclaration,
   isFunctionExpression,
   isIdentifier,
+  isNumericLiteral,
   isObjectLiteralExpression,
+  isPrefixUnaryExpression,
   isPropertyAssignment,
   isSourceFile,
+  isTypeOfExpression,
   isVariableStatement,
   NodeFlags,
   type SourceFile,
@@ -46,6 +50,9 @@ const INERT: ReadonlySet<SyntaxKind> = new Set([
  */
 const INERT_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN', 'undefined']);
 
+/** The inert globals that are numbers: a prefix `-` or `+` of one converts nothing that runs. */
+const NUMBER_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN']);
+
 /** Whether a read of the name is one the code shows initialised where a statement runs. */
 type Shown = (name: string) => boolean;
 
@@ -58,6 +65,7 @@ type Shown = (name: string) => boolean;
  * or where nothing declares it. A name the code shows initialised is read without running or
  * throwing anything, alone or within a container, and is left out with the rest; so is a read of
  * `undefined`, `NaN` or `Infinity` where no declaration of the name is in the file (`INERT_GLOBALS`).
+ * So are the operators that run nothing of their operand's: see `inertChildren`.
  */
 export function canOmit(statement: VariableStatement): boolean {
   // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
@@ -194,6 +202,27 @@ function readsInertGlobal(name: Identifier): boolean {
   return INERT_GLOBALS.has(name.text) && globalOf(name) === name.text;
 }
 
+/**
+ * The value a prefix operator evaluates, where applying the operator runs nothing: `!`, whose
+ * `ToBoolean` calls nothing of any value; and `-` or `+` of a numeric literal, or of `Infinity` or
+ * `NaN` that no declaration gives, which are numbers already. Any other operand is converted,
+ * which calls its `valueOf` or `toString` (`-label`, `+label`), and `+` of a bigint throws. The
+ * increments and decrements assign, and `~` converts: none of them is inert.
+ */
+function prefixChildren(value: PrefixUnaryExpression): readonly Expression[] | undefined {
+  if (value.operator === SyntaxKind.ExclamationToken) {
+    return [value.operand];
+  }
+  if (value.operator !== SyntaxKind.MinusToken && value.operator !== SyntaxKind.PlusToken) {
+    return undefined;
+  }
+  const operand = unwrapped(value.operand);
+  return isNumericLiteral(operand) ||
+    (isIdentifier(operand) && NUMBER_GLOBALS.has(operand.text) && readsInertGlobal(operand))
+    ? []
+    : undefined;
+}
+
 /** The values an inert expression evaluates; none where another evaluation must be preserved. */
 function inertChildren(value: Expression, shown: Shown): readonly Expression[] | undefined {
   if (INERT.has(value.kind) || isArrowFunction(value) || isFunctionExpression(value)) {
@@ -201,6 +230,13 @@ function inertChildren(value: Expression, shown: Shown): readonly Expression[] |
   }
   if (isIdentifier(value)) {
     return shown(value.text) || readsInertGlobal(value) ? [] : undefined;
+  }
+  if (isPrefixUnaryExpression(value)) {
+    return prefixChildren(value);
+  }
+  // `typeof` answers a string of what its operand is, and runs nothing of it.
+  if (isTypeOfExpression(value)) {
+    return [value.expression];
   }
   if (isArrayLiteralExpression(value)) {
     return value.elements;
