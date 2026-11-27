@@ -17,7 +17,7 @@ import {
   REFUSED,
   refusedCall,
 } from './client-plans.ts';
-import { sentToPostgres, textOf, TransactionWrites } from './client-writes.ts';
+import { endsTransaction, sentToPostgres, textOf, TransactionWrites } from './client-writes.ts';
 import type { Followed } from './keys.ts';
 import { boundOf } from './serialized.ts';
 
@@ -205,7 +205,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       writes = new TransactionWrites();
     }
     if (ROLLBACK.test(statement.text)) {
-      writes?.ended('none');
+      writes?.undone();
       writes = undefined;
     }
     if (!COMMIT.test(statement.text)) return run();
@@ -242,6 +242,8 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       return sessionRefused(first, rest, text);
     }
     const args = [first, ...rest];
+    const sent = textOf(first);
+    if (checkedOut && typeof sent === 'string' && endsTransaction(sent)) writes?.endedUnseen();
     return sentToPostgres('query', args, () => outside('query', args), writes);
   };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
@@ -271,7 +273,8 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     // Closed in its transaction, the connection leaves nothing of it; one that ended unseen may have.
     const status = statusOf(connection);
     const closedIn = typeof status === 'string' && status !== IDLE;
-    writes?.ended(closedIn ? 'none' : 'unknown');
+    if (closedIn) writes?.undone();
+    else writes?.ended('unknown');
     writes = undefined;
     return called(connection, 'release', inTransaction(connection) ? [true] : args);
   };

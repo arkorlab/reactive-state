@@ -79,6 +79,21 @@ export function readsOnly(sql: string): boolean {
   );
 }
 
+/** The words a statement that ends the transaction under way begins with. */
+const ENDINGS: ReadonlySet<string> = new Set(['abort', 'commit', 'end', 'rollback']);
+
+/**
+ * Whether a statement of `sql` ends the transaction under way, however the session reads its
+ * strings: the forms `COMMIT;`, `END` or `COMMIT AND CHAIN`, which a client that reads a whole
+ * `COMMIT` and `ROLLBACK` does not see end it.
+ */
+export function endsTransaction(sql: string): boolean {
+  return [true, false].some(
+    (conforming) =>
+      readOf(sql, conforming)?.some((tokens) => ENDINGS.has(tokens[0] ?? '')) === true,
+  );
+}
+
 /** Whether `sql` is one statement, however the session reads its strings. */
 function soleStatement(sql: string): boolean {
   return [true, false].every((conforming) => readOf(sql, conforming)?.length === 1);
@@ -112,6 +127,8 @@ export function refusedByPostgres(error: unknown): boolean {
  */
 export class TransactionWrites {
   readonly #ends: ((ended: ExternalWriteEnd) => void)[] = [];
+  /** Whether the transaction ended, or may have, in a form its client did not read. */
+  #unseen = false;
 
   /** What `settled` settles to, as it ends the transaction's writes (`through`). */
   async #awaited(
@@ -143,6 +160,20 @@ export class TransactionWrites {
   /** Ends each write of the transaction, as it ended. */
   ended(how: ExternalWriteEnd): void {
     for (const end of this.#ends.splice(0)) end(how);
+  }
+
+  /** Notes that the transaction ended, or may have, in a form its client did not read (`COMMIT;`, `END`). */
+  endedUnseen(): void {
+    this.#unseen = true;
+  }
+
+  /**
+   * Ends each write of the transaction as undone — rolled back, or closed in as its connection was
+   * given back — unless it ended unseen before: what it wrote may have landed, which no later
+   * rollback of the connection's undoes.
+   */
+  undone(): void {
+    this.ended(this.#unseen ? 'unknown' : 'none');
   }
 
   /**
