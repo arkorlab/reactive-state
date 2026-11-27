@@ -114,6 +114,12 @@ const scalars: readonly Row[] = [
     reader: false,
   },
   {
+    id: 'number-parameter-asserted-and-added-to',
+    source: 'function frames(count: number) { (count as number) += 1; return String(count); }',
+    invocation: 'frames(value.length)',
+    reader: false,
+  },
+  {
     id: 'string-or-null-given-a-default',
     source: "function frames(text: string | null) { text ??= 'fixed'; return String(text); }",
     invocation: 'frames(value)',
@@ -232,6 +238,27 @@ const lists: readonly Row[] = [
     source:
       'function frames(error: Error, text: string) { const pair = [[error]]; [text] = pair as never; return String(text); }',
     invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'asserted-target-given-a-member',
+    source:
+      "function frames(bag: { errors: Error[] }) { let text = ''; (text as unknown) = bag.errors; return String(text); }",
+    invocation: 'frames({ errors: [new Error("ours")] })',
+    reader: true,
+  },
+  {
+    id: 'asserted-target-of-a-logical-assignment',
+    source:
+      "function frames(bag: { errors: Error[] }) { let text = ''; (text as unknown) ??= bag.errors; return String(text); }",
+    invocation: 'frames({ errors: [new Error("ours")] })',
+    reader: true,
+  },
+  {
+    id: 'asserted-target-in-a-pattern-given-a-member',
+    source:
+      "function frames(bag: { errors: Error[] }) { let text = ''; [(text as unknown)] = [bag.errors]; return String(text); }",
+    invocation: 'frames({ errors: [new Error("ours")] })',
     reader: true,
   },
   {
@@ -462,6 +489,12 @@ const taken: readonly Row[] = [
     source:
       "function frames(count: number, flag: boolean) { let text = ''; text = flag ? ('fixed' as string) : (String(count + 1) + '!' as string); return String(text); }",
     invocation: "frames(value.length, value === 'done')",
+    reader: false,
+  },
+  {
+    id: 'asserted-target-given-a-literal',
+    source: "function frames() { let text = ''; (text as string) = 'fixed'; return String(text); }",
+    invocation: 'frames()',
     reader: false,
   },
   {

@@ -71,7 +71,8 @@ export function mayBecomeArray(binding: FrameBinding): boolean {
  * - any other value (a call's result, a member, an element, `await`, `new`) is what the written type
  *   vouches for, unless an assertion stands over it: then nothing says it is no list, and it is
  *   answered as a value that is not known (`undefined`), which refuses. An assertion over the list a
- *   destructuring assignment takes the value from stands over it as well (`assertedWrite`).
+ *   destructuring assignment takes the value from, or over the target it is written to, stands over
+ *   it as well (`assertedWrite`).
  */
 function shownOf(binding: FrameBinding): readonly (Expression | undefined)[] {
   const given = givenValues(binding);
@@ -92,16 +93,33 @@ function shownOf(binding: FrameBinding): readonly (Expression | undefined)[] {
 }
 
 /**
- * Whether a type assertion stands over the list a destructuring assignment takes a written value from
- * (`[text] = [value] as unknown as [string]`): `givenValues` keeps the element alone, so the cast is
- * looked for above it, through the parentheses, `!` and `satisfies` that wrap the list too. A value
- * written as a whole (`text = value`) has no list above it.
+ * Whether a type assertion stands between a written value and the name it is written to, other than
+ * over the value itself (`withoutWrapping` reads that): over the list a destructuring assignment takes
+ * the value from (`[text] = [value] as unknown as [string]`: `givenValues` keeps the element alone, so
+ * the cast is looked for above it, through the parentheses, `!` and `satisfies` that wrap the list
+ * too), or over the target (`(text as unknown) = value`: the name keeps its written type, and holds
+ * the value). A value written as a whole (`text = value`) has no list above it.
  */
 function assertedWrite(value: Expression): boolean {
   let at: Node = value;
   while (isWrapper(at.parent) || isArrayLiteralExpression(at.parent)) {
     at = at.parent;
     if (isAssertionExpression(at)) return true;
+  }
+  const write = at.parent;
+  return isBinaryExpression(write) && write.right === at && assertsTarget(write.left);
+}
+
+/**
+ * Whether a type assertion stands over the target of an assignment, or over one of the names of the
+ * pattern of names it is (`[(text as unknown)] = [value]`).
+ */
+function assertsTarget(target: Expression): boolean {
+  const pending = [target];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const { isAsserted, value } = withoutWrapping(each, false);
+    if (isAsserted) return true;
+    if (isArrayLiteralExpression(value)) pending.push(...value.elements);
   }
   return false;
 }
