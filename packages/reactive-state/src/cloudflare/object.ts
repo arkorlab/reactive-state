@@ -226,6 +226,8 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   #open = false;
   #opening: Promise<void> | undefined;
   #openingSince = 0;
+  /** Whether the alarm of its first prune is armed, which a storage that failed it may not have. */
+  #armed = false;
   /** When the object last pruned its database's change log, by its clock. */
   #prunedAt = 0;
 
@@ -295,34 +297,41 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
    * Makes the change log of the database, of one of `reactiveDb`'s, unless it is made: where it
    * cannot be, of tables the application's migrations have not made yet, says why, and asks again
    * at the next render — a page's first call, a route's root's (`renderShared`) too — or alarm —
-   * where what the object follows is read — while every other call goes on.
+   * where what the object follows is read — while every other call goes on. The alarm of its first
+   * prune is armed with it, and asked again by the same calls where the storage failed it, whether
+   * or not the log is made: with no other alarm armed, none would prune the log again.
    */
   async #opened(): Promise<void> {
     const host = this.#host;
-    if (host === undefined || this.#open) return;
+    if (host === undefined || (this.#open && this.#armed)) return;
     if (this.#opening === undefined) this.#openingSince = Date.now();
     this.#opening ??= (async () => {
       try {
-        await host.open();
-        this.#open = true;
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `The change log of the application's database could not be made: ${describeThrown(error)}. Run the application's migrations: the next render makes it.`,
-        );
+        if (!this.#open) {
+          try {
+            await host.open();
+            this.#open = true;
+          } catch (error) {
+            // eslint-disable-next-line no-console
+            console.error(
+              `The change log of the application's database could not be made: ${describeThrown(error)}. Run the application's migrations: the next render makes it.`,
+            );
+          }
+        }
+        // Its first prune, or else its next try of a log it could not make, of no call to ask. Said,
+        // not thrown: `blockConcurrencyWhile` resets the object of a callback that throws, and a call
+        // that asked for the log would fail of an alarm, when the log is made all the same.
+        try {
+          await this.#alarm.arm(Date.now() + PRUNE_EVERY_MS);
+          this.#armed = true;
+        } catch (error) {
+          // eslint-disable-next-line no-console
+          console.error(
+            `The alarm that prunes the change log could not be armed: ${describeThrown(error)}. The next render arms it.`,
+          );
+        }
       } finally {
         this.#opening = undefined;
-      }
-      // Its first prune, or else its next try of a log it could not make, of no call to ask. Said,
-      // not thrown: `blockConcurrencyWhile` resets the object of a callback that throws, and a call
-      // that asked for the log would fail of an alarm, when the log is made all the same.
-      try {
-        await this.#alarm.arm(Date.now() + PRUNE_EVERY_MS);
-      } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error(
-          `The alarm that prunes the change log could not be armed: ${describeThrown(error)}`,
-        );
       }
     })();
     // Of every call that asks, `OPEN_WAIT_MS` at most of its making's start: past it, the calls go

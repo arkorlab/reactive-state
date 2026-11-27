@@ -48,12 +48,14 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { useOf } from './code-globals.ts';
+import { globalPathOf, useOf } from './code-globals.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { DEFAULT_ITERATOR, iteratorMemberName } from './framed-iterator-guards.ts';
+import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedMapSet } from './framed-map-mutations.ts';
+import { framedNativeArguments } from './framed-native-arguments.ts';
 import { framedQuietOperand } from './framed-quiet-operands.ts';
 import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { readsBinding } from './scope.ts';
@@ -110,6 +112,9 @@ const ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.QuestionQuestionEqualsToken,
   SyntaxKind.SlashEqualsToken,
 ]);
+
+/** The native `get` methods of a Map and a WeakMap. */
+const NATIVE_GETTERS: ReadonlySet<string> = new Set(['Map.prototype.get', 'WeakMap.prototype.get']);
 
 /**
  * Whether something may replace how the collection the names `bindings` hold iterates before
@@ -292,7 +297,7 @@ function quietUse(
     return quietMember(parent, scope);
   if (isReturnStatement(parent) || (isArrowFunction(parent) && parent.body === at))
     return quietReturn(at, aliases, scope, seen);
-  return borrowedSet(parent, at) || quietPlace(parent, at);
+  return borrowedSet(parent, at) || borrowedGet(parent, at) || quietPlace(parent, at);
 }
 
 /**
@@ -305,6 +310,20 @@ function borrowedSet(parent: Node, at: Node): boolean {
   if (!isCallExpression(parent)) return false;
   const source = framedMapSet(parent);
   return source?.borrowed === true && unwrapped(source.receiver) === at;
+}
+
+/**
+ * Whether a use hands the collection to a native Map's or WeakMap's `get` as its receiver, by
+ * `call`, `apply` or `Reflect.apply`: the native reads an entry and replaces no method. A `get` the
+ * file may install on the prototype is the prototype scan's to read.
+ */
+function borrowedGet(parent: Node, at: Node): boolean {
+  if (!isCallExpression(parent)) return false;
+  const native = framedNativeArguments(parent, NATIVE_GETTERS);
+  if (native === undefined || native.constructed) return false;
+  const reflected = globalPathOf(unwrapped(parent.expression))?.join('.') === 'Reflect.apply';
+  const receiver = framedArgumentPrefix(parent).values[reflected ? 1 : 0];
+  return receiver !== undefined && unwrapped(receiver) === at;
 }
 
 /**
