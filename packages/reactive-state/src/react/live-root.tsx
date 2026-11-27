@@ -16,6 +16,7 @@ import {
 } from 'react';
 
 import type { FieldReceipt, Frame, RenderStatus, Result, View } from '../program.ts';
+import { isApplicationCode } from '../refusal-codes.ts';
 import { Follower } from '../runtime/follow.ts';
 import { canonicalJson } from '../runtime/json.ts';
 import type { KeptRoot } from '../runtime/kept-roots.ts';
@@ -293,6 +294,14 @@ function Notice({ status }: { readonly status: StoreStatus }): ReactNode {
   );
 }
 
+/**
+ * Whether a root shown at `frame` is followed: not where the session may not see it, nor while it
+ * shows the frame its stream was refused at by the application (`refusedAt`).
+ */
+function followed(status: RenderStatus, frame: Frame, refusedAt: Frame | undefined): boolean {
+  return status !== 'unauthenticated' && frame !== refusedAt;
+}
+
 export function LiveRoot(props: LiveRootProps): ReactNode {
   const { events, expire, frame, prefetchable, session, status = 'rendered', update, view } = props;
   const router = useRouter();
@@ -440,7 +449,13 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
   useEffect(() => {
     controller?.want(given.frame.revision);
   }, [controller, given.frame]);
-  const follows = runtime !== null && controller !== null && status !== 'unauthenticated';
+  // The frame the root's stream was refused at by a code of the application's (`refuse(code)`),
+  // which ended the stream: not followed while the root shows it, and followed again once the route
+  // renders the root as it is now — the refusal gone, another frame shown — which lets the page's
+  // hold go (`Revocation`) with nothing else of the stream changed.
+  const [refusedAt, setRefusedAt] = useState<Frame | undefined>(undefined);
+  const follows =
+    runtime !== null && controller !== null && followed(status, current.frame, refusedAt);
   // The stream follows what the view shows: another view is followed with its own subscription.
   const viewKey = useMemo(() => canonicalJson(current.frame.view), [current.frame.view]);
   useEffect(() => {
@@ -455,6 +470,9 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
       // Named by this root: a refusal of its own render holds the page while it shows what it showed.
       onRevoked: (message, code) => {
         runtime.revoked(message, code, root);
+        if (isApplicationCode(code)) {
+          setRefusedAt(latest.current);
+        }
       },
       url: () => subscriptionUrl(events, latest.current.subscription),
     });

@@ -53,7 +53,7 @@ export function framedRegExpText(
 ): boolean {
   if (!isCallExpression(node) && !isNewExpression(node)) return false;
   const words = { error, typed };
-  const native = framedNativeArguments(node, PATTERN);
+  const native = framedNativeArguments(node, PATTERN, true);
   if (native !== undefined) {
     return evaluateConstructorArguments(
       node,

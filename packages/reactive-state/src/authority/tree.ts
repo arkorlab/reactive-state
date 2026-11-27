@@ -129,9 +129,14 @@ function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Whether `value` is a reference a compile made (`REFERENCE`), and not JSON shaped as one. */
+/**
+ * Whether `value` is a reference a compile made (`REFERENCE`), and not JSON shaped as one. Its marker
+ * is read as the data property of the object itself that every reference holds, so that an accessor
+ * under the symbol is no marker and is not run: a prop is looked into before it is refused, and
+ * none of its getters runs then.
+ */
 function isReference(value: unknown): value is Readonly<Record<string, unknown>> {
-  return isObject(value) && (value as { readonly [REFERENCE]?: unknown })[REFERENCE] === true;
+  return isObject(value) && Object.getOwnPropertyDescriptor(value, REFERENCE)?.value === true;
 }
 
 function isComponentRef(value: unknown): value is ComponentRef {
