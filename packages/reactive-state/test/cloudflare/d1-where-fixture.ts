@@ -1,4 +1,3 @@
-import { env } from 'cloudflare:workers';
 import { and, eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/d1';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
@@ -11,7 +10,10 @@ import { followDrizzle, followedDb } from '../../src/sql/index.ts';
 /**
  * An application whose tables are its Drizzle schema's in D1, whose component binds its states to a
  * row of them: what a Durable Object reads and writes of a row through the binding. Its object is
- * given no store: the follow brings its own, of the binding its `client` was given.
+ * given no store: the follow brings its own. The follow is given a function that answers the
+ * binding of now, which the object connects of its environment as its constructor runs, before its
+ * engine starts: a class of `authorityObject`'s own, as an object whose D1 arrives with its
+ * environment alone is.
  */
 
 const rowMembers = sqliteTable('where_members', {
@@ -46,10 +48,19 @@ export const rowCased = sqliteTable('where_cased', {
   done: integer({ mode: 'boolean' }).notNull(),
 });
 
+/** The D1 the follow reads and writes through: an object's, as its constructor connects it. */
+const rowsConnection: { binding?: D1Database | undefined } = {};
+
+/** Connects the follow to the D1 of `bindings`, an object's environment; to none, of none. */
+export function connectRows(bindings: { readonly REACTIVE_D1?: D1Database | undefined }): void {
+  rowsConnection.binding = bindings.REACTIVE_D1;
+}
+
 export const rowsFollow = followDrizzle({ rowMembers, rowNotes, rowTasks });
-const rowsOrm = drizzle(rowsFollow.client(env.REACTIVE_D1), {
-  schema: { rowMembers, rowNotes, rowTasks },
-});
+const rowsOrm = drizzle(
+  rowsFollow.client(() => rowsConnection.binding),
+  { schema: { rowMembers, rowNotes, rowTasks } },
+);
 export const rowsDatabase = followedDb(rowsFollow);
 
 /** The ids of the component's updates. */
@@ -101,9 +112,15 @@ export const rowsProgram: ComponentProgram = {
   writable: ['done', 'estimate', 'kind', 'slug', 'title'],
 };
 
-export const RowsAuthority = authorityObject({
+/** The application's object, which connects the follow of its environment before it starts. */
+export class RowsAuthority extends authorityObject({
   buildId: rowsProgram.buildId,
   database: rowsDatabase,
   programs: [rowsProgram],
   sessions: 'asserted',
-});
+}) {
+  constructor(ctx: DurableObjectState, env: Cloudflare.Env) {
+    connectRows(env);
+    super(ctx, env);
+  }
+}

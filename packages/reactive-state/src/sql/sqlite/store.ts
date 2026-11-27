@@ -139,7 +139,7 @@ async function digestOf(text: string): Promise<string> {
 }
 
 /** What `db.<table>` is answered for a table read by SQL: a fault, which names the way to read it. */
-function readBySql(table: string): Promise<never> {
+export function readBySql(table: string): Promise<never> {
   return Promise.reject(
     new Error(
       `${table} is read by SQL: query it with the application's Drizzle, whose plan says what a render read, not through \`db.${table}\`.`,

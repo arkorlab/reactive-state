@@ -15,6 +15,13 @@ import {
 } from './capture.ts';
 import { type D1Binding, trackedD1 } from './client.ts';
 import { type SqliteKeyColumn, sqliteKeysOf } from './keys.ts';
+import {
+  type BindingOfNow,
+  type ForwardedD1,
+  isBindingOfNow,
+  lateD1,
+  ownStoreOf,
+} from './late-binding.ts';
 import { sqliteRows } from './rows.ts';
 import { sqliteStore } from './store.ts';
 
@@ -24,7 +31,8 @@ import { sqliteStore } from './store.ts';
  * statements note the rows they read, the tables' triggers log each row a statement changed, and
  * the authority renders again what read the rows the log names. A component's state may bind one
  * column of one row (`db.<table>.where(…)`, `rows.ts`), which its setter writes through the same
- * binding.
+ * binding. A binding that arrives as the host starts — a Durable Object's, of its environment — is
+ * given as a function that answers it, or none before it arrives (`late-binding.ts`).
  *
  * ```ts
  * const follow = followDrizzle(schema);
@@ -56,9 +64,17 @@ export interface DrizzleD1Follow<S> {
   readonly captureSql: () => readonly string[];
   /**
    * `binding`, a D1 binding, whose statements in a render note what they read: Drizzle's, and the
-   * connection a state bound to a row reads and writes it through — the last one given.
+   * connection a state bound to a row reads and writes it through — the last one given. Of a
+   * function that answers the binding of now, or none — a Durable Object's, which its constructor
+   * connects of its environment — a binding that asks it at each call, and the follow's own store
+   * asks it at each read of the log: of none, a call throws, naming the store, and the log tells of
+   * no change. That binding holds D1's methods of the binding's type alone (`ForwardedD1`): of a
+   * Worker's `D1Database`, all of it.
    */
-  readonly client: <B extends D1Binding>(binding: B) => B;
+  readonly client: {
+    <B extends D1Binding>(binding: B): B;
+    <B extends D1Binding>(binding: BindingOfNow<B>): ForwardedD1<B>;
+  };
   /**
    * The store the host gives the authority, which reads the log through `binding`: of
    * `followedDb(follow)`'s database, the follow's own, of the binding `client` was last given,
@@ -115,12 +131,17 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
   const reads = { byName, keysByTable, schema: generation, schemaTable };
   const store = { byName, keysByTable, partials, rowids, schema: generation, triggers, uniques };
   const declared = Object.freeze(tables);
-  /** The binding `client` was last given, as it was given: what the follow's store reads. */
-  let given: D1Binding | undefined;
+  /**
+   * The binding `client` was last given, as it was given — or the function that answers it: what
+   * the follow's store reads.
+   */
+  let given: D1Binding | BindingOfNow | undefined;
   const follow = Object.freeze({
     captureSql: () => sqliteCaptureSql(followed),
-    client: <B extends D1Binding>(binding: B) => {
-      const tracked = trackedD1(binding, reads);
+    client: (binding: D1Binding | BindingOfNow) => {
+      // Of a function, a binding that asks it for the binding of now at each call.
+      const opened: D1Binding = isBindingOfNow(binding) ? lateD1(binding, storeName) : binding;
+      const tracked = trackedD1(opened, reads);
       connection = tracked;
       given = binding;
       return tracked;
@@ -134,7 +155,7 @@ export function followSqlite<S extends Readonly<Record<string, unknown>>>(
   // The log is read through the binding as the host gave it, as `follow.store(binding)` reads it:
   // not through the one Drizzle is given, which follows a render's and an operation's statements.
   return withInternals(follow, {
-    store: () => (given === undefined ? undefined : sqliteStore(given, store)),
+    store: () => ownStoreOf(given, store),
     storeName,
     tables: declared,
   });

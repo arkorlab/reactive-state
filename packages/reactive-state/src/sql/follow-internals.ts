@@ -15,8 +15,9 @@ interface FollowInternals {
   /** The name of its store, by which the authority reads its tables. */
   readonly storeName: string;
   /**
-   * A store that reads its log through the connection its `client` was last given, made anew at
-   * each call; none while it was given no connection.
+   * A store that reads its log through the connection its `client` was last given — of D1's, given
+   * a function that answers it, the connection of now at each read (`sqlite/late-binding.ts`) —
+   * made anew at each call; none while it was given no connection.
    */
   readonly store: () => ExternalStore | undefined;
 }
