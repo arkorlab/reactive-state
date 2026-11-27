@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -98,6 +98,32 @@ describe('a PGlite directory', () => {
       await ended(holder);
       const { db } = await reactiveDb(schema);
       await hostOf(db)?.close();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it.each([
+    ['with a slash at its end', (at: string) => `${at}/`],
+    ['by a path from the working directory', (at: string) => path.relative(process.cwd(), at)],
+    [
+      'by a link to it',
+      (at: string) => {
+        const link = `${at}-link`;
+        symlinkSync(at, link);
+        return link;
+      },
+    ],
+  ])(
+    'is one directory whatever it is called by: %s',
+    async (_said, spelled) => {
+      const at = directory();
+      delete process.env['DATABASE_URL'];
+      const first = await reactiveDb(schema);
+      process.env['PGLITE_DIR'] = spelled(at);
+
+      await expect(reactiveDb(schema)).rejects.toThrow(/open already/u);
+
+      await expect(hostOf(first.db)?.close()).resolves.toBeUndefined();
     },
     TEST_TIMEOUT_MS,
   );
