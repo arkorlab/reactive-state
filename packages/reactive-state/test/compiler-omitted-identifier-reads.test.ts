@@ -9,9 +9,12 @@ import { canOmit } from '../src/compiler/omitted-work.ts';
  * value whose evaluation runs nothing of the application's may be left out. A name is not one: reading
  * it runs a global's getter (`g` of `Object.defineProperty(globalThis, 'g', { get() { … } })`), throws
  * a `ReferenceError` for a `let`, a `const` or a class read before its declaration or for a name
- * nothing declares (Node 26.13 ran each in a function), and the compile does not tell which a name
- * is bound to. Each row is the first statement of a function's body, the rest of the body written
- * after it, and whether `canOmit` takes it as work to leave out.
+ * nothing declares (Node 26.13 ran each in a function). So a name is left out only where the code
+ * shows it initialised as the statement runs — a parameter of the function it stands in, as here;
+ * `compiler-omitted-initialised-names.test.ts` holds the rest — or it is `undefined`, `NaN` or
+ * `Infinity` with no declaration of the name in scope, and every other name is kept. Each
+ * row is the first statement of a function's body, the rest of the body written after it, and
+ * whether `canOmit` takes it as work to leave out.
  */
 const REFUSED: readonly { readonly body: string; readonly id: string }[] = [
   { body: 'const unused = g;', id: 'global-accessor' },
@@ -19,9 +22,6 @@ const REFUSED: readonly { readonly body: string; readonly id: string }[] = [
   { body: 'let unused = later; let later = 1;', id: 'let-read-before-declaration' },
   { body: 'const unused = later; class later {}', id: 'class-read-before-declaration' },
   { body: 'const unused = nothingDeclaresThis;', id: 'undeclared-name' },
-  { body: 'const unused = source;', id: 'parameter' },
-  { body: 'let unused = source;', id: 'let-parameter' },
-  { body: 'const unused = undefined;', id: 'undefined' },
   { body: 'const unused = (g);', id: 'parenthesised' },
   { body: 'const unused = g as unknown;', id: 'cast' },
   { body: 'const unused = g!;', id: 'non-null' },
@@ -46,6 +46,17 @@ const REFUSED: readonly { readonly body: string; readonly id: string }[] = [
   { body: 'const unused = make();', id: 'call' },
   { body: `const unused = \`\${source}\`;`, id: 'template-substitution' },
   { body: 'const unused = typeof g;', id: 'typeof' },
+];
+
+/**
+ * A parameter of the function the statement stands in, which the code shows initialised, and the
+ * global `undefined`, a non-writable, non-configurable property of the global object, which reading
+ * runs nothing of and cannot find absent where no declaration of the name is in scope.
+ */
+const SHOWN: readonly { readonly body: string; readonly id: string }[] = [
+  { body: 'const unused = source;', id: 'parameter' },
+  { body: 'let unused = source;', id: 'let-parameter' },
+  { body: 'const unused = undefined;', id: 'undefined' },
 ];
 
 const OMITTED: readonly { readonly body: string; readonly id: string }[] = [
@@ -101,6 +112,10 @@ describe('a constant whose initialization reads a name', () => {
 
   it.each(REFUSED)('is kept: $id', ({ body }) => {
     expect(omitted(body)).toBe(false);
+  });
+
+  it.each(SHOWN)('is left out where the code shows the name initialised: $id', ({ body }) => {
+    expect(omitted(body)).toBe(true);
   });
 
   it.each(OMITTED)('is left out where it reads none: $id', ({ body }) => {
