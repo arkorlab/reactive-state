@@ -48,26 +48,32 @@ export function followChanges(
   say: (line: string) => void,
   watching: Watch = watch,
 ): () => void {
-  const watchers = new Map<string, FSWatcher>();
+  // Each watch by itself, not by its directory: the components may be the root's own (`src: '.'`),
+  // which a watch of the root's files besides would else take the place of in the list, and leave
+  // open as the command ends.
+  const watchers: FSWatcher[] = [];
   const follow = (
     directory: string,
     recursive: boolean,
     listener: (event: string, name: string | null) => void,
-  ): void => {
+  ): FSWatcher | undefined => {
     try {
       const watcher = watching(directory, { recursive }, listener);
       watcher.on('error', (error) => {
         refused(say, directory, error);
       });
-      watchers.set(directory, watcher);
+      watchers.push(watcher);
+      return watcher;
     } catch (error) {
       refused(say, directory, error);
+      return undefined;
     }
   };
   const migrations = path.join(layout.projectDir, MIGRATIONS);
+  let migrating: FSWatcher | undefined;
   const followMigrations = (): void => {
-    if (watchers.has(migrations) || !existsSync(migrations)) return;
-    follow(migrations, true, () => {
+    if (migrating !== undefined || !existsSync(migrations)) return;
+    migrating = follow(migrations, true, () => {
       told('start');
     });
   };
@@ -90,7 +96,7 @@ export function followChanges(
   });
   followMigrations();
   return () => {
-    for (const watcher of watchers.values()) watcher.close();
+    for (const watcher of watchers) watcher.close();
   };
 }
 
