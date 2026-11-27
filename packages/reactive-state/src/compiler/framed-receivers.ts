@@ -44,7 +44,7 @@ export function framedNativeErrorCreation(
 ): boolean {
   if (framedReflectedError(node, names) || framedInvokedError(node, names)) return true;
   if (isCallExpression(node) || isNewExpression(node)) {
-    const bound = framedBoundErrorArguments(node, names);
+    const bound = framedBoundErrorArguments(node, names, true, !made);
     if (bound !== undefined && (made || locallyWrittenBoundWords(bound.target, bound.args)))
       return true;
     if (bound === undefined && made && framedPossibleBoundError(node, names)) return true;
