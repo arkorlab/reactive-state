@@ -325,8 +325,9 @@ function definedEntry(node: CallExpression): readonly MemberWrite[] {
   const [target, key, descriptor] = prefix.values;
   const written = target === undefined ? undefined : writtenPath(target);
   if (written === undefined || (key === undefined && !prefix.unknown)) return [];
-  // A descriptor past a spread whose order is unknown is any value that spread may supply; a key
-  // past one is not shown, and the write is then under any name.
+  // A descriptor past a spread whose order is unknown is any value that spread may supply, none of
+  // them the descriptor for certain (`reopened`); a key past one is not shown, and the write is then
+  // under any name.
   const descriptors = descriptor === undefined ? (prefix.alternatives ?? []) : [descriptor];
   const names = key === undefined ? undefined : framedKeyNames(key);
   return descriptors.flatMap((each) => {
@@ -336,7 +337,7 @@ function definedEntry(node: CallExpression): readonly MemberWrite[] {
         holder: written.holder,
         path: [...written.path, names],
         value,
-        reopened: false,
+        reopened: descriptor === undefined,
       };
     });
   });
