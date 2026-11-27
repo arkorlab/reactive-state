@@ -3,6 +3,7 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
+  isBinaryExpression,
   isCallExpression,
   isClassDeclaration,
   isClassExpression,
@@ -197,7 +198,28 @@ function checkCompetingWrite(
   return (call !== undefined && handsToMutator(call, top, target)) || escapesThroughLiteral(top);
 }
 
-/** Whether `soleTop` is the single non-loop write touching `target.keys` in `target.owner`. */
+/**
+ * Whether `node`, a read of the parameter `target.declared`, is the write that gives it the object
+ * `target.initializer` is (`Target.isHeld`): the definite replacement of the parameter, which the
+ * object the sum is written into comes from, so no write beside the sum.
+ */
+function isReplacement(node: Identifier, target: Target): boolean {
+  const { keys, top } = memberChain(node, target.resolve);
+  const { parent } = top;
+  return (
+    target.isHeld === true &&
+    keys.length === 0 &&
+    isBinaryExpression(parent) &&
+    parent.operatorToken.kind === SyntaxKind.EqualsToken &&
+    parent.left === top &&
+    parent.right === target.initializer
+  );
+}
+
+/**
+ * Whether `soleTop` is the single non-loop write touching `target.keys` in `target.owner`, but for
+ * the replacement of a parameter that gives it the object it writes into.
+ */
 function isSoleSlotWrite(soleTop: Expression, target: Target): boolean {
   if (
     !holdsInitializer(target) ||
@@ -207,9 +229,12 @@ function isSoleSlotWrite(soleTop: Expression, target: Target): boolean {
   ) {
     return false;
   }
-  return !anyAliasRead(target, target.keys, (node, suffix, current, queue) =>
-    checkCompetingWrite(soleTop, node, suffix, { queue, target: current }),
-  );
+  return !anyAliasRead(target, target.keys, (node, suffix, current, queue) => {
+    return (
+      !isReplacement(node, current) &&
+      checkCompetingWrite(soleTop, node, suffix, { queue, target: current })
+    );
+  });
 }
 
 /** The names a loop over `top` binds in its head, where it declares them of `const`. */
@@ -304,8 +329,9 @@ function showsFinite(
  * loop of 1e308 steps. A product, a power or a quotient it repeats, or of an operand it cannot
  * read, is refused: a few steps overflow. Of a parameter read as holding an object (`Target.isHeld`)
  * a sum is taken as the only write of its slot alone: the writes beside it are read of the whole
- * function, the ones before a replacement too, so a sum that is not alone is not shown to be
- * the repeated one, and is refused.
+ * function, the ones before a replacement too, but for the replacement itself, which gives the
+ * object the sum is written into: a sum that is not alone is not shown to be the repeated one,
+ * and is refused.
  */
 function arithmeticWrite(
   operator: SyntaxKind,

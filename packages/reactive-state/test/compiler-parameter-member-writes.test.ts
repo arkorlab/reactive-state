@@ -9,7 +9,10 @@ import { compilerApplications } from './support/compiler-applications.ts';
  * made for that call and held by nothing else, or one the function's own code replaces it with. Any
  * other value a call hands (a constant, what a call answers, a frozen object, an array, a page's
  * value) may be held elsewhere or be no plain object, and a parameter that may be assigned again
- * holds what the compile does not read: each stays refused.
+ * holds what the compile does not read: each stays refused. So does a parameter the function keeps
+ * where the walk of its reads does not follow it (in a list, a member, a closure) and one a call
+ * locks before a write; a replacement of the parameter is no write beside a sum written into the
+ * object it gives.
  */
 const MAKE = "function make(value: {id: string}) { value.id = 'fresh'; return value; }";
 const LOOSE = "function make(value: {id?: string}) { value.id = 'fresh'; return value; }";
@@ -22,6 +25,11 @@ function wide(body: string): string {
 }
 
 const NESTED = " export const payload = make({meta: {id: 'safe'}});";
+
+/** A factory of a number list, called with `[0]`. */
+function counted(body: string): string {
+  return `function make(value: number[]) { ${body} } export const payload = make([0]);`;
+}
 
 describe('shared factory parameter member writes', () => {
   const { apps, compile } = compilerApplications();
@@ -244,6 +252,40 @@ describe('shared factory parameter member writes', () => {
 
     expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
   });
+
+  // The replacement is the write that gives the parameter the object the compile reads, so it is no
+  // write beside the sum; another write of the member, before it or after, is.
+  it.each([
+    counted('value = [1]; value[0] += 1; return value;'),
+    counted('value = [1]; value[0] *= 2; return value;'),
+    counted('value = [1]; value[0]++; return value;'),
+    counted('var value = [1]; value[0] += 1; return value;'),
+    'function make(value: {n: number}) { value = {n: 1}; value.n += 1; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { value = {n: 1}; value.n -= 1; return value; } export const payload = make({n: 0});',
+  ])('keeps a sum written into the object a parameter was replaced with: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    counted('value = [1]; value[0] += 1; value[0] += 1; return value;'),
+    counted('value = [1]; value[0] = 5; value[0] += 1; return value;'),
+    counted('value[0] += 1; value = [1]; value[0] += 1; return value;'),
+    counted('value = [1]; const add = () => { value[0] += 1; }; add(); add(); return value;'),
+    counted('value = [1e308]; value[0] += 1e308; return value;'),
+    counted('value = [1e308]; value[0] *= 2; return value;'),
+    'function make(value: {n: number}) { value = {n: 1e308}; value.n += 1e308; return value; } export const payload = make({n: 0});',
+  ])(
+    'refuses a sum of a replaced parameter that is not alone or not finite: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+    },
+  );
 
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
