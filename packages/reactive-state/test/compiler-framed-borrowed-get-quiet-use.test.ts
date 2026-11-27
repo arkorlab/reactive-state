@@ -58,6 +58,26 @@ const CASES = [
     refused: true,
   },
   {
+    id: 'own-get-borrowing-by-name-prototype-get-replaced',
+    source: `function frames(error:Error){const key={};const weak=new WeakMap<object,unknown>([[key,'fixed']]);(WeakMap.prototype as unknown as {get:unknown}).get=()=>error;weak.get=function(k:object){return WeakMap.prototype.get.call(weak,k);};return (weak.get(key) as ${READ}).stack;}`,
+    refused: true,
+  },
+  {
+    id: 'own-get-borrowing-by-this-prototype-get-replaced',
+    source: `function frames(error:Error){const key={};const weak=new WeakMap<object,unknown>([[key,'fixed']]);(WeakMap.prototype as unknown as {get:unknown}).get=()=>error;weak.get=function(k:object){return WeakMap.prototype.get.call(this,k);};return (weak.get(key) as ${READ}).stack;}`,
+    refused: true,
+  },
+  {
+    id: 'own-get-borrowing-by-this-is-refused-as-the-own-method-escapes',
+    source: `function frames(error:Error){void error;const key={};const weak=new WeakMap<object,{message:string}>([[key,{message:"fixed"}]]);weak.get=function(k:object){return WeakMap.prototype.get.call(this,k);};return weak.get(key)!.message;}`,
+    refused: true,
+  },
+  {
+    id: 'own-get-borrowing-by-name-data',
+    source: `function frames(error:Error){void error;const key={};const weak=new WeakMap<object,unknown>([[key,'fixed']]);weak.get=function(k:object){return WeakMap.prototype.get.call(weak,k);};return (weak.get(key) as ${READ}).stack;}`,
+    refused: false,
+  },
+  {
     id: 'call-get-in-a-loop-map-handed-to-a-function',
     source: `function handOn(value:unknown){void value;}function frames(error:Error){${MAP}let out:unknown;let i=0;do{out=Map.prototype.get.call(map,'a');handOn(map);}while(i++<1);return (out as ${READ}).stack;}`,
     refused: true,
