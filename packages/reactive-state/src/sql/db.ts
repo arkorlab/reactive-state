@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
+import type { Client as PgClient, ClientConfig } from 'pg';
 
 import { type DatabaseHost, hostDatabase, hostOf } from '../authority/database-host.ts';
 import { describeThrown, messageOf } from '../authority/errors.ts';
@@ -246,6 +247,20 @@ async function ended(ending: Promise<unknown>): Promise<void> {
 }
 
 /**
+ * `Client`, made to give up on a connection whose handshake is not done within `ms`: a server that
+ * takes it and says nothing would else hold the first call of the pool for good. Of the client, not
+ * of the pool's own `connectionTimeoutMillis`, which a checkout that waits for a free connection is
+ * failed by too: the application's queries wait as long as the pool takes to free one.
+ */
+function bounded(Client: typeof PgClient, ms: number): new (config?: ClientConfig) => PgClient {
+  return class extends Client {
+    constructor(config?: ClientConfig) {
+      super({ ...config, connectionTimeoutMillis: ms });
+    }
+  };
+}
+
+/**
  * A server: the pool is the application's, and two connections are the host's. The store's is a pool
  * of one, whose reads the follower waits for as long as `TAIL.readTimeoutMs`: past it, the connection
  * is let go of and the next read makes another, as one a lost link holds would answer no read again,
@@ -264,8 +279,8 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
     import('drizzle-orm/node-postgres/migrator'),
   ]);
   const connectionString = url;
-  const pool = new Pool({ connectionString });
   const connectionTimeoutMillis = TAIL.readTimeoutMs;
+  const pool = new Pool({ Client: bounded(Client, connectionTimeoutMillis), connectionString });
   const store = new Pool({
     connectionString,
     connectionTimeoutMillis,
