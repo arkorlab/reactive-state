@@ -52,6 +52,9 @@ export default defineConfig({
           SLOW_START: { className: 'SlowStartAuthority', useSQLite: true },
           // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
           HUNG_START: { className: 'HungStartAuthority', useSQLite: true },
+          // The same, whose storage fails to arm the alarm of its first prune as it starts.
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          ARM_FAILS: { className: 'ArmFailsAuthority', useSQLite: true },
         },
         d1Databases: ['REACTIVE_D1'],
         bindings: {
