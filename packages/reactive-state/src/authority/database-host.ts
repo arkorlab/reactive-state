@@ -16,6 +16,10 @@ export interface DatabaseHost {
   readonly prune: () => Promise<void>;
   /** The application's migrations in `folder`, for a host to run before the authority starts. */
   readonly migrate: (folder: string) => Promise<void>;
+  /** Runs `first`, which writes the application's first records, unless it ran of this database. */
+  readonly seed: (first: () => Promise<void>) => Promise<void>;
+  /** Runs `work` alone of the hosts of this database: of two that start at once, one migrates it. */
+  readonly alone: (work: () => Promise<void>) => Promise<void>;
   readonly close: () => Promise<void>;
 }
 

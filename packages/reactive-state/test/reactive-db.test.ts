@@ -8,6 +8,7 @@ import { sqliteTable, text as sqliteText } from 'drizzle-orm/sqlite-core';
 import { Client, Pool } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { hostOf } from '../src/authority/database-host.ts';
 import { startAuthority } from '../src/authority/index.ts';
 import { reactiveDb } from '../src/sql/db.ts';
 import { followDrizzle } from '../src/sql/index.ts';
@@ -99,6 +100,31 @@ async function authorityOf(db: Awaited<ReturnType<typeof reactiveDb<typeof schem
   const authority = await startAuthority({ buildId: BUILD, database: db, programs: [] });
   onTestFinished(() => authority.close());
   return authority;
+}
+
+/**
+ * A database as a role of `USAGE` and `SELECT` on the log reads it, which `seeding` ran the seed of
+ * first, where it is given.
+ */
+async function asReader(seeding?: () => Promise<void>) {
+  const { db, orm } = await reactiveDb(schema);
+  await orm.execute(sql.raw(DDL));
+  for (const statement of followDrizzle(schema).captureSql()) {
+    await orm.execute(sql.raw(statement));
+  }
+  if (seeding !== undefined) {
+    try {
+      await hostOf(db)?.seed(seeding);
+    } catch {
+      // A seed that failed leaves what notes it, and no note.
+    }
+  }
+  await orm.execute(sql.raw('CREATE ROLE reader'));
+  await orm.execute(sql.raw('GRANT USAGE ON SCHEMA reactive_state TO reader'));
+  await orm.execute(sql.raw('GRANT SELECT ON ALL TABLES IN SCHEMA reactive_state TO reader'));
+  await orm.execute(sql.raw('REVOKE CREATE ON DATABASE postgres FROM PUBLIC'));
+  await orm.execute(sql.raw('SET ROLE reader'));
+  return { db, orm };
 }
 
 describe('reactiveDb', () => {
@@ -405,6 +431,55 @@ describe('reactiveDb', () => {
       await expect(startAuthority({ buildId: BUILD, database: db, programs: [] })).rejects.toThrow(
         'Run the statements of `followDrizzle(schema).captureSql()` as the role that owns the tables, and grant',
       );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'leaves the seed where the role may not make its note, and says so',
+    async () => {
+      const { db, orm } = await asReader();
+      const said = vi.spyOn(console, 'error').mockImplementation(vi.fn());
+      const first = vi.fn<() => Promise<void>>();
+
+      await hostOf(db)?.seed(first);
+      await orm.execute(sql.raw('RESET ROLE'));
+
+      expect(first).not.toHaveBeenCalled();
+      expect(said).toHaveBeenCalledWith(expect.stringContaining('may not note'));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'runs no seed it could not note, which would run again over what it wrote',
+    async () => {
+      const made = vi.fn<() => Promise<void>>().mockRejectedValueOnce(new Error('Not yet.'));
+      const { db, orm } = await asReader(made);
+      const said = vi.spyOn(console, 'error').mockImplementation(vi.fn());
+      const first = vi.fn<() => Promise<void>>();
+
+      await hostOf(db)?.seed(first);
+      await orm.execute(sql.raw('RESET ROLE'));
+
+      expect(first).not.toHaveBeenCalled();
+      expect(said).toHaveBeenCalledWith(expect.stringContaining('may not note'));
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'reads the note of a seed that ran, whatever the role may write, and says nothing',
+    async () => {
+      const { db, orm } = await asReader(vi.fn<() => Promise<void>>());
+      const said = vi.spyOn(console, 'error').mockImplementation(vi.fn());
+      const first = vi.fn<() => Promise<void>>();
+
+      await hostOf(db)?.seed(first);
+      await orm.execute(sql.raw('RESET ROLE'));
+
+      expect(first).not.toHaveBeenCalled();
+      expect(said).not.toHaveBeenCalledWith(expect.stringContaining('may not note'));
     },
     TEST_TIMEOUT_MS,
   );

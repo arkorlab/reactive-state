@@ -7,6 +7,7 @@ import { type DatabaseHost, hostDatabase, hostOf } from '../authority/database-h
 import { describeThrown, messageOf } from '../authority/errors.ts';
 import { TAIL } from '../authority/external.ts';
 import { type AnyDatabase, type Database, database } from '../server/schema.ts';
+import { logOf, seededSql } from './capture.ts';
 import { codeOf } from './client-plans.ts';
 import type { Queryable } from './digest.ts';
 import { type DrizzleFollow, followDrizzle, type FollowDrizzleOptions } from './index.ts';
@@ -24,6 +25,11 @@ const PGLITE_DIR = '.data/pglite';
 const LOG = { keptMs: 3_600_000 } as const;
 /** The SQLSTATE of a role that may not do what it asked. */
 const PRIVILEGE = '42501';
+/**
+ * The advisory lock a host's migrations and first records run under, one of a database: of two hosts
+ * that start at once, the second finds them done.
+ */
+const ALONE_LOCK = 0x72_73_73_64;
 /** How long a close waits for a server, whose lost link would hold it for good. */
 const CLOSE_MS = 5000;
 /** The most of what a server said that a start's refusal quotes. */
@@ -40,6 +46,11 @@ export interface ReactiveDb<S extends Readonly<Record<string, unknown>>> {
 
 /** A connection of `pg`'s, or of PGlite's, as the host reads and writes the log through it. */
 type Connected<S> = Readonly<{ orm: unknown; host: DatabaseHost; schema?: S }>;
+
+/** The namespace of `follow`'s log. */
+function namespaceOf<S>(follow: DrizzleFollow<S>): string {
+  return follow.channel.replace(/_changes$/u, '');
+}
 
 /** What a connection's failure comes to: of no listener, `pg` throws it at the process. */
 function failed(error: Error): void {
@@ -63,7 +74,7 @@ async function capture<S>(connection: Queryable, follow: DrizzleFollow<S>): Prom
       await follow.store(connection).changes(0, 1);
     } catch (error_) {
       throw new Error(
-        `This role may neither make the change log nor read it. Run ${OWNER_RUNS}, and grant this one \`USAGE\` of the schema \`${follow.channel.replace(/_changes$/u, '')}\` and \`SELECT\` on its tables: ${messageOf(error_, QUOTED)}`,
+        `This role may neither make the change log nor read it. Run ${OWNER_RUNS}, and grant this one \`USAGE\` of the schema \`${namespaceOf(follow)}\` and \`SELECT\` on its tables: ${messageOf(error_, QUOTED)}`,
         { cause: error_ },
       );
     }
@@ -81,6 +92,54 @@ async function capture<S>(connection: Queryable, follow: DrizzleFollow<S>): Prom
       { cause: error },
     );
   }
+}
+
+/** What `seedOnce` reads of the note. */
+interface Note {
+  readonly noted: boolean;
+  readonly may: boolean;
+}
+
+/** What `connection`'s database says of the seed, none where the role may read nothing of it. */
+async function noteOf(connection: Queryable, namespace: string): Promise<Note | undefined> {
+  const { seeded } = logOf(namespace);
+  try {
+    await connection.query(seededSql(namespace), []);
+    const { rows } = await connection.query(
+      `SELECT EXISTS (SELECT 1 FROM ${seeded}) AS "noted", pg_catalog.has_table_privilege($1::pg_catalog.text, 'INSERT') AS "may"`,
+      [seeded],
+    );
+    return rows[0] as Note;
+  } catch (error) {
+    if (codeOf(error) !== PRIVILEGE) throw error;
+    return undefined;
+  }
+}
+
+/**
+ * Runs `first` unless `connection`'s database says it ran, so that the application's first records
+ * are plain inserts, as `database()`'s records are written once. The note is written once `first`
+ * ended, so one that failed runs again; it is kept in the log's schema, which goes with the database
+ * as the records do. A role that may not note it runs none, as what it wrote would be written again
+ * at the next start, and says so.
+ */
+async function seedOnce<S>(
+  connection: Queryable,
+  follow: DrizzleFollow<S>,
+  first: () => Promise<void>,
+): Promise<void> {
+  const namespace = namespaceOf(follow);
+  const note = await noteOf(connection, namespace);
+  if (note?.noted === true) return;
+  if (note?.may !== true) {
+    // eslint-disable-next-line no-console
+    console.error(
+      "This role may not note the application's first records, so its seed did not run: run `reactive dev` once as the role that owns the tables.",
+    );
+    return;
+  }
+  await first();
+  await connection.query(`INSERT INTO ${logOf(namespace).seeded} DEFAULT VALUES`, []);
 }
 
 /** PGlite, of one connection: what the store reads through, and `LISTEN` holds, besides. */
@@ -110,6 +169,8 @@ async function inProcess<S extends Readonly<Record<string, unknown>>>(
         return { [follow.storeName]: follow.store(pg) };
       },
       prune: () => follow.prune(pg, Date.now() - LOG.keptMs),
+      alone: (work) => work(),
+      seed: (first) => seedOnce(pg, follow, first),
     },
     orm,
   };
@@ -172,6 +233,17 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
   let listened = false;
   return {
     host: {
+      alone: async (work) => {
+        const held = await pool.connect();
+        held.on('error', failed);
+        try {
+          await held.query(`SELECT pg_catalog.pg_advisory_lock(${String(ALONE_LOCK)})`);
+          await work();
+        } finally {
+          // Its session's end lets go of the lock.
+          held.release(true);
+        }
+      },
       close: () =>
         ended(Promise.all([pool.end(), store.end(), ...(listened ? [listening.end()] : [])])),
       listen: async (told) => {
@@ -186,6 +258,7 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
         return { [follow.storeName]: follow.store(reads) };
       },
       prune: () => follow.prune(queryable, Date.now() - LOG.keptMs),
+      seed: (first) => seedOnce(queryable, follow, first),
     },
     orm,
   };

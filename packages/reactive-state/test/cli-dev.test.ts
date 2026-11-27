@@ -49,6 +49,20 @@ function projectOf({ migrations, seed }: { migrations?: boolean; seed?: string }
   return { root, src };
 }
 
+/** An application whose `src/seed.ts` calls `run`, what the test counts its calls by. */
+function seedOf(run: () => unknown) {
+  const seeded = vi.fn(run);
+  vi.stubGlobal('seededByTheTest', seeded);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const project = projectOf({
+    migrations: true,
+    seed: 'export const seed = () => globalThis.seededByTheTest();',
+  });
+  return { ...project, seeded };
+}
+
 describe('what a development start prepares', () => {
   const { pglite } = { pglite: process.env['PGLITE_DIR'] };
 
@@ -102,17 +116,9 @@ describe('what a development start prepares', () => {
     "runs the application's seed, after its migrations",
     async () => {
       const { db, orm } = await reactiveDb(schema);
-      const seeded = vi.fn(async () =>
+      const { root, seeded, src } = seedOf(async () =>
         orm.execute(sql`INSERT INTO tasks VALUES ('a', 'one') RETURNING id`),
       );
-      vi.stubGlobal('seededByTheTest', seeded);
-      onTestFinished(() => {
-        vi.unstubAllGlobals();
-      });
-      const { root, src } = projectOf({
-        migrations: true,
-        seed: 'export const seed = () => globalThis.seededByTheTest();',
-      });
 
       await prepare(db, root, src);
 
@@ -120,6 +126,99 @@ describe('what a development start prepares', () => {
     },
     TEST_TIMEOUT_MS,
   );
+
+  it(
+    'runs the seed once of a database, however often it starts, so that it may be a plain insert',
+    async () => {
+      const { db, orm } = await reactiveDb(schema);
+      const { root, seeded, src } = seedOf(() =>
+        orm.execute(sql`INSERT INTO tasks VALUES ('a', 'one')`),
+      );
+
+      await prepare(db, root, src);
+      await prepare(db, root, src);
+
+      expect(seeded).toHaveBeenCalledTimes(1);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "reads the seed's module after the migrations, which it may read of as it loads",
+    async () => {
+      const { db, orm } = await reactiveDb(schema);
+      vi.stubGlobal('readAsItLoads', () => orm.execute(sql`SELECT 1 FROM tasks`));
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+      const { root, src } = projectOf({
+        migrations: true,
+        seed: 'await globalThis.readAsItLoads();\nexport const seed = () => undefined;',
+      });
+
+      await expect(prepare(db, root, src)).resolves.toBeUndefined();
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'runs a seed that failed again, as nothing says it ran',
+    async () => {
+      const { db } = await reactiveDb(schema);
+      const failing = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error('The seed failed.'));
+      const { root, seeded, src } = seedOf(failing);
+
+      await expect(prepare(db, root, src)).rejects.toThrow('The seed failed.');
+
+      await prepare(db, root, src);
+      await prepare(db, root, src);
+
+      expect(seeded).toHaveBeenCalledTimes(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    'runs the seed of a database made anew, which says nothing of the one before',
+    async () => {
+      const { db: first } = await reactiveDb(schema);
+      const { db: second } = await reactiveDb(schema);
+      const { root, seeded, src } = seedOf(vi.fn());
+
+      await prepare(first, root, src);
+      await prepare(second, root, src);
+
+      expect(seeded).toHaveBeenCalledTimes(2);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps what it noted in the schema of the database's log",
+    async () => {
+      const { db, orm } = await reactiveDb(schema, { namespace: 'another_log' });
+      const { root, src } = seedOf(vi.fn());
+
+      await prepare(db, root, src);
+
+      await expect(
+        orm.execute(sql`SELECT count(*)::int AS notes FROM another_log.seeded`),
+      ).resolves.toMatchObject({ rows: [{ notes: 1 }] });
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it('runs the seed at each start of a database that holds no note of it', async () => {
+    const db = database({ notes: table({ body: textField() }) });
+    const { root, seeded, src } = seedOf(vi.fn());
+
+    await prepare(db, root, src);
+    await prepare(db, root, src);
+
+    expect(seeded).toHaveBeenCalledTimes(2);
+  });
 
   it('says so of a seed that exports none to run', async () => {
     const db = database({ notes: table({ body: textField() }) });
