@@ -1,6 +1,7 @@
 import {
   type Block,
   type Expression,
+  type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isBlock,
@@ -21,7 +22,7 @@ import {
 } from 'typescript/ast';
 
 import { type Answering, isAnswering } from './answers.ts';
-import { importedValues, unwrapped } from './bounded.ts';
+import { globalOf, importedValues, unwrapped } from './bounded.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /** Initializations that may be omitted without skipping calls, coercions or property reads. */
@@ -36,6 +37,15 @@ const INERT: ReadonlySet<SyntaxKind> = new Set([
   SyntaxKind.TrueKeyword,
 ]);
 
+/**
+ * The globals a read of which runs nothing and cannot throw: non-writable, non-configurable
+ * properties of the global object — a data property has no getter to run, and none can be deleted or
+ * absent — so reading one is as inert as a literal. Any other global is not: a property of the
+ * global object may be an accessor, as `Object.defineProperty(globalThis, 'g', { get() { … } })`
+ * makes one, and may be absent where the code runs (`window` on a server), which throws.
+ */
+const INERT_GLOBALS: ReadonlySet<string> = new Set(['Infinity', 'NaN', 'undefined']);
+
 /** Whether a read of the name is one the code shows initialised where a statement runs. */
 type Shown = (name: string) => boolean;
 
@@ -46,7 +56,8 @@ type Shown = (name: string) => boolean;
  * So does a read of a name the code does not show initialised (`shownAt`): reading one runs a
  * global's getter, and throws where a `let`, a `const` or a class is read before its declaration,
  * or where nothing declares it. A name the code shows initialised is read without running or
- * throwing anything, alone or within a container, and is left out with the rest.
+ * throwing anything, alone or within a container, and is left out with the rest; so is a read of
+ * `undefined`, `NaN` or `Infinity` where no declaration of the name is in the file (`INERT_GLOBALS`).
  */
 export function canOmit(statement: VariableStatement): boolean {
   // eslint-disable-next-line no-bitwise -- TypeScript says `using` and `await using` in this flag.
@@ -172,13 +183,24 @@ function inertValue(expression: Expression, shown: Shown): boolean {
   return true;
 }
 
+/**
+ * Whether `name` reads one of the inert globals (`INERT_GLOBALS`): the name is one of them and no
+ * declaration in its file gives it, nor an import of a value (`globalOf`, which reads each file once).
+ * Where one does — a parameter, a local, a module's declaration, an import — the name read is that
+ * one, which the rules of `shownAt` answer, and nothing here: a local read before its declaration
+ * throws, though the global of its name would not.
+ */
+function readsInertGlobal(name: Identifier): boolean {
+  return INERT_GLOBALS.has(name.text) && globalOf(name) === name.text;
+}
+
 /** The values an inert expression evaluates; none where another evaluation must be preserved. */
 function inertChildren(value: Expression, shown: Shown): readonly Expression[] | undefined {
   if (INERT.has(value.kind) || isArrowFunction(value) || isFunctionExpression(value)) {
     return [];
   }
   if (isIdentifier(value)) {
-    return shown(value.text) ? [] : undefined;
+    return shown(value.text) || readsInertGlobal(value) ? [] : undefined;
   }
   if (isArrayLiteralExpression(value)) {
     return value.elements;

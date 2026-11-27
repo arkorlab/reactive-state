@@ -21,9 +21,15 @@ import { compilerApplications } from './support/compiler-applications.ts';
  * browser part: a prop only the site read is not sent, and a module only the site read is not
  * imported.
  *
- * A name the code does not show initialised is kept, since reading it may run or throw: a global,
- * whose getter may run; a name nothing declares; a `let`, a `const` or a class read before its
- * declaration.
+ * `undefined`, `NaN` and `Infinity` are read without running or throwing anything wherever no
+ * declaration of the name is in scope: they are non-writable, non-configurable properties of the
+ * global object, which has no getter to run, and are never absent. A prop only the site read beside
+ * one of them (`{ credential, optional: undefined }`) is not sent to the browser.
+ *
+ * A name the code does not show initialised is kept, since reading it may run or throw: any other
+ * global, whose getter may run or which may be absent; a name nothing declares; a `let`, a `const`
+ * or a class read before its declaration; one of those three globals where a declaration of the
+ * name is in scope, which is the name read and answers by the rules above.
  */
 
 /** A component of one state whose site alone reads `id`, of the constant `declaration` declares. */
@@ -64,6 +70,21 @@ describe('a constant only a site reads, of names the code shows initialised', ()
       declaration: "const shown = 'fixed';",
       id: 'shown + selected',
       what: 'of a literal',
+    },
+    {
+      declaration: 'const shown = { credential: label, optional: undefined };',
+      id: 'shown + selected',
+      what: 'of a prop and `undefined`, which is not sent',
+    },
+    {
+      declaration: 'const shown = [label, NaN];',
+      id: 'shown + selected',
+      what: 'of a prop and `NaN`, which is not sent',
+    },
+    {
+      declaration: 'const shown = { credential: label, ratio: Infinity };',
+      id: 'shown + selected',
+      what: 'of a prop and `Infinity`, which is not sent',
     },
   ])('is left out of the Client Component: $what', async ({ declaration, id }) => {
     const app = await application(siteOnly(declaration, id));
@@ -138,6 +159,27 @@ const SHOWN: readonly Row[] = [
   },
   { body: 'const unused = [source, { value: first }];', id: 'within-an-array-and-an-object' },
   { body: 'const unused = (source as unknown)!;', id: 'under-a-cast' },
+  { body: 'const unused = undefined;', id: 'global-undefined' },
+  { body: 'const unused = NaN;', id: 'global-nan' },
+  { body: 'const unused = Infinity;', id: 'global-infinity' },
+  {
+    body: 'const unused = { credential: source, optional: undefined };',
+    id: 'prop-beside-undefined',
+  },
+  { body: 'const unused = [undefined, NaN, Infinity, [source]];', id: 'globals-within-an-array' },
+  {
+    body: 'const undefined = make(); const unused = undefined;',
+    id: 'undefined-declared-earlier',
+  },
+  {
+    body: 'function inner(undefined: unknown) { const unused = undefined; return unused; }',
+    id: 'undefined-a-parameter-of-a-function-within-another',
+  },
+  {
+    before: "import undefined from './label';",
+    body: 'const unused = undefined;',
+    id: 'undefined-imported',
+  },
 ];
 
 /** Names the code does not show initialised, and reads that are more than a name's: kept. */
@@ -145,7 +187,11 @@ const KEPT: readonly Row[] = [
   { body: 'const unused = window;', id: 'global' },
   { body: 'const unused = globalThis.value;', id: 'member-of-the-global-object' },
   { body: 'const unused = nothingDeclaresThis;', id: 'undeclared-name' },
-  { body: 'const unused = undefined;', id: 'undefined' },
+  { body: 'const unused = Math;', id: 'another-global-of-the-global-object' },
+  { body: 'const unused = [undefined, Math];', id: 'undefined-beside-another-global' },
+  { body: 'const unused = undefined; const undefined = make();', id: 'undefined-declared-later' },
+  { body: 'const unused = NaN; let NaN = 1;', id: 'nan-declared-later' },
+  { before: 'const Infinity = 1;', body: 'const unused = Infinity;', id: 'infinity-of-the-module' },
   { body: 'const unused = later; const later = 1;', id: 'const-before-its-declaration' },
   { body: 'let unused = later; let later = 1;', id: 'let-before-its-declaration' },
   { body: 'const unused = Later; class Later {}', id: 'class-before-its-declaration' },
@@ -178,11 +224,18 @@ const KEPT: readonly Row[] = [
 ];
 
 /** A function within another, which a scope stands around: what the module imports is not shown. */
-const NESTED: Row = {
-  before: "import { LABEL } from './label';",
-  body: 'return function inner() { const unused = LABEL; return unused; };',
-  id: 'import-read-in-a-function-within-another',
-};
+const NESTED: readonly Row[] = [
+  {
+    before: "import { LABEL } from './label';",
+    body: 'return function inner() { const unused = LABEL; return unused; };',
+    id: 'import-read-in-a-function-within-another',
+  },
+  {
+    before: "import undefined from './label';",
+    body: 'return function inner() { const unused = undefined; return unused; };',
+    id: 'undefined-imported-and-read-in-a-function-within-another',
+  },
+];
 
 describe('whether a constant’s initialization may be left out, by the names it reads', () => {
   let api: API;
@@ -218,7 +271,7 @@ describe('whether a constant’s initialization may be left out, by the names it
     expect(omitted(row)).toBe(true);
   });
 
-  it.each([...KEPT, NESTED])('keeps what the code does not show initialised: $id', (row) => {
+  it.each([...KEPT, ...NESTED])('keeps what the code does not show initialised: $id', (row) => {
     expect(omitted(row)).toBe(false);
   });
 
