@@ -225,10 +225,11 @@ describe('operation generic global types', () => {
       {
         id: 'actions/global-types',
         fileName: 'actions/global-types.ts',
-        written: "'./source'",
+        specifierFrom: () => "'./source'",
         exports: ['choose'],
         callables,
       },
+      'actions/global-types.ts',
       'b_BUILD',
     );
 

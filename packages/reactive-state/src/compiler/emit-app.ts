@@ -328,11 +328,17 @@ export interface StubHost {
 }
 
 /**
- * The stub of a `'use server'` module (`<module id>.ts`): each function, run by the authority, typed
- * as the module's own — its parameters, and what it answers — through an import of its types alone,
- * so that a page's `<form action={publish.bind(null, id)}>` is checked as the original would be.
+ * The stub of a `'use server'` module (`<module id>.ts`, at `file`): each function, run by the
+ * authority, typed as the module's own — its parameters, and what it answers — through an import of
+ * its types alone, so that a page's `<form action={publish.bind(null, id)}>` is checked as the
+ * original would be.
  */
-export function emitStub(operation: OperationModule, buildId: string, host?: StubHost): string {
+export function emitStub(
+  operation: OperationModule,
+  file: string,
+  buildId: string,
+  host?: StubHost,
+): string {
   const source = unusedName(
     'source',
     (name) => name === 'operate' || operation.exports.includes(name),
@@ -408,7 +414,7 @@ export function emitStub(operation: OperationModule, buildId: string, host?: Stu
     ...(host?.prepareOperation === true
       ? [`import { prepareOperation as ${prepare} } from ${host.from};`]
       : []),
-    ...(needsOriginal ? [`import type * as ${source} from ${operation.written};`] : []),
+    ...(needsOriginal ? [`import type * as ${source} from ${operation.specifierFrom(file)};`] : []),
     ...(mirrored.length === 0 ? [] : ['', `type ${result}<Value> = Promise<Awaited<Value>>;`]),
     ...functions,
     '',
@@ -416,25 +422,10 @@ export function emitStub(operation: OperationModule, buildId: string, host?: Stu
 }
 
 /**
- * The names the authority's registry declares or imports at its top level besides the application's,
- * and the shape of the rest of them: each name it generates — `program$…`, `operations$…`, `guard$…`,
- * `database$` — has a `$` in it (`localNames`, `moduleNames`).
+ * The authority's registry (`authority.mts`, at `file`): every program, every operation module, the
+ * database.
  */
-const REGISTRY_NAMES: ReadonlySet<string> = new Set([
-  'buildId',
-  'database',
-  'middleware',
-  'MiddlewareProgram',
-  'operations',
-  'programs',
-  'RegisteredRoute',
-  'RouteRegistration',
-  'routes',
-  'sessions',
-]);
-
-/** The authority's registry (`authority.mts`): every program, every operation module, the database. */
-export function emitRegistry(input: AppInput): string {
+export function emitRegistry(input: AppInput, file: string): string {
   const programs = input.components.map(({ component }) => component.id).toSorted(byCodeUnits);
   const programNames = localNames(programs, 'program');
   const operationNames = localNames(
@@ -442,18 +433,10 @@ export function emitRegistry(input: AppInput): string {
     'operations',
   );
   const { database } = input;
-  // The database is imported by its own name unless the registry declares or imports that name
-  // itself — `database`, `routes`, the names of what it exports, the types it imports — or may
-  // generate it: a name with a `$` in it.
-  const aliased =
-    database.name === 'default' || REGISTRY_NAMES.has(database.name) || database.name.includes('$');
-  const local = aliased ? 'database$' : database.name;
-  const from = specifierLiteral(database.specifier);
-  const imported = aliased ? `${database.name} as database$` : database.name;
   const databaseImport =
     database.name === 'default'
-      ? `import database$ from ${from};`
-      : `import { ${imported} } from ${from};`;
+      ? `import database$ from ${specifierLiteral(database.specifier)};`
+      : `import { ${database.name} as database$ } from ${specifierLiteral(database.specifier)};`;
   const operations = input.operations.map(
     (operation) => `${keyOf(operation.id)}: ${operationNames.get(operation.id) ?? ''}`,
   );
@@ -463,10 +446,10 @@ export function emitRegistry(input: AppInput): string {
       (id) =>
         `import * as ${programNames.get(id) ?? ''} from ${siblingSpecifier(id, '.authority.mts')};`,
     ),
-    ...input.operations.map(
-      (operation) =>
-        `import * as ${operationNames.get(operation.id) ?? ''} from ${operation.written};`,
-    ),
+    ...input.operations.map((operation) => {
+      const namespace = operationNames.get(operation.id) ?? '';
+      return `import * as ${namespace} from ${operation.specifierFrom(file)};`;
+    }),
     databaseImport,
     ...registryImports(input.routing ?? NO_ROUTING),
     '',
@@ -475,7 +458,7 @@ export function emitRegistry(input: AppInput): string {
     operations.length === 0
       ? 'export const operations = {};'
       : `export const operations = { ${operations.join(', ')} };`,
-    `export const database = ${local};`,
+    'export const database = database$;',
     ...(input.host?.session === undefined ? [] : ["export const sessions = 'asserted';"]),
     ...registryExports(input.routing ?? NO_ROUTING),
     '',

@@ -10674,6 +10674,26 @@ const REFUSED: readonly Refused[] = [
     what: 'a server module that re-exports another’s operations with `export *`',
   },
   {
+    file: 'actions/audit.operations.ts',
+    from: 'AUDIT_OPERATIONS',
+    marker: 'export',
+    original: 'AUDIT_OPERATIONS',
+    reason:
+      "`audit.operations.ts` is named as a module of server operations and does not open with `'use server'`: the authority registers a module of that name though nothing imports it, and runs only a `'use server'` module's exports. Open it with the directive, or name it otherwise.",
+    to: 'export async function auditProject(projectId: string): Promise<string> {\n  return projectId;\n}\n',
+    what: 'a module named as one of server operations, of no directive',
+  },
+  {
+    file: 'actions/audit.operations.ts',
+    from: 'AUDIT_OPERATIONS',
+    marker: "'use client'",
+    original: 'AUDIT_OPERATIONS',
+    reason:
+      "`audit.operations.ts` is named as a module of server operations and does not open with `'use server'`",
+    to: "'use client';\n\nexport function auditLabel(): string {\n  return '監査する';\n}\n",
+    what: "a module named as one of server operations, of `'use client'`",
+  },
+  {
     file: EDITOR,
     from: 'export default async function TodoEditor',
     marker: 'export default async function*',

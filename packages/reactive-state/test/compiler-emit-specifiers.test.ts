@@ -36,8 +36,13 @@ function componentOf(id: string): CompiledComponent {
 }
 
 function operationOf(id: string): OperationModule {
-  // `written` is the specifier as the first importer wrote it, quotes and all.
-  return { exports: ['go'], fileName: `${id}.ts`, id, written: JSON.stringify(`./${id}.ts`) };
+  // The specifier is as the first importer wrote it, quotes and all.
+  return {
+    exports: ['go'],
+    fileName: `${id}.ts`,
+    id,
+    specifierFrom: () => JSON.stringify(`./${id}.ts`),
+  };
 }
 
 function inputOf(id: string): AppInput {
@@ -82,7 +87,7 @@ describe('the specifiers of the generated modules', () => {
   it.each(IDS)(
     'writes the imports of a program and an operation module in the registry: $id',
     ({ id }) => {
-      const specifiers = specifiersOf(emitRegistry(inputOf(id)));
+      const specifiers = specifiersOf(emitRegistry(inputOf(id), '/out/authority.mts'));
 
       expect(specifiers).toContain(`./${id}.authority.mts`);
       expect(specifiers).toContain(`./${id}.ts`);
@@ -98,7 +103,7 @@ describe('the specifiers of the generated modules', () => {
 
   it('keeps the spelling of a path that asks for no escape', () => {
     expect(relativeSpecifier('/out/a/b.ts', '/out/elements')).toBe("'../elements'");
-    expect(emitRegistry(inputOf('components/stats'))).toContain(
+    expect(emitRegistry(inputOf('components/stats'), '/out/authority.mts')).toContain(
       "from './components/stats.authority.mts';",
     );
     expect(emitElements(inputOf('components/stats'))).toContain(
