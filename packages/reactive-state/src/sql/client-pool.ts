@@ -17,7 +17,7 @@ import {
   REFUSED,
   refusedCall,
 } from './client-plans.ts';
-import { sentToPostgres, textOf, TransactionWrites } from './client-writes.ts';
+import { endsTransaction, sentToPostgres, textOf, TransactionWrites } from './client-writes.ts';
 import type { Followed } from './keys.ts';
 import { boundOf } from './serialized.ts';
 
@@ -34,7 +34,9 @@ import { boundOf } from './serialized.ts';
  * submittable beside it, which a render may not use: neither says when what it read arrived. And
  * a setting changed on a pool reaches one connection of many, which the plans of every other
  * connection were not asked under, so a text that changes one is refused there. A checked-out
- * connection may change its own, as a transaction does, and nothing here tells it from a commit.
+ * connection may change its own, as a transaction does; of what it changes beyond that — a `SET`
+ * not `LOCAL`, a `set_config` of a session's — it is closed as it is given back, and no render
+ * plans a statement through it.
  *
  * A render may settle while a transaction it opened runs on. What opens and ends one reads nothing
  * and runs regardless, so Drizzle's `rollback` still ends it, and a connection given back in one is
@@ -134,6 +136,15 @@ function heard(): void {
   // Nothing more to tell.
 }
 
+/** Why a render queries through no connection whose settings were changed: its plans were not asked under them. */
+function settingsRefused(): Promise<never> {
+  return Promise.reject(
+    new Error(
+      'A render queries through no checked-out connection whose settings were changed beyond a transaction, which the plans of the pool were not asked under: give every connection its settings as it connects.',
+    ),
+  );
+}
+
 /** `connection`, a pool or one it checked out, its queries in a render noted by `plans`. */
 function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedOut: boolean): C {
   let client = connection;
@@ -162,6 +173,8 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       return answerOf(Array.isArray(answered) ? answered : [answered], catalog);
     },
   };
+  /** Whether a statement of this checked-out connection changed its settings beyond a transaction. */
+  let changed = false;
   const outside = (name: PropertyKey, args: readonly unknown[]): unknown =>
     retainedReceiver(called(connection, name, args), connection, client);
   const refusedInRender = (name: PropertyKey) => {
@@ -205,7 +218,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       writes = new TransactionWrites();
     }
     if (ROLLBACK.test(statement.text)) {
-      writes?.ended('none');
+      writes?.undone();
       writes = undefined;
     }
     if (!COMMIT.test(statement.text)) return run();
@@ -236,12 +249,21 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       const settled: Error = error as Error;
       return refusalOf(Promise.reject(settled), 'query', [first, ...rest]);
     }
-    if (noted !== undefined) return rendered(noted, statement);
-    const text = checkedOut ? undefined : textOf(first);
-    if (typeof text === 'string' && plans.changesOneSession(text)) {
+    if (noted !== undefined) {
+      if (!changed) return rendered(noted, statement);
+      return refusalOf(
+        noted(() => settingsRefused()),
+        'query',
+        [first, ...rest],
+      );
+    }
+    const text = textOf(first);
+    if (checkedOut && typeof text === 'string' && plans.leavesSession(text)) changed = true;
+    if (!checkedOut && typeof text === 'string' && plans.changesOneSession(text)) {
       return sessionRefused(first, rest, text);
     }
     const args = [first, ...rest];
+    if (checkedOut && typeof text === 'string' && endsTransaction(text)) writes?.endedUnseen();
     return sentToPostgres('query', args, () => outside('query', args), writes);
   };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
@@ -266,12 +288,15 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       },
     ]);
   };
-  const release = (...args: unknown[]): unknown => {
+  const release = (...given: unknown[]): unknown => {
+    // What it changed of its settings is not for the next to take it: it is closed.
+    const args = changed ? [true] : given;
     called(connection, 'removeListener', ['error', heard]);
     // Closed in its transaction, the connection leaves nothing of it; one that ended unseen may have.
     const status = statusOf(connection);
     const closedIn = typeof status === 'string' && status !== IDLE;
-    writes?.ended(closedIn ? 'none' : 'unknown');
+    if (closedIn) writes?.undone();
+    else writes?.ended('unknown');
     writes = undefined;
     return called(connection, 'release', inTransaction(connection) ? [true] : args);
   };
