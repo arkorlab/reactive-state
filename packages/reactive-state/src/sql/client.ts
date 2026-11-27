@@ -397,6 +397,19 @@ function answerOf(
   };
 }
 
+/**
+ * Whether `descriptor` is of a value the connection fixed and may not write — neither configurable
+ * nor writable — of which a proxy of the connection may answer nothing but the value itself.
+ */
+function isFixed(descriptor: PropertyDescriptor | undefined): boolean {
+  return (
+    descriptor !== undefined &&
+    'value' in descriptor &&
+    descriptor.configurable !== true &&
+    descriptor.writable !== true
+  );
+}
+
 /** `connection`, a PGlite or one of its transactions, its queries in a render noted by `plans`. */
 function tracked<C extends Connection>(connection: C, plans: Plans, transaction = false): C {
   let client = connection;
@@ -485,7 +498,15 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
       if (typeof value !== 'function') {
         // PGlite's own promise of its start, which no statement answers. No other promise is known
         // so: what holds one says nothing of when it started, or whether a render started it.
-        return key === 'waitReady' ? value : guarded(value, String(key));
+        if (key === 'waitReady') return value;
+        // A namespace the connection fixed and may not write is answered as it stands, as by its
+        // descriptor: a proxy may answer nothing else of it, and throws where it does. Its methods
+        // are the connection's own, so, which a render does not refuse.
+        const fixed =
+          typeof value === 'object' &&
+          value !== null &&
+          isFixed(Reflect.getOwnPropertyDescriptor(target, key));
+        return fixed ? value : guarded(value, String(key));
       }
       // Any other method, by a name or a symbol: the connection's own outside a render, a fault in
       // one.
@@ -498,8 +519,7 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
       if (descriptor === undefined) return;
       const read = (): unknown => Reflect.get(client, key);
       if ('value' in descriptor) {
-        const fixed = descriptor.configurable !== true && descriptor.writable !== true;
-        return fixed ? descriptor : { ...descriptor, value: read() };
+        return isFixed(descriptor) ? descriptor : { ...descriptor, value: read() };
       }
       const open = descriptor.configurable === true && descriptor.get !== undefined;
       return open ? { ...descriptor, get: read } : descriptor;
