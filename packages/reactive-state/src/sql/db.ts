@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
@@ -148,6 +148,22 @@ async function seedOnce<S>(
 }
 
 /**
+ * The file a directory's lock is, beside the directory where it really is: one directory has one
+ * lock, whether it is named with a slash at its end (which would put the file inside it), by a path
+ * from the working directory, or by a link to it.
+ */
+function lockFileOf(directory: string): string {
+  const resolved = path.resolve(directory);
+  let real = resolved;
+  try {
+    real = realpathSync(resolved);
+  } catch {
+    // Not made yet: PGlite makes it, and no link leads to it.
+  }
+  return `${real}.lock`;
+}
+
+/**
  * Takes a directory's lock, which is held until the process ends or `release` is called. PGlite is
  * one process's: a second that opened the same directory would write over what the first keeps in
  * memory, so that neither could open it again. A lock of SQLite's, of a file beside the directory,
@@ -156,7 +172,7 @@ async function seedOnce<S>(
  */
 async function lockOf(directory: string): Promise<() => void> {
   const { DatabaseSync } = await import('node:sqlite');
-  const lock = new DatabaseSync(`${directory}.lock`);
+  const lock = new DatabaseSync(lockFileOf(directory));
   try {
     lock.exec('BEGIN EXCLUSIVE');
   } catch (error) {
