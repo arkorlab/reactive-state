@@ -661,7 +661,9 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const store = first.store(db);
 
     const read = await store.changes(0, 10);
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1100);
+    // The next read of the schema, ten seconds after, while the triggers are those `captureSql()`
+    // makes.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10_100);
     const again = await store.changes(0, 10);
     clock.mockRestore();
 
