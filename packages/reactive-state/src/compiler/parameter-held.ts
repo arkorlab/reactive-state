@@ -1,10 +1,12 @@
 import {
+  type CallExpression,
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
   isArrowFunction,
   isBinaryExpression,
   isBindingElement,
+  isCallExpression,
   isConditionalExpression,
   isElementAccessExpression,
   isExpressionStatement,
@@ -24,16 +26,20 @@ import {
 
 import type { Answering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { globalPath } from './global-answers.ts';
 import { readsOf } from './local-module-reads.ts';
-import { ASSIGNING, isConstList, isWrapping, memberChain } from './local-write-paths.ts';
+import { standsInRepeatableScope } from './local-write-arithmetic.ts';
+import { ASSIGNING, handedTo, isConstList, isWrapping, memberChain } from './local-write-paths.ts';
+import { writesOf } from './local-writes.ts';
 import { bindingIdentifiers, withinFunction } from './scope.ts';
 
 /**
- * Where the walk of a parameter's reads (`writesOf`) stops following what the parameter holds. It
- * reads a write through the parameter's own name, through a `const` the name is taken into, and
- * through a name a pattern or a loop binds of it. A parameter the function keeps anywhere else is
- * written through a name the walk does not read; the object the parameter holds is then no object the
- * compile reads (`Target.isHeld`), and a write into it is a change, as it was of any parameter.
+ * Where the walk of a parameter's reads (`writesOf`) stops reading what the parameter holds. It reads
+ * a write through the parameter's own name, through a `const` the name is taken into and through a
+ * name a pattern or a loop binds of it. A parameter the function keeps anywhere else is written
+ * through a name the walk does not read; one a call locks before a write is written where it
+ * throws. The object the parameter holds is then no object the compile reads (`Target.isHeld`), and
+ * a write into it is a change, as it was of any parameter.
  */
 
 /** The operators whose answer is one of their operands: `a || b`, `a && b`, `a ?? b`, `a, b`. */
@@ -45,18 +51,70 @@ const CARRYING: ReadonlySet<SyntaxKind> = new Set([
 ]);
 
 /**
- * Whether the function keeps the object `declared` holds where no read of it is followed: in a
- * member of an object or an array it writes (`{ target: value }`, `[value]`), a member it assigns it
- * to (`holder.target = value`), a field or a default, or a function that answers it (`() => value`).
- * Of the reads `isCounted` tells, those of the parameter and of the `const` names it is taken into.
+ * The calls of the language that make an object refuse writes: a frozen, a sealed and a
+ * non-extensible object throws where code in a module writes a member it no longer takes.
  */
-export function isKeptElsewhere(
+const LOCKING: ReadonlySet<string> = new Set([
+  'Object.defineProperties',
+  'Object.defineProperty',
+  'Object.freeze',
+  'Object.preventExtensions',
+  'Object.seal',
+  'Reflect.defineProperty',
+  'Reflect.preventExtensions',
+]);
+
+/** How `writesOf` reads the function (its `Walk`): the reads it counts are `reads`. */
+type Walk = Parameters<typeof writesOf>[2];
+
+/**
+ * Whether the parameter `declared` of `fn` holds the object the compile reads of it at each read the
+ * walk counts (`Target.isHeld`): the function keeps it nowhere the walk does not follow (`isKept`),
+ * and no call of `LOCKING` is handed it before a write into it, which then throws. A lock counts as
+ * before every write where it stands in a loop or in a function the code calls, which run it again
+ * or later than where it stands; otherwise as before the writes that follow it in the function, the
+ * writes of functions the code calls among them. A lock after the last write is no lock.
+ */
+export function holdsStill(fn: Answering, declared: Identifier, walk: Walk): boolean {
+  const isCounted = (name: Identifier): boolean => walk.reads?.(name) !== false;
+  const found = readsScanned(fn, declared, isCounted);
+  if (found.isKept) {
+    return false;
+  }
+  if (found.locks.length === 0) {
+    return true;
+  }
+  // A lock in a loop or in a function the code calls runs again, or later, than where it stands.
+  const from = Math.min(
+    ...found.locks.map((lock) => (standsInRepeatableScope(lock, fn) ? fn.pos : lock.end)),
+  );
+  const isAfter = (name: Identifier): boolean => {
+    return (
+      isCounted(name) &&
+      (name.pos >= from || withinFunction(name, fn) || namesOf(memberChain(name).top).length > 0)
+    );
+  };
+  const written = writesOf(declared, undefined, { ...walk, reads: isAfter });
+  return !written.changes && written.values.length === 0;
+}
+
+/** What a walk of the reads of a parameter and of the `const` names it is taken into found. */
+interface Scanned {
+  /** Whether a read of it goes where no read of it is followed (`isKept`). */
+  readonly isKept: boolean;
+  /** The calls of `LOCKING` that are handed it, or a member of it, as the object they lock. */
+  readonly locks: readonly CallExpression[];
+}
+
+/** Reads `isCounted` tells, of `declared` and of the `const` names it is taken into. */
+function readsScanned(
   fn: Answering,
   declared: Identifier,
   isCounted: (name: Identifier) => boolean,
-): boolean {
+): Scanned {
   const holders = [readsOf(declared, fn)];
   const seen = new Set<Identifier>([declared]);
+  const locks: CallExpression[] = [];
   const place = { fn, isHolder: (node: Node) => holders.some((isRead) => isRead(node)) };
   for (const isRead of holders) {
     const visit = (node: Node): boolean => {
@@ -71,14 +129,28 @@ export function isKeptElsewhere(
             holders.push(readsOf(name, fn));
           }
         }
+        const lock = lockedBy(top);
+        if (lock !== undefined) {
+          locks.push(lock);
+        }
       }
       return node.forEachChild((child) => (visit(child) ? true : undefined)) === true;
     };
     if (fn.forEachChild((child) => (visit(child) ? true : undefined)) === true) {
-      return true;
+      return { isKept: true, locks };
     }
   }
-  return false;
+  return { isKept: false, locks };
+}
+
+/** The call of `LOCKING` that `top` is the first argument of: the object it locks. */
+function lockedBy(top: Expression): CallExpression | undefined {
+  const call = handedTo(top);
+  if (call === undefined || !isCallExpression(call) || call.arguments[0] !== top) {
+    return undefined;
+  }
+  const path = globalPath(unwrapped(call.expression));
+  return path !== undefined && LOCKING.has(path.join('.')) ? call : undefined;
 }
 
 /** The `const` names that `top`, a read, is taken into: a declaration's, a loop head's. */

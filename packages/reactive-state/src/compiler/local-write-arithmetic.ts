@@ -102,7 +102,7 @@ const CONTAINER_MUTATING_METHODS: ReadonlySet<string> = new Set([
 ]);
 
 /** Whether `node` sits inside a loop or nested function/class within `owner`. */
-function standsInRepeatableScope(node: Node, owner: Node): boolean {
+export function standsInRepeatableScope(node: Node, owner: Node): boolean {
   let current: Node = node;
   while (current !== owner && !isSourceFile(current)) {
     const isLoop =

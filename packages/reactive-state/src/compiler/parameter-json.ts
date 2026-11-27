@@ -17,7 +17,7 @@ import { metadataInitializer } from './input-callees.ts';
 import type { JsonReading } from './json-reading.ts';
 import { readsOf } from './local-module-reads.ts';
 import { writesOf } from './local-writes.ts';
-import { isKeptElsewhere } from './parameter-held.ts';
+import { holdsStill } from './parameter-held.ts';
 import { parameterValue, readsReplacement } from './parameter-values.ts';
 import { bindingIdentifiers } from './scope.ts';
 
@@ -32,9 +32,9 @@ const PRIMITIVES: ReadonlySet<SyntaxKind> = new Set([
  * Whether a returned parameter acquires a value no JSON holds in the function's own code. A member
  * the code writes is an entry of the object the parameter holds where the compile reads that object:
  * what the function replaces the parameter with, or what the call writes in its place (`written`,
- * `writtenObject`), and the function keeps it where its reads are followed (`parameter-held.ts`). Of
- * any other value the call hands, or an object kept elsewhere, a write changes what the compile does
- * not read.
+ * `writtenObject`), and no call locks it before the write nor the function keeps it where its reads
+ * are not followed (`holdsStill`). Of any other value the call hands, or an object so kept or locked,
+ * a write changes what the compile does not read.
  */
 export function changedParameters(
   fn: Answering,
@@ -65,7 +65,7 @@ export function changedParameters(
       visiting: new Set(),
       reads: replacement === undefined ? undefined : readsReplacement(fn, replacement),
     } satisfies Parameters<typeof writesOf>[2];
-    const isHeld = held !== undefined && !isKeptElsewhere(fn, declared, walk.reads ?? (() => true));
+    const isHeld = held !== undefined && holdsStill(fn, declared, walk);
     const found = writesOf(declared, held, { ...walk, holds: isHeld ? declared : undefined });
     const changed =
       found.changes ||

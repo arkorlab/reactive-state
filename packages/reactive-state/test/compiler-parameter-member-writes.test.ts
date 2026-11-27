@@ -21,6 +21,8 @@ function wide(body: string): string {
   return `function make(value: ${WIDE}) { ${body} }${PAYLOAD}`;
 }
 
+const NESTED = " export const payload = make({meta: {id: 'safe'}});";
+
 describe('shared factory parameter member writes', () => {
   const { apps, compile } = compilerApplications();
 
@@ -200,6 +202,48 @@ describe('shared factory parameter member writes', () => {
       expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
     },
   );
+
+  it.each([
+    wide("value.id = 'fresh'; Object.freeze(value); return value;"),
+    wide("value.id = 'fresh'; return Object.freeze(value);"),
+    wide("value.id = 'fresh'; Object.seal(value); Object.preventExtensions(value); return value;"),
+    wide("Object.freeze({id: 'other'}); value.id = 'fresh'; return value;"),
+    wide('Object.freeze(value); return value;'),
+    wide("value.id = 'fresh'; Object.freeze(value); const id = value.id; return {id};"),
+    wide("Object.freeze(value); value = {id: 'fresh'}; value.id = 'safe'; return value;"),
+    `function make(value: {meta: {id: string}}) { value.meta.id = 'fresh'; Object.freeze(value.meta); return value; }${NESTED}`,
+  ])('keeps a member write before the call that locks the parameter: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    wide("Object.freeze(value); value.id = 'fresh'; return value;"),
+    wide("Object.seal(value); value.extra = 'added'; return value;"),
+    wide("Object.preventExtensions(value); value.extra = 'added'; return value;"),
+    wide("Reflect.preventExtensions(value); value.extra = 'added'; return value;"),
+    wide(
+      "Object.defineProperty(value, 'id', {writable: false}); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "Object.defineProperties(value, {id: {writable: false}}); value.id = 'fresh'; return value;",
+    ),
+    wide("const alias = value; Object.freeze(alias); value.id = 'fresh'; return value;"),
+    wide("const alias = value; Object.freeze(value); alias.id = 'fresh'; return value;"),
+    wide("for (const id of ['a', 'b']) { value.id = id; Object.freeze(value); } return value;"),
+    wide("const swap = () => { value.id = 'fresh'; }; Object.freeze(value); swap(); return value;"),
+    wide("const lock = () => Object.freeze(value); lock(); value.id = 'fresh'; return value;"),
+    wide("if (value.id === 'safe') { Object.freeze(value); } value.id = 'fresh'; return value;"),
+    wide("value = {id: 'fresh'}; Object.freeze(value); value.id = 'safe'; return value;"),
+    `function make(value: {meta: {id: string}}) { Object.freeze(value.meta); value.meta.id = 'fresh'; return value; }${NESTED}`,
+  ])('refuses a member write after a call locks the parameter: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
 
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
