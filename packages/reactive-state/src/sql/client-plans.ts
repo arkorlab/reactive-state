@@ -1,7 +1,7 @@
 import { type TableRead } from '../server/context.ts';
 import { type Relation, relationKey } from './capture.ts';
 import { type Catalog, catalogOf, catalogSql, NO_CONDITIONS } from './catalog.ts';
-import { changesContext, changesSession, namesTemporaryRowType } from './guards.ts';
+import { changesContext, changesSession, leavesSession, namesTemporaryRowType } from './guards.ts';
 import type { Followed } from './keys.ts';
 import { explainSql, type PlanReads, planReads, type Scan } from './plans.ts';
 import { readsOf, type TableScan } from './reads.ts';
@@ -287,6 +287,11 @@ export class Plans {
   /** Whether a text run on one connection of many changes its session (`changesSession`). */
   changesOneSession(sql: string): boolean {
     return changesSession(sql, this.#catalog?.conforming === true);
+  }
+
+  /** Whether a text run on a checked-out connection changes its settings beyond a transaction. */
+  leavesSession(sql: string): boolean {
+    return leavesSession(sql, this.#catalog?.conforming === true);
   }
 
   /**

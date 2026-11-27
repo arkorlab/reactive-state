@@ -93,7 +93,7 @@ export function arrayCopyViews(
   if (selected.method === 'flat')
     return (
       expandedFlatViews(selected, index, stable) ??
-      flattenedArrayViews(selected.receiver, index, fallbackDepth(call, selected.given), {
+      flattenedArrayViews(selected.receiver, index, fallbackDepth(selected), {
         stable,
         capture: call,
       })
@@ -580,12 +580,15 @@ function replacementViews(
 }
 
 /**
- * The depth a flat the reader could not expand reads: every depth where an unresolved spread
- * supplies it, which no written tuple holds; otherwise as written (`flatDepth`).
+ * The depth a flat the reader could not expand reads: every depth where an unresolved spread or an
+ * argument list it cannot read supplies it, or where a spread tuple's entries may have changed, none
+ * of which a written depth holds; otherwise as written (`flatDepth`).
  */
-function fallbackDepth(call: CallExpression, given: readonly Expression[]): number | undefined {
-  const args = framedArgumentPrefix(call, given, 1);
-  return args.unknown && args.alternatives === undefined ? undefined : flatDepth(given[0]);
+function fallbackDepth(copy: CopyCall): number | undefined {
+  if (copy.unknownArguments === true) return undefined;
+  return framedArgumentPrefix(copy.call, copy.given, 1).unknown
+    ? undefined
+    : flatDepth(copy.given[0]);
 }
 
 /** Omitted depth is one; fixed primitive numeric conversions retain zero and unbounded depths. */
