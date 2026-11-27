@@ -88,13 +88,13 @@ const ANYWHERE = new Set(['escape', 'ilike', 'like', 'return', 'similar']);
 /** The words a window's frame opens with, before its bound (`ROWS '1' PRECEDING`). */
 const FRAMES = new Set(['groups', 'range', 'rows']);
 /** The call of a window's proved parentheses, which no function's name is. */
-export const WINDOW = '(window)';
+const WINDOW = '(window)';
 /**
  * The call of `OVER (` after `operator(…)`: a window where the grammar takes that for a function's
  * call (`xmlexists(operator(*) OVER (…) …`), or a function `over`'s where it takes it for the prefix
  * clause. In them a frame's word proves neither reading: no syntax, and no column.
  */
-export const UNPROVEN_WINDOW = '(window?)';
+const UNPROVEN_WINDOW = '(window?)';
 /** A character of an operator's, as `ORDER BY x USING <` ends in one. */
 const OPERATOR_CHARACTER = /^[!#%&*+/<=>?@^|~-]$/u;
 const JSON_OBJECTS = new Set(['json_object', 'json_objectagg']);
