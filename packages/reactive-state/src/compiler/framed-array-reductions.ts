@@ -19,6 +19,7 @@ import { selectedError } from './framed-array-selections.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
 import { framedAtMethod } from './framed-at-methods.ts';
 import { frameBindingOf, frameDeclarationOf, frameMemberName } from './framed-bindings.ts';
+import { framedDeclaredResult } from './framed-copied-inputs.ts';
 import { framedMemberAdmitted } from './framed-error-admission.ts';
 import { framedAppliedArguments, framedArgumentPrefix } from './framed-keys.ts';
 import { quietMapperFunction } from './framed-mapper-quiet.ts';
@@ -122,7 +123,7 @@ export function framedArrayReduction(
  * What a reduction answers before the native's own reading: anything where the file may give the
  * array a method of that name of its own (`arrayMethodMayBeOverridden`), as it is then no native
  * reduction; or, where an unresolved spread supplies the reducer or the initial value, an Error the
- * declared result type, the call's type argument, admits. None where the native reads on.
+ * declared result type (`framedDeclaredResult`) admits. None where the native reads on.
  */
 function settledReduction(
   selected: Reduction,
@@ -131,7 +132,8 @@ function settledReduction(
   if (!selected.borrowed && arrayMethodMayBeOverridden(call, selected.method))
     return { answer: true };
   if (!selected.unknown) return undefined;
-  return { answer: framedMemberAdmitted(call.typeArguments?.[0], []) ? true : undefined };
+  const declared = framedDeclaredResult(call, selected.borrowed);
+  return { answer: framedMemberAdmitted(declared, []) ? true : undefined };
 }
 
 /** TypeScript's leading this declaration consumes no runtime accumulator or current-value slot. */

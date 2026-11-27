@@ -54,6 +54,8 @@ interface CopiedElements {
   readonly depth: number;
   /** Whether the input's elements are the copied ones, as `concat`'s array arguments are not. */
   readonly own: boolean;
+  /** Whether `declared` is the type of the array the elements are copied into, not of one of them. */
+  readonly array?: boolean;
 }
 
 /**
