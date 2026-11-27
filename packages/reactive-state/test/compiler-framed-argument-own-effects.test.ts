@@ -159,6 +159,38 @@ const CASES: readonly Case[] = [
     source: `function frames(error:Error){void error;const holder:{box:{failure?:{stack?:string}}}={box:{failure:{stack:'fixed'}}};const args=['failure',{value:{stack:'other'}}] as const;Object.defineProperty(holder.box,...args);return holder.box.failure!.stack;}`,
     refused: false,
   },
+  // A descriptor the unresolved spread may supply is a possible one, no definite last write: the
+  // array may hold others than it was written with, and any of its entries may be the descriptor.
+  {
+    id: 'define-descriptor-tuple-unshifted',
+    source: `function frames(error:Error){const holder:{box:{inner?:{stack?:string}}}={box:{inner:error}};const args:[PropertyDescriptor]=[{value:{stack:'fixed'}}];args.unshift({value:error});Object.defineProperty(holder.box,'inner',...args);return holder.box.inner!.stack;}`,
+    refused: true,
+  },
+  {
+    id: 'define-descriptors-last-of-two',
+    source: `function frames(error:Error){const holder:{box:{inner?:{stack?:string}}}={box:{inner:error}};const args:[PropertyDescriptor,PropertyDescriptor]=[{value:error},{value:{stack:'fixed'}}];Object.defineProperty(holder.box,'inner',...args);return holder.box.inner!.stack;}`,
+    refused: true,
+  },
+  {
+    id: 'define-descriptors-last-of-two-empty-holder',
+    source: `function frames(error:Error){const holder:{box:{inner?:{stack?:string}}}={box:{}};const args:[PropertyDescriptor,PropertyDescriptor]=[{value:error},{value:{stack:'fixed'}}];Object.defineProperty(holder.box,'inner',...args);return holder.box.inner!.stack;}`,
+    refused: true,
+  },
+  {
+    id: 'define-descriptor-tuple-member-target-unchanged',
+    source: `function frames(error:Error){const holder:{box:{inner?:{stack?:string}}}={box:{inner:error}};const args:[PropertyDescriptor]=[{value:{stack:'fixed'}}];Object.defineProperty(holder.box,'inner',...args);return holder.box.inner!.stack;}`,
+    refused: true,
+  },
+  {
+    id: 'define-descriptor-tuple-quiet-target-data-pin',
+    source: `function frames(error:Error){void error;const box:{inner?:{stack?:string}}={inner:{stack:'kept'}};const args:[PropertyDescriptor]=[{value:{stack:'fixed'}}];Object.defineProperty(box,'inner',...args);return box.inner!.stack;}`,
+    refused: false,
+  },
+  {
+    id: 'define-descriptor-literal-member-target-data-pin',
+    source: `function frames(error:Error){void error;const holder:{box:{inner?:{stack?:string}}}={box:{inner:{stack:'kept'}}};Object.defineProperty(holder.box,'inner',{value:{stack:'fixed'}});return holder.box.inner!.stack;}`,
+    refused: false,
+  },
   // The list an `apply` hands on stands past a spread the receiver's work leaves unresolved: it is
   // not shown, and the key it may hold is any.
   {
