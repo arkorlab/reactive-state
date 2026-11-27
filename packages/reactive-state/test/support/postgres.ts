@@ -9,6 +9,8 @@ import { onTestFinished } from 'vitest';
  */
 export const SERVER_URL = process.env['REACTIVE_POSTGRES_URL'];
 
+/** The first PostgreSQL a render's rows are followed on, as `server_version_num` writes it. */
+const ROWS_SINCE = 170_000;
 /** What a test of a real server may wait: a write behind a lock, and what a loaded machine adds. */
 export const SERVER_TIMEOUT_MS = 60_000;
 
@@ -23,6 +25,14 @@ export function urlOf(database: string, user?: string): string {
   url.pathname = `/${database}`;
   if (user !== undefined) url.username = user;
   return url.href;
+}
+
+/** Whether `client`'s server follows a render's rows: below 17, its tables whole (`catalog.ts`). */
+export async function followsRows(client: Client): Promise<boolean> {
+  const { rows } = await client.query<{ version: number }>(
+    "SELECT current_setting('server_version_num')::int AS version",
+  );
+  return (rows[0]?.version ?? 0) >= ROWS_SINCE;
 }
 
 /** A connection to `database`, closed as the test ends. */

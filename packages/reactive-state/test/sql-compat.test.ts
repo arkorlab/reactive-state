@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { queryCapture } from '../src/sql/compat.ts';
+import { checkServer, queryCapture } from '../src/sql/compat.ts';
 
 /** Capture upgrade diagnostics apply only to the missing objects of the store's own statement. */
 const NAMESPACE = 'custom_log';
@@ -69,5 +69,22 @@ describe('capture upgrade diagnostics', () => {
 
     await expect(queryCapture({ query }, PAGE, [0], NAMESPACE)).resolves.toBe(rows);
     expect(query).toHaveBeenCalledExactlyOnceWith(PAGE, [0]);
+  });
+});
+
+/** A server of `version`, as `server_version_num` writes it. */
+function serverOf(version: number) {
+  return { query: vi.fn().mockResolvedValue({ rows: [{ version }] }) };
+}
+
+describe('the server a render can run on', () => {
+  it('says which PostgreSQL it needs, of one whose plans no render could read', async () => {
+    await expect(checkServer(serverOf(150_019))).rejects.toThrow(
+      'This server is PostgreSQL 15: use PostgreSQL 16 or later',
+    );
+  });
+
+  it('leaves one that plans a statement of parameters', async () => {
+    await expect(checkServer(serverOf(160_000))).resolves.toBeUndefined();
   });
 });

@@ -9,6 +9,7 @@ import { TAIL } from '../authority/external.ts';
 import { type AnyDatabase, type Database, database } from '../server/schema.ts';
 import { logOf, seededSql } from './capture.ts';
 import { codeOf } from './client-plans.ts';
+import { checkServer } from './compat.ts';
 import type { Queryable } from './digest.ts';
 import { type DrizzleFollow, followDrizzle, type FollowDrizzleOptions } from './index.ts';
 
@@ -254,6 +255,7 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
       },
       migrate: (migrationsFolder) => migrator.migrate(orm, { migrationsFolder }),
       open: async () => {
+        await checkServer(queryable);
         await capture(queryable, follow);
         return { [follow.storeName]: follow.store(reads) };
       },

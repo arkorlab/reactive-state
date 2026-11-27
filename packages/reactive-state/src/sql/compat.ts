@@ -1,6 +1,11 @@
 import { logOf } from './capture.ts';
 import type { Queryable } from './digest.ts';
 
+/** The first PostgreSQL that plans a statement of parameters, as each render's reads are read by. */
+const PLANS_SINCE = 160_000;
+/** What `server_version_num` holds of each major version. */
+const A_MAJOR_VERSION = 10_000;
+
 /** The log's functions the store calls by name, which a log of before may lack. */
 const CAPTURE_FUNCTIONS = ['catch_up', 'ddl_count', 'fold_ddl', 'next_number', 'prune'] as const;
 
@@ -40,6 +45,23 @@ export async function queryCapture(
     throw new Error(
       `The reactive-state change log in \`${namespace}\` needs its capture statements again: run every statement returned by \`follow.captureSql()\` after upgrading, before starting the store or pruning the log.`,
       { cause: error },
+    );
+  }
+}
+
+/**
+ * Refuses a server no render could run on, as `EXPLAIN (GENERIC_PLAN)` is of 16: PostgreSQL's answer
+ * reaches a render as a refusal of the application's own query, which says nothing of the server.
+ */
+export async function checkServer(client: Queryable): Promise<void> {
+  const { rows } = await client.query(
+    `SELECT current_setting('server_version_num')::pg_catalog.int4 AS "version"`,
+    [],
+  );
+  const { version } = rows[0] as { readonly version: number };
+  if (version < PLANS_SINCE) {
+    throw new Error(
+      `This server is PostgreSQL ${String(Math.floor(version / A_MAJOR_VERSION))}: use PostgreSQL ${String(PLANS_SINCE / A_MAJOR_VERSION)} or later, whose plans a render's reads are read of.`,
     );
   }
 }
