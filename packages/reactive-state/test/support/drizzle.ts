@@ -33,14 +33,18 @@ export interface Rendering {
 
 /**
  * A PGlite whose tables `ddl` makes — those of `schema`, which its Drizzle reads and writes — with
- * their change log, and its Drizzle, through the client a render's queries are followed by.
+ * their change log, in `namespace` if given, and its Drizzle, through the client a render's
+ * queries are followed by.
  */
 export async function openedWith<S extends Readonly<Record<string, unknown>>>(
   schema: S,
   ddl: string,
+  namespace?: string,
 ): Promise<Opened<S>> {
   // A schema of PostgreSQL's tables, which a type of no table yet says not.
-  const follow = followDrizzle(schema) as DrizzleFollow<S>;
+  const follow = (
+    namespace === undefined ? followDrizzle(schema) : followDrizzle(schema, { namespace })
+  ) as DrizzleFollow<S>;
   const pg = await PGlite.create();
   onTestFinished(async () => {
     await pg.close();

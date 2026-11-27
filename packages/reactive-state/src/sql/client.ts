@@ -1,11 +1,14 @@
 import { type TableRead, tableReads } from '../server/context.ts';
 import { type Relation, relationKey } from './capture.ts';
 import { type Catalog, catalogOf, catalogSql, NO_CONDITIONS } from './catalog.ts';
+import { guardedObjects, refusalOf, retainedReceiver } from './client-objects.ts';
+import { changesContext, namesTemporaryRowType } from './guards.ts';
 import type { Followed } from './keys.ts';
 import { explainSql, type PlanReads, planReads, type Scan } from './plans.ts';
 import { readsOf, type TableScan } from './reads.ts';
 import { renamesColumns } from './renames.ts';
 import { type Bound, boundOf, NOTHING_BOUND } from './serialized.ts';
+import { unknownTypeCast } from './type-guards.ts';
 
 /**
  * A PGlite connection, as the application's Drizzle queries through it, whose queries in a render
@@ -31,6 +34,8 @@ import { type Bound, boundOf, NOTHING_BOUND } from './serialized.ts';
  * a table a later value reads (`$1 = 'owner'` of `'viewer'`), and the plan is kept for the text.
  */
 interface Planner {
+  /** The PGlite scheduler owner: a transaction can hold the main connection's mutex. */
+  readonly owner: Connection;
   readonly check: (explain: string, values: unknown) => Promise<void>;
   readonly plan: (
     explain: string,
@@ -58,10 +63,11 @@ const OWN: readonly RegExp[] = [
 ];
 
 /**
- * How many statements' tables a connection keeps — a statement's text, made by code, repeats — and
- * how much of a refused statement a fault shows.
+ * How many statements' tables a connection keeps — a statement's text, made by code, repeats — how
+ * many times a statement is planned while the query context changes under it — a host's change
+ * moves it before and after it runs — and how much of a refused statement a fault shows.
  */
-const LIMITS = { keptPlans: 1024, shownText: 80 } as const;
+const LIMITS = { keptPlans: 1024, plans: 3, shownText: 80 } as const;
 
 /** The scans of a statement's plan, and whether the schema was the same as it was asked. */
 interface Planned {
@@ -85,8 +91,8 @@ class Plans {
   readonly #bound: Bound;
   readonly #kept = new Map<string, readonly TableScan[]>();
   #catalog: Catalog | undefined;
-  /** How many plans carry the catalog's statement now: the plans asked beside them carry none. */
-  #asking = 0;
+  /** A catalog asked by each scheduler owner; a transaction never awaits the mutex it holds. */
+  readonly #asking = new WeakMap<Connection, Promise<void>>();
   #generation = 0;
 
   constructor(followed: Followed, bound: Bound) {
@@ -94,25 +100,10 @@ class Plans {
     this.#bound = bound;
   }
 
-  /**
-   * A fault for a partitioned table or a partition, and for a table that inherits from another: a
-   * plan names the partitions of a table it reads, and a write to the table is logged as the
-   * table's; a write through a table's parent changes its rows and is logged as the parent's. A
-   * render that reads one would not be told of such a write, whichever of the tables the schema
-   * declares.
-   */
-  #refuseUnfollowable(relation: Relation): void {
-    const key = relationKey(relation);
-    if (this.#catalog?.partitioned?.has(key) === true) {
-      throw new Error(
-        `A render read ${key}, a partitioned table or a partition of one: reactive-state does not follow partitioned tables, so read it outside the render.`,
-      );
-    }
-    if (this.#catalog?.inherited?.has(key) === true) {
-      throw new Error(
-        `A render read ${key}, a table that inherits from another: reactive-state does not follow inheritance, so read it outside the render.`,
-      );
-    }
+  /** Moves the context counter, which every plan and page reads. */
+  #contextChanged(): void {
+    this.#followed.schema.generation += 1;
+    this.#followed.schema.context = (this.#followed.schema.context ?? 0) + 1;
   }
 
   /** The followed table `relation` is; a fault for one nothing follows. */
@@ -123,6 +114,11 @@ class Plans {
         `A render read ${relationKey(relation)}, which reactive-state does not follow: give its table in the schema \`followDrizzle\` is given, or read it outside the render.`,
       );
     }
+    if (this.#catalog?.unsupported?.has(table) === true) {
+      throw new Error(
+        `A render reads no table of an inheritance or partition hierarchy: ${relationKey(relation)}. Its statement triggers cannot capture every write a scan observes.`,
+      );
+    }
     return table;
   }
 
@@ -131,6 +127,31 @@ class Plans {
    * or locks rows, or reads a table nothing follows.
    */
   #scansOfPlan(sql: string, plan: PlanReads): readonly TableScan[] {
+    const catalog = this.#catalog;
+    if (catalog === undefined) {
+      throw new Error(
+        'The query catalog changed while a render was being planned: read the render again.',
+      );
+    }
+    if (changesContext(sql, catalog.conforming === true)) {
+      throw new Error(
+        'A render changes no query context: SET, RESET, DISCARD and set_config belong outside a render. Unicode-escaped identifiers and ambiguous string syntax are not admitted.',
+      );
+    }
+    if (
+      catalog.temporaryBody === true ||
+      namesTemporaryRowType(sql, catalog.temporaryTypes ?? [], catalog.conforming === true) ||
+      unknownTypeCast(
+        sql,
+        catalog.castTypes ?? [],
+        catalog.conforming === true,
+        catalog.typeKeywords,
+      )
+    ) {
+      throw new Error(
+        'A render reads no temporary table row type, unknown cast type or unproven typed table clause, directly or through a known string-body SQL function: staging-table DDL does not follow that type.',
+      );
+    }
     if (plan.writes) {
       throw new Error(
         `A component writes nothing as it renders: ${sql.slice(0, LIMITS.shownText)}`,
@@ -142,7 +163,6 @@ class Plans {
       );
     }
     for (const relation of plan.relations) {
-      this.#refuseUnfollowable(relation);
       this.#tableOf(relation);
     }
     // A statement that names a table's columns otherwise: its plan's names may be other columns'.
@@ -156,39 +176,25 @@ class Plans {
   }
 
   /**
-   * `explain`'s plan, with the catalog's statement before it where `ask`; and whether the schema was
-   * as it was when `generation` was read as it came back: the catalog it answered is kept of one
-   * that was.
+   * The scans `sql` reads, by its plan, asked again while the query context changed as it was
+   * asked: admission metadata of another context proves no read, and a fresh plan reads its own.
    */
-  async #planned(
-    explain: string,
-    planner: Planner,
-    generation: number,
-    ask: boolean,
-  ): Promise<{
-    readonly answered: Awaited<ReturnType<Planner['plan']>>;
-    readonly current: boolean;
-  }> {
-    const asked = ask ? catalogSql(this.#followed) : undefined;
-    if (asked !== undefined) this.#asking += 1;
-    let answered: Awaited<ReturnType<Planner['plan']>>;
-    try {
-      answered = await planner.plan(explain, asked);
-    } finally {
-      if (asked !== undefined) this.#asking -= 1;
+  async #scansOf(sql: string, values: unknown, planner: Planner): Promise<Planned> {
+    for (let attempt = 1; attempt <= LIMITS.plans; attempt += 1) {
+      const planned = await this.#plannedOnce(sql, values, planner);
+      if (planned !== undefined) return planned;
     }
-    const current = this.#followed.schema.generation === generation;
-    if (asked !== undefined && current) {
-      this.#catalog ??= catalogOf(answered.catalog, this.#followed);
-    }
-    return { answered, current };
+    throw new Error(
+      'The query context changed each time a render was being planned: read the render again.',
+    );
   }
 
   /**
    * The scans `sql` reads, by its plan, which `planner` answers once a text — the catalog with the
-   * first; the texts asked least lately are the first a full connection forgets.
+   * first; the texts asked least lately are the first a full connection forgets. Nothing where the
+   * query context changed as it was asked.
    */
-  async #scansOf(sql: string, values: unknown, planner: Planner): Promise<Planned> {
+  async #plannedOnce(sql: string, values: unknown, planner: Planner): Promise<Planned | undefined> {
     const { generation } = this.#followed.schema;
     if (generation !== this.#generation) {
       this.#kept.clear();
@@ -207,32 +213,78 @@ class Plans {
     } catch (error) {
       throw REFUSED.has(String(codeOf(error))) ? refusedText(sql, error) : error;
     }
-    // One plan carries the catalog's statement: a plan asked beside it, before its answer, reads its
-    // tables by no condition (`NO_CONDITIONS`) where the catalog is not yet known.
-    let planned = await this.#planned(
-      explain,
-      planner,
-      generation,
-      this.#catalog === undefined && this.#asking === 0,
-    );
-    // A plan asked beside the one that carries it may come back before that one's answer, or where
-    // that one failed: the catalog is asked again, by this plan alone, rather than this one read or
-    // kept where no table is known to be partitioned or to inherit.
-    if (planned.current && this.#catalog === undefined) {
-      planned = await this.#planned(explain, planner, generation, true);
+    // Statements of the same scheduler owner share admission metadata. A transaction must never
+    // wait for a main-connection plan that may itself be waiting for that transaction's mutex.
+    const pending = this.#asking.get(planner.owner);
+    if (pending !== undefined) await pending;
+    const asked = this.#catalog === undefined ? catalogSql(this.#followed) : undefined;
+    let answered: Awaited<ReturnType<Planner['plan']>>;
+    let ready: ((value: undefined) => void) | undefined;
+    if (asked !== undefined) {
+      const { promise, resolve } = Promise.withResolvers<undefined>();
+      ready = resolve;
+      this.#asking.set(planner.owner, promise);
     }
-    // A plan asked as the schema changed may say what it is no more: read whole, and kept not.
-    const { answered, current } = planned;
+    try {
+      answered = await planner.plan(explain, asked);
+      if (asked !== undefined && this.#followed.schema.generation === generation) {
+        this.#catalog = catalogOf(answered.catalog, this.#followed);
+      }
+    } finally {
+      if (asked !== undefined) {
+        this.#asking.delete(planner.owner);
+        ready?.(undefined);
+      }
+    }
+    // Admission metadata asked across a context change cannot establish a safe read.
+    const current = this.#followed.schema.generation === generation;
+    if (!current) return undefined;
     const scans = this.#scansOfPlan(sql, planReads(answered.plan));
-    if (!current) {
-      return { current, scans };
-    }
     if (this.#kept.size >= LIMITS.keptPlans) {
       const [oldest] = this.#kept.keys();
       if (oldest !== undefined) this.#kept.delete(oldest);
     }
     this.#kept.set(sql, scans);
     return { current, scans };
+  }
+
+  /**
+   * An observed context mutation outside renders invalidates plans on either side of its SQL,
+   * though it fails or a transaction later rolls it back. The follower reads the context counter
+   * on every page, so a change and change back within a digest interval still invalidates views.
+   */
+  async outsideContext(run: () => unknown): Promise<unknown> {
+    this.#contextChanged();
+    try {
+      return await run();
+    } finally {
+      this.#contextChanged();
+    }
+  }
+
+  /** As `outsideContext`, of a call that answers at once and is to go on doing so. */
+  outsideContextNow(run: () => unknown): unknown {
+    this.#contextChanged();
+    try {
+      return run();
+    } finally {
+      this.#contextChanged();
+    }
+  }
+
+  /** Transaction completion restores LOCAL settings after their observed mutation. */
+  async outsideTransaction(run: () => unknown): Promise<unknown> {
+    const context = this.#followed.schema.context;
+    try {
+      return await run();
+    } finally {
+      if (this.#followed.schema.context !== context) this.#contextChanged();
+    }
+  }
+
+  /** Whether a host's SQL may change the context, whose string settings may not be known yet. */
+  observesContext(sql: string): boolean {
+    return changesContext(sql, this.#catalog?.conforming === true);
   }
 
   /**
@@ -331,7 +383,9 @@ function answerOf(
 
 /** `connection`, a PGlite or one of its transactions, its queries in a render noted by `plans`. */
 function tracked<C extends Connection>(connection: C, plans: Plans, transaction = false): C {
+  let client = connection;
   const planner: Planner = {
+    owner: connection,
     check: async (explain, values) => {
       const nulls = Array.isArray(values) ? values.map(() => null) : [];
       try {
@@ -350,10 +404,23 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
     },
   };
   /** A method a render may not call: a fault of the render's, whatever its code does with it. */
+  const outside = (name: PropertyKey, args: readonly unknown[]): unknown => {
+    const sql = args[0];
+    const text = typeof sql === 'string' && (name === 'exec' || name === 'query');
+    const raw = name === 'sql' || (typeof name === 'string' && name.startsWith('execProtocol'));
+    const run = () => retainedReceiver(called(connection, name, args), connection, client);
+    if (name === 'execProtocolRawSync') return plans.outsideContextNow(run);
+    return raw || (text && plans.observesContext(sql)) ? plans.outsideContext(run) : run();
+  };
   const refusedInRender = (name: PropertyKey) => {
     return (...args: unknown[]): unknown => {
       const noted = tableReads();
-      return noted === undefined ? called(connection, name, args) : noted(() => refusedCall(name));
+      if (noted === undefined) return outside(name, args);
+      return refusalOf(
+        noted(() => refusedCall(name)),
+        name,
+        args,
+      );
     };
   };
   const wrapped: Readonly<Record<string, unknown>> = {
@@ -370,7 +437,9 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
           return plans.readsOf(sql, rest[0], planner, rebinds(rest[1]));
         });
       }
-      return called(connection, 'query', [sql, ...rest]);
+      return noted === undefined
+        ? outside('query', [sql, ...rest])
+        : called(connection, 'query', [sql, ...rest]);
     },
     transaction: (body: unknown, ...rest: unknown[]) => {
       const run =
@@ -382,10 +451,12 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
               return answered;
             }
           : body;
-      return called(connection, 'transaction', [run, ...rest]);
+      const call = () => called(connection, 'transaction', [run, ...rest]);
+      return tableReads() === undefined ? plans.outsideTransaction(call) : call();
     },
   };
-  return new Proxy(connection, {
+  const guarded = guardedObjects((name) => refusedCall(name));
+  client = new Proxy(connection, {
     // Read from the connection itself: its getters may read private fields, which a proxy has none of.
     get: (target, key) => {
       if (typeof key === 'string' && Object.hasOwn(wrapped, key)) {
@@ -393,13 +464,16 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
       }
       const value: unknown = Reflect.get(target, key);
       if (typeof value !== 'function') {
-        return value;
+        // PGlite's own promise of its start, which no statement answers. No other promise is known
+        // so: what holds one says nothing of when it started, or whether a render started it.
+        return key === 'waitReady' ? value : guarded(value, String(key));
       }
       // Any other method, by a name or a symbol: the connection's own outside a render, a fault in
       // one.
       return refusedInRender(key);
     },
   });
+  return client;
 }
 
 /**

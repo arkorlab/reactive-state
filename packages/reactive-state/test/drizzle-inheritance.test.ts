@@ -10,7 +10,9 @@ import { engineOf, openedWith } from './support/drizzle.ts';
 /**
  * A table that inherits from another (`INHERITS`) is no table the log follows: a write through its
  * parent changes its rows, and the log names the parent. A render that reads the child is refused,
- * whichever of the tables the schema declares; the parent's own rows (`ONLY`) are read as before.
+ * whichever of the tables the schema declares — by the fault of a hierarchy where the schema
+ * declares what the plan names, and by that of a table nothing follows where it does not; the
+ * parent's own rows (`ONLY`) are read as before.
  */
 
 const base = pgTable('base', { id: text().primaryKey(), kind: text().notNull() });
@@ -28,7 +30,10 @@ const INHERITED = `
   INSERT INTO child VALUES ('c', 'y', 'z');
   INSERT INTO grandchild VALUES ('g', 'w', 'v');
 `;
-const REFUSED = 'does not follow inheritance';
+/** What a render is refused by that reads a table the schema declares that inherits from another. */
+const HIERARCHY = 'A render reads no table of an inheritance or partition hierarchy';
+/** What a render is refused by whose plan names a table that inherits which the schema declares not. */
+const UNFOLLOWED = /^A render read public\.(?:grand)?child, which reactive-state does not follow/u;
 /** Each test makes a PGlite of its own, as long as a second and more under load. */
 const TEST_TIMEOUT_MS = 20_000;
 
@@ -45,23 +50,28 @@ describe(
   { timeout: TEST_TIMEOUT_MS },
   () => {
     it.each([
-      ['beside its parent', { base, child }],
-      ['alone', { child }],
+      ['beside its parent', { base, child }, UNFOLLOWED],
+      ['alone', { child }, UNFOLLOWED],
+      [
+        'beside its parent and the table that inherits from it',
+        { base, child, grandchild },
+        HIERARCHY,
+      ],
     ])(
       'is refused where the schema declares it %s, not served what a write through the parent changes',
-      async (_name, declared) => {
+      async (_name, declared, refused) => {
         const setup = await openedWith(declared, INHERITED);
         const { engine, render } = await engineOf(
           setup,
           reading(setup, 'SELECT id, kind FROM child ORDER BY id'),
         );
 
-        await expect(render()).rejects.toThrow(REFUSED);
+        await expect(render()).rejects.toThrow(refused);
 
         await setup.pg.exec(`UPDATE base SET kind = 'new' WHERE id = 'c'`);
         await engine.poke();
 
-        await expect(render()).rejects.toThrow(REFUSED);
+        await expect(render()).rejects.toThrow(refused);
       },
     );
 
@@ -72,41 +82,47 @@ describe(
         reading(setup, 'SELECT id, kind FROM grandchild ORDER BY id'),
       );
 
-      await expect(render()).rejects.toThrow(REFUSED);
+      await expect(render()).rejects.toThrow(HIERARCHY);
     });
 
     it.each([
-      ['declares them', { base, child, grandchild }],
-      ['declares the parent alone', { base }],
+      ['declares them', { base, child, grandchild }, HIERARCHY],
+      ['declares the parent alone', { base }, UNFOLLOWED],
     ])(
       'is refused where a render reads the parent whole, as the schema %s',
-      async (_name, declared) => {
+      async (_name, declared, refused) => {
         const setup = await openedWith(declared, INHERITED);
         const { render } = await engineOf(
           setup,
           reading(setup, 'SELECT id, kind FROM base ORDER BY id'),
         );
 
-        await expect(render()).rejects.toThrow(REFUSED);
+        await expect(render()).rejects.toThrow(refused);
       },
     );
 
-    it('is refused where it is read beside an ordinary table in one render, whichever statement is asked first', async () => {
-      const plain = pgTable('plain', { id: text().primaryKey() });
-      const setup = await openedWith(
-        { child, plain },
-        `${INHERITED} CREATE TABLE plain (id text PRIMARY KEY);`,
-      );
-      const { render } = await engineOf(setup, async (_props, $) => {
-        const [ordinary, inherited] = await Promise.all([
-          setup.orm.execute(sql`SELECT id FROM plain`),
-          setup.orm.execute(sql`SELECT id FROM child`),
-        ]);
-        return $.h('p', null, JSON.stringify([ordinary.rows.length, inherited.rows.length]));
-      });
+    it.each([
+      ['it alone', { child }, UNFOLLOWED],
+      ['the table that inherits from it too', { child, grandchild }, HIERARCHY],
+    ])(
+      'is refused where it is read beside an ordinary table in one render, as the schema declares %s',
+      async (_name, declared, refused) => {
+        const plain = pgTable('plain', { id: text().primaryKey() });
+        const setup = await openedWith(
+          { ...declared, plain },
+          `${INHERITED} CREATE TABLE plain (id text PRIMARY KEY);`,
+        );
+        const { render } = await engineOf(setup, async (_props, $) => {
+          const [ordinary, inherited] = await Promise.all([
+            setup.orm.execute(sql`SELECT id FROM plain`),
+            setup.orm.execute(sql`SELECT id FROM child`),
+          ]);
+          return $.h('p', null, JSON.stringify([ordinary.rows.length, inherited.rows.length]));
+        });
 
-      await expect(render()).rejects.toThrow(REFUSED);
-    });
+        await expect(render()).rejects.toThrow(refused);
+      },
+    );
   },
 );
 
@@ -154,60 +170,65 @@ describe(
   },
 );
 
-/** The followed tables of the rows below: a parent and the tables that inherit, and a partition. */
+/** The followed tables of the rows below: a parent and the tables that inherit from it. */
 const followed: Followed = {
   byRelation: new Map([
     ['public.base', 'base'],
     ['public.child', 'child'],
+    ['public.grandchild', 'grandchild'],
   ]),
   keysByTable: new Map([
     ['base', [{ column: 'id', field: 'k_id', kind: 'text' }]],
     ['child', [{ column: 'id', field: 'k_id', kind: 'text' }]],
+    ['grandchild', [{ column: 'id', field: 'k_id', kind: 'text' }]],
   ]),
   namespace: 'reactive_state',
   relations: [
     { name: 'base', schema: 'public' },
     { name: 'child', schema: 'public' },
+    { name: 'grandchild', schema: 'public' },
   ],
   schema: { generation: 0 },
   schemaTable: 'reactive_state_schema_sql',
 };
 
 /** A table as the catalog says it, with no column. */
-function catalogTable(name: string, kind: string, partition: boolean, inherits: boolean) {
-  return { columns: [], hidden: false, inherits, kind, name, partition, schema: 'public' };
+function catalogTable(name: string, inherited: boolean) {
+  return {
+    columns: [],
+    hidden: false,
+    inherited,
+    kind: 'r',
+    name,
+    partition: false,
+    schema: 'public',
+  };
 }
 
 const TABLES = [
-  catalogTable('base', 'r', false, false),
-  catalogTable('child', 'r', false, true),
-  catalogTable('grandchild', 'r', false, true),
-  catalogTable('parted', 'p', false, false),
-  catalogTable('parted_eu', 'r', true, true),
+  catalogTable('base', false),
+  catalogTable('child', true),
+  catalogTable('grandchild', true),
 ];
 
-describe('which tables the catalog says inherit from another', () => {
+describe('which followed tables the catalog says inherit from another', () => {
   it.each<readonly [string, Record<string, unknown>]>([
     ['a catalog that follows conditions', { operators: false, utf8: true, version: 180_000 }],
     ['a PostgreSQL before 17', { operators: false, version: 160_004 }],
     ['an application `=` of a type a key may be', { operators: true, version: 180_000 }],
-  ])(
-    'names the tables that inherit, and neither their parent nor a partition: %s',
-    (_name, facts) => {
-      const catalog = catalogOf([{ ...facts, tables: TABLES }], followed);
+  ])('names the tables that inherit, and not their parent: %s', (_name, facts) => {
+    const { unsupported } = catalogOf([{ ...facts, tables: TABLES }], followed);
 
-      expect(catalog.inherited).toStrictEqual(new Set(['public.child', 'public.grandchild']));
-      expect(catalog.partitioned).toStrictEqual(new Set(['public.parted', 'public.parted_eu']));
-    },
-  );
+    expect(unsupported).toStrictEqual(new Set(['child', 'grandchild']));
+  });
 
-  it('names none where no table inherits, and where the catalog is not known', () => {
-    const ordinary = [catalogTable('base', 'r', false, false)];
+  it('names none where no table inherits, and where the catalog names no table', () => {
+    const ordinary = [catalogTable('base', false)];
 
     expect(
-      catalogOf([{ operators: false, tables: ordinary, version: 180_000 }], followed).inherited,
+      catalogOf([{ operators: false, tables: ordinary, version: 180_000 }], followed).unsupported,
     ).toStrictEqual(new Set());
-    expect(catalogOf([{ operators: false, version: 180_000 }], followed).inherited).toStrictEqual(
+    expect(catalogOf([{ operators: false, version: 180_000 }], followed).unsupported).toStrictEqual(
       new Set(),
     );
   });

@@ -1626,6 +1626,21 @@ describe(
       ).resolves.toBe(true);
     });
 
+    it("renders a read again once a temporary view's column is renamed, where the digest alone tells", async () => {
+      const { pg, renders } = await watching(
+        (db) => db.execute(sql`SELECT * FROM recent`),
+        (setup) => setup.query('CREATE TEMPORARY VIEW recent AS SELECT * FROM tasks'),
+      );
+      await withoutEventTriggers({ pg, renders });
+
+      await expect(
+        renders(async () => {
+          await pg.query('ALTER VIEW recent RENAME COLUMN title TO heading');
+          await sleep(PAST_DIGEST_MS);
+        }),
+      ).resolves.toBe(true);
+    });
+
     it("fails a read once a temporary table of a type's name it names stands before the type", async () => {
       const { pg, renders } = await watching((db) =>
         db.execute(sql`SELECT count(*) AS n FROM tasks WHERE status = 'open'::status`),
