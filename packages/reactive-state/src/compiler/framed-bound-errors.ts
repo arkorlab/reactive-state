@@ -19,12 +19,15 @@ import { framedNativeConstructor } from './framed-sources.ts';
 
 /**
  * A finite native bind prefix precedes the invocation's own consumed message arguments. A reader whose
- * proof an exposure drops passes `reached` false, to count only a loop body's uses.
+ * proof an exposure drops passes `reached` false, to count only a loop body's uses. The prefix keeps
+ * that narrower rule unless the proof is one that exempts a refusal (`exempting`), which a use in a
+ * loop's condition or update must drop as well.
  */
 export function framedBoundErrorArguments(
   node: CallExpression | NewExpression,
   names: ReadonlySet<string>,
   reached = true,
+  exempting = false,
 ):
   | {
       readonly target: Expression;
@@ -44,7 +47,7 @@ export function framedBoundErrorArguments(
     !unchangedNativeBind(member.expression, bound, names, reached)
   )
     return undefined;
-  const prefix = framedArgumentPrefix(bound, bound.arguments, Infinity, false);
+  const prefix = framedArgumentPrefix(bound, bound.arguments, Infinity, exempting);
   if (prefix.unknown || prefix.alternatives !== undefined) return undefined;
   return {
     target: member.expression,
