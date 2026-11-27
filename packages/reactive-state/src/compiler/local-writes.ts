@@ -87,8 +87,11 @@ interface Walk {
   readonly visiting: ReadonlySet<Identifier>;
   readonly reads?: ((name: Identifier) => boolean) | undefined;
   readonly resolve?: Resolve | undefined;
-  /** The parameter that holds what it is read as holding at each read (`Target.isHeld`); none else. */
-  readonly holds?: Identifier | undefined;
+  /**
+   * The names that hold what they are read as holding at each read (`Target.isHeld`): a parameter
+   * of a function, and the `const` names a read of it is taken into; none else.
+   */
+  readonly holds?: ReadonlySet<Identifier> | undefined;
 }
 
 const CHANGING: ReadonlySet<string> = new Set([
@@ -260,7 +263,7 @@ function writesAt(
     endsInSymbol,
     initializer,
     inside: receiverOf(top),
-    isHeld: walk.holds === declared,
+    isHeld: walk.holds?.has(declared) === true,
     keys,
     owner: walk.owner,
     resolve: walk.resolve,
@@ -486,6 +489,22 @@ function loopBoundBy(
   );
 }
 
+/**
+ * `walk`, which also reads the `const` names `names`, taken of a read of `target`, as holding what
+ * they hold at each read where `target` does (`Target.isHeld`): a sum written into one is the
+ * write into the parameter that it is, and is read as a sum into the parameter is.
+ */
+function holding(walk: Walk, target: Target, names: readonly Identifier[]): Walk {
+  if (target.isHeld !== true) {
+    return walk;
+  }
+  const holds = new Set(walk.holds);
+  for (const name of names) {
+    holds.add(name);
+  }
+  return { ...walk, holds };
+}
+
 /** What a name of the code's that holds a constant, or a member of it, writes into it. */
 function heldBy(node: Expression, target: Target, walk: Walk): Writes {
   const { parent } = node;
@@ -493,10 +512,11 @@ function heldBy(node: Expression, target: Target, walk: Walk): Writes {
     if (!isConstList(parent.parent)) {
       return CHANGED;
     }
+    const inner = holding(walk, target, bindingIdentifiers(parent.name));
     if (isIdentifier(parent.name)) {
-      return writesOf(parent.name, aliasedHeldOf(target), walk);
+      return writesOf(parent.name, aliasedHeldOf(target), inner);
     }
-    return boundBy(parent.parent, parent.name, walk, (within) => partHeldOf(target, node, within));
+    return boundBy(parent.parent, parent.name, inner, (within) => partHeldOf(target, node, within));
   }
   if (isForOfStatement(parent) && parent.expression === node) {
     const { initializer } = parent;

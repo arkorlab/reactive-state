@@ -66,7 +66,10 @@ export function changedParameters(
       reads: replacement === undefined ? undefined : readsReplacement(fn, replacement),
     } satisfies Parameters<typeof writesOf>[2];
     const isHeld = held !== undefined && holdsStill(fn, declared, walk);
-    const found = writesOf(declared, held, { ...walk, holds: isHeld ? declared : undefined });
+    const found = writesOf(declared, held, {
+      ...walk,
+      holds: isHeld ? new Set([declared]) : undefined,
+    });
     const changed =
       found.changes ||
       found.values.some((put) => check(put.value, { ...reading, entry: put.entry })) ||

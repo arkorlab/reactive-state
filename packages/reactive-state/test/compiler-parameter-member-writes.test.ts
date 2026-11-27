@@ -398,6 +398,35 @@ describe('shared factory parameter member writes', () => {
     expect(compile(app).refusals).toStrictEqual([]);
   });
 
+  // A name a `const` binds of a parameter holds the object it holds as the parameter does, so a sum
+  // that is not alone is refused of it as of the parameter, and one that is alone is folded.
+  it.each([
+    'function make(value: {n: number}) { const alias = value; alias.n += 1e308; alias.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const alias = value; const again = alias; again.n += 1e308; again.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const alias = value; alias.n += 1e308; value.n += 1e308; return value; } export const payload = make({n: 0});',
+    'function make(value: {meta: {n: number}}) { const meta = value.meta; meta.n += 1e308; meta.n += 1e308; return value; } export const payload = make({meta: {n: 0}});',
+    'function make(value: {meta: {n: number}}) { const {meta} = value; meta.n += 1e308; meta.n += 1e308; return value; } export const payload = make({meta: {n: 0}});',
+    'function make(value: {n: number}) { const alias = value; alias.n += 1e308; return value; } export const payload = make({n: 1e308});',
+    'function make(value: {n: number}) { const alias = value; for (const at of [1, 2]) { alias.n += 1e308; } return value; } export const payload = make({n: 0});',
+  ])('refuses a sum written into a name a parameter is taken into: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    'function make(value: {n: number}) { const alias = value; alias.n += 1; return value; } export const payload = make({n: 0});',
+    'function make(value: {n: number}) { const alias = value; const again = alias; again.n -= 1; return value; } export const payload = make({n: 0});',
+    'function make(value: {meta: {n: number}}) { const meta = value.meta; meta.n += 1; return value; } export const payload = make({meta: {n: 0}});',
+    'function make(value: {items: {n: number}[]}) { for (const item of value.items) { item.n += 1; } return value; } export const payload = make({items: [{n: 0}]});',
+  ])('keeps a sum that is alone in a name a parameter is taken into: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
     apps.push(app);
