@@ -313,8 +313,17 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
       } finally {
         this.#opening = undefined;
       }
-      // Its first prune, or else its next try of a log it could not make, of no call to ask.
-      await this.#alarm.arm(Date.now() + PRUNE_EVERY_MS);
+      // Its first prune, or else its next try of a log it could not make, of no call to ask. Said,
+      // not thrown: `blockConcurrencyWhile` resets the object of a callback that throws, and a call
+      // that asked for the log would fail of an alarm, when the log is made all the same.
+      try {
+        await this.#alarm.arm(Date.now() + PRUNE_EVERY_MS);
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `The alarm that prunes the change log could not be armed: ${describeThrown(error)}`,
+        );
+      }
     })();
     // Of every call that asks, `OPEN_WAIT_MS` at most of its making's start: past it, the calls go
     // on as it is made.

@@ -427,7 +427,8 @@ describe('a Drizzle schema in D1', () => {
       ]);
     });
 
-    // A batch of a statement that does not begin with `SELECT` runs after its reads are noted.
+    // A batch of a statement that writes nothing by its words runs beside its plan, a `WITH … SELECT`
+    // too; any other, a `WITH` with a comment in it among them, runs after its reads are noted.
     it('asks no candidate of a batch that waits for its reads', async () => {
       const { asked, watched } = asking();
       const client = followDrizzle(schema).client(watched);
@@ -435,7 +436,7 @@ describe('a Drizzle schema in D1', () => {
       const both = () => {
         return client.batch([
           client.prepare(joined).bind('a'),
-          client.prepare('WITH x AS (SELECT 1 AS n) SELECT n FROM x'),
+          client.prepare('/* waits */ WITH x AS (SELECT 1 AS n) SELECT n FROM x'),
         ]);
       };
       await rendered(both);
