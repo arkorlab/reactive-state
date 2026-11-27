@@ -18,7 +18,7 @@ function ignored(): void {
 }
 
 /** The connection string of `database` on the server, of `user` where another is given. */
-function urlOf(database: string, user?: string): string {
+export function urlOf(database: string, user?: string): string {
   const url = new URL(SERVER_URL ?? '');
   url.pathname = `/${database}`;
   if (user !== undefined) url.username = user;

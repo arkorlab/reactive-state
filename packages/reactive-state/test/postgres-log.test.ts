@@ -5,11 +5,22 @@ import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import type { Client } from 'pg';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { hostOf } from '../src/authority/database-host.ts';
+import { TAIL } from '../src/authority/external.ts';
+import { startAuthority } from '../src/authority/index.ts';
 import type { Json, RenderScope } from '../src/program.ts';
+import { reactiveDb } from '../src/sql/db.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { engineOf } from './support/drizzle.ts';
-import { clientOf, databaseOf, poolOf, SERVER_TIMEOUT_MS, SERVER_URL } from './support/postgres.ts';
+import {
+  clientOf,
+  databaseOf,
+  poolOf,
+  SERVER_TIMEOUT_MS,
+  SERVER_URL,
+  urlOf,
+} from './support/postgres.ts';
 
 /**
  * The log under writers of many sessions, which PGlite has not: what `drizzle-log.test.ts` cannot
@@ -32,6 +43,8 @@ const WRITERS = { count: 12, each: 60 } as const;
 const PAGE = 5000;
 /** What a follower waits between reads of a log that had nothing new. */
 const IDLE_MS = 1;
+/** Longer than the store's connection waits for a read. */
+const PAST_A_READ_MS = TAIL.readTimeoutMs + 500;
 /** What a run leaves the last commit to become visible before the follower stops. */
 const SETTLE_MS = 200;
 
@@ -372,6 +385,55 @@ describe.skipIf(SERVER_URL === undefined)('a pool on a server of many sessions',
       await engine.poke();
 
       await expect(render()).resolves.toContain('"n":7');
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    'wakes the authority of `reactiveDb`, of a commit of another session',
+    async () => {
+      const { name, owner } = await databaseOf(DDL);
+      process.env['DATABASE_URL'] = urlOf(name);
+      onTestFinished(() => {
+        delete process.env['DATABASE_URL'];
+      });
+      const { db } = await reactiveDb(schema);
+      const authority = await startAuthority({ buildId: 'b_server', database: db, programs: [] });
+      onTestFinished(() => authority.close());
+      const poke = vi.spyOn(authority.engine, 'poke');
+
+      await owner.query("UPDATE tasks SET n = 7 WHERE id = '1'");
+
+      await vi.waitFor(() => {
+        expect(poke).toHaveBeenCalledTimes(1);
+      });
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    "makes the log and prunes it past a read's deadline, as each may wait on a writer",
+    async () => {
+      const { name, owner } = await databaseOf(DDL);
+      process.env['DATABASE_URL'] = urlOf(name);
+      onTestFinished(() => {
+        delete process.env['DATABASE_URL'];
+      });
+      const { db } = await reactiveDb(schema);
+
+      await owner.query("BEGIN; UPDATE tasks SET n = 7 WHERE id = '1'");
+      const starting = startAuthority({ buildId: 'b_server', database: db, programs: [] });
+      await sleep(PAST_A_READ_MS);
+      await owner.query('COMMIT');
+      const authority = await starting;
+      onTestFinished(() => authority.close());
+
+      await owner.query('BEGIN; LOCK TABLE reactive_state.head IN ACCESS EXCLUSIVE MODE');
+      const pruned = hostOf(db)?.prune();
+      await sleep(PAST_A_READ_MS);
+      await owner.query('COMMIT');
+
+      await expect(pruned).resolves.toBeUndefined();
     },
     SERVER_TIMEOUT_MS,
   );

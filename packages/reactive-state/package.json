@@ -17,6 +17,7 @@
     "./cloudflare": "./src/cloudflare/index.ts",
     "./compiler": "./src/compiler/index.ts",
     "./d1": "./src/cloudflare/d1-store.ts",
+    "./db": "./src/sql/db.ts",
     "./drizzle": "./src/sql/index.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",
@@ -59,12 +60,16 @@
     "vitest": "catalog:"
   },
   "peerDependencies": {
+    "@electric-sql/pglite": "catalog:",
     "drizzle-orm": "catalog:",
     "next": "catalog:",
     "pg": "catalog:",
     "react": "catalog:"
   },
   "peerDependenciesMeta": {
+    "@electric-sql/pglite": {
+      "optional": true
+    },
     "drizzle-orm": {
       "optional": true
     },

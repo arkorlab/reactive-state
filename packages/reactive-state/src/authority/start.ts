@@ -3,7 +3,9 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
 import type { SiteShape } from '../routing.ts';
+import { type DatabaseHost, takeHost } from './database-host.ts';
 import { diagnosticsEveryOf } from './diagnostics.ts';
+import { describeThrown } from './errors.ts';
 import { type AuthorityServer, createAuthorityServer } from './http.ts';
 import type { Application, ExternalOptions } from './model.ts';
 import { Engine } from './node-engine.ts';
@@ -11,6 +13,8 @@ import type { SiteFetch } from './shared-generate.ts';
 
 /** The bytes of a fresh internal token. */
 const TOKEN_BYTES = 32;
+/** How often a database that holds its own connections has its change log pruned. */
+const PRUNE_EVERY_MS = 600_000;
 
 /**
  * What the authority is started with: what a compile wrote for it (`<out>/authority.mts` exports
@@ -55,19 +59,38 @@ function siteFetch(origin: string): SiteFetch {
   };
 }
 
-/** Starts an authority on a loopback address, with a database of its own and an internal token. */
-export async function startAuthority(options: AuthorityOptions): Promise<Authority> {
-  // An empty token would be refused by every internal request — as an unset variable passed on
-  // would make one — while the authority looked started.
-  if (options.token === '') {
-    throw new Error('The internal token is empty: give one, or none to have one made.');
-  }
-  const token = options.token ?? randomBytes(TOKEN_BYTES).toString('hex');
-  let filename: string | undefined;
-  if (options.stateDir !== undefined) {
-    mkdirSync(options.stateDir, { mode: 0o700, recursive: true });
-    filename = path.join(options.stateDir, 'app.sqlite');
-  }
+/** What an authority's own work of its database comes to where it fails: no render waits on it. */
+function logged(what: string, work: Promise<unknown>): void {
+  void work.catch((error: unknown) => {
+    // eslint-disable-next-line no-console
+    console.error(`${what} failed: ${describeThrown(error)}`);
+  });
+}
+
+/**
+ * Follows the database of `host`, once the engine is made: each change it is told of has the log
+ * read then rather than at the next interval, and the log is pruned. Answers what ends the pruning.
+ */
+async function following(host: DatabaseHost, poke: () => Promise<unknown>): Promise<() => void> {
+  await host.listen(() => {
+    logged('Reading the change log', poke());
+  });
+  const pruning = setInterval(() => {
+    logged('Pruning the change log', host.prune());
+  }, PRUNE_EVERY_MS);
+  pruning.unref();
+  return () => {
+    clearInterval(pruning);
+  };
+}
+
+/** The engine and the server of `options`, following the database of `host`, where it has one. */
+async function started(
+  options: AuthorityOptions,
+  token: string,
+  filename: string | undefined,
+  host: DatabaseHost | undefined,
+): Promise<Authority> {
   const { buildId, clock, database, middleware, operations, port, programs, routes } = options;
   const { externalPollMs, sessions, shareViews, stores, testMode, timeoutMs } = options;
   const engine = new Engine({
@@ -86,22 +109,62 @@ export async function startAuthority(options: AuthorityOptions): Promise<Authori
     ...(clock !== undefined && { clock }),
     ...(timeoutMs !== undefined && { timeoutMs }),
   });
+  let unfollow: (() => void) | undefined;
   try {
+    unfollow = host === undefined ? undefined : await following(host, () => engine.poke());
     const server = await createAuthorityServer({
       engine,
       internalToken: token,
       ...(port !== undefined && { port }),
       ...(testMode !== undefined && { testMode }),
     });
+    const stop = async (): Promise<void> => {
+      unfollow?.();
+      await server.close();
+      await host?.close();
+    };
+    let closing: Promise<void> | undefined;
     return {
       ...server,
+      close: async () => {
+        closing ??= stop();
+        await closing;
+      },
       site: (origin, shape) => {
         engine.site(origin === undefined ? undefined : siteFetch(origin), shape);
       },
       token,
     };
   } catch (error) {
+    unfollow?.();
     await engine.close();
+    throw error;
+  }
+}
+
+/**
+ * Starts an authority on a loopback address, with a database of its own and an internal token. A
+ * database that holds its own connections (`DatabaseHost`) is opened with it, and closed with it.
+ */
+export async function startAuthority(options: AuthorityOptions): Promise<Authority> {
+  // An empty token would be refused by every internal request — as an unset variable passed on
+  // would make one — while the authority looked started.
+  if (options.token === '') {
+    throw new Error('The internal token is empty: give one, or none to have one made.');
+  }
+  const token = options.token ?? randomBytes(TOKEN_BYTES).toString('hex');
+  let filename: string | undefined;
+  if (options.stateDir !== undefined) {
+    mkdirSync(options.stateDir, { mode: 0o700, recursive: true });
+    filename = path.join(options.stateDir, 'app.sqlite');
+  }
+  const host = takeHost(options.database);
+  if (host === undefined) return started(options, token, filename, host);
+  try {
+    const stores = { ...(await host.open()), ...options.stores };
+    return await started({ ...options, stores }, token, filename, host);
+  } catch (error) {
+    await host.close();
     throw error;
   }
 }

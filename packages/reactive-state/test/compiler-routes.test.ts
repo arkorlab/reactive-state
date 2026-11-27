@@ -2657,10 +2657,20 @@ describe('the compile’s judgement of whether a route’s document may be share
       '}',
     )}`;
 
+    const destructured = `${variant(declared, 'export const db = database(', 'const handle = database(')}${file(
+      '',
+      'export const { db } = { db: handle };',
+      '',
+      'export function purge(id: string) {',
+      '  return db.todos.delete(id);',
+      '}',
+    )}`;
+
     await expect(boardWith({ 'db.ts': `${declared}${purging}` })).resolves.toMatchObject({
       shared: true,
     });
     await expect(boardWith({ 'db.ts': renamed })).resolves.toMatchObject({ shared: true });
+    await expect(boardWith({ 'db.ts': destructured })).resolves.toMatchObject({ shared: true });
   });
 
   it('shares the document of a route whose code writes through a table of the database by a constant that holds it, as written or wrapped, in turn', async () => {

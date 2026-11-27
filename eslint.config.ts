@@ -494,6 +494,7 @@ export default defineConfig([
       'tools/**/*.mts',
       'packages/reactive-state/src/{authority,compiler}/**/*.ts',
       'packages/reactive-state/src/next/{adapter,compile-on-build,config}.ts',
+      'packages/reactive-state/src/sql/db.ts',
       'packages/reactive-state/test/**/*.{ts,tsx}',
       'examples/*/scripts/**/*.mts',
     ],
