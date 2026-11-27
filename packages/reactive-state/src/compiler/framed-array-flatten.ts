@@ -156,7 +156,7 @@ function expansion(
   const stable = walk.stable(value);
   const changed = !unchanged || !stable;
   const depth = task.array ? task.depth : task.depth - 1;
-  const marker = stable
+  const marker: ViewRun | undefined = stable
     ? undefined
     : segmentRun([{ value, index: undefined, capture: walk.capture }], false);
   const key = `${depth} ${task.materialized} ${changed}`;
