@@ -27,6 +27,12 @@ function wide(body: string): string {
 const NESTED = " export const payload = make({meta: {id: 'safe'}});";
 
 const IDENTITY = 'function identity<T>(target: T) { return target; }';
+const OPTIONAL = '{id: string; extra?: string; meta?: {bad?: unknown; id?: string}}';
+/** A factory of an object whose members the rows may leave out, called as `PAYLOAD` does. */
+function optional(body: string): string {
+  return `function make(value: ${OPTIONAL}) { ${body} }${PAYLOAD}`;
+}
+
 /** A factory as `wide` makes it, with a helper declared before it. */
 function answered(helper: string, body: string): string {
   return `${helper} ${wide(body)}`;
@@ -531,6 +537,38 @@ describe('shared factory parameter member writes', () => {
     'keeps a member write into a parameter a closure computes from a member of: %s',
     async (module) => {
       const app = await fixture(module);
+      apps.push(app);
+
+      expect(compile(app).refusals).toStrictEqual([]);
+    },
+  );
+
+  // A logical assignment answers the member it leaves, which is what the parameter holds there: the
+  // name that takes the answer names it by a name the walk does not read, as a member's own alias
+  // is refused where the code assigns the member an object and then writes into it.
+  it.each([
+    'const meta = (value.meta ??= {}); meta.bad = new Date(0); return value;',
+    "const meta = (value.meta ||= {}); meta.id = 'x'; return value;",
+    '(value.meta ??= {}).bad = new Date(0); return value;',
+    'const holder: {target?: unknown} = {}; holder.target = (value.meta ??= {}); (holder.target as {bad?: unknown}).bad = new Date(0); return value;',
+    "const meta = (value.meta ??= {}); meta.bad = new Date(0); value.id = 'fresh'; return value;",
+  ])('refuses a member write into a parameter a logical assignment answers: %s', async (body) => {
+    const app = await fixture(optional(body));
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    'value.meta ??= {}; return value;',
+    "value.extra ||= 'none'; value.id = 'fresh'; return value;",
+    "if (value.extra ??= 'none') { value.id = 'fresh'; } return value;",
+    "const same = (value.extra ??= 'none') === value.extra; value.id = same ? 'a' : 'b'; return value;",
+    "[1, 2].forEach((each) => (value.extra = String(each))); value.id = 'fresh'; return value;",
+  ])(
+    'keeps a member write into a parameter a logical assignment answers nowhere: %s',
+    async (body) => {
+      const app = await fixture(optional(body));
       apps.push(app);
 
       expect(compile(app).refusals).toStrictEqual([]);

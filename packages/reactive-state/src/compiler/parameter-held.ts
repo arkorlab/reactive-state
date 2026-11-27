@@ -266,7 +266,8 @@ interface Place {
  * and a default are not. An assignment into the parameter itself (`value.copy = value.id`) is a
  * write the walk reads. A value that stands alone and is handed to a function of the code that
  * answers it (`isAnswered`) is kept where its answer is: the name the answer is taken into is one
- * the walk does not read. `isResult` asks it of a value that is an answer already.
+ * the walk does not read, as it is of the answer of a logical assignment (`isResultKept`).
+ * `isResult` asks it of a value that is an answer already.
  */
 function isKept(top: Expression, place: Place, isResult = false): boolean {
   let node: Node = top;
@@ -285,9 +286,26 @@ function isKept(top: Expression, place: Place, isResult = false): boolean {
     } else {
       return isIndirect
         ? !isConsulted(parent, node)
-        : isStoredAs(parent, node) || isAnswered(top, place);
+        : isStoredAs(parent, node) || isAnswered(top, place) || isResultKept(parent, node, place);
     }
   }
+}
+
+/**
+ * Whether `parent` is a logical assignment (`??=`, `||=`, `&&=`) of the member `node` reads whose
+ * answer, the member the assignment leaves, is kept (`isKept`): `const meta = (value.meta ??= {})`
+ * names what the parameter holds by a name the walk does not read, as `const meta = value.meta`
+ * does where it does. A statement, a condition and a comparison keep nothing. A plain `=` answers
+ * what the code writes there, and is not read.
+ */
+function isResultKept(parent: Node, node: Node, place: Place): boolean {
+  return (
+    isBinaryExpression(parent) &&
+    parent.left === node &&
+    ASSIGNING.has(parent.operatorToken.kind) &&
+    parent.operatorToken.kind !== SyntaxKind.EqualsToken &&
+    isKept(parent, place, true)
+  );
 }
 
 /**
