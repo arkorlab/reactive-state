@@ -176,7 +176,7 @@ function directMethodLimit(call: CallExpression, source: ParameterSource, method
 
 /** Explicit native borrowing fixes its receiver and ignores instance own-method replacements. */
 function borrowedInput(call: CallExpression): MethodInput | undefined {
-  const native = framedNativeArguments(call, NATIVE_METHODS);
+  const native = framedNativeArguments(call, NATIVE_METHODS, true);
   if (native === undefined || native.constructed) return undefined;
   const reflected = globalPathOf(unwrapped(call.expression))?.join('.') === 'Reflect.apply';
   const receiver = framedArgumentPrefix(call, call.arguments).values[reflected ? 1 : 0];
