@@ -18,11 +18,11 @@ const config: KnipConfig = {
       ignoreBinaries: ['mkfifo'],
     },
     // The Workers suite's own Worker, which its Vitest configuration names by path; and the
-    // application's server operations the tests' authority calls by name, as a compile's registry
+    // applications' server operations the tests' authority calls by name, as a compile's registry
     // hands it a `'use server'` module.
     'packages/reactive-state': {
       entry: ['test/cloudflare/worker.ts'],
-      ignore: ['test/support/app/actions/**'],
+      ignore: ['test/support/app/actions/**', 'test/support/todo-app/actions/**'],
       ignoreDependencies: ['cloudflare'],
     },
   },

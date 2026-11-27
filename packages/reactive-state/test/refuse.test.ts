@@ -1,14 +1,14 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { describe, expect, it, onTestFinished } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
-import { Engine } from '../src/authority/node-engine.ts';
 import { PROTOCOL_VERSION } from '../src/program.ts';
 import { FRAMEWORK_CODES, isApplicationCode } from '../src/refusal-codes.ts';
 import { operationDigest, operationRefusal } from '../src/runtime/outcome.ts';
 import { refuse } from '../src/server/index.ts';
-import { application, BUILD } from './support/program.ts';
+import { opened as openedEngine } from './support/todo-app/engine.ts';
+import { application, BUILD } from './support/todo-app/programs.ts';
 
 /**
  * An application's own refusal of a server operation, `refuse(code, message?)`: answered 422 with
@@ -34,12 +34,8 @@ async function rejection(promise: Promise<unknown>): Promise<unknown> {
 
 /** An authority of the test application and of `operations`, and a session of Alice's. */
 async function opened(operations: Readonly<Record<string, unknown>>) {
-  const engine = new Engine({
-    ...application,
+  const engine = await openedEngine({
     operations: { ...application.operations, [MODULE]: operations },
-  });
-  onTestFinished(async () => {
-    await engine.close();
   });
   const { sessionId } = await engine.login('alice');
   const operate = async (name: string, operationId = crypto.randomUUID()) =>
@@ -200,8 +196,7 @@ describe('an application’s own refusal of a server operation', () => {
   });
 
   it('refuses a render with the code, as the authority’s other refusals do', async () => {
-    const engine = new Engine({
-      ...application,
+    const engine = await openedEngine({
       programs: [
         ...application.programs,
         {
@@ -213,9 +208,6 @@ describe('an application’s own refusal of a server operation', () => {
           writable: [],
         },
       ],
-    });
-    onTestFinished(async () => {
-      await engine.close();
     });
     const { sessionId } = await engine.login('alice');
     const root = { build: BUILD, component: 'components/refusing', props: {} };
