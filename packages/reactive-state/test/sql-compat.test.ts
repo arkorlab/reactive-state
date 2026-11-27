@@ -7,6 +7,10 @@ const NAMESPACE = 'custom_log';
 const PAGE = 'SELECT "side", "image" FROM "custom_log"."changes"';
 const COUNT = 'SELECT "custom_log"."ddl_count"()';
 const FOLD = 'SELECT "custom_log"."fold_ddl"($1::double precision)';
+const PRUNE = 'SELECT "custom_log"."prune"($1::double precision)';
+const HEAD = 'SELECT h."pruned" FROM "custom_log"."head" AS h';
+const NEXT = 'SELECT "custom_log"."next_number"()';
+const CATCH_UP = 'SELECT "custom_log"."catch_up"()';
 
 /** A PostgreSQL error whose position names `token` in its original statement. */
 function missing(sql: string, token: string, code: string) {
@@ -22,6 +26,10 @@ describe('capture upgrade diagnostics', () => {
     [PAGE, '"image"', '42703'],
     [COUNT, '"custom_log"', '42883'],
     [FOLD, '"custom_log"', '42883'],
+    [PRUNE, '"custom_log"', '42883'],
+    [HEAD, 'h."pruned"', '42703'],
+    [NEXT, '"custom_log"', '42883'],
+    [CATCH_UP, '"custom_log"', '42883'],
   ])('explains a missing capture object in %s', async (sql, token, code) => {
     const original = missing(sql, token, code);
     const query = vi.fn().mockRejectedValue(original);

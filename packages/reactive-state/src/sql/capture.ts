@@ -9,23 +9,22 @@
  * alone, which renders again whatever read the table; so does a `TRUNCATE`. A statement that
  * changed no row appends none.
  *
- * Each entry's number is taken from one counter row, which the writing transaction holds until it
- * commits: two transactions that write followed tables commit in the order of their numbers, so a
- * follower that has read an entry has read every entry before it. That orders those writers as
- * PostgreSQL orders writes of one row. The row is taken as the statement that first writes a
- * followed table ends, after that statement's own rows, and held to the end of the transaction: a
- * transaction whose later statement writes a row that another transaction's statement has written
- * meanwhile can deadlock with it where, without the capture, it would only have waited for it.
- * PostgreSQL ends one of the two with `40P01`, and an application retries that transaction as it
- * retries any deadlock. The log notifies its channel (`channelOf`) as it commits, for a host to
- * read it then rather than at its next interval. A table followed by the logs of two namespaces
- * holds the triggers of each, named by its namespace; a trigger of the application's of one of
- * those names is replaced, so a namespace is one of the log's own.
+ * A transaction's entries are held in a setting of its own until it commits, then written at once
+ * and numbered from a sequence, under an advisory lock its commit lets go of (`logFunctionsOf`): two
+ * transactions that write followed tables commit in the order of their numbers, so a follower that
+ * has read an entry has read every entry before it. No statement of a writer reads the log or takes
+ * a row of it, so a writer waits on no transaction but one committing, whatever its isolation. A
+ * number a failed commit took stays a gap of the log, which a follower reads past. The sequence is
+ * not replicated by a subscription, so a read of the log finds one left behind and moves it past the
+ * log, in a new epoch (`store.ts`). The log notifies its channel (`channelOf`) as it commits, for a
+ * host to read it then rather than at its next interval. A table followed by the logs of two
+ * namespaces holds the triggers of each, named by its namespace; a trigger of the application's of
+ * one of those names is replaced, so a namespace is one of the log's own.
  *
- * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`: they
- * run as the role that made the log, so a role that writes a followed table needs no right to the
- * log's schema, and only the role that made it may call `note` itself or attach one of them to a
- * table. Their search path stays `pg_catalog, pg_temp`.
+ * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`:
+ * they run as the role that made the log, so a role that writes a followed table needs no right to
+ * the log's schema, and only the role that made it may call `note` or `hold` itself or attach one
+ * of them to a table. Their search path stays `pg_catalog, pg_temp`.
  */
 
 /** A table of the application's, as PostgreSQL names it. */
@@ -44,6 +43,13 @@ export interface FollowedRelation extends Relation {
  * table alone.
  */
 const ROWS = { logged: 100 } as const;
+
+/**
+ * The most bytes of entries one transaction holds: past them, a statement's entries become one
+ * naming the table alone. A setting is copied at each statement, so a long transaction pays for
+ * what it holds that often.
+ */
+const HOLD = { bytes: 262_144 } as const;
 
 /**
  * The commands that change nothing a plan says — a right, a comment, a refreshed view, an index
@@ -67,10 +73,13 @@ const SCHEMA_KEPT = [
 ] as const;
 
 /** The log's own tables in its schema, by name: of each, a relation and a row type. */
-const LOG_TABLES = ['changes', 'ddl', 'head'] as const;
+const LOG_TABLES = ['changes', 'ddl', 'head', 'marks'] as const;
 
 /** The indexes of the log's own tables' primary keys, by name. */
 const LOG_INDEXES = ['changes_pkey', 'head_pkey'] as const;
+
+/** The sequences of the log's own, by name. */
+const LOG_SEQUENCES = ['changes_seq'] as const;
 
 /**
  * The functions of the log's own, which `captureSql()` makes anew in its schema, by their
@@ -82,12 +91,17 @@ const LOG_FUNCTIONS = [
   'capture_deleted()',
   'capture_inserted()',
   'capture_updated()',
+  'catch_up()',
   'ddl_count()',
   'fold_ddl(double precision)',
+  'hold(pg_catalog.text)',
   'image_sql(pg_catalog.oid,pg_catalog.text[])',
+  'next_number()',
   'note(pg_catalog.text,pg_catalog.text)',
   'note_ddl()',
   'note_drop()',
+  'prune(double precision)',
+  'settle()',
 ] as const;
 
 /**
@@ -95,7 +109,13 @@ const LOG_FUNCTIONS = [
  * holds them, PostgreSQL's own (`float8`, `oid`, `text[]`): a text no render reads, whose words name
  * no type. Of no name a lookup reads, which a role of no right to the schema fails.
  */
-export const LOG_SQL_FUNCTIONS = ['ddl_count()', 'fold_ddl(701)', 'image_sql(26 1009)'] as const;
+export const LOG_SQL_FUNCTIONS = [
+  'ddl_count()',
+  'fold_ddl(701)',
+  'image_sql(26 1009)',
+  'next_number()',
+  'prune(701)',
+] as const;
 
 /**
  * The advisory lock `captureSql()` runs under, one of a database whatever the log's namespace: two
@@ -103,6 +123,12 @@ export const LOG_SQL_FUNCTIONS = ['ddl_count()', 'fold_ddl(701)', 'image_sql(26 
  * the other is writing.
  */
 const CAPTURE_LOCK = 0x72_73_63_61;
+
+/**
+ * The advisory lock a transaction numbers its entries under, until it commits: one of a database, as
+ * two logs of one table would otherwise take theirs in either order, and wait for each other.
+ */
+const NUMBERING_LOCK = 0x72_73_6e_6f;
 
 /** How many keys one `jsonb_build_object` of a row's image takes: PostgreSQL's 100 arguments. */
 const KEYS_A_CALL = 50;
@@ -117,6 +143,8 @@ const TRIGGER_TYPES = { DELETE: 8, INSERT: 4, TRUNCATE: 32, UPDATE: 16 } as cons
 export const DEFAULT_NAMESPACE = 'reactive_state';
 /** What the event trigger that counts the schema's commands is named, after the log's namespace. */
 const DDL_TRIGGER = '_ddl';
+/** What the setting a transaction holds its entries in is named, after the log's namespace. */
+const HELD = '.held';
 /** The kinds of relation a statement reads by their names: a table, a view, a sequence and kin. */
 const READ_KINDS = "'r', 'p', 'v', 'm', 'f', 'S'";
 /** Those of them a session's temporary schema holds. */
@@ -189,14 +217,17 @@ export function relationKey(relation: Relation): string {
 }
 
 /**
- * The log's own relations, as statements name them: its schema, its head, its entries, and the
- * changes of the schema an event trigger counted.
+ * The log's own relations, as statements name them: its schema, its head, its entries and what
+ * numbers them, the changes of the schema an event trigger counted, and the marks of a transaction
+ * that holds entries.
  */
 interface LogRelations {
   readonly changes: string;
   readonly ddl: string;
   readonly head: string;
+  readonly marks: string;
   readonly schema: string;
+  readonly sequence: string;
 }
 
 /** The log's own relations in `namespace`. */
@@ -206,7 +237,9 @@ export function logOf(namespace: string): LogRelations {
     changes: `${schema}."changes"`,
     ddl: `${schema}."ddl"`,
     head: `${schema}."head"`,
+    marks: `${schema}."marks"`,
     schema,
+    sequence: `${schema}."changes_seq"`,
   };
 }
 
@@ -329,33 +362,42 @@ function triggersOf(relation: FollowedRelation, namespace: string): readonly str
   return triggers.map((trigger) => triggerOf(relation, namespace, trigger));
 }
 
+/** A statement's value of the setting a transaction holds its entries in, of the log of `namespace`. */
+function heldOf(namespace: string): string {
+  return `coalesce(current_setting(${literal(namespace + HELD)}, true), '')`;
+}
+
+/** What the setting opens with where it holds entries of this transaction. */
+const OWN_HOLD = `pg_current_xact_id()::pg_catalog.text || ':'`;
+
+/**
+ * The statement of a trigger's function that reads the entries of `side`, as the text of a list's
+ * items: of each row, `[schema, table, side, image]`.
+ */
+function entriesRead(side: 'after' | 'before'): string {
+  return `EXECUTE format('SELECT string_agg(json_build_array($1, $2, $3, %s)::pg_catalog.text, '','') FROM ${TRANSITION[side]} AS r', "image") INTO "${side}_entries" USING TG_TABLE_SCHEMA, TG_TABLE_NAME, '${side}'::pg_catalog.text`;
+}
+
 /**
  * The functions the triggers run: each counts the rows its statement changed and, of at most
- * `ROWS.logged` of them, appends an entry of each row's key values — of an update, the row before
- * and after — numbered in one move of the head; past them, or for a table of no keys, it appends
- * one entry naming the table alone. A row's keys are read alone, each as its text (`::text`), by a
- * statement the function writes of the keys its trigger names: a long column the row holds is
- * never read. The statement takes the function's values as parameters, and the function's own
- * variables come before a column of a row of their names.
+ * `ROWS.logged` of them, holds an entry of each row's key values — of an update, the row before
+ * and after; past them, for a table of no keys, or past what a transaction holds, one entry naming
+ * the table alone. A row's keys are read alone, each as its text (`::text`), by a statement the
+ * function writes of the keys its trigger names: a long column the row holds is never read. The
+ * statement takes the function's values as parameters, and the function's own variables come
+ * before a column of a row of their names.
  */
-function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
-  const { changes, head, schema } = logOf(namespace);
-  // Each row's entries are numbered after those of the rows before it: "last" is the head moved
-  // past them all, "total" how many it moved.
-  const logged = (side: 'after' | 'before', rows: string, offset: string): string =>
-    `EXECUTE format('INSERT INTO ${changes} ("seq", "schema_name", "table_name", "side", "image") SELECT $1 - $2 + $5 + row_number() OVER (), $3, $4, $6, %s FROM ${rows} AS r', "image") USING "last", "total", TG_TABLE_SCHEMA, TG_TABLE_NAME, ${offset}, '${side}'::pg_catalog.text`;
-  // The rows of each side are counted and numbered of their own: an update may take out rows it
-  // puts nowhere — a move across partitions a trigger of the partition it goes to skips.
+function rowFunctionsOf(namespace: string): readonly string[] {
+  const { schema } = logOf(namespace);
+  const held = heldOf(namespace);
+  // The rows of each side are counted of their own: an update may take out rows it puts nowhere — a
+  // move across partitions a trigger of the partition it goes to skips.
   const made = (name: string, sides: readonly ('after' | 'before')[]): string => {
     const counted = sides
       .map((side) => `SELECT count(*) INTO "${side}_rows" FROM ${TRANSITION[side]}`)
       .join('; ');
-    const inserts = sides
-      .map((side) =>
-        logged(side, TRANSITION[side], side === 'after' ? '"before_rows"' : '0::pg_catalog.int8'),
-      )
-      .join('; ');
-    return `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ #variable_conflict use_variable\nDECLARE "before_rows" bigint := 0; "after_rows" bigint := 0; "changed" bigint; "total" bigint; "last" bigint; "image" text; BEGIN ${counted}; "changed" := greatest("before_rows", "after_rows"); IF "changed" = 0 THEN RETURN NULL; END IF; IF TG_NARGS = 0 OR "changed" > ${String(ROWS.logged)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END IF; "total" := "before_rows" + "after_rows"; "image" := ${schema}."image_sql"(TG_RELID, TG_ARGV); UPDATE ${head} SET "seq" = "seq" + "total" RETURNING "seq" INTO "last"; ${inserts}; PERFORM pg_notify(${channel}, "last"::pg_catalog.text); RETURN NULL; END $$`;
+    const read = sides.map((side) => entriesRead(side)).join('; ');
+    return `CREATE OR REPLACE FUNCTION ${schema}.${quoted(name)}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ #variable_conflict use_variable\nDECLARE "before_rows" bigint := 0; "after_rows" bigint := 0; "changed" bigint; "image" text; "before_entries" text; "after_entries" text; "entries" text; BEGIN ${counted}; "changed" := greatest("before_rows", "after_rows"); IF "changed" = 0 THEN RETURN NULL; END IF; IF TG_NARGS = 0 OR "changed" > ${String(ROWS.logged)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END IF; "image" := ${schema}."image_sql"(TG_RELID, TG_ARGV); ${read}; "entries" := concat_ws(',', "before_entries", "after_entries"); IF octet_length(${held}) + octet_length("entries") > ${String(HOLD.bytes)} THEN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); ELSE PERFORM ${schema}."hold"("entries"); END IF; RETURN NULL; END $$`;
   };
   return [
     // The expression of a row's image, `r`: an object of the text of each key the table still
@@ -365,14 +407,77 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
     // of the table, and a read's condition is of the same digest (`reads.ts`). One dropped since its trigger
     // was made is left out of it, and the store reads the entry as of the table alone
     // (`store.ts`): the write goes on.
-    `CREATE OR REPLACE FUNCTION ${schema}."image_sql"("relid" pg_catalog.oid, "keys" pg_catalog.text[]) RETURNS pg_catalog.text LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$ SELECT coalesce(string_agg(format('jsonb_build_object(%s)', c.pairs), ' || ' ORDER BY c.chunk), '''{}''::pg_catalog.jsonb') FROM (SELECT n.chunk, string_agg(format(CASE WHEN n.boolean THEN '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(r.%I::pg_catalog.text, getdatabaseencoding())), ''hex'') END' ELSE '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(format(''%%s'', r.%I), getdatabaseencoding())), ''hex'') END' END, n.name, n.name, n.name), ', ' ORDER BY n.at) AS pairs FROM (SELECT u.name, u.at, (u.at - 1) / ${String(KEYS_A_CALL)} AS chunk, a.atttypid = 'boolean'::regtype AS boolean FROM unnest("keys") WITH ORDINALITY AS u(name, at) JOIN pg_attribute AS a ON a.attrelid = "relid" AND a.attname = u.name AND a.attnum > 0 AND NOT a.attisdropped) AS n GROUP BY n.chunk) AS c $$`,
-    // Of each writer, which the trigger's function calls it as, though the database's default
-    // privileges keep functions from `PUBLIC`: it reads the catalog's attributes alone.
-    `GRANT EXECUTE ON FUNCTION ${schema}."image_sql"(pg_catalog.oid, pg_catalog.text[]) TO PUBLIC`,
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."image_sql"("relid" pg_catalog.oid, "keys" pg_catalog.text[]) RETURNS pg_catalog.text LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$ SELECT coalesce(string_agg(format('jsonb_build_object(%s)', c.pairs), ' || ' ORDER BY c.chunk), '''{}''::pg_catalog.jsonb') FROM (SELECT n.chunk, string_agg(format(CASE WHEN n.boolean THEN '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(r.%I::pg_catalog.text, getdatabaseencoding())), ''hex'') END' ELSE '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(format(''%%s'', r.%I), getdatabaseencoding())), ''hex'') END' END, n.name, n.name, n.name), ', ' ORDER BY n.at) AS pairs FROM (SELECT u.name, u.at, (u.at - 1) / ${String(KEYS_A_CALL)} AS chunk, a.atttypid = 'boolean'::regtype AS boolean FROM unnest("keys") WITH ORDINALITY AS u(name, at) JOIN pg_attribute AS a ON a.attrelid = "relid" AND a.attname = u.name AND a.attnum > 0 AND NOT a.attisdropped) AS n GROUP BY n.chunk) AS c $$`,
+      `${schema}."image_sql"(pg_catalog.oid, pg_catalog.text[])`,
+    ),
     // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
     restricted(made('capture_inserted', ['after']), `${schema}."capture_inserted"()`),
     restricted(made('capture_deleted', ['before']), `${schema}."capture_deleted"()`),
     restricted(made('capture_updated', ['before', 'after']), `${schema}."capture_updated"()`),
+  ];
+}
+
+/**
+ * The functions that hold a transaction's entries and write them as it commits. A statement holds
+ * its entries in a setting local to the transaction: a savepoint rolled back takes back what it
+ * held, as it takes back the rows it wrote, and no statement reads the log. The setting opens with
+ * the transaction's id, as any session may set it: what another left holds nothing of this one.
+ *
+ * A transaction's first entry inserts a mark, whose deferred trigger runs as it commits. That
+ * inserts a second mark, queued after the application's deferred triggers, so that their checks run
+ * before the lock and what they write is held too. The second takes the lock its commit lets go of,
+ * writes the entries as numbered and empties the setting, so that a statement after `SET CONSTRAINTS
+ * ALL IMMEDIATE` holds its own. The list is parsed before the lock, and each mark is deleted by its
+ * row: a mark is of no other transaction's. A mark that finds nothing held lost it to a `RESET ALL`,
+ * which no entry can tell of: a new epoch renders again whatever read the log. The trigger fires
+ * always, as a transaction may turn `session_replication_role` to `replica` before it commits.
+ *
+ * As the role that made the log, as the triggers' functions are: a writer needs no right of the log,
+ * no other role may hold an entry, and before PostgreSQL 18 a deferred trigger runs as whichever role
+ * the transaction commits under.
+ */
+function logFunctionsOf(namespace: string, channel: string): readonly string[] {
+  const { changes, head, marks, schema, sequence } = logOf(namespace);
+  const setting = literal(namespace + HELD);
+  const held = heldOf(namespace);
+  const numbers = `${literal(sequence)}::pg_catalog.regclass`;
+  const settling = `${schema}."settle"()`;
+  return [
+    // Of the log's role alone, as the triggers' functions are (`restricted`): `hold`, `note`,
+    // `capture_all` and `settle`, as `image_sql` and the trigger functions of each event are.
+    // The setting before the mark: after `SET CONSTRAINTS ALL IMMEDIATE`, the mark numbers at once.
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."hold"("entries" pg_catalog.text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "held" pg_catalog.text := ${held}; "own" pg_catalog.text := ${OWN_HOLD}; BEGIN IF starts_with("held", "own") THEN PERFORM set_config(${setting}, "held" || ',' || "entries", true); ELSE PERFORM set_config(${setting}, "own" || "entries", true); INSERT INTO ${marks} ("stage") VALUES (1); END IF; END $$`,
+      `${schema}."hold"(pg_catalog.text)`,
+    ),
+    // Of the table alone, once a transaction: past what it holds, a long transaction's statements
+    // would each add one.
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" pg_catalog.text, "table_name" pg_catalog.text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "entry" pg_catalog.text := json_build_array("schema_name", "table_name")::pg_catalog.text; "held" pg_catalog.text := ${held}; BEGIN IF NOT starts_with("held", ${OWN_HOLD}) OR strpos("held", "entry") = 0 THEN PERFORM ${schema}."hold"("entry"); END IF; END $$`,
+      `${schema}."note"(pg_catalog.text, pg_catalog.text)`,
+    ),
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+      `${schema}."capture_all"()`,
+    ),
+    restricted(
+      `CREATE OR REPLACE FUNCTION ${schema}."settle"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "held" pg_catalog.text; "own" pg_catalog.text := ${OWN_HOLD}; "entries" pg_catalog.jsonb; BEGIN DELETE FROM ${marks} WHERE ctid = NEW.ctid; IF NEW."stage" = 1 THEN INSERT INTO ${marks} ("stage") VALUES (2); RETURN NULL; END IF; "held" := ${held}; IF NOT starts_with("held", "own") THEN UPDATE ${head} SET "epoch" = gen_random_uuid()::pg_catalog.text; RETURN NULL; END IF; "entries" := ('[' || substr("held", length("own") + 1) || ']')::pg_catalog.jsonb; PERFORM pg_advisory_xact_lock(${String(NUMBERING_LOCK)}); INSERT INTO ${changes} ("seq", "schema_name", "table_name", "side", "image") SELECT nextval(${numbers}), e.entry ->> 0, e.entry ->> 1, e.entry ->> 2, e.entry -> 3 FROM jsonb_array_elements("entries") WITH ORDINALITY AS e(entry, at) ORDER BY e.at; PERFORM set_config(${setting}, '', true); PERFORM pg_notify(${channel}, currval(${numbers})::pg_catalog.text); RETURN NULL; END $$`,
+      `${schema}."settle"()`,
+    ),
+    // Made again only where it stands otherwise, as `CREATE OR REPLACE` takes no constraint trigger.
+    `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger AS t WHERE t.tgrelid = ${literal(marks)}::pg_catalog.regclass AND t.tgname = 'settle' AND t.tgenabled = 'A' AND t.tgfoid = ${literal(settling)}::pg_catalog.regprocedure) THEN DROP TRIGGER IF EXISTS "settle" ON ${marks}; CREATE CONSTRAINT TRIGGER "settle" AFTER INSERT ON ${marks} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${settling}; ALTER TABLE ${marks} ENABLE ALWAYS TRIGGER "settle"; END IF; END $$`,
+    // Every entry written before `before`, a time in milliseconds, and the head past them, in one
+    // commit: of no number but one it deleted, so no writer's commit is ever read as behind it.
+    `CREATE OR REPLACE FUNCTION ${schema}."prune"("before" double precision) RETURNS void LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ WITH "gone" AS (DELETE FROM ${changes} WHERE "seq" <= (SELECT max("seq") FROM ${changes} WHERE "at" < to_timestamp("before" / 1000)) RETURNING "seq") UPDATE ${head} SET "pruned" = greatest("pruned", (SELECT max(g."seq") FROM "gone" AS g)) WHERE EXISTS (SELECT 1 FROM "gone") $$`,
+    // What the next entry is numbered, and a sequence left behind the log moved past it: where a
+    // subscription, which copies no sequence, brought entries without their numbers, or a log of a
+    // counter row came as it was. In a new epoch, as an entry may have taken a number a follower
+    // had read past. Numbers ahead of the log stay as they are, and none moves back under a
+    // transaction numbering.
+    `CREATE OR REPLACE FUNCTION ${schema}."next_number"() RETURNS bigint LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ SELECT CASE WHEN s."is_called" THEN s."last_value" + 1 ELSE s."last_value" END FROM ${sequence} AS s $$`,
+    `CREATE OR REPLACE FUNCTION ${schema}."catch_up"() RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "last" bigint; BEGIN SELECT greatest(h."pruned", (SELECT max(c."seq") FROM ${changes} AS c)) INTO "last" FROM ${head} AS h; IF "last" < ${schema}."next_number"() THEN RETURN; END IF; PERFORM pg_advisory_xact_lock(${String(NUMBERING_LOCK)}); PERFORM setval(${numbers}, greatest("last", (SELECT s."last_value" FROM ${sequence} AS s))); UPDATE ${head} SET "epoch" = gen_random_uuid()::pg_catalog.text; END $$`,
+    `GRANT EXECUTE ON FUNCTION ${schema}."prune"(double precision), ${schema}."next_number"(), ${schema}."catch_up"() TO PUBLIC`,
   ];
 }
 
@@ -476,7 +581,7 @@ function ddlCounterOf(namespace: string): readonly string[] {
     const ofKind = (kind: string, names: readonly string[]): string =>
       `(${row}.classid = ${of(kind)} AND pg_catalog.replace(${row}.object_identity, '"', '') IN (SELECT ${row}.schema_name || '.' || o.name FROM unnest(ARRAY[${names.map((name) => literal(name)).join(', ')}]) AS o(name)))`;
     const inOwn = `${row}.schema_name = ${own}`;
-    return `${row}.object_identity !~ '""' AND ((${inOwn} AND (${ofKind('pg_class', [...LOG_TABLES, ...LOG_INDEXES])} OR ${ofKind('pg_type', LOG_TABLES)})) OR (${ofKind('pg_proc', LOG_FUNCTIONS)} AND (${inOwn} OR ${anotherLog(row)})))`;
+    return `${row}.object_identity !~ '""' AND ((${inOwn} AND (${ofKind('pg_class', [...LOG_TABLES, ...LOG_INDEXES, ...LOG_SEQUENCES])} OR ${ofKind('pg_type', LOG_TABLES)})) OR (${ofKind('pg_proc', LOG_FUNCTIONS)} AND (${inOwn} OR ${anotherLog(row)})))`;
   };
   const commands = `EXISTS (SELECT 1 FROM pg_event_trigger_ddl_commands() AS c WHERE c.schema_name IS NULL OR (c.schema_name !~ ${TEMPORARY_SCHEMA} AND coalesce(NOT (${theLog('c')}), true)))`;
   // The dropped relations' own row types and their arrays, of the drop's objects read once: a
@@ -550,30 +655,29 @@ export function changeCaptureSql(
   relations: readonly FollowedRelation[],
   namespace: string = DEFAULT_NAMESPACE,
 ): readonly string[] {
-  const { changes, head, schema } = logOf(checkedNamespace(namespace));
+  const { changes, head, marks, schema, sequence } = logOf(checkedNamespace(namespace));
   const channel = literal(channelOf(namespace));
   const statements = [
     `CREATE SCHEMA IF NOT EXISTS ${schema}`,
-    `CREATE TABLE IF NOT EXISTS ${head} ("one" boolean PRIMARY KEY DEFAULT true CHECK ("one"), "epoch" text NOT NULL, "seq" bigint NOT NULL DEFAULT 0)`,
+    // A log of a counter row: what it counted to is where its entries' numbers go on from.
+    `DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass(${literal(head)}) AND attname = 'seq' AND NOT attisdropped) THEN ALTER TABLE ${head} RENAME COLUMN "seq" TO "pruned"; END IF; END $$`,
+    `CREATE TABLE IF NOT EXISTS ${head} ("one" boolean PRIMARY KEY DEFAULT true CHECK ("one"), "epoch" text NOT NULL, "pruned" bigint NOT NULL DEFAULT 0)`,
     // Not `ON CONFLICT DO NOTHING`, which waits on the row a writer's transaction holds to its commit.
     `INSERT INTO ${head} ("epoch") SELECT gen_random_uuid()::pg_catalog.text WHERE NOT EXISTS (SELECT 1 FROM ${head})`,
     `CREATE TABLE IF NOT EXISTS ${changes} ("seq" bigint PRIMARY KEY, "schema_name" text NOT NULL, "table_name" text NOT NULL, "at" timestamptz NOT NULL DEFAULT clock_timestamp())`,
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
     `DO $$ BEGIN IF (SELECT count(*) FROM pg_attribute WHERE attrelid = ${literal(changes)}::pg_catalog.regclass AND attname IN ('side', 'image') AND NOT attisdropped) < 2 THEN ALTER TABLE ${changes} ADD COLUMN IF NOT EXISTS "side" text, ADD COLUMN IF NOT EXISTS "image" jsonb; END IF; END $$`,
-    // Of the role that made the log alone, of which the functions run: any other that may use the
-    // log's schema could else append an entry that renders what read a table again, or attach a
-    // trigger function to a table of its own.
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" pg_catalog.text, "table_name" pg_catalog.text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::pg_catalog.text); END $$`,
-      `${schema}."note"(pg_catalog.text, pg_catalog.text)`,
-    ),
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
-      `${schema}."capture_all"()`,
-    ),
-    ...rowFunctionsOf(namespace, channel),
+    `CREATE SEQUENCE IF NOT EXISTS ${sequence}`,
+    `CREATE TABLE IF NOT EXISTS ${marks} ("stage" smallint NOT NULL)`,
+    // Its rows deleted as a transaction commits where a publication of all tables publishes deletes,
+    // which a table of no replica identity refuses.
+    `DO $$ BEGIN IF (SELECT c.relreplident FROM pg_class AS c WHERE c.oid = ${literal(marks)}::pg_catalog.regclass) <> 'f' THEN ALTER TABLE ${marks} REPLICA IDENTITY FULL; END IF; END $$`,
+    ...rowFunctionsOf(namespace),
+    ...logFunctionsOf(namespace, channel),
     ...ddlCounterOf(namespace),
+    // Last, as it may wait on a commit.
+    `SELECT ${schema}."catch_up"()`,
   ];
   return [
     locked(statements),

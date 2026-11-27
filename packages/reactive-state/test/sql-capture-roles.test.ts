@@ -1,20 +1,38 @@
 import { createHash } from 'node:crypto';
 
 import { PGlite } from '@electric-sql/pglite';
+import { pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
-import { changeCaptureSql } from '../src/sql/capture.ts';
+import { followDrizzle } from '../src/sql/index.ts';
 
 /**
  * Who writes a followed table needs no right to its log: the functions the triggers run write it as
- * the role that made it. The roles of these rows: `migrator`, which makes the table and the log and
- * is no superuser; `app`, which writes the table and has no right to the log's schema; `reader`,
- * which may use the log's schema; and `other`, which may create a table of its own.
+ * the role that made it, and that role alone may execute what writes the log. The roles of these
+ * rows: `migrator`, which makes the table and the log and is no superuser; `app`, which writes the
+ * table and has no right to the log's schema; `reader`, which may use the log's schema and read its
+ * entries and its head, as a host that only reads the log; `other`, which may use the log's schema
+ * and create a table of its own; and `tabler`, which may use the log's schema and make triggers on
+ * the followed table.
  */
 
-const RELATIONS = [{ keys: ['id'], name: 'items', schema: 'public' }];
+const items = pgTable('items', { id: text().primaryKey(), label: text() });
+const follow = followDrizzle({ items });
 /** Each test makes a PGlite of its own, as long as a second and more under load. */
 const TEST_TIMEOUT_MS = 30_000;
+
+/** The triggers' functions, which a writer's statement or its commit enters. */
+const ENTERED = [
+  'capture_all',
+  'capture_deleted',
+  'capture_inserted',
+  'capture_updated',
+  'settle',
+] as const;
+/** What those call, of the log's own. */
+const CALLED = ['hold', 'image_sql', 'note'] as const;
+/** The functions of the log's that write it, in the order of their names: its role's alone to execute. */
+const WRITERS = [...ENTERED, ...CALLED].toSorted((one, other) => one.localeCompare(other));
 
 /** The statement of a trigger of `public.mine` that runs the function of the capture of rows inserted. */
 function attach(name: string): string {
@@ -22,52 +40,41 @@ function attach(name: string): string {
 }
 
 /** The digest of a key's text, as the log keeps it. */
-function digest(text: string): string {
-  return createHash('sha256').update(text).digest('hex');
+function digest(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/** An entry of the log: the table it names, and of a row its side and its image. */
+interface Entry {
+  readonly table: string;
+  readonly side: string | null;
+  readonly image: unknown;
 }
 
 interface Opened {
   readonly pg: PGlite;
-  /** Runs `text` as `role`, and the role is the superuser again after it. */
-  readonly as: (role: string, text: string) => Promise<void>;
-  readonly log: () => Promise<{
-    readonly head: number;
-    readonly entries: readonly { readonly side: string | null; readonly image: unknown }[];
-  }>;
+  /** Runs `statements` as `role`, and the role is the superuser again after it. */
+  readonly as: (role: string, statements: string) => Promise<void>;
+  readonly entries: () => Promise<readonly Entry[]>;
 }
 
-/**
- * The statements of the capture as an installation made before the functions were definers ran
- * them. A function the log's role alone may execute is made now in one statement with the
- * revocation of what every other role is given (`DO $restricted$ … $restricted$`), which the
- * statement of the log holds among the others it runs under the capture's lock; an installation
- * made before ran each as an invoker's function, with no revocation.
- */
-function beforeDefiners(statement: string): string {
-  const open = 'DO $restricted$';
-  const close = ' END $restricted$';
-  const parts: string[] = [];
-  let from = 0;
-  for (let start = statement.indexOf(open); start !== -1; start = statement.indexOf(open, from)) {
-    const end = statement.indexOf(close, start) + close.length;
-    const block = statement.slice(start, end);
-    const revoke = block.indexOf(' REVOKE EXECUTE ON FUNCTION');
-    const made = `${block.slice(0, revoke)}${close}`.replace(' SECURITY DEFINER', '');
-    parts.push(statement.slice(from, start), made);
-    from = end;
+/** Runs the statements of the capture as `migrator`, which made the log. */
+async function install(pg: PGlite): Promise<void> {
+  await pg.exec('SET ROLE migrator');
+  try {
+    for (const statement of follow.captureSql()) {
+      await pg.query(statement);
+    }
+  } finally {
+    await pg.exec('RESET ROLE');
   }
-  parts.push(statement.slice(from));
-  return parts.join('');
 }
 
 /**
  * The table and its log, made by `migrator`, and the roles that write or read; `before` runs first,
- * and `install` says what each statement of the capture is run as, or that it is not.
+ * and `after` once the log is made, as the superuser.
  */
-async function opened(
-  before = '',
-  install: (statement: string) => string | undefined = (statement) => statement,
-): Promise<Opened> {
+async function opened(before = '', after = ''): Promise<Opened> {
   const pg = await PGlite.create();
   onTestFinished(async () => {
     await pg.close();
@@ -77,42 +84,45 @@ async function opened(
     CREATE ROLE app;
     CREATE ROLE reader;
     CREATE ROLE other;
+    CREATE ROLE tabler;
     GRANT CREATE ON DATABASE postgres TO migrator;
     GRANT CREATE ON SCHEMA public TO migrator, other;
     ${before}
     SET ROLE migrator;
     CREATE TABLE public.items (id text PRIMARY KEY, label text);
-  `);
-  for (const statement of changeCaptureSql(RELATIONS)) {
-    const run = install(statement);
-    if (run !== undefined) {
-      await pg.query(run);
-    }
-  }
-  await pg.exec(`
     RESET ROLE;
+  `);
+  await install(pg);
+  await pg.exec(`
     GRANT SELECT, INSERT, UPDATE, DELETE, TRUNCATE ON public.items TO app;
-    GRANT USAGE ON SCHEMA reactive_state TO reader, other;
+    GRANT USAGE ON SCHEMA reactive_state TO reader, other, tabler;
+    GRANT SELECT ON reactive_state.changes, reactive_state.head TO reader;
+    GRANT TRIGGER ON public.items TO tabler;
+    ${after}
   `);
   return {
-    as: async (role, text) => {
+    as: async (role, statements) => {
       await pg.exec(`SET ROLE ${role}`);
       try {
-        await pg.exec(text);
+        await pg.exec(statements);
       } finally {
         await pg.exec('RESET ROLE');
       }
     },
-    log: async () => {
-      const head = await pg.query<{ seq: string }>('SELECT seq FROM reactive_state.head');
-      const entries = await pg.query<{ side: string | null; image: unknown }>(
-        'SELECT side, image FROM reactive_state.changes ORDER BY seq',
+    entries: async () => {
+      const { rows } = await pg.query<Entry>(
+        'SELECT table_name AS "table", side, image FROM reactive_state.changes ORDER BY seq',
       );
-      return { entries: entries.rows, head: Number(head.rows[0]?.seq) };
+      return rows;
     },
     pg,
   };
 }
+
+/** The triggers' functions as an installation made before left them: executable by `PUBLIC`. */
+const MADE_BEFORE = ENTERED.map(
+  (name) => `GRANT EXECUTE ON FUNCTION reactive_state.${name}() TO PUBLIC;`,
+).join(' ');
 
 /** What each of two setups makes of the same writes: the default privileges of the database as they are, and taken from `PUBLIC`. */
 const SETUPS: readonly (readonly [string, string])[] = [
@@ -129,26 +139,23 @@ describe.each(SETUPS)(
     it(
       'logs an insert, an update and a delete of rows, as the rows it wrote',
       async () => {
-        const { as, log } = await opened(before);
+        const { as, entries } = await opened(before);
 
         await as('app', "INSERT INTO items VALUES ('a', 'x')");
         await as('app', "UPDATE items SET label = 'y' WHERE id = 'a'");
         await as('app', "DELETE FROM items WHERE id = 'a'");
 
-        const { entries, head } = await log();
+        const logged = await entries();
 
-        expect(head).toBe(4);
-        expect(entries.map((entry) => entry.side)).toStrictEqual([
+        expect(logged.map((entry) => entry.side)).toStrictEqual([
           'after',
           'before',
           'after',
           'before',
         ]);
-        expect(
-          entries.every(
-            (entry) => JSON.stringify(entry.image) === JSON.stringify({ id: digest('a') }),
-          ),
-        ).toBe(true);
+        expect(logged.map((entry) => entry.image)).toStrictEqual(
+          logged.map(() => ({ id: digest('a') })),
+        );
       },
       TEST_TIMEOUT_MS,
     );
@@ -156,15 +163,15 @@ describe.each(SETUPS)(
     it(
       'logs a statement of more rows than it keeps entries of, and a truncate, as the table',
       async () => {
-        const { as, log } = await opened(before);
+        const { as, entries } = await opened(before);
 
         await as('app', "INSERT INTO items SELECT 'k' || g, 'x' FROM generate_series(1, 150) AS g");
         await as('app', 'TRUNCATE items');
 
-        const { entries, head } = await log();
-
-        expect(head).toBe(2);
-        expect(entries.map((entry) => entry.image)).toStrictEqual([null, null]);
+        await expect(entries()).resolves.toStrictEqual([
+          { image: null, side: null, table: 'items' },
+          { image: null, side: null, table: 'items' },
+        ]);
       },
       TEST_TIMEOUT_MS,
     );
@@ -172,7 +179,7 @@ describe.each(SETUPS)(
 );
 
 describe('the functions that write the log', { timeout: TEST_TIMEOUT_MS }, () => {
-  it('run as the role that made the log, of a search path of the catalog and the temporary schema alone', async () => {
+  it('are of the role that made the log, of a search path of the catalog and the temporary schema alone, and those a writer enters run as that role', async () => {
     const { pg } = await opened();
 
     const { rows } = await pg.query<{
@@ -180,22 +187,22 @@ describe('the functions that write the log', { timeout: TEST_TIMEOUT_MS }, () =>
       owner: string;
       definer: boolean;
       config: readonly string[];
-    }>(`
-      SELECT p.proname AS name, pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS definer, p.proconfig AS config
-      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
-      WHERE n.nspname = 'reactive_state' AND p.proname IN ('capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note')
-      ORDER BY p.proname
-    `);
-
-    expect(rows.map((row) => [row.name, row.owner, row.definer, row.config])).toStrictEqual(
-      ['capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note'].map(
-        (name) => [name, 'migrator', true, ['search_path=pg_catalog, pg_temp']],
-      ),
+    }>(
+      `SELECT p.proname AS name, pg_get_userbyid(p.proowner) AS owner, p.prosecdef AS definer, p.proconfig AS config
+       FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'reactive_state' AND p.proname = ANY($1)
+       ORDER BY p.proname`,
+      [WRITERS],
     );
+
+    expect(rows.map((row) => [row.name, row.owner, row.config])).toStrictEqual(
+      WRITERS.map((name) => [name, 'migrator', ['search_path=pg_catalog, pg_temp']]),
+    );
+    expect(rows.filter((row) => row.definer).map((row) => row.name)).toStrictEqual([...ENTERED]);
   });
 
   it('are called by the role that made the log, and by none that may merely use its schema', async () => {
-    const { as, log } = await opened();
+    const { as, entries } = await opened();
 
     await as('migrator', "SELECT reactive_state.note('public', 'items')");
 
@@ -205,101 +212,172 @@ describe('the functions that write the log', { timeout: TEST_TIMEOUT_MS }, () =>
     await expect(as('app', "SELECT reactive_state.note('public', 'items')")).rejects.toThrow(
       'permission denied for schema reactive_state',
     );
-    expect((await log()).head).toBe(1);
+    await expect(entries()).resolves.toHaveLength(1);
   });
 
   it('are executable by the role that made the log alone, no trigger function by `PUBLIC` either', async () => {
     const { pg } = await opened();
 
-    const { rows } = await pg.query<{ name: string; owner: boolean; others: boolean }>(`
-      SELECT p.proname AS name, has_function_privilege('migrator', p.oid, 'EXECUTE') AS owner, has_function_privilege('other', p.oid, 'EXECUTE') AS others
-      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
-      WHERE n.nspname = 'reactive_state' AND p.proname IN ('capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note')
-      ORDER BY p.proname
-    `);
+    const { rows } = await pg.query<{ name: string; owner: boolean; others: boolean }>(
+      `SELECT p.proname AS name, has_function_privilege('migrator', p.oid, 'EXECUTE') AS owner, has_function_privilege('other', p.oid, 'EXECUTE') AS others
+       FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'reactive_state' AND p.proname = ANY($1)
+       ORDER BY p.proname`,
+      [WRITERS],
+    );
 
     expect(rows.map((row) => [row.name, row.owner, row.others])).toStrictEqual(
-      ['capture_all', 'capture_deleted', 'capture_inserted', 'capture_updated', 'note'].map(
-        (name) => [name, true, false],
-      ),
+      WRITERS.map((name) => [name, true, false]),
     );
   });
 
   it('are attached to no table by a role that may create one', async () => {
     const { as } = await opened();
-    await as('other', 'CREATE TABLE public.mine (id text PRIMARY KEY, secret text)');
+    await as(
+      'other',
+      'CREATE TABLE public.mine (id text PRIMARY KEY, secret text, stage smallint)',
+    );
 
-    for (const [event, images, run] of [
-      ['INSERT', 'REFERENCING NEW TABLE AS rows_after', "capture_inserted('id', 'secret')"],
-      ['DELETE', 'REFERENCING OLD TABLE AS rows_before', "capture_deleted('id', 'secret')"],
+    for (const [kind, event, images, run] of [
       [
+        '',
+        'INSERT',
+        'REFERENCING NEW TABLE AS rows_after FOR EACH STATEMENT',
+        "capture_inserted('id', 'secret')",
+      ],
+      [
+        '',
+        'DELETE',
+        'REFERENCING OLD TABLE AS rows_before FOR EACH STATEMENT',
+        "capture_deleted('id', 'secret')",
+      ],
+      [
+        '',
         'UPDATE',
-        'REFERENCING OLD TABLE AS rows_before NEW TABLE AS rows_after',
+        'REFERENCING OLD TABLE AS rows_before NEW TABLE AS rows_after FOR EACH STATEMENT',
         "capture_updated('id', 'secret')",
       ],
-      ['TRUNCATE', '', 'capture_all()'],
+      ['', 'TRUNCATE', 'FOR EACH STATEMENT', 'capture_all()'],
+      ['CONSTRAINT', 'INSERT', 'DEFERRABLE INITIALLY DEFERRED FOR EACH ROW', 'settle()'],
     ] as const) {
       await expect(
         as(
           'other',
-          `CREATE TRIGGER mine AFTER ${event} ON public.mine ${images} FOR EACH STATEMENT EXECUTE FUNCTION reactive_state.${run}`,
+          `CREATE ${kind} TRIGGER mine AFTER ${event} ON public.mine ${images} EXECUTE FUNCTION reactive_state.${run}`,
         ),
       ).rejects.toThrow('permission denied for function');
     }
   });
 
   it('log the rows a policy of the table lets the writer change, and none it hides', async () => {
-    const { as, log, pg } = await opened();
+    const { as, entries, pg } = await opened();
     await pg.exec(`
       INSERT INTO items VALUES ('mine', 'a'), ('theirs', 'b');
       ALTER TABLE items ENABLE ROW LEVEL SECURITY;
       CREATE POLICY own ON items FOR ALL TO app USING (id = 'mine') WITH CHECK (id = 'mine');
     `);
-    const { head } = await log();
+    const before = await entries();
 
     await as('app', "UPDATE items SET label = 'z'");
 
-    const after = await log();
+    const after = await entries();
 
-    expect(after.head).toBe(head + 2);
-    expect(after.entries.slice(-2).map((entry) => entry.image)).toStrictEqual([
+    expect(after.slice(before.length).map((entry) => entry.image)).toStrictEqual([
       { id: digest('mine') },
       { id: digest('mine') },
     ]);
-    expect(JSON.stringify(after.entries.slice(-2))).not.toContain(digest('theirs'));
+    expect(JSON.stringify(after.slice(before.length))).not.toContain(digest('theirs'));
   });
 
-  it('reach an installation made before, which installs the capture again', async () => {
-    const { as, log, pg } = await opened('', beforeDefiners);
+  it('reach an installation made before, which installs the capture again, and leave a trigger another role attached before as it is', async () => {
+    const { as, entries, pg } = await opened('', MADE_BEFORE);
     await as('other', 'CREATE TABLE public.mine (id text PRIMARY KEY)');
-
-    await expect(as('app', "INSERT INTO items VALUES ('a', 'x')")).rejects.toThrow(
-      'permission denied for schema reactive_state',
-    );
-
     await as('other', attach('before_installing_again'));
 
-    await pg.exec('SET ROLE migrator');
-    for (const statement of changeCaptureSql(RELATIONS)) {
-      await pg.query(statement);
-    }
-    await pg.exec('RESET ROLE');
+    await install(pg);
     await as('app', "INSERT INTO items VALUES ('a', 'x')");
 
-    expect((await log()).head).toBe(1);
+    await expect(entries()).resolves.toStrictEqual([
+      { image: { id: digest('a') }, side: 'after', table: 'items' },
+    ]);
     await expect(as('reader', "SELECT reactive_state.note('public', 'items')")).rejects.toThrow(
       'permission denied for function note',
     );
     await expect(as('other', attach('after_installing_again'))).rejects.toThrow(
       'permission denied for function',
     );
+
+    // The right is asked as a trigger is made, not as it fires: one made before fires on.
+    await as('other', "INSERT INTO public.mine VALUES ('m')");
+
+    await expect(entries()).resolves.toHaveLength(2);
   });
 
   it('are run as before by the superuser', async () => {
-    const { log, pg } = await opened();
+    const { entries, pg } = await opened();
 
     await pg.query("INSERT INTO items VALUES ('a', 'x')");
 
-    expect((await log()).head).toBe(1);
+    await expect(entries()).resolves.toHaveLength(1);
+  });
+});
+
+describe('a role that did not make the log', { timeout: TEST_TIMEOUT_MS }, () => {
+  it('reads it, and prunes it, by the right to use its schema and to read its entries and its head alone', async () => {
+    const { as, pg } = await opened();
+    await as('app', "INSERT INTO items VALUES ('a', 'x')");
+    await pg.exec('SET ROLE reader');
+
+    const read = await follow.store(pg).changes(0, 10);
+    await follow.prune(pg, Date.now() + 60_000);
+    const pruned = await follow.store(pg).changes(0, 10);
+
+    expect(read.changes).toHaveLength(1);
+    expect(pruned).toMatchObject({ changes: [], floor: 2, head: 1 });
+  });
+
+  it('finds the triggers of a followed table standing, by the right to use the schema alone', async () => {
+    const { as } = await opened();
+    const [, table = ''] = follow.captureSql();
+
+    await expect(as('reader', table)).resolves.toBeUndefined();
+  });
+
+  it('makes no trigger a followed table lacks, though it may make triggers on the table', async () => {
+    const { as, entries, pg } = await opened();
+    const [, table = ''] = follow.captureSql();
+    await pg.exec('DROP TRIGGER reactive_state_insert ON public.items');
+
+    await expect(as('tabler', table)).rejects.toThrow(
+      'permission denied for function reactive_state.capture_inserted',
+    );
+
+    await install(pg);
+    await as('app', "INSERT INTO items VALUES ('a', 'x')");
+
+    await expect(entries()).resolves.toHaveLength(1);
+  });
+
+  it('makes nothing of the log, whose statement PostgreSQL refuses whole at the first function it would replace', async () => {
+    const { as, pg } = await opened(
+      'CREATE ROLE second; GRANT CREATE ON DATABASE postgres TO second;',
+      `GRANT USAGE, CREATE ON SCHEMA reactive_state TO second;
+       GRANT ALL ON ALL TABLES IN SCHEMA reactive_state TO second;
+       GRANT ALL ON ALL SEQUENCES IN SCHEMA reactive_state TO second;`,
+    );
+    const [log = ''] = follow.captureSql();
+    const owned = async (): Promise<readonly string[]> => {
+      const { rows } = await pg.query<{ owner: string }>(
+        `SELECT DISTINCT pg_get_userbyid(p.proowner) AS owner FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE n.nspname = 'reactive_state'`,
+      );
+      return rows.map((row) => row.owner);
+    };
+
+    await expect(as('second', log)).rejects.toMatchObject({
+      code: '42501',
+      message: 'must be owner of function image_sql',
+    });
+    await expect(as('reader', log)).rejects.toMatchObject({ code: '42501' });
+    await expect(owned()).resolves.toStrictEqual(['migrator']);
   });
 });

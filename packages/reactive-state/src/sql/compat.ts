@@ -1,10 +1,13 @@
 import { logOf } from './capture.ts';
 import type { Queryable } from './digest.ts';
 
+/** The log's functions the store calls by name, which a log of before may lack. */
+const CAPTURE_FUNCTIONS = ['catch_up', 'ddl_count', 'fold_ddl', 'next_number', 'prune'] as const;
+
 /**
  * A log made by an earlier capture version, identified by PostgreSQL's error code and position in
- * the store's own statement: the row-image columns, or a schema-count helper, are missing. An
- * error inside a function, or anywhere else, keeps its original meaning.
+ * the store's own statement: the row-image columns, the head's prune, or a helper of the store's
+ * are missing. An error inside a function, or anywhere else, keeps its original meaning.
  */
 function missingCapture(error: unknown, sql: string, namespace: string): boolean {
   if (typeof error !== 'object' || error === null) return false;
@@ -14,11 +17,11 @@ function missingCapture(error: unknown, sql: string, namespace: string): boolean
   const at = sql.slice(position - 1);
   const code: unknown = Reflect.get(error, 'code');
   if (code === '42703') {
-    return at.startsWith('"side"') || at.startsWith('"image"');
+    return at.startsWith('"side"') || at.startsWith('"image"') || at.startsWith('h."pruned"');
   }
   if (code === '42883') {
     const { schema } = logOf(namespace);
-    return at.startsWith(`${schema}."ddl_count"(`) || at.startsWith(`${schema}."fold_ddl"(`);
+    return CAPTURE_FUNCTIONS.some((name) => at.startsWith(`${schema}."${name}"(`));
   }
   return false;
 }

@@ -109,24 +109,30 @@ function entriesOf(page: unknown, followed: Followed): readonly ExternalChange[]
 const FOLD = { turns: 10 } as const;
 
 /**
- * The page of the log after `$1`, `$2` entries at most, with its head, floor and epoch. Where the
- * head is more than `$3` entries past `$1` — more than a turn of the authority's reads reaches, a
- * row an entry — the page is of the tables those entries changed instead, an entry of no row of
- * each at its last, so that one turn reaches the head: what read the tables is rendered again, as
- * of a table's change. Of more than `$4` entries, or more tables than a page holds, the floor is
- * past the head: whatever read the store's tables is rendered again, as for changes let go of.
+ * The page of the log after `$1`, `$2` entries at most, with its head, floor and epoch. The head is
+ * the last number a committed entry holds, in the read that reads the entries: a follower that has
+ * read to it has read every entry before it, as numbers are taken in the order of the commits
+ * (`capture.ts`). Past a prune there may be none, so the prune's number is the head then. The floor
+ * is the first number kept, whatever let go of those before it: a number a failed commit took just
+ * before it reads as more let go of than was, which renders again more than it need. Where the head
+ * is more than `$3` numbers past `$1` — more than a turn of the authority's reads reaches, a row an
+ * entry — the page is of the tables those entries changed instead, an entry of no row of each at
+ * its last, so that one turn reaches the head: what read the tables is rendered again, as of a
+ * table's change. Of more than `$4` numbers, or more tables than a page holds, the floor is past the
+ * head: whatever read the store's tables is rendered again, as for changes let go of.
  */
 function pageSql(namespace: string): string {
   const { changes, head, schema } = logOf(namespace);
-  const far = `(SELECT "seq" FROM ${head}) - $1 > $3`;
-  const farther = `(SELECT "seq" FROM ${head}) - $1 > $4`;
+  const log = `"log" AS MATERIALIZED (SELECT h."epoch", h."pruned", greatest(h."pruned", coalesce((SELECT max("seq") FROM ${changes}), 0)) AS "head" FROM ${head} AS h)`;
+  const far = `(SELECT l."head" FROM "log" AS l) - $1 > $3`;
+  const farther = `(SELECT l."head" FROM "log" AS l) - $1 > $4`;
   const page = `SELECT "seq", "schema_name", "table_name", "side", "image" FROM ${changes} WHERE "seq" > $1 AND NOT ${far} ORDER BY "seq" LIMIT $2`;
   const folded = `SELECT max("seq") AS "seq", "schema_name", "table_name" FROM ${changes} WHERE "seq" > $1 AND ${far} AND NOT ${farther} GROUP BY "schema_name", "table_name"`;
   const overflows = `(${farther} OR (SELECT count(*) FROM "folded") > $2)`;
-  const floor = `CASE WHEN ${overflows} THEN h."seq" + 1 ELSE coalesce((SELECT min("seq") FROM ${changes}), CASE WHEN h."seq" = 0 THEN 0 ELSE h."seq" + 1 END) END`;
+  const floor = `CASE WHEN ${overflows} THEN l."head" + 1 ELSE coalesce((SELECT min("seq") FROM ${changes}), CASE WHEN l."head" = 0 THEN 0 ELSE l."head" + 1 END) END`;
   const rows = `(SELECT json_agg(json_build_array(p."seq", p."schema_name", p."table_name", p."side", p."image") ORDER BY p."seq") FROM "page" AS p)`;
   const tables = `(SELECT json_agg(json_build_array(f."seq", f."schema_name", f."table_name") ORDER BY f."seq") FROM "folded" AS f WHERE NOT ${overflows})`;
-  return `WITH "page" AS (${page}), "folded" AS (${folded}) SELECT h."epoch", ${schema}."ddl_count"() AS "ddl", h."seq" AS "head", ${floor} AS "floor", coalesce(${rows}, ${tables}, '[]'::pg_catalog.json) AS "page" FROM ${head} AS h`;
+  return `WITH ${log}, "page" AS (${page}), "folded" AS (${folded}) SELECT l."epoch", ${schema}."ddl_count"() AS "ddl", ${schema}."next_number"() AS "next", l."head", ${floor} AS "floor", coalesce(${rows}, ${tables}, '[]'::pg_catalog.json) AS "page" FROM "log" AS l`;
 }
 
 /** What `db.<table>` is answered for a table read by SQL: a fault, which names the way to read it. */
@@ -145,6 +151,7 @@ function readBySql(table: string): Promise<never> {
  */
 export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
   const statement = pageSql(followed.namespace);
+  const catchUp = `SELECT ${logOf(followed.namespace).schema}."catch_up"()`;
   const schema = new SchemaDigest(client, followed.relations);
   let counted: string | undefined;
   return {
@@ -170,6 +177,12 @@ export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
       // uncounted is then another digest's.
       const ddl = String(row['ddl']);
       const moved = counted !== undefined && counted !== ddl;
+      const head = logNumber(row['head'], 'head');
+      // The next number at or before the head: a sequence no subscription copied. Moved past the
+      // log in a new epoch, as an entry may already hold a number a follower read past.
+      if (logNumber(row['next'], 'next number') <= head) {
+        await queryCapture(client, catchUp, [], followed.namespace);
+      }
       const { changed, digest } = await schema.read(moved);
       if (changed || moved) {
         followed.schema.generation += 1;
@@ -180,7 +193,7 @@ export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
         // Observed session changes can change and change back before the digest is read again.
         epoch: `${epoch}:${ddl}:${digest}:${String(followed.schema.context ?? 0)}`,
         floor: logNumber(row['floor'], 'floor'),
-        head: logNumber(row['head'], 'head'),
+        head,
       };
     },
     count: (table) => readBySql(table.name),
@@ -191,19 +204,22 @@ export function sqlStore(client: Queryable, followed: Followed): ExternalStore {
 
 /**
  * Discards the log's entries written before `before`, a time in milliseconds: every entry up to the
- * last of those, so that what is kept follows on from the head. A follower behind them renders
- * again whatever read the tables, as it does for a log begun anew. The schema's changes counted
- * before it are folded into one row of their sum, so the count the store reads goes on as it was.
+ * last of those, so that what is kept follows on from the head, which keeps the last it discarded. A
+ * follower behind them renders again whatever read the tables, as it does for a log begun anew. The
+ * schema's changes counted before it are folded into one row of their sum, so the count the store
+ * reads goes on as it was.
  */
 export async function pruneSqlChanges(
   client: Queryable,
   before: number,
   namespace: string,
 ): Promise<void> {
-  const { changes, schema } = logOf(namespace);
-  await client.query(
-    `DELETE FROM ${changes} WHERE "seq" <= (SELECT max("seq") FROM ${changes} WHERE "at" < to_timestamp($1::pg_catalog.float8 / 1000))`,
+  const { schema } = logOf(namespace);
+  await queryCapture(
+    client,
+    `SELECT ${schema}."prune"($1::pg_catalog.float8)`,
     [before],
+    namespace,
   );
   await queryCapture(
     client,
