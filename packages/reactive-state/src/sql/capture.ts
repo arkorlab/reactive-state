@@ -91,14 +91,11 @@ const LOG_FUNCTIONS = [
 ] as const;
 
 /**
- * The log's own functions of SQL's language, by name and their arguments as PostgreSQL writes them
- * (`pg_get_function_identity_arguments`): a text no render reads, whose words name no type.
+ * The log's own functions of SQL's language, by name and the oids of their arguments as `pg_proc`
+ * holds them, PostgreSQL's own (`float8`, `oid`, `text[]`): a text no render reads, whose words name
+ * no type. Of no name a lookup reads, which a role of no right to the schema fails.
  */
-export const LOG_SQL_FUNCTIONS = [
-  'ddl_count()',
-  'fold_ddl(before double precision)',
-  'image_sql(relid oid, keys text[])',
-] as const;
+export const LOG_SQL_FUNCTIONS = ['ddl_count()', 'fold_ddl(701)', 'image_sql(26 1009)'] as const;
 
 /** How many keys one `jsonb_build_object` of a row's image takes: PostgreSQL's 100 arguments. */
 const KEYS_A_CALL = 50;
@@ -326,10 +323,10 @@ function rowFunctionsOf(namespace: string, channel: string): readonly string[] {
     // of the table, and a read's condition is of the same digest (`reads.ts`). One dropped since its trigger
     // was made is left out of it, and the store reads the entry as of the table alone
     // (`store.ts`): the write goes on.
-    `CREATE OR REPLACE FUNCTION ${schema}."image_sql"("relid" oid, "keys" text[]) RETURNS text LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$ SELECT coalesce(string_agg(format('jsonb_build_object(%s)', c.pairs), ' || ' ORDER BY c.chunk), '''{}''::pg_catalog.jsonb') FROM (SELECT n.chunk, string_agg(format(CASE WHEN n.boolean THEN '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(r.%I::pg_catalog.text, getdatabaseencoding())), ''hex'') END' ELSE '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(format(''%%s'', r.%I), getdatabaseencoding())), ''hex'') END' END, n.name, n.name, n.name), ', ' ORDER BY n.at) AS pairs FROM (SELECT u.name, u.at, (u.at - 1) / ${String(KEYS_A_CALL)} AS chunk, a.atttypid = 'boolean'::regtype AS boolean FROM unnest("keys") WITH ORDINALITY AS u(name, at) JOIN pg_attribute AS a ON a.attrelid = "relid" AND a.attname = u.name AND a.attnum > 0 AND NOT a.attisdropped) AS n GROUP BY n.chunk) AS c $$`,
+    `CREATE OR REPLACE FUNCTION ${schema}."image_sql"("relid" pg_catalog.oid, "keys" pg_catalog.text[]) RETURNS pg_catalog.text LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$ SELECT coalesce(string_agg(format('jsonb_build_object(%s)', c.pairs), ' || ' ORDER BY c.chunk), '''{}''::pg_catalog.jsonb') FROM (SELECT n.chunk, string_agg(format(CASE WHEN n.boolean THEN '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(r.%I::pg_catalog.text, getdatabaseencoding())), ''hex'') END' ELSE '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(format(''%%s'', r.%I), getdatabaseencoding())), ''hex'') END' END, n.name, n.name, n.name), ', ' ORDER BY n.at) AS pairs FROM (SELECT u.name, u.at, (u.at - 1) / ${String(KEYS_A_CALL)} AS chunk, a.atttypid = 'boolean'::regtype AS boolean FROM unnest("keys") WITH ORDINALITY AS u(name, at) JOIN pg_attribute AS a ON a.attrelid = "relid" AND a.attname = u.name AND a.attnum > 0 AND NOT a.attisdropped) AS n GROUP BY n.chunk) AS c $$`,
     // Of each writer, which the trigger's function calls it as, though the database's default
     // privileges keep functions from `PUBLIC`: it reads the catalog's attributes alone.
-    `GRANT EXECUTE ON FUNCTION ${schema}."image_sql"(oid, text[]) TO PUBLIC`,
+    `GRANT EXECUTE ON FUNCTION ${schema}."image_sql"(pg_catalog.oid, pg_catalog.text[]) TO PUBLIC`,
     // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
     restricted(made('capture_inserted', ['after']), `${schema}."capture_inserted"()`),
     restricted(made('capture_deleted', ['before']), `${schema}."capture_deleted"()`),
@@ -513,7 +510,7 @@ export function changeCaptureSql(
     // log's schema could else append an entry that renders what read a table again, or attach a
     // trigger function to a table of its own.
     restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" text, "table_name" text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::pg_catalog.text); END $$`,
+      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" pg_catalog.text, "table_name" pg_catalog.text) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "next" bigint; BEGIN UPDATE ${head} SET "seq" = "seq" + 1 RETURNING "seq" INTO "next"; INSERT INTO ${changes} ("seq", "schema_name", "table_name") VALUES ("next", "schema_name", "table_name"); PERFORM pg_notify(${channel}, "next"::pg_catalog.text); END $$`,
       `${schema}."note"(pg_catalog.text, pg_catalog.text)`,
     ),
     restricted(

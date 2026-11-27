@@ -114,11 +114,12 @@ export function catalogSql(followed: Followed): string {
   const trees = `(WITH "kept" AS MATERIALIZED (${kept}) SELECT coalesce(json_agg(k.tree), '[]'::pg_catalog.json) FROM "kept" AS k WHERE k.tree ~ ${aliasList})`;
   // Of them, none of a log's own functions, of this log or of another an event trigger tells of: a
   // word of their text (`keys`, `n`) is no type's, though a staging table has its name. An
-  // application's function of such a name, of other arguments or another schema, is read.
+  // application's function of such a name, of other arguments or another schema, is read; so is one
+  // of an application's type that reads as PostgreSQL's (`public.text`), as a signature holds
+  // PostgreSQL's oids, and any where an application's `=` answers no value: only a match is a log's.
   const logFunctions = LOG_SQL_FUNCTIONS.map((signature) => literal(signature)).join(', ');
   const logSchema = `(n.nspname = ${literal(followed.namespace)} OR EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger AS e JOIN pg_catalog.pg_proc AS q ON q.oid = e.evtfoid WHERE q.pronamespace = n.oid AND q.proname = 'note_ddl' AND e.evtname = n.nspname || '_ddl'))`;
-  // A text of each, as a row's comparison finds no `=` where the application's stands before ours.
-  const logFunction = `(${logSchema} AND pg_catalog.format('%s(%s)', p.proname, pg_catalog.pg_get_function_identity_arguments(p.oid)) IN (${logFunctions}))`;
+  const logFunction = `coalesce(CASE WHEN ${logSchema} THEN pg_catalog.format('%s(%s)', p.proname, p.proargtypes) OPERATOR(pg_catalog.=) ANY (ARRAY[${logFunctions}]::pg_catalog.text[]) END, false)`;
   const bodies = `(SELECT coalesce(json_agg(p.prosrc), '[]'::pg_catalog.json) FROM pg_proc AS p JOIN pg_language AS l ON l.oid = p.prolang JOIN pg_namespace AS n ON n.oid = p.pronamespace WHERE l.lanname = 'sql' AND p.prosqlbody IS NULL AND ${others} AND NOT ${logFunction})`;
   const builtinTypes = `(SELECT json_agg(json_build_array(t.typname, pg_type_is_visible(t.oid))) FROM pg_type AS t WHERE t.typnamespace = 'pg_catalog'::pg_catalog.regnamespace AND t.typrelid = 0)`;
   // User-defined scalar and explicitly declared composite types are permanent too, even where
@@ -130,14 +131,15 @@ export function catalogSql(followed: Followed): string {
   // trigger counts the schema's commands (`capture.ts`) or the digest alone tells (`digest.ts`):
   // a view's, one of the name of a type of PostgreSQL's or of the application's — the log's own
   // schema's are the digest's alone — or one a domain, a range, a function or a composite type's
-  // attribute is of, whose drop and change are counted too: none of the log's own schema, the
-  // log's place, whose own functions are counted of nothing. A staging table's
+  // attribute is of, whose drop and change are counted too: none of a log's own schema, this log's
+  // or another's an event trigger tells of, whose own functions are counted of nothing. A staging table's
   // column, rule or constraint is none such: its drop is counted of nothing, after which a change
   // of the type would be of nothing either. Nor, to keep the first plan's catalog lean, is a view.
   // Each dependency names its object's kind — a domain's and a range's are a type's — and schema,
   // quoted as an identifier is (a log of a keyword's name, `user`), of no join of their catalogs.
   const application = `(o.nspname = 'pg_catalog' OR (o.nspname NOT IN ('information_schema', 'pg_toast', ${literal(followed.namespace)}) AND o.nspname !~ '^pg_(toast_)?temp_'))`;
-  const dependent = `EXISTS (SELECT 1 FROM pg_depend AS p, pg_catalog.pg_identify_object(p.classid, p.objid, 0) AS d WHERE p.refclassid = 'pg_type'::pg_catalog.regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n' AND d.type IN ('aggregate', 'composite type', 'function', 'procedure', 'type') AND d.schema IS DISTINCT FROM pg_catalog.quote_ident(${literal(followed.namespace)}))`;
+  const anotherLog = `EXISTS (SELECT 1 FROM pg_catalog.pg_event_trigger AS e JOIN pg_catalog.pg_proc AS q ON q.oid = e.evtfoid JOIN pg_catalog.pg_namespace AS m ON m.oid = q.pronamespace WHERE pg_catalog.quote_ident(m.nspname) = d.schema AND q.proname = 'note_ddl' AND e.evtname = m.nspname || '_ddl')`;
+  const dependent = `EXISTS (SELECT 1 FROM pg_depend AS p, pg_catalog.pg_identify_object(p.classid, p.objid, 0) AS d WHERE p.refclassid = 'pg_type'::pg_catalog.regclass AND p.refobjid IN (t.oid, t.typarray) AND p.deptype = 'n' AND d.type IN ('aggregate', 'composite type', 'function', 'procedure', 'type') AND d.schema IS DISTINCT FROM pg_catalog.quote_ident(${literal(followed.namespace)}) AND NOT ${anotherLog})`;
   const counted = `(c.relkind = 'v' OR EXISTS (SELECT 1 FROM pg_type AS a JOIN pg_namespace AS o ON o.oid = a.typnamespace WHERE a.typname = t.typname AND ${application}) OR ${dependent})`;
   // Each type of the session's temporary schema but an array, as of the application's: its
   // relation's kind, where it is a row type, and whether the count follows that relation.

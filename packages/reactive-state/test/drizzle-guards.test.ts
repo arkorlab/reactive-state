@@ -1,4 +1,4 @@
-import { protocol } from '@electric-sql/pglite';
+import { type PGlite, protocol } from '@electric-sql/pglite';
 import { eq, sql } from 'drizzle-orm';
 import { pgSchema, pgTable, text } from 'drizzle-orm/pg-core';
 import { describe, expect, it, vi } from 'vitest';
@@ -496,6 +496,189 @@ describe('the boundaries of a followed PGlite client', { timeout: 20_000 }, () =
     expect(evaluate).toHaveBeenCalledWith({}, expect.anything());
   });
 
+  it.each([
+    ['listen', (client: PGlite, channel: string) => client.listen(channel, vi.fn())],
+    ['unlisten', (client: PGlite, channel: string) => client.unlisten(channel)],
+  ])(
+    'invalidates cached reads for a context change a channel of %s holds',
+    async (_method, call) => {
+      const setup = await openedWith(schema, DDL);
+      const client = setup.follow.client(setup.pg);
+      const evaluate = vi.fn<ComponentProgram['evaluate']>(async (_props, $) => {
+        const rows = await client.query<{ title: string }>(
+          'SELECT title FROM tasks WHERE id = $1',
+          ['t1'],
+        );
+        return $.h('p', null, rows.rows[0]?.title ?? '');
+      });
+      const { engine, render } = await engineOf(setup, evaluate);
+
+      await expect(render()).resolves.toBe('First');
+
+      evaluate.mockClear();
+
+      await call(client, 'x; SET search_path = other, public; RESET search_path');
+      await engine.poke();
+
+      await expect(render()).resolves.toBe('First');
+      expect(evaluate).toHaveBeenCalledWith({}, expect.anything());
+    },
+  );
+
+  it.each(['set', 'reset', 'x'])('keeps cached reads for the channel %s', async (channel) => {
+    const setup = await openedWith(schema, DDL);
+    const client = setup.follow.client(setup.pg);
+    const evaluate = vi.fn<ComponentProgram['evaluate']>(async (_props, $) => {
+      const rows = await client.query<{ title: string }>('SELECT title FROM tasks WHERE id = $1', [
+        't1',
+      ]);
+      return $.h('p', null, rows.rows[0]?.title ?? '');
+    });
+    const { engine, render } = await engineOf(setup, evaluate);
+
+    await expect(render()).resolves.toBe('First');
+
+    evaluate.mockClear();
+
+    await client.listen(channel, vi.fn());
+    await engine.poke();
+
+    await expect(render()).resolves.toBe('First');
+    expect(evaluate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a namespace a render reads by its descriptor', async () => {
+    const setup = await openedWith(schema, DDL);
+    const run = vi.fn(async () => setup.pg.query('SELECT title FROM tasks'));
+    const original = Object.assign(setup.pg, { extension: { query: run } });
+    const client = setup.follow.client(original);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const found = Object.getOwnPropertyDescriptor(client, 'extension')?.value as {
+        readonly query: () => Promise<unknown>;
+      };
+      try {
+        await found.query();
+      } catch {
+        // A fault of the render's, whatever its code does with it.
+      }
+      return $.h('p', null, 'read');
+    });
+
+    await expect(render()).rejects.toThrow('A render runs its SQL through `query`');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("answers an accessor of the connection's own, by its descriptor, as by its name", async () => {
+    const setup = await openedWith(schema, DDL);
+    const run = vi.fn(async () => setup.pg.query('SELECT title FROM tasks'));
+    const extension = { query: run };
+    const original = Object.defineProperty(setup.pg, 'extension', {
+      configurable: true,
+      enumerable: true,
+      get: () => extension,
+    });
+    const client = setup.follow.client(original);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const descriptor = Object.getOwnPropertyDescriptor(client, 'extension');
+      const found = descriptor?.get?.() as typeof extension;
+      try {
+        await found.query();
+      } catch {
+        // A fault of the render's, whatever its code does with it.
+      }
+      return $.h('p', null, 'read');
+    });
+
+    await expect(render()).rejects.toThrow('A render runs its SQL through `query`');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('refuses a fixed member a render reads by its descriptor, which the connection may write', async () => {
+    const setup = await openedWith(schema, DDL);
+    const run = vi.fn(async () => setup.pg.query('SELECT title FROM tasks'));
+    const original = Object.defineProperty(setup.pg, 'extension', {
+      configurable: false,
+      enumerable: true,
+      value: { query: run },
+      writable: true,
+    });
+    const client = setup.follow.client(original);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const found = Object.getOwnPropertyDescriptor(client, 'extension')?.value as {
+        readonly query: () => Promise<unknown>;
+      };
+      try {
+        await found.query();
+      } catch {
+        // A fault of the render's, whatever its code does with it.
+      }
+      return $.h('p', null, 'read');
+    });
+
+    await expect(render()).rejects.toThrow('A render runs its SQL through `query`');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('answers a member the connection fixed and may not write as it stands', async () => {
+    const setup = await openedWith(schema, DDL);
+    const fixed = { label: 'fixed' };
+    const original = Object.defineProperty(setup.pg, 'extension', {
+      configurable: false,
+      enumerable: true,
+      value: fixed,
+      writable: false,
+    });
+    const client = setup.follow.client(original);
+
+    expect(Object.getOwnPropertyDescriptor(client, 'extension')?.value).toBe(fixed);
+  });
+
+  it('reports no getter of a member that has none', async () => {
+    const setup = await openedWith(schema, DDL);
+    const written = Object.fromEntries([
+      ['configurable', true],
+      ['set', vi.fn()],
+    ]) as PropertyDescriptor;
+    const client = setup.follow.client(Object.defineProperty(setup.pg, 'extension', written));
+
+    const found = Object.getOwnPropertyDescriptor(client, 'extension');
+
+    expect(found).toBeDefined();
+    expect(Reflect.get(found ?? {}, 'get')).toBeUndefined();
+  });
+
+  it("refuses a transaction's method a render reads by its descriptor", async () => {
+    const setup = await openedWith(schema, DDL);
+    const client = setup.follow.client(setup.pg);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      await client.transaction(async (tx) => {
+        const exec = Object.getOwnPropertyDescriptor(tx, 'exec')?.value as (
+          text: string,
+        ) => Promise<unknown>;
+        try {
+          await exec('SELECT 1');
+        } catch {
+          // A fault of the render's, whatever its code does with it.
+        }
+      });
+      return $.h('p', null, 'read');
+    });
+
+    await expect(render()).rejects.toThrow('A render runs its SQL through `query`');
+  });
+
+  it('keeps a member by its descriptor outside a render', async () => {
+    const setup = await openedWith(schema, DDL);
+    const original = Object.assign(setup.pg, { extension: { label: 'kept' } });
+    const client = setup.follow.client(original);
+
+    const found = Object.getOwnPropertyDescriptor(client, 'extension');
+
+    expect(found).toMatchObject({ configurable: true, enumerable: true, writable: true });
+    expect((found?.value as { readonly label: string }).label).toBe('kept');
+    expect(Object.keys(client)).toContain('extension');
+  });
+
   it('answers the synchronous protocol call at once', async () => {
     const setup = await openedWith(schema, DDL);
     const client = setup.follow.client(setup.pg);
@@ -541,6 +724,24 @@ describe('the boundaries of a followed PGlite client', { timeout: 20_000 }, () =
     });
 
     await expect(render()).rejects.toThrow('temporary table row type');
+  });
+
+  it.each([
+    "SELECT pg_input_is_valid('(1)', 'pg_temp.staging') AS v",
+    "SELECT pg_input_is_valid('(1)', 'staging') AS v",
+    "SELECT to_regtype('pg_temp.staging')::text AS v",
+    "SELECT 'pg_temp.staging'::regtype::text AS v",
+    "SELECT CAST('staging' AS regclass)::text AS v",
+    "SELECT 'pg_temp.staging'::text::regtype::text AS v",
+    'SELECT tableoid::regclass::text AS v FROM tasks',
+  ])('refuses a type a render names by text: %s', async (statement) => {
+    const setup = await openedWith(schema, `${DDL} CREATE TEMP TABLE staging (x text, y text);`);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const result = await setup.orm.execute(sql.raw(statement));
+      return $.h('p', null, JSON.stringify(result.rows));
+    });
+
+    await expect(render()).rejects.toThrow('by text');
   });
 
   it('refuses known string-body SQL functions that reference a temporary table row type', async () => {
@@ -635,6 +836,46 @@ describe('the boundaries of a followed PGlite client', { timeout: 20_000 }, () =
     await expect(render()).rejects.toThrow('temporary table row type');
   });
 
+  it("renders as a role that may not use another log's schema", async () => {
+    const setup = await openedWith(schema, DDL);
+    const other = followDrizzle(schema, { namespace: 'log_two' });
+    for (const statement of other.captureSql()) await setup.pg.query(statement);
+    await setup.pg.exec(`
+      CREATE ROLE reader;
+      GRANT USAGE ON SCHEMA reactive_state TO reader;
+      GRANT SELECT ON ALL TABLES IN SCHEMA reactive_state TO reader;
+      GRANT SELECT ON tasks TO reader;
+      SET ROLE reader;
+    `);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const result = await setup.orm.select().from(tasks);
+      return $.h('p', null, result[0]?.title ?? '');
+    });
+
+    await expect(render()).resolves.toBe('First');
+  });
+
+  it.each(['log_two', 'user'])(
+    "refuses a temporary table row type only another log's function is of: %s",
+    async (namespace) => {
+      const setup = await openedWith(schema, `${DDL} CREATE TEMP TABLE staging (x text, y text);`);
+      const other = followDrizzle(schema, { namespace });
+      for (const statement of other.captureSql()) await setup.pg.query(statement);
+      await setup.pg.exec(`
+        CREATE OR REPLACE FUNCTION "${namespace}".ddl_count() RETURNS numeric
+        BEGIN ATOMIC SELECT length((('(a,b)'::pg_temp.staging).x))::numeric; END;
+      `);
+      const { render } = await engineOf(setup, async (_props, $) => {
+        const result = await setup.orm.execute(
+          sql`SELECT (ROW('p0', 'p1')::pg_temp.staging).y AS v`,
+        );
+        return $.h('p', null, JSON.stringify(result.rows));
+      });
+
+      await expect(render()).rejects.toThrow('temporary table row type');
+    },
+  );
+
   it('refuses a temporary table row type again once nothing it names is of it', async () => {
     const setup = await openedWith(
       schema,
@@ -681,6 +922,21 @@ describe('the boundaries of a followed PGlite client', { timeout: 20_000 }, () =
     await expect(render()).resolves.toContain('First');
   });
 
+  it('admits a render beside a string-body function that sets its time zone', async () => {
+    const setup = await openedWith(
+      schema,
+      `${DDL}
+      CREATE FUNCTION zoned() RETURNS void LANGUAGE sql AS $$ SET LOCAL TIME ZONE 'UTC'; SELECT 1 $$;
+    `,
+    );
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const result = await setup.orm.select().from(tasks);
+      return $.h('p', null, result[0]?.title ?? '');
+    });
+
+    await expect(render()).resolves.toBe('First');
+  });
+
   it("admits a render beside a string-body function that writes a keyword's column", async () => {
     const setup = await openedWith(
       schema,
@@ -689,6 +945,23 @@ describe('the boundaries of a followed PGlite client', { timeout: 20_000 }, () =
       CREATE FUNCTION touch() RETURNS void LANGUAGE sql AS $$
         UPDATE notes SET name = 'x' WHERE name LIKE 'y'
       $$;
+    `,
+    );
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const result = await setup.orm.select().from(tasks);
+      return $.h('p', null, result[0]?.title ?? '');
+    });
+
+    await expect(render()).resolves.toBe('First');
+  });
+
+  it("knows the log's own functions, made where an application's type stands before PostgreSQL's", async () => {
+    const setup = await openedWith(
+      schema,
+      `${DDL}
+      CREATE DOMAIN public.text AS pg_catalog.text;
+      SET search_path = public, pg_catalog;
+      CREATE TEMP TABLE keys (x pg_catalog.text);
     `,
     );
     const { render } = await engineOf(setup, async (_props, $) => {
@@ -713,6 +986,34 @@ describe('the boundaries of a followed PGlite client', { timeout: 20_000 }, () =
       await expect(render()).resolves.toBe('First');
     },
   );
+
+  it.each([
+    [
+      "of a type of a log function's signature",
+      `CREATE DOMAIN public.text AS pg_catalog.text;
+       SET search_path = public, pg_catalog;
+       CREATE FUNCTION reactive_state.image_sql(relid oid, keys public.text[]) RETURNS pg_catalog.text
+         LANGUAGE sql AS $$ SELECT (ROW('p1', 'p2')::pg_temp.staging).y $$;`,
+    ],
+    [
+      'beside an `=` of text that answers no value',
+      `CREATE FUNCTION public.unknown_equal(a pg_catalog.text, b pg_catalog.text) RETURNS boolean
+         LANGUAGE sql AS $$ SELECT NULL::boolean $$;
+       CREATE OPERATOR public.= (LEFTARG = pg_catalog.text, RIGHTARG = pg_catalog.text, FUNCTION = public.unknown_equal);
+       SET search_path = public, pg_catalog;
+       CREATE FUNCTION reactive_state.helper() RETURNS pg_catalog.text
+         LANGUAGE sql AS $$ SELECT (ROW('p1', 'p2')::pg_temp.staging).y $$;`,
+    ],
+  ])("reads the body of an application's function in the log's schema, %s", async (_what, made) => {
+    const setup = await openedWith(schema, `${DDL} CREATE TEMP TABLE staging (x text, y text);`);
+    await setup.pg.exec(made);
+    const { render } = await engineOf(setup, async (_props, $) => {
+      const result = await setup.orm.select().from(tasks);
+      return $.h('p', null, result[0]?.title ?? '');
+    });
+
+    await expect(render()).rejects.toThrow('temporary table row type');
+  });
 
   it.each([
     "CREATE FUNCTION public.ddl_count() RETURNS text LANGUAGE sql AS $$ SELECT (ROW('p1', 'p2')::pg_temp.staging).y $$",

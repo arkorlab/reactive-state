@@ -103,6 +103,10 @@ const XML_INPUTS = new Set(['xmlparse', 'xmlserialize']);
 const VARYING = new Set(['bit', 'char', 'character', 'nchar']);
 /** The tokens of a schema-qualified name. */
 const QUALIFIED = { width: 3 } as const;
+/** The words before `TIME ZONE` of its clause, or of its setting (`SET LOCAL TIME ZONE 'UTC'`). */
+const ZONE_OPENINGS = new Set(['at', 'local', 'session', 'set', 'with', 'without']);
+/** The settings the grammar takes a literal after by a word of their own (`SET ROLE 'x'`). */
+const SETTINGS = new Set(['names', 'role', 'schema']);
 
 /**
  * Whether the parentheses from `at` to `closing` are a clause an expression begins after, no operand
@@ -216,6 +220,7 @@ function valueAt(
   const token = tokens[at] ?? '';
   if (closesClause(tokens, at)) return false;
   if (token === ')' || token === ']' || token === "'" || /^\.?[\d$]/u.test(token)) return true;
+  if (token === '*' && tokens[at - 1] === '.') return true;
   if (VALUES.has(token) || token.startsWith('"') || endsCast(tokens, at)) return true;
   return wordValueAt(tokens, at, keywords, call);
 }
@@ -228,10 +233,26 @@ function endsCast(tokens: readonly string[], at: number): boolean {
   return tokens[index - 1] === ':' && tokens[index - 2] === ':';
 }
 
+/**
+ * Whether the word at `at` names a setting a `SET` opens with, of `LOCAL` or `SESSION` or neither:
+ * `SET LOCAL ROLE 'x'`, `SET SESSION AUTHORIZATION 'x'`.
+ */
+function settingAt(tokens: readonly string[], at: number): boolean {
+  const word = tokens[at] ?? '';
+  const authorization = word === 'authorization' && tokens[at - 1] === 'session';
+  if (!authorization && !SETTINGS.has(word)) return false;
+  const first = authorization ? at - 1 : at;
+  const prior = tokens[first - 1];
+  return (
+    prior === 'set' || ((prior === 'local' || prior === 'session') && tokens[first - 2] === 'set')
+  );
+}
+
 /** Built-in multiword type spellings and clause words before a literal. */
 function fixedSyntaxAt(tokens: readonly string[], at: number): boolean {
   const word = tokens[at];
   const prior = tokens[at - 1];
+  if (settingAt(tokens, at)) return true;
   if (word === 'by' && (prior === 'order' || prior === 'group' || prior === 'partition'))
     return true;
   if (word === 'precision' && prior === 'double') return true;
@@ -242,8 +263,7 @@ function fixedSyntaxAt(tokens: readonly string[], at: number): boolean {
   if (word === 'uescape' && prior === "'") return true;
   if (word === 'varying' && VARYING.has(prior ?? '')) return true;
   if (word !== 'zone' || prior !== 'time') return false;
-  const before = tokens[at - 2];
-  return before === 'at' || before === 'with' || before === 'without';
+  return ZONE_OPENINGS.has(tokens[at - 2] ?? '');
 }
 
 /** Whether the tokens before `at` are `USING` and its operator, an end of a window's `ORDER BY`. */

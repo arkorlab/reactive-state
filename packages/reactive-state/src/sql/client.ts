@@ -8,7 +8,7 @@ import { explainSql, type PlanReads, planReads, type Scan } from './plans.ts';
 import { readsOf, type TableScan } from './reads.ts';
 import { renamesColumns } from './renames.ts';
 import { type Bound, boundOf, NOTHING_BOUND } from './serialized.ts';
-import { unknownTypeCast } from './type-guards.ts';
+import { namesTypeByText, unknownTypeCast } from './type-guards.ts';
 
 /**
  * A PGlite connection, as the application's Drizzle queries through it, whose queries in a render
@@ -68,6 +68,17 @@ const OWN: readonly RegExp[] = [
  * moves it before and after it runs — and how much of a refused statement a fault shows.
  */
 const LIMITS = { keptPlans: 1024, plans: 3, shownText: 80 } as const;
+
+/**
+ * What each method that runs a text writes before it: nothing of `exec` and `query`, and of `listen`
+ * and `unlisten` the command PGlite writes their channel after, as it is.
+ */
+const STATEMENTS: ReadonlyMap<PropertyKey, string> = new Map([
+  ['exec', ''],
+  ['listen', 'LISTEN '],
+  ['query', ''],
+  ['unlisten', 'UNLISTEN '],
+]);
 
 /** The scans of a statement's plan, and whether the schema was the same as it was asked. */
 interface Planned {
@@ -150,6 +161,11 @@ class Plans {
     ) {
       throw new Error(
         'A render reads no temporary table row type, unknown cast type or unproven typed table clause, directly or through a known string-body SQL function: staging-table DDL does not follow that type.',
+      );
+    }
+    if (namesTypeByText(sql, catalog.conforming === true, catalog.typeKeywords)) {
+      throw new Error(
+        'A render names no type or relation by text, by `to_regtype`, `pg_input_is_valid` or a cast to `regtype`, `regclass`, `regprocedure` or `regoperator`: a temporary one changes with nothing to count.',
       );
     }
     if (plan.writes) {
@@ -406,11 +422,14 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
   /** A method a render may not call: a fault of the render's, whatever its code does with it. */
   const outside = (name: PropertyKey, args: readonly unknown[]): unknown => {
     const sql = args[0];
-    const text = typeof sql === 'string' && (name === 'exec' || name === 'query');
+    const opening = STATEMENTS.get(name);
+    const text = typeof sql === 'string' && opening !== undefined;
     const raw = name === 'sql' || (typeof name === 'string' && name.startsWith('execProtocol'));
     const run = () => retainedReceiver(called(connection, name, args), connection, client);
     if (name === 'execProtocolRawSync') return plans.outsideContextNow(run);
-    return raw || (text && plans.observesContext(sql)) ? plans.outsideContext(run) : run();
+    return raw || (text && plans.observesContext(`${opening}${sql}`))
+      ? plans.outsideContext(run)
+      : run();
   };
   const refusedInRender = (name: PropertyKey) => {
     return (...args: unknown[]): unknown => {
@@ -471,6 +490,19 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
       // Any other method, by a name or a symbol: the connection's own outside a render, a fault in
       // one.
       return refusedInRender(key);
+    },
+    // A member by its descriptor, as by its name: but one the connection fixed and may not write,
+    // of which a proxy may answer nothing else, and an accessor of no getter, which has none to read.
+    getOwnPropertyDescriptor: (target, key) => {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+      if (descriptor === undefined) return;
+      const read = (): unknown => Reflect.get(client, key);
+      if ('value' in descriptor) {
+        const fixed = descriptor.configurable !== true && descriptor.writable !== true;
+        return fixed ? descriptor : { ...descriptor, value: read() };
+      }
+      const open = descriptor.configurable === true && descriptor.get !== undefined;
+      return open ? { ...descriptor, get: read } : descriptor;
     },
   });
   return client;

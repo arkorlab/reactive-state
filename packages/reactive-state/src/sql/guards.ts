@@ -4,6 +4,14 @@ import { identifierOf, sqlTokens } from './lex.ts';
 const CONTEXT_COMMANDS = new Set(['abort', 'commit', 'discard', 'end', 'reset', 'rollback', 'set']);
 
 /**
+ * Whether the `SET` at `at` sets a transaction's options (`SET TRANSACTION READ ONLY`), which no
+ * plan reads: not a setting of that prefix (`SET transaction.name = 1`).
+ */
+function setsTransaction(tokens: readonly string[], at: number): boolean {
+  return tokens[at] === 'set' && tokens[at + 1] === 'transaction' && tokens[at + 2] !== '.';
+}
+
+/**
  * Whether SQL changes the session or transaction context that a cached plan was asked under.
  * Unknown string syntax and Unicode-escaped identifiers are conservative mutations. The latter
  * can spell `set_config` without its name appearing in the text.
@@ -14,7 +22,9 @@ export function changesContext(sql: string, conforming: boolean): boolean {
   return tokens.some((token, at) => {
     return (
       token === '`' ||
-      ((at === 0 || tokens[at - 1] === ';') && CONTEXT_COMMANDS.has(token)) ||
+      ((at === 0 || tokens[at - 1] === ';') &&
+        CONTEXT_COMMANDS.has(token) &&
+        !setsTransaction(tokens, at)) ||
       (identifierOf(token) === 'set_config' && tokens[at + 1] === '(')
     );
   });

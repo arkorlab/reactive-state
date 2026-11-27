@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { changesContext, namesTemporaryRowType } from '../src/sql/guards.ts';
-import { unknownTypeCast } from '../src/sql/type-guards.ts';
+import { namesTypeByText, unknownTypeCast } from '../src/sql/type-guards.ts';
 
 /** A bulk write's parameters: some 140,000 tokens, past the arguments a JavaScript call takes. */
 const LONG = { values: 70_000 } as const;
@@ -32,6 +32,10 @@ describe('sql admission tokens', () => {
     "SELECT pg_catalog.set_config('role', $1, true)",
     'SELECT "set_config"(\'search_path\', $1, true)',
     String.raw`SELECT U&"set\005fconfig"('role', $1, true)`,
+    'SET transaction.name = 1',
+    'SET "transaction".name = 1',
+    'SET TRANSACTION READ ONLY; SET search_path = other',
+    'ROLLBACK TO SAVEPOINT here',
   ])('observes direct query context changes: %s', (statement) => {
     expect(changesContext(statement, true)).toBe(true);
   });
@@ -44,8 +48,60 @@ describe('sql admission tokens', () => {
     'SELECT reset FROM tasks',
     'SELECT 1 /* ; RESET ROLE */',
     String.raw`SELECT "named".id, E'it\'s set_config(' FROM tasks AS "named"`,
+    'SET TRANSACTION READ ONLY',
+    'set transaction isolation level serializable',
+    "SET TRANSACTION SNAPSHOT '00000003-0000001B-1'",
   ])('leaves literal values and ordinary names alone: %s', (statement) => {
     expect(changesContext(statement, true)).toBe(false);
+  });
+
+  it.each([
+    "SELECT pg_input_is_valid('(1)', 'pg_temp.staging')",
+    "SELECT pg_catalog.pg_input_error_info('(1)', 'staging')",
+    'SELECT "to_regtype"(\'staging\')',
+    "SELECT to_regclass('pg_temp.staging')",
+    "SELECT to_regtypemod('staging')",
+    "SELECT to_regprocedure('f(staging)')",
+    "SELECT to_regoperator('=(staging,staging)')",
+    "SELECT 'pg_temp.staging'::regtype",
+    "SELECT 'staging'::pg_catalog.regclass",
+    "SELECT 'f(staging)'::regprocedure",
+    "SELECT '=(staging,staging)'::regoperator",
+    'SELECT $1::regtype',
+    "SELECT ('pg_temp.' || 'staging')::regtype",
+    "SELECT CAST('staging' AS regclass)",
+    "SELECT regtype 'staging'",
+    "SELECT pg_catalog.regclass 'staging'",
+    "SELECT '{pg_temp.staging}'::_regtype",
+    "SELECT _regclass '{staging}'",
+    "SELECT '{pg_temp.staging}'::regtype[]",
+    "SELECT regtypein('staging')",
+    "SELECT pg_catalog.regclassin('staging')",
+    "SELECT regprocedurein('f(staging)')",
+    "SELECT regoperatorin('=(staging,staging)')",
+    "SELECT 'pg_temp.staging'::text::regclass",
+    'SELECT $1::text::regtype',
+    "SELECT CASE WHEN true THEN 'staging' END::regclass",
+    'SELECT title::regtype FROM tasks',
+    'SELECT tableoid::regclass FROM tasks',
+    'SELECT (tableoid)::regclass FROM tasks',
+    'SELECT t.tableoid::pg_catalog.regclass FROM tasks AS t',
+    'SELECT CAST(tableoid AS regclass) FROM tasks',
+    'SELECT CAST((tableoid) AS regclass) FROM tasks',
+  ])('reads a type or a relation named by text: %s', (statement) => {
+    expect(namesTypeByText(statement, true)).toBe(true);
+  });
+
+  it.each([
+    'SELECT tableoid FROM tasks',
+    "SELECT 'english'::regconfig",
+    "SELECT 'to_regtype(' AS title",
+    'SELECT to_regtype FROM tasks',
+    "SELECT app.to_regtype('staging')",
+    "SELECT 'staging' AS regtype",
+    "SELECT title FROM tasks WHERE status = 'staging'",
+  ])('leaves a text that names no type alone: %s', (statement) => {
+    expect(namesTypeByText(statement, true)).toBe(false);
   });
 
   it('reads a statement of more tokens than a call takes arguments', () => {
@@ -230,6 +286,22 @@ describe('sql admission tokens', () => {
     "SELECT xmlexists('//a' PASSING BY REF '<a/>')",
     "SELECT xmlexists('//a' PASSING BY VALUE '<a/>' BY VALUE)",
     String.raw`SELECT U&'d\0061t' uescape '\' AS title`,
+    'SELECT CAST(t.as AS text) FROM tasks AS t',
+    "SELECT json_value(t.returning, '$') FROM tasks AS t",
+    "SELECT json_value(t.returning, '$' RETURNING text) FROM tasks AS t",
+    "SELECT count(*) OVER (ORDER BY t.* ROWS '1' PRECEDING) FROM tasks AS t",
+    "SET TIME ZONE 'UTC'",
+    "SET LOCAL TIME ZONE 'UTC'",
+    "SET SESSION TIME ZONE 'UTC'",
+    "SET ROLE 'x'",
+    "SET LOCAL ROLE 'x'",
+    "SET SESSION ROLE 'x'",
+    "SET SESSION AUTHORIZATION 'x'",
+    "SET LOCAL SESSION AUTHORIZATION 'x'",
+    "SET SCHEMA 'x'",
+    "SET LOCAL SCHEMA 'x'",
+    "SET NAMES 'x'",
+    "SET LOCAL NAMES 'x'",
   ])('admits known types and ordinary literals: %s', (statement) => {
     expect(
       unknownTypeCast(statement, [{ name: 'text', schema: 'pg_catalog', visible: true }], true),
@@ -242,6 +314,16 @@ describe('sql admission tokens', () => {
     "SELECT xmlexists(operator(*) OVER (ROWS like '1' PRECEDING) PASSING '<a/>') FROM tasks",
     "SELECT xmlexists(operator(t.*) OVER (RANGE ilike '1' PRECEDING) PASSING '<a/>') FROM tasks AS t",
     "SELECT xmlexists(operator(*) OVER (ROWS '1' PRECEDING) PASSING '<a/>') FROM tasks",
+    'SELECT CAST(t.as AS new_type) FROM tasks AS t',
+    "SELECT json_value(t.returning, '$' RETURNING new_type) FROM tasks AS t",
+    "SELECT rows '1' FROM tasks",
+    "SELECT zone 'UTC'",
+    "SELECT something.zone 'UTC'",
+    "SELECT role 'x'",
+    "SELECT names 'x'",
+    "SELECT schema 'x'",
+    "SELECT set.role 'x'",
+    "SELECT local role 'x'",
   ])('refuses what only a keyword class tells from a typed literal: %s', (statement) => {
     expect(
       unknownTypeCast(
