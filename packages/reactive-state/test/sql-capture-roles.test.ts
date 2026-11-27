@@ -39,16 +39,25 @@ interface Opened {
 /**
  * The statements of the capture as an installation made before the functions were definers ran
  * them. A function the log's role alone may execute is made now in one statement with the
- * revocation of what every other role is given (`DO $restricted$ … $restricted$`); an installation
- * made before ran it as an invoker's function, with no revocation.
+ * revocation of what every other role is given (`DO $restricted$ … $restricted$`), which the
+ * statement of the log holds among the others it runs under the capture's lock; an installation
+ * made before ran each as an invoker's function, with no revocation.
  */
 function beforeDefiners(statement: string): string {
-  if (!statement.startsWith('DO $restricted$')) {
-    return statement;
+  const open = 'DO $restricted$';
+  const close = ' END $restricted$';
+  const parts: string[] = [];
+  let from = 0;
+  for (let start = statement.indexOf(open); start !== -1; start = statement.indexOf(open, from)) {
+    const end = statement.indexOf(close, start) + close.length;
+    const block = statement.slice(start, end);
+    const revoke = block.indexOf(' REVOKE EXECUTE ON FUNCTION');
+    const made = `${block.slice(0, revoke)}${close}`.replace(' SECURITY DEFINER', '');
+    parts.push(statement.slice(from, start), made);
+    from = end;
   }
-  const revoke = statement.indexOf(' REVOKE EXECUTE ON FUNCTION');
-  const end = statement.lastIndexOf(' END $restricted$');
-  return `${statement.slice(0, revoke)}${statement.slice(end)}`.replace(' SECURITY DEFINER', '');
+  parts.push(statement.slice(from));
+  return parts.join('');
 }
 
 /**

@@ -97,11 +97,21 @@ const LOG_FUNCTIONS = [
  */
 export const LOG_SQL_FUNCTIONS = ['ddl_count()', 'fold_ddl(701)', 'image_sql(26 1009)'] as const;
 
+/**
+ * The advisory lock `captureSql()` runs under, one of a database whatever the log's namespace: two
+ * hosts that start at once make the log one after the other, and neither fails on the catalog rows
+ * the other is writing.
+ */
+const CAPTURE_LOCK = 0x72_73_63_61;
+
 /** How many keys one `jsonb_build_object` of a row's image takes: PostgreSQL's 100 arguments. */
 const KEYS_A_CALL = 50;
 
 /** The transition tables a trigger names: the rows a statement changed, before it and after it. */
-const TRANSITION = { after: '"rows_after"', before: '"rows_before"' } as const;
+const TRANSITION = { after: 'rows_after', before: 'rows_before' } as const;
+
+/** What `pg_trigger` holds of a trigger of each event: after its statement, of no other event. */
+const TRIGGER_TYPES = { DELETE: 8, INSERT: 4, TRUNCATE: 32, UPDATE: 16 } as const;
 
 /** The schema the log and its functions are kept in, unless the host names another. */
 export const DEFAULT_NAMESPACE = 'reactive_state';
@@ -242,6 +252,22 @@ function literal(text: string): string {
   return `E'${escaped}'`;
 }
 
+/** The arguments a trigger holds, as `pg_trigger` keeps them: each ended by a NUL, in hex. */
+function triggerArguments(keys: readonly string[]): string {
+  return Buffer.from(keys.map((key) => `${key}\0`).join(''), 'utf8').toString('hex');
+}
+
+/** A trigger of a followed table's: its event, what it runs, and what it names to that. */
+interface Trigger {
+  readonly event: keyof typeof TRIGGER_TYPES;
+  readonly run: string;
+  /** The table's key columns, as the function's arguments. */
+  readonly keys: readonly string[];
+  /** The transition tables it names, of the rows before the statement and after it. */
+  readonly before?: string;
+  readonly after?: string;
+}
+
 /**
  * `create`, a statement that makes a function the role that made the log alone may execute, with
  * what every other role is given of it taken away (`signature` names it), as one statement: a `DO`
@@ -264,27 +290,43 @@ function restricted(create: string, signature: string): string {
 }
 
 /**
- * The statements of each trigger a followed table holds: one each of the events it logs, named
- * `<namespace>_<event>`, so that the triggers of another namespace's log stay as they are. Each
- * names the table's key columns to the function it runs, as its arguments.
+ * The statement of `trigger` on `relation`, named `<namespace>_<event>`, so that the triggers of
+ * another namespace's log stay as they are. It is made only where it stands not as it should — of
+ * no other name, function, arguments, event, condition or transition tables, and turned on: making
+ * one locks the table against writers, and waits for every open transaction that wrote it, which a
+ * host's start must not do of a table its triggers stand on.
  */
-function triggersOf(relation: FollowedRelation, namespace: string): readonly string[] {
+function triggerOf(relation: Relation, namespace: string, trigger: Trigger): string {
+  const { after, before, event, keys, run } = trigger;
   const on = qualified(relation);
-  const { schema } = logOf(namespace);
-  const keys = relation.keys.map((key) => literal(key)).join(', ');
-  const named = (event: string): string => quoted(`${namespace}_${event.toLowerCase()}`);
-  const logged = (event: string, images: string, run: string): string =>
-    `CREATE OR REPLACE TRIGGER ${named(event)} AFTER ${event} ON ${on} REFERENCING ${images} FOR EACH STATEMENT EXECUTE FUNCTION ${schema}.${quoted(run)}(${keys})`;
-  return [
-    logged('INSERT', `NEW TABLE AS ${TRANSITION.after}`, 'capture_inserted'),
-    logged(
-      'UPDATE',
-      `OLD TABLE AS ${TRANSITION.before} NEW TABLE AS ${TRANSITION.after}`,
-      'capture_updated',
-    ),
-    logged('DELETE', `OLD TABLE AS ${TRANSITION.before}`, 'capture_deleted'),
-    `CREATE OR REPLACE TRIGGER ${named('TRUNCATE')} AFTER TRUNCATE ON ${on} FOR EACH STATEMENT EXECUTE FUNCTION ${schema}."capture_all"()`,
+  const name = `${namespace}_${event.toLowerCase()}`;
+  const signature = `${logOf(namespace).schema}.${quoted(run)}`;
+  const identity = `${signature}()`;
+  const transition = (table: string | undefined): string =>
+    table === undefined ? 'NULL' : literal(table);
+  const stands = `EXISTS (SELECT 1 FROM pg_catalog.pg_trigger AS t WHERE t.tgrelid = ${literal(on)}::pg_catalog.regclass AND t.tgname = ${literal(name)} AND NOT t.tgisinternal AND t.tgenabled = 'O' AND t.tgtype = ${String(TRIGGER_TYPES[event])} AND t.tgqual IS NULL AND t.tgoldtable::pg_catalog.text IS NOT DISTINCT FROM ${transition(before)} AND t.tgnewtable::pg_catalog.text IS NOT DISTINCT FROM ${transition(after)} AND t.tgfoid = ${literal(identity)}::pg_catalog.regprocedure AND t.tgargs = pg_catalog.decode(${literal(triggerArguments(keys))}, 'hex'))`;
+  const images = [
+    before === undefined ? '' : `OLD TABLE AS ${before} `,
+    after === undefined ? '' : `NEW TABLE AS ${after} `,
+  ].join('');
+  const referencing = images === '' ? '' : `REFERENCING ${images}`;
+  const named = keys.map((key) => literal(key)).join(', ');
+  const statement = `CREATE OR REPLACE TRIGGER ${quoted(name)} AFTER ${event} ON ${on} ${referencing}FOR EACH STATEMENT EXECUTE FUNCTION ${signature}(${named})`;
+  const block = `BEGIN IF NOT ${stands} THEN EXECUTE ${literal(statement)}; END IF; END`;
+  return `DO ${literal(block)}`;
+}
+
+/** The statements of each trigger a followed table holds: one each of the events it logs. */
+function triggersOf(relation: FollowedRelation, namespace: string): readonly string[] {
+  const { keys } = relation;
+  const { after, before } = TRANSITION;
+  const triggers: readonly Trigger[] = [
+    { after, event: 'INSERT', keys, run: 'capture_inserted' },
+    { after, before, event: 'UPDATE', keys, run: 'capture_updated' },
+    { before, event: 'DELETE', keys, run: 'capture_deleted' },
+    { event: 'TRUNCATE', keys: [], run: 'capture_all' },
   ];
+  return triggers.map((trigger) => triggerOf(relation, namespace, trigger));
 }
 
 /**
@@ -476,21 +518,33 @@ function ddlCounterOf(namespace: string): readonly string[] {
   ];
 }
 
+/** `statements` as one, of the transaction it runs in, under the lock of `captureSql()`. */
+function locked(statements: readonly string[]): string {
+  const run = statements.map((statement) => `EXECUTE ${literal(statement)};`).join(' ');
+  const block = `BEGIN PERFORM pg_catalog.pg_advisory_xact_lock(${String(CAPTURE_LOCK)}); ${run} END`;
+  return `DO ${literal(block)}`;
+}
+
 /**
  * The statements that make the log in `namespace` and the triggers of each of `relations`, each to
  * be run by itself, in order, as the role that made the log, which may create triggers on the
- * followed tables: once, or each time a host starts, after the application's migrations, which may
- * have made a followed table again without its triggers. Each may be run again: the log's tables
- * keep their rows and gain what an installation made before lacks (the column `n` of `ddl` and its
- * `FULL` replica identity, the columns `side` and `image` of `changes`), and its functions and
- * triggers are made anew, which brings an installation made before up to date. Another role's run
- * fails at the first function it would replace (`must be owner of function`), by PostgreSQL's rule
- * for `CREATE OR REPLACE FUNCTION`. A function that only the role that made the log may execute is
- * made in the one statement that takes every other role's execution from it (`restricted`), so
- * that a run that stops anywhere leaves none executable by a role that may use the log's schema. A role that
- * only writes followed tables needs nothing of the log's schema, and a host that only reads the log
- * runs none of them: it needs `USAGE` on the schema and `SELECT` on `head` and `changes`. A table
- * no longer followed keeps its triggers until the application drops them.
+ * followed tables: one of the log, then one of each table, as a statement that made two tables'
+ * triggers would hold the first's lock while it waits on the second's writers. Each runs under a
+ * lock two hosts that start at once wait on, and may be run again, once or each time a host
+ * starts, after the application's migrations, which may have made a followed table again without
+ * its triggers: the log's tables keep their rows and gain what an installation made before lacks
+ * (the column `n` of `ddl` and its `FULL` replica identity, the columns `side` and `image` of
+ * `changes`), its functions are made anew, and a trigger where it stands otherwise, which brings
+ * an installation made before up to date. Making a trigger waits for every open transaction that
+ * wrote its table; a start with none to make waits on no writer, but on another host's start.
+ * Another role's run fails at the first function it would replace (`must be owner of function`),
+ * by PostgreSQL's rule for `CREATE OR REPLACE FUNCTION`. A function that only the role that made
+ * the log may execute is made in the one statement that takes every other role's execution from
+ * it (`restricted`), so that a run that stops anywhere leaves none executable by a role that may
+ * use the log's schema. A role that only writes followed tables needs nothing of the log's schema,
+ * and a host that only reads the log runs none of them: it needs `USAGE` on the schema and
+ * `SELECT` on `head` and `changes`. A table no longer followed keeps its triggers until the
+ * application drops them.
  */
 export function changeCaptureSql(
   relations: readonly FollowedRelation[],
@@ -498,10 +552,11 @@ export function changeCaptureSql(
 ): readonly string[] {
   const { changes, head, schema } = logOf(checkedNamespace(namespace));
   const channel = literal(channelOf(namespace));
-  return [
+  const statements = [
     `CREATE SCHEMA IF NOT EXISTS ${schema}`,
     `CREATE TABLE IF NOT EXISTS ${head} ("one" boolean PRIMARY KEY DEFAULT true CHECK ("one"), "epoch" text NOT NULL, "seq" bigint NOT NULL DEFAULT 0)`,
-    `INSERT INTO ${head} ("epoch") VALUES (gen_random_uuid()::pg_catalog.text) ON CONFLICT DO NOTHING`,
+    // Not `ON CONFLICT DO NOTHING`, which waits on the row a writer's transaction holds to its commit.
+    `INSERT INTO ${head} ("epoch") SELECT gen_random_uuid()::pg_catalog.text WHERE NOT EXISTS (SELECT 1 FROM ${head})`,
     `CREATE TABLE IF NOT EXISTS ${changes} ("seq" bigint PRIMARY KEY, "schema_name" text NOT NULL, "table_name" text NOT NULL, "at" timestamptz NOT NULL DEFAULT clock_timestamp())`,
     // A log made before entries kept rows: its entries of none name their tables alone. Altered
     // only where it lacks them, so that a start locks the log for no writer.
@@ -519,6 +574,9 @@ export function changeCaptureSql(
     ),
     ...rowFunctionsOf(namespace, channel),
     ...ddlCounterOf(namespace),
-    ...relations.flatMap((relation) => triggersOf(relation, namespace)),
+  ];
+  return [
+    locked(statements),
+    ...relations.map((relation) => locked(triggersOf(relation, namespace))),
   ];
 }

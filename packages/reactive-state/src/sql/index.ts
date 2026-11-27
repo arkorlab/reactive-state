@@ -116,7 +116,11 @@ export interface DrizzleFollow<S> {
    * `<namespace>_changes`, `reactive_state_changes` unless the namespace is given.
    */
   readonly channel: string;
-  /** The statements that make the log and each table's triggers, each run by itself, in order. */
+  /**
+   * The statements that make the log and each table's triggers, each run by itself, in order: safe
+   * to run at each start, as they take no followed table's lock where its triggers stand as they
+   * should, and two hosts that start at once wait for each other.
+   */
   readonly captureSql: () => readonly string[];
   /**
    * `client`, a PGlite, whose queries in a render note the tables they read: Drizzle's client, and
