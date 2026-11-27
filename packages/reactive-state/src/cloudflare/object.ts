@@ -123,7 +123,7 @@ interface AuthoritySetup extends AuthorityApplication, Omit<FaultOptions, 'onErr
  * `onError`, whose answer the object is kept for: a promise (or any thenable) passed to
  * `waitUntil` prevents the object's eviction until it settles, or for up to 15 minutes, whichever
  * comes first, which a promise that waits on no I/O (a timer) is not kept by otherwise. Its
- * rejection is kept from the platform: the engine logs it.
+ * rejection is kept from the runtime: the engine logs it.
  */
 export function waitingFor(
   ctx: DurableObjectState,
