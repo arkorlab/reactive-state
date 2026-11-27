@@ -163,7 +163,8 @@ function mapGetSelection(call: CallExpression): MapSelection | undefined {
   const wrapper =
     (isPropertyAccessExpression(member) || isElementAccessExpression(member)) &&
     (frameMemberName(member) === 'call' || frameMemberName(member) === 'apply');
-  const native = reflected || wrapper ? framedNativeArguments(call, NATIVE_GETTERS) : undefined;
+  const native =
+    reflected || wrapper ? framedNativeArguments(call, NATIVE_GETTERS, true) : undefined;
   if (native !== undefined && !native.constructed) {
     const prefix = framedArgumentPrefix(call, call.arguments);
     const receiver = prefix.values[reflected ? 1 : 0];
