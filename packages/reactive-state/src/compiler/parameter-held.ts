@@ -292,17 +292,20 @@ function isKept(top: Expression, place: Place, isResult = false): boolean {
 
 /**
  * Whether `top`, a value that stands alone, is handed to a function of the code that answers what it
- * is handed (`returnsParameter`) and its answer is kept (`isKept`): `const alias = identity(value)`
- * names the parameter by a name the walk does not read of it.
+ * is handed (`returnsParameter`), or is the object `Object.assign` writes into, which it answers,
+ * and its answer is kept (`isKept`): `const alias = identity(value)` names the parameter by a name
+ * the walk does not read of it.
  */
 function isAnswered(top: Expression, place: Place): boolean {
   const call = handedTo(top);
   if (call === undefined || !isCallExpression(call)) {
     return false;
   }
-  const callables = place.callables(unwrapped(call.expression));
+  const callee = unwrapped(call.expression);
+  const isAssigned = call.arguments[0] === top && globalPath(callee)?.join('.') === 'Object.assign';
   return (
-    callables.some((callable) => answersGiven(callable, call, top)) && isKept(call, place, true)
+    (isAssigned || place.callables(callee).some((callable) => answersGiven(callable, call, top))) &&
+    isKept(call, place, true)
   );
 }
 

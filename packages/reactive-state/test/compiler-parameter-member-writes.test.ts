@@ -427,6 +427,47 @@ describe('shared factory parameter member writes', () => {
     expect(compile(app).refusals).toStrictEqual([]);
   });
 
+  // `Object.assign` answers the object it is handed first, as a helper that returns its input does.
+  it.each([
+    wide(
+      "const alias = Object.assign(value, {}); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide("Object.assign(value, {}).bad = new Date(0); value.id = 'fresh'; return value;"),
+    wide(
+      "const holder: {target?: unknown} = {}; holder.target = Object.assign(value, {}); (holder.target as {bad?: unknown}).bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "value.id = 'fresh'; const alias = Object.assign(value, {}); alias.bad = new Date(0); return value;",
+    ),
+  ])('refuses a member write into a parameter that Object.assign answers: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    wide("Object.assign(value, {extra: 'more'}); value.id = 'fresh'; return value;"),
+    wide(
+      "const copy = Object.assign({}, value); copy.extra = 'more'; value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const other = Object.assign({id: 'other'}, {extra: 'more'}); other.id = 'x'; value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const same = Object.assign(value, {}) === value; value.id = same ? 'a' : 'b'; return value;",
+    ),
+    wide("value.id = 'fresh'; const frozen = Object.freeze(value); return frozen;"),
+  ])(
+    'keeps a member write into a parameter that Object.assign answers nowhere: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(compile(app).refusals).toStrictEqual([]);
+    },
+  );
+
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
     apps.push(app);
