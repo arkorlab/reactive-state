@@ -272,7 +272,13 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
     max: 1,
     query_timeout: TAIL.readTimeoutMs,
   });
-  const listening = new Client({ connectionString, connectionTimeoutMillis });
+  // `LISTEN` is its one query: a link that stalls after the connection was made, before the server
+  // answers it, would hold the authority's start for as long as the socket takes to fail.
+  const listening = new Client({
+    connectionString,
+    connectionTimeoutMillis,
+    query_timeout: TAIL.readTimeoutMs,
+  });
   pool.on('error', failed);
   store.on('error', failed);
   listening.on('error', failed);
