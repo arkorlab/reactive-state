@@ -168,7 +168,11 @@ export class Modules implements Disposable {
   constructor(api: API, srcDir: string, outDir?: string) {
     this.#api = api;
     this.#srcDir = srcDir;
-    this.#types = this.#stack.use(new TypeSession(api, outDir));
+    this.#types = this.#stack.use(
+      new TypeSession(api, outDir, (specifier, importer) => {
+        this.resolve(specifier, importer);
+      }),
+    );
   }
 
   /** What a module of no directive is, by what it imports and what it holds. */
@@ -261,7 +265,12 @@ export class Modules implements Disposable {
     );
   }
 
-  /** Every distinct module choice made during admission, including unresolved candidates. */
+  /**
+   * Every distinct module choice made during admission, including unresolved candidates: those of
+   * the imports of each module the compile read, and of each application file the checker's
+   * programs hold, whether the compile resolves the import as a module or only the checker does,
+   * as a type-only one.
+   */
   resolutions(): readonly ModuleResolution[] {
     return [...this.#resolutions.values()];
   }
