@@ -353,8 +353,13 @@ async function configReason(
   }
 }
 
-/** What the compile's host reads of options that say nothing of a session or a prefetch. */
-const NOTHING = { prefetch: undefined, session: undefined };
+/** What the compile's host reads of options that name no module and no prefetch. */
+const NOTHING = {
+  prefetch: undefined,
+  prepareOperation: undefined,
+  session: undefined,
+  sessionChange: undefined,
+};
 
 /** What `withReactiveState` is told, what the compile is handed of it, and what its host reads. */
 const TOLD = [
@@ -373,10 +378,28 @@ const TOLD = [
     options: { session: '@/session#session' },
   },
   {
+    compile: { sessionChange: '@/session#applySessionChange' },
+    host: { ...NOTHING, sessionChange: { name: 'applySessionChange', specifier: '@/session' } },
+    id: 'session-change',
+    options: { sessionChange: '@/session#applySessionChange' },
+  },
+  {
+    compile: { prepareOperation: '@/session#prepareOperation' },
+    host: { ...NOTHING, prepareOperation: { name: 'prepareOperation', specifier: '@/session' } },
+    id: 'prepare-operation',
+    options: { prepareOperation: '@/session#prepareOperation' },
+  },
+  {
     compile: { prefetch: '30/60/300' },
     host: { ...NOTHING, prefetch: { expire: 300, revalidate: 60, stale: 30 } },
     id: 'prefetch',
     options: { prefetch: '30/60/300' },
+  },
+  {
+    compile: { prefetchCache: 'private' },
+    host: NOTHING,
+    id: 'prefetch-cache-private',
+    options: { prefetchCache: 'private' },
   },
   {
     compile: { database: '@/data#store' },
@@ -388,19 +411,28 @@ const TOLD = [
     compile: {
       database: '@/data#store',
       prefetch: '30/60/300',
+      prefetchCache: 'remote',
+      prepareOperation: '@/session#prepareOperation',
       session: '@/session#session',
+      sessionChange: '@/session#applySessionChange',
       share: false,
     },
     host: {
       prefetch: { expire: 300, revalidate: 60, stale: 30 },
+      prefetchCache: 'remote',
+      prepareOperation: { name: 'prepareOperation', specifier: '@/session' },
       session: { name: 'session', specifier: '@/session' },
+      sessionChange: { name: 'applySessionChange', specifier: '@/session' },
       share: false,
     },
     id: 'every-option',
     options: {
       database: '@/data#store',
       prefetch: '30/60/300',
+      prefetchCache: 'remote',
+      prepareOperation: '@/session#prepareOperation',
       session: '@/session#session',
+      sessionChange: '@/session#applySessionChange',
       share: false,
     },
   },
