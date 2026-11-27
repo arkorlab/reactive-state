@@ -25,8 +25,9 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { borrowedTextCall } from './framed-array-borrowing.ts';
 import { enumeratedArrayViews } from './framed-array-enumerations.ts';
+import { selectedRunItems } from './framed-array-flatten-runs.ts';
 import {
-  expandedReturnValues,
+  expandedReturnRun,
   flattenedArrayViews,
   flattenedReturnValues,
   flatMappedSourceIndex,
@@ -470,10 +471,7 @@ function expandedFlatReturn(
     readonly stable: (value: Expression) => boolean;
   },
 ): readonly ArrayElementView[] | undefined {
-  const expanded = expandedReturnValues(
-    value,
-    (source) => source === value || stableReturn(source),
-  );
+  const expanded = expandedReturnRun(value, (source) => source === value || stableReturn(source));
   if (expanded === undefined) {
     const source = flatMapOwnedSource(value, value, context.capture);
     if (source === undefined || !flatMapWrittenArray(source) || !singleMapInput(context.receiver))
@@ -488,9 +486,7 @@ function expandedFlatReturn(
     ? flatMappedSourceIndex(context.receiver, inputIndex)
     : undefined;
   if (sourceIndex === Infinity) return [];
-  const selected = fixed
-    ? expanded.slice(index % expanded.length, (index % expanded.length) + 1)
-    : expanded;
+  const selected = selectedRunItems(expanded, fixed ? index % expanded.length : undefined);
   const found = selected.flatMap((element) =>
     mappedReturns(element, { ...context, index: sourceIndex }, context.owner),
   );
