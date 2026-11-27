@@ -32,7 +32,12 @@ interface Flattening {
   readonly changed?: boolean;
 }
 
-/** Known array layers flatten in order; unresolved lengths keep later possible selected values. */
+/**
+ * Known array layers flatten in order; unresolved lengths keep later possible selected values. An
+ * unresolved depth keeps each uniform depth down to one past the receiver's written nesting
+ * (`writtenArrayLayers`): one more layer leaves no position of an element that is no written array
+ * known, as it may be an array of any length, and a deeper flat reads what that one does.
+ */
 export function flattenedArrayViews(
   receiver: Expression,
   index: number | undefined,
@@ -40,25 +45,59 @@ export function flattenedArrayViews(
   context: { readonly stable: (value: Expression) => boolean; readonly capture: Node },
 ): readonly ArrayElementView[] {
   if (depth !== undefined) return knownFlattenedArrayViews(receiver, index, depth, context);
-  const count = writtenArrayCount(receiver);
+  const layers = writtenArrayLayers(receiver);
   const views: ArrayElementView[] = [];
-  for (let at = 0; at <= count; at++)
+  for (let at = 0; at <= layers + 1; at++)
     views.push(...knownFlattenedArrayViews(receiver, index, at, context));
   return views;
 }
 
-/** A finite unknown primitive depth retains each uniform written flattening depth. */
-function writtenArrayCount(receiver: Expression): number {
-  const seen = new Set<ArrayLiteralExpression>();
-  const pending = [receiver];
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const array = literalArray(next);
-    if (array === undefined || seen.has(array)) continue;
-    seen.add(array);
-    for (const element of array.elements)
-      pending.push(isSpreadElement(element) ? element.expression : element);
+/**
+ * The most layers of written arrays one inside another that a receiver holds, each counted once however
+ * many paths reach it: a depth past that flattens no more. An array spread into another adds no layer,
+ * as a flat takes its elements whatever its depth, and arrays side by side add none.
+ */
+function writtenArrayLayers(receiver: Expression): number {
+  const root = literalArray(receiver);
+  if (root === undefined) return 0;
+  const heights = new Map<ArrayLiteralExpression, number>();
+  const active = new Set<ArrayLiteralExpression>();
+  const pending: { readonly array: ArrayLiteralExpression; readonly done: boolean }[] = [
+    { array: root, done: false },
+  ];
+  for (let task = pending.pop(); task !== undefined; task = pending.pop()) {
+    const { array } = task;
+    if (task.done) {
+      heights.set(array, layersWithin(array, heights));
+      active.delete(array);
+    } else if (!heights.has(array) && !active.has(array)) {
+      active.add(array);
+      pending.push({ array, done: true });
+      for (const held of heldArrays(array)) pending.push({ array: held.array, done: false });
+    }
   }
-  return seen.size;
+  return heights.get(root) ?? 0;
+}
+
+/** The layers an array holds, from the heights found for the arrays it holds in place. */
+function layersWithin(array: ArrayLiteralExpression, heights: ReadonlyMap<Node, number>): number {
+  let layers = 0;
+  for (const held of heldArrays(array)) {
+    const inside = heights.get(held.array);
+    if (inside !== undefined) layers = Math.max(layers, held.spread ? inside : inside + 1);
+  }
+  return layers;
+}
+
+/** The written arrays an array holds, each with whether it is spread into it. */
+function heldArrays(
+  array: ArrayLiteralExpression,
+): readonly { readonly array: ArrayLiteralExpression; readonly spread: boolean }[] {
+  return array.elements.flatMap((element) => {
+    const spread = isSpreadElement(element);
+    const held = literalArray(spread ? element.expression : element);
+    return held === undefined ? [] : [{ array: held, spread }];
+  });
 }
 
 /** A fixed native depth keeps the original flattening and selected-position algorithm. */
