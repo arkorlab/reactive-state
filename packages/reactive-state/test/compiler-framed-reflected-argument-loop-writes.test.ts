@@ -123,14 +123,11 @@ const CASES = [
       "function frames(error:Error){const map=new Map<string,unknown>([['a','fixed'],['b',error]]);const args:[string]=['a'];let out:unknown;let i=0;do{out=Reflect.apply(Map.prototype.get,map,args);}while((args[0]='b',i++<1));return (out as {stack?:string}).stack;}",
     refused: true,
   },
-  // Not the tuple's rule: the Map is handed on to a borrowed `get` that a loop runs again, which the
-  // iteration-writes reader takes for a use that may replace the Map's `get` (a borrowed `set` is the
-  // one borrowed native it reads as quiet), so any entry may answer and the Error among them is read.
   {
-    id: 'map-get-key-untouched-loop-handed-on',
+    id: 'map-get-key-untouched-data',
     source:
       "function frames(error:Error){const map=new Map<string,unknown>([['a','fixed'],['b',error]]);const args:[string]=['a'];let out:unknown;let i=0;do{out=Reflect.apply(Map.prototype.get,map,args);}while(i++<1);return (out as {stack?:string}).stack;}",
-    refused: true,
+    refused: false,
   },
   {
     id: 'blob-construct-condition-mention-refused',
