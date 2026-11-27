@@ -542,7 +542,7 @@ describe('a Drizzle schema in D1', () => {
     expect(results[0]?.n).toBe(0);
   });
 
-  it('reads every followed table of a virtual table of a text not read plainly', async () => {
+  it('reads the tables its bytecode opens, of JSON’s table function in a text not read plainly', async () => {
     const orm = drizzle(follow.client(db), { schema });
     const read = await rendered(() =>
       orm.all(sql`SELECT id FROM tasks WHERE id IN (SELECT value FROM json_each(${'[1]'}))`),
@@ -550,6 +550,10 @@ describe('a Drizzle schema in D1', () => {
     const follower = await following();
 
     await orm.update(projects).set({ title: 'Renamed' }).where(eq(projects.id, 'p2'));
+
+    expect(read.changedBy(await follower.changed())).toBe(false);
+
+    await orm.update(tasks).set({ title: 'Renamed' }).where(eq(tasks.id, 2));
 
     expect(read.changedBy(await follower.changed())).toBe(true);
   });
