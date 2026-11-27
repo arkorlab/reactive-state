@@ -2,6 +2,7 @@ import { db } from '@/db';
 
 export { RowsAuthority } from './d1-where-fixture.ts';
 export { ExternalAuthority } from './external-store-fixture.ts';
+export { ReportingAuthority } from './on-error-fixture.ts';
 export {
   HungStartAuthority,
   SlowStartAuthority,

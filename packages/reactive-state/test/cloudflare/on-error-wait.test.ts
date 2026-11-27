@@ -1,3 +1,4 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it, vi } from 'vitest';
 
 import { answer, waitingFor } from '../../src/cloudflare/object.ts';
@@ -17,6 +18,7 @@ describe('onError in a Durable Object', () => {
     const hook = waitingFor(
       { waitUntil } as unknown as DurableObjectState,
       () => thenable as unknown as Promise<void>,
+      {},
     );
 
     await hook(new Error('x'), { kind: 'log' });
@@ -64,5 +66,23 @@ describe('onError in a Durable Object', () => {
     expect(caught).toBeInstanceOf(AggregateError);
     expect((caught as AggregateError).cause).toBe(cause);
     expect((caught as AggregateError).errors).toStrictEqual(parts);
+  });
+});
+
+describe('onError given the object environment', () => {
+  it('passes the environment of the object to the hook as its third argument', async () => {
+    const seen: unknown[] = [];
+    const waitUntil = vi.fn<(work: Promise<unknown>) => void>();
+    const hook = waitingFor(
+      { waitUntil } as unknown as DurableObjectState,
+      (_error, _event, objectEnv) => {
+        seen.push(objectEnv.REACTIVE_SITE_URL);
+      },
+      env as unknown as Record<string, unknown>,
+    );
+
+    await hook(new Error('x'), { kind: 'log' });
+
+    expect(seen).toStrictEqual(['https://site.test']);
   });
 });

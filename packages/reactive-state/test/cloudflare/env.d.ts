@@ -22,6 +22,8 @@ declare global {
       readonly SLOW_START: DurableObjectNamespace<AuthorityObject>;
       /** The same, of a log whose making never ends (`HungStartAuthority`). */
       readonly HUNG_START: DurableObjectNamespace<AuthorityObject>;
+      /** The object whose render fault its `onError` reports (`ReportingAuthority`). */
+      readonly REPORTING: DurableObjectNamespace<AuthorityObject>;
       /** The application's own D1, with trigger-based change capture. */
       readonly REACTIVE_D1: D1Database;
     }
