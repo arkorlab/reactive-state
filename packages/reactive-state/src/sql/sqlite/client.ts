@@ -40,11 +40,13 @@ import {
  * statement's tables, as its bytecode says (`bytecode.ts`), and the rows its conditions name by the
  * tables' keys: of a statement of one table (`where.ts`), and of a join or a subquery scope by scope
  * (`scopes.ts`, `closure.ts`, `sources.ts`). The plan of a text is asked once, in one batch beside
- * nothing else, and kept while the schema stays as it was; a statement that begins with `SELECT`,
- * which writes nothing, runs as its plan is asked, so that a render waits for no more than the slower
- * of the two. A statement that writes is refused before it runs, and so is a text of several
- * statements, which D1 runs each of. The plans are of one database: every binding a follow is given
- * is of the database its store reads. Outside a render, the binding is as it is.
+ * nothing else, and kept while the schema stays as it was; a statement that writes nothing by its
+ * words — one that begins with `SELECT`, comments before it too, or reads alone, as a
+ * `WITH … SELECT` does — runs as its plan is asked, so that a render waits for no more than the
+ * slower of the two, and no call of D1's comes before its own. A statement that writes is refused
+ * before it runs, and so is a text of several statements, which D1 runs each of. The plans are of
+ * one database: every binding a follow is given is of the database its store reads. Outside a
+ * render, the binding is as it is.
  */
 
 /** A followed table of SQLite, as a render's reads name it. */
@@ -105,6 +107,16 @@ const STATEMENTS = new Set(['delete', 'insert', 'replace', 'select', 'update', '
 const READS_ONLY = /^\s*select\b/iu;
 /** How many answers of a plan's batch come before its tables' columns: `EXPLAIN`, the schema. */
 const PLAN_ANSWERS = 2;
+
+/**
+ * Whether `sql`, a render's statement past its refusals, writes nothing by its words: it begins
+ * with `SELECT`, past the comments before it too, or reads alone (`WITH … SELECT`). Such a
+ * statement runs beside its plan, and is a read where no plan says it is not (D1 answers no
+ * `EXPLAIN`, or its batch failed). Of any other, the plan says first whether it writes.
+ */
+function readsBesidePlan(sql: string): boolean {
+  return READS_ONLY.test(sql) || leadingWord(sql) === 'select' || readsAlone(sql);
+}
 
 /** What a statement's text says, which its plan is asked and read by. */
 interface StatementText {
@@ -238,10 +250,10 @@ class SqlitePlans {
   }
 
   /**
-   * The plan of `sql`, which `binding` is asked of with `values`: of a statement that reads — one
-   * that begins with `SELECT`, or reads by its words — whose plan's batch failed, every followed
-   * table for a while; none, of one that reads while D1 answers no `EXPLAIN`, which then reads
-   * every followed table and is asked again the next time.
+   * The plan of `sql`, which `binding` is asked of with `values`: of a statement that reads by its
+   * words (`readsBesidePlan`) whose plan's batch failed, every followed table for a while; none,
+   * of one that reads while D1 answers no `EXPLAIN`, which then reads every followed table and is
+   * asked again the next time.
    */
   async #asked(
     sql: string,
@@ -250,7 +262,7 @@ class SqlitePlans {
   ): Promise<Plan | undefined> {
     if (this.#unexplained()) {
       // Of no plan, a statement is a read by its words alone: of none a statement that writes holds.
-      if (!READS_ONLY.test(sql) && !readsAlone(sql)) throw writes(sql);
+      if (!readsBesidePlan(sql)) throw writes(sql);
       return undefined;
     }
     const text = textOf(sql);
@@ -264,10 +276,10 @@ class SqlitePlans {
       answers = await binding.batch(asked);
     } catch (error) {
       if (!(await this.#explains(binding))) return this.#asked(sql, values, binding);
-      // The statement's own failure, or the batch's: of one that writes nothing — a `SELECT`, or
-      // a read by its words (`WITH … SELECT`) — its run tells, and it reads every table for a
-      // while, so that its renders wait on no failing batch.
-      if (READS_ONLY.test(sql) || readsAlone(sql)) {
+      // The statement's own failure, or the batch's: of one that writes nothing by its words — a
+      // `SELECT`, comments before it too, or a `WITH … SELECT` — its run tells, and it reads every
+      // table for a while, so that its renders wait on no failing batch.
+      if (readsBesidePlan(sql)) {
         this.#warnUnplanned(sql, error);
         return { ...this.#everyTable(), until: Date.now() + LIMITS.unexplainedMs };
       }
@@ -485,7 +497,8 @@ const PLANS = new WeakMap<FollowedSqlite, SqlitePlans>();
 
 /**
  * `run`, D1's answer of `prepared`, in a render once what it reads is noted: of a statement that
- * begins with `SELECT`, as its plan is asked; of any other, after it, which refuses one that writes.
+ * writes nothing by its words (`readsBesidePlan`), as its plan is asked; of any other, after it,
+ * which refuses one that writes.
  */
 async function noted<T>(
   prepared: readonly Prepared[],
@@ -500,7 +513,7 @@ async function noted<T>(
     await note(() => Promise.reject(refused));
     throw refused;
   }
-  const beside = prepared.every((each) => READS_ONLY.test(each.sql));
+  const beside = prepared.every((each) => readsBesidePlan(each.sql));
   // A candidate stands beside what runs: before it, it would be one round trip more of the render.
   const streamed = beside && streamedRender();
   const reads = async (): Promise<readonly TableRead[]> => {
