@@ -35,9 +35,66 @@ const plain = sqliteTable(
   },
   (table) => [index('plain_owner').on(table.owner)],
 );
+/** The invitations of teams: one pending of an account in a team at most. */
+const invites = sqliteTable(
+  'invites',
+  {
+    id: text().primaryKey(),
+    team: text().notNull(),
+    account: text().notNull(),
+    status: text().notNull(),
+  },
+  (table) => {
+    return [
+      uniqueIndex('invites_pending')
+        .on(table.account, table.team)
+        .where(sql`${table.status} = 'pending'`),
+      index('invites_team').on(table.team),
+    ];
+  },
+);
+/** The same table, of the same database, as a schema that declares its index of all of its rows. */
+const invitesWhole = sqliteTable(
+  'invites',
+  {
+    id: text().primaryKey(),
+    team: text().notNull(),
+    account: text().notNull(),
+    status: text().notNull(),
+  },
+  (table) => {
+    return [
+      uniqueIndex('invites_pending').on(table.account, table.team),
+      index('invites_team').on(table.team),
+    ];
+  },
+);
 const follow = followDrizzle(schema);
 const tables = definitionOf(database(follow.tables)).tables;
 const db = env.REACTIVE_D1;
+
+/** `invites` made anew of two invitations of one account in `t1`, the second cancelled. */
+const INVITES = [
+  'DROP TABLE IF EXISTS invites',
+  'CREATE TABLE invites (id TEXT PRIMARY KEY, team TEXT NOT NULL, account TEXT NOT NULL, status TEXT NOT NULL)',
+  "CREATE UNIQUE INDEX invites_pending ON invites (account, team) WHERE status = 'pending'",
+  'CREATE INDEX invites_team ON invites (team)',
+  "INSERT INTO invites VALUES ('x1', 't1', 'a1', 'pending'), ('x2', 't1', 'a1', 'canceled')",
+] as const;
+
+/**
+ * A follow of `invites` as `table` declares it, the table made anew by `statements` and its log,
+ * and a follower of it.
+ */
+async function invitations(
+  table: typeof invites | typeof invitesWhole,
+  statements: readonly string[] = INVITES,
+) {
+  const own = followDrizzle({ invites: table });
+  await db.batch([...statements, ...own.captureSql()].map((statement) => db.prepare(statement)));
+  const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+  return { follower, orm: drizzle(own.client(db), { schema: { invites: table } }) };
+}
 
 /** A follower of the store's log, read to its head. */
 async function following() {
@@ -91,6 +148,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
         'DROP TRIGGER IF EXISTS app_log',
         'DROP TABLE IF EXISTS sets',
         'DROP TABLE IF EXISTS posts',
+        'DROP TABLE IF EXISTS invites',
         ...made(),
         "INSERT INTO badges VALUES (1, 'p1', 'x')",
         ...follow.captureSql(),
@@ -733,5 +791,112 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     expect(faults).toStrictEqual([
       new Error('A render batches the statements of its tracked D1 binding alone.'),
     ]);
+  });
+
+  it("renders a read of a team nothing for another team's rows a unique index of part of the rows meets", async () => {
+    const { follower, orm } = await invitations(invites);
+    const dependencies = await rendered(() =>
+      orm.select().from(invites).where(eq(invites.team, 't1')),
+    );
+    await follower.changed();
+
+    // Of the same account in another team: an invitation, its renewal, and its taking up.
+    const upsert =
+      "INSERT INTO invites VALUES (?, 't2', 'a1', 'pending') ON CONFLICT (account, team) WHERE status = 'pending' DO UPDATE SET status = 'pending'";
+    await db.prepare(upsert).bind('y1').run();
+    await db.prepare(upsert).bind('y2').run();
+    await db.prepare("UPDATE invites SET status = 'accepted' WHERE id = 'y1'").run();
+
+    expect(dependencies.changedBy(await follower.changed())).toBe(false);
+  });
+
+  it('renders a read again for a row a REPLACE deletes by a unique index of part of the rows', async () => {
+    const { follower, orm } = await invitations(invites);
+    const dependencies = await rendered(() =>
+      orm.select().from(invites).where(eq(invites.id, 'x1')),
+    );
+    await follower.changed();
+
+    await db.prepare("INSERT OR REPLACE INTO invites VALUES ('x3', 't1', 'a1', 'pending')").run();
+    const { results } = await db.prepare('SELECT id FROM invites ORDER BY id').all();
+
+    expect(results).toStrictEqual([{ id: 'x2' }, { id: 'x3' }]);
+    expect(dependencies.changedBy(await follower.changed())).toBe(true);
+  });
+
+  it('renders a read again for a row an update meets by the condition of a unique index alone', async () => {
+    const { follower, orm } = await invitations(invites);
+    const dependencies = await rendered(() =>
+      orm.select().from(invites).where(eq(invites.id, 'x1')),
+    );
+    await follower.changed();
+
+    // Of `status` alone: the set's values stay, and the row comes into the index over `x1`.
+    await db.prepare("UPDATE OR REPLACE invites SET status = 'pending' WHERE id = 'x2'").run();
+    const { results } = await db.prepare('SELECT id FROM invites').all();
+
+    expect(results).toStrictEqual([{ id: 'x2' }]);
+    expect(dependencies.changedBy(await follower.changed())).toBe(true);
+  });
+
+  it('renders a read of a team nothing for another team, of an index of all the rows declared of part', async () => {
+    // The database's index is of all of the rows, which the set the schema declares of part of
+    // them meets at each insert and update too.
+    const { follower, orm } = await invitations(invites, [
+      'DROP TABLE IF EXISTS invites',
+      'CREATE TABLE invites (id TEXT PRIMARY KEY, team TEXT NOT NULL, account TEXT NOT NULL, status TEXT NOT NULL)',
+      'CREATE UNIQUE INDEX invites_pending ON invites (account, team)',
+      'CREATE INDEX invites_team ON invites (team)',
+      "INSERT INTO invites VALUES ('x1', 't1', 'a1', 'pending')",
+    ]);
+    const dependencies = await rendered(() =>
+      orm.select().from(invites).where(eq(invites.team, 't1')),
+    );
+    await follower.changed();
+
+    await db.prepare("INSERT INTO invites VALUES ('y1', 't2', 'a1', 'pending')").run();
+
+    expect(dependencies.changedBy(await follower.changed())).toBe(false);
+  });
+
+  it('renders a read again for a row a REPLACE takes by a unique index of part of the rows of a default', async () => {
+    // `account` is NULL as the trigger before the insert reads it, and `'x'` as SQLite writes it.
+    const { follower, orm } = await invitations(invites, [
+      'DROP TABLE IF EXISTS invites',
+      "CREATE TABLE invites (id TEXT PRIMARY KEY, team TEXT NOT NULL, account TEXT NOT NULL DEFAULT 'x', status TEXT NOT NULL)",
+      "CREATE UNIQUE INDEX invites_pending ON invites (account, team) WHERE status = 'pending'",
+      'CREATE INDEX invites_team ON invites (team)',
+      "INSERT INTO invites VALUES ('x1', 't1', 'x', 'pending')",
+    ]);
+    const dependencies = await rendered(() =>
+      orm.select().from(invites).where(eq(invites.id, 'x1')),
+    );
+    await follower.changed();
+
+    await db
+      .prepare(
+        "INSERT OR REPLACE INTO invites (id, team, account, status) VALUES ('x3', 't1', NULL, 'pending')",
+      )
+      .run();
+    const { results } = await db.prepare('SELECT id FROM invites').all();
+
+    expect(results).toStrictEqual([{ id: 'x3' }]);
+    expect(dependencies.changedBy(await follower.changed())).toBe(true);
+  });
+
+  it('renders a read again for a row an update meets by a unique index of part of the rows declared of all', async () => {
+    // The schema's index of all of the rows, whose set the trigger before an update reads changed
+    // alone; the database's of the pending ones.
+    const { follower, orm } = await invitations(invitesWhole);
+    const dependencies = await rendered(() =>
+      orm.select().from(invitesWhole).where(eq(invitesWhole.id, 'x1')),
+    );
+    await follower.changed();
+
+    await db.prepare("UPDATE OR REPLACE invites SET status = 'pending' WHERE id = 'x2'").run();
+    const { results } = await db.prepare('SELECT id FROM invites').all();
+
+    expect(results).toStrictEqual([{ id: 'x2' }]);
+    expect(dependencies.changedBy(await follower.changed())).toBe(true);
   });
 });
