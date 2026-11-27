@@ -39,6 +39,7 @@ import { asyncFoundElements } from './framed-find-results.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { UnfollowableError } from './framed-getter-writes.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
+import { bindingUses } from './framed-local-uses.ts';
 import { mapperRestReadingViews } from './framed-mapper-rest.ts';
 import {
   indexedReading,
@@ -48,7 +49,7 @@ import {
 import { framedCondition } from './framed-sources.ts';
 import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
-import { isTypeOnly, readsBinding } from './scope.ts';
+import { readsBinding } from './scope.ts';
 
 /** Native array element selections retain the error identity of their possible results. */
 
@@ -151,18 +152,12 @@ export function argumentArrayExposed(
   reached = false,
 ): boolean {
   if (aliases.size === 0) return false;
-  const pending: Node[] = [expression.getSourceFile()];
-  for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    if (isTypeOnly(node)) continue;
-    if (
-      isIdentifier(node) &&
-      argumentUseExposed(node, expression, aliases, reached) &&
-      unchanged?.(node) !== true
-    )
-      return true;
-    node.forEachChild((child) => {
-      pending.push(child);
-    });
+  const root = expression.getSourceFile();
+  for (const alias of aliases) {
+    for (const node of bindingUses(root, alias)) {
+      if (argumentUseExposed(node, expression, aliases, reached) && unchanged?.(node) !== true)
+        return true;
+    }
   }
   return false;
 }
