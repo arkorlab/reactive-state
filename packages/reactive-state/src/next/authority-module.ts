@@ -52,7 +52,8 @@ function sameFile(left: string, right: string): boolean {
 /**
  * The module to write where the host imports the object from (`REACTIVE_AUTHORITY_MODULE` of
  * `environment`): none where it names none, nor where the compile writes the object there itself,
- * of the default `out`. Refused where it names no file under the application's root.
+ * of the default `out`. Refused where it names no file under the application's root, or a file
+ * inside the compile's `out` other than the object.
  */
 function declaredAuthorityModule(
   placed: Placed,
@@ -77,6 +78,14 @@ function declaredAuthorityModule(
   const compiled = path.join(placed.outDir, DURABLE_OBJECT_MODULE);
   if (sameFile(file, compiled)) {
     return undefined;
+  }
+  // The compile owns its `out`: it replaces a file there that it writes, as the registry the object
+  // imports, and removes one it does not, which a module of this kind opens as.
+  const inOut = path.relative(placed.outDir, file);
+  if (!inOut.startsWith('..') && !path.isAbsolute(inOut)) {
+    throw new Error(
+      `${AUTHORITY_MODULE_ENV} is \`${declared}\`, a file inside its \`out\`, which the compile owns: it replaces what it writes there and removes what it does not. Name a module outside it.`,
+    );
   }
   return {
     file,
