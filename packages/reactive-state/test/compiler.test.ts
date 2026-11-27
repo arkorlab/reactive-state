@@ -89,6 +89,7 @@ const OUTPUTS = [
   '.reactive/components/todo-row.authority.mts',
   '.reactive/components/todo-row.client.tsx',
   '.reactive/components/todo-row.root.tsx',
+  '.reactive/durable-object.mjs',
   '.reactive/elements.ts',
   '.reactive/hooks/use-estimate.ts',
   '.reactive/hooks/use-todo-filter.ts',

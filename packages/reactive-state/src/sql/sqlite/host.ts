@@ -1,6 +1,7 @@
 import type { DatabaseHost } from '../../authority/database-host.ts';
+import { d1Hosted } from './d1-host.ts';
 import type { DrizzleD1Follow } from './follow.ts';
-import { aloneOf, type LocalD1, localD1 } from './local-d1.ts';
+import type { LocalD1 } from './local-d1.ts';
 
 /**
  * A database of a schema of SQLite's tables, as `reactiveDb` opens one in a process that has no D1
@@ -33,15 +34,18 @@ export async function inSqliteFile<S extends Readonly<Record<string, unknown>>>(
   follow: DrizzleD1Follow<S>,
   keptMs: number,
 ): Promise<{ readonly orm: unknown; readonly host: DatabaseHost }> {
-  const [{ drizzle }, migrator] = await Promise.all([
+  // Of the process that opens the file alone: a bundle of a Worker's may import this module.
+  const [{ drizzle }, migrator, { aloneOf, localD1 }] = await Promise.all([
     import('drizzle-orm/d1'),
     import('drizzle-orm/d1/migrator'),
+    import('./local-d1.ts'),
   ]);
   const file = process.env['D1_FILE'] ?? FILE;
   const binding = localD1(file);
   const orm = drizzle(follow.client(binding) as never, { schema });
   return {
     host: {
+      ...d1Hosted(binding, follow, keptMs),
       alone: (work) => aloneOf(file, work),
       close: () => {
         binding.close();
@@ -49,11 +53,6 @@ export async function inSqliteFile<S extends Readonly<Record<string, unknown>>>(
       },
       listen: () => Promise.resolve(),
       migrate: (migrationsFolder) => migrator.migrate(orm, { migrationsFolder }),
-      open: async () => {
-        await binding.batch(follow.captureSql().map((statement) => binding.prepare(statement)));
-        return { [follow.storeName]: follow.store(binding) };
-      },
-      prune: () => follow.prune(binding, Date.now() - keptMs),
       seed: (first) => seedOnce(binding, first),
     },
     orm,

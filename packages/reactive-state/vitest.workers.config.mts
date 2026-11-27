@@ -41,6 +41,17 @@ export default defineConfig({
           // The application whose states bind rows of its tables in D1.
           // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
           D1_ROWS_AUTHORITY: { className: 'RowsAuthority', useSQLite: true },
+          // The test application, of an object that knows no site (`test/cloudflare/worker.ts`).
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          SITELESS: { className: 'SitelessAuthority', useSQLite: true },
+          // An application of one call, as the compile's own module makes its object.
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          ZERO_CONFIG: { className: 'ZeroConfigAuthority', useSQLite: true },
+          // The same, of a log that takes a while to make, and of one whose making never ends.
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          SLOW_START: { className: 'SlowStartAuthority', useSQLite: true },
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          HUNG_START: { className: 'HungStartAuthority', useSQLite: true },
         },
         d1Databases: ['REACTIVE_D1'],
         bindings: {

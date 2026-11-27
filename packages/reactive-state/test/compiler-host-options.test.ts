@@ -112,6 +112,16 @@ describe('what the host tells the compile', () => {
     expect(routeOf(told)).toContain('routeHandlers({ envelopes, routes, session })');
   });
 
+  it('writes the application’s Durable Object, of its registry alone', () => {
+    const module = output(told.result, told.app, 'durable-object.mjs');
+
+    expect(module).toContain(
+      "import { authorityObject } from '@arkorlab/reactive-state/cloudflare';",
+    );
+    expect(module).toContain("import * as application from './authority.mts';");
+    expect(module).toContain('export const ReactiveAuthority = authorityObject(application);');
+  });
+
   it('registers the application’s sessions', () => {
     expect(output(told.result, told.app, 'authority.mts')).toContain(
       "export const sessions = 'asserted';",

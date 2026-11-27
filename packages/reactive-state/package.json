@@ -20,7 +20,10 @@
     "./cloudflare": "./src/cloudflare/index.ts",
     "./compiler": "./src/compiler/index.ts",
     "./d1": "./src/cloudflare/d1-store.ts",
-    "./db": "./src/sql/db.ts",
+    "./db": {
+      "workerd": "./src/cloudflare/db.ts",
+      "default": "./src/sql/db.ts"
+    },
     "./drizzle": "./src/sql/index.ts",
     "./external": "./src/external.ts",
     "./framework/react": "./src/framework/react.ts",

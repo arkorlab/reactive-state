@@ -2,8 +2,13 @@ import { db } from '@/db';
 
 export { RowsAuthority } from './d1-where-fixture.ts';
 export { ExternalAuthority } from './external-store-fixture.ts';
+export {
+  HungStartAuthority,
+  SlowStartAuthority,
+  ZeroConfigAuthority,
+} from './zero-config-fixture.ts';
 
-import { authorityObject } from '../../src/cloudflare/index.ts';
+import { type AuthorityEnv, authorityObject } from '../../src/cloudflare/index.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../../src/program.ts';
 import type { MiddlewareProgram, RouteRegistration } from '../../src/routing.ts';
 import { forbidden } from '../../src/server/index.ts';
@@ -99,6 +104,16 @@ export const AssertedAuthority = authorityObject(
   { ...application, sessions: 'asserted' },
   { deliveryDelayMs: 60_000 },
 );
+
+/**
+ * The same application, of an object that knows no site, as one deployed of no
+ * `REACTIVE_SITE_URL` is: its change log goes nowhere, and no view of it is shared.
+ */
+export class SitelessAuthority extends authorityObject(application, { deliveryDelayMs: 60_000 }) {
+  constructor(ctx: DurableObjectState, env: AuthorityEnv) {
+    super(ctx, { ...env, REACTIVE_SITE_URL: '' });
+  }
+}
 
 /**
  * The Worker's own answer: at `/coded`, the request's body sent back as it is (`encodeBody:

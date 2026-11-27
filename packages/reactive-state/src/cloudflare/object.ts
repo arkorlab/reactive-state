@@ -1,8 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
 
+import { type DatabaseHost, hostOf } from '../authority/database-host.ts';
 import { diagnosticsEveryOf } from '../authority/diagnostics.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
-import { AuthorityError } from '../authority/errors.ts';
+import { AuthorityError, describeThrown } from '../authority/errors.ts';
 import type { ExternalStores } from '../authority/external.ts';
 import type { Application, AuthorityEngineOptions, Stats } from '../authority/model.ts';
 import { registryOf } from '../authority/programs.ts';
@@ -105,6 +106,27 @@ interface AuthoritySetup extends AuthorityApplication {
 
 /** How often a shared view's stream with nothing to say says so. */
 const HEARTBEAT_MS = 15_000;
+/** How often the object prunes the change log of a database it opened, from its alarm. */
+const PRUNE_EVERY_MS = 600_000;
+/**
+ * How long the object's start waits for its database's change log, at most: a third of the 30 s
+ * Cloudflare lets `blockConcurrencyWhile` wait before it resets the object. Past it, the log is
+ * made on while calls go on.
+ */
+const OPEN_WAIT_MS = 10_000;
+
+/** Waits for `work`, at most `milliseconds`: what is not done then goes on, unwaited. */
+async function within(work: Promise<void>, milliseconds: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, milliseconds);
+  });
+  try {
+    await Promise.race([work, late]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * How the object asks its site for a route's page, to make a shared view's artifacts of: the site
@@ -142,14 +164,37 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   readonly #engine: AuthorityEngine;
   readonly #streams: EventStreams;
   readonly #delivery: SiteDelivery;
+  /** The object's one alarm, which its database's log is pruned at too. */
+  readonly #alarm: ObjectAlarm;
+  /** What the application's database brings, of one of `reactiveDb`'s: its stores and its log. */
+  readonly #host: DatabaseHost | undefined;
+  /** Whether the database's change log is made, and its making under way, and since when. */
+  #open = false;
+  #opening: Promise<void> | undefined;
+  #openingSince = 0;
+  /** When the object last pruned its database's change log, by its clock. */
+  #prunedAt = 0;
 
   constructor(ctx: DurableObjectState, env: AuthorityEnv, setup: AuthoritySetup) {
     super(ctx, env);
+    this.#host = hostOf(setup.database);
+    const host = this.#host;
+    if (host !== undefined) {
+      // As Cloudflare starts an object: each call waits for what `blockConcurrencyWhile` runs, and
+      // `#opened` rejects nothing, which would reset the object, nor waits past the time Cloudflare
+      // resets it at.
+      // eslint-disable-next-line sonarjs/no-async-constructor, @typescript-eslint/no-floating-promises -- see above
+      ctx.blockConcurrencyWhile(async () => this.#opened());
+    }
+    const site = siteFetchOf(env);
+    // Of no site to make a shared view's artifacts of, no view is shared: each is its request's.
+    const sharing = site === undefined ? false : setup.shareViews;
     // Opened synchronously, as the object's storage is read: the schema is applied as the engine's
     // database opens, in one transaction, and the data is the object's from then on. A database of
     // another schema is refused, and the object with it, rather than read as something else.
     const sql = durableObjectSql(ctx.storage);
     const alarm = new ObjectAlarm(ctx.storage);
+    this.#alarm = alarm;
     const options: AuthorityEngineOptions = {
       buildId: setup.buildId,
       database: setup.database,
@@ -166,14 +211,17 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
       programs: setup.programs,
       routes: setup.routes,
       ...(setup.sessions !== undefined && { sessions: setup.sessions }),
-      ...(setup.shareViews !== undefined && { shareViews: setup.shareViews }),
+      ...(sharing !== undefined && { shareViews: sharing }),
       diagnosticsEveryMs: diagnosticsEveryOf(env.REACTIVE_DIAGNOSTICS),
       externalPollMs: setup.externalPollMs,
       sql,
-      stores: setup.stores?.(env as StoreEnv),
+      stores:
+        host === undefined
+          ? setup.stores?.(env as StoreEnv)
+          : { ...host.stores(), ...setup.stores?.(env as StoreEnv) },
     };
     this.#engine = new AuthorityEngine(options);
-    this.#engine.site(siteFetchOf(env));
+    this.#engine.site(site);
     this.#streams = new EventStreams(this.#engine);
     this.#delivery = new SiteDelivery({
       alarm,
@@ -188,6 +236,53 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
       this.#delivery.committed();
     });
     this.#delivery.resume();
+  }
+
+  /**
+   * Makes the change log of the database, of one of `reactiveDb`'s, unless it is made: where it
+   * cannot be, of tables the application's migrations have not made yet, says why, and asks again
+   * at the next render — a page's first call, a route's root's (`renderShared`) too — or alarm —
+   * where what the object follows is read — while every other call goes on.
+   */
+  async #opened(): Promise<void> {
+    const host = this.#host;
+    if (host === undefined || this.#open) return;
+    if (this.#opening === undefined) this.#openingSince = Date.now();
+    this.#opening ??= (async () => {
+      try {
+        await host.open();
+        this.#open = true;
+      } catch (error) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `The change log of the application's database could not be made: ${describeThrown(error)}. Run the application's migrations: the next render makes it.`,
+        );
+      } finally {
+        this.#opening = undefined;
+      }
+      // Its first prune, or else its next try of a log it could not make, of no call to ask.
+      await this.#alarm.arm(Date.now() + PRUNE_EVERY_MS);
+    })();
+    // Of every call that asks, `OPEN_WAIT_MS` at most of its making's start: past it, the calls go
+    // on as it is made.
+    await within(this.#opening, this.#openingSince + OPEN_WAIT_MS - Date.now());
+  }
+
+  /**
+   * Prunes the change log of the database the object opened, at most every `PRUNE_EVERY_MS`: a
+   * failure is said, and the next prune is the next one due.
+   */
+  async #pruned(): Promise<void> {
+    const host = this.#host;
+    const now = Date.now();
+    if (host === undefined || now - this.#prunedAt < PRUNE_EVERY_MS) return;
+    this.#prunedAt = now;
+    try {
+      await host.prune();
+    } catch (error) {
+      // eslint-disable-next-line no-console
+      console.error(`Pruning the change log failed: ${describeThrown(error)}`);
+    }
   }
 
   /**
@@ -244,6 +339,7 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
     root: RootRequest,
     caller?: Caller,
   ): Promise<Result<RenderResult>> {
+    await this.#opened();
     const answered = await answer(async () => this.#engine.render(session, rootOf(root)));
     await this.#delivery.noteCaller(caller);
     return answered;
@@ -316,6 +412,7 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
     request: SharedRenderRequest,
     caller?: Caller,
   ): Promise<Result<SharedRenderAnswer>> {
+    await this.#opened();
     const answered = await answer(async () => this.#engine.renderShared(session, request));
     await this.#delivery.noteCaller(caller);
     return answered;
@@ -356,7 +453,12 @@ export class AuthorityObject extends DurableObject<AuthorityEnv> implements Auth
   }
 
   override async alarm(): Promise<void> {
+    await this.#opened();
     await Promise.all([this.#engine.pollExternal(), this.#delivery.run()]);
+    // After the log's read: what it prunes is read by then.
+    await this.#pruned();
+    // Of no other to arm one, as of no page that reads and no commit, the next prune's own.
+    if (this.#host !== undefined) await this.#alarm.arm(this.#prunedAt + PRUNE_EVERY_MS);
   }
 }
 
