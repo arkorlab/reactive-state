@@ -37,7 +37,10 @@ import { boundOf } from './serialized.ts';
  * connection were not asked under, so a text that changes one is refused there. A checked-out
  * connection may change its own, as a transaction does; of what it changes beyond that — a `SET`
  * not `LOCAL`, a `set_config` of a session's — it is closed as it is given back, and no render
- * plans a statement through it.
+ * plans a statement through it. Nor does one through it while its open transaction holds a setting
+ * of its own (`SET LOCAL`, `set_config(…, true)`): the plans of the pool were not asked under it,
+ * and one asked under it would be read by every other connection. It is read again once the
+ * transaction ends.
  *
  * A render may settle while a transaction it opened runs on. What opens and ends one reads nothing
  * and runs regardless, so Drizzle's `rollback` still ends it, and a connection given back in one is
@@ -147,7 +150,7 @@ function heard(): void {
 function settingsRefused(): Promise<never> {
   return Promise.reject(
     new Error(
-      'A render queries through no checked-out connection whose settings were changed beyond a transaction, which the plans of the pool were not asked under: give every connection its settings as it connects.',
+      'A render queries through no checked-out connection whose settings were changed — beyond a transaction, or for the transaction still open — which the plans of the pool were not asked under: give every connection its settings as it connects, or query once the transaction has ended.',
     ),
   );
 }
@@ -189,6 +192,14 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
   };
   /** Whether a statement of this checked-out connection changed its settings beyond a transaction. */
   let changed = false;
+  /** Whether a statement of it set a setting for its transaction, which may be open still. */
+  let scoped = false;
+  /** Whether a setting of this connection's differs from those the plans of the pool were asked under. */
+  const unplanned = (): boolean => {
+    // The transaction's own settings end with it.
+    if (scoped && !inTransaction(connection)) scoped = false;
+    return changed || scoped;
+  };
   const outside = (name: PropertyKey, args: readonly unknown[]): unknown =>
     retainedReceiver(called(connection, name, args), connection, client);
   const refusedInRender = (name: PropertyKey) => {
@@ -264,7 +275,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       return refusalOf(Promise.reject(settled), 'query', [first, ...rest]);
     }
     if (noted !== undefined) {
-      if (!changed) return rendered(noted, statement);
+      if (!unplanned()) return rendered(noted, statement);
       return refusalOf(
         noted(() => settingsRefused()),
         'query',
@@ -272,7 +283,10 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       );
     }
     const text = textOf(first);
-    if (checkedOut && typeof text === 'string' && plans.leavesSession(text)) changed = true;
+    if (checkedOut && typeof text === 'string') {
+      if (plans.leavesSession(text)) changed = true;
+      else if (plans.changesOneSession(text)) scoped = true;
+    }
     if (!checkedOut && typeof text === 'string' && plans.changesOneSession(text)) {
       return sessionRefused(first, rest, text);
     }

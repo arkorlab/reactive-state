@@ -258,6 +258,23 @@ describe('`reactive dev`', () => {
     TEST_TIMEOUT_MS,
   );
 
+  it.each([
+    ['none is set', '', 'development'],
+    ['production is, as `next dev` keeps it', 'production', 'production'],
+  ])(
+    'runs the application in the mode `next dev` does, where %s',
+    async (_said, exported, mode) => {
+      const root = application({
+        'src/db.ts': `${DB}appendFileSync('modes.log', JSON.stringify(process.env.NODE_ENV) + '\\n');\n`,
+      });
+
+      await run(root, [], { NODE_ENV: exported });
+
+      expect(linesOf(root, 'modes.log')).toStrictEqual([mode]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
   it(
     'starts the authority again of a component that changed',
     async () => {

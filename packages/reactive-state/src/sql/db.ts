@@ -1,8 +1,9 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
+import type { Client as PgClient, ClientConfig } from 'pg';
 
 import { type DatabaseHost, hostDatabase, hostOf, LOG } from '../authority/database-host.ts';
 import { describeThrown, messageOf } from '../authority/errors.ts';
@@ -170,6 +171,22 @@ async function seedOnce<S>(
 }
 
 /**
+ * The file a directory's lock is, beside the directory where it really is: one directory has one
+ * lock, whether it is named with a slash at its end (which would put the file inside it), by a path
+ * from the working directory, or by a link to it.
+ */
+function lockFileOf(directory: string): string {
+  const resolved = path.resolve(directory);
+  let real = resolved;
+  try {
+    real = realpathSync(resolved);
+  } catch {
+    // Not made yet: PGlite makes it, and no link leads to it.
+  }
+  return `${real}.lock`;
+}
+
+/**
  * Takes a directory's lock, which is held until the process ends or `release` is called. PGlite is
  * one process's: a second that opened the same directory would write over what the first keeps in
  * memory, so that neither could open it again. A lock of SQLite's, of a file beside the directory,
@@ -178,7 +195,7 @@ async function seedOnce<S>(
  */
 async function lockOf(directory: string): Promise<() => void> {
   const { DatabaseSync } = await import('node:sqlite');
-  const lock = new DatabaseSync(`${directory}.lock`);
+  const lock = new DatabaseSync(lockFileOf(directory));
   try {
     lock.exec('BEGIN EXCLUSIVE');
   } catch (error) {
@@ -267,6 +284,20 @@ async function ended(ending: Promise<unknown>): Promise<void> {
 }
 
 /**
+ * `Client`, made to give up on a connection whose handshake is not done within `ms`: a server that
+ * takes it and says nothing would else hold the first call of the pool for good. Of the client, not
+ * of the pool's own `connectionTimeoutMillis`, which a checkout that waits for a free connection is
+ * failed by too: the application's queries wait as long as the pool takes to free one.
+ */
+function bounded(Client: typeof PgClient, ms: number): new (config?: ClientConfig) => PgClient {
+  return class extends Client {
+    constructor(config?: ClientConfig) {
+      super({ ...config, connectionTimeoutMillis: ms });
+    }
+  };
+}
+
+/**
  * A server: the pool is the application's, and two connections are the host's. The store's is a pool
  * of one, whose reads the follower waits for as long as `TAIL.readTimeoutMs`: past it, the connection
  * is let go of and the next read makes another, as one a lost link holds would answer no read again,
@@ -285,8 +316,8 @@ async function onServer<S extends Readonly<Record<string, unknown>>>(
     import('drizzle-orm/node-postgres/migrator'),
   ]);
   const connectionString = url;
-  const pool = new Pool({ connectionString });
   const connectionTimeoutMillis = TAIL.readTimeoutMs;
+  const pool = new Pool({ Client: bounded(Client, connectionTimeoutMillis), connectionString });
   const store = new Pool({
     connectionString,
     connectionTimeoutMillis,
