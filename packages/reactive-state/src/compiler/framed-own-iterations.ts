@@ -14,9 +14,13 @@ import {
   isCallExpression,
   isClassLikeDeclaration,
   isComputedPropertyName,
+  isDoStatement,
   isElementAccessExpression,
   isExpression,
   isExpressionStatement,
+  isForInStatement,
+  isForOfStatement,
+  isForStatement,
   isFunctionExpression,
   isFunctionLikeDeclaration,
   isIdentifier,
@@ -30,6 +34,7 @@ import {
   isTypeNode,
   isVariableDeclaration,
   isVariableDeclarationList,
+  isWhileStatement,
   type Node,
   type Statement,
   SyntaxKind,
@@ -128,16 +133,36 @@ function previousStatement(node: Node): Statement | undefined {
 /**
  * Whether `read` runs right after what precedes its statement, with nothing between them that may
  * replace the method again: no function or class lies between them, which would run it later or
- * again, and each operand the statement evaluates before it runs no code (`quietChild`), as an
+ * again, no loop's condition, update or body, which runs again after what the loop does
+ * (`rerun`), and each operand the statement evaluates before it runs no code (`quietChild`), as an
  * assignment, a call or a member read may.
  */
 function quietBefore(read: Node, statement: Statement): boolean {
   for (let node = read; node !== statement; node = node.parent) {
     const { parent } = node;
     if (isFunctionLikeDeclaration(parent) || isClassLikeDeclaration(parent)) return false;
+    if (rerun(parent, node)) return false;
     if (earlierChildren(parent, node).some((child) => !quietChild(child, parent))) return false;
   }
   return true;
+}
+
+/**
+ * Whether `node`, a part of `parent`, runs again on a later pass of a loop: its condition, its
+ * update or its body, but a `for` initializer and a `for-of` or `for-in` iterable, which run once.
+ * What the loop's body does may replace the method before that pass.
+ */
+function rerun(parent: Node, node: Node): boolean {
+  if (isForStatement(parent)) {
+    const repeated: readonly (Node | undefined)[] = [
+      parent.condition,
+      parent.incrementor,
+      parent.statement,
+    ];
+    return repeated.includes(node);
+  }
+  if (isForOfStatement(parent) || isForInStatement(parent)) return node === parent.statement;
+  return isWhileStatement(parent) || isDoStatement(parent);
 }
 
 /**
