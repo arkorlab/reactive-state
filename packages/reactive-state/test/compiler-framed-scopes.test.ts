@@ -27,7 +27,8 @@ describe('shared module framed lexical bindings', () => {
   );
 
   // A parameter written again as a whole — here by a `var` of its name — is a name nothing says the
-  // start of: `String(...)` of it reads what may be an array, whatever it is written with.
+  // start of, unless its written type is a scalar: `Date | string` is none, so `String(...)` of it
+  // reads what may be an array, whatever it is written with.
   it.each([
     "function stamp(date: Date | string) { var date = 'fixed'; return String(date); } export function label(value: string) { return value + stamp(new Date(0)); }",
   ])('refuses the text of a parameter a var of its name writes again: %s', async (source) => {

@@ -3,17 +3,23 @@ import {
   type Expression,
   type Identifier,
   isArrayLiteralExpression,
+  isAsExpression,
+  isAssertionExpression,
   isBindingElement,
   isBinaryExpression,
   isConditionalExpression,
   isGetAccessorDeclaration,
   isIdentifier,
+  isNonNullExpression,
   isObjectLiteralExpression,
   isOmittedExpression,
+  isParameterDeclaration,
   isParenthesizedExpression,
   isPropertyAssignment,
+  isSatisfiesExpression,
   isSpreadAssignment,
   isSpreadElement,
+  isTypeAssertion,
   type Node,
   type ObjectLiteralElementLike,
   SyntaxKind,
@@ -23,6 +29,8 @@ import { unwrapped } from './bounded.ts';
 import { writtenArrayKey } from './framed-array-functions.ts';
 import { givenValues } from './framed-array-identity.ts';
 import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
+import { isScalarType } from './framed-scalar-types.ts';
+import { isWrapper } from './framed-written-targets.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /**
@@ -32,16 +40,129 @@ import { bindingIdentifiers } from './scope.ts';
  * object) starts as none.
  */
 export function mayStartAsArray(binding: FrameBinding): boolean {
-  return mayBeArray(binding.initializer, binding);
+  return !writtenScalar(binding) && mayBeArray(binding.initializer, binding);
 }
 
 /**
  * Whether a name that is written as a whole elsewhere may be given an array there: the right of an
  * assignment, read as the initializer is, or a pattern or a loop head, whose value is not read. A name
- * that starts as a number or a text and is given a list holds the list afterwards.
+ * that starts as a number or a text and is given a list holds the list afterwards. Of a name the code
+ * writes as a scalar, only what it is shown to hold all the same is read (`shownOf`).
  */
 export function mayBecomeArray(binding: FrameBinding): boolean {
-  return givenValues(binding).some((value) => value === undefined || mayBeArray(value, binding));
+  const given = writtenScalar(binding) ? shownOf(binding) : givenValues(binding);
+  return given.some((value) => value === undefined || mayBeArray(value, binding));
+}
+
+/**
+ * What a name the code writes as a scalar is shown to hold all the same, read from what it starts as
+ * and from each value it is given as a whole. Type-checked code cannot write a list to such a name
+ * but under a type assertion, so the written type vouches for a value only where no assertion stands
+ * over it. A part a pattern or a loop head gives is a value the reader of whole writes does not keep
+ * (`givenValues` knows none), so no assertion over its source would be seen: it is answered as a
+ * value that is not known, which refuses. Parentheses, `!` and `satisfies` change no type and are
+ * looked through; `as` and `<T>` are looked through and remembered. A conditional's branches, the
+ * operands of `||`, `&&` and `??`, the last of a sequence and what an assignment gives (its right, or
+ * either side of a logical one) are each read in turn. At the end of those:
+ *
+ * - a written list refuses, and a name is followed as any name is, asserted or not;
+ * - a value that is no list by its syntax (a literal, a template, what an operator makes, a function,
+ *   an object) is none;
+ * - any other value (a call's result, a member, an element, `await`, `new`) is what the written type
+ *   vouches for, unless an assertion stands over it: then nothing says it is no list, and it is
+ *   answered as a value that is not known (`undefined`), which refuses. An assertion over the list a
+ *   destructuring assignment takes the value from, or over the target it is written to, stands over
+ *   it as well (`assertedWrite`).
+ */
+function shownOf(binding: FrameBinding): readonly (Expression | undefined)[] {
+  const given = givenValues(binding);
+  const shown: (Expression | undefined)[] = given.includes(undefined) ? [undefined] : [];
+  const pending = [
+    { isAsserted: false, value: binding.initializer },
+    ...given.map((value) => ({ isAsserted: value !== undefined && assertedWrite(value), value })),
+  ];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    if (each.value === undefined) continue;
+    const { isAsserted, value } = withoutWrapping(each.value, each.isAsserted);
+    const ends = endsOf(value) ?? assignedOf(value);
+    if (ends !== undefined) pending.push(...ends.map((end) => ({ isAsserted, value: end })));
+    else if (isArrayLiteralExpression(value) || isIdentifier(value)) shown.push(value);
+    else if (isAsserted && !isNoArray(value)) shown.push(undefined);
+  }
+  return shown;
+}
+
+/**
+ * Whether a type assertion stands between a written value and the name it is written to, other than
+ * over the value itself (`withoutWrapping` reads that): over the list a destructuring assignment takes
+ * the value from (`[text] = [value] as unknown as [string]`: `givenValues` keeps the element alone, so
+ * the cast is looked for above it, through the parentheses, `!` and `satisfies` that wrap the list
+ * too), or over the target (`(text as unknown) = value`: the name keeps its written type, and holds
+ * the value). A value written as a whole (`text = value`) has no list above it.
+ */
+function assertedWrite(value: Expression): boolean {
+  let at: Node = value;
+  while (isWrapper(at.parent) || isArrayLiteralExpression(at.parent)) {
+    at = at.parent;
+    if (isAssertionExpression(at)) return true;
+  }
+  const write = at.parent;
+  return isBinaryExpression(write) && write.right === at && assertsTarget(write.left);
+}
+
+/**
+ * Whether a type assertion stands over the target of an assignment, or over one of the names of the
+ * pattern of names it is (`[(text as unknown)] = [value]`).
+ */
+function assertsTarget(target: Expression): boolean {
+  const pending = [target];
+  for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
+    const { isAsserted, value } = withoutWrapping(each, false);
+    if (isAsserted) return true;
+    if (isArrayLiteralExpression(value)) pending.push(...value.elements);
+  }
+  return false;
+}
+
+/**
+ * `node` within what wraps it, and whether a type assertion (`as`, `<T>`) is among the wrappers or
+ * stood over them already: parentheses, `!` and `satisfies` assert no other type.
+ */
+function withoutWrapping(
+  node: Expression,
+  isAsserted: boolean,
+): { readonly isAsserted: boolean; readonly value: Expression } {
+  let value = node;
+  let asserted = isAsserted;
+  for (;;) {
+    if (isAsExpression(value) || isTypeAssertion(value)) asserted = true;
+    else if (
+      !isParenthesizedExpression(value) &&
+      !isNonNullExpression(value) &&
+      !isSatisfiesExpression(value)
+    )
+      return { isAsserted: asserted, value };
+    value = value.expression;
+  }
+}
+
+/** The assignments that answer the name's old value or the right: `||=`, `&&=` and `??=`. */
+const LOGICAL_ASSIGNMENTS: ReadonlySet<SyntaxKind> = new Set([
+  SyntaxKind.AmpersandAmpersandEqualsToken,
+  SyntaxKind.BarBarEqualsToken,
+  SyntaxKind.QuestionQuestionEqualsToken,
+]);
+
+/**
+ * What a binary expression `endsOf` does not read answers: the right of an assignment, either side
+ * of a logical one, and none for the compound ones, which make a number or a text; undefined of what
+ * is no binary expression.
+ */
+function assignedOf(value: Expression): readonly Expression[] | undefined {
+  if (!isBinaryExpression(value)) return undefined;
+  const { kind } = value.operatorToken;
+  if (kind === SyntaxKind.EqualsToken) return [value.right];
+  return LOGICAL_ASSIGNMENTS.has(kind) ? [value.left, value.right] : [];
 }
 
 /**
@@ -64,7 +185,9 @@ function mayBeArray(given: Expression | undefined, binding: FrameBinding): boole
 /**
  * The values a value leads to, none where it may be an array: a name leads to what it starts as and to what
  * it is given as a whole, once for each part of a pattern it names; a value that is none of an array, a name
- * or a scalar the compile knows is one.
+ * or a scalar the compile knows is one. A whole name the code writes as a scalar leads to what it is shown to
+ * hold all the same (`shownOf`), and to nothing else: no array, whatever it starts as, a parameter included
+ * (`let text = name` of a `name: string`).
  */
 function leadsOf(
   value: Expression,
@@ -76,6 +199,8 @@ function leadsOf(
   const selected = frameBindingOf(start);
   if (selected === undefined) return start.text === 'undefined' ? [] : undefined;
   if (!firstVisit(seen, selected.binding, selected.keys)) return [];
+  if (selected.keys.length === 0 && writtenScalar(selected.binding))
+    return shownOf(selected.binding);
   if (defaultMayBeArray(start)) return undefined;
   return [
     selectedValue(selected.binding.initializer, selected.keys),
@@ -201,6 +326,19 @@ const SCALAR_KINDS: ReadonlySet<SyntaxKind> = new Set([
  */
 export function isScalarValue(value: Expression): boolean {
   return endsAtKinds(value, SCALAR_KINDS, { strip: withoutParentheses, typed: true });
+}
+
+/**
+ * Whether the code writes a name as a text, a number, a boolean or a bigint: its annotation says so,
+ * or, with none, it starts as a literal or an operator's scalar. TypeScript refuses to give such a
+ * name an array, as the compile trusts a written type that excludes an error, so what it is given
+ * is no array, a call result included (`text = JSON.stringify(value)`). A rest parameter is a list
+ * whatever its annotation says, and is none.
+ */
+export function writtenScalar(binding: FrameBinding): boolean {
+  if (isParameterDeclaration(binding) && binding.dotDotDotToken !== undefined) return false;
+  if (binding.type !== undefined) return isScalarType(binding.type);
+  return binding.initializer !== undefined && isScalarValue(binding.initializer);
 }
 
 /** `node` within the parentheses that wrap it. */

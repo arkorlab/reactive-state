@@ -23,9 +23,9 @@ import { givenValues, writtenAsWhole } from './framed-array-identity.ts';
 import { defaultArrayComparison } from './framed-array-sorting.ts';
 import {
   isNoArray,
-  isScalarValue,
   mayBecomeArray,
   mayStartAsArray,
+  writtenScalar,
 } from './framed-array-starts.ts';
 import { writtenArrayWords } from './framed-array-word-origins.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
@@ -34,7 +34,6 @@ import { mutatorInvocation } from './framed-mutator-calls.ts';
 import { destructuredList } from './framed-nested-lists.ts';
 import { methodMayBeOverridden } from './framed-overridden-methods.ts';
 import { sourceChanged } from './framed-pattern-sources.ts';
-import { isScalarType } from './framed-scalar-types.ts';
 import { framedConsumedArguments } from './framed-text-arguments.ts';
 
 /** Native array text conversion observes the error words its selected elements carry. */
@@ -92,7 +91,8 @@ export function framedArrayString(
  * name or a scalar; a call, a member or a choice of arrays may hand an array on, and is refused. A
  * name it cannot follow, a parameter assigned as a whole (`count += 1`), a name a swap or a loop
  * writes, an array written through an element, is taken as the program shows it: an operand is far
- * oftener text or a number than a list, and `String(name)` alone refuses such a name.
+ * oftener text or a number than a list, and `String(name)` alone refuses such a name, where the code
+ * does not write it as a scalar.
  */
 export function framedArrayOperand(
   value: Expression | undefined,
@@ -278,7 +278,13 @@ export function arrayMethodMayBeOverridden(call: Node, method: string): boolean 
  * Whether a name that starts as a written array, or as a name that stands for one, is written as a
  * whole elsewhere: it may hold another array than the one the chain of names ends at. A chain that
  * ends at a value that is no array (a scalar, a function, an object) is no array the compile started
- * from, but a name that is given an array elsewhere holds it afterwards, and is refused alike.
+ * from, but a name that is given an array elsewhere holds it afterwards, and is refused alike. A name
+ * the code writes as a scalar (`count: number`) holds no array whatever it is given that the compile
+ * cannot follow, a parameter nothing says the start of and a call's result included (`count += 1`,
+ * `text = text.trim()`): it is read as a name that was never written again is, unless the code shows
+ * it a list or a name that may hold one (`text = [error] as never`), directly or through the names
+ * it is given, or writes it under a type assertion a value nothing shows to be no list, or a part a
+ * pattern gives (`shownOf`).
  */
 function rewrittenArray(binding: FrameBinding): boolean {
   return writtenAsWhole(binding) && (mayStartAsArray(binding) || mayBecomeArray(binding));
@@ -327,15 +333,4 @@ function isScalarName(value: Expression): boolean {
   const name = unwrapped(value);
   const selected = isIdentifier(name) ? frameBindingOf(name) : undefined;
   return selected?.keys.length === 0 && writtenScalar(selected.binding);
-}
-
-/**
- * Whether the code writes a name as a text, a number, a boolean or a bigint: its annotation says so,
- * or, with none, it starts as a literal or an operator's scalar. TypeScript refuses to give such a
- * name an array, as the compile trusts a written type that excludes an error, so what it is given
- * is no array, a call result included (`text = JSON.stringify(value)`).
- */
-function writtenScalar(binding: FrameBinding): boolean {
-  if (binding.type !== undefined) return isScalarType(binding.type);
-  return binding.initializer !== undefined && isScalarValue(binding.initializer);
 }
