@@ -88,8 +88,9 @@ export interface AuthorityObjectOptions extends Omit<FaultOptions, 'onError'> {
   readonly pages?: readonly PublicPage[];
   /**
    * The stores the application's external tables are read through, by the names the tables
-   * declare (`table(fields, { external })`), made of the object's environment as it starts: a D1
-   * database it is bound to (`d1Store`), a service of the application's own.
+   * declare (`table(fields, { external })`), made of the object's environment as it starts: a
+   * follow's store of a D1 database it is bound to (`followDrizzle`), a service of the
+   * application's own.
    */
   readonly stores?: ((env: StoreEnv) => ExternalStores) | undefined;
   /** How often each store's change log is read while a stream follows: a second unless given. */

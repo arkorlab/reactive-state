@@ -42,7 +42,7 @@ function rowOf(rows: readonly unknown[]): Readonly<Record<string, unknown>> {
   const [row] = rows;
   if (typeof row !== 'object' || row === null) {
     throw new Error(
-      'The change log has no head: run the statements of `changeCaptureSql()` before following it.',
+      'The change log has no head: run the statements of `follow.captureSql()` before following it.',
     );
   }
   return row as Readonly<Record<string, unknown>>;
