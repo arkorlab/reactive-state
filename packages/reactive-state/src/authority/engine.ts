@@ -311,11 +311,14 @@ export class AuthorityEngine {
   /**
    * Takes a place for an event stream of the session, before the stream renders or listens: the
    * function answered gives the place back, once, when the stream ends however it ends. Refused
-   * with 429 `TOO_MANY_STREAMS` where the session, or the authority, holds as many as it may.
+   * with 429 `TOO_MANY_STREAMS` where the session, its user, or the authority holds as many as it
+   * may. Only an asserted session is counted by its user, whom the application's server vouches
+   * for: a demo session's is whichever of the demo's users its visitor chose.
    */
   admitStream(sessionId: unknown): () => void {
     const session = this.#session(sessionId);
-    return this.#streams.admit(session.key ?? session.id);
+    const user = session.key === undefined ? undefined : session.userId;
+    return this.#streams.admit(session.key ?? session.id, user);
   }
 
   revision(): number {

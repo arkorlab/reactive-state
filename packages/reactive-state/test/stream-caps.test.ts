@@ -3,7 +3,11 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 import type { AssertedSession } from '../src/asserted.ts';
 import { Engine } from '../src/authority/index.ts';
 import type { Watched } from '../src/authority/model.ts';
-import { MAX_STREAMS, MAX_STREAMS_PER_SESSION } from '../src/authority/stream-admission.ts';
+import {
+  MAX_STREAMS,
+  MAX_STREAMS_PER_SESSION,
+  MAX_STREAMS_PER_USER,
+} from '../src/authority/stream-admission.ts';
 import type { SessionId } from '../src/client/contract.ts';
 import { EventStreams } from '../src/cloudflare/stream.ts';
 import type { RootRequest } from '../src/program.ts';
@@ -31,8 +35,26 @@ function open(sessions: 'asserted' | 'demo' = 'demo'): Engine {
 }
 
 /** The `n`th admission of `session`, which a refusal throws. */
-function admitAll(engine: Engine, session: string, count: number): (() => void)[] {
+function admitAll(engine: Engine, session: SessionId, count: number): (() => void)[] {
   return Array.from({ length: count }, () => engine.admitStream(session));
+}
+
+/** A session of `user`'s that the application's server asserts under `key`, for an hour. */
+function assertedOf(user: string, key: string): AssertedSession {
+  return { expires: Date.now() + 3_600_000, id: key, user };
+}
+
+/**
+ * `count` streams of `user`'s, admitted over sessions asserted for it — each of a key of its own,
+ * `<user>-<n>`, holding as many as a session may — which a refusal throws.
+ */
+function admitUser(engine: Engine, user: string, count: number): (() => void)[] {
+  const admitted: (() => void)[] = [];
+  for (let held = 0; held < count; held += MAX_STREAMS_PER_SESSION) {
+    const session = assertedOf(user, `${user}-${held.toString()}`);
+    admitted.push(...admitAll(engine, session, Math.min(MAX_STREAMS_PER_SESSION, count - held)));
+  }
+  return admitted;
 }
 
 /** A session's page: the session, and the subscription its render of the page was issued with. */
@@ -236,6 +258,95 @@ describe('the caps on event streams', () => {
 
     expect(() => engine.admitStream(another.sessionId)).toThrow(expect.objectContaining(REFUSED));
     expect(() => engine.admitStream(sessions[0] ?? '')).toThrow(expect.objectContaining(REFUSED));
+  });
+});
+
+/**
+ * A user of the application's own sessions holds its share over every session its server asserted
+ * for it, so that one signing in again and again, each sign-in a key of its own, cannot hold the
+ * authority's total.
+ */
+describe('the cap on a user’s streams', () => {
+  it('admits a user its share over its sessions and refuses the next with 429', () => {
+    const engine = open('asserted');
+    admitUser(engine, 'alice', MAX_STREAMS_PER_USER);
+
+    expect(() => engine.admitStream(assertedOf('alice', 'another'))).toThrow(
+      expect.objectContaining(REFUSED),
+    );
+  });
+
+  it('admits another user while one is at its cap', () => {
+    const engine = open('asserted');
+    admitUser(engine, 'alice', MAX_STREAMS_PER_USER);
+
+    expect(admitUser(engine, 'bob', MAX_STREAMS_PER_USER)).toHaveLength(MAX_STREAMS_PER_USER);
+  });
+
+  it('gives the user’s place back as a stream closes, once', () => {
+    const engine = open('asserted');
+    const [first] = admitUser(engine, 'alice', MAX_STREAMS_PER_USER);
+    const another = assertedOf('alice', 'another');
+
+    first?.();
+    first?.();
+    engine.admitStream(another);
+
+    expect(() => engine.admitStream(another)).toThrow(expect.objectContaining(REFUSED));
+  });
+
+  it('gives the user’s places back of every stream of a session that ends', async () => {
+    const engine = open('asserted');
+    const ending = await pageOf(engine, 'alice', assertedOf('alice', 'ending'));
+    const streams = new EventStreams(engine);
+    await readersOf(streams, ending, MAX_STREAMS_PER_SESSION);
+    admitUser(engine, 'alice', MAX_STREAMS_PER_USER - MAX_STREAMS_PER_SESSION);
+    const another = assertedOf('alice', 'another');
+
+    expect(() => engine.admitStream(another)).toThrow(expect.objectContaining(REFUSED));
+
+    await engine.endSession('ending');
+    await vi.waitFor(() => {
+      expect(streams.size).toBe(0);
+    });
+
+    expect(admitAll(engine, another, MAX_STREAMS_PER_SESSION)).toHaveLength(
+      MAX_STREAMS_PER_SESSION,
+    );
+  });
+
+  it('refuses at once a stream past its user’s cap of a session short of its own, writing to none', async () => {
+    const engine = open('asserted');
+    const alice = await pageOf(engine, 'alice', assertedOf('alice', 'page'));
+    const streams = new EventStreams(engine);
+    const readers = await readersOf(streams, alice, 2);
+    admitUser(engine, 'alice', MAX_STREAMS_PER_USER - 2);
+
+    await expect(streams.open(alice.session, alice.subscription)).rejects.toMatchObject(REFUSED);
+
+    expect(takenBy(readers)).toStrictEqual(each(2, [OPENING]));
+  });
+
+  it('refuses across users once the authority holds its total', () => {
+    const engine = open('asserted');
+    for (let held = 0; held < MAX_STREAMS; held += MAX_STREAMS_PER_USER) {
+      admitUser(engine, `user-${held.toString()}`, MAX_STREAMS_PER_USER);
+    }
+
+    expect(() => engine.admitStream(assertedOf('another', 'another'))).toThrow(
+      expect.objectContaining(REFUSED),
+    );
+  });
+
+  it('counts a demo session by no user, whom anybody may sign in as', async () => {
+    const engine = open();
+    const admitted: (() => void)[] = [];
+    for (let held = 0; held <= MAX_STREAMS_PER_USER; held += MAX_STREAMS_PER_SESSION) {
+      const { sessionId } = await engine.login('alice');
+      admitted.push(...admitAll(engine, sessionId, MAX_STREAMS_PER_SESSION));
+    }
+
+    expect(admitted).toHaveLength(MAX_STREAMS_PER_USER + MAX_STREAMS_PER_SESSION);
   });
 });
 
