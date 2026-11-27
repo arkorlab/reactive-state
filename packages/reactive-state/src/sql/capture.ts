@@ -20,11 +20,6 @@
  * host to read it then rather than at its next interval. A table followed by the logs of two
  * namespaces holds the triggers of each, named by its namespace; a trigger of the application's of
  * one of those names is replaced, so a namespace is one of the log's own.
- *
- * The functions the triggers run, which are the only writers of the log, are `SECURITY DEFINER`:
- * they run as the role that made the log, so a role that writes a followed table needs no right to
- * the log's schema, and only the role that made it may call `note` or `hold` itself or attach one
- * of them to a table. Their search path stays `pg_catalog, pg_temp`.
  */
 
 /** A table of the application's, as PostgreSQL names it. */
@@ -116,6 +111,25 @@ export const LOG_SQL_FUNCTIONS = [
   'next_number()',
   'prune(701)',
 ] as const;
+
+/**
+ * The functions of the log's own that the role that made it alone may execute, by their names and
+ * what each takes: the triggers' functions, which run as that role whoever's statement or commit
+ * enters them, and what those call. Another role that may use the log's schema could else attach
+ * one of the triggers' functions to a table of its own, whose rows' entries would reach the log, or
+ * hold an entry itself (`ownersAloneSql`). The functions a store's role reads the log by, and the
+ * event triggers', which only an event trigger runs, are none of them.
+ */
+const OWNERS_ALONE = {
+  capture_all: '',
+  capture_deleted: '',
+  capture_inserted: '',
+  capture_updated: '',
+  hold: 'pg_catalog.text',
+  image_sql: 'pg_catalog.oid, pg_catalog.text[]',
+  note: 'pg_catalog.text, pg_catalog.text',
+  settle: '',
+} as const;
 
 /**
  * The advisory lock `captureSql()` runs under, one of a database whatever the log's namespace: two
@@ -302,27 +316,6 @@ interface Trigger {
 }
 
 /**
- * `create`, a statement that makes a function the role that made the log alone may execute, with
- * what every other role is given of it taken away (`signature` names it), as one statement: a `DO`
- * block runs them in the transaction of its one statement, so that no committed state has the
- * function executable by a role but its owner — not between two statements, which a role that may
- * use the log's schema could meet, and not where an installation stops after the first. Executable
- * by another role it would be by `PUBLIC`, which `CREATE OR REPLACE` keeps for a function an
- * installation made before made so; by a role named in the installer's default privileges
- * (`ALTER DEFAULT PRIVILEGES … GRANT EXECUTE ON FUNCTIONS TO app`), which a function is made with;
- * or by one granted it since, which `CREATE OR REPLACE` keeps as well. So `PUBLIC`'s execution is
- * revoked, and each named role's that is not the owner, each with `CASCADE`, which also takes away
- * what a role with the grant option granted on (an owner's `REVOKE` takes away its own grants
- * alone). What is left is no entry of the function's ACL: a superuser, and a role that is a member
- * of the owner, which has the owner's rights. The function's own body is quoted by `$$`, the block
- * by another tag.
- */
-function restricted(create: string, signature: string): string {
-  const named = literal(signature);
-  return `DO $restricted$ DECLARE "who" pg_catalog.text; BEGIN ${create}; REVOKE EXECUTE ON FUNCTION ${signature} FROM PUBLIC CASCADE; FOR "who" IN SELECT DISTINCT x.grantee::pg_catalog.regrole::pg_catalog.text FROM pg_catalog.pg_proc AS p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) AS x WHERE p.oid = ${named}::pg_catalog.regprocedure AND x.grantee NOT IN (0, p.proowner) LOOP EXECUTE pg_catalog.format('REVOKE EXECUTE ON FUNCTION %s FROM %s CASCADE', ${named}, "who"); END LOOP; END $restricted$`;
-}
-
-/**
  * The statement of `trigger` on `relation`, named `<namespace>_<event>`, so that the triggers of
  * another namespace's log stay as they are. It is made only where it stands not as it should — of
  * no other name, function, arguments, event, condition or transition tables, and turned on: making
@@ -407,15 +400,34 @@ function rowFunctionsOf(namespace: string): readonly string[] {
     // of the table, and a read's condition is of the same digest (`reads.ts`). One dropped since its trigger
     // was made is left out of it, and the store reads the entry as of the table alone
     // (`store.ts`): the write goes on.
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."image_sql"("relid" pg_catalog.oid, "keys" pg_catalog.text[]) RETURNS pg_catalog.text LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$ SELECT coalesce(string_agg(format('jsonb_build_object(%s)', c.pairs), ' || ' ORDER BY c.chunk), '''{}''::pg_catalog.jsonb') FROM (SELECT n.chunk, string_agg(format(CASE WHEN n.boolean THEN '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(r.%I::pg_catalog.text, getdatabaseencoding())), ''hex'') END' ELSE '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(format(''%%s'', r.%I), getdatabaseencoding())), ''hex'') END' END, n.name, n.name, n.name), ', ' ORDER BY n.at) AS pairs FROM (SELECT u.name, u.at, (u.at - 1) / ${String(KEYS_A_CALL)} AS chunk, a.atttypid = 'boolean'::regtype AS boolean FROM unnest("keys") WITH ORDINALITY AS u(name, at) JOIN pg_attribute AS a ON a.attrelid = "relid" AND a.attname = u.name AND a.attnum > 0 AND NOT a.attisdropped) AS n GROUP BY n.chunk) AS c $$`,
-      `${schema}."image_sql"(pg_catalog.oid, pg_catalog.text[])`,
-    ),
-    // As `capture_all`'s: a trigger needs the right as it is made, and runs without it.
-    restricted(made('capture_inserted', ['after']), `${schema}."capture_inserted"()`),
-    restricted(made('capture_deleted', ['before']), `${schema}."capture_deleted"()`),
-    restricted(made('capture_updated', ['before', 'after']), `${schema}."capture_updated"()`),
+    `CREATE OR REPLACE FUNCTION ${schema}."image_sql"("relid" pg_catalog.oid, "keys" pg_catalog.text[]) RETURNS pg_catalog.text LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $$ SELECT coalesce(string_agg(format('jsonb_build_object(%s)', c.pairs), ' || ' ORDER BY c.chunk), '''{}''::pg_catalog.jsonb') FROM (SELECT n.chunk, string_agg(format(CASE WHEN n.boolean THEN '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(r.%I::pg_catalog.text, getdatabaseencoding())), ''hex'') END' ELSE '%L, CASE WHEN r.%I IS NULL THEN NULL ELSE encode(sha256(convert_to(format(''%%s'', r.%I), getdatabaseencoding())), ''hex'') END' END, n.name, n.name, n.name), ', ' ORDER BY n.at) AS pairs FROM (SELECT u.name, u.at, (u.at - 1) / ${String(KEYS_A_CALL)} AS chunk, a.atttypid = 'boolean'::regtype AS boolean FROM unnest("keys") WITH ORDINALITY AS u(name, at) JOIN pg_attribute AS a ON a.attrelid = "relid" AND a.attname = u.name AND a.attnum > 0 AND NOT a.attisdropped) AS n GROUP BY n.chunk) AS c $$`,
+    made('capture_inserted', ['after']),
+    made('capture_deleted', ['before']),
+    made('capture_updated', ['before', 'after']),
   ];
+}
+
+/**
+ * The statement that takes from every role but its owner the execution of each function of
+ * `OWNERS_ALONE`, once the statements before it made them. Executable by another role one would be
+ * by `PUBLIC`, which a function is made executable by, and `CREATE OR REPLACE` keeps what a function
+ * of an installation made before was given; by a role named in the installer's default privileges
+ * (`ALTER DEFAULT PRIVILEGES … GRANT EXECUTE ON FUNCTIONS TO app`), which a function is made with;
+ * or by one granted it since, which `CREATE OR REPLACE` keeps as well. So `PUBLIC`'s execution is
+ * revoked, and each named role's that is not the owner, each with `CASCADE`, which also takes away
+ * what a role with the grant option granted on (an owner's `REVOKE` takes away its own grants
+ * alone). What is left is no entry of a function's ACL: a superuser, and a role that is a member of
+ * the owner, which has the owner's rights. It is one of the statements of the log, which run as one
+ * (`locked`), in one transaction: no committed state has a function made and not yet taken from the
+ * others, and a run that fails anywhere leaves none it made.
+ */
+function ownersAloneSql(namespace: string): string {
+  const { schema } = logOf(namespace);
+  const signatures = Object.entries(OWNERS_ALONE).map(
+    ([name, takes]) => `${schema}.${quoted(name)}(${takes})`,
+  );
+  const listed = signatures.map((signature) => `(${literal(signature)})`).join(', ');
+  return `DO $$ DECLARE "granted" record; BEGIN REVOKE EXECUTE ON FUNCTION ${signatures.join(', ')} FROM PUBLIC CASCADE; FOR "granted" IN SELECT DISTINCT f."signature", x.grantee::pg_catalog.regrole::pg_catalog.text AS "grantee" FROM (VALUES ${listed}) AS f("signature") JOIN pg_catalog.pg_proc AS p ON p.oid = f."signature"::pg_catalog.regprocedure CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) AS x WHERE x.grantee NOT IN (0, p.proowner) LOOP EXECUTE pg_catalog.format('REVOKE EXECUTE ON FUNCTION %s FROM %s CASCADE', "granted"."signature", "granted"."grantee"); END LOOP; END $$`;
 }
 
 /**
@@ -434,8 +446,8 @@ function rowFunctionsOf(namespace: string): readonly string[] {
  * always, as a transaction may turn `session_replication_role` to `replica` before it commits.
  *
  * As the role that made the log, as the triggers' functions are: a writer needs no right of the log,
- * no other role may hold an entry, and before PostgreSQL 18 a deferred trigger runs as whichever role
- * the transaction commits under.
+ * no other role may hold an entry or attach one of those functions to a table (`ownersAloneSql`), and
+ * before PostgreSQL 18 a deferred trigger runs as whichever role the transaction commits under.
  */
 function logFunctionsOf(namespace: string, channel: string): readonly string[] {
   const { changes, head, marks, schema, sequence } = logOf(namespace);
@@ -444,27 +456,16 @@ function logFunctionsOf(namespace: string, channel: string): readonly string[] {
   const numbers = `${literal(sequence)}::pg_catalog.regclass`;
   const settling = `${schema}."settle"()`;
   return [
-    // Of the log's role alone, as the triggers' functions are (`restricted`): `hold`, `note`,
-    // `capture_all` and `settle`, as `image_sql` and the trigger functions of each event are.
     // The setting before the mark: after `SET CONSTRAINTS ALL IMMEDIATE`, the mark numbers at once.
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."hold"("entries" pg_catalog.text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "held" pg_catalog.text := ${held}; "own" pg_catalog.text := ${OWN_HOLD}; BEGIN IF starts_with("held", "own") THEN PERFORM set_config(${setting}, "held" || ',' || "entries", true); ELSE PERFORM set_config(${setting}, "own" || "entries", true); INSERT INTO ${marks} ("stage") VALUES (1); END IF; END $$`,
-      `${schema}."hold"(pg_catalog.text)`,
-    ),
+    `CREATE OR REPLACE FUNCTION ${schema}."hold"("entries" pg_catalog.text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "held" pg_catalog.text := ${held}; "own" pg_catalog.text := ${OWN_HOLD}; BEGIN IF starts_with("held", "own") THEN PERFORM set_config(${setting}, "held" || ',' || "entries", true); ELSE PERFORM set_config(${setting}, "own" || "entries", true); INSERT INTO ${marks} ("stage") VALUES (1); END IF; END $$`,
     // Of the table alone, once a transaction: past what it holds, a long transaction's statements
     // would each add one.
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" pg_catalog.text, "table_name" pg_catalog.text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "entry" pg_catalog.text := json_build_array("schema_name", "table_name")::pg_catalog.text; "held" pg_catalog.text := ${held}; BEGIN IF NOT starts_with("held", ${OWN_HOLD}) OR strpos("held", "entry") = 0 THEN PERFORM ${schema}."hold"("entry"); END IF; END $$`,
-      `${schema}."note"(pg_catalog.text, pg_catalog.text)`,
-    ),
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
-      `${schema}."capture_all"()`,
-    ),
-    restricted(
-      `CREATE OR REPLACE FUNCTION ${schema}."settle"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "held" pg_catalog.text; "own" pg_catalog.text := ${OWN_HOLD}; "entries" pg_catalog.jsonb; BEGIN DELETE FROM ${marks} WHERE ctid = NEW.ctid; IF NEW."stage" = 1 THEN INSERT INTO ${marks} ("stage") VALUES (2); RETURN NULL; END IF; "held" := ${held}; IF NOT starts_with("held", "own") THEN UPDATE ${head} SET "epoch" = gen_random_uuid()::pg_catalog.text; RETURN NULL; END IF; "entries" := ('[' || substr("held", length("own") + 1) || ']')::pg_catalog.jsonb; PERFORM pg_advisory_xact_lock(${String(NUMBERING_LOCK)}); INSERT INTO ${changes} ("seq", "schema_name", "table_name", "side", "image") SELECT nextval(${numbers}), e.entry ->> 0, e.entry ->> 1, e.entry ->> 2, e.entry -> 3 FROM jsonb_array_elements("entries") WITH ORDINALITY AS e(entry, at) ORDER BY e.at; PERFORM set_config(${setting}, '', true); PERFORM pg_notify(${channel}, currval(${numbers})::pg_catalog.text); RETURN NULL; END $$`,
-      `${schema}."settle"()`,
-    ),
+    `CREATE OR REPLACE FUNCTION ${schema}."note"("schema_name" pg_catalog.text, "table_name" pg_catalog.text) RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $$ DECLARE "entry" pg_catalog.text := json_build_array("schema_name", "table_name")::pg_catalog.text; "held" pg_catalog.text := ${held}; BEGIN IF NOT starts_with("held", ${OWN_HOLD}) OR strpos("held", "entry") = 0 THEN PERFORM ${schema}."hold"("entry"); END IF; END $$`,
+    `CREATE OR REPLACE FUNCTION ${schema}."capture_all"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ BEGIN PERFORM ${schema}."note"(TG_TABLE_SCHEMA, TG_TABLE_NAME); RETURN NULL; END $$`,
+    `CREATE OR REPLACE FUNCTION ${schema}."settle"() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$ DECLARE "held" pg_catalog.text; "own" pg_catalog.text := ${OWN_HOLD}; "entries" pg_catalog.jsonb; BEGIN DELETE FROM ${marks} WHERE ctid = NEW.ctid; IF NEW."stage" = 1 THEN INSERT INTO ${marks} ("stage") VALUES (2); RETURN NULL; END IF; "held" := ${held}; IF NOT starts_with("held", "own") THEN UPDATE ${head} SET "epoch" = gen_random_uuid()::pg_catalog.text; RETURN NULL; END IF; "entries" := ('[' || substr("held", length("own") + 1) || ']')::pg_catalog.jsonb; PERFORM pg_advisory_xact_lock(${String(NUMBERING_LOCK)}); INSERT INTO ${changes} ("seq", "schema_name", "table_name", "side", "image") SELECT nextval(${numbers}), e.entry ->> 0, e.entry ->> 1, e.entry ->> 2, e.entry -> 3 FROM jsonb_array_elements("entries") WITH ORDINALITY AS e(entry, at) ORDER BY e.at; PERFORM set_config(${setting}, '', true); PERFORM pg_notify(${channel}, currval(${numbers})::pg_catalog.text); RETURN NULL; END $$`,
+    // Of the role that made the log alone, the last of them made: the triggers' functions, which run
+    // as that role, and what they call.
+    ownersAloneSql(namespace),
     // Made again only where it stands otherwise, as `CREATE OR REPLACE` takes no constraint trigger.
     `DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger AS t WHERE t.tgrelid = ${literal(marks)}::pg_catalog.regclass AND t.tgname = 'settle' AND t.tgenabled = 'A' AND t.tgfoid = ${literal(settling)}::pg_catalog.regprocedure) THEN DROP TRIGGER IF EXISTS "settle" ON ${marks}; CREATE CONSTRAINT TRIGGER "settle" AFTER INSERT ON ${marks} DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ${settling}; ALTER TABLE ${marks} ENABLE ALWAYS TRIGGER "settle"; END IF; END $$`,
     // Every entry written before `before`, a time in milliseconds, and the head past them, in one
@@ -635,21 +636,22 @@ function locked(statements: readonly string[]): string {
  * be run by itself, in order, as the role that made the log, which may create triggers on the
  * followed tables: one of the log, then one of each table, as a statement that made two tables'
  * triggers would hold the first's lock while it waits on the second's writers. Each runs under a
- * lock two hosts that start at once wait on, and may be run again, once or each time a host
+ * lock two hosts that start at once wait on, and may be run again: a host may run them each time it
  * starts, after the application's migrations, which may have made a followed table again without
- * its triggers: the log's tables keep their rows and gain what an installation made before lacks
- * (the column `n` of `ddl` and its `FULL` replica identity, the columns `side` and `image` of
- * `changes`), its functions are made anew, and a trigger where it stands otherwise, which brings
- * an installation made before up to date. Making a trigger waits for every open transaction that
- * wrote its table; a start with none to make waits on no writer, but on another host's start.
- * Another role's run fails at the first function it would replace (`must be owner of function`),
- * by PostgreSQL's rule for `CREATE OR REPLACE FUNCTION`. A function that only the role that made
- * the log may execute is made in the one statement that takes every other role's execution from
- * it (`restricted`), so that a run that stops anywhere leaves none executable by a role that may
- * use the log's schema. A role that only writes followed tables needs nothing of the log's schema,
- * and a host that only reads the log runs none of them: it needs `USAGE` on the schema and
- * `SELECT` on `head` and `changes`. A table no longer followed keeps its triggers until the
- * application drops them.
+ * its triggers. The log's tables keep their rows and gain what an installation made before lacks
+ * (the head's `pruned`, which a counter row's `seq` is renamed to; the columns `side` and `image`
+ * of `changes`; the sequence that numbers entries, moved past the log in a new epoch where it is
+ * behind it; the table `marks`; the column `n` of `ddl`; the `FULL` replica identity of `marks` and
+ * of `ddl`); its functions are made anew, which brings an installation made before up to date; and
+ * a trigger is made only where it stands not as it should. Another role's run of the log's
+ * statement fails whole, as it is one transaction: at the first right it lacks, and of every right
+ * short of owning the log's functions at the first function it would replace (`must be owner of
+ * function`), by PostgreSQL's rule for `CREATE OR REPLACE FUNCTION`. Its run of a table's statement
+ * makes nothing where the table's triggers stand, by the right to use the log's schema alone, and
+ * fails where one is to be made: the functions the triggers run are the log's role's alone to
+ * execute (`ownersAloneSql`). A role that only writes followed tables needs nothing of the log's
+ * schema, and a host that only reads the log needs `USAGE` on the schema and `SELECT` on `head` and
+ * `changes`. A table no longer followed keeps its triggers until the application drops them.
  */
 export function changeCaptureSql(
   relations: readonly FollowedRelation[],
