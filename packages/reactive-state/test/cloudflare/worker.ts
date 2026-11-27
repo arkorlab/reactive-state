@@ -5,6 +5,7 @@ export { ExternalAuthority } from './external-store-fixture.ts';
 export { ReportingAuthority } from './on-error-fixture.ts';
 export {
   ApartAuthority,
+  ArmFailsAuthority,
   HungStartAuthority,
   SlowStartAuthority,
   ZeroConfigAuthority,

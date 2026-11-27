@@ -3,6 +3,7 @@ import { sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 import { type DatabaseHost, hostDatabase, hostOf } from '../../src/authority/database-host.ts';
 import { reactiveDb } from '../../src/cloudflare/db.ts';
+import type { AuthorityEnv } from '../../src/cloudflare/env.ts';
 import { authorityObject } from '../../src/cloudflare/object.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../../src/program.ts';
 
@@ -96,6 +97,35 @@ export const HungStartAuthority = authorityObject({
   programs: [zcProgram],
   sessions: 'asserted',
 });
+
+/** Whether the storage of an object `ArmFailsAuthority` makes fails to arm an alarm. */
+export const armFails = { on: false };
+
+/**
+ * Makes the storage of `ctx` fail to arm an alarm while `armFails.on` is set: what the object does
+ * as it starts, where it arms the alarm of its first prune, cannot be made to fail from outside.
+ */
+function failingToArm(ctx: DurableObjectState): DurableObjectState {
+  const { storage } = ctx;
+  const arm = storage.setAlarm.bind(storage);
+  storage.setAlarm = async (...args: Parameters<typeof arm>) => {
+    if (armFails.on) throw new Error('storage');
+    return arm(...args);
+  };
+  return ctx;
+}
+
+/** The application of one call, whose object's storage fails to arm its first alarm as it starts. */
+export class ArmFailsAuthority extends authorityObject({
+  buildId: zcProgram.buildId,
+  database: zcDatabase,
+  programs: [zcProgram],
+  sessions: 'asserted',
+}) {
+  constructor(ctx: DurableObjectState, env: AuthorityEnv) {
+    super(failingToArm(ctx), env);
+  }
+}
 
 /** How often the operation that awaits looks at its gate. */
 const POLL_MS = 10;
