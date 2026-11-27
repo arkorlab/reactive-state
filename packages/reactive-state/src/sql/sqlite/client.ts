@@ -16,11 +16,13 @@ import {
  * A D1 binding whose statements a render runs note what they read of the followed tables: each
  * statement's tables, as its bytecode says (`bytecode.ts`), and of a statement of one table, the
  * rows its condition names by the table's keys (`where.ts`). The plan of a text is asked once, in
- * one batch beside nothing else, and kept while the schema stays as it was; a statement that begins
- * with `SELECT`, which writes nothing, runs as its plan is asked, so that a render waits for no more
- * than the slower of the two. A statement that writes is refused before it runs, and so is a text of
- * several statements, which D1 runs each of. The plans are of one database: every binding a follow
- * is given is of the database its store reads. Outside a render, the binding is as it is.
+ * one batch beside nothing else, and kept while the schema stays as it was; a statement that writes
+ * nothing by its words — one that begins with `SELECT`, comments before it too, or reads alone, as
+ * a `WITH … SELECT` does — runs as its plan is asked, so that a render waits for no more than the
+ * slower of the two, and no call of D1's comes before its own. A statement that writes is refused
+ * before it runs, and so is a text of several statements, which D1 runs each of. The plans are of
+ * one database: every binding a follow is given is of the database its store reads. Outside a
+ * render, the binding is as it is.
  */
 
 /** A followed table of SQLite, as a render's reads name it. */
@@ -83,6 +85,15 @@ const STATEMENTS = new Set(['delete', 'insert', 'replace', 'select', 'update', '
 
 /** A statement that begins with `SELECT`, which writes nothing in SQLite. */
 const READS_ONLY = /^\s*select\b/iu;
+
+/**
+ * Whether `sql`, a render's statement past its refusals, writes nothing by its words, so that it
+ * runs beside its plan: it begins with `SELECT`, past the comments before it too, or reads alone
+ * (`WITH … SELECT`). Of any other, the plan says first whether it writes.
+ */
+function readsBesidePlan(sql: string): boolean {
+  return READS_ONLY.test(sql) || leadingWord(sql) === 'select' || readsAlone(sql);
+}
 
 /** An SQL identifier, quoted. */
 function quoted(name: string): string {
@@ -413,7 +424,8 @@ const PLANS = new WeakMap<FollowedSqlite, SqlitePlans>();
 
 /**
  * `run`, D1's answer of `prepared`, in a render once what it reads is noted: of a statement that
- * begins with `SELECT`, as its plan is asked; of any other, after it, which refuses one that writes.
+ * writes nothing by its words (`readsBesidePlan`), as its plan is asked; of any other, after it,
+ * which refuses one that writes.
  */
 async function noted<T>(
   prepared: readonly Prepared[],
@@ -434,7 +446,7 @@ async function noted<T>(
     );
     return all.flat();
   };
-  if (prepared.every((each) => READS_ONLY.test(each.sql))) {
+  if (prepared.every((each) => readsBesidePlan(each.sql))) {
     // Both settled: a run that fails first answers once its reads are noted, so that a component
     // that catches the failure depends on what it read all the same.
     const [noting, answer] = await Promise.allSettled([note(reads), run()]);
