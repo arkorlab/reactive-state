@@ -24,6 +24,7 @@ import {
   type TableSource,
   tablesNamed,
 } from './sources.ts';
+import { TRACKED } from './tracked.ts';
 import { holdsKind } from './values.ts';
 import { type Conditions, conditionsOf, readsAlone, type Term } from './where.ts';
 import { refusalOf, writes } from './words.ts';
@@ -588,6 +589,7 @@ function refusedSession(session: unknown): unknown {
     },
   });
   SESSION_OWN.set(held, session);
+  TRACKED.add(held);
   return held;
 }
 
@@ -598,7 +600,7 @@ function refusedSession(session: unknown): unknown {
 export function trackedD1<B extends D1Binding>(binding: B, followed: FollowedSqlite): B {
   const plans = PLANS.get(followed) ?? new SqlitePlans(followed);
   PLANS.set(followed, plans);
-  return new Proxy(binding, {
+  const following = new Proxy(binding, {
     get: (target, key) => {
       if (key === 'prepare') {
         return (sql: string) => {
@@ -649,4 +651,6 @@ export function trackedD1<B extends D1Binding>(binding: B, followed: FollowedSql
       };
     },
   });
+  TRACKED.add(following);
+  return following;
 }

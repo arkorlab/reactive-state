@@ -10,6 +10,7 @@ import { followDrizzle } from '../sql/index.ts';
 import { boundD1 } from '../sql/sqlite/bound-d1.ts';
 import { d1Hosted } from '../sql/sqlite/d1-host.ts';
 import type { DrizzleD1Follow } from '../sql/sqlite/follow.ts';
+import { ownChanges } from '../sql/sqlite/own-changes.ts';
 
 /**
  * `./db` in a Worker (`workerd`), as an authority's Durable Object bundles it: the application's
@@ -58,7 +59,9 @@ export async function reactiveDb<S extends Readonly<Record<string, unknown>>>(
     seed: () => notInAWorker('seed'),
   };
   hostDatabase(db, host);
-  return { db, orm: drizzle(d1.client(binding) as never, { schema }) } as unknown as ReactiveDb<S>;
+  // A write answers its own changes, not the rows the log's triggers wrote beside them.
+  const orm = drizzle(d1.client(ownChanges(binding)) as never, { schema });
+  return { db, orm } as unknown as ReactiveDb<S>;
 }
 
 /** What `./db`'s `migrate` is in a Worker: a refusal, as its migrations run before the deploy. */

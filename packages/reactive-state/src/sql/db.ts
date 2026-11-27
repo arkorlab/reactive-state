@@ -23,6 +23,7 @@ import type { D1Binding } from './sqlite/client.ts';
 import { d1Hosted } from './sqlite/d1-host.ts';
 import type { DrizzleD1Follow } from './sqlite/follow.ts';
 import { inSqliteFile } from './sqlite/host.ts';
+import { ownChanges } from './sqlite/own-changes.ts';
 
 /**
  * An application's database in one call, of its Drizzle schema: `DATABASE_URL`'s server through a
@@ -311,7 +312,8 @@ async function onPublishedD1<S extends Readonly<Record<string, unknown>>>(
       migrate: refused,
       seed: refused,
     },
-    orm: drizzle(follow.client(binding) as never, { schema }),
+    // A write answers its own changes, not the rows the log's triggers wrote beside them.
+    orm: drizzle(follow.client(ownChanges(binding)) as never, { schema }),
   };
 }
 

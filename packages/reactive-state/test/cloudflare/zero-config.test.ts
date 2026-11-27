@@ -3,6 +3,7 @@ import { env } from 'cloudflare:workers';
 import { pgTable, text as pgText } from 'drizzle-orm/pg-core';
 import { beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { hostOf } from '../../src/authority/database-host.ts';
 import { migrate, reactiveDb } from '../../src/cloudflare/db.ts';
 import type { AuthorityObject } from '../../src/cloudflare/object.ts';
 import type { SharedRenderRequest } from '../../src/routing.ts';
@@ -310,6 +311,22 @@ describe('`./db` in a Worker', () => {
     await orm.insert(zcTasks).values({ id: 'n', title: 'Named' });
 
     await expect(db.prepare('SELECT title FROM zc_tasks').first('title')).resolves.toBe('Named');
+  });
+
+  it("answers a write's own changes, not the rows the log's triggers wrote beside them", async () => {
+    const { db: database, orm } = await reactiveDb({ zcTasks });
+    for (const table of ['zc_tasks', '_rs_changes', '_rs_meta']) {
+      await db.exec(`DROP TABLE IF EXISTS ${table}`);
+    }
+    await db.exec(ZC_MIGRATION);
+    await hostOf(database)?.open();
+
+    const inserted = await orm.insert(zcTasks).values({ id: 'a', title: 'one' }).run();
+    const own = await db.prepare("UPDATE zc_tasks SET title = 'two' WHERE id = 'a'").run();
+
+    expect(inserted.meta.changes).toBe(1);
+    // D1's own count of a write of the table holds the log's row.
+    expect(own.meta.changes).toBe(2);
   });
 });
 

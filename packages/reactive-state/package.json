@@ -32,6 +32,7 @@
     "./next/compile-on-build": "./src/next/compile-on-build.ts",
     "./next/config": "./src/next/config.ts",
     "./next/route": "./src/next/route.ts",
+    "./own-changes": "./src/own-changes.ts",
     "./program": "./src/program.ts",
     "./react": "./src/react/index.tsx",
     "./routing": "./src/routing.ts",
