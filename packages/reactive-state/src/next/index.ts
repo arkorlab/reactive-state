@@ -6,6 +6,7 @@ import {
   type FieldReceipt,
   type Json,
   type RenderResult,
+  REQUEST_LIMITS,
   type Result,
   type Value,
   type View,
@@ -228,7 +229,7 @@ function viewRequestOf(input: unknown): ViewRequest | undefined {
   }
   let copied: Readonly<Record<string, Json>>;
   try {
-    copied = toJsonRecord(view);
+    copied = toJsonRecord(view, 'The view', VIEW_LIMITS.bytes);
   } catch {
     return undefined;
   }
@@ -311,7 +312,12 @@ function fieldOperationOf(input: unknown): FieldOperation | undefined {
     return { binding, operationId, updaterId };
   }
   try {
-    return { binding, captures: toJsonRecord(captures), operationId, updaterId };
+    return {
+      binding,
+      captures: toJsonRecord(captures, 'The captured values', REQUEST_LIMITS.captures),
+      operationId,
+      updaterId,
+    };
   } catch {
     return undefined;
   }

@@ -714,3 +714,11 @@ export function resourceOf(
   const match = RESOURCE.exec(resource);
   return match === null ? undefined : { id: match[2] ?? '', table: match[1] ?? '' };
 }
+
+/**
+ * The most JSON text a request's values take, which the authority refuses past
+ * (`authority/requests.ts`) and the host's copy of them is bounded by: an update's captured values
+ * (`captures`), and an operation's arguments together (`arguments`), in characters. A JSON value
+ * writes a character at least, so a copy of more values than these can never be accepted.
+ */
+export const REQUEST_LIMITS = Object.freeze({ arguments: 262_144, captures: 4096 });
