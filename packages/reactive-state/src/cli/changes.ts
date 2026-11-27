@@ -13,8 +13,12 @@ import type { ProjectLayout } from '../next/compile-on-build.ts';
 export const MIGRATIONS = 'drizzle';
 /** The application's first records, from its components' directory. */
 export const SEED = 'seed.ts';
-/** The files of the root the authority's start reads of, as `next dev` reads them again. */
-const ROOT_FILES = /^(?:next\.config\.|\.env)/u;
+/**
+ * The files of the root the authority's start reads of: the config and `.env`, as `next dev` reads
+ * them again, and `tsconfig.json`, whose paths it resolves the application's imports by
+ * (`registerPaths`) — that file alone, of no build's `tsconfig.tsbuildinfo` beside it.
+ */
+const ROOT_FILES = /^(?:next\.config\.|\.env|tsconfig\.json$)/u;
 
 /** What a change asks: a compile, or to start again what was read as it started. */
 export type Change = 'compile' | 'start';

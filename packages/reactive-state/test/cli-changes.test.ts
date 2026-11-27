@@ -93,20 +93,25 @@ describe('what `reactive dev` follows', () => {
     expect(outside.changes).toStrictEqual(['compile']);
   });
 
-  it.each(['next.config.ts', 'next.config.mjs', '.env', '.env.local', '.env.development'])(
-    'starts again of a change of %s, and of no other file of the root',
-    (name) => {
-      const { changes, projectDir, start, watched } = followed();
+  it.each([
+    'next.config.ts',
+    'next.config.mjs',
+    '.env',
+    '.env.local',
+    '.env.development',
+    'tsconfig.json',
+  ])('starts again of a change of %s, and of no other file of the root', (name) => {
+    const { changes, projectDir, start, watched } = followed();
 
-      start();
-      watched.get(projectDir)?.listener('change', 'README.md');
-      watched.get(projectDir)?.listener('change', '.next');
-      watched.get(projectDir)?.listener('change', name);
+    start();
+    watched.get(projectDir)?.listener('change', 'README.md');
+    watched.get(projectDir)?.listener('change', '.next');
+    watched.get(projectDir)?.listener('change', 'tsconfig.tsbuildinfo');
+    watched.get(projectDir)?.listener('change', name);
 
-      expect(watched.get(projectDir)?.recursive).toBe(false);
-      expect(changes).toStrictEqual(['start']);
-    },
-  );
+    expect(watched.get(projectDir)?.recursive).toBe(false);
+    expect(changes).toStrictEqual(['start']);
+  });
 
   it('starts again of a migration', () => {
     const { at, changes, start, watched } = followed({ made: ['drizzle'] });

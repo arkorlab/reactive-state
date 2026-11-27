@@ -294,7 +294,6 @@ describe('`reactive dev`', () => {
       const file = path.join(root, 'tsconfig.json');
 
       writeFileSync(file, `${readFileSync(file, 'utf8')}\n`);
-      writeFileSync(path.join(root, 'src/notes.txt'), 'Nothing the compile reads.\n');
 
       await expect.poll(starts, WAIT).toHaveLength(2);
     },
