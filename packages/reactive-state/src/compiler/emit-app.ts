@@ -429,6 +429,10 @@ export function emitRegistry(input: AppInput): string {
   ].join('\n');
 }
 
+/** The module of the authority's Durable Object in the compile's output, and its one export. */
+export const DURABLE_OBJECT_MODULE = 'durable-object.mjs';
+export const DURABLE_OBJECT_CLASS = 'ReactiveAuthority';
+
 /**
  * The authority's Durable Object of the application (`durable-object.mjs`), for a host that
  * registers the compile's own: the class `ReactiveAuthority`, of its registry alone, as the
@@ -442,7 +446,7 @@ export function emitDurableObject(): string {
     '',
     "import * as application from './authority.mts';",
     '',
-    'export const ReactiveAuthority = authorityObject(application);',
+    `export const ${DURABLE_OBJECT_CLASS} = authorityObject(application);`,
     '',
   ].join('\n');
 }

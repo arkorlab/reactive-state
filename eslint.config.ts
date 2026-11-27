@@ -493,7 +493,7 @@ export default defineConfig([
       'tools/**/*.ts',
       'tools/**/*.mts',
       'packages/reactive-state/src/{authority,compiler}/**/*.ts',
-      'packages/reactive-state/src/next/{adapter,compile-on-build,config}.ts',
+      'packages/reactive-state/src/next/{adapter,authority-module,compile-on-build,config,write-whole}.ts',
       'packages/reactive-state/src/cli/**/*.ts',
       'packages/reactive-state/src/sql/db.ts',
       'packages/reactive-state/src/sql/sqlite/{host,local-d1}.ts',

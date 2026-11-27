@@ -31,8 +31,10 @@ import {
 } from '../compiler/module-resolutions.ts';
 import { pagesDirOf } from '../compiler/pages-routes.ts';
 import { byCodeUnits } from '../compiler/splice.ts';
+import { writeAuthorityModule } from './authority-module.ts';
 import { inputRoots, isWithin } from './input-roots.ts';
-import { writeCompiled, writeWhole } from './write-compiled.ts';
+import { writeCompiled } from './write-compiled.ts';
+import { writeWhole } from './write-whole.ts';
 
 /**
  * The compile a build runs before Next.js reads the application (`./adapter.ts`), and a platform's
@@ -725,9 +727,17 @@ function compileLocked(layout: ProjectLayout, options: ProjectOptions, inputs: s
  * wrote, and writes what it compiles; refuses with each refusal where it refuses anything, and
  * writes nothing then, nor takes anything away. Where it compiles nothing, it still takes away the
  * route an earlier compile wrote where the application's pages no longer are, whatever the digest
- * says (`removeStaleRoutes`).
+ * says (`removeStaleRoutes`). Where a host says it imports the authority's object from a module of
+ * its own choosing (`REACTIVE_AUTHORITY_MODULE`) that the compile does not write the object into,
+ * it writes one there that re-exports it (`writeAuthorityModule`), whether it compiled or not.
  */
 export async function compileProject(options: ProjectOptions): Promise<ProjectCompile> {
+  const compiled = await compileOutputs(options);
+  return writeAuthorityModule(compiled) ? { ...compiled, changed: true } : compiled;
+}
+
+/** The compile of `compileProject`, of the compile's own output and route. */
+async function compileOutputs(options: ProjectOptions): Promise<ProjectCompile> {
   const layout = layoutOf(options);
   if (!existsSync(layout.srcDir)) {
     throw new Error(
