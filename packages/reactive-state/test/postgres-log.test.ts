@@ -345,6 +345,38 @@ describe.skipIf(SERVER_URL === undefined)('a pool on a server of many sessions',
   );
 
   it(
+    'tells a host that listens of a commit of another session, once',
+    async () => {
+      const setup = await pooled();
+      const { engine, render } = await rendering(setup, async () => {
+        const { rows } = await setup.tracked.query<{ n: number }>(
+          "SELECT n FROM tasks WHERE id = '1'",
+        );
+        return rows;
+      });
+
+      await expect(render()).resolves.toContain('"n":0');
+
+      // As the package's README sets it up. The engine polls once a minute here.
+      const listening = await clientOf(setup.name);
+      const heard = vi.fn();
+      listening.on('notification', heard);
+      await listening.query(`LISTEN ${setup.follow.channel}`);
+
+      await setup.owner.query("UPDATE tasks SET n = 7 WHERE id = '1'");
+
+      await vi.waitFor(() => {
+        expect(heard).toHaveBeenCalledTimes(1);
+      });
+
+      await engine.poke();
+
+      await expect(render()).resolves.toContain('"n":7');
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
     'runs no statement of a text of several as a render plans it',
     async () => {
       const setup = await pooled();
