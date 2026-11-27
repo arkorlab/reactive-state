@@ -33,7 +33,7 @@ import {
 import { isErased, readsCodeGlobal } from './code-globals.ts';
 import { literalSpecifier } from './load-specifiers.ts';
 import { moduleFile, type ModuleResolution } from './module-resolutions.ts';
-import { browserMapped, packageFiles, type Side } from './packages.ts';
+import { browserMapped, ManifestStore, packageFiles, type Side } from './packages.ts';
 import { unsettledIn } from './settled.ts';
 import { TypeSession } from './type-checker.ts';
 import { checkSyntax, isScript, parseModule } from './typescript.ts';
@@ -153,6 +153,10 @@ export class Modules implements Disposable {
   readonly #kinds = new Map<string, ModuleKind>();
   readonly #aliases = new Map<string, Aliases>();
   readonly #resolutions = new Map<string, ModuleResolution>();
+  /** What each specifier names on each side, from each directory (`identities`). */
+  readonly #identities = new Map<string, readonly string[]>();
+  /** The manifests the compile's lookups read through `packages.ts`, each read once. */
+  readonly #manifests = new ManifestStore();
   /** The files whose kind is being read: one read again is read through a cycle of imports. */
   readonly #reading = new Set<string>();
   /** Each file whose kind its imports made, which a cycle may raise once its other kinds are known. */
@@ -222,6 +226,25 @@ export class Modules implements Disposable {
       this.#aliases.set(tsconfig, aliases);
     }
     return aliases;
+  }
+
+  /**
+   * What `specifier` names from `importer` on `side` (`identities`), of which `importer` gives its
+   * directory alone: where its `tsconfig.json`, its package and the packages it imports are looked
+   * for from.
+   */
+  #identitiesOf(specifier: string, importer: string, side: Side): readonly string[] {
+    const aliased = resolveAliasFiles(this.#aliasesFor(importer), specifier);
+    if (aliased.length > 0) {
+      const mapped = aliased.flatMap((file) => [file, ...browserMapped(file, this.#manifests)]);
+      return [specifier, ...new Set(mapped.map((file) => realFile(file)))];
+    }
+    if (isBuiltin(specifier)) {
+      return [specifier, `node:${specifier.replace(/^node:/u, '')}`];
+    }
+    return PATH.test(specifier) || /^[a-z][\w+.-]*:/iu.test(specifier)
+      ? [specifier]
+      : [specifier, ...packageFiles(specifier, path.dirname(importer), side, this.#manifests)];
   }
 
   /** The application's shared modules `file` imports as it runs, not as types alone. */
@@ -343,20 +366,17 @@ export class Modules implements Disposable {
   /**
    * The files `specifier` may name from `importer` on `side`, to each of what loads that side —
    * itself as written among them — so that two specifiers of one module are one module where a
-   * module is imported on one side alone (`packages.ts`).
+   * module is imported on one side alone (`packages.ts`). Looked up once a compile, by the side, the
+   * importer's directory and the specifier (`#identitiesOf`).
    */
   identities(specifier: string, importer: string, side: Side): readonly string[] {
-    const aliased = resolveAliasFiles(this.#aliasesFor(importer), specifier);
-    if (aliased.length > 0) {
-      const mapped = aliased.flatMap((file) => [file, ...browserMapped(file)]);
-      return [specifier, ...new Set(mapped.map((file) => realFile(file)))];
+    const key = JSON.stringify([side, path.dirname(importer), specifier]);
+    let known = this.#identities.get(key);
+    if (known === undefined) {
+      known = this.#identitiesOf(specifier, importer, side);
+      this.#identities.set(key, known);
     }
-    if (isBuiltin(specifier)) {
-      return [specifier, `node:${specifier.replace(/^node:/u, '')}`];
-    }
-    return PATH.test(specifier) || /^[a-z][\w+.-]*:/iu.test(specifier)
-      ? [specifier]
-      : [specifier, ...packageFiles(specifier, path.dirname(importer), side)];
+    return known;
   }
 
   /** What the application's `file` is. */

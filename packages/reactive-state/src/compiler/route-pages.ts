@@ -22,7 +22,7 @@ import type { CompiledComponent } from './emit-app.ts';
 import type { ModuleClass, Modules } from './modules.ts';
 import { type PageRender, pageRenderOf } from './page-render.ts';
 import { pageShapeOf } from './page-shape.ts';
-import { exportedNames, importEqualsSpecifier, Reach } from './reach.ts';
+import { exportedNames, importEqualsSpecifier, type Reach } from './reach.ts';
 import type { PageEntry, RouteName } from './route-scan.ts';
 
 /**
@@ -144,13 +144,16 @@ function importsValue(statement: ImportDeclaration): boolean {
   );
 }
 
-/** Reactive roots reached through page imports, stopping at each component's authority boundary. */
+/**
+ * Reactive roots reached through page imports, stopping at each component's authority boundary,
+ * through `reach`: one of no database, which the pages of one check share.
+ */
 export function rootsImported(
   page: Pick<PageEntry, 'file'>,
   modules: Modules,
+  reach: Reach,
 ): readonly { readonly root: string; readonly at: Node }[] {
   const { sourceFile } = modules.parse(page.file, false);
-  const reach = new Reach(modules, undefined);
   const imported = sourceFile.statements.flatMap((statement) => {
     if (
       !isImportDeclaration(statement) ||
