@@ -20,6 +20,7 @@ import { Follower } from '../runtime/follow.ts';
 import { canonicalJson } from '../runtime/json.ts';
 import type { KeptRoot } from '../runtime/kept-roots.ts';
 import { type Page, page } from '../runtime/page.ts';
+import { refreshExpired } from '../runtime/refresh.ts';
 import type { StoreStatus } from '../runtime/store.ts';
 import { type ViewAnswer, ViewController, type ViewHost } from '../runtime/view.ts';
 import { type Live, LiveContext } from './state.ts';
@@ -46,8 +47,9 @@ import { type Live, LiveContext } from './state.ts';
  * tells of a revision newer than the frame's. A render of the route, which renders the root for the
  * sites its states' first values show, is shown while it shows every site the page shows; otherwise
  * it only tells of its revision. The route renders again (`router.refresh`) once the session ended
- * or changed. A root rendered with another key — the props it was rendered with, or the session,
- * changed — is followed anew.
+ * or changed — of a build whose roots the deployment's cache keeps, by the expiry of the session's
+ * kept renders, whose answer renders it (`expire`). A root rendered with another key — the props it
+ * was rendered with, or the session, changed — is followed anew.
  */
 
 export interface LiveRootProps {
@@ -78,6 +80,14 @@ export interface LiveRootProps {
    * (`status` `rendered`).
    */
   readonly prefetchable?: boolean | undefined;
+  /**
+   * The compile's `expire` Server Function, of a build whose roots the deployment's cache keeps
+   * (`'use cache: remote'`): called in place of `router.refresh()` for a session that ended,
+   * changed or was refused. It expires the session's kept renders, and its answer renders the route
+   * again — the authority's render, not the one the cache kept of the session before — which the
+   * router shows; the root calls `router.refresh()` only where that call fails.
+   */
+  readonly expire?: (() => Promise<unknown>) | undefined;
 }
 
 interface Shown {
@@ -283,7 +293,7 @@ function Notice({ status }: { readonly status: StoreStatus }): ReactNode {
 }
 
 export function LiveRoot(props: LiveRootProps): ReactNode {
-  const { events, frame, prefetchable, session, status = 'rendered', update, view } = props;
+  const { events, expire, frame, prefetchable, session, status = 'rendered', update, view } = props;
   const router = useRouter();
   const runtime = usePage();
   const root = useId();
@@ -302,9 +312,9 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
     runtime?.settled(catchUpKey(state.given.frame));
   }, [runtime, state.given.frame]);
   // What the root's controller calls, the newest of each as a render commits.
-  const calls = useRef({ router, runtime, view });
+  const calls = useRef({ expire, router, runtime, view });
   useInsertionEffect(() => {
-    calls.current = { router, runtime, view };
+    calls.current = { expire, router, runtime, view };
   });
   const host = useMemo<ViewHost<ReactNode>>(() => {
     return {
@@ -317,7 +327,9 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
         });
       },
       refresh: () => {
-        calls.current.router.refresh();
+        refreshExpired(() => {
+          calls.current.router.refresh();
+        }, calls.current.expire);
       },
       request: async (request) => calls.current.view(request),
       revoked: (message, code) => {
@@ -405,7 +417,9 @@ export function LiveRoot(props: LiveRootProps): ReactNode {
         },
         frame: current.frame,
         refresh: () => {
-          router.refresh();
+          refreshExpired(() => {
+            router.refresh();
+          }, calls.current.expire);
         },
         session,
         want: (revision) => {

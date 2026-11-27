@@ -36,7 +36,7 @@ import { type HostOptions, namedOf } from './emit-host.ts';
 import { emitRoutesModule, middlewareOutputs, ROUTES_MODULE } from './emit-routes.ts';
 import { ReactiveCompileError } from './errors.ts';
 import { type HookModule, HookModules } from './hooks.ts';
-import { emitStubs, hostOf, rootPrefetch } from './host.ts';
+import { emitStubs, hostOf, rootPrefetch, rootRemote } from './host.ts';
 import type { ImportedModule } from './imports.ts';
 import type { Manifest } from './manifest.ts';
 import { rememberModuleResolutions } from './module-resolutions.ts';
@@ -100,6 +100,12 @@ export interface CompileOptions {
    * no root is cached.
    */
   readonly prefetch?: string;
+  /**
+   * Where the roots a prefetch carries are kept: `private`, the browser alone, as where it is not
+   * given; or `remote`, the deployment's cache too, keyed by the reader's session, of a build that
+   * names its `prefetch` and the application's own `session`.
+   */
+  readonly prefetchCache?: string;
   /**
    * `false` turns sharing off: the compile shares no route's view, and every root renders for its
    * own session. Not given, it shares what it shows renders alike for every visitor.
@@ -433,6 +439,7 @@ function emitAll(emitting: Emitting): Map<string, string> {
         : undefined;
     };
   };
+  const byId = new Map(app.components.map((compiled) => [compiled.component.id, compiled]));
   for (const compiled of app.components) {
     const { component, sides, writes } = compiled;
     const base = path.join(outDir, component.id);
@@ -454,7 +461,11 @@ function emitAll(emitting: Emitting): Map<string, string> {
     const route = app.routing?.roots.get(component.id);
     const sharedRoute = app.routing?.routes.find((each) => each.route === route)?.shared;
     const prefetch = rootPrefetch(app.host, { route, sharedRoute });
-    put(`${base}.root.tsx`, emitRoot(compiled, `${base}.root.tsx`, outDir, { prefetch, route }));
+    const remote = rootRemote(app.host, { compiled, life: prefetch, route }, byId);
+    put(
+      `${base}.root.tsx`,
+      emitRoot(compiled, `${base}.root.tsx`, outDir, { prefetch, remote, route }),
+    );
   }
   for (const module of app.hooks) {
     const file = path.join(outDir, `${module.id}${path.extname(module.file)}`);
@@ -463,7 +474,10 @@ function emitAll(emitting: Emitting): Map<string, string> {
   const session = app.host?.session;
   emitStubs(app, outDir, put);
   put(path.join(outDir, 'elements.ts'), emitElements(app));
-  put(path.join(outDir, 'server-functions.ts'), emitServerFunctions(session !== undefined));
+  put(
+    path.join(outDir, 'server-functions.ts'),
+    emitServerFunctions(session !== undefined, app.host?.prefetchCache === 'remote'),
+  );
   put(path.join(outDir, 'authority.mts'), emitRegistry(app));
   put(path.join(outDir, DURABLE_OBJECT_MODULE), emitDurableObject());
   const routing = app.routing ?? NO_ROUTING;

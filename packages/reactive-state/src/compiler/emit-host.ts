@@ -2,7 +2,8 @@
  * What the host — its build, its command — tells the compile beside the application's sources: how
  * the application reads its own signed-in session, where it signs its users in itself (`--session`),
  * how it applies a change of that session a server operation asks for (`--session-change`),
- * the private cache a root renders inside for a link's prefetch to carry it (`--prefetch`), and
+ * the private cache a root renders inside for a link's prefetch to carry it (`--prefetch`), whether
+ * the deployment's cache keeps that render too, by the reader's session (`--prefetch-cache`), and
  * whether anything is shared at all (`--no-share`). Each changes what the compile writes around the
  * components, and nothing of how it reads them: given none, it writes what it wrote before any was.
  */
@@ -31,6 +32,11 @@ export interface HostOptions {
   readonly sessionChange?: Named | undefined;
   /** The lifetime of a private root's cache, where its roots are to be carried by a prefetch. */
   readonly prefetch?: PrefetchLife | undefined;
+  /**
+   * `'remote'` where the deployment's cache keeps the roots a prefetch carries, by the reader's
+   * session (`--prefetch-cache remote`); left out, the browser alone keeps them (`private`).
+   */
+  readonly prefetchCache?: 'remote' | undefined;
   /**
    * `false` where the application turned sharing off (`share: false`): no route's view is every
    * visitor's — each root renders for its own session alone. Left out, the compile shares what it
@@ -141,6 +147,44 @@ function refusedPrefetch(message: string): ReactiveCompileError {
 }
 
 /**
+ * `written` (`--prefetch-cache`) as where the roots a prefetch carries are kept: `'remote'` for the
+ * deployment's cache, or nothing for the browser's alone (`private`, as where it is not said).
+ * Refused: a cache of another name; and a remote one where no prefetch names how long it keeps a
+ * render (`host.prefetch`), or where sessions are the demo's — their id is the cookie's value, a
+ * bearer, which no cache's key may hold — rather than the application's own (`host.session`).
+ */
+export function prefetchCacheOf(
+  written: string | undefined,
+  host: Pick<HostOptions, 'prefetch' | 'session'>,
+): 'remote' | undefined {
+  if (written === undefined || written === 'private') {
+    return undefined;
+  }
+  if (written !== 'remote') {
+    throw refusedCache(`\`${written}\` is no prefetch cache: \`private\` or \`remote\`.`);
+  }
+  if (host.prefetch === undefined) {
+    throw refusedCache(
+      "`--prefetch-cache remote` keeps the roots a link's prefetch carries in the deployment's cache, and no `--prefetch` names how long: name a lifetime.",
+    );
+  }
+  if (host.session === undefined) {
+    throw refusedCache(
+      "`--prefetch-cache remote` keys each root it keeps by the reader's session, and the demo's session is its cookie's value, a bearer no cache's key may hold: name the application's own session source (`--session`).",
+    );
+  }
+  return 'remote';
+}
+
+/** The refusal of a `--prefetch-cache` of no cache the roots may be kept in. */
+function refusedCache(message: string): ReactiveCompileError {
+  return new ReactiveCompileError(message, {
+    fileName: '--prefetch-cache',
+    position: { character: 0, line: 0 },
+  });
+}
+
+/**
  * What a root's entry writes of its private cache, where it has one: the import, the lines its body
  * opens with, and the field `renderRoot` is told of it by.
  */
@@ -167,10 +211,27 @@ function cacheLifeArgument(life: PrefetchLife): string {
 
 /**
  * The lines a prefetchable root's entry opens its body with: its private cache, kept by the browser
- * alone for as long as `life` says, which a link's prefetch carries.
+ * alone for as long as `life` says, which a link's prefetch carries — and those a kept root's
+ * entry opens the function it reads the session by with (`keptBody`).
  */
-function prefetchLines(life: PrefetchLife): readonly string[] {
+export function prefetchLines(life: PrefetchLife): readonly string[] {
   return ["  'use cache: private';", `  cacheLife(${cacheLifeArgument(life)});`];
+}
+
+/**
+ * The lines the function a root's entry keeps its render by opens with (`--prefetch-cache
+ * remote`): the deployment's cache, for as long as `life` says — a prefetch carries what it keeps
+ * by the same floors — under the tag of the bucket of the session it renders for (`keptRootTag`),
+ * and that of the bucket of the session's user (`keptUserTag`), which every session of the user
+ * shares, for the application to expire where it takes the reader's access away or grants it
+ * (`expireKeptRootsOfUser`).
+ */
+export function keptLines(life: PrefetchLife): readonly string[] {
+  return [
+    "  'use cache: remote';",
+    `  cacheLife(${cacheLifeArgument(life)});`,
+    '  cacheTag(await keptRootTag(session), await keptUserTag(session.user));',
+  ];
 }
 
 /** The line that re-exports the application's `named` export as `as`. */

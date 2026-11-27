@@ -19,6 +19,7 @@ import type { ViewAnswer as RootAnswer } from '../runtime/view.ts';
 import { sitePathOf } from '../site-paths.ts';
 import { HTTP_BAD_REQUEST } from '../status.ts';
 import { authority, refused, requestSession, type SessionSource } from './authority.ts';
+import { sessionName } from './kept.ts';
 import { refusedRender } from './refusals.ts';
 import { type Elements, renderTree } from './render.ts';
 import { renderRouteRoot } from './shared-root.ts';
@@ -35,6 +36,13 @@ import { siteShape } from './site.ts';
  */
 
 export { authority, requestSession, routeSession, type SessionSource } from './authority.ts';
+export {
+  expireKeptRoots,
+  expireKeptRootsOfUser,
+  keptRootTag,
+  keptSessionOf,
+  keptUserTag,
+} from './kept.ts';
 export { endSession, sessionKey } from './server-calls.ts';
 export { type AuthorityRefusal, authorityRefusal } from './refusals.ts';
 export { operate, OperationError, type SessionChange } from './operate.ts';
@@ -75,10 +83,22 @@ export interface RenderRootOptions {
   readonly route?: string | undefined;
   /**
    * Whether the entry renders the root inside a private cache (`'use cache: private'`), for a link's
-   * prefetch to carry it: its page shows the frame it holds at once, and follows it from there
-   * (`LiveRoot`).
+   * prefetch to carry it, or the deployment's (`'use cache: remote'`): its page shows the frame it
+   * holds at once, and follows it from there (`LiveRoot`).
    */
   readonly prefetchable?: boolean | undefined;
+  /**
+   * The session the root is rendered for, where its entry read it (`requestSession`) — `null` for a
+   * request of none: the root then reads no cookie, as nothing inside `'use cache: remote'` may. Left
+   * out, the root reads the request's own.
+   */
+  readonly session?: SessionId | undefined;
+  /**
+   * The compile's `expire` Server Function, of a build whose roots the deployment's cache keeps
+   * (`prefetchCache: 'remote'`): the root's `LiveRoot` calls it in place of the router's refresh,
+   * the session's kept roots expired and the route rendered again in its answer.
+   */
+  readonly expire?: (() => Promise<unknown>) | undefined;
 }
 
 /**
@@ -123,40 +143,17 @@ export type RootProps<P, Read extends PropertyKey = never> = P extends unknown
 const UNCONFIRMED = 'Whether the change was saved cannot be confirmed yet.';
 /** Why a page is not brought up to date yet, as it asks again. */
 const UNREFRESHED = 'The page could not be brought up to date yet.';
-/** The bytes of a session's digest a page is told, which tell one session from another. */
-const SESSION_NAME_BYTES = 12;
-const HEX = 16;
 
 /**
- * What a page is told of the session it was rendered for: a digest of its id, never the id — the
- * `HttpOnly` cookie, which a script that read it could present from anywhere — and nothing for no
- * session. It tells the page that it shows another session than before, whose pending operations
- * are not this one's.
- */
-async function sessionName(session: SessionId): Promise<string> {
-  if (session === null) {
-    return '';
-  }
-  // An asserted session is named by its key and its user both, as the authority names it.
-  const named = typeof session === 'string' ? session : `app.${session.id}.${session.user}`;
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`arkorlab.reactive-state.session:${named}`),
-  );
-  return Array.from(new Uint8Array(digest, 0, SESSION_NAME_BYTES), (byte) =>
-    byte.toString(HEX).padStart(2, '0'),
-  ).join('');
-}
-
-/**
- * A root, as the session the request names sees it: the authority renders it — and each reactive
- * component it renders — at one revision, and the tree is rendered inside a `LiveRoot` with the
- * frame it was rendered at. A root the session may not see renders nothing inside its `LiveRoot`,
- * which keeps following it, to render it once the session may. An authority that does not answer is
- * thrown for, as is a refusal to render the root at all, for the route's error boundary to show.
+ * A root, as the session the request names sees it — or the session its entry read and hands it:
+ * the authority renders it — and each reactive component it renders — at one revision, and the tree
+ * is rendered inside a `LiveRoot` with the frame it was rendered at. A root the session may not see
+ * renders nothing inside its `LiveRoot`, which keeps following it, to render it once the session
+ * may. An authority that does not answer is thrown for, as is a refusal to render the root at all,
+ * for the route's error boundary to show.
  */
 export async function renderRoot(options: RenderRootOptions): Promise<ReactNode> {
-  const { component, elements, route, update, view } = options;
+  const { component, elements, expire, route, update, view } = options;
   const prefetchable = options.prefetchable === true;
   const props = toJsonRecord(options.props, `The props ${component} is rendered with`);
   const live = async (result: RenderResult, session: SessionId): Promise<ReactNode> => {
@@ -165,6 +162,7 @@ export async function renderRoot(options: RenderRootOptions): Promise<ReactNode>
       LiveRoot,
       {
         events: eventsUrl(),
+        ...(expire !== undefined && { expire }),
         frame,
         ...(prefetchable && { prefetchable }),
         session: await sessionName(session),
@@ -183,14 +181,16 @@ export async function renderRoot(options: RenderRootOptions): Promise<ReactNode>
       live,
       props,
       route,
+      session: options.session,
     });
     if (routed !== undefined) {
       return routed;
     }
   }
   // The session first: while the page's shell is prerendered it never resolves, which leaves the
-  // root to the request.
-  const session = await requestSession(elements.session);
+  // root to the request — where the entry read it already, it reads nothing of the request.
+  const session =
+    options.session === undefined ? await requestSession(elements.session) : options.session;
   const result = await authority().render(session, {
     build: elements.build,
     component,

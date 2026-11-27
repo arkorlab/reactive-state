@@ -32,6 +32,8 @@ export interface RouteRootOptions {
   readonly events: string;
   /** A session's render of the root, as `renderRoot` shows one. */
   readonly live: (result: RenderResult, session: SessionId) => Promise<ReactNode>;
+  /** The session the root's entry read, where it read it: no cookie of the request's is read then. */
+  readonly session?: SessionId | undefined;
 }
 
 /** The refusal of a request that names a generation the authority is not making. */
@@ -56,7 +58,10 @@ function admissionOf(requested: Headers, generation: string | undefined): string
 /** The root, as its route's page renders it; nothing where the route renders it no shared way. */
 export async function renderRouteRoot(options: RouteRootOptions): Promise<ReactNode> {
   const { component, elements, events, props, route } = options;
-  const [session, requested] = await Promise.all([requestSession(elements.session), headers()]);
+  const [session, requested] = await Promise.all([
+    options.session === undefined ? requestSession(elements.session) : options.session,
+    headers(),
+  ]);
   const generation = requested.get(GENERATION_HEADER) ?? undefined;
   const admission = admissionOf(requested, generation);
   const answer = await authority().renderShared(session, {

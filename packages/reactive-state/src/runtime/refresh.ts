@@ -7,8 +7,43 @@
  * of each must reflect before the store lets the write go; and that a write was let go of whose
  * effect the page cannot show from what it holds, after which every root renders again whatever
  * revision it shows. The route itself renders again (`router.refresh`) once the session ended: once
- * for the page, through the root attached last.
+ * for the page, through the root attached last — of a build whose roots the deployment's cache
+ * keeps, by the expiry of the session's kept renders, whose answer renders it (`refreshExpired`).
  */
+
+/** Has the route render again where `expire` fails: its own answer renders it otherwise. */
+async function refreshedIfFailed(
+  refresh: () => void,
+  expire: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await expire();
+  } catch {
+    refresh();
+  }
+}
+
+/**
+ * Has the route render again: at once (`refresh`), or, of a build whose roots the deployment's cache
+ * keeps, by `expire` — the compile's Server Function, which expires the session's kept renders and
+ * then calls Next.js's `refresh()`, so that its answer carries the route's render, of the
+ * authority's, which the router shows — and by `refresh` only where that call fails. A refresh after
+ * its answer would render the route a second time, every root asking the authority again; and no
+ * wait of this one's bounds a call under way, as Next.js's router runs a refresh asked for meanwhile
+ * behind it (`app-router-instance.js`).
+ */
+export function refreshExpired(
+  refresh: () => void,
+  expire: (() => Promise<unknown>) | undefined,
+): void {
+  if (expire === undefined) {
+    refresh();
+    return;
+  }
+  void refreshedIfFailed(refresh, expire).catch(() => {
+    // The refresh itself is the router's: nothing is left to tell of it here.
+  });
+}
 
 /** A root the page renders, as the page asks it to render again. */
 export interface RefreshTarget {
