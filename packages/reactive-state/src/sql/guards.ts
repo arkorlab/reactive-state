@@ -53,6 +53,48 @@ export function changesSession(sql: string, conforming: boolean): boolean {
   });
 }
 
+/** Whether the `SET` at `at` sets for the transaction alone (`SET LOCAL x = 1`). */
+function setsLocal(tokens: readonly string[], at: number): boolean {
+  return tokens[at] === 'set' && tokens[at + 1] === 'local';
+}
+
+/**
+ * Whether the call of `set_config` whose parentheses open at `open` of `tokens` sets its setting
+ * for the transaction alone: its third argument is the word `true`, as nothing else is known to be.
+ */
+function setsForTransaction(tokens: readonly string[], open: number): boolean {
+  let depth = 0;
+  for (let at = open; at < tokens.length; at += 1) {
+    if (tokens[at] === '(') depth += 1;
+    if (tokens[at] === ')') depth -= 1;
+    if (depth === 0) return tokens[at - 2] === ',' && tokens[at - 1] === 'true';
+  }
+  return false;
+}
+
+/**
+ * Whether SQL changes the settings of the session beyond the transaction it runs in, which stay
+ * with the connection after it: any change `changesSession` says but those of `SET LOCAL` and of
+ * `set_config(…, true)`, which end with the transaction. A third argument of `set_config` that is
+ * not the word `true` is read as a session's.
+ */
+export function leavesSession(sql: string, conforming: boolean): boolean {
+  const tokens = sqlTokens(sql, conforming);
+  if (tokens === undefined) return false;
+  return tokens.some((token, at) => {
+    return (
+      token === '`' ||
+      ((at === 0 || tokens[at - 1] === ';') &&
+        SESSION_COMMANDS.has(token) &&
+        !setsTransaction(tokens, at) &&
+        !setsLocal(tokens, at)) ||
+      (identifierOf(token) === 'set_config' &&
+        tokens[at + 1] === '(' &&
+        !setsForTransaction(tokens, at + 1))
+    );
+  });
+}
+
 /** A temporary table's row type, which ordinary staging-table DDL intentionally does not follow. */
 export interface TemporaryRowType {
   readonly name: string;
