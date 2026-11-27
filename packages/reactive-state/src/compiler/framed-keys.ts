@@ -165,7 +165,8 @@ function argumentPrefix(
  * What is written past the place a prefix ends at: each argument still `pending` there, and what
  * the array of a later spread was written with — the rest of an exposed array first. A spread among
  * them that the compile cannot read supplies nothing it can name, and a hole writes nothing. What a
- * spread before them holds comes first, so none of them stands at a known position.
+ * spread before them holds comes first, so none of them stands at a known position: an array that
+ * several spreads reach adds what it was written with once.
  */
 function writtenPast(
   call: CallExpression | NewExpression,
@@ -173,6 +174,7 @@ function writtenPast(
   reached: boolean,
 ): readonly Expression[] {
   const past: Expression[] = [];
+  const expanded = new Set<ArrayLiteralExpression>();
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
     if (isOmittedExpression(each.node)) continue;
     if (!isSpreadElement(each.node)) {
@@ -180,7 +182,8 @@ function writtenPast(
       continue;
     }
     const selected = argumentArray(each.node.expression, each.seen, call, reached);
-    if (selected === undefined) continue;
+    if (selected === undefined || expanded.has(selected.array)) continue;
+    expanded.add(selected.array);
     const written = selected.array.elements.toReversed();
     for (const node of written) pending.push({ node, seen: selected.seen });
   }
