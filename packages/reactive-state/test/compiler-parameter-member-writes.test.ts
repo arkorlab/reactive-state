@@ -496,6 +496,47 @@ describe('shared factory parameter member writes', () => {
     expect(compile(app).refusals).toStrictEqual([]);
   });
 
+  // A closure that answers a member of the parameter keeps the parameter, whatever the member holds,
+  // since the compile reads no types; one that computes from the member keeps nothing.
+  it.each([
+    wide("const get = () => value.id; value.extra = get(); value.id = 'fresh'; return value;"),
+    wide(
+      "const ids = [1, 2].map(() => value.id); value.extra = ids.join(); value.id = 'fresh'; return value;",
+    ),
+    "function make(value: {id: string; meta: {bad?: unknown}}) { const get = () => value.meta; (get() as {bad?: unknown}).bad = new Date(0); value.id = 'fresh'; return value; } export const payload = make({id: 'safe', meta: {}});",
+  ])(
+    'refuses a member write into a parameter a closure answers a member of: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+    },
+  );
+
+  it.each([
+    wide(
+      "const get = () => value.id.trim(); value.extra = get(); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const get = () => value.id + '!'; value.extra = get(); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const same = () => value.id === 'safe'; value.extra = String(same()); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const sizes = [1, 2].map(() => value.id.trim()); value.extra = sizes.join(); value.id = 'fresh'; return value;",
+    ),
+  ])(
+    'keeps a member write into a parameter a closure computes from a member of: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(compile(app).refusals).toStrictEqual([]);
+    },
+  );
+
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
     apps.push(app);
