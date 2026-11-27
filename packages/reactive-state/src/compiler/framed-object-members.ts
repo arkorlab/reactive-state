@@ -95,6 +95,19 @@ export function framedObjectSources(
   return found;
 }
 
+/**
+ * Whether an expression, or a member of it, is the result of a native assign into a fresh empty
+ * target whose sources include what the compile cannot read, a spread or a list a call may have
+ * changed (`assignedSources`). What it may hold there is only what its type says, so a reader that
+ * would read the type its result is written as keeps that beside `framedObjectSources`.
+ */
+export function framedUnreadAssign(node: Expression): boolean {
+  let value = unwrapped(node);
+  while (isPropertyAccessExpression(value) || isElementAccessExpression(value))
+    value = unwrapped(value.expression);
+  return (assignedSources(value)?.possible.length ?? 0) > 0;
+}
+
 /** Direct literal receivers preserve their written path without guessing mutable holder fields. */
 function literalReceiver(
   node: Expression,

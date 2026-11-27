@@ -276,6 +276,93 @@ describe('sources written past a spread the compile cannot read', () => {
   });
 });
 
+/**
+ * What an assign whose sources include a spread the compile cannot read holds is what its sources
+ * say, and what the type its result is written as says: a result asserted to hold an Error at the
+ * field a reader asks is one that may. The reader of an error's cause and of a request's body keeps
+ * both. A module that constructs an `Error` or a `Request` is refused whatever it does with it, so
+ * these rows are read at the reader only.
+ */
+const TYPED: readonly Case[] = [
+  {
+    id: 'cause-assert-spread-result',
+    source:
+      "function frames(...sources:{cause:Error}[]){return (new Error('x',Object.assign({},...sources)as{cause:Error}).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'cause-assert-spread-result-aggregate',
+    source:
+      "function frames(...sources:{cause:Error}[]){return (new AggregateError([],'x',Object.assign({},...sources)as{cause:Error}).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'cause-assert-spread-result-held',
+    source:
+      "function frames(...sources:{cause:Error}[]){const options=Object.assign({},...sources)as{cause:Error};return (new Error('x',options).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'cause-assert-spread-result-past-written-list',
+    source:
+      "function frames(...sources:{cause:Error}[]){const defaults=[{other:1}];note();return (new Error('x',Object.assign({},...defaults,...sources)as{cause:Error}).cause as{stack?:string}).stack;}function note(){return 0;}",
+    refused: true,
+  },
+  {
+    id: 'request-body-assert-spread-result',
+    source:
+      "async function frames(...sources:{body:Error}[]){return await new Request('http://example.test/',Object.assign({},...sources)as{method:string;body:Error}).text();}",
+    refused: true,
+  },
+  {
+    id: 'cause-literal-past-spread',
+    source:
+      "function frames(error:Error,...sources:object[]){return (new Error('x',Object.assign({},...sources,{cause:error})).cause as{stack?:string}).stack;}",
+    refused: true,
+  },
+  {
+    id: 'cause-spread-result-unasserted-data',
+    source:
+      "function frames(error:Error,...sources:object[]){void error;return (new Error('x',Object.assign({},...sources)).cause as{stack?:string}).stack;}",
+    refused: false,
+  },
+  {
+    id: 'cause-assert-spread-result-data-type',
+    source:
+      "function frames(error:Error,...sources:{cause:{stack:string}}[]){void error;return (new Error('x',Object.assign({},...sources)as{cause:{stack:string}}).cause as{stack?:string}).stack;}",
+    refused: false,
+  },
+  {
+    id: 'cause-assert-written-result-data-pin',
+    source:
+      "function frames(error:Error){void error;return (new Error('x',Object.assign({},{cause:{stack:'fixed'}})as{cause:Error}).cause as{stack?:string}).stack;}",
+    refused: false,
+  },
+  {
+    id: 'request-body-assert-written-result-data-pin',
+    source:
+      "async function frames(error:Error){void error;return await new Request('http://example.test/',Object.assign({},{body:'fixed'})as{method:string;body:Error}).text();}",
+    refused: false,
+  },
+];
+
+describe('the type an assign result with a spread no reader follows is written as', () => {
+  it.each(TYPED)('$id', ({ source, refused }) => {
+    using api = openTypeScript();
+    using parsed = parseModule(api, 'typed-past-spreads.ts', source);
+    const pending: Node[] = [parsed.sourceFile];
+    let found = false;
+    for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
+      if (framedRead(node) !== undefined) found = true;
+      node.forEachChild((child) => {
+        pending.push(child);
+      });
+    }
+
+    expect(found).toBe(refused);
+  });
+});
+
 describe('shared sources written past a spread the compile cannot read', () => {
   const { apps, compile } = compilerApplications();
 
