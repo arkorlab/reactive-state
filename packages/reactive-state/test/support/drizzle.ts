@@ -6,6 +6,7 @@ import { Engine } from '../../src/authority/node-engine.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../../src/program.ts';
 import { type AnyDatabase, database } from '../../src/server/schema.ts';
 import { type DrizzleFollow, followDrizzle } from '../../src/sql/index.ts';
+import type { Queryable } from '../../src/sql/store.ts';
 import { textOf } from './frames.ts';
 
 /**
@@ -74,7 +75,10 @@ export async function openedWith<S extends Readonly<Record<string, unknown>>>(
 
 /** An engine of one component, whose render `evaluate` is, following `follow`'s tables. */
 export async function engineOf(
-  setup: Pick<Opened<Readonly<Record<string, unknown>>>, 'follow' | 'pg'>,
+  setup: {
+    readonly follow: Opened<Readonly<Record<string, unknown>>>['follow'];
+    readonly pg: Queryable;
+  },
   evaluate: ComponentProgram['evaluate'],
   operations: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {},
   options: ProgramOptions = {},

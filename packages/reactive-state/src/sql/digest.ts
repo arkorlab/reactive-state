@@ -72,7 +72,9 @@ export interface Queryable {
  *    reader's answers and does not move the digest, nor does a role made of a name no role had,
  *    where the statement failed before);
  * 3. a setting of the session that a policy, a view or a function reads
- *    (`current_setting('app.user')`), which no list of names could hold;
+ *    (`current_setting('app.user')`), which no list of names could hold (what the follow's client
+ *    does of a statement that sets one outside a render — it moves the store's epoch on a PGlite,
+ *    and refuses it on a pool — is no part of the digest: `client.ts`, `client-pool.ts`);
  * 4. the rows of a materialized view, which a refresh changes and no entry of the log tells of;
  * 5. what a policy, a view or a function computes of what no catalog row holds: the clock, and the
  *    rows of a table a function reads in its body that no plan names;

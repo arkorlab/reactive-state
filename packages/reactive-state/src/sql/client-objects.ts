@@ -1,4 +1,5 @@
 import { tableReads } from '../server/context.ts';
+import type { Connection } from './client-plans.ts';
 
 /** What `result` settles to, the receiver's facade where it settles to the receiver. */
 async function settledReceiver(
@@ -96,4 +97,43 @@ export function guardedObjects(
     return proxy;
   };
   return wrap;
+}
+
+/**
+ * `connection` as a render may hold it: a member `wrapped` answers is that, any other method what
+ * `refused` makes of its name, a fault in a render, and any other value what `valued` makes of it.
+ */
+export function facadeOf<C extends Connection>(
+  connection: C,
+  wrapped: Readonly<Record<string, unknown>>,
+  refused: (key: PropertyKey) => unknown,
+  valued: (value: unknown, key: PropertyKey) => unknown,
+): C {
+  const facade: C = new Proxy(connection, {
+    // Read from the connection itself: its getters may read private fields, which a proxy has none of.
+    get: (target, key) => {
+      if (typeof key === 'string' && Object.hasOwn(wrapped, key)) {
+        return wrapped[key];
+      }
+      const value: unknown = Reflect.get(target, key);
+      if (typeof value !== 'function') return valued(value, key);
+      // Any other method, by a name or a symbol: the connection's own outside a render, a fault in
+      // one.
+      return refused(key);
+    },
+    // A member by its descriptor, as by its name: but one the connection fixed and may not write,
+    // of which a proxy may answer nothing else, and an accessor of no getter, which has none to read.
+    getOwnPropertyDescriptor: (target, key) => {
+      const descriptor = Reflect.getOwnPropertyDescriptor(target, key);
+      if (descriptor === undefined) return;
+      const read = (): unknown => Reflect.get(facade, key);
+      if ('value' in descriptor) {
+        const fixed = descriptor.configurable !== true && descriptor.writable !== true;
+        return fixed ? descriptor : { ...descriptor, value: read() };
+      }
+      const open = descriptor.configurable === true && descriptor.get !== undefined;
+      return open ? { ...descriptor, get: read } : descriptor;
+    },
+  });
+  return facade;
 }

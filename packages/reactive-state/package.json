@@ -42,15 +42,18 @@
     "@cloudflare/vitest-plugin": "catalog:",
     "@cloudflare/workers-types": "catalog:",
     "@electric-sql/pglite": "catalog:",
+    "@electric-sql/pglite-socket": "catalog:",
     "@testing-library/dom": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/node": "catalog:",
+    "@types/pg": "catalog:",
     "@types/react": "catalog:",
     "@types/react-dom": "catalog:",
     "@vitejs/plugin-react": "catalog:",
     "drizzle-orm": "catalog:",
     "jsdom": "catalog:",
     "next": "catalog:",
+    "pg": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",
     "vitest": "catalog:"
@@ -58,10 +61,14 @@
   "peerDependencies": {
     "drizzle-orm": "catalog:",
     "next": "catalog:",
+    "pg": "catalog:",
     "react": "catalog:"
   },
   "peerDependenciesMeta": {
     "drizzle-orm": {
+      "optional": true
+    },
+    "pg": {
       "optional": true
     }
   },

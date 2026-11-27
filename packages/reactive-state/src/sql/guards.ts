@@ -30,6 +30,29 @@ export function changesContext(sql: string, conforming: boolean): boolean {
   });
 }
 
+/** The commands that change a session's settings. */
+const SESSION_COMMANDS = new Set(['discard', 'reset', 'set']);
+
+/**
+ * Whether SQL changes the settings of the session it runs on: of a pool, one connection of many,
+ * which the others and the store would not share. A Unicode-escaped identifier may spell `set_config`
+ * as `changesContext` says. A text the lexer cannot read is let run, as this guards a statement
+ * outside a render, which the application wrote to run.
+ */
+export function changesSession(sql: string, conforming: boolean): boolean {
+  const tokens = sqlTokens(sql, conforming);
+  if (tokens === undefined) return false;
+  return tokens.some((token, at) => {
+    return (
+      token === '`' ||
+      ((at === 0 || tokens[at - 1] === ';') &&
+        SESSION_COMMANDS.has(token) &&
+        !setsTransaction(tokens, at)) ||
+      (identifierOf(token) === 'set_config' && tokens[at + 1] === '(')
+    );
+  });
+}
+
 /** A temporary table's row type, which ordinary staging-table DDL intentionally does not follow. */
 export interface TemporaryRowType {
   readonly name: string;
