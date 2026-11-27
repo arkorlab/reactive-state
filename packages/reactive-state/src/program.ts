@@ -206,6 +206,8 @@ export interface RenderedElement {
   readonly type: string;
   readonly key: string | null;
   readonly props: RenderedProps;
+  /** The props an action is nested in, which the host walks for it: none, where none is. */
+  readonly nested?: readonly string[];
   readonly children: readonly Rendered[];
 }
 
@@ -216,6 +218,8 @@ export interface RenderedModule {
   readonly name: string;
   readonly key: string | null;
   readonly props: RenderedProps;
+  /** The props an action is nested in, which the host walks for it: none, where none is. */
+  readonly nested?: readonly string[];
   readonly children: readonly Rendered[];
 }
 

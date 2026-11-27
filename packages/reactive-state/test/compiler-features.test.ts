@@ -3211,6 +3211,40 @@ describe('the compiler, beyond the application as it is written', () => {
     expect(output(compiled, app, 'authority.mts')).toMatch(/\{ \["__proto__"\]: /u);
   });
 
+  it('takes server operations nested in an object and an array a Client Component is handed', async () => {
+    const { app, compiled } = await compiling({
+      'components/nested-actions.reactive.tsx': file(
+        "import { publishBoard, withdrawBoard } from '@/actions/publication';",
+        "import { Menu } from '@/controls/menu';",
+        '',
+        'export default function NestedActions({ projectId }: { projectId: string }) {',
+        '  return (',
+        '    <Menu',
+        '      commands={{ publish: publishBoard.bind(null, projectId), more: [withdrawBoard.bind(null, projectId)] }}',
+        '      list={[publishBoard, [withdrawBoard]]}',
+        '      byId={{ [projectId]: publishBoard }}',
+        '    />',
+        '  );',
+        '}',
+      ),
+      'controls/menu.tsx': file(
+        "'use client';",
+        '',
+        'export function Menu(_props: {',
+        '  readonly commands: unknown;',
+        '  readonly list: unknown;',
+        '}): null {',
+        '  return null;',
+        '}',
+      ),
+    });
+
+    expect(compiled.refusals).toStrictEqual([]);
+    expect(output(compiled, app, 'components/nested-actions.authority.mts')).toContain(
+      'commands: { publish: publishBoard.bind(null, projectId), more: [withdrawBoard.bind(null, projectId)] }',
+    );
+  });
+
   it('compiles a component of no props, and one whose props it renames', async () => {
     const { app, compiled } = await compiling({
       'components/plain.reactive.tsx': file(

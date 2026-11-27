@@ -9,6 +9,7 @@ import { digest } from '../src/authority/canonical.ts';
 import { type CommitEvent, Engine, type EngineOptions } from '../src/authority/index.ts';
 import { fieldOperationOf, rootOf } from '../src/authority/requests.ts';
 import {
+  actionRef,
   type ComponentProgram,
   componentRef,
   type FieldReceipt,
@@ -17,6 +18,7 @@ import {
   type OperationArgument,
   type OperationReceipt,
   PROTOCOL_VERSION,
+  type RenderedAction,
   type RenderResult,
   type RenderScope,
   type Value,
@@ -1266,6 +1268,50 @@ describe('a server operation', () => {
 
     expect(refused).toMatchObject({
       message: expect.stringContaining('reads as something rendered') as unknown,
+    });
+  });
+
+  it('renders a server operation nested in a prop, which the page calls and the authority runs', async () => {
+    const nested = program('test/nested', (_props, $) => {
+      return $.h(moduleRef('@/ui/menu', 'Menu'), {
+        commands: {
+          rows: [{ complete: actionRef('actions/todos', 'completeProject').bind(null, 'p1') }],
+        },
+      });
+    });
+    const { alice, commits, engine } = await open({ programs: [...programs, nested] });
+
+    const { tree } = await engine.render(alice, {
+      build: BUILD,
+      component: 'test/nested',
+      props: {},
+    });
+    // The component's output sits in the fragment its instance is rendered as.
+    const [menu] = (tree as unknown as { readonly children: readonly unknown[] }).children;
+    const { props } = menu as {
+      readonly props: {
+        readonly commands: {
+          readonly rows: readonly [{ readonly complete: RenderedAction }];
+        };
+      };
+    };
+    const [{ complete }] = props.commands.rows;
+    const receipt = await operate(engine, alice, {
+      args: complete.bound.map((bound) => json(bound)),
+      module: complete.module,
+      name: complete.name,
+    });
+
+    expect(complete).toStrictEqual({
+      bound: ['p1'],
+      kind: 'action',
+      module: 'actions/todos',
+      name: 'completeProject',
+    });
+    expect(commits).toHaveLength(1);
+    expect(commits[0]).toMatchObject({
+      changed: ['todos:t1', 'todos:t2'],
+      revision: receipt.committedRevision,
     });
   });
 

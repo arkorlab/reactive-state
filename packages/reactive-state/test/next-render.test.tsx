@@ -9,7 +9,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import { type Elements, renderTree } from '../src/next/render.ts';
-import type { ClientPart, Rendered, RenderedElement } from '../src/program.ts';
+import type { ClientPart, Json, Rendered, RenderedElement } from '../src/program.ts';
 import { type ClientPartProps, slotOf } from '../src/react/state.ts';
 import { BUILD, rowOf } from './support/page.ts';
 
@@ -53,9 +53,13 @@ function Remover({ remove }: { readonly remove: (id: string) => unknown }): Reac
 }
 
 const deleteTodo = vi.fn<(...args: unknown[]) => unknown>();
+const completeProject = vi.fn<(...args: unknown[]) => unknown>();
 
 const ELEMENTS: Elements = {
-  actions: { 'actions/todos#deleteTodo': deleteTodo },
+  actions: {
+    'actions/todos#deleteTodo': deleteTodo,
+    'actions/todos#completeProject': completeProject,
+  },
   build: BUILD,
   clients: { 'components/todo-editor': Editor, 'components/todo-row': Row },
   modules: {
@@ -79,6 +83,32 @@ function propsOf(node: ReactNode): Readonly<Record<string, unknown>> {
     throw new Error('Not an element.');
   }
   return node.props as Readonly<Record<string, unknown>>;
+}
+
+/** The action `name` of `actions/todos` bound to `bound`, as the authority sends it. */
+function actionOf(name: string, bound: readonly string[]): Json {
+  return { bound, kind: 'action', module: 'actions/todos', name };
+}
+
+const removing = (bound: readonly string[] = []): Json => actionOf('deleteTodo', bound);
+
+const completing = (bound: readonly string[] = []): Json => actionOf('completeProject', bound);
+
+/** The prop `commands` React was handed of a module element given `commands`. */
+function commandsOf(commands: Json): unknown {
+  const node = renderTree(
+    {
+      children: [],
+      key: null,
+      kind: 'module',
+      module: '@/ui/remover',
+      name: 'Remover',
+      nested: ['commands'],
+      props: { commands },
+    },
+    ELEMENTS,
+  );
+  return propsOf(node)['commands'];
 }
 
 describe('the generic renderer', () => {
@@ -163,6 +193,118 @@ describe('the generic renderer', () => {
     remove('t1');
 
     expect(deleteTodo).toHaveBeenCalledExactlyOnceWith('p1', 't1');
+  });
+
+  describe('an action nested in a prop', () => {
+    it('is handed as its Server Function, bound, inside an object', () => {
+      deleteTodo.mockClear();
+      const commands = commandsOf({ label: 'x', remove: removing(['p1']) }) as {
+        readonly label: string;
+        readonly remove: (id: string) => unknown;
+      };
+
+      commands.remove('t1');
+
+      expect(commands.label).toBe('x');
+      expect(deleteTodo).toHaveBeenCalledExactlyOnceWith('p1', 't1');
+    });
+
+    it('is handed as its Server Function inside an array, and an array of an object', () => {
+      deleteTodo.mockClear();
+      const list = commandsOf([removing(), 3, { again: removing(['p1', 't1']) }]) as readonly [
+        unknown,
+        number,
+        { readonly again: () => unknown },
+      ];
+
+      expect(list[0]).toBe(deleteTodo);
+      expect(list[1]).toBe(3);
+
+      list[2].again();
+
+      expect(deleteTodo).toHaveBeenCalledExactlyOnceWith('p1', 't1');
+    });
+
+    it('is handed as its Server Function two levels down', () => {
+      completeProject.mockClear();
+      const deep = commandsOf({ rows: [{ cells: { go: [completing(['p2'])] } }] }) as {
+        readonly rows: readonly { readonly cells: { readonly go: readonly (() => unknown)[] } }[];
+      };
+
+      deep.rows[0]?.cells.go[0]?.();
+
+      expect(completeProject).toHaveBeenCalledExactlyOnceWith('p2');
+    });
+
+    it('is handed as its own Server Function for each of several, the same one at two places too', () => {
+      deleteTodo.mockClear();
+      completeProject.mockClear();
+      const commands = commandsOf({
+        a: removing(['p1']),
+        b: completing(),
+        c: removing(['p1']),
+        d: removing(),
+      }) as Record<string, () => unknown>;
+
+      expect(commands['b']).toBe(completeProject);
+      expect(commands['d']).toBe(deleteTodo);
+
+      commands['a']?.();
+      commands['c']?.();
+
+      expect(deleteTodo).toHaveBeenCalledTimes(2);
+      expect(deleteTodo).toHaveBeenNthCalledWith(1, 'p1');
+      expect(deleteTodo).toHaveBeenNthCalledWith(2, 'p1');
+      expect(completeProject).not.toHaveBeenCalled();
+    });
+
+    it('keeps the data around it, a key named `__proto__` among it, as its own', () => {
+      const data = JSON.parse('{"__proto__": {"x": 1}, "n": [1, "a", null]}') as Json;
+
+      const kept = commandsOf(data) as Record<string, unknown>;
+
+      expect(Object.keys(kept)).toStrictEqual(['__proto__', 'n']);
+      expect(Object.getPrototypeOf(kept)).toBe(Object.prototype);
+      expect(kept['n']).toStrictEqual([1, 'a', null]);
+    });
+  });
+
+  it('hands a prop no action is nested in on as it is, a plain one beside one that is walked', () => {
+    const data = JSON.parse('{"rows": [{"id": "r1", "tags": ["a"]}]}') as Json;
+    const node = renderTree(
+      {
+        children: [],
+        key: null,
+        kind: 'module',
+        module: '@/ui/remover',
+        name: 'Remover',
+        nested: ['commands'],
+        props: { commands: { go: removing() }, data },
+      },
+      ELEMENTS,
+    );
+    const props = propsOf(node);
+
+    expect(props['data']).toBe(data);
+    expect((props['commands'] as { readonly go: unknown }).go).toBe(deleteTodo);
+  });
+
+  it('keeps an array of a nested prop that holds no action as it is', () => {
+    const rows: Json = [{ id: 'r1' }];
+    const node = renderTree(
+      {
+        children: [],
+        key: null,
+        kind: 'module',
+        module: '@/ui/remover',
+        name: 'Remover',
+        nested: ['commands'],
+        props: { commands: { go: removing(), rows } },
+      },
+      ELEMENTS,
+    );
+
+    expect((propsOf(node)['commands'] as { readonly rows: unknown }).rows).toBe(rows);
   });
 
   it('hands an action bound to nothing as its Server Function', () => {
