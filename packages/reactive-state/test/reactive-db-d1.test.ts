@@ -4,13 +4,15 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { hostOf } from '../src/authority/database-host.ts';
 import { startAuthority } from '../src/authority/index.ts';
+import { refuse } from '../src/server/index.ts';
 import { reactiveDb } from '../src/sql/db.ts';
+import { logTrigger } from '../src/sql/sqlite/installed.ts';
 import { type LocalD1, localD1 } from '../src/sql/sqlite/local-d1.ts';
 
 /**
@@ -27,6 +29,126 @@ const schema = { tasks };
 const DDL =
   'CREATE TABLE tasks (id text PRIMARY KEY, title text NOT NULL, done integer NOT NULL DEFAULT 0)';
 const BUILD = 'b_reactive_db_d1';
+/** A table that drops a duplicate row, with a trigger of the application's that audits it first. */
+const IGNORING = [
+  'CREATE TABLE tasks (id text PRIMARY KEY ON CONFLICT IGNORE, title text NOT NULL, done integer NOT NULL DEFAULT 0)',
+  'CREATE TABLE audit (id text)',
+  'CREATE TRIGGER audited BEFORE INSERT ON tasks BEGIN INSERT INTO audit VALUES (NEW.id); END',
+];
+/** A table whose trigger of the application's, before a delete, deletes the row itself. */
+const DELETING = [
+  DDL,
+  'CREATE TRIGGER deleting BEFORE DELETE ON tasks BEGIN DELETE FROM tasks WHERE id = OLD.id; END',
+];
+/** A table with a trigger of the application's that runs after an update. */
+const AFTER_UPDATE = [
+  DDL,
+  'CREATE TABLE audit (id text)',
+  'CREATE TRIGGER audited AFTER UPDATE ON tasks BEGIN INSERT INTO audit VALUES (NEW.id); END',
+];
+/** Rows `a` and `b`: an update of `a` to the key `b` meets a row, so the log is written first. */
+const TWO_ROWS = [DDL, "INSERT INTO tasks VALUES ('b', 'two', 0)"];
+/** A trigger of the application's on the log, made once the authority has: it deletes row `a`. */
+const ON_LOG = [
+  "CREATE TRIGGER zz_log AFTER INSERT ON _rs_changes BEGIN DELETE FROM tasks WHERE id = 'a'; END",
+];
+/** The audit table a temporary trigger writes, and a plain `tasks`. */
+const AUDITED = [DDL, 'CREATE TABLE audit (id text)'];
+/** A temporary trigger that audits and drops an insert into the table of the file. */
+const TEMP_TRIGGER = [
+  'CREATE TEMP TRIGGER dropped BEFORE INSERT ON main.tasks BEGIN INSERT INTO audit VALUES (NEW.id); SELECT RAISE(IGNORE); END',
+];
+/** A temporary table of the name, of a key that drops a duplicate, with its own audit trigger. */
+const TEMP_TABLE = [
+  'CREATE TEMP TABLE tasks (id text PRIMARY KEY ON CONFLICT IGNORE, title text NOT NULL, done integer NOT NULL DEFAULT 0)',
+  "INSERT INTO temp.tasks VALUES ('a', 'one', 0)",
+  'CREATE TEMP TRIGGER audited BEFORE INSERT ON temp.tasks BEGIN INSERT INTO main.audit VALUES (NEW.id); END',
+];
+/** An indexed table of rows, and a trigger that runs `pragma_optimize` and drops the insert. */
+const PRAGMA_TRIGGER = [
+  DDL,
+  'CREATE INDEX tasks_title ON tasks (title)',
+  "INSERT INTO tasks VALUES ('b', 'two', 0)",
+  'CREATE TRIGGER optimizing BEFORE INSERT ON tasks BEGIN SELECT * FROM pragma_optimize(65538); SELECT RAISE(IGNORE); END',
+];
+/** An indexed table of rows, and a view of no row whose read runs `pragma_optimize`. */
+const PRAGMA_VIEW = [
+  DDL,
+  'CREATE INDEX tasks_title ON tasks (title)',
+  "INSERT INTO tasks VALUES ('b', 'two', 0)",
+  'CREATE TABLE audit (id text)',
+  "CREATE VIEW opt AS SELECT 'x' AS id FROM pragma_optimize(65538)",
+];
+/** An indexed table of rows, and an FTS5 table whose content is `pragma_optimize`. */
+const PRAGMA_CONTENT = [
+  DDL,
+  'CREATE INDEX tasks_title ON tasks (title)',
+  "INSERT INTO tasks VALUES ('b', 'two', 0)",
+  "CREATE VIRTUAL TABLE ft USING fts5(optimize, content='pragma_optimize', content_rowid='arg')",
+];
+/** An FTS5 table of a plain content table. */
+const PLAIN_CONTENT = [
+  DDL,
+  "CREATE VIRTUAL TABLE fts USING fts5(title, content='tasks', content_rowid='rowid')",
+];
+/** A table with a generated column and a column that names a pragma: no virtual table. */
+const GENERATED = [
+  DDL,
+  'CREATE TABLE notes (a INTEGER, pragma_note TEXT, b INTEGER AS (a + 1) VIRTUAL)',
+];
+/** A trigger shaped as the log's own that joins a view which raises, made once the log is. */
+const JOINING = [
+  'CREATE VIEW quiet AS SELECT raise(ignore) AS x',
+  `CREATE TRIGGER "_rsd_00_replaced_insert" BEFORE INSERT ON "tasks" BEGIN INSERT INTO _rs_changes (tbl, id, before, after, at) SELECT 'tasks', quiet.x, NULL, NULL, 0 FROM "tasks" AS c JOIN quiet; END`,
+];
+/** The bodies of a log-shaped trigger that read the view `quiet`, which raises, but for a join. */
+const READING_QUIET = [
+  ['a comma join', `SELECT 'tasks', quiet.x, NULL, NULL, 0 FROM "tasks" AS c , quiet`],
+  ['IN of a name', `VALUES ('tasks', '', NULL, NULL, 0 IN quiet)`],
+  [
+    'the own text in a string',
+    `SELECT 'FROM "tasks" AS c WHERE ', quiet.x, NULL, NULL, 0 FROM quiet`,
+  ],
+  [
+    'the own text in a comment',
+    `SELECT 'tasks', quiet.x, NULL, NULL, 0 FROM quiet /* FROM "tasks" AS c WHERE */`,
+  ],
+] as const;
+/** The log made again, as `changeLogSql()` makes it but for a check that raises on `at` 0. */
+const CHECKED_LOG = [
+  'DROP TABLE _rs_changes',
+  'CREATE TABLE _rs_changes (seq INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, tbl TEXT NOT NULL, id TEXT NOT NULL, before TEXT, after TEXT, at INTEGER NOT NULL CHECK (at <> 0 OR raise(ignore)))',
+];
+/** A trigger shaped as the log's own that logs a row, then one the check raises on. */
+const RAISING_LOG = [
+  ...CHECKED_LOG,
+  `CREATE TRIGGER "_rsd_00_replaced_insert" BEFORE INSERT ON "tasks" BEGIN INSERT INTO _rs_changes (tbl, id, before, after, at) VALUES ('tasks', '', NULL, NULL, 1); INSERT INTO _rs_changes (tbl, id, before, after, at) VALUES ('tasks', '', NULL, NULL, 0); END`,
+];
+/** A table keyed by the log's first row, which a cascade moves; a trigger upserts it away. */
+const CASCADING = [
+  'CREATE TABLE cascaded (x INTEGER PRIMARY KEY REFERENCES _rs_changes (seq) ON UPDATE CASCADE, y INTEGER)',
+  'INSERT INTO cascaded VALUES (1, 0)',
+  `CREATE TRIGGER "_rsd_00_replaced_update" BEFORE UPDATE ON "cascaded" BEGIN INSERT INTO _rs_changes (seq, tbl, id, before, after, at) VALUES (1, 't', '', NULL, NULL, 0) ON CONFLICT (seq) DO UPDATE SET seq = 2; END`,
+];
+const cascaded = sqliteTable('cascaded', { x: integer().primaryKey(), y: integer() });
+/** The log made again, its key replacing on conflict, and a table keyed by one of its rows. */
+const REPLACING_LOG = [
+  'DROP TABLE _rs_changes',
+  'CREATE TABLE _rs_changes (seq INTEGER PRIMARY KEY ON CONFLICT REPLACE, tbl TEXT NOT NULL, id TEXT NOT NULL, before TEXT, after TEXT, at INTEGER NOT NULL)',
+  "INSERT INTO _rs_changes VALUES (1, 'x', 'x', NULL, NULL, 0)",
+  'CREATE TABLE cascaded (x INTEGER PRIMARY KEY REFERENCES _rs_changes (seq) ON DELETE CASCADE, y INTEGER)',
+  'INSERT INTO cascaded VALUES (1, 0)',
+  `CREATE TRIGGER "_rsd_00_replaced_update" BEFORE UPDATE ON "cascaded" BEGIN INSERT INTO _rs_changes (seq, tbl, id, before, after, at) VALUES (1, 't', '', NULL, NULL, 0); END`,
+];
+/** A table with a trigger of the application's that raises after an update. */
+const AFTER_RAISE = [
+  DDL,
+  'CREATE TRIGGER raising AFTER UPDATE ON tasks BEGIN SELECT RAISE(IGNORE); END',
+];
+/** A view that ends the statement that reads it, `RAISE(IGNORE)`. */
+const QUIET_VIEW = [DDL, 'CREATE VIEW quiet AS SELECT raise(ignore) AS x'];
+/** How long an operation sleeps past its time in a test of its time, and its time. */
+const SLOW = { pastMs: 600, timeoutMs: 200 } as const;
 /** How long another process holds a file's lock of SQLite's in a test. */
 const HELD_MS = 600;
 /**
@@ -124,6 +246,57 @@ async function opened(file = path.join(directory(), 'd1.sqlite')) {
     await hostOf(opening.db)?.close();
   });
   return opening;
+}
+
+/** The application's Drizzle over the file, as an operation's code writes through it. */
+type Orm = Awaited<ReturnType<typeof opened>>['orm'];
+
+/** What an operation's file is made of beside the table of one task `a`, and how long a call may run. */
+interface Setting {
+  /** The statements that make the tables and triggers, in place of `DDL`. */
+  readonly ddl?: readonly string[];
+  /** The statements that run once the authority has started, which makes the log. */
+  readonly after?: readonly string[];
+  readonly timeoutMs?: number;
+}
+
+/**
+ * The authority of one operation, `write`, over a file of one task `a`: sends it, and answers what
+ * it was rejected with, of the operation `id` given or a new one's.
+ */
+async function operating(
+  write: (orm: Orm) => Promise<void>,
+  setting: Setting = {},
+): Promise<((id?: string) => Promise<unknown>) & { readonly orm: Orm }> {
+  const { db, orm } = await opened();
+  const statements = setting.ddl ?? [DDL];
+  for (const statement of statements) await orm.run(sql.raw(statement));
+  await orm.insert(tasks).values({ id: 'a', title: 'one' });
+  const authority = await startAuthority({
+    buildId: BUILD,
+    database: db,
+    operations: { 'actions/tasks': { write: async () => write(orm) } },
+    programs: [],
+    ...(setting.timeoutMs !== undefined && { timeoutMs: setting.timeoutMs }),
+  });
+  onTestFinished(() => authority.close());
+  const after = setting.after ?? [];
+  for (const statement of after) await orm.run(sql.raw(statement));
+  const { sessionId } = await authority.engine.login('alice');
+  const operate = async (id = crypto.randomUUID()): Promise<unknown> => {
+    try {
+      return await authority.engine.operate(sessionId, {
+        args: [],
+        build: BUILD,
+        module: 'actions/tasks',
+        name: 'write',
+        operationId: id,
+      });
+    } catch (error) {
+      return error;
+    }
+  };
+  return Object.assign(operate, { orm });
 }
 
 describe('reactiveDb of a schema of SQLite', () => {
@@ -608,5 +781,474 @@ describe('reactiveDb of a schema of SQLite', () => {
     await hostOf(db)?.seed(first);
 
     expect(first).toHaveBeenCalledTimes(2);
+  });
+
+  describe('a server operation that writes through the file', () => {
+    it('answers its own refusal after an update that matched no row', async () => {
+      const operate = await operating(async (orm) => {
+        await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'absent'));
+        refuse('NO_TASK');
+      });
+
+      await expect(operate()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it('answers a failure after an update that matched a row', async () => {
+      const operate = await operating(async (orm) => {
+        await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'a'));
+        refuse('NO_TASK');
+      });
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers its own refusal after an update with returning that matched no row', async () => {
+      const operate = await operating(async (orm) => {
+        await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'absent')).returning();
+        refuse('NO_TASK');
+      });
+
+      await expect(operate()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it('answers a failure after an update with returning that matched a row', async () => {
+      const operate = await operating(async (orm) => {
+        await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'a')).returning();
+        refuse('NO_TASK');
+      });
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after a duplicate insert a table drops, as a trigger of the application’s ran', async () => {
+      const operate = await operating(
+        async (orm) => {
+          await orm.insert(tasks).values({ id: 'a', title: 'again' }).returning();
+          refuse('NO_TASK');
+        },
+        { ddl: IGNORING },
+      );
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a resend unsettled after a duplicate insert a table drops, and runs once', async () => {
+      let runs = 0;
+      const operate = await operating(
+        async (orm) => {
+          runs += 1;
+          await orm.insert(tasks).values({ id: 'a', title: 'again' }).returning();
+          await new Promise((resolve) => {
+            setTimeout(resolve, SLOW.pastMs);
+          });
+        },
+        { ddl: IGNORING, timeoutMs: SLOW.timeoutMs },
+      );
+      const id = crypto.randomUUID();
+
+      const first = await operate(id);
+      const again = await operate(id);
+
+      expect(first).toMatchObject({ code: 'OPERATION_UNSETTLED', status: 500 });
+      expect(again).toMatchObject({ code: 'OPERATION_UNSETTLED', status: 500 });
+      expect(runs).toBe(1);
+    });
+
+    it('answers a failure after a delete a trigger of the application’s made a row short of', async () => {
+      const operate = await operating(
+        async (orm) => {
+          await orm.delete(tasks).where(eq(tasks.id, 'a')).returning();
+          refuse('NO_TASK');
+        },
+        { ddl: DELETING },
+      );
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers its own refusal after an update that matched no row, of a trigger that runs after', async () => {
+      const operate = await operating(
+        async (orm) => {
+          await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'absent')).returning();
+          refuse('NO_TASK');
+        },
+        { ddl: AFTER_UPDATE },
+      );
+
+      await expect(operate()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it('answers a failure after an insert that did nothing on a key it holds', async () => {
+      const operate = await operating(async (orm) => {
+        await orm
+          .insert(tasks)
+          .values({ id: 'a', title: 'again' })
+          .onConflictDoNothing()
+          .returning();
+        refuse('NO_TASK');
+      });
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an update of a key a trigger on the log deleted the row of', async () => {
+      const operate = await operating(
+        async (orm) => {
+          await orm.update(tasks).set({ id: 'b' }).where(eq(tasks.id, 'a')).returning();
+          refuse('NO_TASK');
+        },
+        { after: ON_LOG, ddl: TWO_ROWS },
+      );
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a resend unsettled after that update, and runs once', async () => {
+      let runs = 0;
+      const operate = await operating(
+        async (orm) => {
+          runs += 1;
+          await orm.update(tasks).set({ id: 'b' }).where(eq(tasks.id, 'a')).returning();
+          await new Promise((resolve) => {
+            setTimeout(resolve, SLOW.pastMs);
+          });
+        },
+        { after: ON_LOG, ddl: TWO_ROWS, timeoutMs: SLOW.timeoutMs },
+      );
+      const id = crypto.randomUUID();
+
+      const first = await operate(id);
+      const again = await operate(id);
+
+      expect(first).toMatchObject({ code: 'OPERATION_UNSETTLED', status: 500 });
+      expect(again).toMatchObject({ code: 'OPERATION_UNSETTLED', status: 500 });
+      expect(runs).toBe(1);
+    });
+
+    it('answers a failure after a statement that writes uncounted through pragma_optimize', async () => {
+      const operate = await operating(async (orm) => {
+        await orm.run(sql.raw('WITH replace AS (SELECT 1) SELECT * FROM pragma_optimize(65538)'));
+        refuse('NO_TASK');
+      });
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an insert a temporary trigger drops', async () => {
+      const operate = await operating(
+        async (orm) => {
+          await orm.insert(tasks).values({ id: 'c', title: 'three' }).returning();
+          refuse('NO_TASK');
+        },
+        { after: TEMP_TRIGGER, ddl: AUDITED },
+      );
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after a duplicate insert a temporary table of its name drops', async () => {
+      const operate = await operating(
+        async (orm) => {
+          await orm.insert(tasks).values({ id: 'a', title: 'again' }).returning();
+          refuse('NO_TASK');
+        },
+        { after: TEMP_TABLE, ddl: AUDITED },
+      );
+
+      await expect(operate()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an insert whose trigger wrote statistics uncounted', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.insert(tasks).values({ id: 'n', title: 'new' });
+          refuse('NO_TASK');
+        },
+        { ddl: PRAGMA_TRIGGER },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      await expect(
+        set.orm.all(sql`SELECT count(*) AS n FROM sqlite_stat1`),
+      ).resolves.not.toStrictEqual([{ n: 0 }]);
+    });
+
+    it('answers a failure after an insert of no row that read a pragma view', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.run(sql`INSERT INTO audit SELECT id FROM opt`);
+          refuse('NO_TASK');
+        },
+        { ddl: PRAGMA_VIEW },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      await expect(
+        set.orm.all(sql`SELECT count(*) AS n FROM sqlite_stat1`),
+      ).resolves.not.toStrictEqual([{ n: 0 }]);
+    });
+
+    it('answers its own refusal after a zero-count update, of an AFTER trigger', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'absent'));
+          refuse('NO_TASK');
+        },
+        { ddl: AFTER_UPDATE },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it('answers its own refusal after an update returning a key that matched no row', async () => {
+      const set = await operating(async (orm) => {
+        await orm
+          .update(tasks)
+          .set({ title: 'x' })
+          .where(eq(tasks.id, 'absent'))
+          .returning({ id: tasks.id });
+        refuse('NO_TASK');
+      });
+
+      await expect(set()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it('answers a failure after an update that returns through RAISE(IGNORE)', async () => {
+      const set = await operating(async (orm) => {
+        await orm
+          .update(tasks)
+          .set({ title: 'two' })
+          .where(eq(tasks.id, 'a'))
+          .returning({ id: tasks.id, gone: sql`raise(ignore)` });
+        refuse('NO_TASK');
+      });
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an update that returns through a view that raises', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm
+            .update(tasks)
+            .set({ title: 'two' })
+            .where(eq(tasks.id, 'a'))
+            .returning({ id: tasks.id, gone: sql`(select x from quiet)` });
+          refuse('NO_TASK');
+        },
+        { ddl: QUIET_VIEW },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a resend unsettled after an insert that raises, and runs once', async () => {
+      let runs = 0;
+      const set = await operating(
+        async (orm) => {
+          runs += 1;
+          await orm
+            .insert(tasks)
+            .values({ id: 'n', title: 'new' })
+            .returning({ id: tasks.id, gone: sql`raise(ignore)` });
+          await new Promise((resolve) => {
+            setTimeout(resolve, SLOW.pastMs);
+          });
+        },
+        { timeoutMs: SLOW.timeoutMs },
+      );
+      const id = crypto.randomUUID();
+
+      const first = await set(id);
+      const again = await set(id);
+
+      expect(first).toMatchObject({ code: 'OPERATION_UNSETTLED', status: 500 });
+      expect(again).toMatchObject({ code: 'OPERATION_UNSETTLED', status: 500 });
+      expect(runs).toBe(1);
+    });
+
+    it('answers a failure after a delete of a table whose content is a pragma', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.run(sql`DELETE FROM ft WHERE rowid = 65538`);
+          refuse('NO_TASK');
+        },
+        { ddl: PRAGMA_CONTENT },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      await expect(
+        set.orm.all(sql`SELECT count(*) AS n FROM sqlite_stat1`),
+      ).resolves.not.toStrictEqual([{ n: 0 }]);
+    });
+
+    it('answers a failure after a delete with returning that read that table', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm
+            .delete(tasks)
+            .where(sql`id = (SELECT optimize FROM ft WHERE rowid = 65538)`)
+            .returning({ id: tasks.id });
+          refuse('NO_TASK');
+        },
+        { ddl: PRAGMA_CONTENT },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      await expect(
+        set.orm.all(sql`SELECT count(*) AS n FROM sqlite_stat1`),
+      ).resolves.not.toStrictEqual([{ n: 0 }]);
+    });
+
+    it('answers its own refusal after a zero-count update, of FTS5 of plain content', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.update(tasks).set({ title: 'x' }).where(eq(tasks.id, 'absent'));
+          refuse('NO_TASK');
+        },
+        { ddl: PLAIN_CONTENT },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it.each(["ATTACH ':memory:' AS aux", 'DETACH aux', "  /* c */ attach ':memory:' AS aux"])(
+      'refuses %s as D1 does',
+      async (statement) => {
+        const binding = memory();
+
+        await expect(binding.prepare(statement).run()).rejects.toThrow(
+          'D1_ERROR: not authorized: SQLITE_AUTH',
+        );
+        await expect(binding.batch([binding.prepare(statement)])).rejects.toThrow('SQLITE_AUTH');
+      },
+    );
+
+    it('answers a failure after the FTS5 delete, with case_sensitive_like on', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.run(sql`DELETE FROM ft WHERE rowid = 65538`);
+          refuse('NO_TASK');
+        },
+        { ddl: PRAGMA_CONTENT },
+      );
+      await set.orm.run(sql`PRAGMA case_sensitive_like = ON`);
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      await expect(
+        set.orm.all(sql`SELECT count(*) AS n FROM sqlite_stat1`),
+      ).resolves.not.toStrictEqual([{ n: 0 }]);
+    });
+
+    it('answers its own refusal, of a generated column and a pragma name', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.update(tasks).set({ title: 'x' }).where(eq(tasks.id, 'absent'));
+          refuse('NO_TASK');
+        },
+        { ddl: GENERATED },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'NO_TASK', status: 422 });
+    });
+
+    it('answers a failure after an insert a log-shaped trigger joined a raising view', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.insert(tasks).values({ id: 'n', title: 'new' }).returning();
+          refuse('NO_TASK');
+        },
+        { after: JOINING },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('reads the log’s real triggers as its own, and the same with a join as not', async () => {
+      const set = await operating(async () => {
+        await Promise.resolve();
+      });
+      const rows = await set.orm.all<Record<string, unknown>>(
+        sql`SELECT name, tbl_name, sql FROM sqlite_schema WHERE type = 'trigger' AND name LIKE '_rsd_%'`,
+      );
+      const joined = rows.map((row) => {
+        return {
+          ...row,
+          sql: `${String(row['sql']).slice(0, -'; END'.length)} JOIN x; END`,
+        };
+      });
+
+      expect(rows.length).toBeGreaterThan(0);
+      expect(rows.map((row) => logTrigger(row))).toStrictEqual(rows.map(() => true));
+      expect(joined.map((row) => logTrigger(row))).toStrictEqual(rows.map(() => false));
+    });
+
+    it.each(READING_QUIET)(
+      'answers a failure after an insert a log-shaped trigger read a raising view by %s',
+      async (_what, body) => {
+        const set = await operating(
+          async (orm) => {
+            await orm.insert(tasks).values({ id: 'n', title: 'new' }).returning();
+            refuse('NO_TASK');
+          },
+          {
+            after: [
+              'CREATE VIEW quiet AS SELECT raise(ignore) AS x',
+              `CREATE TRIGGER "_rsd_00_replaced_insert" BEFORE INSERT ON "tasks" BEGIN INSERT INTO _rs_changes (tbl, id, before, after, at) ${body}; END`,
+            ],
+          },
+        );
+
+        await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+      },
+    );
+
+    it('answers a failure after an insert whose log row a check on the log raised on', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.insert(tasks).values({ id: 'n', title: 'new' }).returning();
+          refuse('NO_TASK');
+        },
+        { after: RAISING_LOG },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an update whose key a log upsert cascaded away', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.update(cascaded).set({ y: 3 }).where(eq(cascaded.x, 1)).returning();
+          refuse('NO_TASK');
+        },
+        { after: CASCADING },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an update whose row a replacing log deleted', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.update(cascaded).set({ y: 3 }).where(eq(cascaded.x, 1)).returning();
+          refuse('NO_TASK');
+        },
+        { after: REPLACING_LOG },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
+
+    it('answers a failure after an update an AFTER trigger raised on', async () => {
+      const set = await operating(
+        async (orm) => {
+          await orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'a')).returning();
+          refuse('NO_TASK');
+        },
+        { ddl: AFTER_RAISE },
+      );
+
+      await expect(set()).resolves.toMatchObject({ code: 'OPERATION_FAILED', status: 500 });
+    });
   });
 });

@@ -162,19 +162,32 @@ export function beganWrite(sql: string): ((ended: ExternalWriteEnd) => void) | u
   return storage().getStore()?.evaluation.externalWrite?.(sql);
 }
 
+/** What `sentAsWrite` is given besides the statement and how it sends. */
+export interface SentOptions<T = unknown> {
+  /** The answer of a statement the operation sends no more of, as its call would fail. */
+  readonly refusal?: ((error: unknown) => T) | undefined;
+  /**
+   * Whether what a statement answered shows it wrote no row, which ends it `none` rather than
+   * `landed`.
+   */
+  readonly unwritten?: ((answered: unknown) => boolean | Promise<boolean>) | undefined;
+}
+
 /**
  * Sends `send`, a statement of `sql` that may write a table of the application's own and ends as it
  * is answered, as the operation under way sends it (`beganWrite`): `refused` says which of its errors
  * the database answered of the statement itself, which wrote nothing of it. A statement answered at
  * once, or through a callback, is of an outcome unknown. A statement the operation sends no more
- * of is answered by `refusal`, as its call would fail — a rejection, a callback — or else thrown.
+ * of is answered by `options.refusal`, as its call would fail — a rejection, a callback — or else
+ * thrown. A promised answer that `options.unwritten` says wrote no row ends the statement `none`.
  */
 export function sentAsWrite<T>(
   sql: string,
   send: () => T,
   refused: (error: unknown) => boolean,
-  refusal?: (error: unknown) => T,
+  options: SentOptions<T> = {},
 ): T {
+  const { refusal, unwritten } = options;
   let ended: ReturnType<typeof beganWrite>;
   try {
     ended = beganWrite(sql);
@@ -190,9 +203,21 @@ export function sentAsWrite<T>(
     ended(refused(error) ? 'none' : 'unknown');
     throw error;
   }
-  if (answered instanceof Promise) return endedBy(answered, ended, refused) as T;
+  if (answered instanceof Promise) return endedBy(answered, ended, refused, unwritten) as T;
   ended('unknown');
   return answered;
+}
+
+/**
+ * Whether `unwritten` says `value` wrote no row, awaited where it answers a promise; a throw or a
+ * rejection says not, and the answer stands.
+ */
+async function unwrittenBy(unwritten: SentOptions['unwritten'], value: unknown): Promise<boolean> {
+  try {
+    return (await unwritten?.(value)) === true;
+  } catch {
+    return false;
+  }
 }
 
 /** What `answered`, a statement's answer, settles to, as it ends the statement: of its error too. */
@@ -200,10 +225,11 @@ async function endedBy(
   answered: Promise<unknown>,
   ended: (end: ExternalWriteEnd) => void,
   refused: (error: unknown) => boolean,
+  unwritten: SentOptions['unwritten'],
 ): Promise<unknown> {
   try {
     const value: unknown = await answered;
-    ended('landed');
+    ended((await unwrittenBy(unwritten, value)) ? 'none' : 'landed');
     return value;
   } catch (error) {
     ended(refused(error) ? 'none' : 'unknown');
