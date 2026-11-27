@@ -58,6 +58,15 @@ export function givenHost(given: {
 }
 
 /**
+ * The host options a compile's digest reads in one list, in the order it has always held them: what
+ * the digest says of where the roots a prefetch carries are kept it says beside this list, where
+ * said alone, so that a project that says nothing of it digests as it did before.
+ */
+export function hostDigest(options: HostInput): readonly (boolean | string | undefined)[] {
+  return [options.session, options.prefetch, options.share, options.sessionChange];
+}
+
+/**
  * What the host tells the compile beside the sources (`HostOptions`): the session source and the
  * prefetch's lifetime it names, each refused where it names none, and where the roots a prefetch
  * carries are kept, refused where they cannot be.
