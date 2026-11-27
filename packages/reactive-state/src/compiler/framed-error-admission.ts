@@ -178,6 +178,28 @@ function admits(at: AdmissionChecker, type: Type): boolean {
 }
 
 /**
+ * What `errorLike` settled for each type a checker gave, by the type's id, so that a base shared by
+ * several derived types, along each path to it, is read once. `cuts` counts the answers a cycle of
+ * bases cut short: one that cut none stands for the type wherever it is asked, a refusal that a
+ * cut made may differ where the cycle is entered elsewhere.
+ */
+interface Settled {
+  readonly answers: Map<number, boolean>;
+  cuts: number;
+}
+
+const SETTLED = new WeakMap<Checker, Settled>();
+
+function settled(checker: Checker): Settled {
+  let memo = SETTLED.get(checker);
+  if (memo === undefined) {
+    memo = { answers: new Map(), cuts: 0 };
+    SETTLED.set(checker, memo);
+  }
+  return memo;
+}
+
+/**
  * Whether each value of a type may be an Error: one of the language's or the platform's Error
  * types, a class or an interface that derives one, or one whose base the checker cannot resolve
  * (an import it cannot read), as the base may be an Error type; an intersection where a member is,
@@ -189,9 +211,22 @@ function errorLike(
   path: ReadonlySet<number> = new Set(),
 ): boolean {
   if (open(type)) return true;
+  const memo = settled(at.checker);
   // A guard against a cycle of bases along one path; each branch reads its members afresh.
-  if (path.has(type.id)) return false;
-  const within = new Set(path).add(type.id);
+  if (path.has(type.id)) {
+    memo.cuts += 1;
+    return false;
+  }
+  const known = memo.answers.get(type.id);
+  if (known !== undefined) return known;
+  const cuts = memo.cuts;
+  const answer = derivesError(at, type, new Set(path).add(type.id));
+  if (answer || memo.cuts === cuts) memo.answers.set(type.id, answer);
+  return answer;
+}
+
+/** The members, and the bases, of a type that `errorLike` asks of: the path holds the type itself. */
+function derivesError(at: AdmissionChecker, type: Type, within: ReadonlySet<number>): boolean {
   if (type.isUnionType()) return type.getTypes().every((each) => errorLike(at, each, within));
   if (type.isIntersectionType()) return type.getTypes().some((each) => errorLike(at, each, within));
   const target = type.isTypeReference() ? type.getTarget() : type;
