@@ -26,6 +26,12 @@ function wide(body: string): string {
 
 const NESTED = " export const payload = make({meta: {id: 'safe'}});";
 
+const IDENTITY = 'function identity<T>(target: T) { return target; }';
+/** A factory as `wide` makes it, with a helper declared before it. */
+function answered(helper: string, body: string): string {
+  return `${helper} ${wide(body)}`;
+}
+
 /** A factory of a number list, called with `[0]`. */
 function counted(body: string): string {
   return `function make(value: number[]) { ${body} } export const payload = make([0]);`;
@@ -325,6 +331,71 @@ describe('shared factory parameter member writes', () => {
     apps.push(app);
 
     expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  // A helper that answers what it is handed answers the parameter itself: the name the answer is
+  // taken into is one the walk of the parameter's reads does not follow.
+  it.each([
+    answered(
+      IDENTITY,
+      "const alias = identity(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(
+      'const identity = <T,>(target: T) => target;',
+      "const alias = identity(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(
+      `function orEmpty(target: ${WIDE} | undefined) { return target ?? {id: 'x'}; }`,
+      "const alias = orEmpty(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(
+      `function passed(target: ${WIDE}) { const kept = target; return kept; }`,
+      "const alias = passed(value); alias.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    answered(IDENTITY, "identity(value).bad = new Date(0); value.id = 'fresh'; return value;"),
+    answered(
+      IDENTITY,
+      `const holder: {target?: ${WIDE}} = {}; holder.target = identity(value); value.id = 'fresh'; return value;`,
+    ),
+    answered(
+      IDENTITY,
+      "value.id = 'fresh'; const alias = identity(value); alias.bad = new Date(0); return value;",
+    ),
+  ])('refuses a member write into a parameter a helper answers: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    answered(IDENTITY, "identity(value); value.id = 'fresh'; return value;"),
+    answered(IDENTITY, "value.id = 'fresh'; return identity(value);"),
+    answered(
+      IDENTITY,
+      "const same = identity(value) === value; value.id = same ? 'a' : 'b'; return value;",
+    ),
+    answered(
+      'function tidy(text: string) { return text.trim(); }',
+      "const copy = tidy(value.id); value.id = 'fresh'; value.extra = copy; return value;",
+    ),
+    answered(
+      `function size(target: ${WIDE}) { return String(target.id).length; }`,
+      "const length = size(value); value.id = 'fresh'; value.extra = String(length); return value;",
+    ),
+    answered(
+      `function first(target: ${WIDE}, other: ${WIDE}) { return other; }`,
+      "const alias = first(value, {id: 'other'}); alias.bad = 1; value.id = 'fresh'; return value;",
+    ),
+    answered(
+      IDENTITY,
+      "const alias = identity({id: 'other'}); alias.id = 'x'; value.id = 'fresh'; return value;",
+    ),
+  ])('keeps a member write into a parameter that no helper answers: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
   });
 
   it('refuses a member write into a value the page gives', async () => {
