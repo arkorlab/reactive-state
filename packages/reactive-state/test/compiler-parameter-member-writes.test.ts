@@ -468,6 +468,34 @@ describe('shared factory parameter member writes', () => {
     },
   );
 
+  // A member of the parameter written into itself, or into a member of itself, makes an object that
+  // holds itself, as the parameter written into itself does.
+  it.each([
+    'function make(value: {meta: {self?: unknown}}) { value.meta.self = value.meta; return value; } export const payload = make({meta: {}});',
+    'function make(value: {a: {b: {up?: unknown}}}) { value.a.b.up = value.a; return value; } export const payload = make({a: {b: {}}});',
+    "function make(value: {meta: {self?: unknown}}) { value['meta'].self = value['meta']; return value; } export const payload = make({meta: {}});",
+    'function make(value: {meta: {self?: unknown}}) { (value.meta as {self?: unknown}).self = value.meta; return value; } export const payload = make({meta: {}});',
+    'function make(value: {list: unknown[]}) { value.list.push(value.list); return value; } export const payload = make({list: []});',
+    'function make(value: {meta: {self?: unknown}}) { value.meta.self ??= value.meta; return value; } export const payload = make({meta: {}});',
+  ])('refuses a member of a parameter written into itself: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
+  it.each([
+    'function make(value: {meta: {id: string}; other?: unknown}) { value.other = value.meta; return value; } export const payload = make({meta: {id: "safe"}});',
+    'function make(value: {meta: {id: string; copy?: string}}) { value.meta.copy = value.meta.id; return value; } export const payload = make({meta: {id: "safe"}});',
+    'function make(value: {meta: {self?: unknown}; other: {link?: unknown}}) { value.other.link = value.meta; return value; } export const payload = make({meta: {}, other: {}});',
+    'function make(value: {id: string; meta: {id?: string}}) { value.meta.id = value.id; return value; } export const payload = make({id: "safe", meta: {}});',
+  ])('keeps a member of a parameter written into another member: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
     apps.push(app);

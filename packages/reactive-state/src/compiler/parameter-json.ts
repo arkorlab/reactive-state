@@ -12,10 +12,12 @@ import {
 
 import { type Answering, isAnswering, parametersOf } from './answers.ts';
 import { unwrapped } from './bounded.ts';
+import { memberPath } from './exported-values.ts';
 import { writtenAsWhole } from './framed-array-identity.ts';
 import { metadataInitializer } from './input-callees.ts';
 import type { JsonReading } from './json-reading.ts';
 import { readsOf } from './local-module-reads.ts';
+import type { Put } from './local-write-targets.ts';
 import { writesOf } from './local-writes.ts';
 import { holdsStill } from './parameter-held.ts';
 import { parameterValue, readsReplacement } from './parameter-values.ts';
@@ -70,13 +72,39 @@ export function changedParameters(
       ...walk,
       holds: isHeld ? new Set([declared]) : undefined,
     });
+    const isRead = readsOf(declared, fn);
+    const isPutNonJson = (put: Put): boolean => {
+      return (
+        check(put.value, { ...reading, entry: put.entry }) || (isHeld && holdsItself(put, isRead))
+      );
+    };
     const changed =
       found.changes ||
-      found.values.some((put) => check(put.value, { ...reading, entry: put.entry })) ||
+      found.values.some((put) => isPutNonJson(put)) ||
       (replacement !== undefined && replacementNonJson(replacement.value, { reading, check }));
     known.set(name, changed);
     return changed;
   };
+}
+
+/**
+ * Whether the write `put` puts an object into itself: of the parameter, a member a chain of
+ * reads names (`value.meta.self = value.meta`) is written into that member or one inside it, as the
+ * parameter is put into itself (`value.self = value`), which the check of what is put in closes
+ * where it reads the whole parameter. A key the compile cannot read ends the chain, and none is
+ * refused.
+ */
+function holdsItself(put: Put, isRead: (node: Node) => boolean): boolean {
+  if (put.inside === undefined) {
+    return false;
+  }
+  const value = memberPath(put.value);
+  const inside = memberPath(put.inside);
+  return (
+    isRead(value.root) &&
+    isRead(inside.root) &&
+    value.keys.every((key, index) => key === inside.keys[index])
+  );
 }
 
 /**
