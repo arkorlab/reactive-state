@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExternalFollower } from '../../src/authority/external.ts';
 import { database, definitionOf } from '../../src/server/schema.ts';
 import { followDrizzle } from '../../src/sql/index.ts';
+import { bindingValue } from './d1-drizzle-binding.ts';
 import { faultsOf, notedBy, rendered } from './d1-drizzle-render.ts';
 
 /**
@@ -42,7 +43,7 @@ function explaining(times = Infinity): D1Database {
   let failing = times;
   return new Proxy(db, {
     get: (target, key) => {
-      if (key !== 'prepare') return Reflect.get(target, key) as unknown;
+      if (key !== 'prepare') return bindingValue(target, key);
       return (statement: string) => {
         if (!/^EXPLAIN\b/u.test(statement) || failing <= 0) return target.prepare(statement);
         failing -= 1;
@@ -58,7 +59,7 @@ function failingBatches(): D1Database {
     get: (target, key) => {
       if (key === 'batch') return () => Promise.reject(new Error('no batch of reads'));
       if (key === 'prepare') return (statement: string) => target.prepare(statement);
-      return Reflect.get(target, key) as unknown;
+      return bindingValue(target, key);
     },
   });
 }
@@ -78,7 +79,7 @@ function asking(): { readonly asked: string[]; readonly watched: D1Database } {
   const asked: string[] = [];
   const watched = new Proxy(db, {
     get: (target, key) => {
-      if (key !== 'prepare') return Reflect.get(target, key) as unknown;
+      if (key !== 'prepare') return bindingValue(target, key);
       return (statement: string) => {
         asked.push(statement);
         return target.prepare(statement);
@@ -354,7 +355,7 @@ describe('a Drizzle schema in D1', () => {
       const candidates: string[] = [];
       const failing = new Proxy(db, {
         get: (target, key) => {
-          if (key !== 'batch') return Reflect.get(target, key) as unknown;
+          if (key !== 'batch') return bindingValue(target, key);
           return (statements: readonly D1PreparedStatement[]) => {
             if (statements.length > 1) return target.batch([...statements]);
             candidates.push('asked');
@@ -386,7 +387,7 @@ describe('a Drizzle schema in D1', () => {
     ])('reads a table whole of a batch of %s', async (_name, answer) => {
       const odd = new Proxy(db, {
         get: (target, key) => {
-          if (key !== 'batch') return Reflect.get(target, key) as unknown;
+          if (key !== 'batch') return bindingValue(target, key);
           return (statements: readonly D1PreparedStatement[]) =>
             statements.length > 1 ? target.batch([...statements]) : Promise.resolve(answer);
         },
@@ -761,7 +762,7 @@ describe('a Drizzle schema in D1', () => {
     // The plans answer after the statement has failed.
     const slow = new Proxy(db, {
       get: (target, key) => {
-        if (key !== 'batch') return Reflect.get(target, key) as unknown;
+        if (key !== 'batch') return bindingValue(target, key);
         return async (statements: D1PreparedStatement[]) => {
           await new Promise((resolve) => {
             setTimeout(resolve, 50);
@@ -790,7 +791,7 @@ describe('a Drizzle schema in D1', () => {
     let asked = 0;
     const counted = new Proxy(db, {
       get: (target, key) => {
-        if (key !== 'prepare') return Reflect.get(target, key) as unknown;
+        if (key !== 'prepare') return bindingValue(target, key);
         return (statement: string) => {
           if (statement.startsWith('EXPLAIN ')) asked += 1;
           return target.prepare(statement);

@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExternalFollower } from '../../src/authority/external.ts';
 import { database, definitionOf } from '../../src/server/schema.ts';
 import { followDrizzle } from '../../src/sql/index.ts';
+import { bindingValue } from './d1-drizzle-binding.ts';
 import { faultsOf, rendered } from './d1-drizzle-render.ts';
 
 /**
@@ -108,7 +109,7 @@ function pragmaFailingOnce(): D1Database {
   let failing = 1;
   return new Proxy(db, {
     get: (target, key) => {
-      if (key !== 'prepare') return Reflect.get(target, key) as unknown;
+      if (key !== 'prepare') return bindingValue(target, key);
       return (statement: string) => {
         if (!statement.startsWith('PRAGMA index_list') || failing <= 0) {
           return target.prepare(statement);
@@ -196,14 +197,19 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const own = followDrizzle({ shadowed });
     await db.batch(
       [
-        'CREATE TABLE shadowed (id INTEGER PRIMARY KEY, owner TEXT)',
+        // PRAGMA table_info omits this generated shadow. SQLite 3.54 forbids adding a rowid alias
+        // with ALTER TABLE, so declare it when the table is created.
+        'CREATE TABLE shadowed (id INTEGER PRIMARY KEY, owner TEXT, rowid TEXT GENERATED ALWAYS AS (owner) VIRTUAL)',
         'CREATE INDEX shadowed_owner ON shadowed (owner)',
         "INSERT INTO shadowed VALUES (1, 'p1')",
         ...own.captureSql(),
-        // A generated column, which `PRAGMA table_info` leaves out, named as the triggers read the rowid.
-        'ALTER TABLE shadowed ADD COLUMN rowid TEXT GENERATED ALWAYS AS (owner) VIRTUAL',
       ].map((statement) => db.prepare(statement)),
     );
+
+    await expect(
+      db.prepare('SELECT rowid FROM shadowed WHERE id = 1').first('rowid'),
+    ).resolves.toBe('p1');
+
     const orm = drizzle(own.client(db), { schema: { shadowed } });
     const dependencies = await rendered(() =>
       orm.select({ id: shadowed.id }).from(shadowed).where(eq(shadowed.owner, 'p1')),
@@ -760,7 +766,16 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
   });
 
   it('refuses in a render a session the binding holds', async () => {
-    const held = Reflect.get(follow.client(db), 'alwaysPrimarySession') as D1DatabaseSession;
+    // Older D1 bindings exposed this session. Keep that escape-path coverage with an authored
+    // binding now that workerd keeps its own always-primary session in a private field.
+    const session = db.withSession('first-primary');
+    const legacy = new Proxy(db, {
+      get: (target, key) => {
+        if (key === 'alwaysPrimarySession') return session;
+        return bindingValue(target, key);
+      },
+    });
+    const held = Reflect.get(follow.client(legacy), 'alwaysPrimarySession') as D1DatabaseSession;
 
     await expect(faultsOf(() => held.prepare('SELECT 1 AS one').all())).resolves.toStrictEqual([
       new Error('A render runs no D1 `prepare`: query by statements, which are followed.'),
