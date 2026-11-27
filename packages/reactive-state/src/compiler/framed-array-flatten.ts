@@ -13,9 +13,12 @@ import {
 } from 'typescript/ast';
 
 import { unwrapped } from './bounded.ts';
-import { joinedRuns, segmentRun, selectedRunViews, type Run } from './framed-array-flatten-runs.ts';
+import { joinedRuns, segmentRun, selectedRunItems, type Run } from './framed-array-flatten-runs.ts';
 import type { ArrayElementView } from './framed-array-rest.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
+
+/** The segments of a flattening: the views of each position. */
+type ViewRun = Run<ArrayElementView>;
 
 /** Finite native flattening retains original scalar nodes and removes only written array layers. */
 interface Flattening {
@@ -92,7 +95,7 @@ function knownFlattenedArrayViews(
     if (parent === undefined) break;
     finished(top, parent, walk);
   }
-  return selectedRunViews(joinedRuns(root.parts), index);
+  return selectedRunItems(joinedRuns(root.parts), index);
 }
 
 /** What the walk of a receiver shares between the places an array stands: what it has read of each. */
@@ -104,7 +107,7 @@ interface Walk {
   /** The arrays that stand in more than one place, none where an array holds itself, which share nothing. */
   readonly shared: ReadonlySet<ArrayLiteralExpression> | undefined;
   /** What each shared array gave where it stood, by the place's depth, spread and change. */
-  readonly memo: Map<ArrayLiteralExpression, Map<string, Run>>;
+  readonly memo: Map<ArrayLiteralExpression, Map<string, ViewRun>>;
 }
 
 /** A written array whose elements are expanded, and the runs they gave so far. */
@@ -113,13 +116,13 @@ interface Expansion {
   readonly literal: ArrayLiteralExpression | undefined;
   readonly key: string;
   /** Where the array may change, the view of the array itself, which comes before its elements. */
-  readonly marker: Run | undefined;
+  readonly marker: ViewRun | undefined;
   readonly pending: Flattening[];
-  readonly parts: Run[];
+  readonly parts: ViewRun[];
 }
 
 /** One place of a flattening: a run of one segment, or the written array whose elements it holds. */
-function flattening(task: Flattening, walk: Walk): Run | Expansion {
+function flattening(task: Flattening, walk: Walk): ViewRun | Expansion {
   const unchanged = task.changed !== true;
   if (task.value === undefined) return segmentRun([], unchanged);
   const value = unwrapped(task.value);
@@ -148,7 +151,7 @@ function expansion(
     readonly unchanged: boolean;
   },
   walk: Walk,
-): Run | Expansion {
+): ViewRun | Expansion {
   const { value, literal, unchanged } = found;
   const stable = walk.stable(value);
   const changed = !unchanged || !stable;
@@ -177,7 +180,7 @@ function finished(done: Expansion, parent: Expansion, walk: Walk): void {
   if (literal !== undefined) {
     walk.active.delete(literal);
     if (walk.shared?.has(literal) === true) {
-      const kept = walk.memo.get(literal) ?? new Map<string, Run>();
+      const kept = walk.memo.get(literal) ?? new Map<string, ViewRun>();
       walk.memo.set(literal, kept.set(key, run));
     }
   }
@@ -232,36 +235,87 @@ export function flattenedReturnValues(value: Expression): readonly Expression[] 
   return array.elements.filter((element) => !isOmittedExpression(element));
 }
 
-/** A finite return-array spread materializes its holes while direct return holes stay omitted. */
-export function expandedReturnValues(
+/** A written array being expanded in the elements a return spreads, and the runs they gave so far. */
+interface Spread {
+  readonly array: ArrayLiteralExpression;
+  /** Whether a hole of the array counts as an element: of a spread array it does, of the return not. */
+  readonly materialized: boolean;
+  /** How many of the array's elements are expanded. */
+  next: number;
+  readonly parts: Run<Expression>[];
+}
+
+/** What the expansion of a return has met: the runs the arrays spread gave, and the arrays it is in. */
+interface Expansions {
+  readonly kept: Map<ArrayLiteralExpression, Run<Expression>>;
+  readonly active: Set<ArrayLiteralExpression>;
+  readonly stack: Spread[];
+}
+
+/**
+ * A finite return-array spread materializes its holes while direct return holes stay omitted. The
+ * elements it gives, in order, are a run of one segment for each, that the arrays around it hold by
+ * reference: a spread array is expanded once however many places spread it, and a position is found
+ * by the count of segments, without making an element for each place (a list of them, for aliases
+ * that double, held 2**n). None where a spread is no written array, an array is not stable, or an
+ * array holds itself, as `const a = [...a]` does.
+ */
+export function expandedReturnRun(
   value: Expression,
   stable: (value: Expression) => boolean,
-): readonly Expression[] | undefined {
-  const found: Expression[] = [];
-  const pending: {
-    readonly value: Expression;
-    readonly array: boolean;
-    readonly materialized: boolean;
-    readonly seen: ReadonlySet<Node>;
-  }[] = [{ value, array: true, materialized: false, seen: new Set() }];
-  for (let task = pending.pop(); task !== undefined; task = pending.pop()) {
-    if (!task.array) {
-      if (task.materialized || !isOmittedExpression(task.value)) found.push(task.value);
-      continue;
-    }
-    const array = literalArray(task.value);
-    if (array === undefined || task.seen.has(array) || !stable(task.value)) return undefined;
-    const seen = new Set(task.seen).add(array);
-    for (const each of array.elements.toReversed()) {
-      pending.push({
-        value: isSpreadElement(each) ? each.expression : each,
-        array: isSpreadElement(each),
-        materialized: task.materialized || isSpreadElement(each),
-        seen,
-      });
+): Run<Expression> | undefined {
+  const root = literalArray(value);
+  if (root === undefined || !stable(value)) return undefined;
+  const met: Expansions = {
+    kept: new Map(),
+    active: new Set([root]),
+    stack: [{ array: root, materialized: false, next: 0, parts: [] }],
+  };
+  for (let top = met.stack.at(-1); top !== undefined; top = met.stack.at(-1)) {
+    const element = top.array.elements[top.next];
+    top.next += 1;
+    if (element === undefined) {
+      const run = finishedSpread(met, top);
+      if (run !== undefined) return run;
+    } else if (isSpreadElement(element)) {
+      if (!enteredSpread(met, top, element.expression, stable)) return undefined;
+    } else if (top.materialized || !isOmittedExpression(element)) {
+      top.parts.push(segmentRun([element], true));
     }
   }
-  return found;
+  return undefined;
+}
+
+/**
+ * A spread in an array being expanded: the run the array gave where it stood before, or a new
+ * expansion of it. Not an array written, or one that is not stable or is being expanded already.
+ */
+function enteredSpread(
+  met: Expansions,
+  top: Spread,
+  spread: Expression,
+  stable: (value: Expression) => boolean,
+): boolean {
+  const array = literalArray(spread);
+  if (array === undefined || met.active.has(array) || !stable(spread)) return false;
+  const known = met.kept.get(array);
+  if (known === undefined) {
+    met.active.add(array);
+    met.stack.push({ array, materialized: true, next: 0, parts: [] });
+  } else top.parts.push(known);
+  return true;
+}
+
+/** An expanded array's run joins those of the array it is spread in, and is kept for where it stands again. */
+function finishedSpread(met: Expansions, done: Spread): Run<Expression> | undefined {
+  met.stack.pop();
+  met.active.delete(done.array);
+  const run = joinedRuns(done.parts);
+  const parent = met.stack.at(-1);
+  if (parent === undefined) return run;
+  met.kept.set(done.array, run);
+  parent.parts.push(run);
+  return undefined;
 }
 
 /**
