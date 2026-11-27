@@ -10,7 +10,8 @@ import { type FollowedSqliteStore, sqliteStore } from './store.ts';
  * call of one of D1's methods (`prepare`, `batch`, `exec`, `withSession`, `dump`) and calls that
  * method of what it answered, as D1's own are called of their binding: of none, the call throws,
  * naming the store, and a render that made it fails, whatever its code does with the error, so
- * that no answer of it outlasts the binding's arrival; what the function throws, the call throws.
+ * that no answer of it outlasts the binding's arrival; what the function throws, the call throws,
+ * and a render that made it fails the same way.
  * The store asks it at each read of the log: of none, it reads nothing and tells of no change, of
  * an epoch no log of D1's has; of a binding, it reads the log through it by a store of that
  * binding's own (`store.ts`), so that the digest of a schema and the epoch a store keeps are of one
@@ -43,23 +44,30 @@ const UNCONNECTED: ExternalChanges = Object.freeze({
 });
 
 /**
- * What a call of a binding whose function answered none comes to: a fault, naming the store — of a
- * render, the render's fault, noted as a refused statement's is (`client.ts`), as the statement
- * threw before the render could note what it read: an answer its code made of the error would be
- * kept, and not rendered again once the binding arrives.
+ * Throws `thrown` as a fault of the render that made the call, where a render did — noted as a
+ * refused statement's is (`client.ts`), as the call threw before the render could note what it
+ * read: an answer its code made of the error would be kept, and not rendered again once the binding
+ * arrives — and as it is outside one.
  */
-function unconnected(storeName: string): never {
-  const error = new Error(
-    `The store \`${storeName}\` reads and writes D1 through the binding that the function given to \`follow.client\` answers, and it answered none: connect the binding before a statement runs — a Durable Object's, of its environment, in its constructor.`,
-  );
+function faulted(thrown: unknown): never {
   const note = tableReads();
   if (note !== undefined) {
-    const fault = (): Promise<never> => Promise.reject(error);
+    const reason = thrown instanceof Error ? thrown : new Error(String(thrown));
+    const fault = (): Promise<never> => Promise.reject(reason);
     void note(fault).catch(() => {
       // Noted as the render's: the call's own answer is the error.
     });
   }
-  throw error;
+  throw thrown;
+}
+
+/** What a call of a binding whose function answered none comes to: a fault, naming the store. */
+function unconnected(storeName: string): never {
+  return faulted(
+    new Error(
+      `The store \`${storeName}\` reads and writes D1 through the binding that the function given to \`follow.client\` answers, and it answered none: connect the binding before a statement runs — a Durable Object's, of its environment, in its constructor.`,
+    ),
+  );
 }
 
 /**
@@ -92,7 +100,16 @@ export function lateD1<B extends D1Binding>(
   current: BindingOfNow<B>,
   storeName: string,
 ): ForwardedD1<B> {
-  const now = (): B => current() ?? unconnected(storeName);
+  const now = (): B => {
+    let binding: B | null | undefined;
+    try {
+      binding = current();
+    } catch (error) {
+      // What the function throws, the call throws: a fault of the render that made it as well.
+      return faulted(error);
+    }
+    return binding ?? unconnected(storeName);
+  };
   const answered = async (name: string, args: readonly unknown[]): Promise<unknown> => {
     const answer: unknown = await called(now(), name, args);
     return answer;

@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import { SymbolFlags } from 'typescript/sync';
@@ -20,14 +20,13 @@ const CHECK_TIMEOUT_MS = 30_000;
 /** What an export of a module is to TypeScript: a value, a type, or both, as a class is. */
 type Meaning = 'both' | 'type' | 'value';
 
-/** The file of the module the package's `./d1` entry names. */
-async function entryFile(): Promise<string> {
-  const manifest = JSON.parse(await readFile(new URL('package.json', PACKAGE), 'utf8')) as {
-    readonly exports: Readonly<Record<string, unknown>>;
-  };
-  const entry = manifest.exports['./d1'];
-  if (typeof entry !== 'string') throw new TypeError('The `./d1` entry names no module.');
-  return fileURLToPath(new URL(entry, PACKAGE));
+/**
+ * The file of the module the package's `./d1` entry names, as Node resolves the package's own
+ * specifier from its scope: a target Node rejects of a consumer's import — one that does not begin
+ * with `./` — is rejected here too.
+ */
+function entryFile(): string {
+  return createRequire(import.meta.url).resolve('@arkorlab/reactive-state/d1');
 }
 
 /** Whether `flags` holds any of the bits of `mask`, read one bit at a time. */
@@ -72,7 +71,7 @@ function exportsOf(file: string): Readonly<Record<string, Meaning>> {
 
 describe('the D1 entry', () => {
   it('answers d1Executor and pruneChanges alone', async () => {
-    const entry = (await import(await entryFile())) as Readonly<Record<string, unknown>>;
+    const entry = (await import(entryFile())) as Readonly<Record<string, unknown>>;
 
     // A module's namespace holds its names in their order of code units.
     expect(Object.keys(entry)).toStrictEqual(['d1Executor', 'pruneChanges']);
@@ -80,8 +79,8 @@ describe('the D1 entry', () => {
 
   it(
     'exports D1Executor of types, and no other',
-    async () => {
-      const file = await entryFile();
+    () => {
+      const file = entryFile();
 
       expect(exportsOf(file)).toStrictEqual({
         D1Executor: 'type',
