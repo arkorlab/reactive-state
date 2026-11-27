@@ -9,7 +9,12 @@
  * states, through `useSites`.
  */
 
-export { type OperationOutcome, operationOutcome } from '../runtime/outcome.ts';
+export {
+  type OperationOutcome,
+  operationOutcome,
+  type OperationRefusal,
+  operationRefusal,
+} from '../runtime/outcome.ts';
 export type { StoreStatus } from '../runtime/store.ts';
 export { LiveRoot, type LiveRootProps } from './live-root.tsx';
 export { type Sites, useSites } from './sites.tsx';
