@@ -315,10 +315,12 @@ function borrowedSet(parent: Node, at: Node): boolean {
 /**
  * Whether a use hands the collection to a native Map's or WeakMap's `get` as its receiver, by
  * `call`, `apply` or `Reflect.apply`: the native reads an entry and replaces no method. A `get` the
- * file may install on the prototype is the prototype scan's to read.
+ * file may install on the prototype is the prototype scan's to read. The receiver of an own method
+ * is not such a use: an own `get` answers whatever the prototype holds, and what it hands `this` to
+ * is the prototype's `get`, which that scan does not read for it.
  */
 function borrowedGet(parent: Node, at: Node): boolean {
-  if (!isCallExpression(parent)) return false;
+  if (!isCallExpression(parent) || at.kind === SyntaxKind.ThisKeyword) return false;
   const native = framedNativeArguments(parent, NATIVE_GETTERS);
   if (native === undefined || native.constructed) return false;
   const reflected = globalPathOf(unwrapped(parent.expression))?.join('.') === 'Reflect.apply';
