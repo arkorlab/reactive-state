@@ -2,8 +2,10 @@ import { assertedSessionOf } from '../asserted.ts';
 import { type AuthorityEngine, engineNow } from '../authority/engine.ts';
 import { AuthorityError } from '../authority/errors.ts';
 import type { CommitEvent, Watched } from '../authority/model.ts';
+import { holderOf, holderRefused } from '../authority/stream-admission.ts';
 import type { SessionId } from '../client/contract.ts';
 import { REVOKING_STATUSES } from '../status.ts';
+import { OpenStreams, StreamProbes } from './stream-probe.ts';
 
 /**
  * A session's server-sent events for a page's root, by the subscription its frame was issued with,
@@ -34,6 +36,12 @@ import { REVOKING_STATUSES } from '../status.ts';
  * engine refuses the session as it refuses one that ended. An asserted session's render refused
  * once the session's own expiry has come is the expiry's and not an end: the stream is renewed then
  * as well.
+ *
+ * Before a stream past its session's cap is refused, each of the session's streams here is written a
+ * heartbeat outside its pull, once a second at most, and the stream, with any other asked for
+ * meanwhile, waits a moment for places given back (`stream-probe.ts`): the Function a browser leaves
+ * does not see it go, and a stream whose reader left fails on that write and gives its place back,
+ * which it would otherwise hold until its own heartbeat.
  */
 
 /** How long a stream says nothing before it says it is alive, under what proxies close idle at. */
@@ -62,18 +70,23 @@ function announcement(watched: Watched): { readonly frame: { readonly revision: 
   return { frame: { revision: watched.revision } };
 }
 
-/** What a wait for the next commit ended with. */
-type Woken = 'commit' | 'ended' | 'expired' | 'heartbeat';
+/**
+ * What a wait for the next commit ended with: `said` where the stream said a heartbeat outside the
+ * pull (`beat`), after which the next one is due an interval later.
+ */
+type Woken = 'commit' | 'ended' | 'expired' | 'heartbeat' | 'said';
 
 /** What one open stream follows, and where it is counted. */
 interface Following {
   readonly engine: AuthorityEngine;
   readonly sessionId: SessionId;
+  /** Whose places the stream is counted among (`holderOf`); none where its admission says none. */
+  readonly holder: string | undefined;
   /** The signed subscription of the root, as the page's frame was issued with it. */
   readonly subscription: string;
   readonly heartbeatMs: number;
   /** The streams open now, which a follower leaves as it ends. */
-  readonly open: Set<Follower>;
+  readonly open: OpenStreams<Follower>;
   /** Gives back the place the stream was admitted with (`AuthorityEngine.admitStream`), once. */
   readonly release: () => void;
 }
@@ -98,6 +111,8 @@ class Follower {
   #saidAt = 0;
   /** Ends the wait under way, if one is. */
   #wake: ((woken: Woken) => void) | undefined;
+  /** The controller the stream started with, which a heartbeat said outside a pull writes to. */
+  #controller: ReadableStreamDefaultController<Uint8Array> | undefined;
   #ended = false;
 
   constructor(following: Following) {
@@ -123,8 +138,9 @@ class Follower {
   }
 
   /**
-   * Sends `text`, and notes when: the heartbeat is due an interval after. A stream that ended — its
-   * reader gone while a wait or a render was under way — is sent nothing.
+   * Sends `text`, and notes when: the heartbeat is due an interval after, so a wait under way —
+   * where the text is said outside the pull (`beat`) — waits again from now. A stream that ended —
+   * its reader gone while a wait or a render was under way — is sent nothing.
    */
   #say(controller: ReadableStreamDefaultController<Uint8Array>, text: string): void {
     if (this.#ended) {
@@ -132,6 +148,7 @@ class Follower {
     }
     controller.enqueue(encoder.encode(text));
     this.#saidAt = Date.now();
+    this.#wake?.('said');
   }
 
   /**
@@ -179,13 +196,15 @@ class Follower {
 
   /**
    * Waits for what comes next, and answers it: a commit is rendered for by the pull, a heartbeat
-   * is sent, and the stream ends at its session's expiry (`#expire`). Answers whether the pull has
-   * its event.
+   * is sent, a heartbeat said outside the pull has the pull wait again for the next one, an
+   * interval after it, and the stream ends at its session's expiry (`#expire`). Answers whether
+   * the pull has its event.
    */
   async #waited(controller: ReadableStreamDefaultController<Uint8Array>): Promise<boolean> {
     const woken = await this.#next();
     switch (woken) {
-      case 'commit': {
+      case 'commit':
+      case 'said': {
         return false;
       }
       case 'heartbeat': {
@@ -329,6 +348,7 @@ class Follower {
       },
       pull: async (controller) => this.#pull(controller),
       start: (controller) => {
+        this.#controller = controller;
         this.#say(controller, OPENING);
         if (asserted !== undefined && startedAt >= this.#expiresAt) {
           this.#renew(controller);
@@ -337,6 +357,27 @@ class Follower {
         }
       },
     });
+  }
+
+  /** Whose places the stream is counted among (`holderOf`); none where its admission says none. */
+  get holder(): string | undefined {
+    return this.#following.holder;
+  }
+
+  /**
+   * Says a heartbeat now, outside a pull, for the object to find a reader that left
+   * (`stream-probe.ts`): the write to one fails, which cancels the stream. It stands for the
+   * timer's next heartbeat, which is then due an interval after it. A stream that ended, or has not
+   * started, says nothing; nor does one whose reader has yet to take what it was sent last: what
+   * it holds finds a reader that left as a heartbeat would, and one still there is sent no more
+   * than it takes.
+   */
+  beat(): void {
+    const controller = this.#controller;
+    if (controller === undefined || (controller.desiredSize ?? 0) <= 0) {
+      return;
+    }
+    this.#say(controller, HEARTBEAT);
   }
 
   /** Stops listening and waiting, once: for a reader that went away, or a stream that is over. */
@@ -357,11 +398,33 @@ class Follower {
 export class EventStreams {
   readonly #engine: AuthorityEngine;
   readonly #heartbeatMs: number;
-  readonly #open = new Set<Follower>();
+  readonly #open = new OpenStreams<Follower>();
+  /** What finds the streams whose readers left, of a session at its cap (`stream-probe.ts`). */
+  readonly #probes = new StreamProbes();
 
   constructor(engine: AuthorityEngine, heartbeatMs = HEARTBEAT_MS) {
     this.#engine = engine;
     this.#heartbeatMs = heartbeatMs;
+  }
+
+  /**
+   * A place for a stream of the session (`admitStream`). One the admission refuses at the cap of
+   * the session's holder (`holderRefused`) — whatever holds those places: streams open here, or
+   * ones still rendering for the first time — waits for the holder's probe (`stream-probe.ts`), and
+   * asks again as places are given back. Any other refusal, the authority's own cap's, is thrown at
+   * once.
+   */
+  async #admitted(sessionId: SessionId): Promise<() => void> {
+    try {
+      return this.#engine.admitStream(sessionId);
+    } catch (error) {
+      const holder = holderRefused(error);
+      if (holder === undefined) {
+        throw error;
+      }
+      const ask = (): (() => void) => this.#engine.admitStream(sessionId);
+      return this.#probes.admitted(holder, this.#open.of(holder), ask, error);
+    }
   }
 
   /** How many streams are open now. */
@@ -374,15 +437,24 @@ export class EventStreams {
    * before there is any stream: a refusal of it — no session, a subscription of another session's
    * or of another build — is thrown, for the caller to answer as an ordinary refusal. So is a
    * session's, or the authority's, having as many streams open as it may (`admitStream`), before
-   * anything renders or listens.
+   * anything renders or listens — a session's after its streams here were written to, once a
+   * second at most, and a wait for places given back (`#admitted`): a wait outside the engine's
+   * queue, which nothing here holds.
    */
   async open(sessionId: SessionId, subscription: string): Promise<ReadableStream<Uint8Array>> {
-    const release = this.#engine.admitStream(sessionId);
+    const admitted = await this.#admitted(sessionId);
+    const holder = holderOf(admitted);
     const follower = new Follower({
       engine: this.#engine,
       heartbeatMs: this.#heartbeatMs,
+      holder,
       open: this.#open,
-      release,
+      release: () => {
+        admitted();
+        if (holder !== undefined) {
+          this.#probes.released(holder);
+        }
+      },
       sessionId,
       subscription,
     });
