@@ -17,6 +17,23 @@ export function retainedReceiver(result: unknown, receiver: unknown, facade: unk
   return result instanceof Promise ? settledReceiver(result, receiver, facade) : result;
 }
 
+/** What `first` and `rest`, as `query` was called, say of a callback, or of an object's own. */
+export function callbackOf(first: unknown, rest: readonly unknown[]): unknown {
+  const beside = rest.find((each) => typeof each === 'function');
+  if (beside !== undefined || typeof first !== 'object' || first === null) return beside;
+  return Reflect.get(first, 'callback');
+}
+
+/** A rejection with `reason`, which no one need await: it is no unhandled rejection. */
+export function rejection(reason: unknown): Promise<never> {
+  const settled: Error = reason as Error;
+  const rejected = Promise.reject(settled);
+  void rejected.catch(() => {
+    // Whoever awaits it hears it; one nobody awaits is no fault of the process.
+  });
+  return rejected;
+}
+
 /** The language's own `then`. */
 const OWN_THEN = Reflect.get(Promise.prototype, 'then') as (...args: unknown[]) => unknown;
 

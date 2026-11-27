@@ -324,6 +324,14 @@ export class Database {
     );
   }
 
+  /**
+   * Lets go of the record an operation made before its first write of the application's own
+   * tables, where every such write it sent was refused as a statement: it wrote nothing after all.
+   */
+  deleteOperation(sessionId: string, id: string): void {
+    this.#sql.run('DELETE FROM operations WHERE session_id = ? AND id = ?', sessionId, id);
+  }
+
   /** Keeps what an operation answered in the end, where it answered after its commit. */
   settleOperation(sessionId: string, id: string, outcome: string): void {
     this.#sql.run(

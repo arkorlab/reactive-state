@@ -1,5 +1,11 @@
 import { tableReads } from '../server/context.ts';
-import { facadeOf, guardedObjects, refusalOf, retainedReceiver } from './client-objects.ts';
+import {
+  callbackOf,
+  facadeOf,
+  guardedObjects,
+  refusalOf,
+  retainedReceiver,
+} from './client-objects.ts';
 import {
   answerOf,
   called,
@@ -11,6 +17,7 @@ import {
   REFUSED,
   refusedCall,
 } from './client-plans.ts';
+import { sentToPostgres, textOf, TransactionWrites } from './client-writes.ts';
 import type { Followed } from './keys.ts';
 import { boundOf } from './serialized.ts';
 
@@ -32,14 +39,19 @@ import { boundOf } from './serialized.ts';
  * A render may settle while a transaction it opened runs on. What opens and ends one reads nothing
  * and runs regardless, so Drizzle's `rollback` still ends it, and a connection given back in one is
  * closed: the next to take it would write into a transaction no one will commit.
+ *
+ * A server operation's statements that may write are told to it as they go (`client-writes.ts`):
+ * outside a transaction each ends as it is answered; in one a checked-out connection opens, all
+ * end as it does — as its `COMMIT` answers, or as `ROLLBACK`, or a connection given back in it,
+ * leaves them unwritten.
  */
 
-/** What a checked-out connection's transaction opens and ends with, in the forms Drizzle writes. */
-const TRANSACTION: readonly RegExp[] = [
-  ...OWN,
-  /^\s*begin(?:\s+[a-z]+)*\s*$/iu,
-  /^\s*(?:commit|rollback)\s*$/iu,
-];
+/** What opens a checked-out connection's transaction, and ends it, in the forms Drizzle writes. */
+const BEGIN = /^\s*begin(?:\s+[a-z]+)*\s*$/iu;
+const COMMIT = /^\s*commit\s*$/iu;
+const ROLLBACK = /^\s*rollback\s*$/iu;
+/** What a checked-out connection's transaction runs of its own: what opens and ends it, too. */
+const TRANSACTION: readonly RegExp[] = [...OWN, BEGIN, COMMIT, ROLLBACK];
 
 /**
  * The classes of SQLSTATE a check answers only of a text PostgreSQL took as one statement: of what
@@ -64,13 +76,6 @@ interface Statement {
 /** A `pg` connection a render may hold: a pool, or a connection it checked out. */
 type PoolConnection = Connection;
 
-/** What `first` and `rest`, as `query` was called, say of a callback, or of an object's own. */
-function callbackOf(first: unknown, rest: readonly unknown[]): unknown {
-  const beside = rest.find((each) => typeof each === 'function');
-  if (beside !== undefined || typeof first !== 'object' || first === null) return beside;
-  return Reflect.get(first, 'callback');
-}
-
 /**
  * The statement `query` was called with, read once, as `pg` reads it: the values beside a text or an
  * object before an object's own. Nothing of a callback, of a submittable, or of no text: a render
@@ -94,11 +99,6 @@ function statementOf(first: unknown, rest: readonly unknown[]): Statement | unde
   return { rebound, run: [{ ...config, text, values }], text, values };
 }
 
-/** The text `first` holds, as a string or an object's, to read what it would do. */
-function textOf(first: unknown): unknown {
-  return typeof first === 'object' && first !== null ? Reflect.get(first, 'text') : first;
-}
-
 /**
  * That a pool does not run `sql`, which would change one connection of many, answered as `pg`
  * answers a fault of a call of the form of `first` and `rest`.
@@ -115,10 +115,15 @@ function sessionRefused(first: unknown, rest: readonly unknown[], sql: string): 
   return undefined;
 }
 
+/** What `connection`, one a pool checked out, says of its transaction: nothing, of a `pg` that says not. */
+function statusOf(connection: PoolConnection): unknown {
+  const status: unknown = Reflect.get(connection, 'getTransactionStatus');
+  return typeof status === 'function' ? Reflect.apply(status, connection, []) : undefined;
+}
+
 /** Whether `connection`, one a pool checked out, is in a transaction: of a `pg` that says not, it may be. */
 function inTransaction(connection: PoolConnection): boolean {
-  const status: unknown = Reflect.get(connection, 'getTransactionStatus');
-  return typeof status !== 'function' || Reflect.apply(status, connection, []) !== IDLE;
+  return statusOf(connection) !== IDLE;
 }
 
 /**
@@ -132,6 +137,8 @@ function heard(): void {
 /** `connection`, a pool or one it checked out, its queries in a render noted by `plans`. */
 function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedOut: boolean): C {
   let client = connection;
+  /** What an operation's statements wrote in the transaction this connection opened, if one is open. */
+  let writes: TransactionWrites | undefined;
   const planner: Planner = {
     owner: connection,
     check: async (explain, values) => {
@@ -184,6 +191,35 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     await noted(() => plans.readsOf(text, values, planner, rebound));
     return called(connection, 'query', run);
   };
+  /**
+   * `statement`, one of the transaction's own, run: what opens one opens what its statements write,
+   * and what ends one ends that — a `COMMIT` of what wrote is a write of its own, which an operation
+   * that sends no more refuses, and which the code then rolls back. A `COMMIT` of a transaction this
+   * did not see open — of a form Drizzle does not write — is told to the operation as a write.
+   */
+  const transacted = (statement: Statement): unknown => {
+    const run = () => called(connection, 'query', statement.run);
+    if (BEGIN.test(statement.text)) {
+      // A transaction whose end went unseen (`END`, `COMMIT AND CHAIN`) may have written.
+      writes?.ended('unknown');
+      writes = new TransactionWrites();
+    }
+    if (ROLLBACK.test(statement.text)) {
+      writes?.ended('none');
+      writes = undefined;
+    }
+    if (!COMMIT.test(statement.text)) return run();
+    const held = writes;
+    if (held === undefined) return sentToPostgres('query', statement.run, run);
+    try {
+      held.committing();
+    } catch (error) {
+      const refused: Error = error as Error;
+      return Promise.reject(refused);
+    }
+    writes = undefined;
+    return held.through(run(), () => false);
+  };
   const query = (first: unknown, ...rest: unknown[]): unknown => {
     const statement = statementOf(first, rest);
     if (
@@ -191,7 +227,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       statement !== undefined &&
       TRANSACTION.some((form) => form.test(statement.text))
     ) {
-      return called(connection, 'query', statement.run);
+      return transacted(statement);
     }
     let noted: ReturnType<typeof tableReads>;
     try {
@@ -205,7 +241,8 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     if (typeof text === 'string' && plans.changesOneSession(text)) {
       return sessionRefused(first, rest, text);
     }
-    return outside('query', [first, ...rest]);
+    const args = [first, ...rest];
+    return sentToPostgres('query', args, () => outside('query', args), writes);
   };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
     tracked((await called(connection, 'connect', args)) as PoolConnection, plans, true);
@@ -231,6 +268,11 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
   };
   const release = (...args: unknown[]): unknown => {
     called(connection, 'removeListener', ['error', heard]);
+    // Closed in its transaction, the connection leaves nothing of it; one that ended unseen may have.
+    const status = statusOf(connection);
+    const closedIn = typeof status === 'string' && status !== IDLE;
+    writes?.ended(closedIn ? 'none' : 'unknown');
+    writes = undefined;
     return called(connection, 'release', inTransaction(connection) ? [true] : args);
   };
   if (checkedOut) called(connection, 'on', ['error', heard]);

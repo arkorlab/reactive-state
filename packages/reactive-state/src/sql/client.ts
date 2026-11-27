@@ -12,6 +12,7 @@ import {
   refusedCall,
 } from './client-plans.ts';
 import { trackedPool } from './client-pool.ts';
+import { sentToPostgres, TransactionWrites } from './client-writes.ts';
 import type { Followed } from './keys.ts';
 import { boundOf } from './serialized.ts';
 
@@ -25,6 +26,10 @@ import { boundOf } from './serialized.ts';
  * connection but `query` and `transaction`, which Drizzle runs a render's SQL through: `exec`,
  * `sql`, the raw protocol, `listen`, `describeQuery`, a `clone` — each runs SQL no plan is asked of,
  * or off the connection's turn. A `pg` pool is followed alike (`client-pool.ts`).
+ *
+ * A server operation's statements that may write are told to it as they go (`client-writes.ts`):
+ * outside a transaction each ends as it is answered; in one, all end as `transaction` does — as it
+ * commits, or as the code's own throw, or `rollback`, rolls it back.
  */
 
 /**
@@ -52,8 +57,12 @@ function rebinds(options: unknown): boolean {
   );
 }
 
-/** `connection`, a PGlite or one of its transactions, its queries in a render noted by `plans`. */
-function tracked<C extends Connection>(connection: C, plans: Plans, transaction = false): C {
+/**
+ * `connection`, a PGlite or one of its transactions, its queries in a render noted by `plans`; of a
+ * transaction, `writes` ends what an operation's statements in it write.
+ */
+function tracked<C extends Connection>(connection: C, plans: Plans, writes?: TransactionWrites): C {
+  const transaction = writes !== undefined;
   let client = connection;
   const planner: Planner = {
     owner: connection,
@@ -80,7 +89,10 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
     const opening = STATEMENTS.get(name);
     const text = typeof sql === 'string' && opening !== undefined;
     const raw = name === 'sql' || (typeof name === 'string' && name.startsWith('execProtocol'));
-    const run = () => retainedReceiver(called(connection, name, args), connection, client);
+    const answered = () => retainedReceiver(called(connection, name, args), connection, client);
+    // A transaction's `rollback` leaves nothing it wrote, whatever it answers.
+    if (name === 'rollback') writes?.ended('none');
+    const run = () => sentToPostgres(name, args, answered, writes);
     if (name === 'execProtocolRawSync') return plans.outsideContextNow(run);
     return raw || (text && plans.observesContext(`${opening}${sql}`))
       ? plans.outsideContext(run)
@@ -116,16 +128,30 @@ function tracked<C extends Connection>(connection: C, plans: Plans, transaction 
         : called(connection, 'query', [sql, ...rest]);
     },
     transaction: (body: unknown, ...rest: unknown[]) => {
+      const held = new TransactionWrites();
+      // What the code threw, which PGlite rolls the transaction back of before it throws it on.
+      let thrown: { readonly error: unknown } | undefined;
       const run =
         typeof body === 'function'
-          ? (opened: Connection): unknown => {
-              const answered: unknown = Reflect.apply(body, undefined, [
-                tracked(opened, plans, true),
-              ]);
-              return answered;
+          ? async (opened: Connection): Promise<unknown> => {
+              try {
+                const answered: unknown = await Reflect.apply(body, undefined, [
+                  tracked(opened, plans, held),
+                ]);
+                held.committing();
+                return answered;
+              } catch (error) {
+                thrown = { error };
+                throw error;
+              }
             }
           : body;
-      const call = () => called(connection, 'transaction', [run, ...rest]);
+      const call = () => {
+        return held.through(
+          called(connection, 'transaction', [run, ...rest]),
+          (error) => thrown !== undefined && thrown.error === error,
+        );
+      };
       return tableReads() === undefined ? plans.outsideTransaction(call) : call();
     },
   };

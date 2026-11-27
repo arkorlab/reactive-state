@@ -21,6 +21,13 @@ import type { Json, User } from '../program.ts';
 export type Entry = Readonly<Record<string, Json>>;
 
 /**
+ * How a statement an operation sent ended, as the client that sent it tells: `landed`, answered;
+ * `none` where the database refused the statement itself, which wrote nothing of it; and `unknown`
+ * where no answer came, or one the client does not read.
+ */
+export type ExternalWriteEnd = 'landed' | 'none' | 'unknown';
+
+/**
  * What the authority answers an evaluation's reads and writes with. Each takes what the
  * application's code handed `db` as it is: the authority checks it against the declaration.
  */
@@ -70,6 +77,13 @@ export interface Evaluation {
    * database more beside its statements, to say which rows they read.
    */
   readonly streamed?: boolean | undefined;
+  /**
+   * Told, before it goes, of each statement an operation's code sends that may write a table of the
+   * application's own (`sentAsWrite`): what it answers is told how the statement ended. It throws
+   * where the attempt was answered as of an outcome unknown — timed out, or faulted with nothing
+   * kept — whose statements are sent no more. An operation's alone.
+   */
+  readonly externalWrite?: ((sql: string) => (ended: ExternalWriteEnd) => void) | undefined;
 }
 
 /**
@@ -135,6 +149,66 @@ export function tableReads():
     return undefined;
   }
   return currentEvaluation('A query').readTables;
+}
+
+/**
+ * Begins a write of `sql`, a statement that may write a table of the application's own, as the
+ * server operation under way sends it (`Evaluation.externalWrite`): what ends it, told how it ended,
+ * once — none outside an operation, of the host's migrations or a module's own code. It throws where
+ * the operation sends no more. The slot is read whether or not it is open: an attempt left running
+ * past its time is still the one its statements are of.
+ */
+export function beganWrite(sql: string): ((ended: ExternalWriteEnd) => void) | undefined {
+  return storage().getStore()?.evaluation.externalWrite?.(sql);
+}
+
+/**
+ * Sends `send`, a statement of `sql` that may write a table of the application's own and ends as it
+ * is answered, as the operation under way sends it (`beganWrite`): `refused` says which of its errors
+ * the database answered of the statement itself, which wrote nothing of it. A statement answered at
+ * once, or through a callback, is of an outcome unknown. A statement the operation sends no more
+ * of is answered by `refusal`, as its call would fail — a rejection, a callback — or else thrown.
+ */
+export function sentAsWrite<T>(
+  sql: string,
+  send: () => T,
+  refused: (error: unknown) => boolean,
+  refusal?: (error: unknown) => T,
+): T {
+  let ended: ReturnType<typeof beganWrite>;
+  try {
+    ended = beganWrite(sql);
+  } catch (error) {
+    if (refusal === undefined) throw error;
+    return refusal(error);
+  }
+  if (ended === undefined) return send();
+  let answered: T;
+  try {
+    answered = send();
+  } catch (error) {
+    ended(refused(error) ? 'none' : 'unknown');
+    throw error;
+  }
+  if (answered instanceof Promise) return endedBy(answered, ended, refused) as T;
+  ended('unknown');
+  return answered;
+}
+
+/** What `answered`, a statement's answer, settles to, as it ends the statement: of its error too. */
+async function endedBy(
+  answered: Promise<unknown>,
+  ended: (end: ExternalWriteEnd) => void,
+  refused: (error: unknown) => boolean,
+): Promise<unknown> {
+  try {
+    const value: unknown = await answered;
+    ended('landed');
+    return value;
+  } catch (error) {
+    ended(refused(error) ? 'none' : 'unknown');
+    throw error;
+  }
 }
 
 /** Whether the render under way is an event stream's (`Evaluation.streamed`). */
