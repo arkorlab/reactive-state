@@ -12,7 +12,7 @@ import {
   layoutOf,
   type ProjectOptions,
 } from '../next/compile-on-build.ts';
-import { type Change, followChanges } from './changes.ts';
+import { type Change, followChanges, followFiles, outsideOf } from './changes.ts';
 import type { ProjectRead } from './project.ts';
 import { Supervisor } from './supervisor.ts';
 
@@ -54,15 +54,26 @@ export async function readProject(
   });
 }
 
+/** The last compile's record of `project`, whichever process it was of. */
+function digestOf(project: ProjectOptions): Readonly<Record<string, unknown>> {
+  const record = readFileSync(path.join(layoutOf(project).outDir, DIGEST_FILE), 'utf8');
+  return JSON.parse(record) as Readonly<Record<string, unknown>>;
+}
+
 /**
- * What the authority runs of `project`, by the last compile's record, whichever process it was of:
- * what it wrote, and the modules it read, in and out of the application, each by its digest. Not the
- * record's digest of every source, which moves of a module of the browser's alone as well.
+ * What the authority runs of `project`, by the last compile's record: what it wrote, and the modules
+ * it read, in and out of the application, each by its digest. Not the record's digest of every
+ * source, which moves of a module of the browser's alone as well.
  */
 function recordOf(project: ProjectOptions): string {
-  const record = readFileSync(path.join(layoutOf(project).outDir, DIGEST_FILE), 'utf8');
-  const { outputs, reads } = JSON.parse(record) as Readonly<Record<string, unknown>>;
+  const { outputs, reads } = digestOf(project);
   return JSON.stringify({ outputs, reads });
+}
+
+/** The modules the last compile read that no watch of the application's folders reaches. */
+function outsideReadsOf(project: ProjectOptions): string[] {
+  const { reads } = digestOf(project);
+  return outsideOf(layoutOf(project), Object.keys(reads as Readonly<Record<string, string>>));
 }
 
 /**
@@ -109,8 +120,15 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
     stopping?: Promise<void>;
     timer?: ReturnType<typeof setTimeout>;
     unfollow: () => void;
+    outside: { files: string; unfollow: () => void };
   } = {
     again: false,
+    outside: {
+      files: '',
+      unfollow: () => {
+        // Nothing is followed yet.
+      },
+    },
     read,
     record: recordOf(read.project),
     restarting: Promise.resolve(),
@@ -126,6 +144,29 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
       stdio: 'inherit',
     });
   });
+
+  /**
+   * Follows the modules the last compile read outside the folders `followChanges` watches, a
+   * workspace's package or a folder of the root: they change of an edit that touches no source of
+   * the application's. What it follows is what that compile read, so a module it came to read is
+   * followed from then on.
+   */
+  const following = (told: (change: Change) => void): void => {
+    const files = outsideReadsOf(running.read.project);
+    const key = files.join('\n');
+    if (key === running.outside.files) return;
+    running.outside.unfollow();
+    running.outside = {
+      files: key,
+      unfollow: followFiles(
+        files,
+        () => {
+          told('compile');
+        },
+        say,
+      ),
+    };
+  };
 
   /**
    * Compiles the components again, and starts the authority again where it is behind what is on
@@ -144,6 +185,7 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
       }
       await compileProject(running.read.project);
       const record = recordOf(running.read.project);
+      following(told);
       if (again || record !== running.record || !authority.running) {
         running.record = record;
         await authority.start();
@@ -174,6 +216,7 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
     }, SETTINGS.settleMs);
   };
   running.unfollow = followChanges(layoutOf(read.project), told, say);
+  following(told);
   const stop = (): void => {
     running.stopping ??= authority.stop();
     next.kill('SIGTERM');
@@ -188,6 +231,7 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
   const stopped = running.stopping ?? authority.stop();
   reading.abort();
   running.unfollow();
+  running.outside.unfollow();
   clearTimeout(running.timer);
   await stopped;
 }
