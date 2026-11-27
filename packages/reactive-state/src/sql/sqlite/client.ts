@@ -1,9 +1,20 @@
 import { type TableRead, tableReads } from '../../server/context.ts';
 import { bytecodeReads, type Instruction, type SchemaEntry } from './bytecode.ts';
 import type { SqliteKeyColumn, SqliteKeyKind } from './keys.ts';
+import { type StatementRead, statementRead } from './scopes.ts';
+import {
+  COLLATED,
+  type ColumnTypes,
+  type PlanAnswers,
+  readsApart,
+  sourcesOf,
+  tablesNamed,
+  wheresTogether,
+} from './sources.ts';
 import { holdsKind, sqliteKeyText } from './values.ts';
 import {
   BYTE_ORDER_MARK,
+  type Conditions,
   conditionsOf,
   leadingWord,
   namesPragmaFunction,
@@ -14,13 +25,14 @@ import {
 
 /**
  * A D1 binding whose statements a render runs note what they read of the followed tables: each
- * statement's tables, as its bytecode says (`bytecode.ts`), and of a statement of one table, the
- * rows its condition names by the table's keys (`where.ts`). The plan of a text is asked once, in
- * one batch beside nothing else, and kept while the schema stays as it was; a statement that begins
- * with `SELECT`, which writes nothing, runs as its plan is asked, so that a render waits for no more
- * than the slower of the two. A statement that writes is refused before it runs, and so is a text of
- * several statements, which D1 runs each of. The plans are of one database: every binding a follow
- * is given is of the database its store reads. Outside a render, the binding is as it is.
+ * statement's tables, as its bytecode says (`bytecode.ts`), and the rows its conditions name by the
+ * tables' keys: of a statement of one table (`where.ts`), and of a join or a subquery scope by scope
+ * (`scopes.ts`, `closure.ts`, `sources.ts`). The plan of a text is asked once, in one batch beside
+ * nothing else, and kept while the schema stays as it was; a statement that begins with `SELECT`,
+ * which writes nothing, runs as its plan is asked, so that a render waits for no more than the slower
+ * of the two. A statement that writes is refused before it runs, and so is a text of several
+ * statements, which D1 runs each of. The plans are of one database: every binding a follow is given
+ * is of the database its store reads. Outside a render, the binding is as it is.
  */
 
 /** A followed table of SQLite, as a render's reads name it. */
@@ -59,10 +71,13 @@ interface D1Run {
   readonly all: () => Promise<unknown>;
 }
 
-/** The tables a statement reads, as its plan says, and the terms of one it reads by its keys. */
+/**
+ * The tables a statement reads, as its plan says, and of a table it reads by its keys, the terms of
+ * each time it reads it: a read of none is of the table whole.
+ */
 interface Plan {
   readonly tables: readonly string[];
-  readonly keyed?: { readonly table: string; readonly terms: readonly KeyTerm[] } | undefined;
+  readonly keyed?: ReadonlyMap<string, readonly (readonly KeyTerm[])[]> | undefined;
   /** When the plan is asked again, where it is kept for a while alone: of a batch that failed. */
   readonly until?: number | undefined;
 }
@@ -83,6 +98,24 @@ const STATEMENTS = new Set(['delete', 'insert', 'replace', 'select', 'update', '
 
 /** A statement that begins with `SELECT`, which writes nothing in SQLite. */
 const READS_ONLY = /^\s*select\b/iu;
+/** How many answers of a plan's batch come before its tables' columns: `EXPLAIN`, the schema. */
+const PLAN_ANSWERS = 2;
+
+/** What a statement's text says, which its plan is asked and read by. */
+interface StatementText {
+  readonly conditions: Conditions | undefined;
+  /** The tables it names, each of whose columns the plan asks. */
+  readonly named: readonly string[];
+  readonly scoped: StatementRead | undefined;
+}
+
+/** What `sql` says: a statement of one table, or one read scope by scope. */
+function textOf(sql: string): StatementText {
+  const conditions = conditionsOf(sql);
+  if (conditions !== undefined) return { conditions, named: [conditions.table], scoped: undefined };
+  const scoped = statementRead(sql);
+  return { conditions, named: tablesNamed(scoped), scoped };
+}
 
 /** An SQL identifier, quoted. */
 function quoted(name: string): string {
@@ -110,7 +143,7 @@ function schemaOf(result: unknown): readonly SchemaEntry[] {
 }
 
 /** Each column's declared type of a batch's result of `PRAGMA table_info`, by the column's name. */
-function columnTypesOf(result: unknown): ReadonlyMap<string, string> {
+function columnTypesOf(result: unknown): ColumnTypes {
   const types = new Map<string, string>();
   for (const row of rowsOf(result)) {
     types.set(String(row['name']), typeof row['type'] === 'string' ? row['type'] : '');
@@ -196,20 +229,19 @@ class SqlitePlans {
     return { tables: [...new Set(this.#followed.byName.values())] };
   }
 
-  /** The terms of `conditions`'s table that are of its keys, as the table's columns hold them. */
+  /** The terms of `table` that are of its keys, as its columns, `declared`, hold them. */
   #keyTerms(
     table: string,
     terms: readonly Term[],
     schema: readonly SchemaEntry[],
-    columns: unknown,
+    declared: ColumnTypes,
   ): readonly KeyTerm[] {
     const keys = this.#followed.keysByTable.get(table) ?? [];
     const own = schema.find(
       (entry) => entry.type === 'table' && this.#followed.byName.get(entry.name) === table,
     );
     // A collation of the table's own may find two texts equal: no text key is followed of it.
-    const collated = /\bcollate\b/iu.test(own?.sql ?? '');
-    const declared = columnTypesOf(columns);
+    const collated = COLLATED.test(own?.sql ?? '');
     return terms.flatMap((term) => {
       const key = keys.find((each) => each.column === term.column);
       const type = declared.get(term.column);
@@ -288,11 +320,11 @@ class SqlitePlans {
       if (!READS_ONLY.test(sql) && !readsAlone(sql)) throw writes(sql);
       return undefined;
     }
-    const conditions = conditionsOf(sql);
-    const statement = (text: string): D1Statement => binding.prepare(text) as D1Statement;
+    const text = textOf(sql);
+    const statement = (asking: string): D1Statement => binding.prepare(asking) as D1Statement;
     const asked = [statement(`EXPLAIN ${sql}`).bind(...values), statement(SCHEMA_SQL)];
-    if (conditions !== undefined) {
-      asked.push(statement(`PRAGMA table_info(${quoted(conditions.table)})`));
+    for (const table of text.named) {
+      asked.push(statement(`PRAGMA table_info(${quoted(table)})`));
     }
     let answers: readonly unknown[];
     try {
@@ -308,15 +340,50 @@ class SqlitePlans {
       }
       throw error;
     }
+    return this.#planned(sql, text, answers);
+  }
+
+  /** The plan of `sql` of its batch's `answers`. */
+  #planned(sql: string, text: StatementText, answers: readonly unknown[]): Plan {
+    const { conditions, named, scoped } = text;
     const schema = schemaOf(answers[1]);
     const read = bytecodeReads(instructionsOf(answers[0]), schema);
     if (read.kind === 'writes') throw writes(sql);
-    if (read.kind === 'unread') return this.#everyTable();
+    if (read.kind === 'unread' || read.virtuals > (scoped?.functions.length ?? 0)) {
+      return this.#everyTable();
+    }
     const tables = [...read.tables].map((name) => this.#declared(name));
-    const only = conditions === undefined ? undefined : this.#followed.byName.get(conditions.table);
+    const columns = new Map(
+      named.map((table, at) => [table, columnTypesOf(answers[at + PLAN_ANSWERS])]),
+    );
+    if (scoped !== undefined) {
+      const { tables: opened, virtuals } = read;
+      return this.#scopedPlan(scoped, { columns, opened, schema, virtuals }, tables);
+    }
+    if (conditions === undefined) return { tables };
+    const only = this.#followed.byName.get(conditions.table);
     if (only === undefined || tables.some((table) => table !== only)) return { tables };
-    const terms = this.#keyTerms(only, conditions?.terms ?? [], schema, answers[2]);
-    return { keyed: { table: only, terms }, tables };
+    const declared = columns.get(conditions.table) ?? new Map<string, string>();
+    const terms = this.#keyTerms(only, conditions.terms, schema, declared);
+    return { keyed: new Map([[only, [terms]]]), tables };
+  }
+
+  /**
+   * The plan of a statement read scope by scope, of `tables` its bytecode opens: a source whose rows
+   * no term restricts reads its table whole, beside what the table's other sources name.
+   */
+  #scopedPlan(read: StatementRead, answers: PlanAnswers, tables: readonly string[]): Plan {
+    const reads = sourcesOf(read, answers);
+    if (reads.kind === 'every') return this.#everyTable();
+    if (reads.kind === 'whole') return { tables };
+    const keyed = new Map<string, (readonly KeyTerm[])[]>();
+    for (const { columns, table, terms } of reads.sources) {
+      const declared = this.#declared(table);
+      const of = keyed.get(declared) ?? [];
+      keyed.set(declared, of);
+      of.push(this.#keyTerms(declared, terms, answers.schema, columns));
+    }
+    return { keyed: new Map([...keyed].map(([table, of]) => [table, readsApart(of)])), tables };
   }
 
   /** The plan of `sql` as it is asked of `binding`: the ask under way of the text, or a new one. */
@@ -373,8 +440,10 @@ class SqlitePlans {
   ): Promise<readonly TableRead[]> {
     const plan = await this.#planOf(sql, values, binding);
     const reads: TableRead[] = plan.tables.flatMap((table) => {
-      const terms = plan.keyed?.table === table ? plan.keyed.terms : [];
-      return wheresOf(terms, values).map((where) => ({ table, where }));
+      const sources = plan.keyed?.get(table) ?? [[]];
+      const wheres = sources.flatMap((terms) => wheresOf(terms, values));
+      const named = sources.length > 1 ? wheresTogether(wheres, LIMITS.wheres) : wheres;
+      return named.map((where) => ({ table, where }));
     });
     // The schema's table too: a change of the schema renders the statement again.
     return [...reads, { schema: true, table: this.#followed.schemaTable, where: {} }];

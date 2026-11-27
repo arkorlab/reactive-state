@@ -230,7 +230,22 @@ describe("the tables a statement's bytecode reads", () => {
       schema,
     );
 
-    expect(read).toStrictEqual({ kind: 'reads', tables: new Set(['tasks']) });
+    expect(read).toStrictEqual({ kind: 'reads', tables: new Set(['tasks']), virtuals: 0 });
+  });
+
+  it('counts the virtual tables it opens, whose reads no root page names', () => {
+    const read = bytecodeReads(
+      [
+        { opcode: 'VOpen', p1: 0, p2: 0, p3: 0 },
+        { opcode: 'OpenRead', p1: 1, p2: 5, p3: 0 },
+        { opcode: 'VOpen', p1: 2, p2: 0, p3: 0 },
+        { opcode: 'Transaction', p1: 0, p2: 0, p3: 5 },
+        { opcode: 'Halt', p1: 0, p2: 0, p3: 0 },
+      ],
+      schema,
+    );
+
+    expect(read).toStrictEqual({ kind: 'reads', tables: new Set(['tasks']), virtuals: 2 });
   });
 
   // An answer of `EXPLAIN` that is no program as SQLite writes one is read as no answer.
@@ -249,7 +264,6 @@ describe("the tables a statement's bytecode reads", () => {
     [{ opcode: 'Vacuum', p1: 0, p2: 0, p3: 0 }, 'writes'],
     [{ opcode: 'AutoCommit', p1: 0, p2: 0, p3: 0 }, 'writes'],
     [{ opcode: 'Savepoint', p1: 0, p2: 0, p3: 0 }, 'writes'],
-    [{ opcode: 'VOpen', p1: 0, p2: 0, p3: 0 }, 'unread'],
     [{ opcode: 'OpenRead', p1: 0, p2: 4, p3: 1 }, 'unread'],
     [{ opcode: 'OpenRead', p1: 0, p2: 9, p3: 0 }, 'unread'],
   ] as const)('reads %j as %s', (instruction, kind) => {

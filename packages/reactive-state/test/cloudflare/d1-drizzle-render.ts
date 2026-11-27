@@ -27,8 +27,8 @@ export async function faultsOf(read: () => Promise<unknown>): Promise<readonly u
   return faults;
 }
 
-/** What a render of `read` notes it read, as an evaluation of a render takes it in. */
-export async function rendered(read: () => Promise<unknown>): Promise<Dependencies> {
+/** Each read a render of `read` notes, as an evaluation of a render takes it in. */
+export async function notedBy(read: () => Promise<unknown>): Promise<readonly TableRead[]> {
   const reads: TableRead[] = [];
   const evaluation = {
     readTables: async (taken: () => Promise<readonly TableRead[]>) => {
@@ -39,6 +39,12 @@ export async function rendered(read: () => Promise<unknown>): Promise<Dependenci
   await evaluate(evaluation, async () => {
     await read();
   });
+  return reads;
+}
+
+/** What a render of `read` read, as its dependencies. */
+export async function rendered(read: () => Promise<unknown>): Promise<Dependencies> {
+  const reads = await notedBy(read);
   const dependencies = new Dependencies();
   for (const { table, where } of reads) dependencies.query(table, where);
   return dependencies;

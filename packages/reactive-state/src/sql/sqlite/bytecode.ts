@@ -25,7 +25,12 @@ export interface SchemaEntry {
 
 /** What a statement's bytecode says it does. */
 export type BytecodeReads =
-  | { readonly kind: 'reads'; readonly tables: ReadonlySet<string> }
+  | {
+      readonly kind: 'reads';
+      readonly tables: ReadonlySet<string>;
+      /** How many virtual tables it opens, whose reads no root page names. */
+      readonly virtuals: number;
+    }
   | { readonly kind: 'writes' }
   | { readonly kind: 'unread'; readonly why: string };
 
@@ -41,7 +46,7 @@ const READS = new Set(['OpenRead', 'ReopenIdx']);
  */
 const WRITES = new Set(['AutoCommit', 'OpenWrite', 'Savepoint', 'SqlExec', 'Vacuum', 'VUpdate']);
 /** The opcode that opens a virtual table, whose reads no root page names. */
-const UNREAD = new Set(['VOpen']);
+const VIRTUAL = 'VOpen';
 /** The opcode every program of SQLite's ends at: one of none is not read as SQLite's. */
 const END = 'Halt';
 
@@ -53,14 +58,13 @@ function whole(value: unknown): number | undefined {
 
 /**
  * What `instruction` opens to read: the table of the b-tree, by the name `schema` gives its root
- * page; why it is not read plainly — a virtual table, a b-tree of another database than `main` (a
- * temporary or an attached one's), a root page the schema names not; or nothing it opens to read.
+ * page; why it is not read plainly — a b-tree of another database than `main` (a temporary or an
+ * attached one's), a root page the schema names not; or nothing it opens to read.
  */
 function openedBy(
   { opcode, p2, p3 }: Instruction,
   byPage: ReadonlyMap<number, SchemaEntry>,
 ): { readonly table: string } | { readonly why: string } | undefined {
-  if (UNREAD.has(opcode)) return { why: `it runs ${opcode}` };
   if (!READS.has(opcode)) return undefined;
   const page = whole(p2);
   if (page === undefined || whole(p3) !== 0) {
@@ -86,11 +90,13 @@ export function bytecodeReads(
   const byPage = new Map(schema.map((entry) => [entry.rootpage, entry]));
   const tables = new Set<string>();
   let unread: string | undefined;
+  let virtuals = 0;
   for (const instruction of instructions) {
     const { opcode, p2 } = instruction;
     if (WRITES.has(opcode) || (opcode === 'Transaction' && whole(p2) !== 0)) {
       return { kind: 'writes' };
     }
+    if (opcode === VIRTUAL) virtuals += 1;
     const opened = openedBy(instruction, byPage);
     if (opened !== undefined && 'why' in opened) unread ??= opened.why;
     if (opened !== undefined && 'table' in opened) tables.add(opened.table);
@@ -98,5 +104,7 @@ export function bytecodeReads(
   if (instructions.every((instruction) => instruction.opcode !== END)) {
     return { kind: 'unread', why: 'its bytecode is of no Halt' };
   }
-  return unread === undefined ? { kind: 'reads', tables } : { kind: 'unread', why: unread };
+  return unread === undefined
+    ? { kind: 'reads', tables, virtuals }
+    : { kind: 'unread', why: unread };
 }

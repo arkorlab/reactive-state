@@ -2,10 +2,11 @@
  * The conditions of a statement of SQLite that a render's reads are followed by: of a statement
  * Drizzle's builder writes of one table — `select … from "t" where "t"."c" = ? and "t"."d" in (?,
  * ?)` — each term of the top level's `AND` that names a column equal to a parameter, or in a list of
- * them. A statement of more — a join, a subquery, a set operation, a `WITH` — or of what this reads
- * not plainly — a comment, a numbered or a named parameter, a name quoted otherwise than `"` — has
- * none; a condition of a `CASE`, whose `AND` is its own, has none; and a term of more — an `OR`, a
- * `COLLATE`, a function — is left out: the read is then of more rows, never of fewer.
+ * them. A statement of more — a join, a subquery — is `scopes.ts`'s to read; a set operation, a
+ * `WITH`, or what this reads not plainly — a comment, a numbered or a named parameter, a name quoted
+ * otherwise than `"` — has none; a condition of a `CASE`, whose `AND` is its own, has none; and a
+ * term of more — an `OR`, a `COLLATE`, a function — is left out: the read is then of more rows,
+ * never of fewer.
  */
 
 /** A term of a statement's condition: a column, equal to one of the parameters at `params`. */
@@ -22,7 +23,7 @@ export interface Conditions {
 }
 
 /** A token of the text: a quoted name, a string, a word, a parameter, or another character. */
-type Token =
+export type Token =
   | { readonly kind: 'name'; readonly text: string }
   | { readonly kind: 'word'; readonly text: string }
   | { readonly kind: 'param' }
@@ -84,7 +85,7 @@ const WRITING = new Set([
  */
 const PRAGMA_FUNCTION = /(?:^|[^\w$])["[`]?pragma_/iu;
 /** How many tokens a column of its table is: `"t"`, `.`, `"c"`. */
-const QUALIFIED = { tokens: 3 } as const;
+export const QUALIFIED = { tokens: 3 } as const;
 /**
  * A word as SQLite's tokenizer reads one: a letter, `_` or any character past ASCII, then those, the
  * digits and `$` — `élimit` is one name, not `é` and `limit` — and its spaces, of ASCII alone: a
@@ -97,6 +98,11 @@ const SPACE = /[\t\n\f\r ]+/uy;
 export const BYTE_ORDER_MARK = '\u{FEFF}';
 /** An ASCII capital: SQLite's keywords are of ASCII alone, compared in any case of it. */
 const CAPITAL = /[A-Z]/gu;
+
+/** `name` as SQLite compares keywords and names: of ASCII's case alone. */
+export function folded(name: string): string {
+  return name.replaceAll(CAPITAL, (capital) => capital.toLowerCase());
+}
 
 /** The end of a quoted run from `at`, its quote doubled within it; `undefined` where it never ends. */
 function quotedEnd(sql: string, at: number): number | undefined {
@@ -138,11 +144,19 @@ function tokenAt(
     const [found] = pattern.exec(sql) ?? [];
     if (found !== undefined) {
       const kind = pattern === WORD ? 'word' : 'other';
-      const text = found.replaceAll(CAPITAL, (capital) => capital.toLowerCase());
-      return { end: at + found.length, token: { kind, text } };
+      return { end: at + found.length, token: { kind, text: folded(found) } };
     }
   }
   return { end: at + 1, token: { kind: 'other', text: char } };
+}
+
+/** Each parameter of `tokens`, by its place among the statement's. */
+export function placesOf(tokens: readonly Token[]): ReadonlyMap<Token, number> {
+  const places = new Map<Token, number>();
+  for (const token of tokens) {
+    if (token.kind === 'param') places.set(token, places.size);
+  }
+  return places;
 }
 
 /** The tokens of `sql`; `undefined` where it is not read plainly. */
@@ -166,13 +180,21 @@ function tokensOf(sql: string): readonly Token[] | undefined {
   return tokens;
 }
 
+/**
+ * The tokens of `sql` where they are what SQLite reads: it stops at a NUL, and two lone surrogates
+ * reach it as one U+FFFD. What restricts a read must be read as SQLite does; what writes need not.
+ */
+export function plainTokensOf(sql: string): readonly Token[] | undefined {
+  return sql.includes('\0') || !sql.isWellFormed() ? undefined : tokensOf(sql);
+}
+
 /** Whether `token` is the word `word`. */
-function isWord(token: Token | undefined, word: string): boolean {
+export function isWord(token: Token | undefined, word: string): boolean {
   return token?.kind === 'word' && token.text === word;
 }
 
 /** Whether `token` is the character `text`. */
-function isChar(token: Token | undefined, text: string): boolean {
+export function isChar(token: Token | undefined, text: string): boolean {
   return token?.kind === 'other' && token.text === text;
 }
 
@@ -228,7 +250,7 @@ function enclosed(tokens: readonly Token[]): boolean {
 }
 
 /** `tokens` of the parentheses around them all taken off, where one pair holds them all. */
-function unwrapped(tokens: readonly Token[]): readonly Token[] {
+export function unwrapped(tokens: readonly Token[]): readonly Token[] {
   let inner = tokens;
   while (enclosed(inner)) inner = inner.slice(1, -1);
   return inner;
@@ -307,12 +329,9 @@ function selectsAlone(tokens: readonly Token[]): boolean {
  * among the statement's; `undefined` where it is no such statement, or is not read plainly.
  */
 export function conditionsOf(sql: string): Conditions | undefined {
-  const tokens = tokensOf(sql);
+  const tokens = plainTokensOf(sql);
   if (tokens === undefined || !selectsAlone(tokens)) return undefined;
-  const places = new Map<Token, number>();
-  for (const token of tokens) {
-    if (token.kind === 'param') places.set(token, places.size);
-  }
+  const places = placesOf(tokens);
   const after = tokens.slice(1);
   const fromAt = after.findIndex((token) => isWord(token, 'from'));
   if (
