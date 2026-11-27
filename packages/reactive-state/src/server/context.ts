@@ -65,6 +65,11 @@ export interface Evaluation {
    * nothing renders an operation again.
    */
   readonly readTables?: ((reads: () => Promise<readonly TableRead[]>) => Promise<void>) | undefined;
+  /**
+   * Whether this render is an event stream's, not a page's: what follows its reads may ask the
+   * database more beside its statements, to say which rows they read.
+   */
+  readonly streamed?: boolean | undefined;
 }
 
 /**
@@ -130,6 +135,12 @@ export function tableReads():
     return undefined;
   }
   return currentEvaluation('A query').readTables;
+}
+
+/** Whether the render under way is an event stream's (`Evaluation.streamed`). */
+export function streamedRender(): boolean {
+  const slot = storage().getStore();
+  return slot?.open === true && slot.evaluation.streamed === true;
 }
 
 /**

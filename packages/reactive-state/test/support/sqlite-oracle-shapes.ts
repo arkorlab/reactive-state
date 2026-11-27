@@ -50,6 +50,16 @@ function inviterSeat(db: Orm) {
     );
 }
 
+/** The members of an organization, with their people's names: a join no parameter reaches. */
+export const roster: Shape = (db, picks) => {
+  return db
+    .select({ id: member.id, role: member.role, name: user.name })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(eq(member.organizationId, picks.organization))
+    .orderBy(asc(member.createdAt), asc(member.id));
+};
+
 const joins: Readonly<Record<string, Shape>> = {
   aggregate: (db, picks) => {
     return db
@@ -142,14 +152,7 @@ const joins: Readonly<Record<string, Shape>> = {
       .orderBy(asc(user.name), asc(member.id))
       .limit(1);
   },
-  roster: (db, picks) => {
-    return db
-      .select({ id: member.id, role: member.role, name: user.name })
-      .from(member)
-      .innerJoin(user, eq(user.id, member.userId))
-      .where(eq(member.organizationId, picks.organization))
-      .orderBy(asc(member.createdAt), asc(member.id));
-  },
+  roster,
   selfAlias: (db, picks) => {
     const other = alias(member, 'other');
     return db
@@ -265,7 +268,19 @@ const leftJoins: Readonly<Record<string, Shape>> = {
   },
 };
 
+/** A term of a result's alias beside a key term, which is no column of the table. */
+export const aliasTerm: Shape = (db, picks) => {
+  const value = sql<string>`upper(${member.role})`.as('value');
+  const seat = db.select({ id: user.id }).from(user).where(eq(user.id, member.userId));
+  return db
+    .select({ id: member.id, value })
+    .from(member)
+    .where(and(eq(member.organizationId, picks.organization), eq(value, 'OWNER'), exists(seat)))
+    .orderBy(asc(member.id));
+};
+
 const subqueries: Readonly<Record<string, Shape>> = {
+  aliasTerm,
   derived: (db, picks) => {
     const some = db
       .select()
@@ -478,6 +493,13 @@ const written: Readonly<Record<string, Shape>> = {
       select "m"."id" from "member" "m" left join "user" "u" on "u"."id" = "m"."user_id"
       where "u"."id" is null and "m"."organization_id" = ${picks.organization}
       order by "m"."id"`);
+  },
+  // Neither source has a key term: named by each other, each waits for what only the other notes.
+  mutualDrivers: (db) => {
+    return db.all(sql`
+      select "m"."id" as a, "u"."id" as b from "member" "m"
+      inner join "user" "u" on "u"."id" = "m"."user_id"
+      where "m"."role" = ${'owner'} and "u"."name" = ${'ann'} order by 1, 2`);
   },
   negated: (db, picks) => {
     return db.all(sql`

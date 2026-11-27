@@ -1,5 +1,5 @@
 import type { SchemaEntry } from './bytecode.ts';
-import { comparisonOf, termsOf } from './closure.ts';
+import { type Comparison, comparisonOf, type Edge, edgesOf, termsOf } from './closure.ts';
 import type { Occurrence, StatementRead } from './scopes.ts';
 import { folded, type Term } from './where.ts';
 
@@ -32,8 +32,9 @@ export interface PlanAnswers {
 }
 
 /** A time a statement reads a table, by the schema's name, and what restricts its rows. */
-interface TableSource {
+export interface TableSource {
   readonly columns: ColumnTypes;
+  readonly occurrence: Occurrence;
   readonly table: string;
   readonly terms: readonly Term[];
 }
@@ -42,7 +43,12 @@ interface TableSource {
 export type Sources =
   | { readonly kind: 'every' }
   | { readonly kind: 'whole' }
-  | { readonly kind: 'sources'; readonly sources: readonly TableSource[] };
+  | {
+      readonly kind: 'sources';
+      readonly sources: readonly TableSource[];
+      /** The equalities between columns compared alike, which a candidate names a source's rows by. */
+      readonly edges: readonly Edge[];
+    };
 
 /** The tables `read` names, once each, by a name of the text. */
 export function tablesNamed(read: StatementRead | undefined): readonly string[] {
@@ -91,37 +97,18 @@ export function sourcesOf(read: StatementRead, answers: PlanAnswers): Sources {
   }
   const entryOf = (of: Occurrence) => tables.get(folded(of.table ?? ''));
   const typesOf = (of: Occurrence): ColumnTypes => columns.get(of.table ?? '') ?? new Map();
-  const terms = termsOf(read, ({ column, occurrence }) => {
+  const comparison: Comparison = ({ column, occurrence }) => {
     const collated = COLLATED.test(entryOf(occurrence)?.sql ?? '');
     return comparisonOf(typesOf(occurrence).get(column), collated);
-  });
+  };
+  const terms = termsOf(read, comparison);
   const sources = named.flatMap((source) => {
     const table = entryOf(source)?.name;
     // A source the bytecode opens not is SQLite's left join left out: the schema's digest holds it.
     if (table === undefined || !opened.has(table)) return [];
-    return [{ columns: typesOf(source), table, terms: terms.get(source) ?? [] }];
+    return [
+      { columns: typesOf(source), occurrence: source, table, terms: terms.get(source) ?? [] },
+    ];
   });
-  return { kind: 'sources', sources };
-}
-
-/**
- * The reads of a table a statement stands in `sources` times: once of each set of terms, and once
- * whole where a source of no term holds what the others name.
- */
-export function readsApart<T>(sources: readonly (readonly T[])[]): readonly (readonly T[])[] {
-  if (sources.some((terms) => terms.length === 0)) return [[]];
-  return [...new Map(sources.map((terms) => [JSON.stringify(terms), terms])).values()];
-}
-
-/**
- * What the `wheres` of a table's several sources name together, each once: the table whole where one
- * of them is, or where they name more than the `most` a read may.
- */
-export function wheresTogether(
-  wheres: readonly Readonly<Record<string, string>>[],
-  most: number,
-): readonly Readonly<Record<string, string>>[] {
-  const distinct = [...new Map(wheres.map((where) => [JSON.stringify(where), where])).values()];
-  const whole = distinct.some((where) => Object.keys(where).length === 0);
-  return whole || distinct.length > most ? [{}] : distinct;
+  return { edges: edgesOf(read, comparison), kind: 'sources', sources };
 }

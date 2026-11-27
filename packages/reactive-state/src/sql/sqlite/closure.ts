@@ -22,6 +22,23 @@ export function comparisonOf(type: string | undefined, collated: boolean): strin
   return (['integer', 'text'] as const).find((kind) => holdsKind(kind, type));
 }
 
+/** Two columns an equality holds of on every row of `to`'s source that counts. */
+export interface Edge {
+  readonly from: ColumnRef;
+  readonly to: ColumnRef;
+}
+
+/** Whether `a` and `b` compare alike. */
+function alike(comparison: Comparison, a: ColumnRef, b: ColumnRef): boolean {
+  const of = comparison(a);
+  return of !== undefined && of === comparison(b);
+}
+
+/** Whether an equality in `scope`, of the `ON` of the `LEFT JOIN` of `on`, holds of `to`'s rows. */
+function holdsOf(to: ColumnRef, scope: Scope, on: Occurrence | undefined): boolean {
+  return to.occurrence.scope === scope && (on === undefined || on === to.occurrence);
+}
+
 /** A column that holds a parameter, and of which parameters. */
 interface Bound {
   readonly of: ColumnRef;
@@ -44,11 +61,6 @@ class Closure {
     return `${String(this.#places.get(occurrence))}.${column}`;
   }
 
-  #alike(a: ColumnRef, b: ColumnRef): boolean {
-    const comparison = this.#comparison(a);
-    return comparison !== undefined && comparison === this.#comparison(b);
-  }
-
   /** Notes that `of` holds `params`: whether that is new. */
   #add(of: ColumnRef, params: readonly number[]): boolean {
     const key = this.#key(of);
@@ -67,10 +79,7 @@ class Closure {
   /** Of an equality in `scope`, what `from` holds handed on to `to`. */
   #handed(to: ColumnRef, from: ColumnRef, scope: Scope, on: Occurrence | undefined): boolean {
     const known = this.#bound.get(this.#key(from));
-    const allowed = on === undefined || on === to.occurrence;
-    return (
-      known !== undefined && allowed && to.occurrence.scope === scope && this.#add(to, known.params)
-    );
+    return known !== undefined && holdsOf(to, scope, on) && this.#add(to, known.params);
   }
 
   /** Of a `LEFT JOIN`'s `ON`: `b.k = a.f and a.f = ?` holds of `b`, though not of `a`. */
@@ -89,7 +98,7 @@ class Closure {
     for (const fact of scope.facts) {
       if (fact.kind === 'params') {
         found = this.#term(fact, scope) || found;
-      } else if (this.#alike(fact.a, fact.b)) {
+      } else if (alike(this.#comparison, fact.a, fact.b)) {
         for (const [to, from] of [
           [fact.a, fact.b],
           [fact.b, fact.a],
@@ -113,6 +122,21 @@ class Closure {
     }
     return [...this.#bound.values()];
   }
+}
+
+/** Each equality of `read` between columns compared alike, of each side it holds of. */
+export function edgesOf(read: StatementRead, comparison: Comparison): readonly Edge[] {
+  const edges: Edge[] = [];
+  for (const scope of read.scopes) {
+    for (const fact of scope.facts) {
+      if (fact.kind === 'equal' && alike(comparison, fact.a, fact.b)) {
+        const { a, b, on } = fact;
+        if (holdsOf(a, scope, on)) edges.push({ from: b, to: a });
+        if (holdsOf(b, scope, on)) edges.push({ from: a, to: b });
+      }
+    }
+  }
+  return edges;
 }
 
 /** The terms of each source of `read`, of its own conditions and what equalities hand it. */

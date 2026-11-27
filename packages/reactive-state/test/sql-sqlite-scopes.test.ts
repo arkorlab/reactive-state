@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import type { SchemaEntry } from '../src/sql/sqlite/bytecode.ts';
-import { comparisonOf, termsOf } from '../src/sql/sqlite/closure.ts';
+import { type Comparison, comparisonOf, edgesOf, termsOf } from '../src/sql/sqlite/closure.ts';
 import { type StatementRead, statementRead } from '../src/sql/sqlite/scopes.ts';
-import { sourcesOf } from '../src/sql/sqlite/sources.ts';
+import { type Sources, sourcesOf } from '../src/sql/sqlite/sources.ts';
 import { conditionsOf, readsAlone } from '../src/sql/sqlite/where.ts';
 
 /** Each source of `sql`, `alias: column=place …`, every column compared alike; none unread. */
@@ -305,10 +305,69 @@ describe('what a statement says of each source it reads', () => {
   });
 });
 
+/** What `read` says of each source, but the occurrence it stands for: its kind, of none. */
+function sourcesIn(read: Sources) {
+  if (read.kind !== 'sources') throw new Error(`of no sources: ${read.kind}`);
+  return read.sources.map(({ columns, table, terms }) => ({ columns, table, terms }));
+}
+
+/** Each edge of `sql`, as `to = from`, of columns compared alike unless `comparison` says. */
+function edgesIn(sql: string, comparison: Comparison = () => 'text') {
+  const edges = edgesOf(plainly(sql), comparison);
+  return edges.map(
+    ({ from, to }) => `${to.occurrence.alias}.${to.column}=${from.occurrence.alias}.${from.column}`,
+  );
+}
+
 /** An entry of the schema, of a table of one text column unless it says otherwise. */
 function entry(name: string, type = 'table', sql = 'CREATE TABLE t (k TEXT)'): SchemaEntry {
   return { name, rootpage: 1, sql, tableName: name, type };
 }
+
+describe('the equalities that hold of the rows of a source', () => {
+  it.each([
+    [
+      "an inner join's, of each side",
+      'select 1 from "a" inner join "b" on "b"."k" = "a"."f"',
+      ['b.k=a.f', 'a.f=b.k'],
+    ],
+    [
+      "a `LEFT JOIN`'s, of its right table alone",
+      'select 1 from "a" left join "b" on "b"."k" = "a"."f"',
+      ['b.k=a.f'],
+    ],
+    [
+      'a `WHERE` over a left join, of each side',
+      'select 1 from "a" left join "b" on 1 where "b"."k" = "a"."f"',
+      ['b.k=a.f', 'a.f=b.k'],
+    ],
+    [
+      "a subquery's, of its own source alone",
+      'select 1 from "a" where exists (select 1 from "b" where "b"."k" = "a"."f")',
+      ['b.k=a.f'],
+    ],
+    [
+      "a `NOT EXISTS`'s, of its own source",
+      'select 1 from "a" where not exists (select 1 from "b" where "b"."k" = "a"."f")',
+      ['b.k=a.f'],
+    ],
+    ['none under an `OR`', 'select 1 from "a" inner join "b" on "b"."k" = "a"."f" or 1', []],
+    ['none of `IS`', 'select 1 from "a" inner join "b" on "b"."k" is "a"."f"', []],
+  ])('reads %s', (_name, sql, edges) => {
+    expect(edgesIn(sql)).toStrictEqual(edges);
+  });
+
+  it('reads none of columns compared otherwise', () => {
+    const sql = 'select 1 from "a" inner join "b" on "b"."k" = "a"."f"';
+
+    expect(
+      edgesIn(sql, ({ occurrence }) => (occurrence.alias === 'a' ? 'integer' : 'text')),
+    ).toStrictEqual([]);
+    expect(
+      edgesIn(sql, ({ occurrence }) => (occurrence.alias === 'x' ? 'text' : undefined)),
+    ).toStrictEqual([]);
+  });
+});
 
 describe('what a plan says of the sources a statement names', () => {
   const texts = new Map([['k', 'TEXT']]);
@@ -327,13 +386,10 @@ describe('what a plan says of the sources a statement names', () => {
       virtuals: 0,
     });
 
-    expect(read).toStrictEqual({
-      kind: 'sources',
-      sources: [
-        { columns: texts, table: 'a', terms: [{ column: 'k', params: [0] }] },
-        { columns: texts, table: 'b', terms: [{ column: 'k', params: [0] }] },
-      ],
-    });
+    expect(sourcesIn(read)).toStrictEqual([
+      { columns: texts, table: 'a', terms: [{ column: 'k', params: [0] }] },
+      { columns: texts, table: 'b', terms: [{ column: 'k', params: [0] }] },
+    ]);
   });
 
   it('hands no parameter to a table of a collation of its own', () => {
@@ -345,13 +401,10 @@ describe('what a plan says of the sources a statement names', () => {
       virtuals: 0,
     });
 
-    expect(read).toStrictEqual({
-      kind: 'sources',
-      sources: [
-        { columns: texts, table: 'a', terms: [{ column: 'k', params: [0] }] },
-        { columns: texts, table: 'b', terms: [] },
-      ],
-    });
+    expect(sourcesIn(read)).toStrictEqual([
+      { columns: texts, table: 'a', terms: [{ column: 'k', params: [0] }] },
+      { columns: texts, table: 'b', terms: [] },
+    ]);
   });
 
   it('reads no source of a table the bytecode opens not', () => {
@@ -362,10 +415,7 @@ describe('what a plan says of the sources a statement names', () => {
       virtuals: 0,
     });
 
-    expect(read).toStrictEqual({
-      kind: 'sources',
-      sources: [{ columns: texts, table: 'a', terms: [] }],
-    });
+    expect(sourcesIn(read)).toStrictEqual([{ columns: texts, table: 'a', terms: [] }]);
   });
 
   it.each([

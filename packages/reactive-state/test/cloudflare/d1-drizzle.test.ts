@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ExternalFollower } from '../../src/authority/external.ts';
 import { database, definitionOf } from '../../src/server/schema.ts';
 import { followDrizzle } from '../../src/sql/index.ts';
-import { notedBy, rendered } from './d1-drizzle-render.ts';
+import { faultsOf, notedBy, rendered } from './d1-drizzle-render.ts';
 
 /**
  * A Drizzle schema's tables in D1, run in workerd: a render's statements note the rows they read by
@@ -71,6 +71,47 @@ async function refusal(read: () => Promise<unknown>): Promise<string> {
     return String(error instanceof Error ? error.cause : error);
   }
   return 'none';
+}
+
+/** The statements `db` is asked, and `db` as it asks them. */
+function asking(): { readonly asked: string[]; readonly watched: D1Database } {
+  const asked: string[] = [];
+  const watched = new Proxy(db, {
+    get: (target, key) => {
+      if (key !== 'prepare') return Reflect.get(target, key) as unknown;
+      return (statement: string) => {
+        asked.push(statement);
+        return target.prepare(statement);
+      };
+    },
+  });
+  return { asked, watched };
+}
+
+/** A stream's render of `read`, of a plan a page's render asked before it. */
+async function streamed(read: () => Promise<unknown>) {
+  await rendered(read);
+  return rendered(read, { streamed: true });
+}
+
+/** Each read a stream's render of `read` notes, of a plan a page's render asked before it. */
+async function notedInStream(read: () => Promise<unknown>) {
+  await rendered(read);
+  return notedBy(read, { streamed: true });
+}
+
+/** The candidates among `asked`. */
+function candidatesIn(asked: readonly string[]): readonly string[] {
+  return asked.filter((each) => each.includes('DISTINCT'));
+}
+
+/** The tasks of `code`, each with its project's title. */
+function byCode(orm: ReturnType<typeof drizzle<typeof schema>>, code: string) {
+  return orm
+    .select({ title: tasks.title, project: projects.title })
+    .from(tasks)
+    .innerJoin(projects, eq(tasks.projectId, projects.id))
+    .where(eq(tasks.code, code));
 }
 
 /** A follower of the store's log, read to its head. */
@@ -226,6 +267,182 @@ describe('a Drizzle schema in D1', () => {
 
     expect(joined.changedBy(added)).toBe(false);
     expect(viewed.changedBy(added)).toBe(true);
+  });
+
+  describe("an event stream's render of a join", () => {
+    it('names the rows of a table no parameter reaches, by the values of its driver', async () => {
+      const orm = drizzle(follow.client(db), { schema });
+      const read = await streamed(() => byCode(orm, 'a'));
+      const follower = await following();
+
+      await orm.update(projects).set({ title: 'Renamed' }).where(eq(projects.id, 'p2'));
+
+      expect(read.changedBy(await follower.changed())).toBe(false);
+
+      await orm.update(projects).set({ title: 'Mine' }).where(eq(projects.id, 'p1'));
+
+      expect(read.changedBy(await follower.changed())).toBe(true);
+    });
+
+    it('renders again for a row its driver comes to hold', async () => {
+      const orm = drizzle(follow.client(db), { schema });
+      const read = await streamed(() => byCode(orm, 'a'));
+      const follower = await following();
+
+      await orm.update(tasks).set({ projectId: 'p2' }).where(eq(tasks.code, 'a'));
+
+      expect(read.changedBy(await follower.changed())).toBe(true);
+    });
+
+    it("asks no candidate of a page's render, which reads the table whole", async () => {
+      const { asked, watched } = asking();
+      const orm = drizzle(follow.client(watched), { schema });
+      const read = await rendered(() => byCode(orm, 'a'));
+      const follower = await following();
+
+      expect(candidatesIn(asked)).toStrictEqual([]);
+
+      await orm.update(projects).set({ title: 'Renamed' }).where(eq(projects.id, 'p2'));
+
+      expect(read.changedBy(await follower.changed())).toBe(true);
+    });
+
+    it("asks a candidate once of a statement, beside its plan's statements", async () => {
+      const { asked, watched } = asking();
+      const orm = drizzle(follow.client(watched), { schema });
+      await streamed(() => byCode(orm, 'a'));
+
+      expect(candidatesIn(asked)).toStrictEqual([
+        'SELECT DISTINCT "project_id" AS "value" FROM "tasks" WHERE "code" IN (?) LIMIT 33',
+      ]);
+    });
+
+    it('names no row of a table of a driver that holds none', async () => {
+      const orm = drizzle(follow.client(db), { schema });
+      const noted = await notedInStream(() => byCode(orm, 'none'));
+
+      expect(noted.filter(({ table }) => table === 'projects')).toStrictEqual([]);
+    });
+
+    it('reads a table whole past the records a read names', async () => {
+      const projectIds = Array.from({ length: 33 }, (_, at) => `many${String(at)}`);
+      await db.batch(
+        projectIds.flatMap((id, at) => {
+          return [
+            db.prepare('INSERT INTO projects VALUES (?, ?)').bind(id, id),
+            db
+              .prepare('INSERT INTO tasks (id, project_id, title, code) VALUES (?, ?, ?, ?)')
+              .bind(at + 100, id, 'many', id),
+          ];
+        }),
+      );
+      const orm = drizzle(follow.client(db), { schema });
+      const noted = await notedInStream(() => {
+        return orm
+          .select({ title: tasks.title })
+          .from(tasks)
+          .innerJoin(projects, eq(tasks.projectId, projects.id))
+          .where(inArray(tasks.code, projectIds));
+      });
+
+      expect(noted.filter(({ table }) => table === 'projects')).toStrictEqual([
+        { table: 'projects', where: {} },
+      ]);
+    });
+
+    it('reads a table whole where its candidate fails, and asks none for a while', async () => {
+      const candidates: string[] = [];
+      const failing = new Proxy(db, {
+        get: (target, key) => {
+          if (key !== 'batch') return Reflect.get(target, key) as unknown;
+          return (statements: readonly D1PreparedStatement[]) => {
+            if (statements.length > 1) return target.batch([...statements]);
+            candidates.push('asked');
+            return Promise.reject(new Error('no candidates'));
+          };
+        },
+      });
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => {
+        // Held to below.
+      });
+      const orm = drizzle(followDrizzle(schema).client(failing), { schema });
+      const noted = await notedInStream(() => byCode(orm, 'a'));
+      await notedBy(() => byCode(orm, 'a'), { streamed: true });
+
+      expect(noted.filter(({ table }) => table === 'projects')).toStrictEqual([
+        { table: 'projects', where: {} },
+      ]);
+      expect(candidates).toHaveLength(1);
+      expect(warned).toHaveBeenCalledTimes(1);
+      expect(warned.mock.calls[0]?.[0]).toContain('candidate');
+
+      warned.mockRestore();
+    });
+
+    it.each([
+      ['no answer', []],
+      ['an answer of no rows field', [{}]],
+      ['rows that are no list', [{ results: null }]],
+    ])('reads a table whole of a batch of %s', async (_name, answer) => {
+      const odd = new Proxy(db, {
+        get: (target, key) => {
+          if (key !== 'batch') return Reflect.get(target, key) as unknown;
+          return (statements: readonly D1PreparedStatement[]) =>
+            statements.length > 1 ? target.batch([...statements]) : Promise.resolve(answer);
+        },
+      });
+      const orm = drizzle(followDrizzle(schema).client(odd), { schema });
+      const noted = await notedInStream(() => byCode(orm, 'a'));
+
+      expect(noted.filter(({ table }) => table === 'projects')).toStrictEqual([
+        { table: 'projects', where: {} },
+      ]);
+    });
+
+    it('asks no candidate beside a plan it asks, which the render waits for', async () => {
+      const { asked, watched } = asking();
+      const orm = drizzle(followDrizzle(schema).client(watched), { schema });
+      const first = await notedBy(() => byCode(orm, 'a'), { streamed: true });
+
+      expect(candidatesIn(asked)).toStrictEqual([]);
+      expect(first.filter(({ table }) => table === 'projects')).toStrictEqual([
+        { table: 'projects', where: {} },
+      ]);
+
+      const second = await notedBy(() => byCode(orm, 'a'), { streamed: true });
+
+      expect(candidatesIn(asked)).toHaveLength(1);
+      expect(second.filter(({ table }) => table === 'projects')).toStrictEqual([
+        { table: 'projects', where: { k_id: 'p1' } },
+      ]);
+    });
+
+    // A batch of a statement that does not begin with `SELECT` runs after its reads are noted.
+    it('asks no candidate of a batch that waits for its reads', async () => {
+      const { asked, watched } = asking();
+      const client = followDrizzle(schema).client(watched);
+      const { sql: joined } = byCode(drizzle(client, { schema }), 'a').toSQL();
+      const both = () => {
+        return client.batch([
+          client.prepare(joined).bind('a'),
+          client.prepare('WITH x AS (SELECT 1 AS n) SELECT n FROM x'),
+        ]);
+      };
+      await rendered(both);
+      await rendered(both, { streamed: true });
+
+      expect(candidatesIn(asked)).toStrictEqual([]);
+    });
+
+    it("leaves a statement's own failure to the code that catches it", async () => {
+      const client = follow.client(db);
+      const orm = drizzle(client, { schema });
+      const { sql: asked } = byCode(orm, 'a').toSQL();
+      await rendered(() => client.prepare(asked).bind('a').all());
+      const faults = await faultsOf(() => client.prepare(asked).bind().all(), { streamed: true });
+
+      expect(faults).toStrictEqual([]);
+    });
   });
 
   it('reads whole a table a join reaches by what no parameter names', async () => {

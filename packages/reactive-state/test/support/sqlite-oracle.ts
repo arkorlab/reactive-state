@@ -108,42 +108,76 @@ const DDL = [
 /** Whether SQLite answers rows of `sql`, as D1 does of a statement it reads. */
 const READS = /^\s*(?:explain|pragma|select|values|with)\b/iu;
 
+/** A statement a render's candidate asks, whose values name the rows of a table. */
+const CANDIDATE = /^SELECT DISTINCT "\w+" AS "value" FROM /u;
+
+/** What a trial does around a render's statements: what writes between them, or answers otherwise. */
+interface OracleHooks {
+  /** Told as a batch of candidates is asked, and as it is answered. */
+  asking?: (() => void) | undefined;
+  answered?: (() => void) | undefined;
+  /** Whether a statement waits a turn, so that the candidates beside it run first. */
+  late?: boolean;
+  /** What the rows of a candidate are answered as. */
+  rows?: ((rows: readonly unknown[]) => readonly unknown[]) | undefined;
+}
+
 /** What `answer` answers, as D1 does: later, and of a rejection of what it throws. */
-async function later<T>(answer: () => T): Promise<T> {
-  await Promise.resolve();
+async function later<T>(answer: () => T, hooks: OracleHooks): Promise<T> {
+  await (hooks.late === true
+    ? new Promise((resolve) => {
+        setImmediate(resolve);
+      })
+    : Promise.resolve());
   return answer();
 }
 
 /** A statement of D1's shape, bound to `values`. */
-function statementOf(db: DatabaseSync, sql: string, values: readonly SQLInputValue[]) {
+function statementOf(
+  db: DatabaseSync,
+  hooks: OracleHooks,
+  sql: string,
+  values: readonly SQLInputValue[],
+) {
   const ran = () => {
     const prepared = db.prepare(sql);
+    if (CANDIDATE.test(sql)) {
+      const rows = prepared.all(...values);
+      return { meta: {}, results: hooks.rows?.(rows) ?? rows, success: true };
+    }
     if (READS.test(sql)) return { meta: {}, results: prepared.all(...values), success: true };
     const { changes } = prepared.run(...values);
     return { meta: { changes: Number(changes) }, results: [], success: true };
   };
   return {
-    all: () => later(ran),
-    bind: (...bound: readonly SQLInputValue[]) => statementOf(db, sql, bound),
-    first: () => later(() => db.prepare(sql).get(...values) ?? null),
+    all: () => later(ran, hooks),
+    bind: (...bound: readonly SQLInputValue[]) => statementOf(db, hooks, sql, bound),
+    first: () => later(() => db.prepare(sql).get(...values) ?? null, hooks),
     ran,
     raw: () => {
       return later(() => {
         const prepared = db.prepare(sql);
         prepared.setReturnArrays(true);
         return prepared.all(...values);
-      });
+      }, hooks);
     },
-    run: () => later(ran),
+    run: () => later(ran, hooks),
+    sql,
   };
 }
 
-/** A binding of D1's shape over `db`, whose calls run at once and so never interleave. */
-function bindingOf(db: DatabaseSync): D1Database {
+/** A binding of D1's shape over `db`, whose calls answer a turn later, as D1's do. */
+function bindingOf(db: DatabaseSync, hooks: OracleHooks): D1Database {
   const binding = {
-    batch: (statements: readonly ReturnType<typeof statementOf>[]) =>
-      later(() => statements.map((statement) => statement.ran())),
-    prepare: (sql: string) => statementOf(db, sql, []),
+    batch: async (statements: readonly ReturnType<typeof statementOf>[]) => {
+      const candidates = statements.some((statement) => CANDIDATE.test(statement.sql));
+      await Promise.resolve();
+      if (candidates) hooks.asking?.();
+      const answers = statements.map((statement) => statement.ran());
+      if (candidates) hooks.answered?.();
+      return answers;
+    },
+    prepare: (sql: string) => statementOf(db, hooks, sql, []),
   };
   return binding as unknown as D1Database;
 }
@@ -156,6 +190,8 @@ export interface OracleDatabase {
   readonly binding: D1Database;
   readonly db: DatabaseSync;
   readonly follow: DrizzleD1Follow<typeof tables>;
+  /** What a trial sets around a render, and clears after it. */
+  readonly hooks: OracleHooks;
   /** What a render reads through: its statements note their rows. */
   readonly followed: Orm;
   /** What the oracle asks through, of nothing noted. */
@@ -168,11 +204,13 @@ export function oracleDatabase(foreignKeys: boolean): OracleDatabase {
   const follow = followDrizzle(tables);
   for (const statement of DDL) db.exec(statement);
   for (const statement of follow.captureSql()) db.exec(statement);
-  const binding = bindingOf(db);
+  const hooks: OracleHooks = {};
+  const binding = bindingOf(db, hooks);
   return {
     binding,
     db,
     follow,
+    hooks,
     followed: drizzle(follow.client(binding), { schema }),
     plain: drizzle(binding, { schema }),
   };
@@ -224,7 +262,7 @@ const INVITATIONS = idsOf('i', 7);
 const ROLES = ['member', 'admin', 'owner'];
 const NAMES = ['ann', 'bob', 'cid'];
 const STATUSES = ['pending', 'accepted'];
-const SHARE = { filled: 0.8, nulled: 0.2 } as const;
+const SHARE = { filled: 0.8, held: 0.7, nulled: 0.2 } as const;
 const STAMPS = 9;
 /** A member's levels, as integers. */
 const LEVELS = [1, 2];
@@ -357,11 +395,15 @@ export function populate(db: DatabaseSync, random: Random): void {
   }
 }
 
-/** A random write of one statement, of its text where the database took it. */
-export function mutate(db: DatabaseSync, random: Random): string | undefined {
+/**
+ * A random write of one statement, of its text where the database took it, most of the time of a row
+ * `held` names: what an answer holds is what a miss shows in.
+ */
+export function mutate(db: DatabaseSync, random: Random, held = ''): string | undefined {
   const { ids, insert, table, updates } = random.of(TARGETS);
   const kind = random.of(['insert', 'update', 'update', 'delete']);
-  const id = random.of(ids);
+  const named = ids.filter((each) => held.includes(`"${each}"`));
+  const id = random.of(named.length > 0 && random.chance(SHARE.held) ? named : ids);
   if (kind === 'insert') return attempt(db, insert(random, id));
   if (kind === 'delete') return attempt(db, [`DELETE FROM "${table}" WHERE id = ?`, [id]]);
   const [column, value] = random.of(updates(random));
