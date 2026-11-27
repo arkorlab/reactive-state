@@ -5,12 +5,13 @@ import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 import { authorityObject } from '../../src/cloudflare/object.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../../src/program.ts';
-import { database, forbidden } from '../../src/server/index.ts';
-import { followDrizzle } from '../../src/sql/index.ts';
+import { forbidden } from '../../src/server/index.ts';
+import { followDrizzle, followedDb } from '../../src/sql/index.ts';
 
 /**
  * An application whose tables are its Drizzle schema's in D1, whose component binds its states to a
- * row of them: what a Durable Object reads and writes of a row through the binding.
+ * row of them: what a Durable Object reads and writes of a row through the binding. Its object is
+ * given no store: the follow brings its own, of the binding its `client` was given.
  */
 
 const rowMembers = sqliteTable('where_members', {
@@ -49,7 +50,7 @@ export const rowsFollow = followDrizzle({ rowMembers, rowNotes, rowTasks });
 const rowsOrm = drizzle(rowsFollow.client(env.REACTIVE_D1), {
   schema: { rowMembers, rowNotes, rowTasks },
 });
-export const rowsDatabase = database(rowsFollow.tables);
+export const rowsDatabase = followedDb(rowsFollow);
 
 /** The ids of the component's updates. */
 export const ROW_UPDATES = {
@@ -100,18 +101,9 @@ export const rowsProgram: ComponentProgram = {
   writable: ['done', 'estimate', 'kind', 'slug', 'title'],
 };
 
-export const RowsAuthority = authorityObject(
-  {
-    buildId: rowsProgram.buildId,
-    database: rowsDatabase,
-    programs: [rowsProgram],
-    sessions: 'asserted',
-  },
-  {
-    stores: (bindings) => {
-      return {
-        [rowsFollow.storeName]: rowsFollow.store(bindings['REACTIVE_D1'] as D1Database),
-      };
-    },
-  },
-);
+export const RowsAuthority = authorityObject({
+  buildId: rowsProgram.buildId,
+  database: rowsDatabase,
+  programs: [rowsProgram],
+  sessions: 'asserted',
+});
