@@ -67,7 +67,13 @@ export function framedCopiedUnread(reading: ArrayElementView): boolean {
   const whole = selected?.keys.length === 0;
   const own =
     whole && copied.follow && copied.own ? ownElementsAdmitted(binding?.type, reading) : undefined;
-  return own ?? framedMemberAdmitted(copied.declared, (reading.keys ?? []).slice(copied.depth));
+  const keys = (reading.keys ?? []).slice(copied.depth);
+  return (
+    own ??
+    (copied.array === true
+      ? framedElementAdmitted(copied.declared, undefined, keys)
+      : framedMemberAdmitted(copied.declared, keys))
+  );
 }
 
 /**
@@ -92,20 +98,39 @@ function ownElementsAdmitted(
 /**
  * What a native maps through a callback an unresolved spread supplies, `[0].map(...mappers())`:
  * the result of one the compile cannot read, which may be an Error where the call's declared
- * result type, its type argument, admits one at the read keys (`copied`, not followed). None where
- * the mapping reads its callback, or no spread supplies it.
+ * result type (`framedDeclaredResult`) admits one at the read keys (`copied`, not followed); of a
+ * borrowed method that type is the array's. None where the mapping reads its callback, or no
+ * spread supplies it.
  */
 export function framedUnreadCallback(
   call: CallExpression,
-  mapping: { readonly callback: Expression | undefined; readonly expanded: boolean },
+  mapping: {
+    readonly callback: Expression | undefined;
+    readonly expanded: boolean;
+    readonly borrowed: boolean;
+  },
 ): readonly ArrayElementView[] | undefined {
   const spread = call.arguments.find((each) => isSpreadElement(each));
   if (spread === undefined || !isSpreadElement(spread)) return undefined;
   if (!mapping.expanded || mapping.callback !== undefined) return undefined;
   if (framedArgumentPrefix(call, call.arguments, Infinity, false).alternatives !== undefined)
     return undefined;
-  const copied = { declared: call.typeArguments?.[0], follow: false, depth: 0, own: false };
+  const declared = framedDeclaredResult(call, mapping.borrowed);
+  const copied = { declared, follow: false, depth: 0, own: false, array: mapping.borrowed };
   return [{ value: spread.expression, index: undefined, capture: call, copied }];
+}
+
+/**
+ * The type argument written on a native method's call that declares what it answers: the method's
+ * own first, `reduce<U>` and `map<U>`; where the method is borrowed through `call`, `apply` or
+ * `Reflect.apply`, the last, as their type arguments are the receiver's type, the arguments' and
+ * the result's. None where none is written.
+ */
+export function framedDeclaredResult(
+  call: CallExpression,
+  borrowed: boolean,
+): TypeNode | undefined {
+  return borrowed ? call.typeArguments?.at(-1) : call.typeArguments?.[0];
 }
 
 /**
