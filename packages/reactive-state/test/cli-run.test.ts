@@ -583,6 +583,41 @@ describe('`reactive dev`', () => {
   );
 
   it(
+    "starts the authority again of a module out of the application's folders, though nothing else changed",
+    async () => {
+      const root = application({
+        '../shared/greeting.ts': "export const GREETING = 'Hello';\n",
+        'lib/mark.ts': "export const MARK = '!';\n",
+        'tsconfig.json': JSON.stringify({
+          compilerOptions: {
+            jsx: 'react-jsx',
+            paths: { '@/*': ['./src/*'], '@lib/*': ['./lib/*'], '@shared/*': ['../shared/*'] },
+          },
+        }),
+        [COMPONENT]: [
+          "import { GREETING } from '@shared/greeting';",
+          "import { MARK } from '@lib/mark';",
+          '',
+          'export default function Hello({ name }: { readonly name: string }) {',
+          '  return <p>{GREETING}, {name}{MARK}</p>;',
+          '}',
+          '',
+        ].join('\n'),
+      });
+      const { starts } = await run(root);
+
+      writeFileSync(path.join(root, '../shared/greeting.ts'), "export const GREETING = 'Hi';\n");
+
+      await expect.poll(starts, WAIT).toHaveLength(2);
+
+      writeFileSync(path.join(root, 'lib/mark.ts'), "export const MARK = '?';\n");
+
+      await expect.poll(starts, WAIT).toHaveLength(3);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
     'ends what it runs as it is told to stop',
     async () => {
       const root = application();
