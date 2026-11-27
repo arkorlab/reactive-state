@@ -106,12 +106,16 @@ export async function dev(projectDir: string, args: readonly string[] = []): Pro
     [process.env[name], read.env[name]].find((value) => value !== undefined && value !== '');
   const port = given('REACTIVE_ENGINE_PORT') ?? SETTINGS.port;
   const token = given('REACTIVE_ENGINE_TOKEN') ?? randomBytes(SETTINGS.tokenBytes).toString('hex');
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     REACTIVE_ENGINE_PORT: port,
     REACTIVE_ENGINE_TOKEN: token,
     REACTIVE_ENGINE_URL: `http://127.0.0.1:${port}`,
   };
+  // The mode `next dev` runs in, which it sets of none: what the authority runs is the application's
+  // own code, its database module, its seed and its operations, which may read it. (Of a type that
+  // names the three modes, as Next.js types it.)
+  Reflect.set(env, 'NODE_ENV', given('NODE_ENV') ?? 'development');
   const running: {
     read: ProjectRead;
     record: string;
