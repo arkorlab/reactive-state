@@ -399,6 +399,32 @@ function namedAt(sql: string, at: number): boolean {
   return NAMED.has(char) && (char !== '$' || !NAME_CHARACTER.test(sql[at - 1] ?? ''));
 }
 
+/** The digits a numbered parameter's index is written in (`?12`), where one begins. */
+const INDEX = /\d*/uy;
+
+/**
+ * How many parameters SQLite gives the statement `sql` of `?` and `?NNN` — its largest index, as
+ * `sqlite3_bind_parameter_count` answers: a `?` is one past the largest before it — outside its
+ * strings, quoted names and comments; none where it holds a named one, whose own end SQLite reads
+ * otherwise.
+ */
+export function parametersOf(sql: string): number | undefined {
+  let count = 0;
+  let at = 0;
+  while (at < sql.length) {
+    if (namedAt(sql, at)) return undefined;
+    if (sql[at] === '?') {
+      INDEX.lastIndex = at + 1;
+      const [digits = ''] = INDEX.exec(sql) ?? [];
+      count = digits === '' ? count + 1 : Math.max(count, Number(digits));
+      at += 1 + digits.length;
+    } else {
+      at = Math.max(runEnd(sql, at), at + 1);
+    }
+  }
+  return count;
+}
+
 /**
  * Whether `sql` is one statement: of no `;` but at its end, outside its strings, quoted names and
  * comments, and of no named parameter, whose own end SQLite reads otherwise. D1 runs each

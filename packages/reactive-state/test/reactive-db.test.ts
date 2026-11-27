@@ -4,7 +4,6 @@ import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { sql } from 'drizzle-orm';
 import { pgTable, text } from 'drizzle-orm/pg-core';
-import { sqliteTable, text as sqliteText } from 'drizzle-orm/sqlite-core';
 import { Client, Pool } from 'pg';
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
@@ -480,16 +479,6 @@ describe('reactiveDb', () => {
 
       expect(first).not.toHaveBeenCalled();
       expect(said).not.toHaveBeenCalledWith(expect.stringContaining('may not note'));
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    'refuses a schema of SQLite, which D1 keeps',
-    async () => {
-      const notes = sqliteTable('notes', { id: sqliteText().primaryKey() });
-
-      await expect(reactiveDb({ notes })).rejects.toThrow(/SQLite/u);
     },
     TEST_TIMEOUT_MS,
   );

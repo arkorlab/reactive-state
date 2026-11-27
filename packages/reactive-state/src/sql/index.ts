@@ -98,7 +98,7 @@ export interface FollowDrizzleOptions {
 }
 
 /** Whether a schema holds a table of SQLite's, which D1 keeps: by its dialect, which Drizzle types. */
-type OfSqlite<S> = true extends {
+export type OfSqlite<S> = true extends {
   [K in keyof S]: S[K] extends { readonly _: { readonly config: { readonly dialect: 'sqlite' } } }
     ? true
     : false;

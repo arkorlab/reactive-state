@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 
+import type { DrizzleD1Database } from 'drizzle-orm/d1';
 import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core';
 
 import { type DatabaseHost, hostDatabase, hostOf } from '../authority/database-host.ts';
@@ -11,13 +12,21 @@ import { logOf, seededSql } from './capture.ts';
 import { codeOf } from './client-plans.ts';
 import { checkServer } from './compat.ts';
 import type { Queryable } from './digest.ts';
-import { type DrizzleFollow, followDrizzle, type FollowDrizzleOptions } from './index.ts';
+import {
+  type DrizzleFollow,
+  followDrizzle,
+  type FollowDrizzleOptions,
+  type OfSqlite,
+} from './index.ts';
+import type { DrizzleD1Follow } from './sqlite/follow.ts';
+import { inSqliteFile } from './sqlite/host.ts';
 
 /**
  * An application's database in one call, of its Drizzle schema: `DATABASE_URL`'s server through a
- * `pg.Pool`, or of none PGlite in this process. What it answers is what the application reads and
- * writes with; the authority it is given to does all else as it starts (`DatabaseHost`). A module of
- * its own, as `./drizzle` is bundled for Workers, which have neither.
+ * `pg.Pool`, or of none PGlite in this process; of a schema of SQLite's tables, D1's, a file in D1's
+ * shape (`sqlite/host.ts`). What it answers is what the application reads and writes with; the
+ * authority it is given to does all else as it starts (`DatabaseHost`). A module of its own, as
+ * `./drizzle` is bundled for Workers, which have neither.
  */
 
 /** Where PGlite keeps a database between runs. */
@@ -39,10 +48,15 @@ const QUOTED = 500;
 const OWNER_RUNS =
   'the statements of `followDrizzle(schema).captureSql()` as the role that owns the tables';
 
-/** What `reactiveDb` answers: what reads and writes the tables, and what the authority is given. */
+/**
+ * What `reactiveDb` answers: what reads and writes the tables, of PostgreSQL's Drizzle or of D1's as
+ * the schema is, and what the authority is given.
+ */
 export interface ReactiveDb<S extends Readonly<Record<string, unknown>>> {
-  readonly orm: PgDatabase<PgQueryResultHKT, S>;
-  readonly db: Database<DrizzleFollow<S>['tables']>;
+  readonly orm: OfSqlite<S> extends true ? DrizzleD1Database<S> : PgDatabase<PgQueryResultHKT, S>;
+  readonly db: Database<
+    (OfSqlite<S> extends true ? DrizzleD1Follow<S> : DrizzleFollow<S>)['tables']
+  >;
 }
 
 /** A connection of `pg`'s, or of PGlite's, as the host reads and writes the log through it. */
@@ -274,18 +288,19 @@ export async function reactiveDb<S extends Readonly<Record<string, unknown>>>(
   schema: S,
   options: FollowDrizzleOptions = {},
 ): Promise<ReactiveDb<S>> {
-  const follow = followDrizzle(schema, options) as unknown as DrizzleFollow<S>;
+  const follow = followDrizzle(schema, options) as unknown as DrizzleFollow<S> | DrizzleD1Follow<S>;
   if (!('channel' in follow)) {
-    throw new TypeError(
-      "reactiveDb(): a schema of SQLite's tables is D1's, which a Worker's binding opens: follow it with `followDrizzle`.",
-    );
+    const connected = await inSqliteFile(schema, follow, LOG.keptMs);
+    const db = database(follow.tables);
+    hostDatabase(db, connected.host);
+    return { db, orm: connected.orm } as unknown as ReactiveDb<S>;
   }
   const url = process.env['DATABASE_URL'];
   const connected =
     url === undefined ? await inProcess(schema, follow) : await onServer(url, schema, follow);
-  const db = database<DrizzleFollow<S>['tables']>(follow.tables);
+  const db = database(follow.tables);
   hostDatabase(db, connected.host);
-  return { db, orm: connected.orm as ReactiveDb<S>['orm'] };
+  return { db, orm: connected.orm } as unknown as ReactiveDb<S>;
 }
 
 /** Runs the application's migrations in `folder` on `db`, of `reactiveDb`, before its authority starts. */
