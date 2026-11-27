@@ -41,6 +41,10 @@ import { scopeOf } from './views.ts';
  * authority that stopped in between leaves it, answers a resend that its outcome is unknown (500
  * `OPERATION_UNSETTLED`), never a result it did not see returned.
  *
+ * The operation's code holds the authority's queue while it runs, unless every table of the
+ * application is external (`OperationFlights`): the code then runs apart from it, and the queue
+ * is entered again to keep its outcome, if the session still lasts (`Running#execute`).
+ *
  * The application's own tables (`followDrizzle`) are written by its own statements, which no
  * transaction of the authority's holds: so, before the first of them that may write, the operation
  * makes its record as a commit would, and a resend of it is never run again. Once one may have
@@ -131,7 +135,7 @@ function repeated(previous: Outcome, operationId: string): OperationReceipt {
 }
 
 /** One run of an operation: its call, its one transaction, and what it committed. */
-class Running {
+export class Running {
   readonly #core: Core;
   readonly #session: Session;
   readonly #call: OperationCall;
@@ -160,13 +164,31 @@ class Running {
   readonly #connections = new Map<WeakKey, () => boolean>();
   /** What became of its answer: kept for a resend, or answered as of an outcome unknown. */
   #settled: 'abandoned' | 'kept' | undefined;
+  /**
+   * Whether its code has returned or thrown: what it sends after that, until it is answered, is
+   * refused.
+   */
+  #ended = false;
+  /**
+   * Whether its answer is kept: always for an asserted session; for a demo session while its row
+   * exists.
+   */
+  #keeping = true;
 
-  constructor(core: Core, session: Session, call: OperationCall, fingerprint: string) {
+  /**
+   * `queued` says whether the run holds the authority's queue while its code runs: the time it
+   * is given says so (`Call`).
+   */
+  constructor(core: Core, session: Session, call: OperationCall, queued: boolean) {
     this.#core = core;
     this.#session = session;
     this.#call = call;
-    this.#fingerprint = fingerprint;
-    this.#timer = new Call(`The server operation ${call.module}#${call.name}`, core.timeoutMs);
+    this.#fingerprint = fingerprintOf(call);
+    this.#timer = new Call(
+      `The server operation ${call.module}#${call.name}`,
+      core.timeoutMs,
+      queued,
+    );
   }
 
   /**
@@ -360,7 +382,8 @@ class Running {
         // Its answer is kept: a resend answers that, whatever this statement does.
       };
     }
-    if (this.#settled === 'abandoned' || this.#timer.fault !== undefined) {
+    // Past its code's end, until its answer is given, nothing it sends is its answer's.
+    if (this.#settled === 'abandoned' || this.#ended || this.#timer.fault !== undefined) {
       throw new Error(
         `The server operation ${this.#call.module}#${this.#call.name} has an outcome other than its code's, and sends no more statements: ${sql.slice(0, SHOWN_STATEMENT)}`,
       );
@@ -388,7 +411,8 @@ class Running {
    */
   #mark(): void {
     // After a commit, its record says it committed already, which a resend answers as unsettled.
-    if (this.#committed === null) {
+    // A session that was ended makes none: nothing would sweep it, and no resend is presented.
+    if (this.#committed === null && this.#lasting()) {
       const { db } = this.#core;
       const revision = db.revision();
       this.#core.sweep();
@@ -413,6 +437,9 @@ class Running {
 
   /** Keeps what the operation answered: in its record, made by its commit or now. */
   #keep(outcome: Outcome): void {
+    if (!this.#keeping) {
+      return;
+    }
     const { db } = this.#core;
     const { id: sessionId } = this.#session;
     const { operationId } = this.#call;
@@ -514,7 +541,54 @@ class Running {
     return result;
   }
 
-  async run(operation: (...args: readonly unknown[]) => unknown): Promise<OperationReceipt> {
+  /**
+   * Whether the operation's record is wanted: an asserted session keeps it whatever became of its
+   * assertion, which may be asserted anew and present the same id; a demo session keeps it while
+   * its row exists, expired or not, and nothing once it was ended, which no resend can present.
+   */
+  #lasting(): boolean {
+    const { id, key } = this.#session;
+    return key !== undefined || this.#core.db.session(id) !== undefined;
+  }
+
+  /** Where it is asked: whether the answer is kept, which a session that was ended forgoes. */
+  #alive(checkSession: boolean): void {
+    if (checkSession && !this.#lasting()) {
+      this.#keeping = false;
+    }
+  }
+
+  /** Writes to the authority's storage as the answer is kept; a failure is the call's fault. */
+  #stored(write: () => void): void {
+    try {
+      write();
+    } catch (error) {
+      if (!isAuthorityError(error)) {
+        this.#timer.faulted(error instanceof Error ? error : new Error(String(error)));
+      }
+      throw error;
+    }
+  }
+
+  /** What the operation threw, answered and told to the application: the error to throw. */
+  #failed(thrown: unknown): unknown {
+    // Answered first: what the hook does to the error changes nothing of the answer or its record.
+    const answered = this.#refused(thrown);
+    this.#told(thrown);
+    // A fault that answers in a refusal's place (its keeping failed) is the application's to hear.
+    if (answered !== thrown) {
+      this.#told(answered);
+    }
+    return answered;
+  }
+
+  /**
+   * The operation's code, run in its evaluation within its time: nothing of the authority's
+   * storage is read or written but the record `#mark` makes before a write of the application's
+   * own tables. What becomes of its answer is the function returned (`Finish`), which keeps the
+   * outcome: the caller runs it where the authority's storage may be written, with nothing between.
+   */
+  async execute(operation: (...args: readonly unknown[]) => unknown): Promise<Finish> {
     const timer = this.#timer;
     const scope = scopeOf(this.#core, timer, this.#session);
     const args = argumentsOf(this.#call.args);
@@ -532,25 +606,89 @@ class Running {
         result: operationResult(returned),
         ...(this.#change !== undefined && { sessionChange: this.#change }),
       };
-      // Kept as the operation's code is answered: a storage that fails it is the call's fault.
-      timer.answer(() => {
-        this.#keep({ receipt });
-      });
-      return { ...receipt, deduplicated: false, operationId: this.#call.operationId };
+      return (checkSession) => {
+        try {
+          // Kept as the operation's code is answered: a storage that fails it — the session's
+          // read too — is the call's fault, and the receipt is not answered.
+          this.#stored(() => {
+            this.#alive(checkSession);
+            this.#keep({ receipt });
+          });
+        } catch (error) {
+          throw this.#failed(timer.fault === undefined ? timer.outcome(error) : timer.fault.error);
+        }
+        return { ...receipt, deduplicated: false, operationId: this.#call.operationId };
+      };
     } catch (error) {
       const thrown = timer.fault === undefined ? timer.outcome(error) : timer.fault.error;
-      // Answered first: what the hook does to the error changes nothing of the answer or its record.
-      const answered = this.#refused(thrown);
-      this.#told(thrown);
-      // A fault that answers in a refusal's place (its keeping failed) is the application's to hear.
-      if (answered !== thrown) {
-        this.#told(answered);
-      }
-      throw answered;
+      return (checkSession) => {
+        try {
+          this.#stored(() => {
+            this.#alive(checkSession);
+          });
+        } catch (error_) {
+          // The code's own outcome is lost to the fault, as a keeping that failed loses it: the
+          // application hears of both, and the fault is answered, not kept.
+          this.#told(thrown);
+          throw this.#failed(timer.fault === undefined ? timer.outcome(error_) : timer.fault.error);
+        }
+        throw this.#failed(thrown);
+      };
     } finally {
+      this.#ended = true;
       timer.close();
     }
   }
+
+  /** Runs the operation and answers it at once, as a run that holds the queue does. */
+  async run(operation: (...args: readonly unknown[]) => unknown): Promise<OperationReceipt> {
+    return (await this.execute(operation))(false);
+  }
+}
+
+/**
+ * What ends an operation's run: its receipt, or the error it throws. It keeps the outcome for a
+ * resend. Where `checkSession` is set, a demo session whose row is gone since the run began keeps
+ * nothing: the outcome is answered as it is, since no resend can present that session. An asserted
+ * session always keeps it, though its assertion expired or its key was ended meanwhile (the ended
+ * key's receipts are swept as any are). A storage that fails the check is the call's fault.
+ */
+export type Finish = (checkSession: boolean) => OperationReceipt;
+
+/**
+ * The answer kept for `session`'s operation id, as a resend gets it, or none; an id kept for
+ * another operation is refused (409).
+ */
+export function keptAnswer(
+  core: Core,
+  session: Session,
+  call: OperationCall,
+): OperationReceipt | undefined {
+  const { operationId } = call;
+  const previous = core.db.operation(session.id, operationId);
+  if (previous === undefined) {
+    return undefined;
+  }
+  if (previous.kind !== 'operation' || previous.fingerprint !== fingerprintOf(call)) {
+    throw refusal(
+      HTTP_CONFLICT,
+      'OPERATION_REUSED',
+      'That operation id was used for another operation.',
+    );
+  }
+  core.metrics.deduplicated += 1;
+  return repeated(JSON.parse(previous.outcome) as Outcome, operationId);
+}
+
+/** A new run of the operation for `session`, counted; `queued` says whether it holds the queue. */
+export function runningOf(
+  core: Core,
+  session: Session,
+  call: OperationCall,
+  queued: boolean,
+): Running {
+  core.metrics.operationRuns += 1;
+  return new Running(core, session, call, queued);
 }
 
 /** Runs one server operation for the session `sessionId` names; its receipt, or a refusal. */
@@ -561,20 +699,7 @@ export async function runOperation(
   operation: (...args: readonly unknown[]) => unknown,
 ): Promise<OperationReceipt> {
   const session = core.session(sessionId);
-  const fingerprint = fingerprintOf(call);
-  const { operationId } = call;
-  const previous = core.db.operation(session.id, operationId);
-  if (previous !== undefined) {
-    if (previous.kind !== 'operation' || previous.fingerprint !== fingerprint) {
-      throw refusal(
-        HTTP_CONFLICT,
-        'OPERATION_REUSED',
-        'That operation id was used for another operation.',
-      );
-    }
-    core.metrics.deduplicated += 1;
-    return repeated(JSON.parse(previous.outcome) as Outcome, operationId);
-  }
-  core.metrics.operationRuns += 1;
-  return new Running(core, session, call, fingerprint).run(operation);
+  return (
+    keptAnswer(core, session, call) ?? (await runningOf(core, session, call, true).run(operation))
+  );
 }

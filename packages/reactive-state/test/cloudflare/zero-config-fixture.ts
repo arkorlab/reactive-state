@@ -96,3 +96,43 @@ export const HungStartAuthority = authorityObject({
   programs: [zcProgram],
   sessions: 'asserted',
 });
+
+/** How often the operation that awaits looks at its gate. */
+const POLL_MS = 10;
+
+/** The module of the application's operation that awaits, and the module its call names. */
+export const APART_MODULE = 'actions/apart';
+
+/**
+ * What the application's operation awaits, and tells, as flags it polls: a promise one request
+ * context resolves for another's cannot be awaited across Durable Objects' contexts.
+ */
+export const apart = { open: false, runs: 0, started: false };
+
+/** The gate shut again, and the runs counted from none, for the test that follows. */
+export function apartGate(): void {
+  apart.open = false;
+  apart.runs = 0;
+  apart.started = false;
+}
+
+/** The application of one call, whose every table is its own, with an operation that awaits. */
+export const ApartAuthority = authorityObject({
+  buildId: zcProgram.buildId,
+  database: zcDatabase,
+  operations: {
+    [APART_MODULE]: {
+      slow: async (): Promise<string> => {
+        apart.runs += 1;
+        await zcOrm.select().from(zcTasks);
+        apart.started = true;
+        while (!apart.open) {
+          await later(POLL_MS);
+        }
+        return 'done';
+      },
+    },
+  },
+  programs: [zcProgram],
+  sessions: 'asserted',
+});

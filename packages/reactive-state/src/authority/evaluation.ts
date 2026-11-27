@@ -61,11 +61,18 @@ export class Call {
   /** Whether a fault of the call was told to the application's `onError` where it was met. */
   reported = false;
 
-  constructor(what: string, timeoutMs: number) {
+  /**
+   * `queued` says whether the call holds the authority's one queue while its code runs; a call
+   * apart from it (an operation on the application's own tables) is answered when it settles.
+   */
+  constructor(what: string, timeoutMs: number, queued = true) {
     this.#what = what;
     this.#timer = setTimeout(() => {
+      const consequence = queued
+        ? "it holds the authority's one queue, which every request waits in."
+        : "it runs apart from the authority's queue, which moves on, and its caller waits for it.";
       const error = new Error(
-        `${what} did not settle within ${String(timeoutMs)} ms: it holds the authority's one queue, which every request waits in.`,
+        `${what} did not settle within ${String(timeoutMs)} ms: ${consequence}`,
       );
       this.#fault ??= { error };
       this.#timedOut = error;
@@ -90,7 +97,8 @@ export class Call {
       this.#stillOpen();
       return value;
     } catch (error) {
-      if (!isAuthorityError(error)) {
+      // A read that settles once the call closed is no part of its outcome.
+      if (!isAuthorityError(error) && this.#open) {
         this.#fault ??= { error };
       }
       throw error;

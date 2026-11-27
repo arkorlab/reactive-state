@@ -18,6 +18,7 @@ declare global {
       readonly SITELESS: DurableObjectNamespace<AuthorityObject>;
       /** The object of an application of one call (`ZeroConfigAuthority`). */
       readonly ZERO_CONFIG: DurableObjectNamespace<AuthorityObject>;
+      readonly APART: DurableObjectNamespace<AuthorityObject>;
       /** The same, of a log that takes a while to make (`SlowStartAuthority`). */
       readonly SLOW_START: DurableObjectNamespace<AuthorityObject>;
       /** The same, of a log whose making never ends (`HungStartAuthority`). */

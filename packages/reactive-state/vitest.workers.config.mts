@@ -47,6 +47,9 @@ export default defineConfig({
           // An application of one call, as the compile's own module makes its object.
           // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
           ZERO_CONFIG: { className: 'ZeroConfigAuthority', useSQLite: true },
+          // The same, with a server operation that awaits.
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          APART: { className: 'ApartAuthority', useSQLite: true },
           // The same, of a log that takes a while to make, and of one whose making never ends.
           // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
           SLOW_START: { className: 'SlowStartAuthority', useSQLite: true },

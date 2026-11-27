@@ -62,7 +62,8 @@ export interface AuthorityEngineOptions extends Application, ExternalOptions, Fa
   /**
    * How long a call that runs the application's code — a render, a write's replay, a server
    * operation — may run before it is a fault: it holds the authority's one queue, which every
-   * request of the application waits in. Five seconds unless given.
+   * request of the application waits in, but for an operation of an application whose every table
+   * is external, which runs apart from it. Five seconds unless given.
    */
   readonly timeoutMs?: number;
   /** The longest a route's gate holds a request for a view that is settling: 10 s unless given. */

@@ -1,4 +1,10 @@
-import { HTTP_BAD_REQUEST, HTTP_FORBIDDEN } from '../status.ts';
+import {
+  BUILD_MISMATCH,
+  HTTP_BAD_REQUEST,
+  HTTP_CONFLICT,
+  HTTP_FORBIDDEN,
+  HTTP_UNAUTHORIZED,
+} from '../status.ts';
 
 export interface AuthorityErrorOptions extends ErrorOptions {
   readonly status: number;
@@ -100,4 +106,14 @@ export function describeThrown(thrown: unknown): string {
   } catch {
     return 'a value that does not say what it is';
   }
+}
+
+/** The refusal of a request of a build the authority does not run: reload (409). */
+export function buildMismatch(): Error {
+  return refusal(HTTP_CONFLICT, BUILD_MISMATCH, 'The application was updated. Reload the page.');
+}
+
+/** The refusal of a request of no session, or of one that ended: sign in first (401). */
+export function signInFirst(): Error {
+  return refusal(HTTP_UNAUTHORIZED, 'UNAUTHENTICATED', 'Sign in first.');
 }
