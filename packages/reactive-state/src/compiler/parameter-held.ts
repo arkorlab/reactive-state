@@ -7,19 +7,29 @@ import {
   isBinaryExpression,
   isBindingElement,
   isCallExpression,
+  isCaseClause,
   isConditionalExpression,
+  isDoStatement,
   isElementAccessExpression,
   isExpressionStatement,
   isForOfStatement,
+  isForStatement,
+  isIfStatement,
   isObjectLiteralExpression,
   isParameterDeclaration,
+  isPrefixUnaryExpression,
   isPropertyAccessExpression,
   isPropertyAssignment,
   isPropertyDeclaration,
   isReturnStatement,
   isShorthandPropertyAssignment,
+  isSwitchStatement,
+  isTemplateSpan,
+  isTypeOfExpression,
   isVariableDeclaration,
   isVariableDeclarationList,
+  isVoidExpression,
+  isWhileStatement,
   type Node,
   SyntaxKind,
 } from 'typescript/ast';
@@ -29,7 +39,14 @@ import { unwrapped } from './bounded.ts';
 import { globalPath } from './global-answers.ts';
 import { readsOf } from './local-module-reads.ts';
 import { standsInRepeatableScope } from './local-write-arithmetic.ts';
-import { ASSIGNING, handedTo, isConstList, isWrapping, memberChain } from './local-write-paths.ts';
+import {
+  ASSIGNING,
+  handedTo,
+  isConstList,
+  isWrapping,
+  memberChain,
+  UPDATING,
+} from './local-write-paths.ts';
 import { writesOf } from './local-writes.ts';
 import { bindingIdentifiers, withinFunction } from './scope.ts';
 
@@ -196,10 +213,11 @@ interface Place {
 /**
  * Whether the value of a read `top` goes where no read of it is followed. A value that only passes
  * through a condition, `||`, a list or an object (`isIndirect`) goes on to what holds that, which
- * the walk does not read, unless it is answered by the function itself. A value that stands alone is
- * followed where it is handed to a call, taken into a `const` or written to; an assignment of it
- * to a member, a field and a default are not. An assignment into the parameter itself
- * (`value.copy = value.id`) is a write the walk reads.
+ * the walk does not read, unless it is answered by the function itself or only read there
+ * (`isConsulted`: a condition, a comparison). A value that stands alone is followed where it is
+ * handed to a call, taken into a `const` or written to; an assignment of it to a member, a field
+ * and a default are not. An assignment into the parameter itself (`value.copy = value.id`) is a
+ * write the walk reads.
  */
 function isKept(top: Expression, place: Place): boolean {
   let node: Node = top;
@@ -216,9 +234,45 @@ function isKept(top: Expression, place: Place): boolean {
     } else if (isExpressionStatement(parent) || isAssignedInto(parent, node, place)) {
       return false;
     } else {
-      return isIndirect || isStoredAs(parent, node);
+      return isIndirect ? !isConsulted(parent, node) : isStoredAs(parent, node);
     }
   }
+}
+
+/**
+ * Whether `parent` only reads the value of `node` and keeps nothing of it: a condition (`if`,
+ * `while`, `do`, `for`, `switch`, a case, `?:`), a `!`, a `typeof`, a sign, an operator that answers
+ * a new value (a comparison, an arithmetic, `in`), the left of a comma, an element's key, a
+ * template's substitution. An assignment keeps what it assigns, and a member read of it writes.
+ */
+function isConsulted(parent: Node, node: Node): boolean {
+  if (isConditionalExpression(parent)) {
+    return parent.condition === node;
+  }
+  if (isForStatement(parent)) {
+    return parent.condition !== undefined && parent.condition === node;
+  }
+  if (
+    isIfStatement(parent) ||
+    isWhileStatement(parent) ||
+    isDoStatement(parent) ||
+    isSwitchStatement(parent) ||
+    isCaseClause(parent)
+  ) {
+    return parent.expression === node;
+  }
+  if (isBinaryExpression(parent)) {
+    return !ASSIGNING.has(parent.operatorToken.kind);
+  }
+  if (isElementAccessExpression(parent)) {
+    return parent.argumentExpression === node;
+  }
+  return (
+    isTypeOfExpression(parent) ||
+    isVoidExpression(parent) ||
+    isTemplateSpan(parent) ||
+    (isPrefixUnaryExpression(parent) && !UPDATING.has(parent.operator))
+  );
 }
 
 /** Whether `parent` assigns `node` to a member of what the walk reads of the parameter. */

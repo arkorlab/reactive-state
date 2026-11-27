@@ -287,6 +287,46 @@ describe('shared factory parameter member writes', () => {
     },
   );
 
+  // A value that only a condition, a comparison or an operator reads is kept nowhere, however many
+  // `||`, `&&`, `??` it passes through; one a name, a member, a call or a list takes stays kept.
+  it.each([
+    wide("if (value.id || false) { value.id = 'fresh'; } return value;"),
+    wide("if (value.id ?? 'none') { value.id = 'fresh'; } return value;"),
+    wide(
+      "while (value.id && value.extra) { value.extra = undefined; } value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "const same = (value.id || '') === 'safe'; value.id = 'fresh'; return same ? value : value;",
+    ),
+    wide("const label = value.id || value.extra ? 'a' : 'b'; value.id = label; return value;"),
+    wide("const none = !(value.id || value.extra); value.id = none ? 'a' : 'b'; return value;"),
+    wide(`const text = \`\${value.id || 'none'}!\`; value.id = text; return value;`),
+    wide("const same = (value || {id: 'x'}) === value; value.id = same ? 'a' : 'b'; return value;"),
+    wide("switch (value.id || 'none') { case 'safe': value.id = 'fresh'; } return value;"),
+  ])('keeps a member write into a parameter that only a condition reads: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    wide(
+      `const alias = value || {id: 'x'}; (alias as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide("const wrapper = {target: value.id || value}; value.id = 'fresh'; return value;"),
+    wide(
+      `const list = [value || {id: 'x'}]; (list[0] as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide(`((value || {id: 'x'}) as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`),
+    wide("console.log(value || {id: 'x'}); value.id = 'fresh'; return value;"),
+  ])('refuses a member write into a parameter a carried value is kept of: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+  });
+
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
     apps.push(app);
