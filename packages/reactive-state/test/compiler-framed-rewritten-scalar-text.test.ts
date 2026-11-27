@@ -107,6 +107,13 @@ const scalars: readonly Row[] = [
     reader: false,
   },
   {
+    id: 'string-names-swapped-under-a-tuple-assertion',
+    source:
+      'function frames(first: string, second: string) { [first, second] = [second, first] as [string, string]; return String(first); }',
+    invocation: "frames(value, 'fixed')",
+    reader: false,
+  },
+  {
     id: 'string-or-null-given-a-default',
     source: "function frames(text: string | null) { text ??= 'fixed'; return String(text); }",
     invocation: 'frames(value)',
@@ -225,6 +232,13 @@ const lists: readonly Row[] = [
     source:
       'function frames(error: Error, text: string) { const pair = [[error]]; [text] = pair as never; return String(text); }',
     invocation: 'frames(new Error("ours"), value)',
+    reader: true,
+  },
+  {
+    id: 'part-of-an-asserted-list-source',
+    source:
+      "function frames(bag: { errors: Error[] }) { let text = ''; [text] = [bag.errors] as unknown as [string]; return String(text); }",
+    invocation: 'frames({ errors: [new Error("ours")] })',
     reader: true,
   },
   {

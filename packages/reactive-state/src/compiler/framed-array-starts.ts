@@ -4,6 +4,7 @@ import {
   type Identifier,
   isArrayLiteralExpression,
   isAsExpression,
+  isAssertionExpression,
   isBindingElement,
   isBinaryExpression,
   isConditionalExpression,
@@ -29,6 +30,7 @@ import { writtenArrayKey } from './framed-array-functions.ts';
 import { givenValues } from './framed-array-identity.ts';
 import { frameBindingOf, frameDeclarationOf, type FrameBinding } from './framed-bindings.ts';
 import { isScalarType } from './framed-scalar-types.ts';
+import { isWrapper } from './framed-written-targets.ts';
 import { bindingIdentifiers } from './scope.ts';
 
 /**
@@ -68,12 +70,16 @@ export function mayBecomeArray(binding: FrameBinding): boolean {
  *   an object) is none;
  * - any other value (a call's result, a member, an element, `await`, `new`) is what the written type
  *   vouches for, unless an assertion stands over it: then nothing says it is no list, and it is
- *   answered as a value that is not known (`undefined`), which refuses.
+ *   answered as a value that is not known (`undefined`), which refuses. An assertion over the list a
+ *   destructuring assignment takes the value from stands over it as well (`assertedWrite`).
  */
 function shownOf(binding: FrameBinding): readonly (Expression | undefined)[] {
   const given = givenValues(binding);
   const shown: (Expression | undefined)[] = given.includes(undefined) ? [undefined] : [];
-  const pending = [binding.initializer, ...given].map((value) => ({ isAsserted: false, value }));
+  const pending = [
+    { isAsserted: false, value: binding.initializer },
+    ...given.map((value) => ({ isAsserted: value !== undefined && assertedWrite(value), value })),
+  ];
   for (let each = pending.pop(); each !== undefined; each = pending.pop()) {
     if (each.value === undefined) continue;
     const { isAsserted, value } = withoutWrapping(each.value, each.isAsserted);
@@ -83,6 +89,21 @@ function shownOf(binding: FrameBinding): readonly (Expression | undefined)[] {
     else if (isAsserted && !isNoArray(value)) shown.push(undefined);
   }
   return shown;
+}
+
+/**
+ * Whether a type assertion stands over the list a destructuring assignment takes a written value from
+ * (`[text] = [value] as unknown as [string]`): `givenValues` keeps the element alone, so the cast is
+ * looked for above it, through the parentheses, `!` and `satisfies` that wrap the list too. A value
+ * written as a whole (`text = value`) has no list above it.
+ */
+function assertedWrite(value: Expression): boolean {
+  let at: Node = value;
+  while (isWrapper(at.parent) || isArrayLiteralExpression(at.parent)) {
+    at = at.parent;
+    if (isAssertionExpression(at)) return true;
+  }
+  return false;
 }
 
 /**
