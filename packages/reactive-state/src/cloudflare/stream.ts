@@ -74,6 +74,8 @@ interface Following {
   readonly heartbeatMs: number;
   /** The streams open now, which a follower leaves as it ends. */
   readonly open: Set<Follower>;
+  /** Gives back the place the stream was admitted with (`AuthorityEngine.admitStream`), once. */
+  readonly release: () => void;
 }
 
 class Follower {
@@ -346,6 +348,7 @@ class Follower {
     this.#unsubscribe();
     this.#unfollow();
     this.#following.open.delete(this);
+    this.#following.release();
     this.#wake?.('ended');
   }
 }
@@ -369,13 +372,17 @@ export class EventStreams {
   /**
    * The session's stream for the root `subscription` follows. The root is rendered here first,
    * before there is any stream: a refusal of it — no session, a subscription of another session's
-   * or of another build — is thrown, for the caller to answer as an ordinary refusal.
+   * or of another build — is thrown, for the caller to answer as an ordinary refusal. So is a
+   * session's, or the authority's, having as many streams open as it may (`admitStream`), before
+   * anything renders or listens.
    */
   async open(sessionId: SessionId, subscription: string): Promise<ReadableStream<Uint8Array>> {
+    const release = this.#engine.admitStream(sessionId);
     const follower = new Follower({
       engine: this.#engine,
       heartbeatMs: this.#heartbeatMs,
       open: this.#open,
+      release,
       sessionId,
       subscription,
     });

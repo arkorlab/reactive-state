@@ -201,6 +201,20 @@ describe('the route a compile writes', () => {
       expect(unnamed.status).toBe(400);
     });
 
+    it('answers a stream refused for too many open as the 429 it is, which the page opens again after its wait, and not as `revoked`', async () => {
+      hoisted.client['events']?.mockResolvedValue(
+        refusal(429, 'TOO_MANY_STREAMS', 'Too many event streams are open.'),
+      );
+
+      const refused = await get(request('events?subscription=s'), segments('events'));
+
+      expect(refused.status).toBe(429);
+      await expect(refused.json()).resolves.toStrictEqual({
+        code: 'TOO_MANY_STREAMS',
+        error: 'Too many event streams are open.',
+      });
+    });
+
     it('answers a refusal a reconnection may pass, as an authority that did not answer, as one', async () => {
       hoisted.client['events']?.mockResolvedValue(
         refusal(503, 'AUTHORITY_UNAVAILABLE', 'The authority did not answer.'),
