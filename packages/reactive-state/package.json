@@ -9,6 +9,9 @@
     "url": "git+https://github.com/arkorlab/reactive-state.git",
     "directory": "packages/reactive-state"
   },
+  "bin": {
+    "reactive": "./src/cli/reactive.ts"
+  },
   "type": "module",
   "exports": {
     "./authority": "./src/authority/index.ts",
