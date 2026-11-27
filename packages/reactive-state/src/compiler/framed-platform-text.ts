@@ -58,7 +58,7 @@ export function framedPlatformText(
   if (framedBlobParts(node, words)) return true;
   if (framedConstructorInitText(node, words)) return true;
   if (framedResponseStatusText(node, words)) return true;
-  const response = framedNativeArguments(node, RESPONSE_CONSTRUCTORS);
+  const response = framedNativeArguments(node, RESPONSE_CONSTRUCTORS, true);
   if (response?.constructed === true)
     return response.args === undefined
       ? response.applied !== undefined && arrayError(response.applied, words, node)
@@ -94,7 +94,7 @@ function platformMethodText(node: CallExpression, words: ConvertedWords): boolea
 
 /** Static URL parsing converts its first input and optional base, including native borrowing. */
 function urlParseText(node: CallExpression, words: ConvertedWords): boolean {
-  const selected = framedNativeArguments(node, URL_PARSERS);
+  const selected = framedNativeArguments(node, URL_PARSERS, true);
   if (selected !== undefined && !selected.constructed)
     return selected.args === undefined
       ? selected.applied !== undefined && arrayError(selected.applied, words, node)
