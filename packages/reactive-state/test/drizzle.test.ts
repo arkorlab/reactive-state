@@ -7,6 +7,7 @@ import type { Json, RenderScope } from '../src/program.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
+import { ownStore, storeThrough } from './support/follow-store.ts';
 
 /** The application's tables, which its Drizzle reads and writes and the authority follows. */
 const projects = pgTable('projects', { id: text().primaryKey(), title: text().notNull() });
@@ -127,7 +128,7 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
 
   it('logs each row a statement changed, a truncation, and nothing of one that changed none', async () => {
     const setup = await opened();
-    const store = setup.follow.store(setup.pg);
+    const store = ownStore(setup.follow);
     const { head } = await store.changes(0, 10);
 
     await setup.orm.update(tasks).set({ title: 'none' }).where(eq(tasks.id, 'missing'));
@@ -173,7 +174,7 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
       INSERT INTO parted VALUES ('a', 'eu'), ('b', 'eu'), ('d', 'eu');
     `,
     );
-    const store = setup.follow.store(setup.pg);
+    const store = ownStore(setup.follow);
     const { head } = await store.changes(0, 10);
 
     // `a` moves; `b`, then `d` alone, are taken out and put nowhere.
@@ -209,14 +210,14 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
 
     await expect(render()).resolves.toContain('"a"');
 
-    const { epoch } = await setup.follow.store(setup.pg).changes(0, 10);
+    const { epoch } = await ownStore(setup.follow).changes(0, 10);
 
     expect(epoch).not.toContain('unread');
   });
 
   it('keeps its log and head when its statements run again, and its head when pruned', async () => {
     const setup = await opened();
-    const store = setup.follow.store(setup.pg);
+    const store = ownStore(setup.follow);
     await setup.orm.insert(tasks).values({ id: 't2', projectId: 'p1', title: 'two' });
     const before = await store.changes(0, 10);
     for (const statement of setup.follow.captureSql()) {
@@ -242,7 +243,7 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
     'explains how to upgrade a log missing its %s column',
     async (column) => {
       const setup = await opened();
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const before = await store.changes(0, 10);
       await setup.pg.query(`ALTER TABLE reactive_state.changes DROP COLUMN "${column}"`);
 
@@ -256,7 +257,7 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
 
   it('explains how to upgrade a log missing its schema-count function', async () => {
     const setup = await opened();
-    const store = setup.follow.store(setup.pg);
+    const store = ownStore(setup.follow);
     const before = await store.changes(0, 10);
     await setup.pg.query('DROP FUNCTION reactive_state.ddl_count()');
 
@@ -708,14 +709,14 @@ describe('tables of a Drizzle schema in PostgreSQL', { timeout: TEST_TIMEOUT_MS 
       await setup.pg.query(statement);
     }
     const heads = await Promise.all(
-      logs.map(async (log) => (await log.store(setup.pg).changes(0, 10)).head),
+      logs.map(async (log) => (await storeThrough(log, setup.pg).changes(0, 10)).head),
     );
 
     await setup.orm.insert(tasks).values({ id: 't2', projectId: 'p1', title: 'two' });
 
     for (const [index, log] of logs.entries()) {
       const head = heads[index] ?? 0;
-      const read = await log.store(setup.pg).changes(head, 10);
+      const read = await storeThrough(log, setup.pg).changes(head, 10);
 
       expect(read.changes).toStrictEqual([
         {

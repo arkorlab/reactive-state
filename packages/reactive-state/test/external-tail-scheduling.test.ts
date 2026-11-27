@@ -1,14 +1,13 @@
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { ExternalTail } from '../src/authority/external-tail.ts';
-import type { ExternalStore } from '../src/authority/external.ts';
 import { ObjectAlarm, scheduleExternalAlarm } from '../src/cloudflare/alarm.ts';
-import { database, definitionOf, table, text } from '../src/server/schema.ts';
+import { logStore } from './support/follow-store.ts';
+import { itemTables } from './support/followed-items.ts';
 
 /** An alarm's retry deadlines, independent of the next log read. */
 const TIME = { poll: 1000, retry: 100, cap: 30_000, turns: 12 } as const;
-const db = database({ items: table({ title: text() }, { external: 'remote' }) });
-const tables = definitionOf(db).tables;
+const tables = itemTables();
 
 /** A pending host write, rejected only after the test has observed the answer. */
 function pending() {
@@ -28,12 +27,7 @@ function fixture(schedule: (at: number) => Promise<void>, stores = true) {
     /* The test asserts each failure is logged. */
   });
   const changes = vi.fn(() => Promise.resolve({ changes: [], epoch: 'test', floor: 0, head: 0 }));
-  const store: ExternalStore = {
-    changes,
-    count: () => Promise.resolve(0),
-    find: () => Promise.resolve([]),
-    get: () => Promise.resolve(null),
-  };
+  const store = logStore(changes);
   const kept: Promise<unknown>[] = [];
   let retained = true;
   const tail = new ExternalTail({

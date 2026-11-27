@@ -8,7 +8,7 @@ import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { eq, sql as raw } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { pgTable, text } from 'drizzle-orm/pg-core';
-import { Client, Pool } from 'pg';
+import { Pool } from 'pg';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { Engine } from '../src/authority/node-engine.ts';
@@ -16,7 +16,8 @@ import { type OperationCall, PROTOCOL_VERSION } from '../src/program.ts';
 import { refuse } from '../src/server/index.ts';
 import { database, table, text as field } from '../src/server/schema.ts';
 import { followDrizzle } from '../src/sql/index.ts';
-import { engineOf, openedWith } from './support/drizzle.ts';
+import { databaseFor, engineOf, openedWith } from './support/drizzle.ts';
+import { followInternals, storeThrough } from './support/follow-store.ts';
 
 /**
  * A server operation that writes the application's own tables runs once, however often it is sent:
@@ -40,10 +41,10 @@ const TIME = { pastMs: 600, timeoutMs: 200 } as const;
 const TEST_TIMEOUT_MS = 20_000;
 /** Long enough that only `poke()` reads the log in a test. */
 const IDLE_POLL_MS = 60_000;
-/** A pool's connections, and those of the store's client and of the socket's spare. */
+/** A pool's connections, and those of the store's own pool and of the socket's spare. */
 const CONNECTIONS = { pool: 3, served: 5 } as const;
 
-/** What a test's engine follows: the tables, the database, and the Drizzle that writes them. */
+/** What a test's engine follows: the follow, and what it reads the log through, where given. */
 type Setup = Parameters<typeof engineOf>[0];
 
 /** What `promise` was rejected with; a test fails when it was not. */
@@ -115,7 +116,7 @@ function engineAt(
 ): Engine {
   return new Engine({
     buildId: BUILD,
-    database: database(setup.follow.tables),
+    database: databaseFor(setup),
     externalPollMs: IDLE_POLL_MS,
     filename,
     operations: { [MODULE]: operations },
@@ -129,7 +130,6 @@ function engineAt(
         writable: [],
       },
     ],
-    stores: { [setup.follow.storeName]: setup.follow.store(setup.pg) },
     timeoutMs: TIME.timeoutMs,
   });
 }
@@ -449,8 +449,9 @@ describe(
 
     it('answers a resend of an operation that wrote and committed the authority’s own records as the first', async () => {
       const setup = await openedWith(schema, DDL);
+      // No public form mixes the two: declared of the follow's tables, and given its store.
       const declared = database({
-        ...setup.follow.tables,
+        ...followInternals(setup.follow).tables,
         notes: table({ body: field({ maxLength: 64 }) }),
       });
       const both = async (): Promise<string> => {
@@ -478,7 +479,10 @@ describe(
   },
 );
 
-/** A PGlite of the tasks, served to a `pg.Pool` and to a client the store reads through. */
+/**
+ * A PGlite of the tasks, served to a `pg.Pool` and to a pool of one connection the store reads
+ * through, as `reactiveDb`'s store does on a server: a follow is given no `pg.Client`.
+ */
 async function pooled() {
   const db = await PGlite.create();
   await db.exec(DDL);
@@ -492,18 +496,20 @@ async function pooled() {
   const port = Number(server.getServerConn().split(':').at(-1));
   const config = { database: 'postgres', host: '127.0.0.1', port, ssl: false, user: 'postgres' };
   const connections = new Pool({ ...config, max: CONNECTIONS.pool });
-  const store = new Client(config);
-  await store.connect();
+  const reads = new Pool({ ...config, max: 1 });
   const follow = followDrizzle(schema);
-  for (const statement of follow.captureSql()) await store.query(statement);
+  for (const statement of follow.captureSql()) await reads.query(statement);
   onTestFinished(async () => {
     await connections.end();
-    await store.end();
+    await reads.end();
     await server.stop();
     await db.close();
   });
   const tracked = follow.client(connections);
-  return { follow, orm: drizzle({ client: tracked, schema }), pg: store, tracked };
+  // The log, read through the store's own connection: by a follow of the same tables, given it.
+  const reader = followDrizzle(schema);
+  const store = () => storeThrough(reader, reads);
+  return { follow, orm: drizzle({ client: tracked, schema }), pg: reads, store, tracked };
 }
 
 describe(

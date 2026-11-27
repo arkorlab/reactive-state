@@ -15,9 +15,10 @@ import {
 } from '../src/authority/index.ts';
 import { SharedStore } from '../src/authority/shared-store.ts';
 import { PROTOCOL_VERSION } from '../src/program.ts';
-import { database, forbidden, refuse, table, text } from '../src/server/index.ts';
-import { definitionOf } from '../src/server/schema.ts';
+import { forbidden, refuse } from '../src/server/index.ts';
 import { db } from './support/app/db.ts';
+import { logStore } from './support/follow-store.ts';
+import { itemsReadThrough, itemTables } from './support/followed-items.ts';
 import { clientOf } from './support/frames.ts';
 import { application, BUILD, programs, SET_TITLE } from './support/program.ts';
 
@@ -110,12 +111,15 @@ const operations = {
   },
 };
 
-/** A started authority over a hosted database, and the poke its database notifies it with. */
+/**
+ * A started authority over a hosted database of a followed table, whose log `store` answers, and
+ * the poke its database notifies it with.
+ */
 async function hostedPoke(
-  hosted: Parameters<typeof hostDatabase>[0],
   store: ExternalStore,
   onError: EngineOptions['onError'],
 ): Promise<() => void> {
+  const hosted = itemsReadThrough(store);
   let poke: (() => void) | undefined;
   hostDatabase(hosted, {
     alone: async (work) => work(),
@@ -128,7 +132,8 @@ async function hostedPoke(
     open: () => Promise.resolve(),
     prune: () => Promise.resolve(),
     seed: async (first) => first(),
-    stores: () => ({ remote: store }),
+    // The follow's store, a stand-in, is the declaration's: the host brings none of its own.
+    stores: () => ({}),
   });
   const authority = await startAuthority({ ...application, database: hosted, onError });
   onTestFinished(async () => {
@@ -364,13 +369,9 @@ describe('onError', () => {
   it("is told of a followed store's log that could not be scheduled, in place of its log", async () => {
     const log = spyOnLog();
     const events: AuthorityErrorEvent[] = [];
-    const schema = database({ items: table({ title: text() }, { external: 'remote' }) });
-    const store: ExternalStore = {
-      changes: () => Promise.resolve({ changes: [], epoch: 'test', floor: 0, head: 0 }),
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
+    const store = logStore(() =>
+      Promise.resolve({ changes: [], epoch: 'test', floor: 0, head: 0 }),
+    );
     const tail = new ExternalTail({
       everyMs: 1000,
       ingest: () => Promise.resolve(),
@@ -380,7 +381,7 @@ describe('onError', () => {
       retained: () => true,
       schedule: () => Promise.reject(new Error('alarm failed')),
       stores: new Map([['items', store]]),
-      tables: definitionOf(schema).tables,
+      tables: itemTables(),
     });
     onTestFinished(() => {
       tail.stop();
@@ -470,20 +471,14 @@ describe('onError', () => {
   it('tells of a failed read once, however many operations wait on the same one', async () => {
     spyOnLog();
     const events: AuthorityErrorEvent[] = [];
-    const schema = database({ items: table({ title: text() }, { external: 'remote' }) });
-    const store: ExternalStore = {
-      changes: () => Promise.reject(new Error('read failed')),
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
+    const store = logStore(() => Promise.reject(new Error('read failed')));
     const tail = new ExternalTail({
       ingest: () => Promise.resolve(),
       report: reporterOf((_error, event) => {
         events.push(event);
       }),
       stores: new Map([['items', store]]),
-      tables: definitionOf(schema).tables,
+      tables: itemTables(),
     });
     onTestFinished(() => {
       tail.stop();
@@ -557,15 +552,9 @@ describe('onError', () => {
     async (_what, rejection) => {
       const log = spyOnLog();
       const events: AuthorityErrorEvent[] = [];
-      const hosted = database({ items: table({ title: text() }, { external: 'remote' }) });
-      const store: ExternalStore = {
-        // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a primitive, as tested
-        changes: () => Promise.reject(rejection),
-        count: () => Promise.resolve(0),
-        find: () => Promise.resolve([]),
-        get: () => Promise.resolve(null),
-      };
-      const poke = await hostedPoke(hosted, store, (_error, event) => {
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a primitive, as tested
+      const store = logStore(() => Promise.reject(rejection));
+      const poke = await hostedPoke(store, (_error, event) => {
         events.push(event);
       });
 
@@ -582,14 +571,8 @@ describe('onError', () => {
 
   it("writes a hosted database's change log failure once without the option", async () => {
     const log = spyOnLog();
-    const hosted = database({ items: table({ title: text() }, { external: 'remote' }) });
-    const store: ExternalStore = {
-      changes: () => Promise.reject(new Error('log read failed')),
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
-    const poke = await hostedPoke(hosted, store, undefined);
+    const store = logStore(() => Promise.reject(new Error('log read failed')));
+    const poke = await hostedPoke(store, undefined);
 
     poke();
     await vi.waitFor(() => {
@@ -719,27 +702,20 @@ describe('onError', () => {
   });
 
   it("tells of an operation's fault only after the wait on the stores' logs, which it ends in", async () => {
-    const schema = database({ items: table({ title: text() }, { external: 'remote' }) });
-    const store: ExternalStore = {
-      changes: async () => {
-        await new Promise((resolve) => {
-          setTimeout(resolve, 150);
-        });
-        return { changes: [], epoch: 'test', floor: 0, head: 0 };
-      },
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
+    const store = logStore(async () => {
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      return { changes: [], epoch: 'test', floor: 0, head: 0 };
+    });
     const engine = new Engine({
       ...application,
-      database: schema,
+      database: itemsReadThrough(store),
       onError: (error) => {
         (error as Error).message = 'rewritten by the hook';
       },
       operations: { 'test/ops': operations['test/ops'] },
       programs: [],
-      stores: { remote: store },
       timeoutMs: 10,
     });
     onTestFinished(async () => {
@@ -840,22 +816,15 @@ describe('onError', () => {
 
   it('is told of an explicit poke whose read failed, once, and still rejects', async () => {
     spyOnLog();
-    const schema = database({ items: table({ title: text() }, { external: 'remote' }) });
-    const store: ExternalStore = {
-      changes: () => Promise.reject(new Error('read failed')),
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
+    const store = logStore(() => Promise.reject(new Error('read failed')));
     const events: AuthorityErrorEvent[] = [];
     const engine = new Engine({
       ...application,
-      database: schema,
+      database: itemsReadThrough(store),
       onError: (_error, event) => {
         events.push(event);
       },
       programs: [],
-      stores: { remote: store },
     });
     onTestFinished(async () => {
       await engine.close();
@@ -950,23 +919,16 @@ describe('onError', () => {
 
   it('tells of a read once where it is made, however many pokes wait on it', async () => {
     spyOnLog();
-    const schema = database({ items: table({ title: text() }, { external: 'remote' }) });
-    const store: ExternalStore = {
-      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a primitive, as tested
-      changes: () => Promise.reject('read failed'),
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- a primitive, as tested
+    const store = logStore(() => Promise.reject('read failed'));
     const events: AuthorityErrorEvent[] = [];
     const engine = new Engine({
       ...application,
-      database: schema,
+      database: itemsReadThrough(store),
       onError: (_error, event) => {
         events.push(event);
       },
       programs: [],
-      stores: { remote: store },
     });
     onTestFinished(async () => {
       await engine.close();

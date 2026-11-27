@@ -16,6 +16,7 @@ import {
 } from '../src/program.ts';
 import { type AnyDatabase, database } from '../src/server/schema.ts';
 import { type DrizzleFollow, followDrizzle, followedDb } from '../src/sql/index.ts';
+import { followInternals } from './support/follow-store.ts';
 import { textOf } from './support/frames.ts';
 
 /**
@@ -223,9 +224,9 @@ describe('what followedDb refuses', () => {
   const follow = followDrizzle({ tasks });
 
   it.each([
-    ['its tables', () => follow.tables],
+    ['its tables', () => followInternals(follow).tables],
     ['a copy of it', () => ({ ...follow })],
-    ['a database of its tables', () => database(follow.tables)],
+    ['a database of its tables', () => database(followInternals(follow).tables)],
   ])('refuses in place of a follow %s', (_, given) => {
     expect(() => followedDb(given() as never)).toThrow(
       'followedDb(): argument 1 is not what `followDrizzle()` answered: give each follow itself, not its `tables` nor a database',

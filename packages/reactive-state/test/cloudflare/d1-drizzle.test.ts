@@ -5,8 +5,9 @@ import { alias, index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-cor
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalFollower } from '../../src/authority/external.ts';
-import { database, definitionOf } from '../../src/server/schema.ts';
-import { followDrizzle } from '../../src/sql/index.ts';
+import { definitionOf } from '../../src/server/schema.ts';
+import { followDrizzle, followedDb } from '../../src/sql/index.ts';
+import { ownStore, storeThrough } from '../support/follow-store.ts';
 import { bindingValue } from './d1-drizzle-binding.ts';
 import { faultsOf, notedBy, rendered } from './d1-drizzle-render.ts';
 
@@ -32,8 +33,16 @@ const tasks = sqliteTable(
 );
 const schema = { projects, tasks };
 const follow = followDrizzle(schema);
-const tables = definitionOf(database(follow.tables)).tables;
+const tables = definitionOf(followedDb(follow)).tables;
 const db = env.REACTIVE_D1;
+
+/**
+ * The store of the log, read through `db` whatever binding a test gave `follow`: of a follow of the
+ * same tables, given it.
+ */
+function storeOfDb() {
+  return storeThrough(followDrizzle(schema), db);
+}
 
 /**
  * `db`, of a D1 that fails `EXPLAIN` the first `times` it is asked — every time, of no `times` — as
@@ -117,7 +126,7 @@ function byCode(orm: ReturnType<typeof drizzle<typeof schema>>, code: string) {
 
 /** A follower of the store's log, read to its head. */
 async function following() {
-  const follower = new ExternalFollower(follow.store(db), tables);
+  const follower = new ExternalFollower(storeOfDb(), tables);
   await follower.changed();
   return follower;
 }
@@ -233,7 +242,7 @@ describe('a Drizzle schema in D1', () => {
 
     const orm = drizzle(own.client(db), { schema: { labels } });
     const dependencies = await rendered(() => orm.select().from(labels).where(eq(labels.id, 'a')));
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare("INSERT OR REPLACE INTO labels VALUES ('z', 'first')").run();
@@ -842,7 +851,7 @@ describe('a Drizzle schema in D1', () => {
   });
 
   it('reads a log further behind than a turn reaches by the tables its entries changed', async () => {
-    const store = follow.store(db);
+    const store = storeOfDb();
     const { head } = await store.changes(0, 10);
     const statements = Array.from({ length: 110 }, (_, at) => {
       return db

@@ -6,8 +6,7 @@ import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { rowChange } from '../../src/authority/row-writes.ts';
 import type { AuthorityObject } from '../../src/cloudflare/object.ts';
 import type { BoundRow, FieldRef } from '../../src/program.ts';
-import { database } from '../../src/server/index.ts';
-import { followDrizzle } from '../../src/sql/index.ts';
+import { followDrizzle, followedDb } from '../../src/sql/index.ts';
 import { clientOf } from '../support/frames.ts';
 import { rendered } from './d1-drizzle-render.ts';
 import {
@@ -174,7 +173,7 @@ describe('a row of a table in D1', () => {
   it('leaves a column the database holds not a fault, of a read as of a write', async () => {
     const follow = followDrizzle({ rowGhosts });
     follow.client(db);
-    const { ghost } = database(follow.tables).rowGhosts.where(eq(rowGhosts.id, 'n1'));
+    const { ghost } = followedDb(follow).rowGhosts.where(eq(rowGhosts.id, 'n1'));
 
     await expect(rowOf(ghost).read(['ghost'])).rejects.toThrow('no such column');
     await expect(rowOf(ghost).write('ghost', 'Boo')).rejects.toThrow('no such column');
@@ -183,7 +182,7 @@ describe('a row of a table in D1', () => {
   it('reads and writes a column the database spells in another case', async () => {
     const follow = followDrizzle({ rowCased });
     follow.client(db);
-    const row = rowOf(database(follow.tables).rowCased.where(eq(rowCased.id, 'c1')).title);
+    const row = rowOf(followedDb(follow).rowCased.where(eq(rowCased.id, 'c1')).title);
 
     await expect(row.read(['title', 'done'])).resolves.toStrictEqual({
       done: true,

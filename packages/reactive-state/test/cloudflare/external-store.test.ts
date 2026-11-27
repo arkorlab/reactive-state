@@ -2,10 +2,9 @@ import { evictDurableObject, runDurableObjectAlarm, runInDurableObject } from 'c
 import { env } from 'cloudflare:workers';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
-import { changeCaptureSql } from '../../src/cloudflare/d1-store.ts';
 import type { AuthorityObject } from '../../src/cloudflare/object.ts';
 import { textOf } from '../support/frames.ts';
-import { externalDatabase, externalProgram } from './external-store-fixture.ts';
+import { externalFollow, externalProgram } from './external-store-fixture.ts';
 import { type AuthorityStub, valueOf } from './helpers.ts';
 
 const CLOCK = { tick: 1000, lifetime: 60_000 } as const;
@@ -17,7 +16,7 @@ async function prepare(): Promise<void> {
   await env.REACTIVE_D1.exec('DROP TABLE IF EXISTS _rs_changes');
   await env.REACTIVE_D1.exec('DROP TABLE IF EXISTS _rs_meta');
   await env.REACTIVE_D1.exec('CREATE TABLE external_items (id TEXT PRIMARY KEY, title TEXT)');
-  const ddl = changeCaptureSql(externalDatabase, 'remote', { items: { name: 'external_items' } });
+  const ddl = externalFollow.captureSql();
   await env.REACTIVE_D1.batch(ddl.map((sql) => env.REACTIVE_D1.prepare(sql)));
   await env.REACTIVE_D1.prepare('INSERT INTO external_items VALUES (?, ?)')
     .bind('one', 'first')

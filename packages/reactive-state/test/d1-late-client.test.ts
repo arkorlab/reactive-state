@@ -9,6 +9,7 @@ import { internalsOf } from '../src/sql/follow-internals.ts';
 import { type DrizzleD1Follow, followDrizzle, followedDb } from '../src/sql/index.ts';
 import { type LocalD1, localD1 } from '../src/sql/sqlite/local-d1.ts';
 import { notedBy } from './cloudflare/d1-drizzle-render.ts';
+import { storeThrough } from './support/follow-store.ts';
 import { textOf } from './support/frames.ts';
 
 /**
@@ -161,7 +162,8 @@ describe('a D1 follow given a function that answers its binding', () => {
     const changed = await store.changes(after.head, 10);
 
     expect(after.epoch).not.toBe(before.epoch);
-    expect(after.epoch).toBe((await follow.store(binding).changes(0, 10)).epoch);
+    // Of a store of the binding's own: of a follow of the same tables, given it.
+    expect(after.epoch).toBe((await storeThrough(followOf(), binding).changes(0, 10)).epoch);
     expect(changed.changes).toStrictEqual([
       expect.objectContaining({ after: { k_id: 'c1' }, before: { k_id: 'c1' }, table: 'cards' }),
     ]);
@@ -182,7 +184,7 @@ describe('a D1 follow given a function that answers its binding', () => {
     current = first;
     const again = await store.changes(0, 10);
 
-    expect(ofSecond.epoch).toBe((await follow.store(second).changes(0, 10)).epoch);
+    expect(ofSecond.epoch).toBe((await storeThrough(followOf(), second).changes(0, 10)).epoch);
     expect(ofSecond.epoch).not.toBe(ofFirst.epoch);
     expect(again.epoch).toBe(ofFirst.epoch);
   });

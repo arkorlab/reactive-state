@@ -4,10 +4,11 @@ import { index, integer, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { ExternalFollower } from '../src/authority/external.ts';
-import { database as declared, definitionOf } from '../src/server/schema.ts';
-import { followDrizzle } from '../src/sql/index.ts';
+import { definitionOf } from '../src/server/schema.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
 import { type LocalD1, localD1 } from '../src/sql/sqlite/local-d1.ts';
 import { notedBy, rendered } from './cloudflare/d1-drizzle-render.ts';
+import { ownStore, storeThrough } from './support/follow-store.ts';
 
 /**
  * What the D1 follow reads of a database's schema (`sqlite_schema`), of a file in D1's shape: the
@@ -111,7 +112,7 @@ describe('what the D1 store reads of the schema', () => {
       // The warning of triggers that are not `captureSql()`'s, kept out of the output.
     });
     const binding = await followed();
-    const store = follow.store(binding);
+    const store = storeThrough(follow, binding);
     clockAt(0);
     const before = await store.changes(0, 10);
 
@@ -125,7 +126,7 @@ describe('what the D1 store reads of the schema', () => {
   it('asks a plan anew once a table nothing follows loses the key its left join was left out by', async () => {
     const binding = await followed();
     await ran(binding, ['CREATE UNIQUE INDEX audit_note_key ON audit (note)']);
-    const store = follow.store(binding);
+    const store = storeThrough(follow, binding);
     const orm = drizzle(follow.client(binding) as never, { schema });
     // SQLite leaves out a left join of a table whose unique key matches one row, of whose columns
     // the statement reads none.
@@ -153,7 +154,7 @@ describe('what the D1 store reads of the schema', () => {
 
   it('reads the schema once in ten seconds while the triggers are those captureSql() makes', async () => {
     const binding = await followed();
-    const store = follow.store(binding);
+    const store = storeThrough(follow, binding);
     const prepared = vi.spyOn(binding, 'prepare');
 
     clockAt(0);
@@ -177,7 +178,7 @@ describe('what the D1 store reads of the schema', () => {
     });
     const binding = await followed();
     await ran(binding, [`DROP TRIGGER "${UPDATE_TRIGGER}"`]);
-    const store = follow.store(binding);
+    const store = storeThrough(follow, binding);
     const prepared = vi.spyOn(binding, 'prepare');
 
     clockAt(0);
@@ -238,10 +239,7 @@ describe('what a plan of a D1 statement reads of the schema', () => {
     const joined = sql`select "t"."id" from "TAGS" "t" join "items" "i" on "i"."tag" = "t"."id" where "t"."label" = ${'a'}`;
     const query = () => orm.all(joined);
     const dependencies = await rendered(query);
-    const follower = new ExternalFollower(
-      own.store(binding),
-      definitionOf(declared(own.tables)).tables,
-    );
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     // A label of `A`, which the statement's `= 'a'` finds by the column's collation.

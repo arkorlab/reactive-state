@@ -2,11 +2,12 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle, type PgliteDatabase } from 'drizzle-orm/pglite';
 import { onTestFinished } from 'vitest';
 
+import type { ExternalStore } from '../../src/authority/external.ts';
 import { Engine } from '../../src/authority/node-engine.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../../src/program.ts';
-import { type AnyDatabase, database } from '../../src/server/schema.ts';
-import { type DrizzleFollow, followDrizzle } from '../../src/sql/index.ts';
-import type { Queryable } from '../../src/sql/store.ts';
+import type { AnyDatabase } from '../../src/server/schema.ts';
+import { type DrizzleFollow, followDrizzle, followedDb } from '../../src/sql/index.ts';
+import { followInternals, ownStore, readingThrough } from './follow-store.ts';
 import { textOf } from './frames.ts';
 
 /**
@@ -35,9 +36,22 @@ export interface Rendering {
   readonly session: string;
 }
 
+/**
+ * What an engine of a test follows: a follow, and what the authority reads its log through in place
+ * of the follow's own store, where the test gives it — a wrapped store, a faulty one, or one of
+ * another connection — made anew as each authority starts.
+ */
+export interface Following {
+  readonly follow: Opened<Readonly<Record<string, unknown>>>['follow'];
+  readonly store?: (() => ExternalStore) | undefined;
+}
+
 /** What a test gives the component and the engine, of what they take but `evaluate`. */
 export type ProgramOptions = Partial<Pick<ComponentProgram, 'updaters' | 'writable'>> & {
-  /** The database the engine is given, where it declares more than the followed tables. */
+  /**
+   * The database the engine is given, where it declares more than the followed tables: it reads
+   * the follow's log through the follow's store (`databaseFor`).
+   */
   readonly database?: AnyDatabase;
   readonly diagnosticsEveryMs?: number;
   readonly timeoutMs?: number;
@@ -73,12 +87,21 @@ export async function openedWith<S extends Readonly<Record<string, unknown>>>(
   return { follow, orm, pg };
 }
 
+/**
+ * The database an engine of `setup` is given: the follow's own (`followedDb`), which brings the
+ * follow's store, or `declared`, of more tables than the follow's, which reads the follow's log
+ * through that store as well — either through `setup.store` where the test gives one.
+ */
+export function databaseFor(setup: Following, declared?: AnyDatabase): AnyDatabase {
+  const db = declared ?? followedDb(setup.follow);
+  if (declared === undefined && setup.store === undefined) return db;
+  const { follow, store = () => ownStore(follow) } = setup;
+  return readingThrough(db, { [followInternals(follow).storeName]: store });
+}
+
 /** An engine of one component, whose render `evaluate` is, following `follow`'s tables. */
 export async function engineOf(
-  setup: {
-    readonly follow: Opened<Readonly<Record<string, unknown>>>['follow'];
-    readonly pg: Queryable;
-  },
+  setup: Following,
   evaluate: ComponentProgram['evaluate'],
   operations: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {},
   options: ProgramOptions = {},
@@ -100,11 +123,10 @@ export async function engineOf(
   };
   const engine = new Engine({
     buildId: BUILD,
-    database: declared ?? database(setup.follow.tables),
+    database: databaseFor(setup, declared),
     externalPollMs: IDLE_POLL_MS,
     operations,
     programs: [component],
-    stores: { [setup.follow.storeName]: setup.follow.store(setup.pg) },
     ...(timeoutMs !== undefined && { timeoutMs }),
     ...(diagnosticsEveryMs !== undefined && { diagnosticsEveryMs }),
   });

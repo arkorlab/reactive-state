@@ -3,13 +3,14 @@ import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { pgTable, text } from 'drizzle-orm/pg-core';
-import { Client, Pool } from 'pg';
+import { Pool } from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { type OperationCall } from '../src/program.ts';
 import { changeSession } from '../src/server/index.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
+import { storeThrough } from './support/follow-store.ts';
 
 /**
  * `changeSession` in the application's own transaction (`followDrizzle`'s PGlite `transaction`): the
@@ -96,7 +97,7 @@ describe('a session change asked in a transaction of the application’s own', (
   );
 });
 
-/** A pool's connections, and those of the store's client and the socket's spare. */
+/** A pool's connections, and those of the store's own pool and the socket's spare. */
 const CONNECTIONS = { pool: 3, served: 5 } as const;
 
 /** How long a pool's `end()` is waited for, a connection of the test's being left checked out. */
@@ -123,19 +124,29 @@ async function pooled() {
   const port = Number(server.getServerConn().split(':').at(-1));
   const config = { database: 'postgres', host: '127.0.0.1', port, ssl: false, user: 'postgres' };
   const connections = new Pool({ ...config, max: CONNECTIONS.pool });
-  const store = new Client(config);
-  await store.connect();
+  // The store's own connection, as `reactiveDb`'s on a server: a pool of one, as a follow is given
+  // no `pg.Client`.
+  const reads = new Pool({ ...config, max: 1 });
   const follow = followDrizzle({ tasks });
-  for (const statement of follow.captureSql()) await store.query(statement);
+  for (const statement of follow.captureSql()) await reads.query(statement);
   onTestFinished(async () => {
     // A connection Drizzle's failed BEGIN never released holds `end()`: the server closing frees it.
     await Promise.race([connections.end(), wait(LEAKED_MS)]);
-    await store.end();
+    await reads.end();
     await server.stop();
     await db.close();
   });
   const tracked = follow.client(connections);
-  return { follow, orm: drizzle({ client: tracked, schema: { tasks } }), pg: store, tracked };
+  // The log, read through the store's own connection: by a follow of the same tables, given it.
+  const reader = followDrizzle({ tasks });
+  const store = () => storeThrough(reader, reads);
+  return {
+    follow,
+    orm: drizzle({ client: tracked, schema: { tasks } }),
+    pg: reads,
+    store,
+    tracked,
+  };
 }
 
 /** The message of the `TypeError` that asking for a session change throws, or none if it is taken. */

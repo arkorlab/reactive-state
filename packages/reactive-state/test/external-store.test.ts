@@ -3,6 +3,8 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
+import { eq } from 'drizzle-orm';
+import { pgTable, text as column } from 'drizzle-orm/pg-core';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { Dependencies, type RowChange } from '../src/authority/dependencies.ts';
@@ -25,19 +27,99 @@ import {
   type Json,
 } from '../src/program.ts';
 import { database, definitionOf, json, table, text } from '../src/server/schema.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
+import { keyDigest } from '../src/sql/reads.ts';
+import { openedWith } from './support/drizzle.ts';
+import { followInternals, logStore, readingThrough } from './support/follow-store.ts';
 import { textOf } from './support/frames.ts';
 
-/** The application's records, held by its store alone. */
+/** A table of records its store answers, which only `externalGet` and `externalFind` read. */
 const db = database({
   items: table({ title: text(), group: text(), document: json() }, { external: 'remote' }),
 });
 const declared = definitionOf(db).tables.get('items');
 if (declared === undefined) throw new Error('The test declares items.');
-const tables = definitionOf(db).tables;
 const ITEMS = { name: 'items', table: declared };
+
+/** The application's items, of a Drizzle schema, which its own database holds and logs. */
+const items = pgTable('items', {
+  id: column().primaryKey(),
+  title: column().notNull(),
+  group: column().notNull().unique(),
+});
+const ITEMS_DDL = `
+  CREATE TABLE items (id text PRIMARY KEY, title text NOT NULL, "group" text NOT NULL UNIQUE);
+  INSERT INTO items VALUES ('one', 'first', 'a');
+`;
+/** A follow of the items, of the store `remote`, given no connection: a stand-in reads its log. */
+const follow = followDrizzle({ items }, { store: 'remote' });
+/** The tables read through the store, as the authority reads them of the follow's database. */
+const tables = definitionOf(followedDb(follow)).tables;
 const CLOCK = { start: 1000, tick: 100, expired: 31_000 } as const;
 const BUILD = 'b_external';
 const LOG_PAGE = 200;
+
+/**
+ * A stand-in of a follow's store: a log the application changes without writing to the authority,
+ * of an epoch and a floor the test moves, whose reads may fail.
+ */
+function log() {
+  const changes: ExternalChange[] = [];
+  let epoch = 'initial';
+  let floor = 0;
+  let fail = false;
+  const readLog = vi.fn((since: number, limit: number) => {
+    if (fail) return Promise.reject(new Error('The remote store is unavailable.'));
+    return Promise.resolve({
+      changes: changes.filter((change) => change.seq > since).slice(0, limit),
+      epoch,
+      floor,
+      head: changes.at(-1)?.seq ?? 0,
+    });
+  });
+  return {
+    changes,
+    epoch: (value: string) => {
+      epoch = value;
+    },
+    fail: (value: boolean) => {
+      fail = value;
+    },
+    floor: (value: number) => {
+      floor = value;
+    },
+    readLog,
+    store: logStore(readLog),
+  };
+}
+
+/** A database of the follow's tables, whose log the authority reads through `source`. */
+function readThrough(source: ReturnType<typeof log>) {
+  return readingThrough(followedDb(follow), { remote: () => source.store });
+}
+
+/**
+ * The items in a database of the application's own, read by its Drizzle, and a database of them
+ * whose log the authority reads through `source`.
+ */
+async function followedItems(source: ReturnType<typeof log>) {
+  const setup = await openedWith({ items }, ITEMS_DDL);
+  return { ...setup, db: readingThrough(followedDb(setup.follow), { sql: () => source.store }) };
+}
+
+/** The title of the item `one`, as the application's Drizzle reads it. */
+async function titleOfOne(setup: Awaited<ReturnType<typeof followedItems>>) {
+  const [item] = await setup.orm
+    .select({ title: items.title })
+    .from(items)
+    .where(eq(items.id, 'one'));
+  return item?.title;
+}
+
+/** What a follow's log keeps of the item `id` of `group`: its keys, as their digests. */
+function keysOf(id: string, group: string) {
+  return { k_group: keyDigest(group), k_id: keyDigest(id) };
+}
 
 /** A store whose records and log the application changes without writing to the authority. */
 function remote() {
@@ -83,13 +165,6 @@ function remote() {
   };
 }
 
-/** The test's one required record. */
-function oneOf(source: ReturnType<typeof remote>) {
-  const record = source.records.get('one');
-  if (record === undefined) throw new Error('The test has one record.');
-  return record;
-}
-
 describe('external stores', () => {
   it('refuses a host without the store or with no interval before it opens the database', async () => {
     const dir = await mkdtemp(path.join(tmpdir(), 'reactive-state-external-'));
@@ -97,11 +172,19 @@ describe('external stores', () => {
       await rm(dir, { force: true, recursive: true });
     });
     const filename = path.join(dir, 'authority.sqlite');
-    const opened = { buildId: BUILD, database: db, filename, programs: [] };
+    // Of a follow given no connection, which brings no store.
+    const opened = { buildId: BUILD, database: followedDb(follow), filename, programs: [] };
 
-    expect(() => new Engine(opened)).toThrow('`stores.remote`');
+    expect(() => new Engine(opened)).toThrow(
+      "The store `remote` reads its follow's log through the connection `follow.client` was given",
+    );
+    // Of the follow's tables declared beside none, whose declaration no follow brought a store
+    // of: the authority's own refusal of a table whose store it was given none of.
     expect(
-      () => new Engine({ ...opened, externalPollMs: 0, stores: { remote: remote().store } }),
+      () => new Engine({ ...opened, database: database(followInternals(follow).tables) }),
+    ).toThrow('`stores.remote`');
+    expect(
+      () => new Engine({ ...opened, database: readThrough(log()), externalPollMs: 0 }),
     ).toThrow('externalPollMs');
 
     const kept = new DatabaseSync(filename);
@@ -113,12 +196,11 @@ describe('external stores', () => {
   });
 
   it('does not commit an unchanged log', async () => {
-    const source = remote();
+    const source = log();
     const engine = new Engine({
       buildId: BUILD,
-      database: db,
+      database: readThrough(source),
       programs: [],
-      stores: { remote: source.store },
     });
     onTestFinished(async () => {
       await engine.close();
@@ -132,13 +214,14 @@ describe('external stores', () => {
   });
 
   it('stops after idle memos expire and reads the store again on the next visit', async () => {
-    const source = remote();
+    const source = log();
+    const setup = await followedItems(source);
     let now = CLOCK.start;
     const child: ComponentProgram = {
       buildId: BUILD,
       component: 'components/external-child',
       protocolVersion: PROTOCOL_VERSION,
-      evaluate: async (_props, $) => $.h('p', null, (await db.items.get('one'))?.title),
+      evaluate: async (_props, $) => $.h('p', null, await titleOfOne(setup)),
       updaters: {},
       writable: [],
     };
@@ -150,10 +233,9 @@ describe('external stores', () => {
     const engine = new Engine({
       buildId: BUILD,
       clock: () => now,
-      database: db,
+      database: setup.db,
       externalPollMs: CLOCK.tick,
       programs: [root, child],
-      stores: { remote: source.store },
     });
     onTestFinished(async () => {
       await engine.close();
@@ -170,13 +252,13 @@ describe('external stores', () => {
 
     expect(source.readLog).toHaveBeenCalledTimes(reads);
 
-    oneOf(source).title = 'after idle';
+    await setup.pg.query("UPDATE items SET title = 'after idle' WHERE id = 'one'");
 
     expect(textOf((await engine.render(session, request)).tree)).toBe('after idle');
   });
 
   it('keeps the cursor until its changes have been ingested', async () => {
-    const source = remote();
+    const source = log();
     const follower = new ExternalFollower(source.store, tables);
     await follower.changed();
     source.changes.push({ seq: 1, table: 'items', id: 'one' });
@@ -191,15 +273,15 @@ describe('external stores', () => {
   });
 
   it.each([
-    { what: 'corrected record', before: { title: 1 }, after: { title: 'corrected' } },
-    { what: 'deleted invalid record', before: { title: 1 }, after: null },
-    { what: 'invalid after image', before: { title: 'before' }, after: { title: 1 } },
+    { what: 'corrected record', before: { k_id: 1 }, after: { k_id: 'corrected' } },
+    { what: 'deleted invalid record', before: { k_id: 1 }, after: null },
+    { what: 'invalid after image', before: { k_id: 'before' }, after: { k_id: 1 } },
   ])('invalidates an invalid historical $what and continues to later changes', async (image) => {
-    const source = remote();
+    const source = log();
     const follower = new ExternalFollower(source.store, tables);
     await follower.changed();
     const dependencies = new Dependencies();
-    dependencies.query('items', { title: 'any prior predicate' });
+    dependencies.query('items', { k_id: 'any prior predicate' });
     source.changes.push({ ...image, id: 'one', seq: 1, table: 'items' });
 
     const changed = await follower.changed();
@@ -208,21 +290,21 @@ describe('external stores', () => {
     expect(dependencies.changedBy(changed)).toBe(true);
 
     source.changes.push({
-      before: { title: 'corrected' },
-      after: { title: 'later' },
+      before: { k_id: 'corrected' },
+      after: { k_id: 'later' },
       id: 'two',
       seq: 2,
       table: 'items',
     });
 
     await expect(follower.changed()).resolves.toMatchObject([
-      { id: 'two', after: { title: 'later' } },
+      { id: 'two', after: { k_id: 'later' } },
     ]);
     expect(source.readLog.mock.calls.at(-1)?.[0]).toBe(1);
   });
 
   it('invalidates every dependency when a log is replaced or pruned past its cursor', async () => {
-    const source = remote();
+    const source = log();
     const follower = new ExternalFollower(source.store, tables);
     const dependencies = new Dependencies();
     dependencies.record('items', 'missing');
@@ -241,17 +323,21 @@ describe('external stores', () => {
   });
 
   it('invalidates a rewound log even when its epoch was preserved', async () => {
-    const source = remote();
+    const source = log();
     source.changes.push({ seq: 2, table: 'items', id: 'one' });
     const follower = new ExternalFollower(source.store, tables);
     await follower.changed();
     source.changes.length = 0;
 
-    await expect(follower.changed()).resolves.toMatchObject([{ table: 'items', unknown: 'table' }]);
+    // Each table of the store: the items, and the table of their schema's changes.
+    await expect(follower.changed()).resolves.toMatchObject([
+      { table: 'items', unknown: 'table' },
+      { table: 'reactive_state_schema_remote', unknown: 'table' },
+    ]);
   });
 
   it('rejects malformed log metadata and replays the same cursor after recovery', async () => {
-    const source = remote();
+    const source = log();
     const follower = new ExternalFollower(source.store, tables);
     await follower.changed();
     source.readLog.mockResolvedValueOnce({ changes: [], epoch: 'initial', floor: 0, head: NaN });
@@ -264,7 +350,7 @@ describe('external stores', () => {
   });
 
   it('recovers a coalesced read even when the read ahead of it rejects', async () => {
-    const source = remote();
+    const source = log();
     source.readLog.mockRejectedValueOnce(new Error('A transient failure.'));
     const tail = new ExternalTail({
       ingest: () => Promise.resolve(),
@@ -298,7 +384,7 @@ describe('external stores', () => {
   });
 
   it('uses a host alarm while renderings are retained, and stops once none remain', async () => {
-    const source = remote();
+    const source = log();
     let retained = false;
     let now = CLOCK.start;
     const schedule = vi.fn();
@@ -339,7 +425,7 @@ describe('external stores', () => {
   });
 
   it('rearms after a failed read without losing its cursor', async () => {
-    const source = remote();
+    const source = log();
     let now = CLOCK.start;
     const schedule = vi.fn();
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {
@@ -416,21 +502,21 @@ describe('external stores', () => {
   });
 
   it('keeps memoized renders current without a connected stream', async () => {
-    const source = remote();
+    const source = log();
+    const setup = await followedItems(source);
     const component: ComponentProgram = {
       buildId: BUILD,
       component: 'components/external-record',
-      evaluate: async (_props, $) => $.h('p', null, (await db.items.get('one'))?.title),
+      evaluate: async (_props, $) => $.h('p', null, await titleOfOne(setup)),
       protocolVersion: PROTOCOL_VERSION,
       updaters: {},
       writable: [],
     };
     const engine = new Engine({
       buildId: BUILD,
-      database: db,
+      database: setup.db,
       externalPollMs: CLOCK.tick,
       programs: [component],
-      stores: { remote: source.store },
     });
     onTestFinished(async () => {
       await engine.close();
@@ -443,10 +529,9 @@ describe('external stores', () => {
     await vi.waitFor(() => {
       expect(source.readLog).toHaveBeenCalledWith(Number.MAX_SAFE_INTEGER, LOG_PAGE);
     });
-    const current = oneOf(source);
-    const before = { ...current };
-    current.title = 'second';
-    source.changes.push({ after: current, before, id: 'one', seq: 1, table: 'items' });
+    await setup.pg.query("UPDATE items SET title = 'second' WHERE id = 'one'");
+    const one = keysOf('one', 'a');
+    source.changes.push({ after: one, before: one, id: 'row', seq: 1, table: 'items' });
 
     await vi.waitFor(async () => {
       expect(textOf((await engine.render(session, root)).tree)).toBe('second');
@@ -456,9 +541,14 @@ describe('external stores', () => {
   });
 
   it('evicts only queries whose where predicate a changed record enters or leaves', async () => {
-    const source = remote();
+    const source = log();
+    const setup = await followedItems(source);
     const evaluate = vi.fn(async (_props: Readonly<Record<string, Json>>, $: RenderScope) => {
-      const records = await db.items.findMany({ where: { group: 'a' }, limit: 1 });
+      const records = await setup.orm
+        .select({ title: items.title })
+        .from(items)
+        .where(eq(items.group, 'a'))
+        .limit(1);
       return $.h('p', null, records.map((record) => record.title).join(','));
     });
     const component: ComponentProgram = {
@@ -471,10 +561,9 @@ describe('external stores', () => {
     };
     const engine = new Engine({
       buildId: BUILD,
-      database: db,
+      database: setup.db,
       externalPollMs: CLOCK.expired,
       programs: [component],
-      stores: { remote: source.store },
     });
     onTestFinished(async () => {
       await engine.close();
@@ -484,9 +573,9 @@ describe('external stores', () => {
     await engine.poke();
     await engine.render(session, root);
     source.changes.push({
-      after: { title: 'unrelated', group: 'b' },
-      before: { title: 'old', group: 'b' },
-      id: 'other',
+      after: keysOf('other', 'b'),
+      before: keysOf('other', 'b'),
+      id: 'row',
       seq: 1,
       table: 'items',
     });
@@ -495,12 +584,11 @@ describe('external stores', () => {
 
     expect(evaluate).toHaveBeenCalledExactlyOnceWith({}, expect.anything());
 
-    const record = oneOf(source);
-    record.group = 'b';
+    await setup.pg.query(`UPDATE items SET "group" = 'b' WHERE id = 'one'`);
     source.changes.push({
-      after: record,
-      before: { title: 'first', group: 'a' },
-      id: 'one',
+      after: keysOf('one', 'b'),
+      before: keysOf('one', 'a'),
+      id: 'row',
       seq: 2,
       table: 'items',
     });
@@ -511,12 +599,13 @@ describe('external stores', () => {
   });
 
   it('follows a retained shared route after its memo has expired', async () => {
-    const source = remote();
+    const source = log();
+    const setup = await followedItems(source);
     let now = CLOCK.start;
     const component: ComponentProgram = {
       buildId: BUILD,
       component: 'components/shared-external-record',
-      evaluate: async (_props, $) => $.h('p', null, (await db.items.get('one'))?.title),
+      evaluate: async (_props, $) => $.h('p', null, await titleOfOne(setup)),
       protocolVersion: PROTOCOL_VERSION,
       updaters: {},
       writable: [],
@@ -524,7 +613,7 @@ describe('external stores', () => {
     const engine = new Engine({
       buildId: BUILD,
       clock: () => now,
-      database: db,
+      database: setup.db,
       externalPollMs: CLOCK.tick,
       programs: [component],
       routes: [
@@ -539,7 +628,6 @@ describe('external stores', () => {
           shared: true,
         },
       ],
-      stores: { remote: source.store },
     });
     onTestFinished(async () => {
       await engine.close();
@@ -558,10 +646,9 @@ describe('external stores', () => {
 
     await nextTurn();
     now += CLOCK.expired;
-    const current = oneOf(source);
-    const before = { ...current };
-    current.title = 'shared-second';
-    source.changes.push({ after: current, before, id: 'one', seq: 1, table: 'items' });
+    await setup.pg.query("UPDATE items SET title = 'shared-second' WHERE id = 'one'");
+    const one = keysOf('one', 'a');
+    source.changes.push({ after: one, before: one, id: 'row', seq: 1, table: 'items' });
 
     await engine.pollExternal();
 

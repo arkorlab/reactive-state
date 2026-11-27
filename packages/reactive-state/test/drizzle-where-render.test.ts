@@ -11,9 +11,15 @@ import {
   type RenderScope,
   type StateSource,
 } from '../src/program.ts';
-import { database } from '../src/server/index.ts';
-import { type DrizzleFollow, followDrizzle } from '../src/sql/index.ts';
-import { COMPONENT, engineOf, openedWith, type ProgramOptions } from './support/drizzle.ts';
+import { type DrizzleFollow, followDrizzle, followedDb } from '../src/sql/index.ts';
+import {
+  COMPONENT,
+  engineOf,
+  type Following,
+  openedWith,
+  type ProgramOptions,
+} from './support/drizzle.ts';
+import { storeThrough } from './support/follow-store.ts';
 import { clientOf } from './support/frames.ts';
 
 /**
@@ -74,15 +80,15 @@ async function opened(extra = '') {
 }
 
 type Opened = Awaited<ReturnType<typeof opened>>;
-type Db = ReturnType<typeof database<Opened['follow']['tables']>>;
+type Db = ReturnType<typeof followedDb<[Opened['follow']]>>;
 
 /** An engine of one component whose states `states` makes: what a render of it shows of each. */
 async function showing(
-  setup: Pick<Opened, 'follow' | 'pg'>,
+  setup: Pick<Following, 'store'> & Pick<Opened, 'follow'>,
   states: (db: Db) => Readonly<Record<string, unknown>>,
   options: ProgramOptions = {},
 ) {
-  const db = database(setup.follow.tables);
+  const db = followedDb(setup.follow);
   const evaluate = vi.fn((_props: Readonly<Record<string, Json>>, $: RenderScope) =>
     $.client({ props: {}, slots: {}, states: states(db) as never }),
   );
@@ -111,7 +117,7 @@ function rowReads(query: { readonly mock: { readonly calls: readonly unknown[][]
 
 /** What `renderShared` answers of a route of a root that binds a row, `writable` or not. */
 async function sharedAnswer(setup: Opened, writable: readonly string[]) {
-  const db = database(setup.follow.tables);
+  const db = followedDb(setup.follow);
   const root: ComponentProgram = {
     buildId: BUILD,
     component: COMPONENT,
@@ -140,7 +146,6 @@ async function sharedAnswer(setup: Opened, writable: readonly string[]) {
         shared: true,
       },
     ],
-    stores: { [setup.follow.storeName]: setup.follow.store(setup.pg) },
   });
   onTestFinished(async () => {
     await engine.close();
@@ -227,7 +232,7 @@ describe('a state bound to a row of a followed table', () => {
     async () => {
       const first = await databaseOf({ firstTasks: tasks }, 'one', 'Of the first');
       const second = await databaseOf({ secondTasks: tasks }, 'two', 'Of the second');
-      const db = database({ ...first.follow.tables, ...second.follow.tables });
+      const db = followedDb(first.follow, second.follow);
       const component: ComponentProgram = {
         buildId: BUILD,
         component: COMPONENT,
@@ -251,7 +256,6 @@ describe('a state bound to a row of a followed table', () => {
         database: db,
         externalPollMs: IDLE_POLL_MS,
         programs: [component],
-        stores: { one: first.follow.store(first.pg), two: second.follow.store(second.pg) },
       });
       onTestFinished(async () => {
         await engine.close();
@@ -396,7 +400,7 @@ describe('a state bound to a row of a followed table', () => {
         INSERT INTO labels VALUES ('P1', 'Launch');
       `,
       );
-      const db = database(setup.follow.tables);
+      const db = followedDb(setup.follow);
       const { engine, rendered } = await engineOf(setup, (_props, $) => {
         return $.client({
           props: {},
@@ -493,7 +497,9 @@ describe('a state bound to a row of a followed table', () => {
     async () => {
       const setup = await opened();
       const follow = followDrizzle(schema);
-      const { rendered } = await showing({ follow, pg: setup.pg }, (db) => {
+      // The log, read through a follow of the same tables given the connection, as this one is not.
+      const store = () => storeThrough(followDrizzle(schema), setup.pg);
+      const { rendered } = await showing({ follow, store }, (db) => {
         return {
           title: db.tasks.where(eq(tasks.id, 't1')).title,
         };

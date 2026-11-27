@@ -11,8 +11,7 @@ import {
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { type FieldRef, isFieldRef } from '../src/program.ts';
-import { database } from '../src/server/index.ts';
-import { followDrizzle } from '../src/sql/index.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
 
 /** A row's columns of SQLite's, and the keys that name one row, as a schema of D1 declares them. */
 const tasks = sqliteTable(
@@ -59,7 +58,13 @@ const members = sqliteTable(
 
 /** The database of the schema's tables, as an application declares it. */
 function declared() {
-  return database(followDrizzle({ members, tasks }).tables);
+  return followedDb(followDrizzle({ members, tasks }));
+}
+
+/** `ref` of a table whose type holds none, as a caller in JavaScript may call it. */
+function refOf(handle: unknown, id: string): unknown {
+  const ref = Reflect.get(handle as Record<string, unknown>, 'ref') as (given: string) => unknown;
+  return ref(id);
 }
 
 describe('db.<table>.where, of a schema of SQLite', () => {
@@ -140,6 +145,6 @@ describe('db.<table>.where, of a schema of SQLite', () => {
   });
 
   it('points `ref` at `where`', () => {
-    expect(() => declared().tasks.ref('1')).toThrow('db.tasks.where');
+    expect(() => refOf(declared().tasks, '1')).toThrow('db.tasks.where');
   });
 });

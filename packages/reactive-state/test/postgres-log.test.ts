@@ -9,7 +9,7 @@ import type { Client } from 'pg';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { hostOf } from '../src/authority/database-host.ts';
-import { TAIL } from '../src/authority/external.ts';
+import { type ExternalStore, TAIL } from '../src/authority/external.ts';
 import { startAuthority } from '../src/authority/index.ts';
 import { prepare } from '../src/cli/prepare.ts';
 import type { Json, RenderScope } from '../src/program.ts';
@@ -17,6 +17,7 @@ import { reactiveDb } from '../src/sql/db.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { engineOf } from './support/drizzle.ts';
+import { storeThrough } from './support/follow-store.ts';
 import {
   clientOf,
   databaseOf,
@@ -83,7 +84,7 @@ async function opened(ddl: string, tables: Readonly<Record<string, unknown>>) {
 }
 
 /** A follower of `store`, reading as writers commit, until `stop` is called. */
-function following(store: ReturnType<ReturnType<typeof followDrizzle<typeof schema>>['store']>) {
+function following(store: ExternalStore) {
   const seen: number[] = [];
   let cursor = 0;
   let unordered = 0;
@@ -144,12 +145,19 @@ async function writing(
   return committed.reduce((sum, each) => sum + each, 0);
 }
 
-/** A pool of the tasks, through what follows it, and the store on a connection of its own. */
+/**
+ * A pool of the tasks, through what follows it, and the store on a connection of its own: a pool of
+ * one, given to a follow of the same tables, as a follow is given no `pg.Client`.
+ */
 async function pooled() {
   const { follow, name, owner } = await opened(DDL, schema);
   const pool = poolOf(name, { max: 4 });
   const tracked = follow.client(pool);
-  return { follow, name, orm: drizzle({ client: tracked, schema }), owner, pg: owner, tracked };
+  const reads = poolOf(name, { max: 1 });
+  const reader = followDrizzle(schema);
+  const store = () => storeThrough(reader, reads);
+  const orm = drizzle({ client: tracked, schema });
+  return { follow, name, orm, owner, pg: owner, store, tracked };
 }
 
 /** What a render of `read` answers, with the engine that made it. */
@@ -207,7 +215,7 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
     'reaches a follower whole and in order, of writers of their own rows at %s',
     async (level) => {
       const { follow, name, owner } = await opened(DDL, schema);
-      const follower = following(follow.store(await clientOf(name)));
+      const follower = following(storeThrough(follow, poolOf(name, { max: 1 })));
 
       const committed = await writing(name, level, (writer, turn) => {
         const id = [String(100 + writer * 12 + (turn % 12))];
@@ -235,7 +243,7 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
       const tables = Object.fromEntries(names.map((each) => [each, ownTable(each)]));
       const ddl = names.map((each) => ownDdl(each)).join('');
       const { follow, name, owner } = await opened(ddl, tables);
-      const follower = following(follow.store(await clientOf(name)));
+      const follower = following(storeThrough(follow, poolOf(name, { max: 1 })));
 
       const committed = await writing(name, 'SERIALIZABLE', (writer, turn) => {
         const statement = `UPDATE own_${String(writer)} SET n = n + 1 WHERE id = $1`;
@@ -258,8 +266,8 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
   it(
     'holds no writer or follower behind an open transaction',
     async () => {
-      const { follow, name, owner } = await opened(DDL, schema);
-      const store = follow.store(owner);
+      const { follow, name } = await opened(DDL, schema);
+      const store = storeThrough(follow, poolOf(name, { max: 1 }));
       const [open, other] = await Promise.all([clientOf(name), clientOf(name)]);
       const { head } = await store.changes(0, 10);
 
@@ -286,7 +294,7 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
   it(
     'numbers transactions in the order they commit',
     async () => {
-      const { follow, name, owner } = await opened(DDL, schema);
+      const { follow, name } = await opened(DDL, schema);
       const [first, second] = await Promise.all([clientOf(name), clientOf(name)]);
       await first.query('BEGIN');
       await second.query('BEGIN');
@@ -296,7 +304,7 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
       await second.query('COMMIT');
       await first.query('COMMIT');
 
-      const { changes } = await follow.store(owner).changes(0, 10);
+      const { changes } = await storeThrough(follow, poolOf(name, { max: 1 })).changes(0, 10);
 
       expect(
         changes.flatMap(({ after }) => (after === null ? [] : [after?.['k_id']])),
@@ -319,7 +327,9 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
       );
       await owner.query("UPDATE tasks SET n = 1 WHERE id = '1'");
 
-      await expect(follow.store(owner).changes(0, 10)).resolves.toMatchObject({
+      await expect(
+        storeThrough(follow, poolOf(name, { max: 1 })).changes(0, 10),
+      ).resolves.toMatchObject({
         changes: [{ seq: 1 }, { seq: 2 }],
       });
     },
@@ -348,12 +358,8 @@ describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions'
     'loses no commit to starts and prunes among writers',
     async () => {
       const { follow, name, owner } = await opened(DDL, schema);
-      const [reader, pruner, host] = await Promise.all([
-        clientOf(name),
-        clientOf(name),
-        clientOf(name),
-      ]);
-      const store = follow.store(reader);
+      const [pruner, host] = await Promise.all([clientOf(name), clientOf(name)]);
+      const store = storeThrough(follow, poolOf(name, { max: 1 }));
       const run = { stopped: false };
       let lowered = 0;
       let last = 0;

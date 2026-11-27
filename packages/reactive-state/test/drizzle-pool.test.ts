@@ -7,9 +7,9 @@ import { Client, Pool, type PoolClient, Query } from 'pg';
 import { describe, expect, it, type MockInstance, onTestFinished, vi } from 'vitest';
 
 import type { Json, ProgramUpdater, RenderScope } from '../src/program.ts';
-import { database } from '../src/server/index.ts';
-import { followDrizzle } from '../src/sql/index.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
 import { COMPONENT, engineOf } from './support/drizzle.ts';
+import { storeThrough } from './support/follow-store.ts';
 import { clientOf } from './support/frames.ts';
 
 /**
@@ -27,8 +27,11 @@ const DDL = `
 `;
 /** Each test makes a PGlite of its own, as long as a second and more under load. */
 const TEST_TIMEOUT_MS = 20_000;
-/** Connections of the pool, and those of the store and of what a test holds besides. */
-const CONNECTIONS = { besides: 2, pool: 3 } as const;
+/**
+ * Connections of the pool, and those of the store, of the test's own client and of what a test
+ * holds besides.
+ */
+const CONNECTIONS = { besides: 3, pool: 3 } as const;
 const TITLE_SET = 'u_title';
 /** PostgreSQL's oid of `character`, whose text compares of no trailing spaces. */
 const BPCHAR = 1042;
@@ -36,7 +39,10 @@ const updaters: Readonly<Record<string, ProgramUpdater>> = {
   [TITLE_SET]: { keys: ['title'], kind: 'set' },
 };
 
-/** A PGlite of the tasks, its log made, served to a pool and to a client the store reads through. */
+/**
+ * A PGlite of the tasks, its log made, served to a pool, to a pool of one connection the store
+ * reads through — a follow is given no `pg.Client` — and to a client of the test's own.
+ */
 async function pooled() {
   const db = await PGlite.create();
   await db.exec(DDL);
@@ -50,18 +56,24 @@ async function pooled() {
   const port = Number(server.getServerConn().split(':').at(-1));
   const config = { database: 'postgres', host: '127.0.0.1', port, ssl: false, user: 'postgres' };
   const pool = new Pool({ ...config, max: CONNECTIONS.pool });
-  const store = new Client(config);
-  await store.connect();
+  const reads = new Pool({ ...config, max: 1 });
+  const client = new Client(config);
+  await client.connect();
   const follow = followDrizzle(schema);
-  for (const statement of follow.captureSql()) await store.query(statement);
+  for (const statement of follow.captureSql()) await client.query(statement);
   const tracked = follow.client(pool);
   onTestFinished(async () => {
     await pool.end();
-    await store.end();
+    await reads.end();
+    await client.end();
     await server.stop();
     await db.close();
   });
-  return { config, follow, orm: drizzle({ client: tracked, schema }), pg: store, pool, tracked };
+  // The log, read through the store's own connection: by a follow of the same tables, given it.
+  const reader = followDrizzle(schema);
+  const store = () => storeThrough(reader, reads);
+  const orm = drizzle({ client: tracked, schema });
+  return { config, follow, orm, pg: client, pool, store, tracked };
 }
 
 type Pooled = Awaited<ReturnType<typeof pooled>>;
@@ -520,8 +532,8 @@ describe('a transaction of a pool', () => {
     'moves no epoch outside a render, which would render everything again at each commit',
     async () => {
       const setup = await pooled();
-      const { orm, pg, follow } = setup;
-      const store = follow.store(pg);
+      const { orm } = setup;
+      const store = setup.store();
       await store.changes(0, 10);
       const { epoch } = await store.changes(0, 10);
 
@@ -774,7 +786,7 @@ describe('a state bound to a row, through a pool', () => {
     'reads the row and writes it, through the connections of the pool',
     async () => {
       const setup = await pooled();
-      const db = database(setup.follow.tables);
+      const db = followedDb(setup.follow);
       const { engine, rendered, session } = await engineOf(
         setup,
         (_props: Readonly<Record<string, Json>>, $: RenderScope) => {
