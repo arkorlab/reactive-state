@@ -144,10 +144,13 @@ function heard(): void {
 /** `connection`, a pool or one it checked out, its queries in a render noted by `plans`. */
 function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedOut: boolean): C {
   let client = connection;
-  // A connection the operation checked out is looked at while it holds it: until its release.
-  const unregister = checkedOut
-    ? usedConnection(connection, () => transacting(connection))
-    : undefined;
+  // A connection the operation checked out is looked at while it holds it: until its release. One
+  // kept from before the operation is its own as the operation sends a statement through it.
+  let unregister: (() => void) | undefined;
+  const used = (): void => {
+    unregister = usedConnection(connection, () => transacting(connection)) ?? unregister;
+  };
+  if (checkedOut) used();
   /** What an operation's statements wrote in the transaction this connection opened, if one is open. */
   let writes: TransactionWrites | undefined;
   const planner: Planner = {
@@ -255,8 +258,10 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
     const args = [first, ...rest];
     return sentToPostgres('query', args, () => outside('query', args), writes);
   };
-  const query = (first: unknown, ...rest: unknown[]): unknown =>
-    underwayQuery([first, ...rest], ([text, ...more]) => queried(text, ...more));
+  const query = (first: unknown, ...rest: unknown[]): unknown => {
+    if (checkedOut) used();
+    return underwayQuery([first, ...rest], ([text, ...more]) => queried(text, ...more));
+  };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
     tracked((await called(connection, 'connect', args)) as PoolConnection, plans, true);
   const connect = (...args: unknown[]): unknown => {
