@@ -25,7 +25,7 @@ import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, frameDeclarationOf } from './framed-bindings.ts';
 import { framedJsonBoxedKey, type JsonBoxedKeyContext } from './framed-json-boxed-keys.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
-import { repeatedFrameRead } from './framed-writes.ts';
+import { repeatedBodyRead } from './framed-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** A JSON property list reads only source-known string and number entries of a real array. */
@@ -168,7 +168,7 @@ function keyUse(
   if (declared === undefined || executionOwner(name) !== owner) return null;
   if (
     (name.pos >= expression.pos || destructuredFirst(expression, name)) &&
-    !repeatedFrameRead(name, expression, declared, owner)
+    !repeatedBodyRead(name, expression, declared, owner)
   )
     return undefined;
   return closedKeyWrite(name, expression) ?? null;

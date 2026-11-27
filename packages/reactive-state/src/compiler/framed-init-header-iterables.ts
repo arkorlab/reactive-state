@@ -40,7 +40,7 @@ export function framedInitHeaderIterable(call: NewExpression, words: InitTextWor
   if (!framedNativeConstructor(call.expression, CONSTRUCTORS)) return false;
   const options = quietArguments(call);
   if (options === undefined) return false;
-  const init = framedRecordOrigin(options, call);
+  const init = framedRecordOrigin(options, call, false);
   if (
     init?.unchanged !== true ||
     !framedPrefixSameOwner(init.record, call) ||
@@ -49,7 +49,7 @@ export function framedInitHeaderIterable(call: NewExpression, words: InitTextWor
     return false;
   const headers = headerOption(init.record);
   if (headers === undefined) return false;
-  const origin = framedRecordOrigin(headers, call);
+  const origin = framedRecordOrigin(headers, call, false);
   if (
     origin?.unchanged !== true ||
     !framedPrefixSameOwner(origin.record, call) ||

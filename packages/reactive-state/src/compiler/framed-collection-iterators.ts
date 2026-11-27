@@ -220,7 +220,7 @@ function arrayIteratorValue(
   if (
     method === 'keys' ||
     !addedIteratorBoundary(source.value, read) ||
-    argumentArrayExposed(receiver, source.bindings) ||
+    argumentArrayExposed(receiver, source.bindings, undefined, false) ||
     !iteratorBoundaryQuiet({ source, acquisition: node, next: read.capture, method })
   )
     return undefined;
@@ -280,7 +280,7 @@ function defaultIteratorValue(
     input === undefined ||
     !addedIteratorBoundary(at.source.value, read) ||
     !isArrayLiteralExpression(input.value) ||
-    argumentArrayExposed(at.entries, input.bindings) ||
+    argumentArrayExposed(at.entries, input.bindings, undefined, false) ||
     !iteratorQuietValues([input.value]) ||
     !iteratorPrefixQuiet(input.value, at.source.value) ||
     !iteratorBoundaryQuiet({

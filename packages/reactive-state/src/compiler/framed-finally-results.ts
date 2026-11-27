@@ -97,7 +97,7 @@ function ignoredFinalizer(node: Expression): boolean {
 
 /** Ignored trailing operands are evaluated before a native handler is installed. */
 function quietTrailingArguments(call: CallExpression): boolean {
-  const given = framedArgumentPrefix(call, call.arguments, Infinity);
+  const given = framedArgumentPrefix(call, call.arguments, Infinity, false);
   return (
     !given.unknown &&
     (given.alternatives?.length ?? 0) === 0 &&

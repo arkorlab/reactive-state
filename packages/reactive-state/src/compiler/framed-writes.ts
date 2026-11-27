@@ -428,6 +428,32 @@ function runsOnce(node: Node, loop: Node): boolean {
   return (isForOfStatement(loop) || isForInStatement(loop)) && withinBody(node, loop.expression);
 }
 
+/**
+ * The narrower loop rule: only a later use in a repeated body reaches the next pass's read, and no
+ * read that runs once, in a `for` initializer or a `for…of` or `for…in` iterable. A reader whose
+ * proof an earlier use drops, rather than widens with what may be there, keeps this rule, so that a
+ * use in a loop's condition or update leaves its proof, and its refusal, in place.
+ */
+export function repeatedBodyRead(node: Node, name: Node, declared: Node, owner: Node): boolean {
+  for (let at = name.parent; at !== owner; at = at.parent) {
+    const body = loopBody(at);
+    if (
+      body !== undefined &&
+      canRepeat(at) &&
+      withinBody(node, body) &&
+      !runsOnce(name, at) &&
+      !initializedWithin(declared, name, body)
+    )
+      return true;
+  }
+  return false;
+}
+
+/** A reach's loop rule: the narrower body rule where it is `false`, and the wider one otherwise. */
+export function reachedLoopRead(reached: boolean | 'loops'): typeof repeatedFrameRead {
+  return reached === false ? repeatedBodyRead : repeatedFrameRead;
+}
+
 /** The written body of the language's loop forms, one of the parts each later pass repeats. */
 function loopBody(node: Node): Node | undefined {
   return isForStatement(node) ||

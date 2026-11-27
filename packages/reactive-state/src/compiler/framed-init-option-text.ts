@@ -30,7 +30,7 @@ export function framedInitTextValue(
   const error = (each: Expression, keys?: readonly string[]) =>
     framedOriginCoowned(each, call) && words.error(each, keys);
   return (
-    (framedNativeErrorInput(value, call, reads) && error(value)) ||
+    (framedNativeErrorInput(value, call, reads, false) && error(value)) ||
     (framedQuietArrayWords(value, error, call) &&
       framedArrayString(value, { error, typed: words.typed }, call))
   );
@@ -53,11 +53,11 @@ export function framedInitHeaderWords(
 ): boolean {
   const record = framedTextOptions(value, natives);
   if (record !== undefined) return headerValues([...record.values()], call, words);
-  const source = framedQuietSource(value);
+  const source = framedQuietSource(value, false);
   if (source === undefined || !isArrayLiteralExpression(source)) return false;
   const values: Expression[] = [];
   for (const each of source.elements) {
-    const entry = framedQuietSource(each);
+    const entry = framedQuietSource(each, false);
     if (entry === undefined || !isArrayLiteralExpression(entry) || entry.elements.length !== 2)
       return false;
     const key = entry.elements[0];

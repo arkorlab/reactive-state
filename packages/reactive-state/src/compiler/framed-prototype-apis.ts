@@ -4,7 +4,7 @@ import { globalPathOf } from './code-globals.ts';
 import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedBodyRead } from './framed-writes.ts';
 import { isTypeOnly } from './scope.ts';
 
 /** Additional prototype origins retain opacity after native namespace replacement or exposure. */
@@ -40,7 +40,7 @@ function namespaceExposure(
   if (other === owner) {
     if (
       (node.pos >= read.pos || destructuredFirst(read, node)) &&
-      !repeatedFrameRead(node, read, read.getSourceFile(), owner)
+      !repeatedBodyRead(node, read, read.getSourceFile(), owner)
     )
       return false;
   } else if (unreferencedLocalFunction(other, owner)) return false;

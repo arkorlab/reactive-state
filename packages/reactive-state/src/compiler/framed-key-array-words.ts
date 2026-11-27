@@ -70,7 +70,7 @@ export function framedKeyArrayWords(key: Expression, consumer: Node, words: KeyW
     return (
       words.error(value, keys) &&
       framedOriginCoowned(value, key) &&
-      framedNativeErrorInput(value, key)
+      framedNativeErrorInput(value, key, undefined, false)
     );
   };
   return (
@@ -103,7 +103,7 @@ function evaluatedOptionalKey(node: Node): boolean {
 
 /** Fresh literal values and whole unchanged aliases establish a nonnull optional receiver. */
 function knownNonNullish(expression: Expression): boolean {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   if (value === undefined) return false;
   if (
     isObjectLiteralExpression(value) ||

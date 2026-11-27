@@ -53,7 +53,7 @@ export function framedEventListenerText(call: CallExpression, words: ListenerWor
     const spread = isSpreadElement(argument);
     const value = spread ? argument.expression : argument;
     return (
-      (!spread && framedNativeErrorInput(value, call) && error(value)) ||
+      (!spread && framedNativeErrorInput(value, call, undefined, false) && error(value)) ||
       (framedQuietArrayWords(value, error, call) &&
         arrayError(value, { error, typed: words.typed }, call))
     );

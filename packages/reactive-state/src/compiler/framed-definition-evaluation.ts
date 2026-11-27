@@ -111,7 +111,7 @@ function quietDescriptors(call: CallExpression): boolean {
     else if (isShorthandPropertyAssignment(field) && isIdentifier(field.name))
       descriptor = field.name;
     else return false;
-    const source = framedQuietSource(descriptor);
+    const source = framedQuietSource(descriptor, false);
     if (
       source === undefined ||
       !isObjectLiteralExpression(source) ||

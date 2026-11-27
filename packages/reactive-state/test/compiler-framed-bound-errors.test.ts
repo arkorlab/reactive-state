@@ -155,7 +155,7 @@ const CASES = [
       'function frames(){const original=Error.bind;try{Error.bind=(()=>()=>({stack:"fixed"})) as typeof Error.bind;return Error.bind(null,"fixed")().stack;}finally{Error.bind=original;}}',
     invocation: 'frames()',
     refused: true,
-    reader: false,
+    reader: true,
   },
   {
     id: 'bound-native-alias-own-bind-data',
@@ -163,13 +163,29 @@ const CASES = [
       'function frames(){const Native=Error;const original=Native.bind;try{Native.bind=(()=>()=>({stack:"fixed"})) as typeof Native.bind;return Native.bind(null,"fixed")().stack;}finally{Native.bind=original;}}',
     invocation: 'frames()',
     refused: true,
-    reader: false,
+    reader: true,
   },
   {
     id: 'bound-ignore-later-arguments-data',
     source:
       'function frames(error:Error){return (Error.bind(null,"fixed") as (...args:unknown[])=>Error)(error).message;}',
     invocation: 'frames(new Error("ours"))',
+    refused: false,
+    reader: false,
+  },
+  {
+    id: 'bound-loop-condition-use',
+    source:
+      'function frames(){const Bound=Error.bind(null,"fixed");let result:unknown;let i=0;do{result=Bound().stack;}while((void Bound,i++<1));return result;}',
+    invocation: 'frames()',
+    refused: true,
+    reader: true,
+  },
+  {
+    id: 'bound-loop-condition-data',
+    source:
+      'function frames(){const Bound=Error.bind(null,"fixed");let result:unknown;let i=0;do{result=Bound().message;}while((void Bound,i++<1));return result;}',
+    invocation: 'frames()',
     refused: false,
     reader: false,
   },

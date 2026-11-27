@@ -41,7 +41,7 @@ export function asyncArrayFactoryViews(
     return undefined;
   const prefix = framedArgumentPrefix(call, call.arguments, Infinity);
   const [input, mapper, ...rest] = prefix.values;
-  const source = input === undefined ? undefined : concatSource(input, stable);
+  const source = input === undefined ? undefined : concatSource(input, stable, false);
   if (
     source === undefined ||
     prefix.unknown ||

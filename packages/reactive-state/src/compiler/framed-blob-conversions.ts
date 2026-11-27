@@ -36,7 +36,7 @@ export function quietBlobConversions(
   const prefix = framedArgumentPrefix(call, args, 2);
   if (prefix.unknown || prefix.alternatives !== undefined) return false;
   const [parts, options] = prefix.values;
-  const sequence = parts === undefined ? undefined : framedBlobSequence(parts, call, original);
+  const sequence = parts === undefined ? undefined : framedBlobSequence(parts, original);
   return (
     (parts === undefined ||
       (sequence !== undefined && quietParts(sequence.elements, original, error))) &&

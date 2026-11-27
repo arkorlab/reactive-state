@@ -90,12 +90,24 @@ const CASES: readonly Case[] = [
     id: 'find-async-tail-effect-pin',
     source:
       'function frames(error:Error){return([error].find as(...args:unknown[])=>Error|undefined)(async()=>false,Object.assign(error,{stack:"fixed"}))!.stack;}',
-    refused: false,
+    refused: true,
   },
   {
     id: 'find-async-saved-result-pin',
     source:
       'function frames(error:Error){const found=[error].find(async()=>false);Object.assign(error,{stack:"fixed"});return found!.stack;}',
+    refused: true,
+  },
+  {
+    id: 'async-find-loop-replace',
+    source:
+      'function frames(error:Error){const input:Array<{stack?:string}>=[{stack:"fixed"}];let result:unknown;let i=0;do result=input.find(async()=>true)!.stack;while((input[0]=error,i++<1));return result;}',
+    refused: true,
+  },
+  {
+    id: 'async-find-loop-replace-data',
+    source:
+      'function frames(error:Error){const input:Array<{stack?:string}>=[{stack:"fixed"}];const spare:Array<{stack?:string}>=[];let result:unknown;let i=0;do result=input.find(async()=>true)!.stack;while((spare[0]=error,i++<1));return result;}',
     refused: false,
   },
 ];

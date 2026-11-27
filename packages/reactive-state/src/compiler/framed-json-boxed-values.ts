@@ -50,7 +50,7 @@ export function framedJsonBoxedValue(expression: Expression, consumer: Node): bo
   const trace: BoxedTrace = { aliases: new Set(), reads: new Set(), operations: new Set() };
   if (!nativeBoxedOrigin(expression, consumer, trace)) return false;
   return (
-    !argumentArrayExposed(consumer, trace.aliases, (name) => trace.reads.has(name)) &&
+    !argumentArrayExposed(consumer, trace.aliases, (name) => trace.reads.has(name), true) &&
     [...trace.operations].every((call) =>
       jsonBoxedCreation(call.arguments, trace.operations, consumer, true),
     ) &&

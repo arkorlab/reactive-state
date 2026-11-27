@@ -61,7 +61,7 @@ export function framedJsonSpreadElements(
   if (
     values === undefined ||
     !jsonSpreadEvaluation(consumer, selected.args, values, trace) ||
-    argumentArrayExposed(consumer, trace.aliases, (name) => trace.reads.has(name))
+    argumentArrayExposed(consumer, trace.aliases, (name) => trace.reads.has(name), false)
   )
     return undefined;
   return values;
@@ -172,13 +172,13 @@ function definitionKey(expression: Expression): boolean {
 
 /** Descriptor fields are data or deferred function values; descriptor getters stay opaque. */
 function literalDescriptor(expression: Expression): boolean {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   return value !== undefined && isObjectLiteralExpression(value) && jsonSpreadFields(value, false);
 }
 
 /** Plural definitions keep the same exact-key and quiet descriptor boundary as singular ones. */
 function descriptorMap(expression: Expression): boolean {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   return (
     value !== undefined &&
     isObjectLiteralExpression(value) &&

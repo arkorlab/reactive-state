@@ -72,7 +72,7 @@ function raceSelection(call: CallExpression): RaceSelection | undefined {
     !iteratorQuietValues(call.arguments.slice(1))
   )
     return undefined;
-  const elements = framedAppliedArguments(call, input);
+  const elements = framedAppliedArguments(call, input, false);
   if (elements === undefined) return undefined;
   const prefix = framedArgumentPrefix(call, elements, Infinity);
   if (prefix.unknown || prefix.alternatives !== undefined) return undefined;

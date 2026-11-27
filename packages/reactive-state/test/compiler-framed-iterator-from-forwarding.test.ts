@@ -710,6 +710,22 @@ const CASES = [
     reader: false,
     refused: false,
   },
+  {
+    id: 'from-loop-condition-use',
+    source:
+      'function frames(error:Error){const input=[error];const alias=input;let result:unknown;let i=0;do{result=Iterator.from(alias).next().value!.stack;}while((void alias,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'from-loop-condition-data',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=Iterator.from([{stack:"fixed"},error]).next().value!.stack;}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
 ] as const;
 
 describe('native Iterator from words', () => {

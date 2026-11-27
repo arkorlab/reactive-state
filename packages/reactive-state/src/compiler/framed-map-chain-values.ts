@@ -30,7 +30,7 @@ import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedMapKey } from './framed-map-keys.ts';
 import { framedNativeArguments } from './framed-native-arguments.ts';
-import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedAssignedValues, framedPossibleBranch, repeatedBodyRead } from './framed-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Finite borrowed native Map chains retain written values even without a fresh construction. */
@@ -185,7 +185,7 @@ function exposedUse(
   if (other === owner) {
     if (
       (name.pos >= value.pos || destructuredFirst(value, name)) &&
-      !repeatedFrameRead(name, value, selected.binding, owner)
+      !repeatedBodyRead(name, value, selected.binding, owner)
     )
       return false;
   } else if (unreferencedLocalFunction(other, owner)) return false;

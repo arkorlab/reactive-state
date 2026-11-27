@@ -45,7 +45,7 @@ import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedPrefixSameOwner } from './framed-native-prefix.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch, repeatedBodyRead } from './framed-writes.ts';
 import { STANDARD_ERRORS } from './local-type-utility-readings.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
@@ -307,7 +307,7 @@ function exposed(name: Identifier, sources: Sources, point: Node): boolean {
   if (owner === reader) {
     if (
       (name.pos >= point.end || destructuredFirst(point, name)) &&
-      !repeatedFrameRead(name, point, selected.binding, reader)
+      !repeatedBodyRead(name, point, selected.binding, reader)
     )
       return false;
     if (observationReceiver(name, point)) return false;

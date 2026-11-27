@@ -30,7 +30,7 @@ export function mapperSpreadViews(
   if (views === undefined) return undefined;
   const fn = sourceCallback(mapping.callback);
   if (fn === undefined) return undefined;
-  const given = framedArgumentPrefix(call, call.arguments, Infinity);
+  const given = framedArgumentPrefix(call, call.arguments, Infinity, false);
   if (
     given.unknown ||
     (given.alternatives?.length ?? 0) > 0 ||

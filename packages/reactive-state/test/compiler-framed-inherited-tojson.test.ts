@@ -274,6 +274,41 @@ const CASES: readonly Case[] = [
     invocation: 'frames(new Error("ours"))',
     refused: true,
   },
+  {
+    id: 'receiver-exposed-do-condition',
+    source:
+      'function frames(error:Error){const value={__proto__:{toJSON(){return error;}}} as {x?:number};let result:unknown;let i=0;do{result=JSON.stringify(value,["stack"]);}while((value.x=1,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'prototype-exposed-do-condition',
+    source:
+      'function frames(error:Error){const proto={toJSON(){return error;}} as {toJSON():unknown;x?:number};const value={__proto__:proto};let result:unknown;let i=0;do{result=JSON.stringify(value,["stack"]);}while((proto.x=1,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'receiver-exposed-write',
+    source:
+      'function frames(error:Error){const value={__proto__:{toJSON(){return error;}}} as {x?:number};value.x=1;return JSON.stringify(value,["stack"]);}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'receiver-exposed-do-condition-data',
+    source:
+      'function frames(){const value={__proto__:{toJSON(){return {stack:"fixed"};}}} as {x?:number};let result:unknown;let i=0;do{result=JSON.stringify(value,["stack"]);}while((value.x=1,i++<1));return result;}',
+    invocation: 'frames()',
+    refused: false,
+  },
+  {
+    id: 'prototype-exposed-do-condition-data',
+    source:
+      'function frames(){const proto={toJSON(){return {stack:"fixed"};}} as {toJSON():unknown;x?:number};const value={__proto__:proto};let result:unknown;let i=0;do{result=JSON.stringify(value,["stack"]);}while((proto.x=1,i++<1));return result;}',
+    invocation: 'frames()',
+    refused: false,
+  },
 ];
 
 describe('inherited JSON toJSON readers', () => {

@@ -233,7 +233,7 @@ function borrowedHtmlArguments(
   const args =
     borrowed.applied === undefined
       ? borrowed.given
-      : framedAppliedArguments(call, borrowed.applied);
+      : framedAppliedArguments(call, borrowed.applied, false);
   return args !== undefined && htmlArguments(args, words, call, borrowed.receiver);
 }
 
@@ -262,7 +262,7 @@ function htmlArguments(
     !prefix.unknown &&
     prefix.alternatives === undefined &&
     value !== undefined &&
-    ((framedNativeErrorInput(value, call) && words.error(value)) ||
+    ((framedNativeErrorInput(value, call, undefined, false) && words.error(value)) ||
       (framedQuietArrayWords(value, words.error, call) && arrayError(value, words, call)))
   );
 }

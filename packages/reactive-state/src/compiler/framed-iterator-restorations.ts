@@ -97,7 +97,7 @@ function freshIterator(source: Expression, next: CallExpression): FreshIterator 
   const member = unwrapped(value.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
   const method = frameMemberName(member);
-  const construction = framedQuietSource(member.expression);
+  const construction = framedQuietSource(member.expression, false);
   if (
     method === undefined ||
     construction === undefined ||
@@ -114,7 +114,7 @@ function freshIterator(source: Expression, next: CallExpression): FreshIterator 
 /** Native Map entry access and source construction cannot invoke an opaque iterator or entry getter. */
 function quietCollection(construction: NewExpression, next: CallExpression): boolean {
   const first = construction.arguments?.[0];
-  const input = first === undefined ? undefined : framedQuietSource(first);
+  const input = first === undefined ? undefined : framedQuietSource(first, false);
   if (
     input === undefined ||
     !isArrayLiteralExpression(input) ||
@@ -126,7 +126,7 @@ function quietCollection(construction: NewExpression, next: CallExpression): boo
   return (
     !framedNativeConstructor(construction.expression, MAPS) ||
     input.elements.every((each) => {
-      const entry = framedQuietSource(each);
+      const entry = framedQuietSource(each, false);
       return (
         entry !== undefined &&
         isArrayLiteralExpression(entry) &&

@@ -240,6 +240,22 @@ const CASES = [
     refused: false,
     group: 'collection',
   },
+  {
+    id: 'set-own-for-each-loop-delete',
+    source:
+      'function frames(error:Error){const items=new Set([error]);let result:unknown;let i=0;items.forEach=()=>{};do items.forEach(value=>{result=value.stack;});while((Reflect.deleteProperty(items,"forEach"),i++<1));return result;}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+    group: 'collection',
+  },
+  {
+    id: 'set-own-for-each-loop-delete-data',
+    source:
+      'function frames(error:Error){const items=new Set([error]);const spare={forEach:0};let result:unknown;let i=0;items.forEach=()=>{};do items.forEach(value=>{result=value.stack;});while((Reflect.deleteProperty(spare,"forEach"),i++<1));return result;}',
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+    group: 'collection',
+  },
 ];
 
 describe('borrowed array and collection callback readers', () => {

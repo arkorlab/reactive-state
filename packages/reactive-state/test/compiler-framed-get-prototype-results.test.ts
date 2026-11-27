@@ -340,6 +340,24 @@ const CASES = [
     refused: false,
     runtime: 'fixed',
   },
+  {
+    id: 'prototype-loop-condition-use',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=Object.getPrototypeOf(Object.create(error)).stack;}while((void error,i++<1));return result;}',
+    reader: true,
+    refused: true,
+    invocation: 'frames(new Error("ours"))',
+    runtime: 'frames',
+  },
+  {
+    id: 'prototype-loop-condition-data',
+    source:
+      'function frames(error:Error){const Object={getPrototypeOf:(_value:unknown)=>({stack:"fixed"}),create:(value:unknown)=>value};let result:unknown;let i=0;do{result=Object.getPrototypeOf(Object.create(error)).stack;}while((void error,i++<1));return result;}',
+    reader: false,
+    refused: false,
+    invocation: 'frames(new Error("ours"))',
+    runtime: 'fixed',
+  },
 ];
 
 describe('immediate getPrototypeOf readers', () => {

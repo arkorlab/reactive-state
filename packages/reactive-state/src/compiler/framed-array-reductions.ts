@@ -136,7 +136,7 @@ function reductionProof(
   if (callback === undefined) return undefined;
   const fn = unwrapped(callback);
   if (!isArrowFunction(fn) && !isFunctionExpression(fn)) return undefined;
-  const evaluated = framedArgumentPrefix(call, call.arguments, Infinity);
+  const evaluated = framedArgumentPrefix(call, call.arguments, Infinity, false);
   if (
     evaluated.unknown ||
     !framedOriginCoowned(selected.receiver, call) ||
@@ -259,7 +259,7 @@ function reduction(call: CallExpression): Reduction | undefined {
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
   const method = frameMemberName(member);
   if (method !== 'reduce' && method !== 'reduceRight') return undefined;
-  const expanded = framedArgumentPrefix(call);
+  const expanded = framedArgumentPrefix(call, call.arguments, 2, false);
   return expanded.unknown
     ? undefined
     : {

@@ -71,7 +71,7 @@ export function framedGroupByKeyText(
   const coownedError = (each: Expression, keys?: readonly string[]) =>
     framedOriginCoowned(framedGroupByOwnedInput(each, value), node) && error(each, keys);
   return (
-    (framedNativeErrorInput(value, node) && coownedError(value)) ||
+    (framedNativeErrorInput(value, node, undefined, false) && coownedError(value)) ||
     (framedQuietArrayWords(value, coownedError, node) &&
       framedArrayString(value, { error: coownedError, typed }, node))
   );
@@ -79,7 +79,7 @@ export function framedGroupByKeyText(
 
 /** A computed native member name must not evaluate an ignored application effect before grouping. */
 function quietNativeMember(expression: Expression): boolean {
-  let value = framedQuietSource(expression);
+  let value = framedQuietSource(expression, false);
   if (value === undefined) return false;
   while (isPropertyAccessExpression(value) || isElementAccessExpression(value)) {
     if (isElementAccessExpression(value) && !framedQuietPrimitive(value.argumentExpression))
@@ -91,7 +91,7 @@ function quietNativeMember(expression: Expression): boolean {
 
 /** Literal array iteration is nonempty only after all finite literal spreads are expanded. */
 function nonemptyQuietInput(value: Expression): boolean {
-  const source = framedQuietSource(value);
+  const source = framedQuietSource(value, false);
   if (source === undefined || !isArrayLiteralExpression(source) || !framedQuietData(source))
     return false;
   const pending = [source];
@@ -105,7 +105,7 @@ function nonemptyQuietInput(value: Expression): boolean {
         found = true;
         continue;
       }
-      const spread = framedQuietSource(item.expression);
+      const spread = framedQuietSource(item.expression, false);
       if (spread === undefined || !isArrayLiteralExpression(spread)) return false;
       pending.push(spread);
     }
@@ -115,7 +115,7 @@ function nonemptyQuietInput(value: Expression): boolean {
 
 /** Immutable literal functions and an unchanged named declaration retain their original body. */
 function callbackSource(expression: Expression): Answering | undefined {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   if (value === undefined) return undefined;
   if (isArrowFunction(value) || isFunctionExpression(value)) return value;
   if (!isIdentifier(value) || framedAssignedValues(value).length > 0) return undefined;

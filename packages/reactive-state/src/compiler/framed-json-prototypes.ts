@@ -19,21 +19,28 @@ import { isTypeOnly } from './scope.ts';
 
 /** Source-written literal prototypes retain only unchanged lexical JSON hook origins. */
 
-/** Receiver uses through the whole JSON call may replace a prototype hook before native lookup. */
-export function jsonUnchangedReceiver(
+/**
+ * A receiver's literal record, and whether its uses through the whole JSON call leave it unchanged:
+ * one they may change may have lost or replaced a prototype hook before native lookup, or not.
+ */
+export function jsonLiteralReceiver(
   expression: Expression,
   value: Expression,
   consumer: Node,
-): boolean {
-  const origin = framedRecordOrigin(expression, consumer);
-  return origin?.unchanged === true && origin.record === value;
+): { readonly unchanged: boolean } | undefined {
+  const origin = framedRecordOrigin(expression, consumer, true);
+  if (origin === undefined) return undefined;
+  return origin.record === value ? origin : undefined;
 }
 
-/** One explicit literal prototype and its whole const aliases keep their original record at JSON time. */
+/**
+ * One explicit literal prototype and its whole const aliases keep their original record at JSON
+ * time, unless a use may change it first: its hook then stays possible beside the receiver itself.
+ */
 export function jsonWrittenPrototype(
   object: ObjectLiteralExpression,
   consumer: Node,
-): ObjectLiteralExpression | undefined {
+): { readonly prototype: ObjectLiteralExpression; readonly unchanged: boolean } | undefined {
   const prototypes = framedLiteralPrototypes(object);
   const prototype = prototypes[0];
   if (prototype === undefined || prototypes.length !== 1) return undefined;
@@ -46,8 +53,8 @@ export function jsonWrittenPrototype(
     value = unwrapped(declared.initializer);
   }
   if (!isObjectLiteralExpression(value) || !quietHookGetters(value)) return undefined;
-  const origin = framedRecordOrigin(prototype, consumer);
-  return origin?.unchanged === true && origin.record === value ? value : undefined;
+  const origin = framedRecordOrigin(prototype, consumer, true);
+  return origin?.record === value ? { prototype: value, unchanged: origin.unchanged } : undefined;
 }
 
 /** An inherited method's bare this denotes the serialized receiver; other this-dependent results stay opaque. */

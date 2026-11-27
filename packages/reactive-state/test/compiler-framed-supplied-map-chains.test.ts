@@ -401,6 +401,22 @@ const CASES = [
     reader: true,
     refused: true,
   },
+  {
+    id: 'chain-loop-condition-use',
+    source:
+      'function frames(error:Error,values:Map<string,{stack:string;message?:string}>){let result:unknown;let i=0;do{result=Map.prototype.get.call(Map.prototype.set.call(values,"x",error),"x").stack;}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"),new Map())',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'chain-loop-condition-data',
+    source:
+      'function frames(error:Error,values:Map<string,{stack:string;message?:string}>){let result:unknown;let i=0;do{result=Map.prototype.get.call(Map.prototype.set.call(values,"x",{stack:"fixed"}),"x").stack;}while((void values,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"),new Map())',
+    reader: false,
+    refused: false,
+  },
 ] as const;
 
 describe('native supplied Map chain words', () => {

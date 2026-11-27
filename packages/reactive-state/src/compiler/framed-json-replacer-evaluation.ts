@@ -68,11 +68,16 @@ export function quietJsonReplacerEvaluation(context: ReplacerEvaluation): boolea
   const value = unwrapped(returned);
   return (
     quietError(value) ||
-    framedNativeErrorInput(returned, call, {
-      consumer: call,
-      unconverted,
-      consumed: new Set(),
-    })
+    framedNativeErrorInput(
+      returned,
+      call,
+      {
+        consumer: call,
+        unconverted,
+        consumed: new Set(),
+      },
+      false,
+    )
   );
 }
 

@@ -65,7 +65,8 @@ const NATIVE_SYMBOLS = new Set([
   'Symbol.unscopables',
 ]);
 
-export type ConcatStable = (value: Expression) => boolean;
+/** Whether a source is unchanged at `at`; `reached` false counts only a loop body's uses. */
+export type ConcatStable = (value: Expression, at?: Expression, reached?: boolean) => boolean;
 
 type ConcatField = Exclude<ObjectLiteralExpression['properties'][number], SpreadAssignment>;
 
@@ -133,8 +134,15 @@ function quietValue(value: Expression): boolean {
   );
 }
 
-/** Whole constant aliases keep only initializers whose earlier uses preserve the source proof. */
-export function concatSource(expression: Expression, stable: ConcatStable): Expression | undefined {
+/**
+ * Whole constant aliases keep only initializers whose earlier uses preserve the source proof. A reader
+ * whose proof an exposure drops passes `reached` false, to count only a loop body's uses.
+ */
+export function concatSource(
+  expression: Expression,
+  stable: ConcatStable,
+  reached = true,
+): Expression | undefined {
   let value = unwrapped(expression);
   const seen = new Set<FrameBinding>();
   while (isIdentifier(value)) {
@@ -152,7 +160,8 @@ export function concatSource(expression: Expression, stable: ConcatStable): Expr
     seen.add(binding);
     value = unwrapped(binding.initializer);
   }
-  return stable(expression) ? value : undefined;
+  const unchanged = reached ? stable(expression) : stable(expression, expression, false);
+  return unchanged ? value : undefined;
 }
 
 /**
@@ -176,7 +185,7 @@ export function concatFields(
       fields.push(at.property);
       continue;
     }
-    const value = concatSource(at.property.expression, stable);
+    const value = concatSource(at.property.expression, stable, false);
     if (
       value === undefined ||
       !isObjectLiteralExpression(value) ||
@@ -285,7 +294,9 @@ export function concatKey(
   if (isIdentifier(name) || isStringLiteral(name) || isNoSubstitutionTemplateLiteral(name))
     return name.text;
   if (isNumericLiteral(name)) return String(Number(name.text.replaceAll('_', '')));
-  const value = isComputedPropertyName(name) ? concatSource(name.expression, stable) : undefined;
+  const value = isComputedPropertyName(name)
+    ? concatSource(name.expression, stable, false)
+    : undefined;
   if (value === undefined) return undefined;
   if (isStringLiteral(value) || isNoSubstitutionTemplateLiteral(value)) return value.text;
   const number = literalNumber(value);
@@ -366,7 +377,8 @@ export function concatValues(
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
     if (at.seen.has(at.value) || (at.value !== root && symbolValue(at.value))) continue;
     const seen = new Set(at.seen).add(at.value);
-    const source = at.keys.length === 0 ? at.value : (concatSource(at.value, stable) ?? at.value);
+    const source =
+      at.keys.length === 0 ? at.value : (concatSource(at.value, stable, false) ?? at.value);
     const selected = framedObjectSources(source, at.keys);
     if (selected === undefined) found.push({ value: at.value, keys: at.keys });
     else pending.push(...selected.map((each) => ({ ...each, seen })));

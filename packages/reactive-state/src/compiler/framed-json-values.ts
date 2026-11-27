@@ -28,12 +28,12 @@ import {
 import { answersLater, isAnswering } from './answers.ts';
 import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
-import { argumentArrayExposed } from './framed-array-selections.ts';
+import { argumentArrayReached } from './framed-array-selections.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { jsonConstantDeclaration } from './framed-json-keys.ts';
 import {
   jsonIndependentResult,
-  jsonUnchangedReceiver,
+  jsonLiteralReceiver,
   jsonWrittenPrototype,
 } from './framed-json-prototypes.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
@@ -60,7 +60,7 @@ export function jsonValueSource(expression: Expression): JsonValueSource {
     aliases.add(declared);
     value = unwrapped(declared.initializer);
   }
-  return { value, aliases, exposed: argumentArrayExposed(expression, aliases) };
+  return { value, aliases, exposed: argumentArrayReached(expression, aliases) };
 }
 
 /** A written callable toJSON runs once before selecting the current serialized value's members. */
@@ -71,9 +71,11 @@ export function jsonToJSON(
 ): readonly Expression[] | null | undefined {
   const own =
     previousOwnMember(expression, source, call, 'toJSON') ?? ownMember(source.value, 'toJSON');
-  const inherited =
-    own === undefined && !source.exposed && jsonUnchangedReceiver(expression, source.value, call);
-  const written = inherited ? inheritedToJSON(source.value, call) : own;
+  const receiver =
+    own === undefined ? jsonLiteralReceiver(expression, source.value, call) : undefined;
+  const hook = receiver === undefined ? undefined : inheritedToJSON(source.value, call);
+  const inherited = hook !== undefined;
+  const written = hook === undefined ? own : hook.written;
   if (written === undefined || written === null) return written;
   if (written.length === 0) return [expression];
   const returned: Expression[] = [];
@@ -82,6 +84,8 @@ export function jsonToJSON(
     if (results === undefined) return inherited ? undefined : null;
     returned.push(...results);
   }
+  if (hook !== undefined && (!(hook.unchanged && receiver?.unchanged === true) || source.exposed))
+    returned.push(expression);
   return returned;
 }
 
@@ -110,16 +114,26 @@ function jsonHookResults(
   return returned;
 }
 
-/** Nearest source-written prototype declarations shadow their parent hooks, including noncallable values. */
-function inheritedToJSON(expression: Expression, call: Node): JsonSelection | undefined {
+/**
+ * Nearest source-written prototype declarations shadow their parent hooks, including noncallable
+ * values; a prototype a prior use may change leaves the hook it held possible, not settled.
+ */
+function inheritedToJSON(
+  expression: Expression,
+  call: Node,
+): { readonly written: readonly JsonMember[]; readonly unchanged: boolean } | undefined {
   let value = unwrapped(expression);
+  let unchanged = true;
   const seen = new Set<Node>();
   while (isObjectLiteralExpression(value)) {
-    const prototype = jsonWrittenPrototype(value, call);
-    if (prototype === undefined || seen.has(prototype)) return undefined;
+    const selected = jsonWrittenPrototype(value, call);
+    if (selected === undefined || seen.has(selected.prototype)) return undefined;
+    const { prototype } = selected;
     seen.add(prototype);
+    unchanged &&= selected.unchanged;
     const own = ownMember(prototype, 'toJSON');
-    if (own !== undefined) return own ?? undefined;
+    if (own === null) return undefined;
+    if (own !== undefined) return { written: own, unchanged };
     value = prototype;
   }
   return undefined;

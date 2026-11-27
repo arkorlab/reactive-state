@@ -61,7 +61,7 @@ export function mapperDefaultViews(
   read: MapperDefaultRead,
 ): readonly ArrayElementView[] {
   if (!hasDefaults(name, parameter)) return [];
-  const source = concatSource(read.receiver, read.stable);
+  const source = concatSource(read.receiver, read.stable, false);
   if (
     source === undefined ||
     !isArrayLiteralExpression(source) ||

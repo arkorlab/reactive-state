@@ -25,7 +25,7 @@ export function framedBoundErrorMessage(
   names: ReadonlySet<string>,
   error: (value: Expression) => boolean,
 ): boolean | undefined {
-  const selected = framedBoundErrorArguments(node, names);
+  const selected = framedBoundErrorArguments(node, names, false);
   if (selected === undefined) return undefined;
   if (!quietBoundErrorEvaluation(node, selected.bound)) return false;
   if (!selected.constructed && framedNativeConstructor(selected.target, DOM)) return false;
@@ -36,7 +36,7 @@ export function framedBoundErrorMessage(
     return (
       value !== undefined &&
       quietEarlierConversion(selected.target, prefix.values, index) &&
-      framedNativeErrorInput(value, node) &&
+      framedNativeErrorInput(value, node, undefined, false) &&
       error(value)
     );
   });

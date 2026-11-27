@@ -240,6 +240,76 @@ const CASES = [
     refused: false,
   },
   {
+    id: 'json-stack-getter-do-condition',
+    source:
+      'function frames(){const error=new Error("fixed");let text="";let i=0;do{text=JSON.stringify(error,["stack"]);}while((Object.defineProperty(error,"stack",{get(){return new Error("nested");},configurable:true}),i++<1));return text;}',
+    invocation: 'frames()',
+    refused: true,
+  },
+  {
+    id: 'json-stack-getter-comma',
+    source:
+      'function frames(){const error=new Error("fixed");return (Object.defineProperty(error,"stack",{get(){return new Error("nested");},configurable:true}),JSON.stringify(error,["stack"]));}',
+    invocation: 'frames()',
+    refused: true,
+  },
+  {
+    id: 'json-stack-getter-branch',
+    source:
+      'function frames(flag=true){const error=new Error("fixed");if(flag)Object.defineProperty(error,"stack",{get(){return new Error("nested");},configurable:true});return JSON.stringify(error,["stack"]);}',
+    invocation: 'frames()',
+    refused: true,
+  },
+  {
+    id: 'json-stack-getter-loop-body',
+    source:
+      'function frames(){const error=new Error("fixed");let text="";for(let i=0;i<2;i++){text=JSON.stringify(error,["stack"]);Object.defineProperty(error,"stack",{get(){return new Error("nested");},configurable:true});}return text;}',
+    invocation: 'frames()',
+    refused: true,
+  },
+  {
+    id: 'json-stack-getter-do-condition-data',
+    source:
+      'function frames(){const error=new Error("fixed");let text="";let i=0;do{text=JSON.stringify(error,["message"]);}while((Object.defineProperty(error,"stack",{get(){return "fixed";},configurable:true}),i++<1));return text;}',
+    invocation: 'frames()',
+    refused: false,
+  },
+  {
+    id: 'json-stack-getter-comma-data',
+    source:
+      'function frames(){const error=new Error("fixed");return (Object.defineProperty(error,"stack",{get(){return "fixed";},configurable:true}),JSON.stringify(error,["message"]));}',
+    invocation: 'frames()',
+    refused: false,
+  },
+  {
+    id: 'json-stack-getter-branch-data',
+    source:
+      'function frames(flag=true){const error=new Error("fixed");if(flag)Object.defineProperty(error,"stack",{get(){return "fixed";},configurable:true});return JSON.stringify(error,["message"]);}',
+    invocation: 'frames()',
+    refused: false,
+  },
+  {
+    id: 'json-stack-getter-loop-body-data',
+    source:
+      'function frames(){const error=new Error("fixed");let text="";for(let i=0;i<2;i++){text=JSON.stringify(error,["message"]);Object.defineProperty(error,"stack",{get(){return "fixed";},configurable:true});}return text;}',
+    invocation: 'frames()',
+    refused: false,
+  },
+  {
+    id: 'json-keys-loop-condition-use',
+    source:
+      'function frames(error:Error){const keys=["stack"];let result:unknown;let i=0;do{result=JSON.stringify(error,keys);}while((void keys,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'json-keys-loop-condition-data',
+    source:
+      'function frames(error:Error){let result:unknown;let i=0;do{result=JSON.stringify(error,["name"]);}while((void error,i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
+  {
     id: 'json-keys-default-use',
     source:
       'function frames(error:Error){const keys=["stack"];let text="";const {a=keys.length}=(text=JSON.stringify(error,keys),{} as {a?:number});return text+a;}',

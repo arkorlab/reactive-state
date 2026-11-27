@@ -27,7 +27,7 @@ import { unwrapped } from './bounded.ts';
 import { globalPathOf } from './code-globals.ts';
 import { frameMemberName, type FrameTypeSelection } from './framed-bindings.ts';
 import { locallyWrittenBoundWords } from './framed-bound-error-words.ts';
-import { framedBoundErrorArguments } from './framed-bound-errors.ts';
+import { framedBoundErrorArguments, framedPossibleBoundError } from './framed-bound-errors.ts';
 import { framedGetPrototypeValues } from './framed-get-prototypes.ts';
 import { framedArgumentPrefix } from './framed-keys.ts';
 import { framedProxyGetForwards } from './framed-proxy-get-results.ts';
@@ -44,9 +44,10 @@ export function framedNativeErrorCreation(
 ): boolean {
   if (framedReflectedError(node, names) || framedInvokedError(node, names)) return true;
   if (isCallExpression(node) || isNewExpression(node)) {
-    const bound = framedBoundErrorArguments(node, names);
+    const bound = framedBoundErrorArguments(node, names, true, !made);
     if (bound !== undefined && (made || locallyWrittenBoundWords(bound.target, bound.args)))
       return true;
+    if (bound === undefined && made && framedPossibleBoundError(node, names)) return true;
   }
   return (
     (isNewExpression(node) || isCallExpression(node)) &&

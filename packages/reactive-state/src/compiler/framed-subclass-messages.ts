@@ -142,7 +142,7 @@ function boundOr(
 function bindCall(
   target: Expression,
 ): { readonly call: CallExpression; readonly receiver: Expression } | undefined {
-  const bound = framedQuietSource(target);
+  const bound = framedQuietSource(target, false);
   if (bound === undefined || !isCallExpression(bound)) return undefined;
   const member = unwrapped(bound.expression);
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;

@@ -69,7 +69,7 @@ export function framedEncoderStreamText(call: CallExpression, words: StreamWords
     framedOriginCoowned(each, call) && words.error(each, keys);
   const chunk = write.chunk;
   return (
-    (framedNativeErrorInput(chunk, call) && error(chunk)) ||
+    (framedNativeErrorInput(chunk, call, undefined, false) && error(chunk)) ||
     (framedQuietArrayWords(chunk, error, call) &&
       arrayError(chunk, { error, typed: words.typed }, call))
   );

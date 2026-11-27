@@ -47,13 +47,17 @@ export interface QuietCopy {
   readonly roots: readonly Expression[];
 }
 
-/** The literal source of an immediately selected native call whose evaluated operands stay quiet. */
+/**
+ * The literal source of an immediately selected native call whose evaluated operands stay quiet. A
+ * reader whose proof an exposure drops passes `reached` false, to count only a loop body's uses.
+ */
 export function quietCopy(
   copy: QuietCopyCall,
   operands: readonly Expression[],
   stable: (receiver: Expression) => boolean,
+  reached = true,
 ): QuietCopy | undefined {
-  return immediateSelection(copy.call) ? quietSource(copy, operands, stable) : undefined;
+  return immediateSelection(copy.call) ? quietSource(copy, operands, stable, reached) : undefined;
 }
 
 /** The literal source of a native call whose receiver, operands and wrapper tails stay quiet. */
@@ -61,9 +65,10 @@ export function quietSource(
   copy: QuietCopyCall,
   operands: readonly Expression[],
   stable: (receiver: Expression) => boolean,
+  reached = true,
 ): QuietCopy | undefined {
   if (copy.unknownArguments === true) return undefined;
-  const source = concatSource(copy.receiver, stable);
+  const source = concatSource(copy.receiver, stable, reached);
   if (source === undefined || !isArrayLiteralExpression(source)) return undefined;
   const tails = wrapperTails(copy.call);
   if (tails === undefined) return undefined;

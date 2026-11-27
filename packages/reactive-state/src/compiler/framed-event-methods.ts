@@ -54,7 +54,7 @@ export function framedEventMethodText(call: CallExpression, words: EventWords): 
   const source = nativeEventSource(member.expression);
   return (
     source !== undefined &&
-    !argumentArrayExposed(member.expression, source.bindings) &&
+    !argumentArrayExposed(member.expression, source.bindings, undefined, false) &&
     convertedEventArguments(call, call.arguments, words)
   );
 }
@@ -109,7 +109,7 @@ function convertedEventArguments(
     const spread = isSpreadElement(argument);
     const value = spread ? argument.expression : argument;
     return (
-      (!spread && framedNativeErrorInput(value, call) && words.error(value)) ||
+      (!spread && framedNativeErrorInput(value, call, undefined, false) && words.error(value)) ||
       (framedQuietArrayWords(value, words.error, call) && arrayError(value, words, call))
     );
   });

@@ -181,6 +181,20 @@ const CASES = [
     invocation: 'frames(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'tospliced-loop-push',
+    source:
+      'function frames(error:Error){const values:Array<{stack?:string}>=[];let result:unknown;let i=0;do result=values.toSpliced(0,0)[0]?.stack;while((values.push(error),i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'tospliced-loop-push-data',
+    source:
+      'function frames(error:Error){const values:Array<{stack?:string}>=[];let result:unknown;let i=0;do result=values.toSpliced(0,0)[0]?.stack;while((values.push({stack:"later"}),i++<1));return result;}',
+    invocation: 'frames(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('native toSpliced Error origins readers', () => {

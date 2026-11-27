@@ -116,7 +116,7 @@ function flatArgumentViews(
       stable: read.stable,
       capture: read.capture,
     });
-  const source = concatSource(read.receiver, read.stable);
+  const source = concatSource(read.receiver, read.stable, false);
   if (
     source !== undefined &&
     argument === MAPPER_ARGUMENTS.receiver &&
@@ -189,7 +189,7 @@ function restBinding(
 
 /** Defaults apply to the argument inside a rest pattern only after quiet original evaluation. */
 function restDefaults(selected: RestBinding, read: MapperDefaultRead): readonly ArrayElementView[] {
-  const source = concatSource(read.receiver, read.stable);
+  const source = concatSource(read.receiver, read.stable, false);
   if (
     source === undefined ||
     !isArrayLiteralExpression(source) ||

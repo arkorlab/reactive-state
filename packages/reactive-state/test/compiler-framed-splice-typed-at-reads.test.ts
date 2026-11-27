@@ -68,14 +68,14 @@ const CASES: readonly Case[] = [
     source:
       'function frames(error:Error){const input:{stack?:string}[]=[error];input[0]={stack:"fixed"};return input.splice(0,1)[0]!.stack;}',
     invocation: OURS,
-    refused: false,
+    refused: true,
   },
   {
     id: 'splice-saved-literal-pin',
     source:
       'function frames(error:Error){const removed=[error].splice(0,1);Object.assign(error,{stack:"fixed"});return removed[0]!.stack;}',
     invocation: OURS,
-    refused: false,
+    refused: true,
   },
   {
     id: 'splice-at-other-index-pin',

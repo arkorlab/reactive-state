@@ -18,22 +18,26 @@ import { frameBindingOf } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
 import { framedQuietData } from './framed-native-evaluation.ts';
 import { framedNativeConstructor } from './framed-sources.ts';
-import { framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedPossibleBranch, reachedLoopRead, type repeatedFrameRead } from './framed-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Additional bind normalization retains opacity after a possible constructor or bind exposure. */
 
-/** Selected constructor aliases do not excuse earlier own bind replacements or prototype exposures. */
+/**
+ * Selected constructor aliases do not excuse earlier own bind replacements or prototype exposures.
+ * A reader whose proof an exposure drops passes `reached` false, to count only a loop body's uses.
+ */
 export function unchangedNativeBind(
   target: Expression,
   call: CallExpression,
   names: ReadonlySet<string>,
+  reached = true,
 ): boolean {
-  const selected = constructorReads(target);
+  const scope = { reads: constructorReads(target), later: reachedLoopRead(reached) };
   const pending: Node[] = [call.getSourceFile()];
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (isTypeOnly(node)) continue;
-    if (isIdentifier(node) && bindExposure(node, call, names, selected)) return false;
+    if (isIdentifier(node) && bindExposure(node, call, names, scope)) return false;
     node.forEachChild((child) => {
       pending.push(child);
     });
@@ -67,16 +71,16 @@ function bindExposure(
   name: Identifier,
   call: CallExpression,
   names: ReadonlySet<string>,
-  selected: ReadonlySet<Identifier>,
+  scope: { readonly reads: ReadonlySet<Identifier>; readonly later: typeof repeatedFrameRead },
 ): boolean {
-  if (!readsBinding(name) || selected.has(name)) return false;
+  if (!readsBinding(name) || scope.reads.has(name)) return false;
   if (name === frameBindingOf(name)?.binding.name) return false;
   const reader = executionOwner(call);
   const writer = executionOwner(name);
   if (
     reader === writer &&
     (name.pos >= call.pos || destructuredFirst(call, name)) &&
-    !repeatedFrameRead(name, call, name, reader)
+    !scope.later(name, call, name, reader)
   )
     return false;
   if (reader !== writer && unreferencedLocalFunction(writer, reader)) return false;

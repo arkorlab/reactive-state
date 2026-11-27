@@ -35,15 +35,27 @@ import { framedNativeConstructor } from './framed-sources.ts';
 
 const CONVERSION_MEMBERS = new Set(['__proto__', 'toString', 'valueOf']);
 
-/** Whole unchanged constant aliases retain their written initializer without executing a call. */
-export function framedQuietSource(expression: Expression): Expression | undefined {
+/**
+ * Whole unchanged constant aliases retain their written initializer without executing a call. A
+ * reader whose proof an exposure drops passes `reached` false, to count only a loop body's uses.
+ */
+export function framedQuietSource(
+  expression: Expression,
+  reached: boolean | 'loops' = 'loops',
+): Expression | undefined {
   const source = quietAliasSource(expression);
-  return source === undefined || argumentArrayExposed(expression, source.bindings)
+  return source === undefined ||
+    argumentArrayExposed(expression, source.bindings, undefined, reached)
     ? undefined
     : source.value;
 }
 
 /** Binding reads keep only constant initializer evaluation, with no general invocation result inference. */
+/** A whole constant alias chain's written initializer, whatever may have used the chain since. */
+export function framedWrittenSource(expression: Expression): Expression | undefined {
+  return quietAliasSource(expression)?.value;
+}
+
 function quietAliasSource(
   expression: Expression,
 ): { readonly value: Expression; readonly bindings: ReadonlySet<FrameBinding> } | undefined {
@@ -114,7 +126,7 @@ export function framedQuietArrayWords(
   const pending = [expression];
   const seen = new Set<Expression>();
   for (let at = pending.pop(); at !== undefined; at = pending.pop()) {
-    const value = framedQuietSource(at);
+    const value = framedQuietSource(at, false);
     if (value === undefined) return false;
     if (seen.has(value)) continue;
     seen.add(value);
@@ -134,7 +146,9 @@ function quietArrayWord(
 ): boolean {
   return (
     framedQuietPrimitive(value) ||
-    (isIdentifier(value) && framedNativeErrorInput(value, consumer) && error(value))
+    (isIdentifier(value) &&
+      framedNativeErrorInput(value, consumer, undefined, false) &&
+      error(value))
   );
 }
 
@@ -179,7 +193,7 @@ function quietValue(
   }
   if (isObjectLiteralExpression(value)) return quietFields(value, pending);
   if (!isSpreadElement(value)) return false;
-  const source = framedQuietSource(value.expression);
+  const source = framedQuietSource(value.expression, false);
   if (source === undefined || !isArrayLiteralExpression(source)) return false;
   pending.push(source);
   return true;
@@ -206,7 +220,7 @@ function quietField(
   pending: Expression[],
 ): boolean {
   if (isSpreadAssignment(property)) {
-    const source = framedQuietSource(property.expression);
+    const source = framedQuietSource(property.expression, false);
     if (source === undefined || !isObjectLiteralExpression(source)) return false;
     pending.push(source);
   } else if (isPropertyAssignment(property) && quietName(property.name))

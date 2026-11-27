@@ -64,7 +64,7 @@ export function framedProxyInputQuiet(expression: Expression): boolean {
   const pending = [expression];
   const seen = new Set<Expression>();
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
-    const value = framedQuietSource(node);
+    const value = framedQuietSource(node, false);
     if (value === undefined) return false;
     if (seen.has(value)) continue;
     seen.add(value);

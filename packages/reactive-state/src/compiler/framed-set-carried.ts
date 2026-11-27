@@ -14,7 +14,7 @@ import { destructuredFirst } from './destructuring-order.ts';
 import { executionOwner } from './framed-array-mutations.ts';
 import { frameBindingOf, type FrameBinding } from './framed-bindings.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
-import { framedAssignedValues, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedAssignedValues, framedPossibleBranch, repeatedBodyRead } from './framed-writes.ts';
 import { isTypeOnly, readsBinding } from './scope.ts';
 
 /** Finite native Set slots preserve carried bindings only before their fields can be exposed. */
@@ -109,7 +109,7 @@ function exposedUse(
   if (other === owner) {
     if (
       (name.pos >= capture.pos || destructuredFirst(capture, name)) &&
-      !repeatedFrameRead(name, capture, selected.binding, owner)
+      !repeatedBodyRead(name, capture, selected.binding, owner)
     )
       return false;
   } else if (unreferencedLocalFunction(other, owner)) return false;

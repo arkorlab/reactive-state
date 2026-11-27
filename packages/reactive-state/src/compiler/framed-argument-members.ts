@@ -44,7 +44,7 @@ export function framedArgumentMember(
         parameter !== undefined &&
         isIdentifier(parameter.name) &&
         framedDirectMemberReturn(node, owner) &&
-        framedNativeErrorInput(parameter.name, value) &&
+        framedNativeErrorInput(parameter.name, value, undefined, false) &&
         error(parameter.name, path)
       );
     }
@@ -68,7 +68,7 @@ function implicitArguments(expression: Expression): boolean {
 
 /** Only canonical non-negative own argument indices have a fixed parameter position. */
 function argumentIndex(expression: Expression): number | undefined {
-  const value = framedQuietSource(expression);
+  const value = framedQuietSource(expression, false);
   if (value === undefined || (!isNumericLiteral(value) && !isStringLiteral(value)))
     return undefined;
   const key = isNumericLiteral(value) ? String(Number(value.text)) : value.text;

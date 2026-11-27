@@ -33,7 +33,6 @@ import { arrayProjectedViews, arrayProjectionMayBeOverridden } from './framed-ar
 import { arrayRestView, type ArrayElementView } from './framed-array-rest.ts';
 import { arrayMethodMayBeOverridden } from './framed-arrays.ts';
 import { asyncArrayFactoryViews } from './framed-async-array-factories.ts';
-import { quietAsyncFindFallback } from './framed-async-filter-fallback.ts';
 import { frameBindingOf, frameMemberName, type FrameBinding } from './framed-bindings.ts';
 import { asyncFoundElements } from './framed-find-results.ts';
 import { unreferencedLocalFunction } from './framed-function-references.ts';
@@ -47,7 +46,7 @@ import {
   nestedArrayReadings,
 } from './framed-nested-selections.ts';
 import { framedCondition } from './framed-sources.ts';
-import { framedAssignedSources, framedPossibleBranch, repeatedFrameRead } from './framed-writes.ts';
+import { framedAssignedSources, framedPossibleBranch, reachedLoopRead } from './framed-writes.ts';
 import { constantValue } from './numbers.ts';
 import { readsBinding } from './scope.ts';
 
@@ -142,14 +141,17 @@ function appliedArgument(expression: Expression): Pick<AtSelection, 'argument' |
 }
 
 /**
- * Only a whole constant alias chain retains an apply array before its entries can be exposed. Where
- * `reached`, a use in what a destructuring pattern around the read destructures exposes it too.
+ * Only a whole constant alias chain retains an apply array before its entries can be exposed. A use
+ * counts where it runs before the read: written before it, but for one in a destructuring pattern
+ * whose source holds the read, or in a loop's condition, update or body on the next pass. Where
+ * `reached`, one in what a pattern around the read destructures counts too; where false, for a
+ * reader whose proof an exposure drops, only a loop body's uses repeat.
  */
 export function argumentArrayExposed(
   expression: Expression,
   aliases: ReadonlySet<FrameBinding>,
   unchanged?: (name: Identifier) => boolean,
-  reached = false,
+  reached: boolean | 'loops' = 'loops',
 ): boolean {
   if (aliases.size === 0) return false;
   const root = expression.getSourceFile();
@@ -163,9 +165,10 @@ export function argumentArrayExposed(
 }
 
 /**
- * An exposure by a use that may run before the read: one written before it, and one in what a
- * destructuring pattern around the read destructures, which runs first though written after — for
- * a reader that keeps every candidate of an exposed array, so that an exposure never drops a proof.
+ * An exposure by any use that may run before the read: one written before it, one in what a
+ * destructuring pattern around the read destructures, which runs first though written after, and
+ * one in a loop's condition or update on the next pass — for a reader that keeps every candidate of
+ * an exposed array, so that an exposure widens what it keeps and never drops a proof.
  */
 export function argumentArrayReached(
   expression: Expression,
@@ -179,7 +182,7 @@ function argumentUseExposed(
   name: Identifier,
   expression: Expression,
   aliases: ReadonlySet<FrameBinding>,
-  reached: boolean,
+  reached: boolean | 'loops',
 ): boolean {
   if (!readsBinding(name)) return false;
   const selected = frameBindingOf(name);
@@ -191,8 +194,8 @@ function argumentUseExposed(
   if (owner === reader) {
     if (
       (name.pos >= expression.pos || destructuredFirst(expression, name)) &&
-      !(reached && destructuredFirst(name, expression)) &&
-      !repeatedFrameRead(name, expression, selected.binding, reader)
+      !(reached === true && destructuredFirst(name, expression)) &&
+      !reachedLoopRead(reached)(name, expression, selected.binding, reader)
     )
       return false;
   } else if (unreferencedLocalFunction(owner, reader)) return false;
@@ -361,7 +364,7 @@ export function framedArrayFind(call: CallExpression, proof: ElementProof): bool
   if (!selected.unknown) {
     const found = asyncFoundElements(call, selected.receiver, selected.method, stableSource);
     if (found !== undefined) return found.some((each) => proof.error(each));
-    if (falsePredicate(call, selected.receiver, selected.argument)) return false;
+    if (falsePredicate(selected.argument)) return false;
   }
   return selectedError(selected.receiver, undefined, proof, call);
 }
@@ -404,26 +407,26 @@ function findSelection(call: CallExpression): FindSelection | undefined {
 }
 
 /**
- * A written false body selects nothing unless a source-qualified async parameter fallback keeps
- * its truthy Promise; other async forms retain the prior opaque boundary.
+ * A written false body selects nothing; an async predicate's Promise is truthy, so it selects the
+ * first element it visits, and without an exact answer every element stays possible.
  */
-function falsePredicate(
-  call: CallExpression,
-  receiver: Expression,
-  node: Expression | undefined,
-): boolean {
+function falsePredicate(node: Expression | undefined): boolean {
   if (node === undefined) return false;
   const value = unwrapped(node);
   if (!(isArrowFunction(value) && !isBlock(value.body) && framedCondition(value.body) === false))
     return false;
-  return (
-    !answersLater(value) ||
-    !quietAsyncFindFallback({ call, receiver, given: call.arguments }, value, stableSource)
-  );
+  return !answersLater(value);
 }
 
-/** Only an unexposed whole array source retains an exact copy position. */
-function stableSource(expression: Expression, at: Expression = expression): boolean {
+/** Concat's quiet slots, whose proof an exposure drops, count only a loop body's repeated uses. */
+const provenSource = (receiver: Expression): boolean => stableSource(receiver, receiver, false);
+
+/**
+ * Only an unexposed whole array source retains an exact copy position. A use that may run before the
+ * copy counts: in what a destructuring pattern around it destructures, and in a loop's condition or
+ * update, unless `reached` is false.
+ */
+function stableSource(expression: Expression, at: Expression = expression, reached = true) {
   let value = unwrapped(expression);
   const aliases = new Set<FrameBinding>();
   while (isIdentifier(value)) {
@@ -434,7 +437,7 @@ function stableSource(expression: Expression, at: Expression = expression): bool
     if (selected.binding.initializer === undefined) return false;
     value = unwrapped(selected.binding.initializer);
   }
-  return !argumentArrayReached(at, aliases);
+  return !argumentArrayExposed(at, aliases, undefined, reached);
 }
 
 /** Copied slots retain their creation-time receiver and selected offset. */
@@ -469,7 +472,7 @@ function expandCopiedArray(reading: ElementReading, pending: ElementReading[]): 
   const copies =
     arrayFactoryViews(reading.value, reading.index, stableSource) ??
     arrayProjectedViews(reading.value, reading.index, stableSource) ??
-    arrayCopyViews(reading.value, reading.index, stableSource);
+    arrayCopyViews(reading.value, reading.index, provenSource, stableSource);
   if (copies === undefined) return false;
   pending.push(
     ...copies.map((copy) => {

@@ -65,7 +65,7 @@ export function framedProxyDescriptorFields(
   const call = framedProxyDescriptorCall(observation);
   if (call === undefined || !quietCreation(creation) || framedProxyTrapResult(trap, 2) !== returned)
     return undefined;
-  const record = framedQuietSource(returned);
+  const record = framedQuietSource(returned, false);
   if (record === undefined || !isObjectLiteralExpression(record) || !framedProxyRecordQuiet(record))
     return undefined;
   const value = descriptorGetter(record);
@@ -88,8 +88,8 @@ export function framedProxyDescriptorFields(
 function quietCreation(creation: NewExpression): boolean {
   const args = creation.arguments ?? [];
   const [target, handler] = args;
-  const object = target === undefined ? undefined : framedQuietSource(target);
-  const methods = handler === undefined ? undefined : framedQuietSource(handler);
+  const object = target === undefined ? undefined : framedQuietSource(target, false);
+  const methods = handler === undefined ? undefined : framedQuietSource(handler, false);
   return (
     object !== undefined &&
     isObjectLiteralExpression(object) &&
@@ -129,7 +129,7 @@ function readDescriptorField(
   if (selected === undefined && isGetAccessorDeclaration(property)) return false;
   if (name === 'configurable')
     state.configurable =
-      selected !== undefined && framedQuietSource(selected)?.kind === SyntaxKind.TrueKeyword;
+      selected !== undefined && framedQuietSource(selected, false)?.kind === SyntaxKind.TrueKeyword;
   if (name !== 'value') return true;
   if (isSetAccessorDeclaration(property)) {
     if (!state.getter) state.value = undefined;
@@ -146,7 +146,7 @@ function quietSelected(source: Expression, consumer: Expression): boolean {
   const seen = new Set<Expression>();
   for (let node = pending.pop(); node !== undefined; node = pending.pop()) {
     if (!framedOriginCoowned(node, consumer)) return false;
-    const value = framedQuietSource(node);
+    const value = framedQuietSource(node, false);
     if (value === undefined) return false;
     if (seen.has(value)) continue;
     seen.add(value);
@@ -162,7 +162,7 @@ function quietSelectedValue(
   pending: Expression[],
 ): boolean {
   if (framedQuietPrimitive(value) || isOmittedExpression(value)) return true;
-  if (isIdentifier(value)) return framedNativeErrorInput(value, consumer);
+  if (isIdentifier(value)) return framedNativeErrorInput(value, consumer, undefined, false);
   if (isNewExpression(value))
     return (
       framedNativeConstructor(value.expression, ERRORS) &&
@@ -199,7 +199,7 @@ export function framedProxyDescriptorProjection(
       found.push(at.value);
       continue;
     }
-    const value = framedQuietSource(at.value);
+    const value = framedQuietSource(at.value, false);
     if (value === undefined) return undefined;
     const next = literalSelection(value, key);
     if (next === undefined) return undefined;

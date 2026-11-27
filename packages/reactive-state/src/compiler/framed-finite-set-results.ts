@@ -67,7 +67,7 @@ export function finiteSetSelection(
   if (
     source === undefined ||
     !framedOriginPrefix(source.construction) ||
-    argumentArrayExposed(expression, source.bindings)
+    argumentArrayExposed(expression, source.bindings, undefined, false)
   )
     return undefined;
   const args = argumentsOf(source.construction, source.construction.arguments ?? []);
@@ -162,7 +162,8 @@ function initialValues(
     if (next === undefined) return undefined;
     value = next;
   }
-  if (!isArrayLiteralExpression(value) || argumentArrayExposed(input, bindings)) return undefined;
+  if (!isArrayLiteralExpression(value) || argumentArrayExposed(input, bindings, undefined, false))
+    return undefined;
   const values = argumentsOf(read, value.elements);
   return values !== undefined && quietSetValues(values) ? values : undefined;
 }

@@ -28,14 +28,14 @@ const CREATORS = new Set(['Object.create']);
 /** Saved result aliases retain the old boundary instead of overlooking subsequent field writes. */
 export function framedGetPrototypeValues(node: Expression): readonly Expression[] | undefined {
   if (!isCallExpression(node) || !immediateMember(node)) return undefined;
-  const target = framedQuietSource(node.expression);
+  const target = framedQuietSource(node.expression, false);
   if (target === undefined || !framedNativeConstructor(target, GETTERS)) return undefined;
   const args = writtenArguments(node);
   const source = args?.[0];
   if (source === undefined || args === undefined) return undefined;
-  const created = framedQuietSource(source);
+  const created = framedQuietSource(source, false);
   if (created === undefined || !isCallExpression(created)) return undefined;
-  const creator = framedQuietSource(created.expression);
+  const creator = framedQuietSource(created.expression, false);
   if (creator === undefined || !framedNativeConstructor(creator, CREATORS)) return undefined;
   const inputs = writtenArguments(created);
   const prototype = inputs?.[0];
@@ -67,10 +67,10 @@ function writtenArguments(call: CallExpression): readonly Expression[] | undefin
 
 /** Supplied prototype bindings stay unexposed; fresh native Error creation needs quiet data inputs. */
 function quietPrototype(value: Expression, consumer: CallExpression): boolean {
-  const source = framedQuietSource(value);
+  const source = framedQuietSource(value, false);
   if (source === undefined) return false;
   return (
-    framedNativeErrorInput(value, consumer) ||
+    framedNativeErrorInput(value, consumer, undefined, false) ||
     framedQuietData(value) ||
     (isNewExpression(source) &&
       framedNativeConstructor(source.expression, STANDARD_ERRORS) &&

@@ -65,11 +65,11 @@ function quietChildren(value: Expression): readonly Expression[] | undefined {
   if (isNewExpression(value) && framedNativeConstructor(value.expression, COLLECTIONS)) {
     const args = value.arguments ?? [];
     const first = args[0];
-    const entries = first === undefined ? undefined : framedQuietSource(first);
+    const entries = first === undefined ? undefined : framedQuietSource(first, false);
     return first === undefined || (entries !== undefined && isArrayLiteralExpression(entries))
       ? args
       : undefined;
   }
-  const source = isSpreadElement(value) ? framedQuietSource(value.expression) : undefined;
+  const source = isSpreadElement(value) ? framedQuietSource(value.expression, false) : undefined;
   return source !== undefined && isArrayLiteralExpression(source) ? [source] : undefined;
 }

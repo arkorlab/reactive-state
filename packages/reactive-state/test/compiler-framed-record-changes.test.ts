@@ -141,6 +141,20 @@ const CASES: readonly Case[] = [
     invocation: 'frames(new Error("ours"))',
     refused: false,
   },
+  {
+    id: 'spread-record-loop-write',
+    source:
+      'function words(error:Error){const source:{x?:unknown}={x:"fixed"};let result:unknown;let i=0;do result=new URLSearchParams({...source} as Record<string,string>).get("x");while((source.x=error,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    refused: true,
+  },
+  {
+    id: 'spread-record-loop-write-data',
+    source:
+      'function words(error:Error){const source:{x?:unknown}={x:"fixed"};let result:unknown;let i=0;do result=new URLSearchParams({...source} as Record<string,string>).get("x");while((source.x="later",i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    refused: false,
+  },
 ];
 
 describe('changed record readers', () => {

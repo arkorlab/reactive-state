@@ -184,6 +184,70 @@ const CASES = [
     refused: false,
     sharedRefused: false,
   },
+  {
+    id: 'create-spread-condition-error',
+    source:
+      'function frames(){const args:[object]=[{stack:"fixed"}];let result:unknown;let i=0;do{result=Object.create(...args).stack;}while((args[0]=new Error("ours"),i++<1));return result;}',
+    invocation: 'frames()',
+    refused: true,
+    sharedRefused: true,
+  },
+  {
+    id: 'create-spread-condition-data',
+    source:
+      'function frames(){const args:[object]=[{stack:"fixed"}];let result:unknown;let i=0;do{result=Object.create(...args).stack;}while((args[0]={stack:"later"},i++<1));return result;}',
+    invocation: 'frames()',
+    refused: false,
+    sharedRefused: false,
+  },
+  {
+    id: 'construct-spread-condition-error',
+    source:
+      'function frames(){class Fixed{stack="fixed";}const args:[new()=>object,[]]=[Fixed,[]];let result:unknown;let i=0;do{result=(Reflect.construct(...args) as {stack?:string}).stack;}while((args[0]=Error,i++<1));return result;}',
+    invocation: 'frames()',
+    refused: true,
+    sharedRefused: true,
+  },
+  {
+    id: 'construct-spread-condition-data',
+    source:
+      'function frames(){class Fixed{stack="fixed";}class Later{stack="later";}const args:[new()=>object,[]]=[Fixed,[]];let result:unknown;let i=0;do{result=(Reflect.construct(...args) as {stack?:string}).stack;}while((args[0]=Later,i++<1));return result;}',
+    invocation: 'frames()',
+    refused: false,
+    sharedRefused: false,
+  },
+  {
+    id: 'create-spread-update-error',
+    source:
+      'function frames(){const args:[object]=[{stack:"fixed"}];let result:unknown;for(let i=0;(result=Object.create(...args).stack,i<2);i++,args[0]=new Error("ours")){}return result;}',
+    invocation: 'frames()',
+    refused: true,
+    sharedRefused: true,
+  },
+  {
+    id: 'create-spread-update-data',
+    source:
+      'function frames(){const args:[object]=[{stack:"fixed"}];let result:unknown;for(let i=0;(result=Object.create(...args).stack,i<2);i++,args[0]={stack:"later"}){}return result;}',
+    invocation: 'frames()',
+    refused: false,
+    sharedRefused: false,
+  },
+  {
+    id: 'construct-spread-update-error',
+    source:
+      'function frames(){class Fixed{stack="fixed";}const args:[new()=>object,[]]=[Fixed,[]];let result:unknown;for(let i=0;(result=(Reflect.construct(...args) as {stack?:string}).stack,i<2);i++,args[0]=Error){}return result;}',
+    invocation: 'frames()',
+    refused: true,
+    sharedRefused: true,
+  },
+  {
+    id: 'construct-spread-update-data',
+    source:
+      'function frames(){class Fixed{stack="fixed";}class Later{stack="later";}const args:[new()=>object,[]]=[Fixed,[]];let result:unknown;for(let i=0;(result=(Reflect.construct(...args) as {stack?:string}).stack,i<2);i++,args[0]=Later){}return result;}',
+    invocation: 'frames()',
+    refused: false,
+    sharedRefused: false,
+  },
 ] as const;
 
 describe('repeated loop error receiver readers', () => {

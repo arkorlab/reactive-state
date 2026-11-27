@@ -141,7 +141,7 @@ function mappedCall(call: CallExpression): Mapping | undefined {
   if (!isPropertyAccessExpression(member) && !isElementAccessExpression(member)) return undefined;
   const name = frameMemberName(member);
   if (name !== 'map' && name !== 'flatMap') return undefined;
-  const selected = framedArgumentPrefix(call, call.arguments, 1);
+  const selected = framedArgumentPrefix(call, call.arguments, 1, false);
   const first = call.arguments[0];
   return {
     receiver: member.expression,
@@ -363,7 +363,7 @@ function identityMappedViews(
   const name = unwrapped(returned);
   if (!isIdentifier(name)) return original;
   const declaration = frameBindingOf(name)?.binding;
-  const source = concatSource(receiver, stable);
+  const source = concatSource(receiver, stable, false);
   if (
     declaration === undefined ||
     source === undefined ||

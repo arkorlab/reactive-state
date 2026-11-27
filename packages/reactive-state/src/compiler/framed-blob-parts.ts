@@ -71,7 +71,7 @@ export function framedBlobParts(node: CallExpression | NewExpression, words: Par
 /** Reflected calls add input origins only before their own string conversion becomes opaque. */
 function reflectedBlobWords(call: CallExpression, words: PartWords): PartWords {
   const retained = (value: Expression): boolean => {
-    if (framedNativeErrorInput(value, call)) return true;
+    if (framedNativeErrorInput(value, call, undefined, false)) return true;
     const source = unwrapped(blobOptions(value) ?? value);
     return isNewExpression(source) && framedNativeConstructor(source.expression, ERRORS);
   };
@@ -91,7 +91,7 @@ function fileNameWords(call: BlobCall, words: PartWords): boolean {
 /** Only the selected options type field participates in native MIME type text conversion. */
 function contentTypeWords(call: BlobCall, words: PartWords): boolean {
   const index = framedNativeConstructor(call.target, FILES) ? 2 : 1;
-  const options = framedArgumentPrefix(call.node, call.args, index + 1).values[index];
+  const options = framedArgumentPrefix(call.node, call.args, index + 1, false).values[index];
   if (options === undefined) return false;
   const pending: { value: Expression; keys: readonly string[] }[] = [
     { value: options, keys: ['type'] },
@@ -136,5 +136,5 @@ function blobOptions(expression: Expression): Expression | undefined {
     aliases.add(binding);
     value = unwrapped(binding.initializer);
   }
-  return argumentArrayExposed(expression, aliases) ? undefined : value;
+  return argumentArrayExposed(expression, aliases, undefined, false) ? undefined : value;
 }

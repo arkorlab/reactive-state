@@ -64,7 +64,7 @@ function constructedObject(construction: Construction): readonly Expression[] | 
   const { call, target, list, made } = construction;
   if (target === undefined || list === undefined || !nativeObject(target)) return undefined;
   if (made !== undefined && !framedNativeConstructor(made, OBJECT)) return undefined;
-  return firstObject(framedAppliedArguments(call, list));
+  return firstObject(framedAppliedArguments(call, list, false));
 }
 
 /** The first argument, where none is unknown or spread before it. */

@@ -253,6 +253,22 @@ const CASES = [
     reader: true,
     refused: true,
   },
+  {
+    id: 'type-loop-condition-use',
+    source:
+      'function words(error:Error){const args:[BlobPart[],BlobPropertyBag]=[[],{type:error as never}];let result:unknown;let i=0;do{result=new Blob(...args).type;}while((void args,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    reader: true,
+    refused: true,
+  },
+  {
+    id: 'type-loop-condition-data',
+    source:
+      'function words(error:Error){let result:unknown;let i=0;do{result=new Blob([],{type:"text/plain",ignored:error} as BlobPropertyBag).type;}while((void error,i++<1));return result;}',
+    invocation: 'words(new Error("ours"))',
+    reader: false,
+    refused: false,
+  },
 ] as const;
 
 describe('native Blob and File content-type words', () => {
