@@ -215,8 +215,8 @@ function compileWith(api: API, options: CompileOptions): Compiled {
     return compiled === undefined ? [] : [compiled];
   });
   checkNodeArguments(components, attempt);
-  // A module nothing imports is imported by its path from the outputs, measured from the source
-  // directory as it was given, as `outDir` is: not from its real path, which `srcDir` is.
+  // A module nothing imports is imported by its path from the outputs, each by its real path: a
+  // link in `outDir` or in `srcDir`, as it was given, leads where Node loads the module from.
   const operations = operationModules(
     {
       components,

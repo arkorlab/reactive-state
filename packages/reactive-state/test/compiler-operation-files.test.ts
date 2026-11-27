@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
-import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -246,6 +246,38 @@ describe('a module of server operations registered by its file’s name', () => 
       'actions/audit.operations',
       ...IMPORTED,
     ]);
+  });
+
+  it('is imported by its path from where the output directory leads, through a link to a directory elsewhere', async () => {
+    const app = await application({ [AUDIT]: AUDIT_SOURCE, [NOTES]: NOTES_SOURCE });
+    apps.push(app);
+    const made = await mkdtemp(path.join(tmpdir(), 'reactive-out-'));
+    const elsewhere = realpathSync(made);
+    others.push(elsewhere);
+    await mkdir(path.join(elsewhere, 'output'));
+    const outDir = path.join(app.root, '.reactive');
+    await symlink(path.join(elsewhere, 'output'), outDir, 'dir');
+    const compiled = compileApp({
+      api,
+      appDir: path.join(app.src, 'app'),
+      outDir,
+      srcDir: app.src,
+    });
+    writeOutputs(compiled.outputs, outDir);
+    const audit = realpathSync(path.join(app.src, AUDIT));
+    // Node resolves a relative specifier from the real path of the module that holds it.
+    const resolved = (name: string): string | undefined => {
+      const specifier = /from '([^']*audit\.operations\.ts)'/u.exec(
+        compiled.outputs.get(path.join(outDir, name)) ?? '',
+      )?.[1];
+      if (specifier === undefined) return undefined;
+      const real = realpathSync(path.join(outDir, name));
+      return path.resolve(path.dirname(real), specifier);
+    };
+
+    expect(compiled.refusals).toStrictEqual([]);
+    expect(resolved('authority.mts')).toBe(audit);
+    expect(resolved(AUDIT)).toBe(audit);
   });
 
   // A pin: an imported module was registered so before it could be named.

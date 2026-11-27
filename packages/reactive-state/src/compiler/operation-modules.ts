@@ -1,3 +1,4 @@
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 
 import type { CompiledComponent } from './emit-app.ts';
@@ -13,7 +14,7 @@ import { byCodeUnits, specifierLiteral } from './splice.ts';
  * The `'use server'` modules the authority registers, each read once, by its file: each a component
  * or a hook imports, as its first importer writes it; then each whose file under the source
  * directory is named `*.operations.ts` (`OPERATIONS_SUFFIX`) though nothing imports it, by its path
- * from each output that imports it. A module both imported and so named is one, imported as its
+ * from each output that imports it, both by their real paths (`pathSpecifier`). A module both imported and so named is one, imported as its
  * importer writes it.
  */
 
@@ -23,10 +24,7 @@ export interface OperationSources {
   readonly hooks: readonly HookModule[];
   /** Each `*.operations.ts` under the source directory, by its path. */
   readonly named: readonly string[];
-  /**
-   * The source directory as the compile was given it — through a link, where it was — as the
-   * outputs' directory is: what an output's path to a module nothing imports is measured in.
-   */
+  /** The source directory, through a link where it was given so: where a module nothing imports is. */
   readonly srcDir: string;
 }
 
@@ -48,9 +46,33 @@ function operationsOf(
   return described === undefined ? undefined : { ...described, fileName: parsed.name };
 }
 
-/** The specifier `from` imports `file` by: its path from `from`'s directory, with its extension. */
+/**
+ * `location` by its real path: that of its nearest ancestor that exists, then what is written below
+ * it. An output directory the compile has not written yet has none of its own, and a link in what is
+ * there leads where Node loads the module from.
+ */
+function realLocation(location: string): string {
+  const rest: string[] = [];
+  for (let at = path.resolve(location); ; at = path.dirname(at)) {
+    try {
+      return path.join(realpathSync(at), ...rest);
+    } catch {
+      if (path.dirname(at) === at) return path.resolve(location);
+      rest.unshift(path.basename(at));
+    }
+  }
+}
+
+/**
+ * The specifier `from` imports `file` by: its path from `from`'s directory, with its extension. Node
+ * resolves a relative specifier from the real path of the module that holds it, so both are measured
+ * there: an output directory that is a link leads elsewhere, and `..` out of it is not its parent's.
+ */
 function pathSpecifier(from: string, file: string): string {
-  const relative = path.relative(path.dirname(from), file).split(path.sep).join('/');
+  const relative = path
+    .relative(realLocation(path.dirname(from)), realLocation(file))
+    .split(path.sep)
+    .join('/');
   return specifierLiteral(relative.startsWith('../') ? relative : `./${relative}`);
 }
 
