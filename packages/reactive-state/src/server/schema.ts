@@ -10,7 +10,9 @@ import { currentEvaluation, type Entry, type Evaluation } from './context.ts';
  * and the records the authority starts with. A table the declaration names `external` is none of
  * the authority's: its records are a database of the application's own, which the authority reads
  * through the store its host gives it by that name, and follows the change log of — read-only to
- * the application's components and operations alike, as its own code writes it.
+ * the application's components and operations alike, as its own code writes it. Of a table of a
+ * Drizzle schema in PostgreSQL or PGlite alone, a state may bind one column of one row
+ * (`db.<table>.where(…)`), which its setter writes through the application's own connection.
  */
 
 /** The longest text a field may hold, in UTF-16 units, as `<input maxLength>` counts them. */
@@ -115,6 +117,28 @@ export interface Query<F extends Fields> {
 /** A record's fields as a write gives them: those it leaves out of a new record hold their default. */
 export type Writable<F extends Fields> = { readonly [K in keyof F]?: FieldType<F[K]> };
 
+/** A column a state may bind of a table's rows (`TableRows`). */
+export interface RowField {
+  /** Its name in the table, which the schema may spell otherwise. */
+  readonly column: string;
+  /** What a write may put there: of a row's value, no read is held to it. */
+  readonly definition: FieldDefinition;
+  /** The only values the schema lets it hold, which `text({ enum })` holds PostgreSQL to none of. */
+  readonly labels?: readonly string[] | undefined;
+}
+
+/**
+ * How a state binds a row of a table of a Drizzle schema: by the condition `C` that names one, which
+ * answers a reference `R` of each column a state may bind of it. The application's connection reads
+ * and writes the row: no record of it is the authority's.
+ */
+export interface TableRows<C = never, R = unknown> {
+  /** Each column a state may bind, by the name the schema gives it. */
+  readonly fields: Readonly<Record<string, RowField>>;
+  /** The references of the row `condition` names, of the table `name`; a fault of any other. */
+  readonly where: (name: string, condition: C) => R;
+}
+
 export interface Table<F extends Fields = Fields> {
   readonly fields: F;
   /**
@@ -129,6 +153,8 @@ export interface Table<F extends Fields = Fields> {
    * a database of the application's own: none for a table the authority keeps.
    */
   readonly external?: string | undefined;
+  /** How a state binds the table's rows: of a table of a Drizzle schema in PostgreSQL alone. */
+  readonly rows?: TableRows | undefined;
 }
 
 /**
@@ -191,8 +217,20 @@ export interface AnyDatabase {
   readonly [DEFINITION]: DatabaseDefinition;
 }
 
+/** What a table of a Drizzle schema adds to its handle: the row a condition names. */
+type RowHandle<T> = T extends { readonly rows: TableRows<infer C, infer R> }
+  ? {
+      /**
+       * A reference of each column a state may bind of the one row `condition` names: `eq`s, alone
+       * or under `and`, that hold a primary key or a unique index whole. The others it holds are
+       * held of each read and each write as well, as a tenant's is.
+       */
+      readonly where: (condition: C) => R;
+    }
+  : unknown;
+
 export type Database<T extends Tables> = AnyDatabase & {
-  readonly [K in keyof T]: TableHandle<T[K]['fields']>;
+  readonly [K in keyof T]: RowHandle<T[K]> & TableHandle<T[K]['fields']>;
 } & {
   /**
    * Runs `body` as one transaction — of a server operation, and its only one — in which every
@@ -359,7 +397,8 @@ export function table<F extends Fields>(
     readonly unique?: readonly (readonly (keyof F & string)[])[] | undefined;
     /**
      * The store, by the name its host gives it, the table's records are read through: a database
-     * of the application's own, which the authority follows the change log of and never writes.
+     * of the application's own, which the authority follows the change log of, and writes only
+     * where a state binds a row of a table of a Drizzle schema (`TableRows`).
      */
     readonly external?: string | undefined;
   } = {},
@@ -446,6 +485,11 @@ export function defaultOf(definition: FieldDefinition): Value {
   return definition.default;
 }
 
+/** Whether `name` is one a field may have, which a binding carries: `NAME`. */
+export function isFieldName(name: string): boolean {
+  return NAME.test(name);
+}
+
 /** Whether `id` is one a record may have: 1 to 64 letters, digits, `_` or `-`. */
 export function isRecordId(id: unknown): id is string {
   return typeof id === 'string' && RECORD_ID.test(id);
@@ -477,6 +521,11 @@ function promised<T>(call: () => T): Promise<T> {
 function handle(name: string, definition: Table): Readonly<Record<string, unknown>> {
   const fieldNames = Object.keys(definition.fields);
   const ref = (id: string): Readonly<Record<string, FieldRef>> => {
+    if (definition.rows !== undefined) {
+      throw new TypeError(
+        `db.${name}.ref: a row of ${name} is named by a condition, not an id: bind a state to one of \`db.${name}.where(eq(…))\``,
+      );
+    }
     if (definition.external !== undefined) {
       throw new TypeError(
         `db.${name}.ref: ${name} is read through the store \`${definition.external}\`, whose records no state is bound to: the authority never writes them`,
@@ -491,6 +540,14 @@ function handle(name: string, definition: Table): Readonly<Record<string, unknow
       return [field, reference] as const;
     });
     return Object.freeze(Object.fromEntries(refs));
+  };
+  const where = (condition: unknown): unknown => {
+    if (definition.rows === undefined) {
+      throw new TypeError(
+        `db.${name}.where: a condition names a row of a table of a Drizzle schema in PostgreSQL or PGlite, which ${name} is not`,
+      );
+    }
+    return definition.rows.where(name, condition as never);
   };
   const call = async <T>(method: string, body: (evaluation: Evaluation) => T): Promise<T> =>
     promised(() => body(currentEvaluation(`db.${name}.${method}`)));
@@ -510,6 +567,7 @@ function handle(name: string, definition: Table): Readonly<Record<string, unknow
     ref,
     update: async (id: unknown, patch: unknown) =>
       call('update', (evaluation) => evaluation.update(name, id, patch)),
+    where,
   });
 }
 
@@ -580,11 +638,13 @@ export function database<T extends Tables>(
       );
     }
     // Declared again as `table()` declares it, should it be written by hand or changed since.
-    const declared = table(definition.fields, {
+    const checked = table(definition.fields, {
       external: definition.external,
       public: definition.public,
       unique: definition.unique,
     });
+    const { rows } = definition;
+    const declared = rows === undefined ? checked : Object.freeze({ ...checked, rows });
     definitions.set(name, declared);
     handles[name] = handle(name, declared);
   }

@@ -150,7 +150,7 @@ const TEMPORARY_SCHEMA = "'^pg_temp$|^pg_(toast_)?temp_'";
 const DEFAULT_SCHEMA = 'public';
 
 /** `name` as a PostgreSQL identifier: quoted, its quotes doubled. */
-function quoted(name: string): string {
+export function quoted(name: string): string {
   if (name === '' || Buffer.byteLength(name) > IDENTIFIER_BYTES || name.includes('\0')) {
     throw new TypeError(`\`${name}\` is not a PostgreSQL identifier.`);
   }
@@ -158,7 +158,7 @@ function quoted(name: string): string {
 }
 
 /** `relation` as a statement names it: its schema and its name, each quoted. */
-function qualified(relation: Relation): string {
+export function qualified(relation: Relation): string {
   return `${quoted(relation.schema)}.${quoted(relation.name)}`;
 }
 

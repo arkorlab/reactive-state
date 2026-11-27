@@ -152,18 +152,23 @@ export class Call {
     return error;
   }
 
-  /** Runs the application's `body` in `evaluation`, within the call's time. */
-  async run<T>(evaluation: Evaluation, body: () => Promise<T>): Promise<T> {
+  /** Runs `body`, within the call's time. */
+  async within<T>(body: () => Promise<T>): Promise<T> {
     if (this.#timedOut !== undefined) {
       throw this.#timedOut;
     }
     const { promise, reject } = Promise.withResolvers<never>();
     this.#running.add(reject);
     try {
-      return await Promise.race([evaluate(evaluation, body), promise]);
+      return await Promise.race([body(), promise]);
     } finally {
       this.#running.delete(reject);
     }
+  }
+
+  /** Runs the application's `body` in `evaluation`, within the call's time. */
+  async run<T>(evaluation: Evaluation, body: () => Promise<T>): Promise<T> {
+    return this.within(async () => evaluate(evaluation, body));
   }
 
   /**

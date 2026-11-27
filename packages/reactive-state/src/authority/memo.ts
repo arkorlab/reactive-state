@@ -4,7 +4,8 @@ import type { Output } from './skeleton.ts';
 /**
  * What one component rendered, with what it and every component it renders read: the memo's entry
  * for the component, its props, the user and the build. It holds no field's value and no binding —
- * those are read and signed for each render, for its session — so one user's sessions share it.
+ * those are read and signed for each render, for its session — so one user's sessions share it;
+ * but a row's value, which it read as it read anything else, and which goes with it.
  */
 export interface MemoEntry {
   readonly output: Output;

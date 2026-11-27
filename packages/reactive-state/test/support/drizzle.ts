@@ -4,7 +4,7 @@ import { onTestFinished } from 'vitest';
 
 import { Engine } from '../../src/authority/node-engine.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../../src/program.ts';
-import { database } from '../../src/server/schema.ts';
+import { type AnyDatabase, database } from '../../src/server/schema.ts';
 import { type DrizzleFollow, followDrizzle } from '../../src/sql/index.ts';
 import { textOf } from './frames.ts';
 
@@ -29,7 +29,20 @@ export interface Rendering {
   readonly engine: Engine;
   readonly operate: (module: string, name: string) => ReturnType<Engine['operate']>;
   readonly render: () => Promise<string>;
+  /** The render itself: its tree, and the frame its fields' values are in. */
+  readonly rendered: () => ReturnType<Engine['render']>;
+  readonly session: string;
 }
+
+/** What a test gives the component and the engine, of what they take but `evaluate`. */
+export type ProgramOptions = Partial<Pick<ComponentProgram, 'updaters' | 'writable'>> & {
+  /** The database the engine is given, where it declares more than the followed tables. */
+  readonly database?: AnyDatabase;
+  readonly timeoutMs?: number;
+};
+
+/** The component's id, as a tree names it. */
+export const COMPONENT = 'components/drizzle';
 
 /**
  * A PGlite whose tables `ddl` makes — those of `schema`, which its Drizzle reads and writes — with
@@ -63,22 +76,25 @@ export async function engineOf(
   setup: Pick<Opened<Readonly<Record<string, unknown>>>, 'follow' | 'pg'>,
   evaluate: ComponentProgram['evaluate'],
   operations: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {},
+  options: ProgramOptions = {},
 ): Promise<Rendering> {
+  const { database: declared, timeoutMs, updaters = {}, writable = [] } = options;
   const component: ComponentProgram = {
     buildId: BUILD,
-    component: 'components/drizzle',
+    component: COMPONENT,
     evaluate,
     protocolVersion: PROTOCOL_VERSION,
-    updaters: {},
-    writable: [],
+    updaters,
+    writable,
   };
   const engine = new Engine({
     buildId: BUILD,
-    database: database(setup.follow.tables),
+    database: declared ?? database(setup.follow.tables),
     externalPollMs: IDLE_POLL_MS,
     operations,
     programs: [component],
     stores: { [setup.follow.storeName]: setup.follow.store(setup.pg) },
+    ...(timeoutMs !== undefined && { timeoutMs }),
   });
   onTestFinished(async () => {
     await engine.close();
@@ -98,5 +114,7 @@ export async function engineOf(
       });
     },
     render: async () => textOf((await engine.render(session, root)).tree),
+    rendered: async () => engine.render(session, root),
+    session,
   };
 }

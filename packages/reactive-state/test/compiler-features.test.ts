@@ -3096,6 +3096,39 @@ describe('the compiler, beyond the application as it is written', () => {
     expect(checked.stdout + checked.stderr).toBe('');
   });
 
+  it('compiles a state bound to a row of a Drizzle table as one bound by `ref`', async () => {
+    const { app, compiled } = await compiling({
+      'components/row.reactive.tsx': file(
+        "import { and, eq } from 'drizzle-orm';",
+        "import { useReactiveState } from 'framework/react';",
+        "import { db } from '@/db';",
+        "import { tasks } from '@/schema';",
+        '',
+        'export default function Row({ id, projectId }: { id: string; projectId: string }) {',
+        '  const row = db.tasks.where(and(eq(tasks.id, id), eq(tasks.projectId, projectId)));',
+        '  const [title, setTitle] = useReactiveState(row.title);',
+        '  const [done] = useReactiveState(db.tasks.where(eq(tasks.id, id)).done);',
+        '  return (',
+        '    <label>',
+        '      {done ? "done" : "open"}',
+        '      <input value={title} onChange={(event) => setTitle(event.target.value)} />',
+        '    </label>',
+        '  );',
+        '}',
+      ),
+      'schema.ts': "export const tasks = { id: 'id', projectId: 'projectId' } as const;\n",
+    });
+    const program = output(compiled, app, 'components/row.authority.mts');
+    const client = output(compiled, app, 'components/row.client.tsx');
+
+    expect(program).toContain('title: row.title');
+    expect(program).toContain('done: db.tasks.where(eq(tasks.id, id)).done');
+    expect(program).toContain('export const writable = Object.freeze(["title"]);');
+    expect(program).toMatch(/\{ keys: \["title"\], kind: "set" \}/u);
+    expect(client).toContain('useReactiveState(stateOf<States["title"]>(part, "title"))');
+    expect(client).not.toContain('drizzle-orm');
+  });
+
   it('registers two updates told apart only by the text around a template’s substitutions as two', async () => {
     const { app, compiled } = await compiling({
       'components/marks.reactive.tsx': file(

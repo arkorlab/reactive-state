@@ -1,6 +1,7 @@
 /**
  * `framework/react` as a `.reactive.tsx` component, and a custom hook it calls, see it. Given a field
- * reference — `db.todos.ref(id).title`, from the application's own `@/db` — `useReactiveState`
+ * reference — `db.todos.ref(id).title`, or a row's `db.tasks.where(eq(tasks.id, id)).title`, from
+ * the application's own `@/db` — `useReactiveState`
  * binds the component to the authority's value of that field: the setter writes a value, or an
  * update of the current one the authority runs (`current => addEstimate(current, step)`). Given
  * anything else, it is React's own `useState`. The compiler replaces the import in what it writes,

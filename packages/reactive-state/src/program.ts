@@ -50,11 +50,39 @@ declare const VALUE: unique symbol;
 export const REFERENCE: unique symbol = Symbol.for('arkorlab.reactive-state.reference');
 
 /**
- * One field of one record of the application's database, as `db.<table>.ref(id)` gives it: what a
- * component binds a state to. It names the field and nothing else — the authority reads what the
- * field is from the database it was given, never from the reference — and its value's type is the
- * reference's type alone. It is marked as a compile's references are (`REFERENCE`): JSON shaped as
- * one — a prop's, a value the application read — starts a state as that value, and binds nothing.
+ * What became of a write to a row, as the application's database answered it: the row took the
+ * value (`written`); no row is there to take it, or none holds what it was to hold still (`absent`);
+ * another row holds that value of a unique key (`taken`); the database refuses the value (`invalid`);
+ * or a privilege or a policy of the database refuses the write (`denied`).
+ */
+export type RowWrite = 'absent' | 'denied' | 'invalid' | 'taken' | 'written';
+
+/**
+ * The row of a table of the application's Drizzle schema that `db.<table>.where(…)` names, read and
+ * written through the application's own connection: its condition's values are here alone, and no
+ * binding's token carries them.
+ */
+export interface BoundRow {
+  /**
+   * What the row holds of `fields`: nothing where there is no such row, or the condition's values
+   * are of a kind no row could hold (a text no UUID is).
+   */
+  readonly read: (
+    fields: readonly string[],
+  ) => Promise<Readonly<Record<string, Value>> | undefined>;
+  /** Writes `value` to `field`, of a row that holds `held` there where it is given. */
+  readonly write: (field: string, value: Value, held?: Value) => Promise<RowWrite>;
+  /** What the change log keeps of the row, of the keys its condition names (`capture.ts`). */
+  readonly image: Readonly<Record<string, string>>;
+}
+
+/**
+ * One field of one record of the application's database, as `db.<table>.ref(id)` gives it — or one
+ * column of one row, as `db.<table>.where(…)` does: what a component binds a state to. It names the
+ * field and nothing else — the authority reads what the field is from the database it was given,
+ * never from the reference — and its value's type is the reference's type alone. It is marked as a
+ * compile's references are (`REFERENCE`): JSON shaped as one — a prop's, a value the application
+ * read — starts a state as that value, and binds nothing.
  */
 export interface FieldRef<T extends Value = Value> {
   readonly [REFERENCE]: true;
@@ -62,6 +90,8 @@ export interface FieldRef<T extends Value = Value> {
   readonly table: string;
   readonly id: string;
   readonly field: string;
+  /** The row a column is of: none of a record the authority keeps. */
+  readonly row?: BoundRow | undefined;
   /** Never there at run time. */
   readonly [VALUE]?: T;
 }

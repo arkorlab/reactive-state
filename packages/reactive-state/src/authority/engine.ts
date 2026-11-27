@@ -494,7 +494,19 @@ export class AuthorityEngine {
    */
   async update(sessionId: unknown, request: unknown): Promise<FieldReceipt> {
     const operation = fieldOperationOf(request);
-    return this.#run(async () => writeField(this.#core, sessionId, operation));
+    const target = { row: false };
+    const toRow = (): void => {
+      target.row = true;
+    };
+    try {
+      return await this.#run(async () => writeField(this.#core, sessionId, operation, toRow));
+    } finally {
+      // The application's triggers logged the row: what read it by other keys than its condition
+      // names follows the log, whose read waits for the queue this write held.
+      if (target.row) {
+        await readAfterOperation(this.#tail);
+      }
+    }
   }
 
   /**
