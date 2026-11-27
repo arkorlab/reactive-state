@@ -15,6 +15,12 @@ const MAKE = "function make(value: {id: string}) { value.id = 'fresh'; return va
 const LOOSE = "function make(value: {id?: string}) { value.id = 'fresh'; return value; }";
 const PAYLOAD = " export const payload = make({id: 'safe'});";
 
+const WIDE = '{id: string; bad?: unknown; extra?: string}';
+/** A factory of an object that has room for the members the rows write, called as `PAYLOAD` does. */
+function wide(body: string): string {
+  return `function make(value: ${WIDE}) { ${body} }${PAYLOAD}`;
+}
+
 describe('shared factory parameter member writes', () => {
   const { apps, compile } = compilerApplications();
 
@@ -136,6 +142,64 @@ describe('shared factory parameter member writes', () => {
 
     expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
   });
+
+  // The compile reads the object a parameter holds only where the function's own code keeps it
+  // nowhere the walk of its reads does not follow, and writes into it before anything locks it.
+  // Otherwise a member write is a change, as it was before the object was read at all.
+  it.each([
+    wide('const wrapper = {target: value}; return wrapper.target;'),
+    wide(
+      "const wrapper = {target: {id: 'other'}}; wrapper.target.id = 'x'; value.id = 'fresh'; return value;",
+    ),
+    wide("value.id = 'fresh'; return [value];"),
+    wide("value.id = 'fresh'; return {value};"),
+    wide("value.id = 'fresh'; return value.id === 'safe' ? value : {id: 'other'};"),
+    wide("const copy = {...value}; copy.bad = 1; value.id = 'fresh'; return copy;"),
+    wide("console.log(value); value.id = 'fresh'; return value;"),
+    wide("const alias = value; const again = alias; again.id = 'fresh'; return value;"),
+    wide("value.extra = value.id; value.id = 'fresh'; return value;"),
+    wide("value.extra = value.id || 'none'; value.id = 'fresh'; return value;"),
+    wide("const alias = value; alias.extra = value.id; value.id = 'fresh'; return value;"),
+    wide("const swap = () => { value.id = 'fresh'; }; swap(); return value;"),
+  ])('keeps a member write into a parameter nothing keeps elsewhere: %s', async (module) => {
+    const app = await fixture(module);
+    apps.push(app);
+
+    expect(compile(app).refusals).toStrictEqual([]);
+  });
+
+  it.each([
+    wide(
+      "const wrapper = {target: value}; wrapper.target.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide(
+      "value.id = 'fresh'; const wrapper = {target: value}; wrapper.target.bad = new Date(0); return value;",
+    ),
+    wide(
+      "const alias = value; const wrapper = {target: alias}; wrapper.target.bad = new Date(0); value.id = 'fresh'; return value;",
+    ),
+    wide("const list = [value]; list[0].bad = new Date(0); value.id = 'fresh'; return value;"),
+    wide(
+      `const holder: {target?: ${WIDE}} = {}; holder.target = value; (holder.target as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide("const get = () => value; get().bad = new Date(0); value.id = 'fresh'; return value;"),
+    wide(
+      `const pick = value.id === 'safe' ? value : {id: 'other'}; (pick as ${WIDE}).bad = new Date(0); value.id = 'fresh'; return value;`,
+    ),
+    wide(
+      "value = {id: 'fresh'}; const wrapper = {target: value}; wrapper.target.bad = new Date(0); value.id = 'safe'; return value;",
+    ),
+    // The walk does not tell a wrapper nothing writes through from one something does.
+    wide("const wrapper = {target: value}; value.id = 'fresh'; return value;"),
+  ])(
+    'refuses a member write into a parameter kept in an alias the walk misses: %s',
+    async (module) => {
+      const app = await fixture(module);
+      apps.push(app);
+
+      expect(refusalOf(compile(app)).reason).toContain('no JSON holds');
+    },
+  );
 
   it('refuses a member write into a value the page gives', async () => {
     const app = await fixture(`export ${MAKE}`, 'first === null ? null : make(first)');
