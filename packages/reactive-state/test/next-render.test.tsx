@@ -38,13 +38,31 @@ function Editor({ part }: ClientPartProps): ReactNode {
   return <section>{slotOf(part, 's0')}</section>;
 }
 
+/** A Client Component the authority renders as a module element, handed an action as a prop. */
+function Remover({ remove }: { readonly remove: (id: string) => unknown }): ReactNode {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        remove('t1');
+      }}
+    >
+      remove
+    </button>
+  );
+}
+
 const deleteTodo = vi.fn<(...args: unknown[]) => unknown>();
 
 const ELEMENTS: Elements = {
   actions: { 'actions/todos#deleteTodo': deleteTodo },
   build: BUILD,
   clients: { 'components/todo-editor': Editor, 'components/todo-row': Row },
-  modules: { 'next/link#default': Link, 'react#Suspense': Suspense },
+  modules: {
+    '@/ui/remover#Remover': Remover,
+    'next/link#default': Link,
+    'react#Suspense': Suspense,
+  },
 };
 
 function element(
@@ -123,6 +141,28 @@ describe('the generic renderer', () => {
     action('form data');
 
     expect(deleteTodo).toHaveBeenCalledExactlyOnceWith('p1', 't1', 'form data');
+  });
+
+  it('hands a module element an action prop as its Server Function, bound', () => {
+    deleteTodo.mockClear();
+    const remover = renderTree(
+      {
+        children: [],
+        key: null,
+        kind: 'module',
+        module: '@/ui/remover',
+        name: 'Remover',
+        props: {
+          remove: { bound: ['p1'], kind: 'action', module: 'actions/todos', name: 'deleteTodo' },
+        },
+      },
+      ELEMENTS,
+    );
+    const remove = propsOf(remover)['remove'] as (id: string) => unknown;
+
+    remove('t1');
+
+    expect(deleteTodo).toHaveBeenCalledExactlyOnceWith('p1', 't1');
   });
 
   it('hands an action bound to nothing as its Server Function', () => {
