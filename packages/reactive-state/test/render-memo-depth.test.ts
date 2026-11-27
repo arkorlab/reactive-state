@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { Database } from '../src/authority/database.ts';
+import { reporterOf } from '../src/authority/error-hook.ts';
 import { Call } from '../src/authority/evaluation.ts';
 import { Memo } from '../src/authority/memo.ts';
 import { nodeSql } from '../src/authority/node-sql.ts';
@@ -81,6 +82,7 @@ function rendererOf(memo: Memo): Renderer {
     evaluatedBy: new Map(),
     instances: 0,
     memo,
+    report: reporterOf(undefined),
     programs: new Map(PROGRAMS.map((each) => [each.component, each])),
     scope: {
       call,

@@ -8,6 +8,7 @@ import {
 import { HTTP_BAD_REQUEST } from '../status.ts';
 import { canonicalJson, frozenJson, shortDigest } from './canonical.ts';
 import type { Dependencies } from './dependencies.ts';
+import type { Report } from './error-hook.ts';
 import { AuthorityError, asRefusal, describeThrown, isAuthorityError } from './errors.ts';
 import { type CheckedItem, itemsOf } from './items.ts';
 import {
@@ -251,6 +252,8 @@ class Filling {
   readonly #requested: PageView | undefined;
   readonly #dependencies: Dependencies;
   readonly #recorded: string[] = [];
+  /** The component whose part the walk stands in: what a fault of a site's function is told of. */
+  #component = '';
   readonly view: Record<string, Readonly<Record<string, SiteInputs>>> = {};
   readonly named: Record<string, Readonly<Record<string, SiteInputs>>> = {};
 
@@ -318,6 +321,11 @@ class Filling {
     return { ...output, instance, shown, slots };
   }
 
+  /** Where a fault of `site`'s own function of the inputs a view sent is told. */
+  #faults(site: string): SiteFaults {
+    return { component: this.#component, report: this.#renderer.report, site };
+  }
+
   /**
    * The sites the part `instance` shows, with their inputs: as the view names them, or at first;
    * the items of each list, made once; and those whose functions refused the inputs a view sent,
@@ -356,7 +364,8 @@ class Filling {
       // list of no items shows nothing.
       let shows = true;
       try {
-        shows = functions === undefined || showsOfView(site, functions, checked, items);
+        shows =
+          functions === undefined || showsOfView(this.#faults(site), functions, checked, items);
       } catch (error) {
         if (!isSiteRefusal(error)) {
           throw error;
@@ -402,7 +411,10 @@ class Filling {
       try {
         const given = setInputsOf(set, declared.inputs);
         const checked = checkedInputs(site, declared, followedInputs(declared, given, output));
-        if (functions === undefined || showsOfView(site, functions, checked, into.items)) {
+        if (
+          functions === undefined ||
+          showsOfView(this.#faults(site), functions, checked, into.items)
+        ) {
           Object.defineProperty(into.chosen, site, { enumerable: true, value: checked });
         }
       } catch (error) {
@@ -462,7 +474,7 @@ class Filling {
     const asView: SiteRun | undefined = requested
       ? (made) => {
           try {
-            return ofView(site, made);
+            return ofView(this.#faults(site), made);
           } catch (error) {
             if (isSiteRefusal(error)) {
               own.add(error);
@@ -564,9 +576,22 @@ class Filling {
 
   /** `instance`, where the walk stands, with the sites of every part in it rendered. */
   async instance(instance: SkeletonInstance, at: At): Promise<SkeletonInstance> {
-    const output = await this.#output(instance.output, at);
-    return output === instance.output ? instance : { ...instance, output };
+    const outer = this.#component;
+    this.#component = instance.component;
+    try {
+      const output = await this.#output(instance.output, at);
+      return output === instance.output ? instance : { ...instance, output };
+    } finally {
+      this.#component = outer;
+    }
   }
+}
+
+/** Where a fault of a site's own function is told: the site, its component, and who hears of it. */
+interface SiteFaults {
+  readonly site: string;
+  readonly component: string;
+  readonly report: Report;
 }
 
 /**
@@ -575,20 +600,20 @@ class Filling {
  * its rendering to render. What its functions make of the inputs is the view's (`ofView`).
  */
 function showsOfView(
-  site: string,
+  faults: SiteFaults,
   functions: SiteFunctions,
   inputs: SiteInputs,
   items: Map<string, readonly CheckedItem[]>,
 ): boolean {
-  if (!ofView(site, () => siteShows(functions, inputs))) {
+  if (!ofView(faults, () => siteShows(functions, inputs))) {
     return false;
   }
   const { each } = functions;
   if (each === undefined) {
     return true;
   }
-  const listed = ofView(site, () => itemsOf(site, each, inputs, invalidView));
-  items.set(site, listed);
+  const listed = ofView(faults, () => itemsOf(faults.site, each, inputs, invalidView));
+  items.set(faults.site, listed);
   return listed.length > 0;
 }
 
@@ -598,7 +623,7 @@ function showsOfView(
  * refusal stays what it is, of whichever copy of the package threw it; a fault is the refusal's
  * cause, and the authority's log keeps it, for one the inputs only revealed of the code.
  */
-function ofView<T>(site: string, made: () => T): T {
+function ofView<T>({ component, report, site }: SiteFaults, made: () => T): T {
   try {
     return made();
   } catch (error) {
@@ -606,9 +631,12 @@ function ofView<T>(site: string, made: () => T): T {
       throw asRefusal(error);
     }
     // The authority's own log wherever it runs — stderr in Node, the object's log in workerd —
-    // through the one writer both have.
-    // eslint-disable-next-line no-console
-    console.error(`The site ${site} faulted of the inputs a view sent: ${describeThrown(error)}`);
+    // through the one writer both have, or the application's `onError`.
+    report(
+      error,
+      { component, kind: 'render' },
+      `The site ${site} faulted of the inputs a view sent: ${describeThrown(error)}`,
+    );
     throw invalidView(`The site ${site} renders nothing of the inputs the view sends.`, error);
   }
 }

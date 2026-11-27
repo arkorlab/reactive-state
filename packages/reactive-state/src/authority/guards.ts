@@ -1,5 +1,6 @@
 import type { MiddlewareProgram, ResponseDescriptor, RouteParams } from '../routing.ts';
 import type { Dependencies } from './dependencies.ts';
+import { isAuthorityError } from './errors.ts';
 import { renderEvaluation } from './evaluation.ts';
 import type { Core } from './model.ts';
 import { isForbidden, type Renderer } from './render.ts';
@@ -88,9 +89,22 @@ export async function runGuards(
   core: Core,
   renderer: Renderer,
   guards: readonly MiddlewareProgram[],
-  context: { readonly params: RouteParams; readonly dependencies: Dependencies },
+  context: {
+    readonly params: RouteParams;
+    readonly dependencies: Dependencies;
+    /** The route whose guards run: what a fault of one is told of. */
+    readonly route: string;
+  },
 ): Promise<GuardOutcome> {
   const { call } = renderer.scope;
+  // A guard's fault is the route's, told where it is met: no component ran.
+  const fail = (error: unknown): never => {
+    if (!isAuthorityError(error)) {
+      core.report(error, { kind: 'route', route: context.route });
+      call.reported = true;
+    }
+    throw error;
+  };
   const scope = {
     ...renderer.scope,
     onRead: () => {
@@ -109,16 +123,18 @@ export async function runGuards(
       if (isForbidden(outcome)) {
         return { id: program.id, kind: 'refused' };
       }
-      throw outcome;
+      return fail(outcome);
     }
     if (call.fault !== undefined) {
-      throw call.fault.error;
+      return fail(call.fault.error);
     }
     if (answered !== undefined) {
       const response = responseOf(answered);
       if (response === undefined) {
-        throw new Error(
-          `The guard of the middleware ${JSON.stringify(program.id)} answered what is neither nothing nor a response.`,
+        return fail(
+          new Error(
+            `The guard of the middleware ${JSON.stringify(program.id)} answered what is neither nothing nor a response.`,
+          ),
         );
       }
       return { id: program.id, kind: 'respond', response };

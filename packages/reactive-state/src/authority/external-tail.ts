@@ -1,5 +1,6 @@
 import type { Table } from '../server/schema.ts';
 import type { RowChange } from './dependencies.ts';
+import { type Report, reporterOf } from './error-hook.ts';
 import { describeThrown } from './errors.ts';
 import { ExternalFollower, type ExternalStore } from './external.ts';
 import { nextTurn } from './turns.ts';
@@ -35,6 +36,8 @@ export interface ExternalTailOptions {
   /** The host's alarm; absent on Node, where a timer schedules each turn. */
   readonly schedule?: ((at: number) => Promise<void>) | undefined;
   readonly keep?: ((work: Promise<unknown>) => void) | undefined;
+  /** Tells the application of what the log could not do, or writes it. */
+  readonly report?: Report | undefined;
 }
 
 /**
@@ -58,6 +61,7 @@ export class ExternalTail {
   readonly #retained: () => boolean;
   readonly #clock: () => number;
   readonly #schedule: ((at: number) => Promise<void>) | undefined;
+  readonly #report: Report;
   readonly #keep: ((work: Promise<unknown>) => void) | undefined;
   #following = 0;
   #due: number | undefined;
@@ -69,6 +73,14 @@ export class ExternalTail {
   #polling = false;
   #refreshing = false;
   #stopped = false;
+
+  /**
+   * Tells the application of a fault of the tail's, as the log does. `read` says it is a read's
+   * failure that the caller only awaited, which the read told of where it was made.
+   */
+  readonly fault = (error: unknown, log: string, read = false): void => {
+    this.#report(error, { kind: 'log' }, log, read);
+  };
 
   constructor(options: ExternalTailOptions) {
     const { stores, tables } = options;
@@ -94,6 +106,7 @@ export class ExternalTail {
     this.#clock = options.clock ?? Date.now;
     this.#schedule = options.schedule;
     this.#keep = options.keep;
+    this.#report = options.report ?? reporterOf(undefined);
   }
 
   async #readEach(): Promise<void> {
@@ -138,8 +151,8 @@ export class ExternalTail {
         this.#scheduled = at;
         if (!this.#active()) this.refresh();
       } catch (error) {
-        // eslint-disable-next-line no-console
-        console.error(
+        this.fault(
+          error,
           `An external store's next poll could not be scheduled: ${describeThrown(error)}`,
         );
         if (this.#arming !== attempt) return;
@@ -194,8 +207,7 @@ export class ExternalTail {
             try {
               await this.run();
             } catch (error) {
-              // eslint-disable-next-line no-console
-              console.error(describeThrown(error));
+              this.fault(error, describeThrown(error));
             }
           })();
           this.#keep?.(work);
@@ -241,9 +253,10 @@ export class ExternalTail {
     try {
       await this.read();
     } catch (error) {
-      // eslint-disable-next-line no-console
-      console.error(
+      this.fault(
+        error,
         `An external store's change log could not be ingested: ${describeThrown(error)}`,
+        true,
       );
     } finally {
       this.#polling = false;
@@ -275,6 +288,10 @@ export class ExternalTail {
     this.#reading = (async () => {
       try {
         await this.#readEach();
+      } catch (error) {
+        // Told here, once for the read, however many wait on it.
+        this.#report(error, { kind: 'log' });
+        throw error;
       } finally {
         this.#reading = undefined;
       }

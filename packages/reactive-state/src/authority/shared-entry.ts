@@ -53,6 +53,15 @@ export interface Candidate extends Rendering {
   readonly revision: number;
 }
 
+/**
+ * What one evaluation of a view says of its fault, to the job that ran it: whether it was a fault
+ * of the render, which `onError` was told of at once. Per evaluation, not per view: another
+ * evaluation of the same view cannot change it.
+ */
+export interface EvaluationFault {
+  told: boolean;
+}
+
 export interface Entry {
   readonly key: string;
   readonly route: RouteRegistration;

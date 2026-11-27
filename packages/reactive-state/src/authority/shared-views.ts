@@ -14,7 +14,7 @@ import { HTTP_CONFLICT, HTTP_FORBIDDEN, HTTP_NOT_FOUND } from '../status.ts';
 import { type ArtifactFit, fitOf, REMAKING } from './artifact-deployments.ts';
 import { digest } from './canonical.ts';
 import { Dependencies, type RowChange } from './dependencies.ts';
-import { refusal } from './errors.ts';
+import { isAuthorityError, refusal } from './errors.ts';
 import {
   artifactAnswer,
   decidedBy,
@@ -38,6 +38,7 @@ import {
   retainedView,
   WAIT,
   type Wait,
+  type EvaluationFault,
   type Waiting,
 } from './shared-entry.ts';
 import { assertFollowerRoom, type SharedFollowing, sharedFollowing } from './shared-following.ts';
@@ -125,7 +126,7 @@ export class SharedViews {
     this.#sites = new SiteShapes(host.store, host.core.registry.buildId);
     this.#jobs = new SharedJobs(host, {
       current: (entry) => this.#entries.get(entry.key) === entry,
-      evaluate: (entry) => this.#evaluate(entry),
+      evaluate: (entry, fault) => this.#evaluate(entry, fault),
       privatize: (entry, reason) => {
         this.#jobs.apply(entry, { kind: 'private', reason });
         this.#persist(entry);
@@ -418,7 +419,7 @@ export class SharedViews {
   }
 
   /** In the queue: `entry` evaluated at the revision the queue holds, and what follows of it. */
-  async #evaluate(entry: Entry): Promise<void> {
+  async #evaluate(entry: Entry, fault?: EvaluationFault): Promise<void> {
     let outcome: SharedOutcome;
     try {
       outcome = await sharedOutcome(this.#core, entry.route, entry.params);
@@ -428,6 +429,9 @@ export class SharedViews {
       // commit, does — and what a commit may have withdrawn of it is revoked (`faulted`).
       this.#jobs.faulted(entry);
       this.#persist(entry);
+      // Told only once the clean-up held: a fault of its own, thrown above, is not the render's, and
+      // a refusal is told to nobody.
+      if (fault && !isAuthorityError(error)) fault.told = true;
       throw error;
     }
     try {

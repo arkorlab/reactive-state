@@ -4,6 +4,7 @@ import type { AnyDatabase, DatabaseDefinition } from '../server/schema.ts';
 import type { Database } from './database.ts';
 import type { RowChange } from './dependencies.ts';
 import type { Diagnostics, FollowStats } from './diagnostics.ts';
+import type { FaultOptions, Report } from './error-hook.ts';
 import type { ExternalStores } from './external.ts';
 import type { Memo } from './memo.ts';
 import type { Registry } from './programs.ts';
@@ -56,7 +57,7 @@ export interface ExternalHost {
 }
 
 /** What the authority's engine is opened with, wherever its SQLite is. */
-export interface AuthorityEngineOptions extends Application, ExternalOptions {
+export interface AuthorityEngineOptions extends Application, ExternalOptions, FaultOptions {
   /** The host's turns of following external stores (`ExternalHost`): the Durable Object's. */
   readonly externalHost?: ExternalHost | undefined;
   readonly sql: SqlDriver;
@@ -72,7 +73,7 @@ export interface AuthorityEngineOptions extends Application, ExternalOptions {
 }
 
 /** What the authority is opened with on a developer's machine (`Engine`). */
-export interface EngineOptions extends Application, ExternalOptions {
+export interface EngineOptions extends Application, ExternalOptions, FaultOptions {
   /** The database file; in memory when not given. */
   readonly filename?: string;
   readonly clock?: () => number;
@@ -219,6 +220,8 @@ export interface Core {
   readonly clock: () => number;
   readonly timeoutMs: number;
   readonly metrics: Metrics;
+  /** Tells the application's `onError` of what was met, or logs it where there is none. */
+  readonly report: Report;
   readonly diagnostics: Diagnostics;
   /** The components evaluated, by id. */
   readonly evaluatedBy: Map<string, number>;

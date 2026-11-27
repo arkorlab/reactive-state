@@ -58,6 +58,8 @@ export class Call {
    */
   #boundReads = 0;
   #lastBound: string | undefined;
+  /** Whether a fault of the call was told to the application's `onError` where it was met. */
+  reported = false;
 
   constructor(what: string, timeoutMs: number) {
     this.#what = what;

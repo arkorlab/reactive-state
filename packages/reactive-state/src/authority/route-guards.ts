@@ -1,7 +1,7 @@
 import type { GuardAnswer, GuardRequest, RegisteredRoute, RouteParams } from '../routing.ts';
 import { HTTP_BAD_REQUEST, HTTP_NOT_FOUND } from '../status.ts';
 import { Dependencies } from './dependencies.ts';
-import { refusal } from './errors.ts';
+import { isAuthorityError, refusal } from './errors.ts';
 import { Call } from './evaluation.ts';
 import { respondedAnswer } from './gate-answers.ts';
 import { guardAdmission } from './guard-admissions.ts';
@@ -101,7 +101,7 @@ export async function routeGuards(
       core,
       rendererOf(core, call, session),
       guardsOf(core, routed.route.middleware),
-      { dependencies: new Dependencies(), params: routed.params },
+      { dependencies: new Dependencies(), params: routed.params, route: routed.route.route },
     );
     if (outcome.kind === 'respond') {
       return { ...respondedAnswer(outcome.response, { method: 'GET' }), by: outcome.id };
@@ -115,7 +115,11 @@ export async function routeGuards(
       : PASSED;
   } catch (error) {
     // A fault is the call's outcome, whatever came after it.
-    throw call.fault === undefined ? error : call.fault.error;
+    const thrown = call.fault === undefined ? error : call.fault.error;
+    if (!isAuthorityError(thrown)) {
+      core.report(thrown, { kind: 'route', route: routed.route.route }, undefined, call.reported);
+    }
+    throw thrown;
   } finally {
     call.close();
   }

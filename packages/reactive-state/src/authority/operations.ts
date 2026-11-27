@@ -7,7 +7,7 @@ import {
   HTTP_UNPROCESSABLE,
 } from '../status.ts';
 import { digest } from './canonical.ts';
-import { AuthorityError, messageOf, refusal } from './errors.ts';
+import { AuthorityError, isAuthorityError, messageOf, refusal } from './errors.ts';
 import { Call, operationEvaluation, transactionEvaluation } from './evaluation.ts';
 import type { Core, Session } from './model.ts';
 import { operationResult } from './operation-results.ts';
@@ -201,6 +201,14 @@ class Running {
       }
     }
     return refused;
+  }
+
+  /** Tells the application's `onError` of `error`, unless it is the authority's own refusal. */
+  #told(error: unknown): void {
+    if (!isAuthorityError(error)) {
+      const { module, name, operationId } = this.#call;
+      this.#core.report(error, { kind: 'operation', module, name, operationId });
+    }
   }
 
   /** Whether a write of the application's own tables may have landed: one ended so, or under way. */
@@ -404,7 +412,15 @@ class Running {
       });
       return { ...receipt, deduplicated: false, operationId: this.#call.operationId };
     } catch (error) {
-      throw this.#refused(timer.fault === undefined ? timer.outcome(error) : timer.fault.error);
+      const thrown = timer.fault === undefined ? timer.outcome(error) : timer.fault.error;
+      // Answered first: what the hook does to the error changes nothing of the answer or its record.
+      const answered = this.#refused(thrown);
+      this.#told(thrown);
+      // A fault that answers in a refusal's place (its keeping failed) is the application's to hear.
+      if (answered !== thrown) {
+        this.#told(answered);
+      }
+      throw answered;
     } finally {
       timer.close();
     }

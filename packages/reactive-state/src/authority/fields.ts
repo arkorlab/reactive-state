@@ -17,7 +17,7 @@ import {
 import { type BindingClaims, verifyBinding } from './bindings.ts';
 import { digest } from './canonical.ts';
 import type { RowChange } from './dependencies.ts';
-import { denied, messageOf, refusal } from './errors.ts';
+import { denied, isAuthorityError, messageOf, refusal } from './errors.ts';
 import { Call } from './evaluation.ts';
 import { Memo } from './memo.ts';
 import type { Core, Session } from './model.ts';
@@ -121,7 +121,16 @@ async function replayed(
     }
     return outcome;
   } catch (error) {
-    throw call.fault === undefined ? error : call.fault.error;
+    const thrown = call.fault === undefined ? error : call.fault.error;
+    if (!isAuthorityError(thrown)) {
+      core.report(
+        thrown,
+        { component: claims.root.component, kind: 'render' },
+        undefined,
+        call.reported,
+      );
+    }
+    throw thrown;
   } finally {
     call.close();
   }

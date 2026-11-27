@@ -13,6 +13,7 @@ export type {
 export type { RowChange } from './dependencies.ts';
 export type { SqlDriver, SqlParameter } from './sql.ts';
 export { AuthorityError } from './errors.ts';
+export type { AuthorityErrorEvent, OnError } from './error-hook.ts';
 export { type Registry, registryOf, type RegistryOptions } from './programs.ts';
 export {
   type AuthorityServer,

@@ -4,7 +4,7 @@ import { HTTP_UNAUTHORIZED } from '../status.ts';
 import { assemble } from './assemble.ts';
 import { digest } from './canonical.ts';
 import { Dependencies } from './dependencies.ts';
-import { AuthorityError, refusal } from './errors.ts';
+import { AuthorityError, isAuthorityError, refusal } from './errors.ts';
 import { Call, type Scope } from './evaluation.ts';
 import { guardsOf, runGuards } from './guards.ts';
 import type { Core } from './model.ts';
@@ -80,6 +80,7 @@ function rendererOf(core: Core, call: Call): Renderer {
     definition: core.definition,
     evaluatedBy: core.evaluatedBy,
     instances: 0,
+    report: core.report,
     memo: core.memo,
     programs: core.registry.programs,
     scope: sharedScope(core, call),
@@ -192,6 +193,7 @@ export async function sharedOutcome(
     const guarded = await runGuards(core, renderer, guardsOf(core, route.middleware), {
       dependencies,
       params,
+      route: route.route,
     });
     if (call.requestBound !== undefined) {
       return { kind: 'private', reason: call.requestBound };
@@ -217,6 +219,9 @@ export async function sharedOutcome(
     const thrown = call.fault === undefined ? error : call.fault.error;
     if (thrown instanceof AuthorityError && thrown.status === HTTP_UNAUTHORIZED) {
       return { kind: 'private', reason: 'a refusal of the session' };
+    }
+    if (!isAuthorityError(thrown)) {
+      core.report(thrown, { component: route.root, kind: 'render' }, undefined, call.reported);
     }
     throw thrown;
   } finally {
