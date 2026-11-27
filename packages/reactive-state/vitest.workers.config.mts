@@ -38,6 +38,9 @@ export default defineConfig({
           // The same host reading a database the application owns.
           // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
           EXTERNAL_AUTHORITY: { className: 'ExternalAuthority', useSQLite: true },
+          // The application whose states bind rows of its tables in D1.
+          // eslint-disable-next-line unicorn/no-keyword-prefix -- Miniflare's option name.
+          D1_ROWS_AUTHORITY: { className: 'RowsAuthority', useSQLite: true },
         },
         d1Databases: ['REACTIVE_D1'],
         bindings: {

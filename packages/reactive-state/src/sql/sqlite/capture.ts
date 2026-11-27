@@ -44,7 +44,7 @@ export interface FollowedSqliteTable {
 }
 
 /** An SQL identifier, quoted: any name, its quotes doubled. */
-function quoted(name: string): string {
+export function quoted(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
 }
 

@@ -13,7 +13,6 @@ import {
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
-import { sqliteTable, text as sqliteText } from 'drizzle-orm/sqlite-core';
 import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import { type FieldRef, isFieldRef } from '../src/program.ts';
@@ -204,8 +203,8 @@ describe('db.<table>.where', () => {
     ['a column the condition names', 'id', 'names the row'],
     ['another column the condition names', 'projectId', 'names the row'],
     ['a column that may hold NULL', 'note', 'NULL'],
-    ['a generated column', 'shout', 'PostgreSQL generates'],
-    ['an identity column', 'sequence', 'PostgreSQL generates'],
+    ['a generated column', 'shout', 'the database generates'],
+    ['an identity column', 'sequence', 'the database generates'],
     ['a column of another type', 'updatedAt', 'PgTimestamp'],
     ['a column of no name a binding carries', '_revision', 'a letter, then letters, digits or _'],
   ])('refuses to bind %s', (_, column, reason) => {
@@ -227,15 +226,6 @@ describe('db.<table>.where', () => {
 
     expect(() => whereOf(db.notes, eq(tasks.id, ID))).toThrow(
       'db.notes.where: a condition names a row of a table of a Drizzle schema',
-    );
-  });
-
-  it('refuses a table of a schema of SQLite, for now, and tells why', () => {
-    const logs = sqliteTable('logs', { id: sqliteText().primaryKey() });
-    const db = database(followDrizzle({ logs }).tables);
-
-    expect(() => whereOf(db.logs, eq(logs.id, ID))).toThrow(
-      'db.logs.where: a condition names a row of a table of a Drizzle schema',
     );
   });
 

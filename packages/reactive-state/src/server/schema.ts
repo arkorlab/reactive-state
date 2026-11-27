@@ -11,8 +11,8 @@ import { currentEvaluation, type Entry, type Evaluation } from './context.ts';
  * the authority's: its records are a database of the application's own, which the authority reads
  * through the store its host gives it by that name, and follows the change log of — read-only to
  * the application's components and operations alike, as its own code writes it. Of a table of a
- * Drizzle schema in PostgreSQL or PGlite alone, a state may bind one column of one row
- * (`db.<table>.where(…)`), which its setter writes through the application's own connection.
+ * Drizzle schema alone, a state may bind one column of one row (`db.<table>.where(…)`), which its
+ * setter writes through the application's own connection.
  */
 
 /** The longest text a field may hold, in UTF-16 units, as `<input maxLength>` counts them. */
@@ -153,7 +153,7 @@ export interface Table<F extends Fields = Fields> {
    * a database of the application's own: none for a table the authority keeps.
    */
   readonly external?: string | undefined;
-  /** How a state binds the table's rows: of a table of a Drizzle schema in PostgreSQL alone. */
+  /** How a state binds the table's rows: of a table of a Drizzle schema alone. */
   readonly rows?: TableRows | undefined;
 }
 
@@ -544,7 +544,7 @@ function handle(name: string, definition: Table): Readonly<Record<string, unknow
   const where = (condition: unknown): unknown => {
     if (definition.rows === undefined) {
       throw new TypeError(
-        `db.${name}.where: a condition names a row of a table of a Drizzle schema in PostgreSQL or PGlite, which ${name} is not`,
+        `db.${name}.where: a condition names a row of a table of a Drizzle schema, which ${name} is not`,
       );
     }
     return definition.rows.where(name, condition as never);

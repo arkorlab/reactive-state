@@ -14,7 +14,8 @@ import {
 import { type Connection, trackedClient } from './client.ts';
 import { generationOf } from './generations.ts';
 import { type KeyColumn, keysOf } from './keys.ts';
-import { type RowReferences, rowsOf } from './rows.ts';
+import { postgresRows } from './postgres-rows.ts';
+import type { RowReferences } from './rows.ts';
 import { type DrizzleD1Follow, followSqlite } from './sqlite/follow.ts';
 import { pruneSqlChanges, type Queryable, sqlStore } from './store.ts';
 
@@ -197,7 +198,7 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
     const fields = keys.map((key) => [key.field, text()] as const);
     tables[name] = Object.freeze({
       ...table(Object.fromEntries(fields), { external: storeName }),
-      rows: rowsOf(value, keys, connected),
+      rows: postgresRows(value, keys, connected),
     });
     byRelation.set(relationKey(relation), name);
     keysByTable.set(name, keys);

@@ -1,28 +1,13 @@
-import { Column, getTableColumns, is, Param, SQL, StringChunk } from 'drizzle-orm';
-import {
-  getTableConfig,
-  type IndexedColumn,
-  type PgColumn,
-  type PgTable,
-} from 'drizzle-orm/pg-core';
+import { Column, getTableColumns, is, Param, SQL, StringChunk, type Table } from 'drizzle-orm';
 
 import { digest } from '../authority/canonical.ts';
 import { type BoundRow, type FieldRef, REFERENCE, type RowWrite, type Value } from '../program.ts';
 import {
-  boolean,
   type FieldDefinition,
-  integer,
   isFieldName,
   type RowField,
   type TableRows,
-  text,
 } from '../server/schema.ts';
-import { qualified, quoted } from './capture.ts';
-import { codeOf } from './client.ts';
-import type { Queryable } from './digest.ts';
-import type { KeyColumn } from './keys.ts';
-import { keyDigest } from './reads.ts';
-import { valueText } from './values.ts';
 
 /**
  * A row of a table of a Drizzle schema, as a state binds it: the condition `db.<table>.where(…)` is
@@ -32,32 +17,56 @@ import { valueText } from './values.ts';
  * and so is one written by a version of Drizzle that spells them otherwise: nothing here guesses.
  *
  * A row's read and its write are one statement each, through the connection the application's
- * Drizzle was given: a read of a render is noted as any of its queries is (`client.ts`), and a
- * write is logged by the table's triggers as any of the application's is.
+ * Drizzle was given, as its dialect writes them (`RowDialect`): a read of a render is noted as any
+ * of its queries is, and a write is logged by the table's triggers as any of the application's is.
+ * What a column holds is what Drizzle reads and writes of it, as `mapFromDriverValue` and
+ * `mapToDriverValue` say: of SQLite, a boolean is an integer.
  */
 
-/** The columns' types a state may hold, as a value of JSON a page sends back the same. */
-const INTEGERS = {
-  PgInteger: { max: 2_147_483_647, min: -2_147_483_648 },
-  PgSmallInt: { max: 32_767, min: -32_768 },
-} as const;
-/**
- * What the database says of a write, by SQLSTATE: of a unique key held twice, of a right or a policy
- * that refuses it, and of what the application's trigger raised; and the classes of what it refuses
- * of a value — its data, a constraint, a limit of what it can hold.
- */
-const SQLSTATE = {
-  classes: ['22', '23', '54'],
-  data: '22',
-  privilege: '42501',
-  raised: 'P0001',
-  unique: '23505',
-} as const;
 /** How many chunks Drizzle writes `eq(…)` of, and `and(…)` of more than one condition. */
 const CHUNKS = { conjunction: 3, equality: 5 } as const;
 
 /** Each column a condition names, as a statement runs with it: in the order of their names. */
-type Named = ReadonlyMap<string, unknown>;
+export type Named = ReadonlyMap<string, unknown>;
+
+/** What a table declares of its keys, as each dialect's `getTableConfig` answers it. */
+interface TableKeys {
+  readonly columns: readonly Pick<Column, 'isUnique' | 'name' | 'primary'>[];
+  readonly indexes: readonly {
+    readonly config: {
+      readonly columns: readonly unknown[];
+      readonly unique: boolean;
+      readonly where?: unknown;
+    };
+  }[];
+  readonly primaryKeys: readonly { readonly columns: readonly { readonly name: string }[] }[];
+  readonly uniqueConstraints: readonly {
+    readonly columns: readonly { readonly name: string }[];
+  }[];
+}
+
+/** One write, as a statement runs with it: of the column, to `value`, where it holds `held`. */
+export interface RowUpdate {
+  readonly column: string;
+  readonly value: unknown;
+  readonly held?: Value;
+}
+
+/** What a table's rows are read and written by, as its database's dialect writes them. */
+export interface RowDialect {
+  readonly keys: TableKeys;
+  /** What a write may put in `column`, of a type a state may hold; nothing of any other. */
+  readonly definitionOf: (column: Column) => FieldDefinition | undefined;
+  /** What the change log keeps of the row `named` holds, of the keys among them. */
+  readonly imageOf: (named: Named) => Readonly<Record<string, string>>;
+  /** What the row holds of `columns`: nothing of no row, or of no value a row could hold. */
+  readonly read: (
+    named: Named,
+    columns: readonly string[],
+  ) => Promise<Readonly<Record<string, unknown>> | undefined>;
+  /** Writes the row, as `RowWrite` says it came to; a fault of anything else. */
+  readonly write: (named: Named, update: RowUpdate) => Promise<RowWrite>;
+}
 
 /** The value of a column of `C`, of a state that may bind it: nothing of one it may not. */
 type Bindable<C> = C extends {
@@ -70,7 +79,10 @@ type Bindable<C> = C extends {
       | 'PgSmallInt'
       | 'PgText'
       | 'PgUUID'
-      | 'PgVarchar';
+      | 'PgVarchar'
+      | 'SQLiteBoolean'
+      | 'SQLiteInteger'
+      | 'SQLiteText';
     readonly data: infer T extends Value;
     readonly generated: undefined;
     readonly identity: undefined;
@@ -150,7 +162,7 @@ function isDriverValue(value: unknown): boolean {
 }
 
 /** The columns `condition` names of `table`, each with the value a statement runs with. */
-function namedBy(name: string, table: PgTable, condition: unknown): Named {
+function namedBy(name: string, table: Table, condition: unknown): Named {
   const equalities = equalitiesIn(condition);
   if (equalities === undefined) {
     throw refused(
@@ -178,21 +190,26 @@ function namedBy(name: string, table: PgTable, condition: unknown): Named {
   return new Map([...named].toSorted(([one], [other]) => one.localeCompare(other)));
 }
 
+/** The name of a column an index holds; nothing of an expression. */
+function indexedName(column: unknown): string | undefined {
+  if (typeof column !== 'object' || column === null || is(column, SQL)) return undefined;
+  const name: unknown = Reflect.get(column, 'name');
+  return typeof name === 'string' ? name : undefined;
+}
+
 /**
- * The groups of columns of `table` that name one row whatever else it holds: a primary key, a unique
- * column or constraint, a unique index — of no condition of its own, and of no expression.
+ * The groups of columns a table declares that name one row whatever else it holds: a primary key, a
+ * unique column or constraint, a unique index — of no condition of its own, and of no expression.
  */
-function keyGroupsOf(table: PgTable): readonly (readonly string[])[] {
-  const { columns, indexes, primaryKeys, uniqueConstraints } = getTableConfig(table);
+function keyGroupsOf(keys: TableKeys): readonly (readonly string[])[] {
+  const { columns, indexes, primaryKeys, uniqueConstraints } = keys;
   const groups: (readonly string[])[] = [
     ...columns.filter((column) => column.primary || column.isUnique).map(({ name }) => [name]),
     ...primaryKeys.map((key) => key.columns.map(({ name }) => name)),
     ...uniqueConstraints.map((unique) => unique.columns.map(({ name }) => name)),
   ];
   for (const { config } of indexes) {
-    const names = config.columns.map((column) =>
-      is(column, SQL) ? undefined : (column as IndexedColumn).name,
-    );
+    const names = config.columns.map((column) => indexedName(column));
     if (config.unique && config.where === undefined && !names.includes(undefined)) {
       groups.push(names as readonly string[]);
     }
@@ -200,50 +217,31 @@ function keyGroupsOf(table: PgTable): readonly (readonly string[])[] {
   return groups;
 }
 
-/** What a write may put in `column`, of a type a state may hold; nothing of any other. */
-function definitionOf(column: PgColumn): FieldDefinition | undefined {
-  switch (column.columnType) {
-    case 'PgBoolean': {
-      return boolean();
-    }
-    case 'PgInteger':
-    case 'PgSmallInt': {
-      return integer(INTEGERS[column.columnType]);
-    }
-    case 'PgEnumColumn':
-    case 'PgEnumObjectColumn':
-    case 'PgText':
-    case 'PgUUID':
-    case 'PgVarchar': {
-      return text();
-    }
-    default: {
-      return undefined;
-    }
-  }
-}
-
 /** Why no state binds `column`, the schema's `field`, or nothing where one may. */
-function whyNotBound(field: string, column: PgColumn): string | undefined {
+function whyNotBound(dialect: RowDialect, field: string, column: Column): string | undefined {
   if (!isFieldName(field)) {
     return 'a binding names a column by a letter, then letters, digits or _';
   }
   if (column.generated !== undefined || column.generatedIdentity !== undefined) {
-    return 'PostgreSQL generates it, and takes no write';
+    return 'the database generates it, and takes no write';
   }
   if (!column.notNull) {
     return 'it may hold NULL, which no state holds';
   }
-  return definitionOf(column) === undefined
+  return dialect.definitionOf(column) === undefined
     ? `a state holds text, a whole number or a boolean, and no ${column.columnType}`
     : undefined;
 }
 
 /** The columns a state may bind, by the names the schema gives them. */
-function fieldsOf(columns: Readonly<Record<string, PgColumn>>): Readonly<Record<string, RowField>> {
+function fieldsOf(
+  dialect: RowDialect,
+  columns: Readonly<Record<string, Column>>,
+): Readonly<Record<string, RowField>> {
   const fields: Record<string, RowField> = {};
   for (const [field, column] of Object.entries(columns)) {
-    const definition = whyNotBound(field, column) === undefined ? definitionOf(column) : undefined;
+    const bound = whyNotBound(dialect, field, column) === undefined;
+    const definition = bound ? dialect.definitionOf(column) : undefined;
     if (definition !== undefined) {
       fields[field] = { column: column.name, definition, labels: column.enumValues };
     }
@@ -251,111 +249,46 @@ function fieldsOf(columns: Readonly<Record<string, PgColumn>>): Readonly<Record<
   return Object.freeze(fields);
 }
 
-/** The log's image of the row `named` holds: each key among them, as the log keeps it. */
-function imageOf(named: Named, keys: readonly KeyColumn[]): Readonly<Record<string, string>> {
-  const image: Record<string, string> = {};
-  for (const key of keys) {
-    const written = named.has(key.column) ? valueText(key.kind, named.get(key.column)) : undefined;
-    if (written !== undefined) image[key.field] = keyDigest(written);
-  }
-  return Object.freeze(image);
+/** Whether a column's `value` is one a state may hold: SQLite keeps any value in any column. */
+function isValue(value: unknown): value is Value {
+  return ['boolean', 'number', 'string'].includes(typeof value);
 }
 
-/** Whether `error` is the database's refusal of data, which no row of it could hold. */
-function isOfData(error: unknown): boolean {
-  return String(codeOf(error)).startsWith(SQLSTATE.data);
-}
-
-/**
- * What a write that failed with `error` became, where sending it again would answer the same; a
- * fault of anything else, which the page sends again.
- */
-function writeRefusedBy(error: unknown): RowWrite {
-  const code = String(codeOf(error));
-  if (code === SQLSTATE.unique) return 'taken';
-  if (code === SQLSTATE.privilege) return 'denied';
-  if (code === SQLSTATE.raised || SQLSTATE.classes.some((kind) => code.startsWith(kind))) {
-    return 'invalid';
-  }
-  throw error;
-}
-
-/** What reads and writes the rows of one table. */
-interface RowAccess {
-  readonly connected: () => Queryable;
-  readonly fields: Readonly<Record<string, RowField>>;
-  readonly keys: readonly KeyColumn[];
-  readonly relation: string;
-}
-
-/** The condition `named` as a statement writes it, of the parameters from `$first` on. */
-function matching(named: Named, first: number): string {
-  const columns = [...named.keys()];
-  return columns.map((column, at) => `${quoted(column)} = $${String(first + at)}`).join(' AND ');
-}
-
-/** The name in the table of the column a state binds as `field`. */
-function columnOf({ fields }: RowAccess, field: string): string {
-  return fields[field]?.column ?? field;
-}
-
-/** What the row `named` holds of `asked`: nothing of no row, or of no value a row could hold. */
-async function rowRead(
-  access: RowAccess,
+/** The row `named` holds, of the table's `columns`, as `dialect` reads and writes it. */
+function boundRow(
+  dialect: RowDialect,
+  columns: Readonly<Record<string, Column>>,
   named: Named,
-  asked: readonly string[],
-): Promise<Readonly<Record<string, Value>> | undefined> {
-  const columns = asked.map((field) => quoted(columnOf(access, field))).join(', ');
-  const statement = `SELECT ${columns} FROM ${access.relation} WHERE ${matching(named, 1)}`;
-  let rows: readonly unknown[];
-  try {
-    ({ rows } = await access.connected().query(statement, [...named.values()]));
-  } catch (error) {
-    if (isOfData(error)) return;
-    throw error;
-  }
-  const [row] = rows as readonly (Readonly<Record<string, Value>> | undefined)[];
-  if (row === undefined) return;
-  return Object.fromEntries(
-    asked.map((field) => [field, row[columnOf(access, field)]] as [string, Value]),
-  );
-}
-
-/**
- * Writes `value` to `field` of the row `named`, where it holds `held` there, if given: as its text,
- * of no collation, which may find what another writer left equal to it.
- */
-async function rowWrite(
-  access: RowAccess,
-  named: Named,
-  { field, held, value }: { readonly field: string; readonly held?: Value; readonly value: Value },
-): Promise<RowWrite> {
-  const column = quoted(columnOf(access, field));
-  const values = [value, ...named.values()];
-  const guard =
-    held === undefined
-      ? ''
-      : ` AND ${column}::pg_catalog.text COLLATE pg_catalog."C" = $${String(values.length + 1)}`;
-  const statement = `UPDATE ${access.relation} SET ${column} = $1 WHERE ${matching(named, 2)}${guard} RETURNING 1`;
-  try {
-    const { rows } = await access
-      .connected()
-      .query(statement, held === undefined ? values : [...values, String(held)]);
-    return rows.length > 0 ? 'written' : 'absent';
-  } catch (error) {
-    // A condition's own value may be what the database refuses, of which there is no row.
-    if (isOfData(error) && (await rowRead(access, named, [field])) === undefined) return 'absent';
-    return writeRefusedBy(error);
-  }
-}
-
-/** The row `named` holds, as `access` reads and writes it. */
-function boundRow(access: RowAccess, named: Named): BoundRow {
+): BoundRow {
+  const columnOf = (field: string): Column => {
+    const column = columns[field];
+    if (column === undefined) throw new TypeError(`\`${field}\` is no column of the row.`);
+    return column;
+  };
   return {
-    image: imageOf(named, access.keys),
-    read: async (asked) => rowRead(access, named, asked),
-    write: async (field, value, held) =>
-      rowWrite(access, named, { field, value, ...(held !== undefined && { held }) }),
+    image: dialect.imageOf(named),
+    read: async (asked) => {
+      const read = await dialect.read(
+        named,
+        asked.map((field) => columnOf(field).name),
+      );
+      if (read === undefined) return;
+      const values = new Map<string, Value>();
+      for (const field of asked) {
+        const column = columnOf(field);
+        const held = read[column.name];
+        if (isValue(held)) values.set(field, column.mapFromDriverValue(held) as Value);
+      }
+      return Object.fromEntries(values);
+    },
+    write: async (field, value, held) => {
+      const column = columnOf(field);
+      return dialect.write(named, {
+        column: column.name,
+        value: column.mapToDriverValue(value),
+        ...(held !== undefined && { held: column.mapToDriverValue(held) as Value }),
+      });
+    },
   };
 }
 
@@ -371,7 +304,8 @@ function refusedColumn(name: string, field: string, reason: string): PropertyDes
 
 /** A reference of each column of the row `id` a state may bind, of the table `name`. */
 function referencesOf(
-  columns: Readonly<Record<string, PgColumn>>,
+  dialect: RowDialect,
+  columns: Readonly<Record<string, Column>>,
   {
     id,
     name,
@@ -388,7 +322,7 @@ function referencesOf(
   for (const [field, column] of Object.entries(columns)) {
     const why = named.has(column.name)
       ? 'it names the row: a write to it would leave the state no row to follow'
-      : whyNotBound(field, column);
+      : whyNotBound(dialect, field, column);
     if (why === undefined) {
       const reference: FieldRef = { [REFERENCE]: true, field, id, kind: 'field', row, table: name };
       references[field] = Object.freeze(reference);
@@ -399,19 +333,12 @@ function referencesOf(
   return Object.freeze(references);
 }
 
-/** The rows of `table`, of the keys `keys`, a state may bind, through what `connected` answers. */
-export function rowsOf(
-  table: PgTable,
-  keys: readonly KeyColumn[],
-  connected: () => Queryable,
-): TableRows<unknown> {
-  const columns = getTableColumns(table) as Readonly<Record<string, PgColumn>>;
-  const fields = fieldsOf(columns);
-  const groups = keyGroupsOf(table);
-  const { name: relation, schema = 'public' } = getTableConfig(table);
-  const access = { connected, fields, keys, relation: qualified({ name: relation, schema }) };
+/** The rows of `table` a state may bind, as `dialect` reads and writes them. */
+export function rowsOf(table: Table, dialect: RowDialect): TableRows<unknown> {
+  const columns: Readonly<Record<string, Column>> = getTableColumns(table);
+  const groups = keyGroupsOf(dialect.keys);
   return Object.freeze({
-    fields,
+    fields: fieldsOf(dialect, columns),
     where: (name: string, condition: unknown) => {
       const named = namedBy(name, table, condition);
       if (groups.every((group) => group.some((column) => !named.has(column)))) {
@@ -420,10 +347,10 @@ export function rowsOf(
           'the columns of the condition hold no key of the table whole: a primary key, a unique column or constraint, or a unique index of no condition and no expression',
         );
       }
-      const row = boundRow(access, named);
+      const row = boundRow(dialect, columns, named);
       // Of the table's name in the database: two stores may each hold this relation and this key.
       const id = digest(['row', name, [...named].map(([key, value]) => [key, String(value)])]);
-      return referencesOf(columns, { id, name, named, row });
+      return referencesOf(dialect, columns, { id, name, named, row });
     },
   });
 }
