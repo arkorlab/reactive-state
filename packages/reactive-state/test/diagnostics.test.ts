@@ -1,6 +1,6 @@
 import { eq } from 'drizzle-orm';
 import { pgTable, text } from 'drizzle-orm/pg-core';
-import { afterEach, describe, expect, it, onTestFinished, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import { Dependencies } from '../src/authority/dependencies.ts';
 import { Diagnostics, diagnosticsEveryOf } from '../src/authority/diagnostics.ts';
@@ -299,25 +299,33 @@ describe('the report of what the authority counts', () => {
     expect(reads).toStrictEqual({ tasks: { keyed: 0, whole: 1 } });
   });
 
-  it('writes no report in a render, of a read by rows its next statement reads whole', async () => {
-    const info = vi.spyOn(console, 'info').mockImplementation(() => {
-      // Asserted below, kept out of the output.
+  describe('a render', () => {
+    let render: Awaited<ReturnType<typeof engineOf>>['render'];
+    let info: ReturnType<typeof reporting>['info'];
+
+    // Database startup and capture installation have their own setup lifecycle.
+    beforeEach(async () => {
+      info = vi.spyOn(console, 'info').mockImplementation(() => {
+        // Asserted below, kept out of the output.
+      });
+      const setup = await openedWith(schema, DDL);
+      ({ render } = await engineOf(
+        setup,
+        async (_props, $) => {
+          await setup.orm.select().from(tasks).where(eq(tasks.id, 't1'));
+          await setup.orm.select().from(tasks);
+          return $.h('p', null, 'read');
+        },
+        {},
+        { diagnosticsEveryMs: 60_000 },
+      ));
     });
-    const setup = await openedWith(schema, DDL);
-    const { render } = await engineOf(
-      setup,
-      async (_props, $) => {
-        await setup.orm.select().from(tasks).where(eq(tasks.id, 't1'));
-        await setup.orm.select().from(tasks);
-        return $.h('p', null, 'read');
-      },
-      {},
-      { diagnosticsEveryMs: 60_000 },
-    );
 
-    await render();
+    it('writes no report in a render, of a read by rows its next statement reads whole', async () => {
+      await render();
 
-    expect(info).toHaveBeenCalledTimes(1);
-    expect(info.mock.lastCall?.[0]).toContain('"keyed":1,"whole":1');
+      expect(info).toHaveBeenCalledTimes(1);
+      expect(info.mock.lastCall?.[0]).toContain('"keyed":1,"whole":1');
+    });
   });
 });
