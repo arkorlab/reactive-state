@@ -25,7 +25,7 @@ import {
   tablesNamed,
 } from './sources.ts';
 import { holdsKind } from './values.ts';
-import { type Conditions, conditionsOf, readsAlone, type Term } from './where.ts';
+import { type Conditions, conditionsOf, leadingWord, readsAlone, type Term } from './where.ts';
 import { refusalOf, writes } from './words.ts';
 
 /**
