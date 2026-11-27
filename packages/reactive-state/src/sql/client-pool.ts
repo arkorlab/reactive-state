@@ -263,8 +263,7 @@ function tracked<C extends PoolConnection>(connection: C, plans: Plans, checkedO
       return sessionRefused(first, rest, text);
     }
     const args = [first, ...rest];
-    const sent = textOf(first);
-    if (checkedOut && typeof sent === 'string' && endsTransaction(sent)) writes?.endedUnseen();
+    if (checkedOut && typeof text === 'string' && endsTransaction(text)) writes?.endedUnseen();
     return sentToPostgres('query', args, () => outside('query', args), writes);
   };
   const checkOut = async (args: readonly unknown[]): Promise<PoolConnection> =>
