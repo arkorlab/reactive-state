@@ -7,8 +7,8 @@ import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { Engine } from '../src/authority/node-engine.ts';
 import { type ComponentProgram, PROTOCOL_VERSION, type ProgramUpdater } from '../src/program.ts';
-import { database } from '../src/server/index.ts';
-import { followDrizzle } from '../src/sql/index.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
+import { readingThrough, storeThrough } from './support/follow-store.ts';
 import { clientOf as frameClientOf } from './support/frames.ts';
 import {
   clientOf,
@@ -107,7 +107,7 @@ async function opened(options: Options = {}) {
   for (const statement of follow.captureSql()) await owner.query(statement);
   if (options.setup !== undefined) await owner.query(options.setup);
   follow.client(poolOf(name, { max: 6, ...options.pool }));
-  const db = database(follow.tables);
+  const db = followedDb(follow);
   const evaluations = { count: 0 };
   const component: ComponentProgram = {
     buildId: BUILD,
@@ -122,12 +122,14 @@ async function opened(options: Options = {}) {
     updaters,
     writable: [...KEYS],
   };
+  // The log, read through a connection of its own, of the server's own role and settings: a pool
+  // of one, given to a follow of the same tables, as a follow is given no `pg.Client`.
+  const reads = poolOf(name, { max: 1 });
   const engine = new Engine({
     buildId: BUILD,
-    database: db,
+    database: readingThrough(db, { sql: () => storeThrough(followDrizzle(schema), reads) }),
     externalPollMs: 60_000,
     programs: [component],
-    stores: { sql: follow.store(await clientOf(name)) },
     ...(options.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
   });
   onTestFinished(async () => {

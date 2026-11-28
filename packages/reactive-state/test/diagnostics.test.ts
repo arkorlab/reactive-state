@@ -4,12 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 
 import { Dependencies } from '../src/authority/dependencies.ts';
 import { Diagnostics, diagnosticsEveryOf } from '../src/authority/diagnostics.ts';
-import type { ExternalStore } from '../src/authority/external.ts';
 import { Engine } from '../src/authority/index.ts';
 import { type ComponentProgram, PROTOCOL_VERSION } from '../src/program.ts';
 import { tableReads } from '../src/server/context.ts';
-import { database, table, text as textField } from '../src/server/schema.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
+import { logStore } from './support/follow-store.ts';
+import { itemsReadThrough } from './support/followed-items.ts';
 
 const tasks = pgTable('tasks', { id: text().primaryKey(), title: text() });
 const schema = { tasks };
@@ -88,16 +88,10 @@ describe('what the authority counts of what it follows', { timeout: 20_000 }, ()
   });
 
   it('counts the reads of a render every visitor shares', async () => {
-    const items = table({ name: textField() }, { external: 'remote' });
-    const store: ExternalStore = {
-      changes: () => Promise.resolve({ changes: [], epoch: 'e', floor: 0, head: 0 }),
-      count: () => Promise.resolve(0),
-      find: () => Promise.resolve([]),
-      get: () => Promise.resolve(null),
-    };
+    const store = logStore(() => Promise.resolve({ changes: [], epoch: 'e', floor: 0, head: 0 }));
     const engine = new Engine({
       buildId: 'b',
-      database: database({ items }),
+      database: itemsReadThrough(store),
       programs: [SHARED],
       routes: [
         {
@@ -111,7 +105,6 @@ describe('what the authority counts of what it follows', { timeout: 20_000 }, ()
           shared: true,
         },
       ],
-      stores: { remote: store },
     });
     onTestFinished(async () => {
       await engine.close();

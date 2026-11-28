@@ -16,12 +16,12 @@ import type { SqliteKeyColumn } from './keys.ts';
  * which triggers made before it wrote, or of an insert or an update of a table of a unique index
  * whose rows the triggers do not log as met, which a `REPLACE` may delete other rows by, unlogged —
  * names the table alone (`installed.ts`). Its epoch is the log's and a digest of the schema
- * (`sqlite_schema`), read once a second at most: a log read under another schema is another one,
- * which renders again whatever read its tables, and a plan asked before is asked again. While a
- * table's triggers are not those `captureSql()` makes, each read of the log is of another epoch:
- * whatever read the store's tables renders again each time. Its records are read by the
- * application's own SQL, whose plan says what a render read (`client.ts`); `db.<table>` reads none
- * of them.
+ * (`sqlite_schema`), read once in ten seconds at most: a log read under another schema is another
+ * one, which renders again whatever read its tables, and a plan asked before is asked again. While a
+ * table's triggers are not those `captureSql()` makes, the schema is read once a second, and each
+ * read of it is of another epoch: whatever read the store's tables renders again each time. Its
+ * records are read by the application's own SQL, whose plan says what a render read (`client.ts`);
+ * `db.<table>` reads none of them.
  */
 
 /**
@@ -37,9 +37,14 @@ const LOG = '_rs_changes';
 const META = '_rs_meta';
 /** The id of an entry of a row: none of the log's tables is read by its records' ids. */
 const ROW = 'row';
-/** How often the schema's digest is read at most, and of how many turns' entries a read folds. */
-/** How often the schema's digest is read at most, and after how long a `PRAGMA` D1 answered not is asked again. */
-const SCHEMA = { readMs: 1000, retryMs: 60_000 } as const;
+/**
+ * How often the schema is read at most: while each followed table's triggers are those
+ * `captureSql()` makes, and while one's are others, of which each read is another epoch; and after
+ * how long a `PRAGMA` D1 answered not is asked again. D1 counts a read of the schema as rows read of
+ * each row it holds, however few it answers.
+ */
+const SCHEMA = { settledMs: 10_000, unsettledMs: 1000, retryMs: 60_000 } as const;
+/** Of how many turns' entries a read folds. */
 const FOLD = { turns: 10 } as const;
 const HEX_RADIX = 16;
 
@@ -50,7 +55,11 @@ const HEX_RADIX = 16;
  * of more than `?4` entries, or more tables than a page holds, the floor is past the head.
  */
 const PAGE_SQL = `WITH h AS (SELECT coalesce((SELECT seq FROM sqlite_sequence WHERE name = '${LOG}'), 0) AS head), f AS (SELECT (SELECT head FROM h) - ?1 > ?3 AS far, (SELECT head FROM h) - ?1 > ?4 AS farther), r AS (SELECT seq, tbl, id, before, after FROM ${LOG} WHERE seq > ?1 AND NOT (SELECT far FROM f) ORDER BY seq LIMIT ?2), d AS (SELECT max(seq) AS seq, tbl, '' AS id, NULL AS before, NULL AS after FROM ${LOG} WHERE seq > ?1 AND (SELECT far FROM f) AND NOT (SELECT farther FROM f) GROUP BY tbl), o AS (SELECT (SELECT farther FROM f) OR (SELECT count(*) FROM d) > ?2 AS over), m AS (SELECT head, CASE WHEN (SELECT over FROM o) THEN head + 1 ELSE coalesce((SELECT min(seq) FROM ${LOG}), CASE WHEN head = 0 THEN 0 ELSE head + 1 END) END AS floor, (SELECT value FROM ${META} WHERE key = 'epoch') AS epoch FROM h), c AS (SELECT * FROM r UNION ALL SELECT * FROM d WHERE NOT (SELECT over FROM o)) SELECT c.seq, c.tbl, c.id, c.before, c.after, m.head, m.floor, m.epoch FROM m LEFT JOIN c ON 1 ORDER BY c.seq`;
-/** The schema, whose digest the epoch holds, and whose indexes say which tables are unique. */
+/**
+ * The schema, whose digest the epoch holds, and whose indexes say which tables are unique: the whole
+ * of it, as a plan of the followed tables may stand on a table nothing follows — SQLite leaves out
+ * a left join of a table its unique key matches one row of, whose columns nothing else reads.
+ */
 const SCHEMA_SQL = 'SELECT rowid, type, name, tbl_name, sql FROM sqlite_schema ORDER BY type, name';
 
 /** A log number SQLite answered, as a safe whole number. */
@@ -130,7 +139,7 @@ async function digestOf(text: string): Promise<string> {
 }
 
 /** What `db.<table>` is answered for a table read by SQL: a fault, which names the way to read it. */
-function readBySql(table: string): Promise<never> {
+export function readBySql(table: string): Promise<never> {
   return Promise.reject(
     new Error(
       `${table} is read by SQL: query it with the application's Drizzle, whose plan says what a render read, not through \`db.${table}\`.`,
@@ -183,7 +192,8 @@ export function sqliteStore(binding: D1Binding, followed: FollowedSqliteStore): 
     changes: async (since, limit): Promise<ExternalChanges> => {
       const far = limit * TAIL.pagesAtOnce;
       const page = prepare(PAGE_SQL).bind(since, limit, far, far * FOLD.turns);
-      const stale = schema === undefined || Date.now() - schema.at >= SCHEMA.readMs;
+      const every = installed.untriggered.size > 0 ? SCHEMA.unsettledMs : SCHEMA.settledMs;
+      const stale = schema === undefined || Date.now() - schema.at >= every;
       const answers = await binding.batch(stale ? [page, prepare(SCHEMA_SQL)] : [page]);
       if (stale) await schemaRead(rowsOf(answers[1]));
       const rows = rowsOf(answers[0]);
@@ -195,7 +205,7 @@ export function sqliteStore(binding: D1Binding, followed: FollowedSqliteStore): 
         );
       }
       // Another epoch once a read of the schema finds triggers other than `captureSql()`'s: once a
-      // second at most, as the schema is read, not at each read of the log.
+      // second at most, as the schema is read then, not at each read of the log.
       if (stale && installed.untriggered.size > 0) untriggeredReads += 1;
       const untriggered = installed.untriggered.size > 0 ? `:u${String(untriggeredReads)}` : '';
       const changes = rows.flatMap((row) => {

@@ -23,6 +23,7 @@ import type { Json, RenderScope } from '../src/program.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
+import { followInternals, ownStore, storeThrough } from './support/follow-store.ts';
 
 /**
  * A render of the application's Drizzle queries is rendered again for the rows its plan's
@@ -677,7 +678,7 @@ describe(
       for (const statement of follow.captureSql()) {
         await setup.pg.query(statement);
       }
-      const store = follow.store(setup.pg);
+      const store = storeThrough(follow, setup.pg);
       const { head } = await store.changes(0, 10);
 
       await setup.pg.query("INSERT INTO tallies VALUES ('a', 1, 'x', false)");
@@ -819,7 +820,7 @@ describe(
 
     it('logs the rows of a table whose key was dropped after its triggers were made, of the table alone', async () => {
       const setup = await opened();
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const { head } = await store.changes(0, 10);
       // A migration the host ran no `captureSql()` after: the triggers still name the column.
       await setup.pg.query('DROP INDEX tasks_big');
@@ -929,7 +930,7 @@ describe(
         followDrizzle(schema, { store: 's'.repeat(51) }),
         followDrizzle(schema, { store: 'x0123abcd' }),
       ]
-        .flatMap((follow) => Object.keys(follow.tables))
+        .flatMap((follow) => Object.keys(followInternals(follow).tables))
         .filter((name) => name.startsWith('reactive_state_schema'));
 
       expect(new Set(tables).size).toBe(5);
@@ -1730,20 +1731,22 @@ describe(
         SET ROLE reader;
       `);
 
-      await expect(setup.follow.store(setup.pg).changes(0, 10)).resolves.toBeDefined();
+      await expect(ownStore(setup.follow).changes(0, 10)).resolves.toBeDefined();
       await expect(setup.follow.prune(setup.pg, Date.now())).resolves.toBeUndefined();
     });
 
     it("follows the log on where the schema's digest cannot be read, of every read again", async () => {
       const setup = await opened();
+      // Of PGlite's shape, as a follow is given a connection: its `exec` is PGlite's.
       const failing = {
+        exec: async (statement: string) => setup.pg.exec(statement),
         query: (statement: string, values: unknown[]) => {
           return statement.includes('AS "digest"')
             ? Promise.reject(new Error('canceling statement due to statement timeout'))
             : setup.pg.query(statement, values);
         },
       };
-      const store = setup.follow.store(failing);
+      const store = storeThrough(setup.follow, failing);
       const failed = vi.spyOn(console, 'error').mockImplementation(() => {
         // What the store logs of a digest it could not read, kept out of the output.
       });
@@ -1769,7 +1772,7 @@ describe(
         SET ROLE reader;
       `);
 
-      await expect(setup.follow.store(setup.pg).changes(0, 10)).resolves.toBeDefined();
+      await expect(ownStore(setup.follow).changes(0, 10)).resolves.toBeDefined();
       await expect(setup.follow.prune(setup.pg, Date.now())).resolves.toBeUndefined();
     });
 
@@ -2304,7 +2307,7 @@ describe(
 
     it("keeps the count of the schema's changes as the log is pruned", async () => {
       const setup = await opened();
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       await setup.pg.query('CREATE TABLE pruned (id text)');
       const before = await store.changes(0, 10);
 
@@ -2359,7 +2362,7 @@ describe(
 
     it('reads the table whole for an entry whose row lacks a key the table has now', async () => {
       const setup = await opened();
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const { head } = await store.changes(0, 10);
       // An entry a trigger wrote before `project_id` was a key of the table.
       await setup.pg.query(
@@ -2378,10 +2381,9 @@ describe(
         const rows = await setup.orm.execute(sql`SELECT title FROM chosen_tasks`);
         return $.h('p', null, JSON.stringify(rows.rows));
       });
-      const { engine, render } = await engineOf(
-        { follow: followDrizzle(schema), pg: setup.pg },
-        evaluate,
-      );
+      const other = followDrizzle(schema);
+      other.client(setup.pg);
+      const { engine, render } = await engineOf({ follow: other }, evaluate);
       await render();
       await setup.pg.query(
         "CREATE OR REPLACE VIEW chosen_tasks AS SELECT * FROM tasks WHERE project_id = 'p2'",
@@ -2449,7 +2451,7 @@ describe(
 
     it('reads a log further behind than a turn reaches by the tables its entries changed', async () => {
       const setup = await opened();
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const { head } = await store.changes(0, 10);
       const rows = Array.from({ length: PAST_LOGGED_ROWS - 1 }, (_, at) => {
         return {

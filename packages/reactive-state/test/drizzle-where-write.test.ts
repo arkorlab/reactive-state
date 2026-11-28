@@ -18,8 +18,15 @@ import type { RowChange } from '../src/authority/dependencies.ts';
 import type { ExternalStore } from '../src/authority/external.ts';
 import type { Json, ProgramUpdater, RenderScope, Value } from '../src/program.ts';
 import { database, forbidden, table, text as textField } from '../src/server/index.ts';
-import { followDrizzle } from '../src/sql/index.ts';
-import { COMPONENT, engineOf, openedWith, type ProgramOptions } from './support/drizzle.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
+import {
+  COMPONENT,
+  engineOf,
+  type Following,
+  openedWith,
+  type ProgramOptions,
+} from './support/drizzle.ts';
+import { followInternals, ownStore } from './support/follow-store.ts';
 import { clientOf } from './support/frames.ts';
 
 /**
@@ -134,11 +141,11 @@ type Opened = Awaited<ReturnType<typeof opened>>;
 
 /** The row of `id` as a component binds it, of the project `p1`, for alice alone. */
 async function editing(
-  setup: Pick<Opened, 'follow' | 'orm' | 'pg'>,
+  setup: Pick<Following, 'store'> & Pick<Opened, 'follow' | 'orm' | 'pg'>,
   options: ProgramOptions & { readonly row?: () => string } = {},
 ) {
   const { orm } = setup;
-  const db = database(setup.follow.tables);
+  const db = followedDb(setup.follow);
   const evaluate = vi.fn(async (_props: Readonly<Record<string, Json>>, $: RenderScope) => {
     const access = await orm
       .select({ userId: members.userId })
@@ -230,50 +237,44 @@ function racing({ pg }: Pick<Opened, 'pg'>, times: number, before: () => Promise
   });
 }
 
-/** `follow` of `setup`, of a store whose log answers no read once `hold` is called. */
+/** The store of `setup`'s log, of the follow's own, which answers no read once `hold` is called. */
 function heldLog(setup: Opened) {
   const { promise: released, resolve: release } = Promise.withResolvers<undefined>();
   let held = false;
   onTestFinished(() => {
     release(undefined);
   });
-  const follow = {
-    ...setup.follow,
-    store: (client: Parameters<typeof setup.follow.store>[0]): ExternalStore => {
-      const store = setup.follow.store(client);
-      return {
-        ...store,
-        changes: async (...args) => {
-          if (held) await released;
-          return store.changes(...args);
-        },
-      };
-    },
+  const store = (): ExternalStore => {
+    const own = ownStore(setup.follow);
+    return {
+      ...own,
+      changes: async (...args) => {
+        if (held) await released;
+        return own.changes(...args);
+      },
+    };
   };
   return {
-    follow,
     hold: () => {
       held = true;
     },
+    store,
   };
 }
 
-/** `setup` of a store whose log's reads `changes` counts. */
+/** `setup` of a store whose log's reads `changes` counts, of the follow's own. */
 function counted(setup: Opened, changes: () => void) {
-  const follow = {
-    ...setup.follow,
-    store: (client: Parameters<typeof setup.follow.store>[0]): ExternalStore => {
-      const store = setup.follow.store(client);
-      return {
-        ...store,
-        changes: async (...args) => {
-          changes();
-          return store.changes(...args);
-        },
-      };
-    },
+  const store = (): ExternalStore => {
+    const own = ownStore(setup.follow);
+    return {
+      ...own,
+      changes: async (...args) => {
+        changes();
+        return own.changes(...args);
+      },
+    };
   };
-  return { ...setup, follow };
+  return { ...setup, store };
 }
 
 /** A PGlite of one issue, its `label` of the collation `collation`, where one is given. */
@@ -302,7 +303,7 @@ async function applied(
   key: 'code' | 'label' | 'owner' | 'rank' | 'status',
   apply: (current: never) => Value,
 ) {
-  const db = database(setup.follow.tables);
+  const db = followedDb(setup.follow);
   const { engine, rendered, session } = await engineOf(
     setup,
     (_props, $) => {
@@ -390,7 +391,7 @@ describe('a write to a state bound to a row', () => {
     async () => {
       const setup = await opened();
       const log = heldLog(setup);
-      const { rendered, stateOf, write } = await editing({ ...setup, follow: log.follow });
+      const { rendered, stateOf, write } = await editing({ ...setup, store: log.store });
       const { field } = await stateOf('title');
       log.hold();
 
@@ -427,8 +428,9 @@ describe('a write to a state bound to a row', () => {
       const setup = await opened();
       const changes = vi.fn();
       const notes = table({ title: textField() });
+      // No public form mixes the two: declared of the follow's tables, and given its store.
       const db = database(
-        { ...setup.follow.tables, notes },
+        { ...followInternals(setup.follow).tables, notes },
         { seed: { notes: { n1: { title: 'Kept' } } } },
       );
       const { engine, rendered, session } = await engineOf(
@@ -607,7 +609,7 @@ describe('a write to a state bound to a row', () => {
     async () => {
       const setup = await opened();
       const log = heldLog(setup);
-      const { add, rendered, stateOf } = await editing({ ...setup, follow: log.follow });
+      const { add, rendered, stateOf } = await editing({ ...setup, store: log.store });
       const { field } = await stateOf('estimate');
       log.hold();
       await setup.pg.query("UPDATE tasks SET estimate = 7 WHERE id = 't1'");
@@ -772,7 +774,7 @@ describe('a write to a state bound to a row', () => {
         { notes: keyedNotes },
         'CREATE TABLE notes (id uuid PRIMARY KEY, body text NOT NULL);',
       );
-      const db = database(setup.follow.tables);
+      const db = followedDb(setup.follow);
       const { engine, rendered, session } = await engineOf(
         setup,
         (_props, $) => {
@@ -809,9 +811,9 @@ describe('a write to a state bound to a row', () => {
       const setup = await issueOpened();
       const follow = followDrizzle({ issues: looseIssues });
       follow.client(setup.pg);
-      const db = database(follow.tables);
+      const db = followedDb(follow);
       const { engine, rendered, session } = await engineOf(
-        { follow, pg: setup.pg },
+        { follow },
         (_props, $) => {
           const { status } = db.issues.where(eq(looseIssues.id, 'i1'));
           return $.client({ props: {}, slots: {}, states: { status } });

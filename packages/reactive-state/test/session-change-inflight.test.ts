@@ -1,13 +1,14 @@
 import { PGlite } from '@electric-sql/pglite';
 import { PGLiteSocketServer } from '@electric-sql/pglite-socket';
 import { pgTable, text } from 'drizzle-orm/pg-core';
-import { Client, Pool, type PoolClient, Query } from 'pg';
+import { Pool, type PoolClient, Query } from 'pg';
 import { describe, expect, it, onTestFinished } from 'vitest';
 
 import { type Json, type OperationCall } from '../src/program.ts';
 import { changeSession } from '../src/server/index.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { engineOf, openedWith } from './support/drizzle.ts';
+import { storeThrough } from './support/follow-store.ts';
 
 /**
  * A session change asked while a statement or a transaction of the application's own tables is
@@ -62,17 +63,21 @@ async function pooled(max: number) {
   const port = Number(server.getServerConn().split(':').at(-1));
   const config = { database: 'postgres', host: '127.0.0.1', port, ssl: false, user: 'postgres' };
   const connections = new Pool({ ...config, max });
-  const store = new Client(config);
-  await store.connect();
+  // The store's own connection, as `reactiveDb`'s on a server: a pool of one, as a follow is given
+  // no `pg.Client`.
+  const reads = new Pool({ ...config, max: 1 });
   const follow = followDrizzle({ tasks });
-  for (const statement of follow.captureSql()) await store.query(statement);
+  for (const statement of follow.captureSql()) await reads.query(statement);
   onTestFinished(async () => {
     await Promise.race([connections.end(), wait(LEAKED_MS)]);
-    await store.end();
+    await reads.end();
     await server.stop();
     await db.close();
   });
-  return { follow, pg: store, tracked: follow.client(connections) };
+  // The log, read through the store's own connection: by a follow of the same tables, given it.
+  const reader = followDrizzle({ tasks });
+  const store = () => storeThrough(reader, reads);
+  return { follow, pg: reads, store, tracked: follow.client(connections) };
 }
 
 /** An operation module over a pooled PGlite, and a way to run its operations. */

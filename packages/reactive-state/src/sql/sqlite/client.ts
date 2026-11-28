@@ -14,6 +14,7 @@ import {
   wheresOf,
   wheresTogether,
 } from './reads.ts';
+import { planSchemaSql } from './schema-read.ts';
 import { type StatementRead, statementRead } from './scopes.ts';
 import { READS_ONLY, sentBy, sentCall, sessionText } from './sent.ts';
 import {
@@ -88,9 +89,6 @@ interface Plan {
  * answered no `EXPLAIN`, or failed a batch of candidates, is asked none.
  */
 const LIMITS = { keptPlans: 1024, shownText: 80, unexplainedMs: 60_000 } as const;
-/** The schema's tables and indexes, by their root pages, and each table's own statement. */
-const SCHEMA_SQL =
-  "SELECT type, name, tbl_name, rootpage, sql FROM sqlite_schema WHERE type IN ('table', 'index')";
 /** How many answers of a plan's batch come before its tables' columns: `EXPLAIN`, the schema. */
 const PLAN_ANSWERS = 2;
 
@@ -253,7 +251,12 @@ class SqlitePlans {
     }
     const text = textOf(sql);
     const statement = (asking: string): D1Statement => binding.prepare(asking) as D1Statement;
-    const asked = [statement(`EXPLAIN ${sql}`).bind(...values), statement(SCHEMA_SQL)];
+    // The schema's tables and indexes, by their root pages, and the statements of the tables the
+    // statement names alone, which a collation and a virtual table are read of.
+    const asked = [
+      statement(`EXPLAIN ${sql}`).bind(...values),
+      statement(planSchemaSql(text.named)),
+    ];
     for (const table of text.named) {
       asked.push(statement(`PRAGMA table_info(${quoted(table)})`));
     }

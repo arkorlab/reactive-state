@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { ExternalTail, pollIntervalOf } from '../src/authority/external-tail.ts';
-import type { ExternalStore } from '../src/authority/external.ts';
-import { database, definitionOf, table, text } from '../src/server/schema.ts';
+import { logStore } from './support/follow-store.ts';
+import { itemTables } from './support/followed-items.ts';
 
 /**
  * How often an external store's log is read, as the host gives it: a wait a timer takes, or the
@@ -10,16 +10,10 @@ import { database, definitionOf, table, text } from '../src/server/schema.ts';
  * 1 ms instead, and each turn of a tail that waited so would find its read not due, and wait again.
  */
 
-const db = database({ items: table({ title: text() }, { external: 'remote' }) });
-const tables = definitionOf(db).tables;
+const tables = itemTables();
 
 /** A store no test reads: a tail is only made. */
-const STORE: ExternalStore = {
-  changes: () => Promise.reject(new Error('No log is read.')),
-  count: () => Promise.reject(new Error('No record is counted.')),
-  find: () => Promise.reject(new Error('No record is found.')),
-  get: () => Promise.reject(new Error('No record is read.')),
-};
+const STORE = logStore(() => Promise.reject(new Error('No log is read.')));
 
 /** A tail of `everyMs`, on Node: no host schedules its turns. */
 function tailOf(everyMs: number | undefined): ExternalTail {

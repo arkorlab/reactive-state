@@ -3,6 +3,7 @@ import type { Entry } from '../server/context.ts';
 import { checkValue, type DatabaseDefinition, isRecordId, type Table } from '../server/schema.ts';
 import { frozenJson } from './canonical.ts';
 import type { RowChange } from './dependencies.ts';
+import { storesBroughtBy } from './followed-stores.ts';
 import {
   entryOf,
   type Found,
@@ -112,24 +113,30 @@ async function withinDeadline<T>(pending: Promise<T>, ms: number): Promise<T> {
 }
 
 /**
- * The store each external table of `database` is read through, of `stores`: a fault where a table
- * names one the host gave none of, which no read of it could answer.
+ * The store each external table of `database` is read through: the host's, of `stores`, else the
+ * one a follow of the database brings (`followed-stores.ts`), made once — a fault of a follow given
+ * no connection. A fault, too, where a table names a store neither gave, which no read of it could
+ * answer.
  */
 export function storesOf(
   database: DatabaseDefinition,
   stores: ExternalStores = {},
 ): ReadonlyMap<string, ExternalStore> {
+  const brought = storesBroughtBy(database);
+  const made = new Map<string, ExternalStore>();
   const byTable = new Map<string, ExternalStore>();
   for (const [name, table] of database.tables) {
     if (table.external === undefined) {
       continue;
     }
-    const store = Object.hasOwn(stores, table.external) ? stores[table.external] : undefined;
+    const given = Object.hasOwn(stores, table.external) ? stores[table.external] : undefined;
+    const store = given ?? made.get(table.external) ?? brought?.get(table.external)?.();
     if (store === undefined) {
       throw new TypeError(
         `The table ${name} is read through the store \`${table.external}\`, which the authority's host gave none of: give it as \`stores.${table.external}\`.`,
       );
     }
+    made.set(table.external, store);
     byTable.set(name, store);
   }
   return byTable;

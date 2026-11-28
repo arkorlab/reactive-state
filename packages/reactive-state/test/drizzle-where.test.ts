@@ -18,7 +18,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { type FieldRef, isFieldRef } from '../src/program.ts';
 import { database, table, text as textField } from '../src/server/index.ts';
 import { isRecordId } from '../src/server/schema.ts';
-import { followDrizzle } from '../src/sql/index.ts';
+import { followDrizzle, followedDb } from '../src/sql/index.ts';
 
 /** A row's columns, and the keys that name one row: each of the ways a schema declares one. */
 const states = pgEnum('state', ['open', 'closed']);
@@ -118,7 +118,7 @@ const REFUSED = [
 
 /** The database of the schema's tables, as an application declares it. */
 function declared() {
-  return database(followDrizzle(schema).tables);
+  return followedDb(followDrizzle(schema));
 }
 
 /** `where` of a table whose type holds none, as a caller in JavaScript may call it. */
@@ -127,6 +127,12 @@ function whereOf(handle: unknown, condition: unknown): unknown {
     given: unknown,
   ) => unknown;
   return where(condition);
+}
+
+/** `ref` of a table whose type holds none, as a caller in JavaScript may call it. */
+function refOf(handle: unknown, id: string): unknown {
+  const ref = Reflect.get(handle as Record<string, unknown>, 'ref') as (given: string) => unknown;
+  return ref(id);
 }
 
 describe('db.<table>.where', () => {
@@ -230,6 +236,6 @@ describe('db.<table>.where', () => {
   });
 
   it('points `ref` of a followed table at `where`', () => {
-    expect(() => declared().tasks.ref(ID)).toThrow('db.tasks.where');
+    expect(() => refOf(declared().tasks, ID)).toThrow('db.tasks.where');
   });
 });

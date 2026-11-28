@@ -6,11 +6,11 @@ import { beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { rowChange } from '../../src/authority/row-writes.ts';
 import type { AuthorityObject } from '../../src/cloudflare/object.ts';
 import type { BoundRow, FieldRef } from '../../src/program.ts';
-import { database } from '../../src/server/index.ts';
-import { followDrizzle } from '../../src/sql/index.ts';
+import { followDrizzle, followedDb } from '../../src/sql/index.ts';
 import { clientOf } from '../support/frames.ts';
 import { rendered } from './d1-drizzle-render.ts';
 import {
+  connectRows,
   ROW_UPDATES,
   rowCased,
   rowGhosts,
@@ -20,11 +20,12 @@ import {
   rowsProgram,
   rowTasks,
 } from './d1-where-fixture.ts';
-import { type AuthorityStub, valueOf } from './helpers.ts';
+import { type AuthorityStub, inObject, valueOf } from './helpers.ts';
 
 /**
  * A state bound to a row of a table in D1, run in workerd: its read and its write, by what D1
- * itself answers, and a write through a Durable Object.
+ * itself answers, and a write through a Durable Object, whose constructor connects the follow to
+ * the D1 of its environment.
  */
 
 const db = env.REACTIVE_D1;
@@ -90,7 +91,11 @@ function firstNote() {
 }
 
 describe('a row of a table in D1', () => {
-  beforeEach(prepare);
+  beforeEach(async () => {
+    // Read outside any object: the test connects the follow, as an object's constructor does.
+    connectRows(env);
+    await prepare();
+  });
 
   it('reads what the row holds, a boolean as a boolean', async () => {
     const row = rowOf(firstTask().title);
@@ -168,7 +173,7 @@ describe('a row of a table in D1', () => {
   it('leaves a column the database holds not a fault, of a read as of a write', async () => {
     const follow = followDrizzle({ rowGhosts });
     follow.client(db);
-    const { ghost } = database(follow.tables).rowGhosts.where(eq(rowGhosts.id, 'n1'));
+    const { ghost } = followedDb(follow).rowGhosts.where(eq(rowGhosts.id, 'n1'));
 
     await expect(rowOf(ghost).read(['ghost'])).rejects.toThrow('no such column');
     await expect(rowOf(ghost).write('ghost', 'Boo')).rejects.toThrow('no such column');
@@ -177,7 +182,7 @@ describe('a row of a table in D1', () => {
   it('reads and writes a column the database spells in another case', async () => {
     const follow = followDrizzle({ rowCased });
     follow.client(db);
-    const row = rowOf(database(follow.tables).rowCased.where(eq(rowCased.id, 'c1')).title);
+    const row = rowOf(followedDb(follow).rowCased.where(eq(rowCased.id, 'c1')).title);
 
     await expect(row.read(['title', 'done'])).resolves.toStrictEqual({
       done: true,
@@ -328,5 +333,26 @@ describe('a state bound to a row in D1, through a Durable Object', () => {
     valueOf(await write('title', ROW_UPDATES.title, { value: 'Rewritten' }));
 
     await expect(runDurableObjectAlarm(stub)).resolves.toBeDefined();
+  });
+
+  it('connects the follow as its constructor runs, and arms no alarm as it starts', async () => {
+    // As a module's top level holds it, of no environment: no binding until a constructor runs.
+    connectRows({});
+    const { render, stateOf, stub } = authority();
+
+    await expect(rowOf(firstTask().title).read(['title'])).rejects.toThrow(
+      'The store `sql` reads and writes D1 through the binding that the function',
+    );
+
+    await stub.stats();
+
+    // A database of `reactiveDb`'s arms its prune alarm as its object starts; this one, none.
+    await expect(
+      inObject(stub, async (_object, state) => state.storage.getAlarm()),
+    ).resolves.toBeNull();
+
+    const { field } = await stateOf('title');
+
+    expect((await render()).frame.fields[field]).toBe('Write docs');
   });
 });

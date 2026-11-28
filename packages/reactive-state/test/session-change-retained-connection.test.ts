@@ -71,11 +71,9 @@ async function retained(operations: (held: PoolClient) => Readonly<Record<string
     await server.stop();
     await db.close();
   });
-  const { engine, session } = await engineOf(
-    { follow, pg: store },
-    (_props, $) => $.h('p', null, 'shown'),
-    { [MODULE]: operations(held) },
-  );
+  const { engine, session } = await engineOf({ follow }, (_props, $) => $.h('p', null, 'shown'), {
+    [MODULE]: operations(held),
+  });
   return { held, operate: async (name: string) => engine.operate(session, callOf(name)) };
 }
 

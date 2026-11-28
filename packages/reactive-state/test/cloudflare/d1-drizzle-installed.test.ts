@@ -5,8 +5,9 @@ import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqli
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalFollower } from '../../src/authority/external.ts';
-import { database, definitionOf } from '../../src/server/schema.ts';
-import { followDrizzle } from '../../src/sql/index.ts';
+import { definitionOf } from '../../src/server/schema.ts';
+import { followDrizzle, followedDb } from '../../src/sql/index.ts';
+import { ownStore, storeThrough } from '../support/follow-store.ts';
 import { bindingValue } from './d1-drizzle-binding.ts';
 import { faultsOf, rendered } from './d1-drizzle-render.ts';
 
@@ -71,7 +72,7 @@ const invitesWhole = sqliteTable(
   },
 );
 const follow = followDrizzle(schema);
-const tables = definitionOf(database(follow.tables)).tables;
+const tables = definitionOf(followedDb(follow)).tables;
 const db = env.REACTIVE_D1;
 
 /** `invites` made anew of two invitations of one account in `t1`, the second cancelled. */
@@ -93,13 +94,17 @@ async function invitations(
 ) {
   const own = followDrizzle({ invites: table });
   await db.batch([...statements, ...own.captureSql()].map((statement) => db.prepare(statement)));
-  const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
-  return { follower, orm: drizzle(own.client(db), { schema: { invites: table } }) };
+  const orm = drizzle(own.client(db), { schema: { invites: table } });
+  const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
+  return { follower, orm };
 }
 
-/** A follower of the store's log, read to its head. */
+/**
+ * A follower of the store's log, read to its head: through `db`, whatever binding a test gave
+ * `follow`, by a follow of the same tables given it.
+ */
 async function following() {
-  const follower = new ExternalFollower(follow.store(db), tables);
+  const follower = new ExternalFollower(storeThrough(followDrizzle(schema), db), tables);
   await follower.changed();
   return follower;
 }
@@ -214,7 +219,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const dependencies = await rendered(() =>
       orm.select({ id: shadowed.id }).from(shadowed).where(eq(shadowed.owner, 'p1')),
     );
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare("INSERT INTO shadowed (id, owner) VALUES (2, 'p2')").run();
@@ -237,7 +242,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     );
     const orm = drizzle(own.client(db), { schema: { codes } });
     const dependencies = await rendered(() => orm.select().from(codes).where(eq(codes.id, 1)));
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare("UPDATE OR REPLACE codes SET code = 'A' WHERE id = 2").run();
@@ -266,7 +271,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     );
     const orm = drizzle(own.client(db), { schema: { pairs } });
     const dependencies = await rendered(() => orm.select().from(pairs).where(eq(pairs.owner, 1)));
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     // Of `b` alone, which the trigger before the update reads not of the set `a`.
@@ -294,9 +299,10 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const dependencies = await rendered(() =>
       orm.select().from(plain).where(eq(plain.owner, 'p1')),
     );
+    // The log, read through a binding of its own, of a follow of the same tables given it.
     const follower = new ExternalFollower(
-      own.store(pragmaFailingOnce()),
-      definitionOf(database(own.tables)).tables,
+      storeThrough(followDrizzle({ plain }), pragmaFailingOnce()),
+      definitionOf(followedDb(own)).tables,
     );
     // Of no answer, each insert is of the table; a minute after, the indexes are asked again.
     await follower.changed();
@@ -385,7 +391,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const dependencies = await rendered(() =>
       orm.select({ id: norms.id }).from(norms).where(eq(norms.id, 1)),
     );
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare('INSERT OR REPLACE INTO norms (id, code) VALUES (2, NULL)').run();
@@ -421,10 +427,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
       const dependencies = await rendered(() =>
         orm.select().from(plain).where(eq(plain.owner, 'p1')),
       );
-      const follower = new ExternalFollower(
-        own.store(db),
-        definitionOf(database(own.tables)).tables,
-      );
+      const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
       await follower.changed();
 
       await db.prepare("INSERT INTO plain VALUES (1, 'p1')").run();
@@ -452,7 +455,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const dependencies = await rendered(() =>
       orm.select({ id: gens.id }).from(gens).where(eq(gens.id, 1)),
     );
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare('INSERT OR REPLACE INTO gens (id) VALUES (NULL)').run();
@@ -482,7 +485,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     );
     const orm = drizzle(own.client(db), { schema: { sets } });
     const dependencies = await rendered(() => orm.select().from(sets).where(eq(sets.id, 2)));
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare("UPDATE OR REPLACE sets SET a = 'y' WHERE id = 1").run();
@@ -525,10 +528,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
       );
       const orm = drizzle(own.client(db), { schema: { sets } });
       const dependencies = await rendered(() => orm.select().from(sets).where(eq(sets.id, 2)));
-      const follower = new ExternalFollower(
-        own.store(db),
-        definitionOf(database(own.tables)).tables,
-      );
+      const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
       await follower.changed();
 
       await db.prepare("UPDATE OR REPLACE sets SET a = 'x' WHERE id = 1").run();
@@ -564,7 +564,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     );
     const orm = drizzle(own.client(db), { schema: { sets } });
     const dependencies = await rendered(() => orm.select().from(sets).where(eq(sets.id, 2)));
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare("UPDATE OR REPLACE sets SET a = 'x' WHERE id = 1").run();
@@ -623,7 +623,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
     const dependencies = await rendered(() =>
       orm.select().from(plain).where(eq(plain.owner, 'p1')),
     );
-    const follower = new ExternalFollower(own.store(db), definitionOf(database(own.tables)).tables);
+    const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
     await follower.changed();
 
     await db.prepare("UPDATE plain SET owner = 'p3' WHERE id = 2").run();
@@ -658,10 +658,12 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
         ...second.captureSql(),
       ].map((statement) => db.prepare(statement)),
     );
-    const store = first.store(db);
+    const store = storeThrough(first, db);
 
     const read = await store.changes(0, 10);
-    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 1100);
+    // The next read of the schema, ten seconds after, while the triggers are those `captureSql()`
+    // makes.
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 10_100);
     const again = await store.changes(0, 10);
     clock.mockRestore();
 
@@ -700,10 +702,7 @@ describe("what a D1 database holds of a Drizzle schema's tables", () => {
       const dependencies = await rendered(() =>
         orm.select().from(plain).where(eq(plain.owner, 'p1')),
       );
-      const follower = new ExternalFollower(
-        own.store(db),
-        definitionOf(database(own.tables)).tables,
-      );
+      const follower = new ExternalFollower(ownStore(own), definitionOf(followedDb(own)).tables);
       await follower.changed();
 
       await db.prepare("INSERT INTO plain VALUES (1, 'p1')").run();

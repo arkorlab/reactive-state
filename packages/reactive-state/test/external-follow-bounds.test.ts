@@ -7,7 +7,9 @@ import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
 import type { ExternalChange, ExternalChanges, ExternalStore } from '../src/authority/external.ts';
 import { Engine } from '../src/authority/node-engine.ts';
-import { database, table, text } from '../src/server/schema.ts';
+import { keyDigest } from '../src/sql/reads.ts';
+import { logStore } from './support/follow-store.ts';
+import { itemsReadThrough } from './support/followed-items.ts';
 
 /**
  * What following an external store's log keeps, and how long a read of the log may take: the
@@ -16,7 +18,6 @@ import { database, table, text } from '../src/server/schema.ts';
  * authority's call timeout is a failed read, retried from where it was.
  */
 
-const db = database({ items: table({ title: text() }, { external: 'remote' }) });
 const BUILD = 'b_external_bounds';
 
 /** A store of no records, whose log the test writes and whose next reads it may hold. */
@@ -32,13 +33,13 @@ function remote() {
     return Promise.resolve(answered);
   };
   const read = vi.fn<ExternalStore['changes']>(page);
-  const store: ExternalStore = {
-    changes: read,
-    count: () => Promise.resolve(0),
-    find: () => Promise.resolve([]),
-    get: () => Promise.resolve(null),
-  };
+  const store = logStore(read);
   return { changes, page, read, store };
+}
+
+/** What a change of the log keeps of the row of `id`, as a follow's log keeps its key's. */
+function keyed(id: string) {
+  return { k_id: keyDigest(id) };
 }
 
 /** A read of the log no answer ends. */
@@ -79,10 +80,9 @@ describe('following an external store', () => {
     const source = remote();
     const engine = new Engine({
       buildId: BUILD,
-      database: db,
+      database: itemsReadThrough(source.store),
       filename,
       programs: [],
-      stores: { remote: source.store },
     });
     // The first read finds where the log is, and takes every record for changed: a commit.
     await engine.poke();
@@ -90,7 +90,7 @@ describe('following an external store', () => {
     for (let seq = 1; seq <= 1000; seq += 1) {
       source.changes.push({
         after: null,
-        before: { title: `item ${String(seq)}` },
+        before: keyed(`item-${String(seq)}`),
         id: `item-${String(seq)}`,
         seq,
         table: 'items',
@@ -114,9 +114,8 @@ describe('following an external store', () => {
     const source = remote();
     const engine = new Engine({
       buildId: BUILD,
-      database: db,
+      database: itemsReadThrough(source.store),
       programs: [],
-      stores: { remote: source.store },
       timeoutMs: 50,
     });
     onTestFinished(async () => {
@@ -128,7 +127,7 @@ describe('following an external store', () => {
     const held = await settledWithin(engine.poke());
     source.changes.push({
       after: null,
-      before: { title: 'gone' },
+      before: keyed('gone'),
       id: 'gone',
       seq: 1,
       table: 'items',
@@ -147,9 +146,8 @@ describe('following an external store', () => {
     const source = remote();
     const engine = new Engine({
       buildId: BUILD,
-      database: db,
+      database: itemsReadThrough(source.store),
       programs: [],
-      stores: { remote: source.store },
       timeoutMs: 50,
     });
     onTestFinished(async () => {
@@ -160,7 +158,7 @@ describe('following an external store', () => {
     for (let seq = 1; seq <= 201; seq += 1) {
       source.changes.push({
         after: null,
-        before: { title: 'gone' },
+        before: keyed(`gone-${String(seq)}`),
         id: `gone-${String(seq)}`,
         seq,
         table: 'items',

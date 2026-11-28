@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { followDrizzle } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { type Opened, openedWith } from './support/drizzle.ts';
+import { ownStore, storeThrough } from './support/follow-store.ts';
 
 /**
  * The log as a transaction writes it: what its statements changed is held until it commits, then
@@ -27,7 +28,7 @@ type Setup = Opened<typeof schema>;
 
 /** The log's entries, each by the row it names, or by `''` of the table alone. */
 async function entriesOf(setup: Setup) {
-  const { changes } = await setup.follow.store(setup.pg).changes(0, 10_000);
+  const { changes } = await ownStore(setup.follow).changes(0, 10_000);
   return changes.map((change) => change.after?.['k_id'] ?? change.before?.['k_id'] ?? '');
 }
 
@@ -78,7 +79,7 @@ describe("the log of a transaction's writes", () => {
       await setup.pg.exec("BEGIN; INSERT INTO tasks VALUES ('a', 'one')");
       await setup.pg.exec("UPDATE tasks SET id = 'b' WHERE id = 'a'; COMMIT");
 
-      const { changes } = await setup.follow.store(setup.pg).changes(0, 10);
+      const { changes } = await ownStore(setup.follow).changes(0, 10);
 
       expect(changes.map(({ after, before, seq }) => [seq, after, before])).toStrictEqual([
         [1, { k_id: keyDigest('a') }, null],
@@ -94,7 +95,7 @@ describe("the log of a transaction's writes", () => {
     async () => {
       const setup = await openedWith(schema, DDL);
       await setup.pg.query("INSERT INTO tasks VALUES ('a', 'one')");
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const before = await store.changes(0, 10);
 
       await setup.pg.exec("BEGIN; INSERT INTO tasks VALUES ('b', 'two'); ROLLBACK");
@@ -271,7 +272,7 @@ describe("the log of a transaction's writes", () => {
         CREATE CONSTRAINT TRIGGER audited AFTER INSERT ON tasks DEFERRABLE INITIALLY DEFERRED
           FOR EACH ROW WHEN (NEW.id = 'b') EXECUTE FUNCTION audited();`,
       );
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       await setup.pg.query("INSERT INTO tasks VALUES ('first', 'one')");
 
       // The audit's refusal is queued behind the mark that numbers the entries.
@@ -321,7 +322,7 @@ describe("the log of a transaction's writes", () => {
     'renders everything again where `%s` took what a transaction held',
     async (taken) => {
       const setup = await openedWith(schema, DDL);
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       const { epoch } = await store.changes(0, 10);
 
       await setup.pg.exec(`BEGIN; INSERT INTO tasks VALUES ('a', 'one'); ${taken}; COMMIT`);
@@ -456,7 +457,7 @@ describe("the log of a transaction's writes", () => {
 
       await expect(entriesOf(setup)).resolves.toStrictEqual([keyDigest('a')]);
 
-      const { changes } = await second.store(setup.pg).changes(0, 10);
+      const { changes } = await storeThrough(second, setup.pg).changes(0, 10);
 
       expect(changes.map((change) => change.after?.['k_id'])).toStrictEqual([keyDigest('a')]);
     },
@@ -490,7 +491,7 @@ describe('the head of the log', () => {
     'reads as the last number kept, in the read that reads the entries',
     async () => {
       const setup = await openedWith(schema, DDL);
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
 
       await expect(store.changes(0, 10)).resolves.toMatchObject({ floor: 0, head: 0 });
 
@@ -510,7 +511,7 @@ describe('the head of the log', () => {
       await setup.pg.query("SELECT nextval('reactive_state.changes_seq')");
       await setup.pg.query("INSERT INTO tasks VALUES ('b', 'two')");
 
-      const read = await setup.follow.store(setup.pg).changes(1, 10);
+      const read = await ownStore(setup.follow).changes(1, 10);
 
       expect(read.floor).toBe(1);
       expect(read.head).toBe(3);
@@ -527,7 +528,7 @@ describe('the head of the log', () => {
 
       await setup.pg.query('DELETE FROM reactive_state.changes WHERE seq <= 2');
 
-      await expect(setup.follow.store(setup.pg).changes(1, 10)).resolves.toMatchObject({
+      await expect(ownStore(setup.follow).changes(1, 10)).resolves.toMatchObject({
         floor: 3,
       });
     },
@@ -538,7 +539,7 @@ describe('the head of the log', () => {
     'renders everything again, and numbers past the log, once a read finds the sequence behind it',
     async () => {
       const setup = await openedWith(schema, DDL);
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       await setup.pg.query("INSERT INTO tasks VALUES ('a', 'one'), ('b', 'two'), ('c', 'three')");
       await setup.follow.prune(setup.pg, Date.now() + 60_000);
       await setup.pg.query("INSERT INTO tasks VALUES ('d', 'four'), ('e', 'five')");
@@ -563,7 +564,7 @@ describe('the head of the log', () => {
     'finds the sequence behind the log at the number of its last entry, which the next would take',
     async () => {
       const setup = await openedWith(schema, DDL);
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       await setup.pg.query("INSERT INTO tasks VALUES ('a', 'one'), ('b', 'two')");
       await setup.pg.query("SELECT setval('reactive_state.changes_seq', 1)");
 
@@ -579,7 +580,7 @@ describe('the head of the log', () => {
     'stays at the last entry pruned, whose floor follows it, and takes no number back',
     async () => {
       const setup = await openedWith(schema, DDL);
-      const store = setup.follow.store(setup.pg);
+      const store = ownStore(setup.follow);
       await setup.pg.query("INSERT INTO tasks VALUES ('a', 'one'), ('b', 'two')");
 
       await setup.follow.prune(setup.pg, Date.now() + 60_000);
@@ -615,7 +616,7 @@ describe('the head of the log', () => {
 
       await setup.follow.prune(setup.pg, Date.now() + 60_000);
 
-      await expect(setup.follow.store(setup.pg).changes(0, 10)).resolves.toMatchObject({
+      await expect(ownStore(setup.follow).changes(0, 10)).resolves.toMatchObject({
         changes: [],
         floor: 2,
         head: 1,
@@ -637,14 +638,12 @@ describe('the statements of a log already there', () => {
         DROP SEQUENCE reactive_state.changes_seq;
       `);
 
-      await expect(setup.follow.store(setup.pg).changes(0, 10)).rejects.toThrow(
-        'follow.captureSql()',
-      );
+      await expect(ownStore(setup.follow).changes(0, 10)).rejects.toThrow('follow.captureSql()');
 
       for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
       await setup.pg.query("INSERT INTO tasks VALUES ('b', 'two')");
 
-      await expect(setup.follow.store(setup.pg).changes(5, 10)).resolves.toMatchObject({
+      await expect(ownStore(setup.follow).changes(5, 10)).resolves.toMatchObject({
         changes: [{ seq: 6 }],
         head: 6,
       });
@@ -663,7 +662,7 @@ describe('the statements of a log already there', () => {
       for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
       await setup.pg.query("INSERT INTO tasks VALUES ('a', 'one')");
 
-      await expect(setup.follow.store(setup.pg).changes(40, 10)).resolves.toMatchObject({
+      await expect(ownStore(setup.follow).changes(40, 10)).resolves.toMatchObject({
         changes: [{ seq: 41 }],
       });
     },
@@ -694,7 +693,7 @@ describe('the statements of a log already there', () => {
       for (const statement of setup.follow.captureSql()) await setup.pg.query(statement);
       await setup.pg.query("INSERT INTO tasks VALUES ('a', 'one')");
 
-      await expect(setup.follow.store(setup.pg).changes(0, 10)).resolves.toMatchObject({
+      await expect(ownStore(setup.follow).changes(0, 10)).resolves.toMatchObject({
         changes: [{ seq: 10 }],
       });
     },

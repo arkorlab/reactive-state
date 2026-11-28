@@ -12,6 +12,7 @@ import {
   relationKey,
 } from './capture.ts';
 import { type Connection, trackedClient } from './client.ts';
+import { withInternals } from './follow-internals.ts';
 import { generationOf } from './generations.ts';
 import { type KeyColumn, keysOf } from './keys.ts';
 import { postgresRows } from './postgres-rows.ts';
@@ -19,6 +20,7 @@ import type { RowReferences } from './rows.ts';
 import { type DrizzleD1Follow, followSqlite } from './sqlite/follow.ts';
 import { pruneSqlChanges, type Queryable, sqlStore } from './store.ts';
 
+export { followedDb } from './followed.ts';
 export type { DrizzleD1Follow } from './sqlite/follow.ts';
 
 /**
@@ -26,16 +28,16 @@ export type { DrizzleD1Follow } from './sqlite/follow.ts';
  * read and written by its own Drizzle, and followed by the authority: a render's queries note the
  * tables their plans read, the tables' triggers log each statement that changed them, and the
  * authority renders again what read a table the log names. The application's database declares
- * them as external tables of one store, whose host follows that log. A component's state may bind
- * one column of one row (`db.<table>.where(…)`, `rows.ts`), which its setter writes through the
- * same client.
+ * them as external tables of one store, which the follow brings (`followedDb`), and the authority
+ * follows that log by. A component's state may bind one column of one row
+ * (`db.<table>.where(…)`, `rows.ts`), which its setter writes through the same client.
  *
  * ```ts
  * // @/db
  * export const follow = followDrizzle(schema);
  * export const pg = await PGlite.create('.data/pglite');
  * export const orm = drizzle({ client: follow.client(pg), schema });
- * export const db = database(follow.tables);
+ * export const db = followedDb(follow);
  * ```
  */
 
@@ -107,7 +109,10 @@ export type OfSqlite<S> = true extends {
   : false;
 
 export interface DrizzleFollow<S> {
-  /** The schema's tables, as the application's database declares them: `database(follow.tables)`. */
+  /**
+   * The schema's tables, as the application's database declares them: `followedDb(follow)` declares
+   * them with the store, `database(follow.tables)` alone.
+   */
   readonly tables: FollowedTables<S>;
   /** The store's name, which the authority's host gives `store()` by. */
   readonly storeName: string;
@@ -131,7 +136,11 @@ export interface DrizzleFollow<S> {
    * condition is followed by the text it answers, which is asked before the value is bound.
    */
   readonly client: <C extends Connection>(client: C) => C;
-  /** The store the host gives the authority, which reads the log through `client`. */
+  /**
+   * The store the host gives the authority, which reads the log through `client`: of
+   * `followedDb(follow)`'s database, the follow's own, of the connection `client` was last given,
+   * unless the host gives one.
+   */
   readonly store: (client: Queryable) => ExternalStore;
   /** Discards the log's entries written before `before`, a time in milliseconds. */
   readonly prune: (client: Queryable, before: number) => Promise<void>;
@@ -232,17 +241,29 @@ function followPostgres<S extends Readonly<Record<string, unknown>>>(
     schema: generationOf(namespace),
     schemaTable,
   };
-  return Object.freeze({
+  const declared = Object.freeze(tables);
+  /** The connection `client` was last given, as it was given: what the follow's store reads. */
+  let given: Connection | undefined;
+  const follow = Object.freeze({
     captureSql: () => changeCaptureSql(relations, namespace),
     channel,
     client: <C extends Connection>(client: C) => {
       const tracked = trackedClient(client, followed);
       connection = tracked as unknown as Queryable;
+      given = client;
       return tracked;
     },
     prune: (client: Queryable, before: number) => pruneSqlChanges(client, before, namespace),
     store: (client: Queryable) => sqlStore(client, followed),
     storeName,
-    tables: Object.freeze(tables) as FollowedTables<S>,
+    tables: declared as FollowedTables<S>,
+  });
+  // The log is read through the connection as the host gave it, as `follow.store(connection)` reads
+  // it: not through the client Drizzle is given, which follows a render's and an operation's
+  // statements.
+  return withInternals(follow, {
+    store: () => (given === undefined ? undefined : sqlStore(given as Queryable, followed)),
+    storeName,
+    tables: declared,
   });
 }

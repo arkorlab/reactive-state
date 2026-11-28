@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { ExternalFollower } from '../src/authority/external.ts';
-import { database, definitionOf } from '../src/server/schema.ts';
+import { definitionOf } from '../src/server/schema.ts';
+import { followedDb } from '../src/sql/index.ts';
 import type { StatementRead } from '../src/sql/sqlite/scopes.ts';
 import { rendered } from './cloudflare/d1-drizzle-render.ts';
+import { ownStore } from './support/follow-store.ts';
 import {
   aliasTerm,
   leftTableTerm,
@@ -108,15 +110,15 @@ interface Trials {
 
 /** Two members of an organization, each of a person of their own, and the follower of the log. */
 async function twoMembers(of: OracleDatabase) {
-  const { binding, db, follow } = of;
+  const { db, follow } = of;
   db.exec(`
     INSERT INTO organization (id, name, slug) VALUES ('o0', 'one', 's0');
     INSERT INTO "user" (id, name) VALUES ('u0', 'ann'), ('u1', 'bob');
     INSERT INTO member (id, organization_id, user_id, role, created_at) VALUES
       ('m0', 'o0', 'u0', 'owner', 1), ('m1', 'o0', 'u1', 'member', 2);
   `);
-  const tables = definitionOf(database(follow.tables)).tables;
-  const follower = new ExternalFollower(follow.store(binding), tables);
+  const tables = definitionOf(followedDb(follow)).tables;
+  const follower = new ExternalFollower(ownStore(follow), tables);
   await follower.changed();
   return follower;
 }
@@ -135,11 +137,11 @@ async function trial(
   random: Random,
   streamed: boolean,
 ): Promise<string | undefined> {
-  const { binding, db, follow, followed, plain } = of;
+  const { db, follow, followed, plain } = of;
   populate(db, random);
   const picks = picked(random);
-  const tables = definitionOf(database(follow.tables)).tables;
-  const follower = new ExternalFollower(follow.store(binding), tables);
+  const tables = definitionOf(followedDb(follow)).tables;
+  const follower = new ExternalFollower(ownStore(follow), tables);
   await follower.changed();
   const writes: string[] = [];
   if (streamed) race(of, random, writes);
