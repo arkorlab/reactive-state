@@ -1,4 +1,4 @@
-import { identifierOf, sqlTokens } from './lex.ts';
+import { dollarBodies, identifierOf, sqlTokens } from './lex.ts';
 
 /** The query context changes that a text can make directly, outside its quoted literal values. */
 const CONTEXT_COMMANDS = new Set(['abort', 'commit', 'discard', 'end', 'reset', 'rollback', 'set']);
@@ -54,6 +54,53 @@ function readingsOf(sql: string, conforming: boolean): readonly (readonly string
   return readings.length === 0 ? undefined : readings;
 }
 
+/** What a statement of a `DO` block's code may follow: the words that open one in PL/pgSQL. */
+const BODY_STARTS: ReadonlySet<string> = new Set([';', 'begin', 'else', 'loop', 'then']);
+
+/**
+ * Whether `body`, the code of a `DO` block, changes a setting of the session at a statement of its
+ * own (`SET`, `RESET`, `DISCARD`) or by `set_config`: the settings of the session, or, where
+ * `beyond`, those that stay beyond its transaction, and, besides, a statement it builds at run time
+ * (`EXECUTE`), which no reading says the end of. Code no reading can read may.
+ */
+function bodyChanges(body: string, conforming: boolean, beyond: boolean): boolean {
+  const tokens = sqlTokens(body, conforming);
+  if (tokens === undefined) return true;
+  return tokens.some((token, at) => {
+    const starts = at === 0 || BODY_STARTS.has(tokens[at - 1] ?? '');
+    if (starts && beyond && token === 'execute') return true;
+    if (identifierOf(token) === 'set_config' && tokens[at + 1] === '(') {
+      return !beyond || !setsForTransaction(tokens, at + 1);
+    }
+    return (
+      token === '`' ||
+      (starts &&
+        SESSION_COMMANDS.has(token) &&
+        !setsTransaction(tokens, at) &&
+        !setsConstraints(tokens, at) &&
+        !(beyond && setsLocal(tokens, at)))
+    );
+  });
+}
+
+/**
+ * Whether `sql` runs a `DO` block whose code changes a setting of the session (`bodyChanges`): a
+ * dollar-quoted body is a string to the lexer, which the code of a block is written in. A text
+ * with a block is read by each string syntax the session may have, as every guard here is.
+ */
+function runsChangingBlock(sql: string, conforming: boolean, beyond: boolean): boolean {
+  return (conforming ? [true] : [true, false]).some((syntax) => {
+    const tokens = sqlTokens(sql, syntax);
+    const runs = tokens?.some(
+      (token, at) => token === 'do' && (at === 0 || tokens[at - 1] === ';'),
+    );
+    return (
+      runs === true &&
+      (dollarBodies(sql, syntax) ?? []).some((body) => bodyChanges(body, syntax, beyond))
+    );
+  });
+}
+
 /** Whether `tokens` change a setting of the session (`changesSession`). */
 function changesIn(tokens: readonly string[]): boolean {
   return tokens.some((token, at) => {
@@ -74,11 +121,17 @@ function changesIn(tokens: readonly string[]): boolean {
  * as `changesContext` says. Read by each string syntax the session may have, a change either finds
  * counts; a text that cannot be read in any may change one, and is refused with it: what is let run
  * on a pool's connection may be given to the next to take it, which the text cannot say it leaves
- * as it was. A checked-out connection runs such a text and is closed as it is given back.
+ * as it was. A checked-out connection runs such a text and is closed as it is given back. The code
+ * of a `DO` block is read for a statement that changes one (`bodyChanges`); what a function of the
+ * database's, named by a text, or a statement built at run time does, is not seen.
  */
 export function changesSession(sql: string, conforming: boolean): boolean {
   const readings = readingsOf(sql, conforming);
-  return readings === undefined || readings.some((tokens) => changesIn(tokens));
+  return (
+    readings === undefined ||
+    readings.some((tokens) => changesIn(tokens)) ||
+    runsChangingBlock(sql, conforming, false)
+  );
 }
 
 /** Whether the `SET` at `at` sets for the transaction alone (`SET LOCAL x = 1`). */
@@ -123,11 +176,16 @@ function leavesIn(tokens: readonly string[]): boolean {
  * `set_config(…, true)`, which end with the transaction. A third argument of `set_config` that is
  * not the word `true` is read as a session's. Read by each string syntax the session may have, a
  * change either finds counts; a text that cannot be read in any may change one, as a connection
- * that is closed as it is given back loses nothing but its reconnection.
+ * that is closed as it is given back loses nothing but its reconnection. The code of a `DO` block
+ * is read as `changesSession` reads it, and a statement it builds at run time (`EXECUTE`) may too.
  */
 export function leavesSession(sql: string, conforming: boolean): boolean {
   const readings = readingsOf(sql, conforming);
-  return readings === undefined || readings.some((tokens) => leavesIn(tokens));
+  return (
+    readings === undefined ||
+    readings.some((tokens) => leavesIn(tokens)) ||
+    runsChangingBlock(sql, conforming, true)
+  );
 }
 
 /** The words a statement that ends the transaction under way begins with. */
@@ -197,15 +255,25 @@ export function scopedAfter(sql: string, conforming: boolean, before: boolean): 
 }
 
 /**
+ * Whether the end of a transaction that begins at `at` of `tokens` starts another at once
+ * (`COMMIT AND CHAIN`), with its options before it (`WORK`, `TRANSACTION`).
+ */
+function chainsAt(tokens: readonly string[], at: number): boolean {
+  const next = tokens[at + 1];
+  const from = at + (next === 'work' || next === 'transaction' ? 2 : 1);
+  return tokens[from] === 'and' && tokens[from + 1] === 'chain';
+}
+
+/**
  * Whether `tokens`, a text's, leave a transaction open: one opened (`BEGIN`, `START TRANSACTION`)
- * that no later statement of it ends.
+ * that no later statement of it ends, or ends and chains to another.
  */
 function opensIn(tokens: readonly string[]): boolean {
   let open = false;
   for (const [at, token] of tokens.entries()) {
     if (at !== 0 && tokens[at - 1] !== ';') continue;
     if (token === 'begin' || (token === 'start' && tokens[at + 1] === 'transaction')) open = true;
-    else if (endsTransactionAt(tokens, at)) open = false;
+    else if (endsTransactionAt(tokens, at)) open &&= chainsAt(tokens, at);
   }
   return open;
 }
@@ -213,7 +281,8 @@ function opensIn(tokens: readonly string[]): boolean {
 /**
  * Whether SQL leaves a transaction open on the connection it runs on: of a pool, one that is given
  * to the next to take it, who would write into a transaction no one commits. A text that opens one
- * and ends it (`BEGIN; …; COMMIT`) leaves none. Read by each string syntax the session may have; a
+ * and ends it (`BEGIN; …; COMMIT`) leaves none, one that chains (`COMMIT AND CHAIN`) leaves another
+ * open. Read by each string syntax the session may have; a
  * text that cannot be read in any is for `changesSession` to refuse.
  */
 export function leavesTransactionOpen(sql: string, conforming: boolean): boolean {
