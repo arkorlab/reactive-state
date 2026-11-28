@@ -1,5 +1,6 @@
 import { is } from 'drizzle-orm';
 import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
+import { SQLiteTable } from 'drizzle-orm/sqlite-core';
 
 import type { ExternalStore } from '../authority/external.ts';
 import { type Table, table, text } from '../server/schema.ts';
@@ -11,8 +12,12 @@ import {
   relationKey,
 } from './capture.ts';
 import { type Connection, trackedClient } from './client.ts';
+import { generationOf } from './generations.ts';
 import { type KeyColumn, keysOf } from './keys.ts';
+import { type DrizzleD1Follow, followSqlite } from './sqlite/follow.ts';
 import { pruneSqlChanges, type Queryable, sqlStore } from './store.ts';
+
+export type { DrizzleD1Follow } from './sqlite/follow.ts';
 
 /**
  * An application whose tables are its Drizzle schema's, in PostgreSQL — PGlite as it develops —
@@ -50,31 +55,6 @@ const DIGEST = {
 } as const;
 
 /**
- * Where the generation of each namespace's schema is kept (`Followed.schema`): one of the process's,
- * which every copy of this module finds alike, as the evaluation's (`context.ts`).
- */
-const GENERATIONS = Symbol.for('arkorlab.reactive-state.drizzle-generations');
-
-/**
- * The generation of the schema of the database whose log is in `namespace`: one of every
- * `followDrizzle` of it, so that a client of one is told what a store of another read.
- */
-function generationOf(namespace: string): { generation: number } {
-  const shared = globalThis as unknown as Record<
-    symbol,
-    Map<string, { generation: number }> | undefined
-  >;
-  shared[GENERATIONS] ??= new Map();
-  const all = shared[GENERATIONS];
-  let schema = all.get(namespace);
-  if (schema === undefined) {
-    schema = { generation: 0 };
-    all.set(namespace, schema);
-  }
-  return schema;
-}
-
-/**
  * The table of the schema of the store `storeName`: of its name where a table's may hold it, else
  * of a digest of it (`_` and 16 hexadecimal digits), whatever the host names its store; no two
  * stores' names alike but in their digests make one table.
@@ -103,9 +83,18 @@ type FollowedTables<S> = Readonly<Record<`${typeof SCHEMA_TABLE}${string}`, Tabl
 export interface FollowDrizzleOptions {
   /** The store the tables are read through, as the authority's host gives it: `sql` unless given. */
   readonly store?: string;
-  /** The schema the change log is kept in: `reactive_state` unless given. */
+  /** The schema the change log is kept in, of PostgreSQL alone: `reactive_state` unless given. */
   readonly namespace?: string;
 }
+
+/** Whether a schema holds a table of SQLite's, which D1 keeps: by its dialect, which Drizzle types. */
+type OfSqlite<S> = true extends {
+  [K in keyof S]: S[K] extends { readonly _: { readonly config: { readonly dialect: 'sqlite' } } }
+    ? true
+    : false;
+}[keyof S]
+  ? true
+  : false;
 
 export interface DrizzleFollow<S> {
   /** The schema's tables, as the application's database declares them: `database(follow.tables)`. */
@@ -132,10 +121,41 @@ export interface DrizzleFollow<S> {
   readonly prune: (client: Queryable, before: number) => Promise<void>;
 }
 
-/** The tables of `schema` an authority follows, and what its host follows them with. */
+/**
+ * The tables of `schema` an authority follows, and what its host follows them with: of PostgreSQL's
+ * tables (`drizzle-orm/pg-core`), or of SQLite's in D1 (`drizzle-orm/sqlite-core`), not of both.
+ */
 export function followDrizzle<S extends Readonly<Record<string, unknown>>>(
   schema: S,
   options: FollowDrizzleOptions = {},
+): OfSqlite<S> extends true ? DrizzleD1Follow<S> : DrizzleFollow<S> {
+  const values = Object.values(schema);
+  const sqlite = values.some((value) => is(value, SQLiteTable));
+  if (!sqlite) return followPostgres(schema, options) as never;
+  if (values.some((value) => is(value, PgTable))) {
+    throw new TypeError(
+      "followDrizzle(): a schema is of PostgreSQL's tables or of SQLite's, not of both: follow each of its own.",
+    );
+  }
+  if (options.namespace !== undefined) {
+    throw new TypeError(
+      "followDrizzle(): a namespace is of PostgreSQL's log alone: D1's log is `_rs_changes`.",
+    );
+  }
+  const storeName = options.store ?? 'sql';
+  const schemaTable = schemaTableOf(storeName);
+  if (Object.hasOwn(schema, schemaTable)) {
+    throw new TypeError(
+      `followDrizzle(): \`${schemaTable}\` is the name of the table a change of the schema is followed by, not a table of the schema's.`,
+    );
+  }
+  return followSqlite(schema, storeName, schemaTable) as never;
+}
+
+/** The tables of `schema`, of PostgreSQL, an authority follows. */
+function followPostgres<S extends Readonly<Record<string, unknown>>>(
+  schema: S,
+  options: FollowDrizzleOptions,
 ): DrizzleFollow<S> {
   const storeName = options.store ?? 'sql';
   const namespace = options.namespace ?? DEFAULT_NAMESPACE;

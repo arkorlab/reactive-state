@@ -39,7 +39,8 @@ export async function openedWith<S extends Readonly<Record<string, unknown>>>(
   schema: S,
   ddl: string,
 ): Promise<Opened<S>> {
-  const follow = followDrizzle(schema);
+  // A schema of PostgreSQL's tables, which a type of no table yet says not.
+  const follow = followDrizzle(schema) as DrizzleFollow<S>;
   const pg = await PGlite.create();
   onTestFinished(async () => {
     await pg.close();
