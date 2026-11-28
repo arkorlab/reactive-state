@@ -8,12 +8,19 @@
  * a node asked about is found again in the program's own source file, by its position and kind, and
  * only the program's nodes reach the checker. The program is made again when a module read since is
  * asked about, and every snapshot is disposed of with the session.
+ *
+ * What the checker answers also depends on which file it takes for each import, which no text of a
+ * file read says: a file added that TypeScript prefers to the one it took, or one at an import it
+ * found none at, changes the answer with every text read unchanged. The session therefore hands
+ * each import of each application file a program holds — a type-only one too, which the compile
+ * itself never resolves as a module — to the resolver its compile reads modules with, which records
+ * the file chosen, or that none was, beside the compile's own choices.
  */
 
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
-import type { Node, SourceFile } from 'typescript/ast';
+import { isStringLiteralLikeNode, type Node, type SourceFile } from 'typescript/ast';
 import {
   type API,
   type Checker,
@@ -79,6 +86,9 @@ const ERROR_FAMILY = [
   'DOMException',
 ];
 
+/** Records which file `specifier`, written in `importer`, names: the compile's own choice of one. */
+export type RecordResolution = (specifier: string, importer: string) => void;
+
 /** What a parse was made of, and the session whose program reads it. */
 interface Parsed {
   readonly session: TypeSession;
@@ -112,10 +122,15 @@ export class TypeSession implements Disposable {
   readonly #reads = new Map<string, string>();
   /** The directory the compile writes into, whose files are no input of it. */
   readonly #written: string | undefined;
+  /** Where the choice of file for each import a program holds is recorded; none outside a compile. */
+  readonly #resolving: RecordResolution | undefined;
+  /** The files whose imports were recorded, each once: a text is the same in every program. */
+  readonly #resolved = new Set<string>();
 
-  constructor(api: API, written?: string) {
+  constructor(api: API, written?: string, resolving?: RecordResolution) {
     this.#api = api;
     this.#written = written === undefined ? undefined : `${path.resolve(written)}${path.sep}`;
+    this.#resolving = resolving;
   }
 
   /** Whether a file is one the compile itself writes. */
@@ -174,19 +189,41 @@ export class TypeSession implements Disposable {
   /**
    * Records what a program read beside the session's parses: each source file of the application's
    * own, outside `node_modules` and the compiler's libraries, which a type-only import or the
-   * configuration's file list brings in, and the configuration with each it extends.
+   * configuration's file list brings in, and the configuration with each it extends. And, of each
+   * application file the program holds, the file each of its imports names (`#recordImports`).
    */
   #record(program: Program, config: string): void {
     const configurations = config === '' ? [] : aliasesOf(config).files;
     for (const { file, text } of configurations) this.#reads.set(file, text);
     for (const file of program.getSourceFileNames()) {
-      if (this.#texts.has(file) || this.#reads.has(file) || this.#output(file)) continue;
+      if (this.#output(file)) continue;
+      this.#recordImports(program, file);
+      if (this.#texts.has(file) || this.#reads.has(file)) continue;
       if (!framedApplicationFile(file)) continue;
       try {
         this.#reads.set(file, readFileSync(file, 'utf8'));
       } catch {
         // A file the program holds that the disk does not, as a layer gives, is the compile's own.
       }
+    }
+  }
+
+  /**
+   * Records the choice of file for each import of `file`, an application's own the program holds,
+   * once for the session: the compile resolves what it reads itself, and an import of a type alone
+   * is one it does not, which the checker resolves for it. The choice is the compile's own
+   * (`moduleFile`) — the one a later build checks again against the disk, whatever the checker
+   * took. Imports are TypeScript's list of a file's: declarations, `export … from`, `import x =
+   * require()`, and a type's `import('…')`.
+   */
+  #recordImports(program: Program, file: string): void {
+    const record = this.#resolving;
+    if (record === undefined || this.#resolved.has(file) || !framedApplicationFile(file)) return;
+    this.#resolved.add(file);
+    const source = program.getSourceFile(file);
+    if (source === undefined) return;
+    for (const node of source.imports) {
+      if (isStringLiteralLikeNode(node)) record(node.text, file);
     }
   }
 
