@@ -1,4 +1,4 @@
-import { dollarBodies, identifierOf, sqlTokens } from './lex.ts';
+import { identifierOf, quotedRuns, sqlTokens } from './lex.ts';
 
 /** The query context changes that a text can make directly, outside its quoted literal values. */
 const CONTEXT_COMMANDS = new Set(['abort', 'commit', 'discard', 'end', 'reset', 'rollback', 'set']);
@@ -54,51 +54,130 @@ function readingsOf(sql: string, conforming: boolean): readonly (readonly string
   return readings.length === 0 ? undefined : readings;
 }
 
+/** What the code of a `DO` block may do of the settings of the session (`readBody`). */
+interface Block {
+  /** A setting that stays beyond the transaction: `SET`, `RESET`, `DISCARD`, `set_config(…, false)`. */
+  readonly beyond: boolean;
+  /** A setting of the transaction alone: `SET LOCAL`, `set_config(…, true)`. */
+  readonly local: boolean;
+  /** A statement it builds at run time (`EXECUTE`), which may be any of them. */
+  readonly dynamic: boolean;
+  /** Code no reading reads: a body in a single-quoted string, or one the lexer cannot read. */
+  readonly unread: boolean;
+}
+
+const NO_BLOCK: Block = { beyond: false, dynamic: false, local: false, unread: false };
+const UNREAD_BLOCK: Block = { ...NO_BLOCK, unread: true };
+
+/** The two readings of the code of a block, as one that may do what either does. */
+function joined(first: Block, second: Block): Block {
+  return {
+    beyond: first.beyond || second.beyond,
+    dynamic: first.dynamic || second.dynamic,
+    local: first.local || second.local,
+    unread: first.unread || second.unread,
+  };
+}
+
 /** What a statement of a `DO` block's code may follow: the words that open one in PL/pgSQL. */
 const BODY_STARTS: ReadonlySet<string> = new Set([';', 'begin', 'else', 'loop', 'then']);
 
 /**
- * Whether `body`, the code of a `DO` block, changes a setting of the session at a statement of its
- * own (`SET`, `RESET`, `DISCARD`) or by `set_config`: the settings of the session, or, where
- * `beyond`, those that stay beyond its transaction, and, besides, a statement it builds at run time
- * (`EXECUTE`), which no reading says the end of. Code no reading can read may.
+ * What the code of a `DO` block, `body`, does of the settings at a statement of its own (`SET`,
+ * `RESET`, `DISCARD`) or by `set_config`, read as outside a block: not `UPDATE … SET`.
  */
-function bodyChanges(body: string, conforming: boolean, beyond: boolean): boolean {
+function readBody(body: string, conforming: boolean): Block {
   const tokens = sqlTokens(body, conforming);
-  if (tokens === undefined) return true;
-  return tokens.some((token, at) => {
+  if (tokens === undefined) return UNREAD_BLOCK;
+  let block = NO_BLOCK;
+  for (const [at, token] of tokens.entries()) {
     const starts = at === 0 || BODY_STARTS.has(tokens[at - 1] ?? '');
-    if (starts && beyond && token === 'execute') return true;
-    if (identifierOf(token) === 'set_config' && tokens[at + 1] === '(') {
-      return !beyond || !setsForTransaction(tokens, at + 1);
-    }
-    return (
-      token === '`' ||
-      (starts &&
-        SESSION_COMMANDS.has(token) &&
-        !setsTransaction(tokens, at) &&
-        !setsConstraints(tokens, at) &&
-        !(beyond && setsLocal(tokens, at)))
-    );
-  });
+    const configures = identifierOf(token) === 'set_config' && tokens[at + 1] === '(';
+    const sets =
+      starts &&
+      SESSION_COMMANDS.has(token) &&
+      !setsTransaction(tokens, at) &&
+      !setsConstraints(tokens, at);
+    if (starts && token === 'execute') block = { ...block, dynamic: true };
+    else if (configures && setsForTransaction(tokens, at + 1)) block = { ...block, local: true };
+    else if (token === '`' || configures || (sets && !setsLocal(tokens, at))) {
+      block = { ...block, beyond: true };
+    } else if (sets) block = { ...block, local: true };
+  }
+  return block;
+}
+
+/** A word that may be the `DO` of a statement: what a text with none is spared the reading of. */
+const DO_WORD = /\bdo\b/iu;
+
+/**
+ * The statement each `'` of `tokens` stands in, by the index of its first token, and whether it
+ * names a language (`LANGUAGE 'plpgsql'`): the order of the strings `quotedRuns` hands back.
+ */
+function quotesIn(
+  tokens: readonly string[],
+): readonly { readonly language: boolean; readonly start: number }[] {
+  const quotes: { language: boolean; start: number }[] = [];
+  let start = 0;
+  for (const [at, word] of tokens.entries()) {
+    if (at === 0 || tokens[at - 1] === ';') start = at;
+    if (word === "'") quotes.push({ language: tokens[at - 1] === 'language', start });
+  }
+  return quotes;
 }
 
 /**
- * Whether `sql` runs a `DO` block whose code changes a setting of the session (`bodyChanges`): a
- * dollar-quoted body is a string to the lexer, which the code of a block is written in. A text
- * with a block is read by each string syntax the session may have, as every guard here is.
+ * What each `DO` statement of `sql`, read as `tokens` in the string syntax `syntax`, does of the
+ * settings, by the index of its first token. A dollar-quoted body is a string to the lexer, which
+ * `quotedRuns` hands back in the order the `'` of the tokens stand for it; the strings of a
+ * statement are its code, but for the name of its language, and a code that is a string of
+ * its own (`DO '…'`) is not read.
  */
-function runsChangingBlock(sql: string, conforming: boolean, beyond: boolean): boolean {
-  return (conforming ? [true] : [true, false]).some((syntax) => {
+function blocksOf(
+  sql: string,
+  syntax: boolean,
+  tokens: readonly string[],
+): ReadonlyMap<number, Block> {
+  const blocks = new Map<number, Block>();
+  if (!DO_WORD.test(sql)) return blocks;
+  for (const [at, word] of tokens.entries()) {
+    if (word === 'do' && (at === 0 || tokens[at - 1] === ';')) blocks.set(at, NO_BLOCK);
+  }
+  const runs = quotedRuns(sql, syntax) ?? [];
+  const quotes = quotesIn(tokens);
+  // A count of strings that is not the tokens' says the text is not read as it was written.
+  const aligned = quotes.length === runs.length;
+  for (const [index, { language, start }] of quotes.entries()) {
+    const block = blocks.get(start);
+    if (block === undefined || language) continue;
+    const run = runs[index];
+    const read = aligned && run?.dollar === true ? readBody(run.text, syntax) : UNREAD_BLOCK;
+    blocks.set(start, joined(block, read));
+  }
+  return blocks;
+}
+
+/** What each `DO` statement of `sql` does of the settings, read by each syntax the session may have. */
+function blocksIn(sql: string, conforming: boolean): readonly Block[] {
+  return (conforming ? [true] : [true, false]).flatMap((syntax) => {
     const tokens = sqlTokens(sql, syntax);
-    const runs = tokens?.some(
-      (token, at) => token === 'do' && (at === 0 || tokens[at - 1] === ';'),
-    );
-    return (
-      runs === true &&
-      (dollarBodies(sql, syntax) ?? []).some((body) => bodyChanges(body, syntax, beyond))
-    );
+    return tokens === undefined ? [] : [...blocksOf(sql, syntax, tokens).values()];
   });
+}
+
+/** Whether a block may change a setting the pool must refuse on one connection of many. */
+function changesBlock(block: Block): boolean {
+  return block.beyond || block.local || block.unread;
+}
+
+/** Whether a block may leave a setting beyond the transaction, which closes a connection. */
+function leavesBlock(block: Block): boolean {
+  return block.beyond || block.dynamic || block.unread;
+}
+
+/** Whether a block may set one for the transaction, which a render through it is refused. */
+function holdsBlock(block: Block): boolean {
+  return block.local || block.dynamic || block.unread;
 }
 
 /** Whether `tokens` change a setting of the session (`changesSession`). */
@@ -122,15 +201,16 @@ function changesIn(tokens: readonly string[]): boolean {
  * counts; a text that cannot be read in any may change one, and is refused with it: what is let run
  * on a pool's connection may be given to the next to take it, which the text cannot say it leaves
  * as it was. A checked-out connection runs such a text and is closed as it is given back. The code
- * of a `DO` block is read for a statement that changes one (`bodyChanges`); what a function of the
- * database's, named by a text, or a statement built at run time does, is not seen.
+ * of a `DO` block is read for a statement that changes one (`readBody`), and a block whose code is
+ * a string of its own (`DO '…'`) is not read, and refused; what a function of the database's, named
+ * by a text, or a statement built at run time does, is not seen.
  */
 export function changesSession(sql: string, conforming: boolean): boolean {
   const readings = readingsOf(sql, conforming);
   return (
     readings === undefined ||
     readings.some((tokens) => changesIn(tokens)) ||
-    runsChangingBlock(sql, conforming, false)
+    blocksIn(sql, conforming).some((block) => changesBlock(block))
   );
 }
 
@@ -177,14 +257,15 @@ function leavesIn(tokens: readonly string[]): boolean {
  * not the word `true` is read as a session's. Read by each string syntax the session may have, a
  * change either finds counts; a text that cannot be read in any may change one, as a connection
  * that is closed as it is given back loses nothing but its reconnection. The code of a `DO` block
- * is read as `changesSession` reads it, and a statement it builds at run time (`EXECUTE`) may too.
+ * is read as `changesSession` reads it, and a statement it builds at run time (`EXECUTE`), or code
+ * no reading reads, may too.
  */
 export function leavesSession(sql: string, conforming: boolean): boolean {
   const readings = readingsOf(sql, conforming);
   return (
     readings === undefined ||
     readings.some((tokens) => leavesIn(tokens)) ||
-    runsChangingBlock(sql, conforming, true)
+    blocksIn(sql, conforming).some((block) => leavesBlock(block))
   );
 }
 
@@ -209,18 +290,24 @@ function endsTransactionAt(tokens: readonly string[], at: number): boolean {
  * and the end of the transaction is not told, for a statement that fails before it never ran it —
  * and `ran`, once every statement did, in the order the text has them.
  */
-function scopedOver(tokens: readonly string[], before: boolean): Scoped {
+function scopedOver(
+  tokens: readonly string[],
+  before: boolean,
+  blocks: ReadonlyMap<number, Block>,
+): Scoped {
   let ran = before;
   let sent = before;
   for (const [at, token] of tokens.entries()) {
     const opens = at === 0 || tokens[at - 1] === ';';
+    const block = opens ? blocks.get(at) : undefined;
     if (opens && endsTransactionAt(tokens, at)) {
       ran = false;
     } else if (
       (opens && token === 'set' && tokens[at + 1] === 'local') ||
       (identifierOf(token) === 'set_config' &&
         tokens[at + 1] === '(' &&
-        setsForTransaction(tokens, at + 1))
+        setsForTransaction(tokens, at + 1)) ||
+      (block !== undefined && holdsBlock(block))
     ) {
       ran = true;
       sent = true;
@@ -245,12 +332,16 @@ export interface Scoped {
  * its end (`ran`): while it goes, or where it fails part-way, the transaction may be as it was
  * (`sent`), and holds what it held. Read by each string syntax the session may have, they are held
  * where either reading holds them; of a text that cannot be read in any, they may be, as a render
- * through the connection is refused only while its transaction is open.
+ * through the connection is refused only while its transaction is open. A `DO` block sets them
+ * where its code does, or may: by `SET LOCAL`, `set_config(…, true)`, a statement built at run time
+ * or code no reading reads.
  */
 export function scopedAfter(sql: string, conforming: boolean, before: boolean): Scoped {
-  const readings = readingsOf(sql, conforming);
-  if (readings === undefined) return { ran: true, sent: true };
-  const each = readings.map((tokens) => scopedOver(tokens, before));
+  const each = (conforming ? [true] : [true, false]).flatMap((syntax) => {
+    const tokens = sqlTokens(sql, syntax);
+    return tokens === undefined ? [] : [scopedOver(tokens, before, blocksOf(sql, syntax, tokens))];
+  });
+  if (each.length === 0) return { ran: true, sent: true };
   return { ran: each.some((one) => one.ran), sent: each.some((one) => one.sent) };
 }
 
