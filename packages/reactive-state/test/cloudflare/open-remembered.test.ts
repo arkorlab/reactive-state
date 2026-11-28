@@ -85,6 +85,43 @@ describe('the change log of an object that made it before', () => {
   );
 
   it(
+    'arms the alarm that prunes it where a runtime calls the start’s callback before the constructor ends',
+    { timeout: 40_000 },
+    async () => {
+      const errors = vi.spyOn(console, 'error').mockImplementation(vi.fn());
+      onTestFinished(() => {
+        errors.mockRestore();
+      });
+      const stub = objectOf();
+      const session = { expires: Date.now() + LIFETIME_MS, id: 'zero-config', user: 'alice' };
+      valueOf(await stub.render(session, ROOT));
+
+      const armed = await inObject(stub, async (instance, state) => {
+        // Of no alarm a start before left armed: only the start's own callback can arm one here.
+        await state.storage.deleteAlarm();
+        // workerd calls `blockConcurrencyWhile`'s callback after the constructor ends; the object
+        // does not rest on that, so a runtime that calls it at once finds all it reads made.
+        const atOnce = vi
+          .spyOn(state, 'blockConcurrencyWhile')
+          .mockImplementation(async (callback) => callback());
+        const Start = instance.constructor as new (
+          ctx: DurableObjectState,
+          environment: typeof env,
+        ) => AuthorityObject;
+        const fresh = new Start(state, env);
+        atOnce.mockRestore();
+        await vi.waitFor(async () => {
+          await expect(state.storage.getAlarm()).resolves.not.toBeNull();
+        });
+        return valueOf(await fresh.render(session, ROOT));
+      });
+
+      expect(armed.frame.revision).toBe(0);
+      expect(errors).not.toHaveBeenCalledWith(expect.stringContaining('could not be armed'));
+    },
+  );
+
+  it(
     'is taken for unmade where its making again fails, and asked for by the next call as it was',
     { timeout: 40_000 },
     async () => {
