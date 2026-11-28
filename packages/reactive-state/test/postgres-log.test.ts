@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 
 import { drizzle } from 'drizzle-orm/node-postgres';
@@ -5,11 +8,23 @@ import { integer, pgTable, text } from 'drizzle-orm/pg-core';
 import type { Client } from 'pg';
 import { describe, expect, it, onTestFinished, vi } from 'vitest';
 
+import { hostOf } from '../src/authority/database-host.ts';
+import { TAIL } from '../src/authority/external.ts';
+import { startAuthority } from '../src/authority/index.ts';
+import { prepare } from '../src/cli/prepare.ts';
 import type { Json, RenderScope } from '../src/program.ts';
+import { reactiveDb } from '../src/sql/db.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { keyDigest } from '../src/sql/reads.ts';
 import { engineOf } from './support/drizzle.ts';
-import { clientOf, databaseOf, poolOf, SERVER_TIMEOUT_MS, SERVER_URL } from './support/postgres.ts';
+import {
+  clientOf,
+  databaseOf,
+  poolOf,
+  SERVER_TIMEOUT_MS,
+  SERVER_URL,
+  urlOf,
+} from './support/postgres.ts';
 
 /**
  * The log under writers of many sessions, which PGlite has not: what `drizzle-log.test.ts` cannot
@@ -32,6 +47,27 @@ const WRITERS = { count: 12, each: 60 } as const;
 const PAGE = 5000;
 /** What a follower waits between reads of a log that had nothing new. */
 const IDLE_MS = 1;
+/** The sessions that hold an advisory lock of this database. */
+const ADVISORY_LOCKS_HELD = `
+  SELECT pid FROM pg_locks
+  WHERE locktype = 'advisory' AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+`;
+/** The advisory locks held of this database. */
+const ADVISORY_LOCKS = ADVISORY_LOCKS_HELD;
+/** How many new databases a race of two hosts is run on: it shows itself in about one of two. */
+const CAPTURE_ROUNDS = 8;
+/** A migration of Drizzle's, as `drizzle-kit` writes its journal. */
+const JOURNAL = {
+  dialect: 'postgresql',
+  entries: [
+    { breakpoints: true, idx: 0, tag: '0000_first', version: '7', when: 1_700_000_000_000 },
+  ],
+  version: '7',
+};
+/** Well below the 10 seconds a pool leaves a connection idle. */
+const LOCK_GONE_MS = 3000;
+/** Longer than the store's connection waits for a read. */
+const PAST_A_READ_MS = TAIL.readTimeoutMs + 500;
 /** What a run leaves the last commit to become visible before the follower stops. */
 const SETTLE_MS = 200;
 
@@ -132,6 +168,38 @@ function ownTable(name: string) {
 /** What makes the table `name`, of rows to write. */
 function ownDdl(name: string) {
   return `CREATE TABLE ${name} (id text PRIMARY KEY, n int NOT NULL); INSERT INTO ${name} SELECT g::text, 0 FROM generate_series(1, 400) AS g;`;
+}
+
+/** An application's root, of one migration and a `src/seed.ts` the test counts the calls of. */
+function application() {
+  const root = mkdtempSync(path.join(tmpdir(), 'reactive-seed-'));
+  onTestFinished(() => {
+    rmSync(root, { force: true, recursive: true });
+  });
+  const src = path.join(root, 'src');
+  mkdirSync(src);
+  mkdirSync(path.join(root, 'drizzle/meta'), { recursive: true });
+  writeFileSync(path.join(root, 'drizzle/meta/_journal.json'), JSON.stringify(JOURNAL));
+  writeFileSync(path.join(root, 'drizzle/0000_first.sql'), 'CREATE TABLE migrated (id text);');
+  writeFileSync(
+    path.join(src, 'seed.ts'),
+    'export const seed = () => globalThis.seededByTheTest();',
+  );
+  return { root, src };
+}
+
+/** Two of `reactiveDb` on the database `name`, as two processes hold it, closed as the test ends. */
+async function twoHosts(name: string) {
+  process.env['DATABASE_URL'] = urlOf(name);
+  onTestFinished(() => {
+    delete process.env['DATABASE_URL'];
+  });
+  const databases = [await reactiveDb(schema), await reactiveDb(schema)];
+  const hosts = databases.flatMap(({ db }) => hostOf(db) ?? []);
+  onTestFinished(async () => {
+    await Promise.all(hosts.map((host) => host.close()));
+  });
+  return { databases, hosts };
 }
 
 describe.skipIf(SERVER_URL === undefined)('the log on a server of many sessions', () => {
@@ -383,6 +451,115 @@ describe.skipIf(SERVER_URL === undefined)('a pool on a server of many sessions',
       await engine.poke();
 
       await expect(render()).resolves.toContain('"n":7');
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    'wakes the authority of `reactiveDb`, of a commit of another session',
+    async () => {
+      const { name, owner } = await databaseOf(DDL);
+      process.env['DATABASE_URL'] = urlOf(name);
+      onTestFinished(() => {
+        delete process.env['DATABASE_URL'];
+      });
+      const { db } = await reactiveDb(schema);
+      const authority = await startAuthority({ buildId: 'b_server', database: db, programs: [] });
+      onTestFinished(() => authority.close());
+      const poke = vi.spyOn(authority.engine, 'poke');
+
+      await owner.query("UPDATE tasks SET n = 7 WHERE id = '1'");
+
+      await vi.waitFor(() => {
+        expect(poke).toHaveBeenCalledTimes(1);
+      });
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    'migrates a new database and runs the seed of one of two hosts that start at once',
+    async () => {
+      const { name, owner } = await databaseOf(DDL);
+      const { databases, hosts } = await twoHosts(name);
+      const { root, src } = application();
+      const seed = vi.fn(() => sleep(SETTLE_MS));
+      vi.stubGlobal('seededByTheTest', seed);
+      onTestFinished(() => {
+        vi.unstubAllGlobals();
+      });
+
+      await Promise.all(databases.map(({ db }) => prepare(db, root, src)));
+
+      expect(seed).toHaveBeenCalledTimes(1);
+      await expect(owner.query('SELECT 1 FROM migrated')).resolves.toBeDefined();
+      expect(hosts).toHaveLength(2);
+
+      // Let go of at once, not as the pool closes an idle connection, which holds the next start.
+      await expect
+        .poll(async () => (await owner.query(ADVISORY_LOCKS)).rowCount, { timeout: LOCK_GONE_MS })
+        .toBe(0);
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    'notes the seed though the connection that held the lock was lost',
+    async () => {
+      const { name, owner } = await databaseOf(DDL);
+      const { hosts } = await twoHosts(name);
+      const [host] = hosts;
+      vi.spyOn(console, 'error').mockImplementation(vi.fn());
+      const seed = vi.fn(async () => {
+        await owner.query(`SELECT pg_terminate_backend(pid) FROM (${ADVISORY_LOCKS_HELD}) AS held`);
+      });
+
+      await host?.alone(() => host.seed(seed));
+      await host?.alone(() => host.seed(seed));
+
+      expect(seed).toHaveBeenCalledTimes(1);
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    'makes its note under the lock the log is made under, as the two make one schema',
+    async () => {
+      for (let round = 0; round < CAPTURE_ROUNDS; round += 1) {
+        const { name } = await databaseOf(DDL);
+        const { hosts } = await twoHosts(name);
+        const [making, noting] = hosts;
+        const first = vi.fn<() => Promise<void>>();
+
+        await expect(Promise.all([making?.open(), noting?.seed(first)])).resolves.toBeDefined();
+      }
+    },
+    SERVER_TIMEOUT_MS,
+  );
+
+  it(
+    "makes the log and prunes it past a read's deadline, as each may wait on a writer",
+    async () => {
+      const { name, owner } = await databaseOf(DDL);
+      process.env['DATABASE_URL'] = urlOf(name);
+      onTestFinished(() => {
+        delete process.env['DATABASE_URL'];
+      });
+      const { db } = await reactiveDb(schema);
+
+      await owner.query("BEGIN; UPDATE tasks SET n = 7 WHERE id = '1'");
+      const starting = startAuthority({ buildId: 'b_server', database: db, programs: [] });
+      await sleep(PAST_A_READ_MS);
+      await owner.query('COMMIT');
+      const authority = await starting;
+      onTestFinished(() => authority.close());
+
+      await owner.query('BEGIN; LOCK TABLE reactive_state.head IN ACCESS EXCLUSIVE MODE');
+      const pruned = hostOf(db)?.prune();
+      await sleep(PAST_A_READ_MS);
+      await owner.query('COMMIT');
+
+      await expect(pruned).resolves.toBeUndefined();
     },
     SERVER_TIMEOUT_MS,
   );

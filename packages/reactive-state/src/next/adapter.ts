@@ -33,6 +33,7 @@ import {
   instantRule,
   type LoaderOptions,
   loaderOptionsOf,
+  projectOfLoader,
   REACTIVE_SOURCES,
   reactiveRule,
   requirePageExtensions,
@@ -610,17 +611,8 @@ async function reactiveConfig(
   // Next.js's own unless the application said others: it fills its default in.
   requirePageExtensions(config.pageExtensions, config.configFileName);
   requireCacheComponents(config);
-  const { database, prefetch, session, share } = loader;
-  requirePrefetchLife(prefetch, config, 'The reactive-state adapter');
-  const project = {
-    out: loader.out,
-    projectDir: loader.root,
-    src: loader.src,
-    ...(database !== undefined && { database }),
-    ...(session !== undefined && { session }),
-    ...(prefetch !== undefined && { prefetch }),
-    ...(share === 'off' && { share: false }),
-  };
+  requirePrefetchLife(loader.prefetch, config, 'The reactive-state adapter');
+  const project = projectOfLoader(loader);
   if (COMPILING_PHASES.has(context.phase)) {
     await compileProject(project);
   }

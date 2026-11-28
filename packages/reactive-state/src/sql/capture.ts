@@ -241,6 +241,7 @@ interface LogRelations {
   readonly head: string;
   readonly marks: string;
   readonly schema: string;
+  readonly seeded: string;
   readonly sequence: string;
 }
 
@@ -253,6 +254,7 @@ export function logOf(namespace: string): LogRelations {
     head: `${schema}."head"`,
     marks: `${schema}."marks"`,
     schema,
+    seeded: `${schema}."seeded"`,
     sequence: `${schema}."changes_seq"`,
   };
 }
@@ -629,6 +631,18 @@ function locked(statements: readonly string[]): string {
   const run = statements.map((statement) => `EXECUTE ${literal(statement)};`).join(' ');
   const block = `BEGIN PERFORM pg_catalog.pg_advisory_xact_lock(${String(CAPTURE_LOCK)}); ${run} END`;
   return `DO ${literal(block)}`;
+}
+
+/**
+ * The statement that makes what `reactiveDb`'s host notes an application's first records in, beside
+ * the log of `namespace`: under the lock of `captureSql()`, as the two make one schema, and of a
+ * table that stands nothing, as PostgreSQL asks for the right to make one before it reads it stands.
+ */
+export function seededSql(namespace: string): string {
+  const { schema, seeded } = logOf(checkedNamespace(namespace));
+  const table = `CREATE TABLE IF NOT EXISTS ${seeded} ("at" timestamptz NOT NULL DEFAULT clock_timestamp())`;
+  const block = `BEGIN IF to_regclass(${literal(seeded)}) IS NULL THEN CREATE SCHEMA IF NOT EXISTS ${schema}; ${table}; END IF; END`;
+  return locked([`DO ${literal(block)}`]);
 }
 
 /**

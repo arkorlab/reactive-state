@@ -32,7 +32,7 @@ import {
 
 import { literalName, unwrapped } from './bounded.ts';
 import { useOf } from './code-globals.ts';
-import { freeReads } from './scope.ts';
+import { bindingIdentifiers, freeReads } from './scope.ts';
 import { isConstant } from './statements.ts';
 
 /**
@@ -88,16 +88,17 @@ function importedAs(statement: ImportDeclaration, exported: string): readonly st
 
 /**
  * The name `statement`, of the database's own module, declares the export `exported` by: `db` of
- * `export const db = …`, `handle` of `export { handle as db }`, `db` of `export default db`.
+ * `export const db = …` and of `export const { db } = …`, `handle` of `export { handle as db }`, `db`
+ * of `export default db`.
  */
 function ownName(statement: Statement, exported: string): readonly string[] {
   if (isVariableStatement(statement)) {
     const exportedHere =
       statement.modifiers?.some((each) => each.kind === SyntaxKind.ExportKeyword) === true;
-    const declared = statement.declarationList.declarations.map((each) => each.name);
-    return exportedHere && declared.some((name) => isIdentifier(name) && name.text === exported)
-      ? [exported]
-      : [];
+    const declared = statement.declarationList.declarations.flatMap((each) =>
+      bindingIdentifiers(each.name),
+    );
+    return exportedHere && declared.some((name) => name.text === exported) ? [exported] : [];
   }
   if (isExportAssignment(statement)) {
     const value = unwrapped(statement.expression);

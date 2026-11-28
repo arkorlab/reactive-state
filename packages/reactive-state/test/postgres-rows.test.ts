@@ -10,7 +10,14 @@ import { type ComponentProgram, PROTOCOL_VERSION, type ProgramUpdater } from '..
 import { database } from '../src/server/index.ts';
 import { followDrizzle } from '../src/sql/index.ts';
 import { clientOf as frameClientOf } from './support/frames.ts';
-import { clientOf, databaseOf, poolOf, SERVER_TIMEOUT_MS, SERVER_URL } from './support/postgres.ts';
+import {
+  clientOf,
+  databaseOf,
+  followsRows,
+  poolOf,
+  SERVER_TIMEOUT_MS,
+  SERVER_URL,
+} from './support/postgres.ts';
 
 /**
  * A state bound to a row, written through a `pg.Pool` on a real server: what a lock, a deadlock, an
@@ -211,12 +218,13 @@ describe.skipIf(SERVER_URL === undefined)('a state bound to a row, through a poo
       const setup = await opened();
       await setup.rendered();
       const before = setup.evaluations.count;
+      const another = (await followsRows(setup.owner)) ? 0 : 1;
 
       await setup.owner.query("UPDATE tasks SET title = 'Other' WHERE id = 't2'");
       await setup.engine.poke();
       await setup.rendered();
 
-      expect(setup.evaluations.count).toBe(before);
+      expect(setup.evaluations.count).toBe(before + another);
 
       await setup.owner.query("UPDATE tasks SET title = 'Own' WHERE id = 't1'");
       await setup.engine.poke();

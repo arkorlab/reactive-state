@@ -8,6 +8,7 @@ import { type CacheLifeConfig, cacheLifeProfiles } from '../compiler/cache-life.
 import { prefetchOf } from '../compiler/emit-host.ts';
 import { ReactiveCompileError } from '../compiler/errors.ts';
 import { PAGE_EXTENSIONS } from '../compiler/page-extensions.ts';
+import type { ProjectOptions } from './compile-on-build.ts';
 
 /**
  * How an application connects reactive state to Next.js. A page imports a component's source —
@@ -167,6 +168,20 @@ export function loaderOptionsOf(collection: RuleCollection): LoaderOptions | und
     }
   }
   return undefined;
+}
+
+/** What the compile is given of `loader`, the options of this package's rule. */
+export function projectOfLoader(loader: LoaderOptions): ProjectOptions {
+  const { database, out, prefetch, root, session, share, src } = loader;
+  return {
+    out,
+    projectDir: root,
+    src,
+    ...(database !== undefined && { database }),
+    ...(session !== undefined && { session }),
+    ...(prefetch !== undefined && { prefetch }),
+    ...(share === 'off' && { share: false }),
+  };
 }
 
 /** `packages` with this package among them, once. */
