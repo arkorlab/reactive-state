@@ -78,6 +78,8 @@ interface Walk {
   readonly seen: Set<WeakKey>;
   /** Whether a hole of an array is taken, which JSON carries as `null` (`isCarriedJson`). */
   readonly holes: boolean;
+  /** What stands for a value of its own wherever it is met (`isCarriedJson`'s `leaf`). */
+  readonly leaf?: (value: WeakKey) => boolean;
   /**
    * Each object already read as JSON in this walk, by the deepest it was read at. An object the value
    * holds more than once — no cycle: shared — is read again only where it stands deeper, and fits a
@@ -118,11 +120,13 @@ function jsonWithin(value: unknown, depth: number, walk: Walk): boolean {
   if (typeof value !== 'object') {
     return false;
   }
-  if (
-    depth >= MAX_DEPTH ||
-    walk.seen.has(value) ||
-    !(Array.isArray(value) || isPlainObject(value))
-  ) {
+  if (depth >= MAX_DEPTH) {
+    return false;
+  }
+  if (walk.leaf?.(value) === true) {
+    return true;
+  }
+  if (walk.seen.has(value) || !(Array.isArray(value) || isPlainObject(value))) {
     return false;
   }
   if ((walk.read.get(value) ?? -1) >= depth) {
@@ -162,8 +166,13 @@ export function isJson(value: unknown): value is Json {
  * and what an element's prop, an action's bound arguments or an operation's result hold, which
  * reach the page as JSON alone, as React carries them.
  */
-export function isCarriedJson(value: unknown): value is Json {
-  return jsonWithin(value, 0, { holes: true, read: new Map(), seen: new Set() });
+export function isCarriedJson(value: unknown, leaf?: (value: WeakKey) => boolean): value is Json {
+  return jsonWithin(value, 0, {
+    holes: true,
+    read: new Map(),
+    seen: new Set(),
+    ...(leaf !== undefined && { leaf }),
+  });
 }
 
 function written(value: unknown, out: string[]): void {
@@ -224,39 +233,50 @@ export function keyTag(key: string | null): string | null {
   return key === null ? null : shortDigest(['key', key]);
 }
 
-/** Validated own data, normalized without inherited serialization or iteration hooks. */
-export function carried(value: Json): Json {
+/**
+ * Validated own data, normalized without inherited serialization or iteration hooks. Where `leaf`
+ * answers for an object — the one `isCarriedJson` was told to take as it stands — its answer takes
+ * the object's place.
+ */
+export function carried(value: Json, leaf?: (value: WeakKey) => unknown): Json {
   let result = value;
   if (typeof value === 'number') {
     result = value + 0;
   } else if (typeof value === 'object' && value !== null) {
-    result = Array.isArray(value)
-      ? carriedArray(value as readonly Json[])
-      : carriedObject(value as Readonly<Record<string, Json | undefined>>);
+    result = (leaf?.(value) ??
+      (Array.isArray(value)
+        ? carriedArray(value as readonly Json[], leaf)
+        : carriedObject(value as Readonly<Record<string, Json | undefined>>, leaf))) as Json;
   }
   return result;
 }
 
 /** Missing own slots carry null without reading an inherited value or getter. */
-function carriedArray(value: readonly Json[]): Json[] {
+function carriedArray(
+  value: readonly Json[],
+  leaf: ((value: WeakKey) => unknown) | undefined,
+): Json[] {
   const result: Json[] = [];
   const length = value.length;
   for (let index = 0; index < length; index += 1) {
     const item = Object.getOwnPropertyDescriptor(value, String(index))?.value as Json | undefined;
-    result.push(item === undefined ? null : carried(item));
+    result.push(item === undefined ? null : carried(item, leaf));
   }
   return result;
 }
 
 /** Own object data keeps its original key order, including a proto-named key. */
-function carriedObject(value: Readonly<Record<string, Json | undefined>>): Record<string, Json> {
+function carriedObject(
+  value: Readonly<Record<string, Json | undefined>>,
+  leaf: ((value: WeakKey) => unknown) | undefined,
+): Record<string, Json> {
   const result: Record<string, Json> = {};
   for (const [key, item] of Object.entries(value)) {
     if (item !== undefined) {
       Object.defineProperty(result, key, {
         configurable: true,
         enumerable: true,
-        value: carried(item),
+        value: carried(item, leaf),
         writable: true,
       });
     }

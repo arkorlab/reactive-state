@@ -118,6 +118,8 @@ interface SkeletonElement {
   readonly type: string;
   readonly key: string | null;
   readonly props: Readonly<Record<string, SkeletonProp>>;
+  /** The props an action is nested in (`RenderedElement`). */
+  readonly nested?: readonly string[];
   readonly children: readonly Skeleton[];
 }
 
@@ -127,6 +129,8 @@ interface SkeletonModule {
   readonly name: string;
   readonly key: string | null;
   readonly props: Readonly<Record<string, SkeletonProp>>;
+  /** The props an action is nested in (`RenderedElement`). */
+  readonly nested?: readonly string[];
   readonly children: readonly Skeleton[];
 }
 

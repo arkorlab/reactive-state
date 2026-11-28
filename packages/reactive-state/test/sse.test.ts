@@ -123,6 +123,7 @@ function open(engine: Engine, res: SlowResponse, initial: Watched = watched(0, '
     engine,
     expiresIn: 60_000,
     initial,
+    release: vi.fn<() => void>(),
     sessionId: 'session',
     streams: new Set(),
     subscription: 'subscription',

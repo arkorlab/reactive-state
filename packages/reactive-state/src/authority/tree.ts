@@ -30,6 +30,8 @@ interface ElementNode {
   readonly type: string;
   readonly key: string | null;
   readonly props: Readonly<Record<string, PropValue>>;
+  /** The props an action is nested in, which the host walks for it (`RenderedElement`). */
+  readonly nested?: readonly string[];
   readonly children: readonly Child[];
 }
 
@@ -39,6 +41,8 @@ interface ModuleNode {
   readonly name: string;
   readonly key: string | null;
   readonly props: Readonly<Record<string, PropValue>>;
+  /** The props an action is nested in, which the host walks for it (`RenderedElement`). */
+  readonly nested?: readonly string[];
   readonly children: readonly Child[];
 }
 
@@ -125,9 +129,14 @@ function isObject(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Whether `value` is a reference a compile made (`REFERENCE`), and not JSON shaped as one. */
+/**
+ * Whether `value` is a reference a compile made (`REFERENCE`), and not JSON shaped as one. Its marker
+ * is read as the data property of the object itself that every reference holds, so that an accessor
+ * under the symbol is no marker and is not run: a prop is looked into before it is refused, and
+ * none of its getters runs then.
+ */
 function isReference(value: unknown): value is Readonly<Record<string, unknown>> {
-  return isObject(value) && (value as { readonly [REFERENCE]?: unknown })[REFERENCE] === true;
+  return isObject(value) && Object.getOwnPropertyDescriptor(value, REFERENCE)?.value === true;
 }
 
 function isComponentRef(value: unknown): value is ComponentRef {
@@ -155,29 +164,54 @@ function isActionRef(value: unknown): value is ActionRef {
   );
 }
 
+/** What a prop holds that JSON does not carry as it is: a node, or an action. */
+type Held = 'action' | 'node';
+
 /**
- * Whether `value` holds a node anywhere in it: a node is a plain object of JSON itself, which only
- * this tells from JSON a prop holds. An object is looked in again only where it is reached shallower
- * than it was looked in at (`looked`): from there it is looked in as deep as may be, where reached
- * deeper first it was looked in less deep. Looked in each way it is reached, one that holds itself
- * twice would be looked in twice as often at each depth, before what follows could refuse it as no
- * JSON; so, each object is looked in at most once at each depth, and what holds itself once.
+ * What `value` holds first of a node or an action, anywhere in it: a node is a plain object of JSON
+ * itself, which only this tells from JSON a prop holds. An object is looked in again only where it is
+ * reached shallower than it was looked in at (`looked`): from there it is looked in as deep as may
+ * be, where reached deeper first it was looked in less deep. Looked in each way it is reached, one
+ * that holds itself twice would be looked in twice as often at each depth, before what follows could
+ * refuse it as no JSON; so, each object is looked in at most once at each depth, and what holds
+ * itself once.
  */
-function holdsNode(value: unknown, depth = 0, looked?: Map<WeakKey, number>): boolean {
+function heldIn(
+  value: unknown,
+  depth = 0,
+  looked?: Map<WeakKey, number>,
+  nodesOnly = false,
+): Held | undefined {
   if (isNode(value)) {
-    return true;
+    return 'node';
   }
   if (typeof value !== 'object' || value === null || depth >= MAX_DEPTH) {
-    return false;
+    return undefined;
+  }
+  if (isActionRef(value)) {
+    // Looked for nodes alone, an action is a leaf, whatever follows it.
+    return nodesOnly ? undefined : 'action';
   }
   const shallowest = looked?.get(value);
   if (shallowest !== undefined && shallowest <= depth) {
-    return false;
+    return undefined;
   }
   // Made as the first object is looked in: none for the text and numbers most props are.
   const depths = looked ?? new Map<WeakKey, number>();
   depths.set(value, depth);
-  return Object.values(value).some((item) => holdsNode(item, depth + 1, depths));
+  let held: Held | undefined;
+  for (const item of Object.values(value)) {
+    held = heldIn(item, depth + 1, depths, nodesOnly);
+    if (held !== undefined) {
+      break;
+    }
+  }
+  return held;
+}
+
+/** Whether `value` holds a node anywhere in it. */
+function holdsNode(value: unknown): boolean {
+  return heldIn(value, 0, undefined, true) === 'node';
 }
 
 /**
@@ -196,9 +230,14 @@ function holdsReference(value: unknown, depth = 0, seen = new Set<WeakKey>()): b
   return Object.values(value).some((item) => holdsReference(item, depth + 1, seen));
 }
 
-/** Refuses JSON shaped as something rendered, at any depth. */
+/** The actions `renderedActionOf` made, which `unambiguous` takes for what they are. */
+const MADE = new WeakSet();
+
+/** Refuses JSON shaped as something rendered, at any depth, of the copy that is carried. */
 function unambiguous(name: string, value: Json): Json {
-  if (Array.isArray(value)) {
+  if (MADE.has(value as WeakKey)) {
+    // An action this tree made of a reference is no JSON shaped as one.
+  } else if (Array.isArray(value)) {
     for (const item of value as readonly Json[]) {
       unambiguous(name, item);
     }
@@ -289,34 +328,73 @@ function childOf(value: unknown): Child {
   return child;
 }
 
-function propOf(name: string, value: unknown): PropValue {
+/** An action as the tree carries it: its module, its name, and the JSON it is bound to. */
+function renderedActionOf(name: string, value: ActionRef): RenderedAction {
+  if (!isCarriedJson(value.bound)) {
+    throw new TypeError(`The action of \`${name}\` is bound to arguments that are not JSON.`);
+  }
+  const action: RenderedAction = {
+    bound: carried(value.bound) as readonly Json[],
+    kind: 'action',
+    module: value.module,
+    name: value.name,
+  };
+  MADE.add(action);
+  return Object.freeze(action);
+}
+
+/**
+ * A prop of plain objects and arrays that holds actions, as the tree carries it: JSON, each action
+ * as the action it is, as at the top of a prop. What is no plain object or array of these — a
+ * `Map`, an instance of a class, a function, an element — is refused where the prop is. The copy
+ * that is carried is the one checked for JSON shaped as something rendered.
+ */
+function nestedActionsOf(name: string, value: unknown, checked: boolean): Json {
+  if (!checked && !isCarriedJson(value, isActionRef)) {
+    throw new TypeError(`The prop \`${name}\` is neither JSON, an element, nor an action.`);
+  }
+  return unambiguous(
+    name,
+    carried(value as Json, (held) =>
+      isActionRef(held) ? renderedActionOf(name, held) : undefined,
+    ),
+  );
+}
+
+/** A prop as the tree keeps it, and whether an action is nested in it, for the host to walk. */
+interface PropOf {
+  readonly nested: boolean;
+  readonly prop: PropValue;
+}
+
+function propOf(name: string, value: unknown): PropOf {
   if (typeof value === 'function') {
     throw new TypeError(
       `The prop \`${name}\` is a function, which a component the server renders cannot hand on: render it in a component with states, or make it a server operation.`,
     );
   }
-  let prop: PropValue;
   if (isActionRef(value)) {
-    if (!isCarriedJson(value.bound)) {
-      throw new TypeError(`The action of \`${name}\` is bound to arguments that are not JSON.`);
-    }
-    const action: RenderedAction = {
-      bound: carried(value.bound) as readonly Json[],
-      kind: 'action',
-      module: value.module,
-      name: value.name,
-    };
-    prop = Object.freeze(action);
-  } else if (isNode(value) || (Array.isArray(value) && holdsNode(value))) {
-    prop = childOf(value);
-  } else if (isCarriedJson(value) && !holdsNode(value)) {
-    // As JSON carries it — an `undefined` property left out, a hole `null`, `-0` `0` — whichever
-    // host answers: an HTTP answer is JSON, and a Durable Object's RPC would keep each as it is.
-    prop = unambiguous(name, carried(value));
-  } else {
-    throw new TypeError(`The prop \`${name}\` is neither JSON, an element, nor an action.`);
+    return { nested: false, prop: renderedActionOf(name, value) };
   }
-  return prop;
+  if (isNode(value)) {
+    return { nested: false, prop: childOf(value) };
+  }
+  // A plain object is read for JSON before it is looked into, which runs none of its getters; one
+  // look for what a prop holds that JSON does not carry as it is: a node, or an action.
+  const plain = isObject(value) && isCarriedJson(value, isActionRef);
+  const held = plain || Array.isArray(value) ? heldIn(value) : undefined;
+  if (held === 'action') {
+    return { nested: true, prop: nestedActionsOf(name, value, plain) };
+  }
+  if (held === 'node' && Array.isArray(value)) {
+    return { nested: false, prop: childOf(value) };
+  }
+  // As JSON carries it — an `undefined` property left out, a hole `null`, `-0` `0` — whichever
+  // host answers: an HTTP answer is JSON, and a Durable Object's RPC would keep each as it is.
+  if (held === undefined && (plain || (!isObject(value) && isCarriedJson(value)))) {
+    return { nested: false, prop: unambiguous(name, carried(value)) };
+  }
+  throw new TypeError(`The prop \`${name}\` is neither JSON, an element, nor an action.`);
 }
 
 function keyOf(key: unknown): string | null {
@@ -330,14 +408,25 @@ function keyOf(key: unknown): string | null {
 }
 
 /** An element's props as the tree keeps them: `key` and `children` are not props of it. */
-function propsOf(given: Readonly<Record<string, unknown>>): Readonly<Record<string, PropValue>> {
+function propsOf(given: Readonly<Record<string, unknown>>): {
+  readonly nested?: readonly string[];
+  readonly props: Readonly<Record<string, PropValue>>;
+} {
   const props: Record<string, PropValue> = {};
+  const nested: string[] = [];
   for (const [name, value] of Object.entries(given)) {
     if (name !== 'key' && name !== 'children' && value !== undefined) {
-      Object.defineProperty(props, name, { enumerable: true, value: propOf(name, value) });
+      const each = propOf(name, value);
+      Object.defineProperty(props, name, { enumerable: true, value: each.prop });
+      if (each.nested) {
+        nested.push(name);
+      }
     }
   }
-  return Object.freeze(props);
+  return {
+    props: Object.freeze(props),
+    ...(nested.length > 0 && { nested: Object.freeze(nested) }),
+  };
 }
 
 /**
@@ -414,7 +503,7 @@ function h(
     return made({ children: inside, key, kind: 'fragment' });
   }
   if (typeof type === 'string') {
-    return made({ children: inside, key, kind: 'element', props: propsOf(given), type });
+    return made({ children: inside, key, kind: 'element', ...propsOf(given), type });
   }
   if (isModuleRef(type)) {
     return made({
@@ -423,7 +512,7 @@ function h(
       kind: 'module',
       module: type.module,
       name: type.name,
-      props: propsOf(given),
+      ...propsOf(given),
     });
   }
   throw new TypeError('An element is of a tag, a module’s export, or a reactive component.');

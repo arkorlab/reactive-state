@@ -26,6 +26,7 @@ import {
 const PACKAGE = fileURLToPath(new URL('../', import.meta.url));
 
 const SETTINGS = 'components/publication-settings.reactive.tsx';
+const COMMANDS = 'components/project-commands.reactive.tsx';
 
 /** A source file of `lines`. */
 function file(...lines: readonly string[]): string {
@@ -98,6 +99,42 @@ describe('the stubs of the application’s server operations', () => {
 
     expect(output(compiled, app, 'components/publication-settings.client.tsx')).toContain(
       '<form action={publishBoard.bind(null, projectId)}>',
+    );
+    expect(diagnosticsOfOutputs(app)).toStrictEqual([]);
+  });
+
+  it('hands a Client Component an operation as a prop, bound, which the type check accepts', async () => {
+    const completer = file(
+      "'use client';",
+      '',
+      "import type { ReactNode } from 'react';",
+      '',
+      'export function Completer({ complete }: { readonly complete: () => Promise<void> }): ReactNode {',
+      '  return (',
+      '    <button type="button" onClick={() => void complete()}>',
+      '      すべて完了にする',
+      '    </button>',
+      '  );',
+      '}',
+    );
+    const commands = variant(
+      variant(
+        await source(COMMANDS),
+        "import { createTodo, completeProject } from '@/actions/todos';",
+        "import { createTodo, completeProject } from '@/actions/todos';\nimport { Completer } from '@/controls/completer';",
+      ),
+      '      <form action={completeProject.bind(null, projectId)}>\n        <button type="submit">すべて完了にする</button>\n      </form>',
+      '      <Completer complete={completeProject.bind(null, projectId)} />',
+    );
+    const { app, compiled } = await compiledWith({
+      'controls/completer.tsx': completer,
+      [COMMANDS]: commands,
+    });
+    writeOutputs(compiled.outputs, app.out);
+
+    expect(compiled.refusals).toStrictEqual([]);
+    expect(output(compiled, app, 'components/project-commands.authority.mts')).toContain(
+      '$.h(Completer, { complete: completeProject.bind(null, projectId) })',
     );
     expect(diagnosticsOfOutputs(app)).toStrictEqual([]);
   });

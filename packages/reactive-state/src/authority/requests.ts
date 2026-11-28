@@ -3,6 +3,7 @@ import {
   type Json,
   type OperationArgument,
   type OperationCall,
+  REQUEST_LIMITS,
   type RootRequest,
   type SiteInputs,
   type Value,
@@ -25,7 +26,7 @@ import { fitsJson, fitsJsonCharacters, MAX_CARRIED_BYTES } from './json-size.ts'
 
 const OPERATION_ID = /^[\w:-]{1,128}$/u;
 /** The most an update's captured values take, as canonical JSON. */
-const MAX_CAPTURES_LENGTH = 4096;
+const MAX_CAPTURES_LENGTH = REQUEST_LIMITS.captures;
 /** The most arguments a server operation is sent, and the most entries one form holds. */
 const MAX_ARGUMENTS = 64;
 const MAX_FORM_ENTRIES = 64;
@@ -36,7 +37,7 @@ const MAX_FORM_BYTES = 16_384;
  * the Node authority's body (`MAX_BODY_BYTES`) holds every call this lets through, and the two
  * refuse alike. A form of 16 KiB whose every character JSON escapes takes 96 Ki of it.
  */
-const MAX_ARGUMENTS_LENGTH = 262_144;
+const MAX_ARGUMENTS_LENGTH = REQUEST_LIMITS.arguments;
 
 const encoder = new TextEncoder();
 

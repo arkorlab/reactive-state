@@ -2,7 +2,12 @@ import { refresh } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 
 import { AUTHORITY_UNAVAILABLE, type Failure } from '../client/index.ts';
-import type { Json, OperationArgument, OperationCall } from '../program.ts';
+import {
+  type Json,
+  type OperationArgument,
+  type OperationCall,
+  REQUEST_LIMITS,
+} from '../program.ts';
 import { type JsonBudget, jsonBudget, spendJson, toJson } from '../runtime/json.ts';
 import { operationDigest } from '../runtime/outcome.ts';
 import { HTTP_INTERNAL_ERROR } from '../status.ts';
@@ -199,7 +204,8 @@ export async function operate(
     session: source,
     sessionChange,
   } = typeof built === 'string' ? { build: built } : built;
-  const budget = jsonBudget();
+  // The arguments share one count of values, as many as the authority's text of them could hold.
+  const budget = jsonBudget(REQUEST_LIMITS.arguments);
   const call: OperationCall = {
     args: args.map((argument, index) => encodeArgument(argument, index, budget)),
     build,

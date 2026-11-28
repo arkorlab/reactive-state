@@ -2,6 +2,7 @@ import type { DatabaseHost } from '../../authority/database-host.ts';
 import { d1Hosted } from './d1-host.ts';
 import type { DrizzleD1Follow } from './follow.ts';
 import type { LocalD1 } from './local-d1.ts';
+import { ownChanges } from './own-changes.ts';
 
 /**
  * A database of a schema of SQLite's tables, as `reactiveDb` opens one in a process that has no D1
@@ -42,7 +43,8 @@ export async function inSqliteFile<S extends Readonly<Record<string, unknown>>>(
   ]);
   const file = process.env['D1_FILE'] ?? FILE;
   const binding = localD1(file);
-  const orm = drizzle(follow.client(binding) as never, { schema });
+  // A write answers its own changes, not the rows the log's triggers wrote beside them.
+  const orm = drizzle(follow.client(ownChanges(binding)) as never, { schema });
   return {
     host: {
       ...d1Hosted(binding, follow, keptMs),

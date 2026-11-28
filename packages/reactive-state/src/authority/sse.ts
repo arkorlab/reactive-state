@@ -23,6 +23,8 @@ export interface EventStream {
   readonly initial: Watched;
   /** How long the session had, when the stream opened, before it expires. */
   readonly expiresIn: number;
+  /** Gives back the place the stream was admitted with (`AuthorityEngine.admitStream`), once. */
+  readonly release: () => void;
   /** The open streams, which the authority closes when it closes. */
   readonly streams: Set<ServerResponse>;
 }
@@ -212,6 +214,7 @@ class Follower {
     this.#unsubscribe();
     this.#unfollow();
     this.#stream.streams.delete(this.#res);
+    this.#stream.release();
     this.#res.end();
   }
 }
@@ -231,6 +234,7 @@ export function openEventStream(
   // The root was rendered before the stream opened; a client that left meanwhile has no stream to
   // follow, and nothing would ever close one opened for it.
   if (req.destroyed || res.destroyed || res.socket?.destroyed !== false) {
+    stream.release();
     res.end();
     return;
   }

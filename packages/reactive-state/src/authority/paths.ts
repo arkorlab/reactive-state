@@ -29,12 +29,24 @@ import {
  * an ES module or CommonJS as its extension, its package's `type` and its syntax make it. A `.tsx` or
  * `.jsx` file is refused: Node runs no JSX, and a module the authority loads is never one the
  * browser's code needs.
+ *
+ * `server-only`, the marker of a module that runs in the authority alone, is an empty module
+ * wherever it is imported or required from, as it is in Next.js's server bundles, which alias it
+ * so: Node could find no such package where the application installs none — Next.js ships its own
+ * copy — and the package's entry throws where it does.
  */
 
 const TYPESCRIPT = /\.[cm]?ts$/u;
 const JSX = /\.[jt]sx$/u;
 /** What marks a JSON document the hooks load as a module whose default it is. */
 const AS_MODULE = 'reactive-state-json';
+/** The marker of a module that runs in the authority alone: the bare specifier, nothing else. */
+const SERVER_ONLY = 'server-only';
+/**
+ * Where `server-only` leads, from whatever module imports or requires it: a URL `load` answers with
+ * an empty module.
+ */
+const SERVER_ONLY_URL = 'reactive-state:server-only';
 const RELATIVE = /^\.\.?\//u;
 const NODE_MODULES = /[/\\]node_modules[/\\]/u;
 /**
@@ -282,6 +294,9 @@ export function registerPaths(tsconfig: string): void {
   };
   registerHooks({
     resolve(specifier, context, nextResolve) {
+      if (specifier === SERVER_ONLY) {
+        return { format: 'module', shortCircuit: true, url: SERVER_ONLY_URL };
+      }
       // The application's aliases are the application's: a package's imports are resolved as its
       // own `package.json` says, though a name of one is also a path the application declares.
       const fromPackage = ofPackage(context.parentURL);
@@ -305,6 +320,9 @@ export function registerPaths(tsconfig: string): void {
       return resolution;
     },
     load(url, context, nextLoad) {
+      if (url === SERVER_ONLY_URL) {
+        return { format: 'module', shortCircuit: true, source: '' };
+      }
       const document = new URL(url);
       if (!document.searchParams.has(AS_MODULE)) {
         return nextLoad(url, context);

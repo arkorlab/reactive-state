@@ -270,16 +270,28 @@ async function handleApi(exchange: Exchange): Promise<void> {
     case 'GET /api/events': {
       const sessionId = presentedSession(req);
       const subscription = url.searchParams.get('subscription') ?? '';
-      const initial = await engine.watch(sessionId, subscription);
-      const expiresIn = await engine.expiresIn(sessionId);
-      openEventStream(req, res, {
-        engine,
-        expiresIn,
-        initial,
-        sessionId,
-        streams: exchange.streams,
-        subscription,
-      });
+      // Admitted before anything renders or listens; the stream gives its place back as it ends,
+      // and a request that fails before it opens one gives it back here.
+      const release = engine.admitStream(sessionId);
+      let opened = false;
+      try {
+        const initial = await engine.watch(sessionId, subscription);
+        const expiresIn = await engine.expiresIn(sessionId);
+        opened = true;
+        openEventStream(req, res, {
+          engine,
+          expiresIn,
+          initial,
+          release,
+          sessionId,
+          streams: exchange.streams,
+          subscription,
+        });
+      } finally {
+        if (!opened) {
+          release();
+        }
+      }
       return;
     }
     case 'GET /api/public': {

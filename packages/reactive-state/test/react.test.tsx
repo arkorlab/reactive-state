@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import {
+  Activity,
   Component,
   type ReactNode,
   startTransition,
+  StrictMode,
   Suspense,
   useEffect,
   useLayoutEffect,
@@ -38,6 +40,7 @@ import {
 } from '../src/react/index.tsx';
 import * as reactive from '../src/react/index.tsx';
 import { page as pageRuntime, resetPage } from '../src/runtime/page.ts';
+import type { Send, StoreStatus } from '../src/runtime/store.ts';
 import type { ViewAnswer } from '../src/runtime/view.ts';
 import {
   BUILD,
@@ -1177,6 +1180,79 @@ function shownText(testId: string): string | undefined {
 
 function fallsBack(): boolean {
   return screen.queryByRole('status') !== null;
+}
+
+/** A root of no dynamic site and no field: a tree the page may show again as it showed it. */
+const PLAIN = 'root:plain';
+
+/** A plain root as a page renders it. */
+interface Plain {
+  readonly frame: Frame;
+  /** What its paragraph says: `text@<revision>` unless said. */
+  readonly text?: string;
+  /** Whether a link's prefetch may carry it, as a host's `prefetch` has its entry say: so unless said. */
+  readonly prefetchable?: boolean;
+  readonly session?: string;
+}
+
+/** A frame of the plain root `rootKey` at `revision`. */
+function plainAt(revision: number, rootKey = PLAIN): Frame {
+  return frameAt(revision, {}, { rootKey });
+}
+
+/** A plain root as `renderRoot` renders it: a paragraph, which its root key names. */
+function plainPage(plain: Plain, view: ViewFunction): ReactNode {
+  const { frame, prefetchable = true, session = ALICE } = plain;
+  return (
+    <LiveRoot
+      events={EVENTS}
+      frame={frame}
+      prefetchable={prefetchable}
+      session={session}
+      update={unanswered()}
+      view={view}
+    >
+      <p data-testid={frame.rootKey}>{plain.text ?? `text@${String(frame.revision)}`}</p>
+    </LiveRoot>
+  );
+}
+
+/** A plain root of a route gone back to, inside the boundary a navigation waits in. */
+function goneBackTo(plain: Plain, view: ViewFunction): ReactNode {
+  return <Suspense fallback={<p role="status">戻っています</p>}>{plainPage(plain, view)}</Suspense>;
+}
+
+/** Shows a plain root, then lets it go, as a navigation away from its route does. */
+async function shownAndLeft(plain: Plain, view: ViewFunction): Promise<void> {
+  const shown = render(plainPage(plain, view));
+  await settle();
+  shown.unmount();
+}
+
+/** The event streams opened so far, oldest first: their subscriptions, and whether each was closed. */
+function streams(): readonly { readonly subscription: string | null; readonly closed: boolean }[] {
+  return opened.map(({ closed, subscription }) => ({ closed, subscription }));
+}
+
+/** A write of the page's own whose answer is `answer`, sent as the page makes it. */
+function writeAnswered(answer: (operation: FieldOperation) => Result<FieldReceipt>): void {
+  pageRuntime().store.set({
+    binding: 'binding:title:t1',
+    field: 'todos:t1:title',
+    send: vi.fn<Send>((operation) => Promise.resolve(answer(operation))),
+    session: ALICE,
+    updaterId: 'u_set_title',
+    value: 'Plan B',
+  });
+}
+
+/** Waits for the page's store to say what `holds` asks of its status. */
+async function storeSays(holds: (status: StoreStatus) => boolean): Promise<void> {
+  await vi.waitFor(() => {
+    if (!holds(pageRuntime().store.getStatus())) {
+      throw new Error('The store does not say so yet.');
+    }
+  });
 }
 
 describe('the browser’s half', () => {
@@ -2530,6 +2606,345 @@ describe('the browser’s half', () => {
       expect(view.mock.calls).toStrictEqual([
         [expect.objectContaining({ view: { [NOT_A_NUMBER]: {} } })],
       ]);
+    });
+  });
+
+  describe('a root the page kept as it let it go', () => {
+    it('shows what it showed at once, mounted again from an older frame, and asks for it again at once', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      // Another root's stream told the page of a newer revision since.
+      pageRuntime().saw(8);
+
+      // The route the router kept, gone back to: its root's frame as it was first rendered.
+      await interact(() => {
+        render(goneBackTo({ frame: plainAt(2) }, view));
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('text@5');
+      expect(fallsBack()).toBe(false);
+      // Asked for again as it shows, with no stream event: the root as the authority renders it now.
+      expect(view).toHaveBeenCalledExactlyOnceWith({
+        subscription: plainAt(5).subscription,
+        view: {},
+      });
+      // Followed from what it shows: its stream opens with the newest subscription.
+      expect(streams()).toStrictEqual([
+        { closed: true, subscription: plainAt(5).subscription },
+        { closed: false, subscription: plainAt(5).subscription },
+      ]);
+
+      await answerWith(view, 0, rendered(plainAt(8), <p data-testid={PLAIN}>text@8</p>));
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('text@8');
+      expect(view).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows nothing in place of what it kept once the authority answers the root is forbidden', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      await interact(() => {
+        render(goneBackTo({ frame: plainAt(2) }, view));
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('text@5');
+
+      // The reader was taken out of the root's team meanwhile, the session still theirs.
+      const forbidden: Result<ViewAnswer<ReactNode>> = {
+        ok: true,
+        value: { children: null, frame: plainAt(6), status: 'forbidden' },
+      };
+      await answerWith(view, 0, forbidden);
+      await settle();
+
+      expect(shownText(PLAIN)).toBeUndefined();
+      expect(fallsBack()).toBe(false);
+      expect(view).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows what it showed at once in another root’s place, from an older frame', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      const { rerender } = render(goneBackTo({ frame: plainAt(6, 'root:other') }, view));
+      await settle();
+
+      // Gone back to the route the router kept: the kept root's older frame in the other's place.
+      await interact(() => {
+        startTransition(() => {
+          rerender(goneBackTo({ frame: plainAt(2) }, view));
+        });
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('text@5');
+      expect(shownText('root:other')).toBeUndefined();
+      expect(view).toHaveBeenCalledExactlyOnceWith({
+        subscription: plainAt(5).subscription,
+        view: {},
+      });
+      expect(streams().at(-1)).toStrictEqual({
+        closed: false,
+        subscription: plainAt(5).subscription,
+      });
+    });
+
+    it('keeps what a root showed as another root key takes its place, and shows it at once back', async () => {
+      const view = answering();
+      const { rerender } = render(goneBackTo({ frame: plainAt(5) }, view));
+      await settle();
+      // A search parameter's navigation: the segment kept, its root rendered with other props.
+      rerender(goneBackTo({ frame: plainAt(6, 'root:other') }, view));
+      await settle();
+
+      expect(pageRuntime().kept(PLAIN)?.frame).toStrictEqual(plainAt(5));
+
+      // Gone back: the root as the router kept it, in the other's place again.
+      await interact(() => {
+        startTransition(() => {
+          rerender(goneBackTo({ frame: plainAt(2) }, view));
+        });
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('text@5');
+      expect(view).toHaveBeenCalledExactlyOnceWith({
+        subscription: plainAt(5).subscription,
+        view: {},
+      });
+    });
+
+    it('keeps nothing of a root while it is on the page, though StrictMode cleans it up as it mounts', async () => {
+      const view = answering();
+      const shown = render(<StrictMode>{plainPage({ frame: plainAt(5) }, view)}</StrictMode>);
+      await settle();
+
+      expect(pageRuntime().kept(PLAIN)).toBeUndefined();
+
+      shown.unmount();
+
+      expect(pageRuntime().kept(PLAIN)?.frame).toStrictEqual(plainAt(5));
+    });
+
+    it('lets go of what a root left it once that root shows again, its route hidden and shown', async () => {
+      const view = answering();
+      const frame = plainAt(5);
+      const root = plainPage({ frame }, view);
+      const { rerender } = render(<Activity mode="visible">{root}</Activity>);
+      await settle();
+      // The route left, which the router keeps in a hidden `<Activity>`.
+      rerender(<Activity mode="hidden">{root}</Activity>);
+      await settle();
+
+      expect(pageRuntime().kept(PLAIN)?.frame).toBe(frame);
+
+      rerender(<Activity mode="visible">{root}</Activity>);
+      await settle();
+
+      expect(pageRuntime().kept(PLAIN)).toBeUndefined();
+    });
+
+    it('keeps what one root left it while another root shows it, StrictMode’s cleanup of that one too', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      await interact(() => {
+        render(<StrictMode>{goneBackTo({ frame: plainAt(2) }, view)}</StrictMode>);
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('text@5');
+      expect(pageRuntime().kept(PLAIN)?.frame).toStrictEqual(plainAt(5));
+    });
+
+    it('keeps the tree another root showed last of what it kept, at the revision it kept', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5), text: 'first@5' }, view);
+      // Another root shows it again, from an older frame.
+      const restored = render(goneBackTo({ frame: plainAt(2) }, view));
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('first@5');
+
+      // A render of the route hands it another tree at that revision — of a render that reads the
+      // time, say — and the root is let go of.
+      restored.rerender(goneBackTo({ frame: plainAt(5), text: 'second@5' }, view));
+      await settle();
+      restored.unmount();
+
+      await interact(() => {
+        render(goneBackTo({ frame: plainAt(2) }, view));
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('second@5');
+      expect(view).toHaveBeenLastCalledWith({ subscription: plainAt(5).subscription, view: {} });
+    });
+
+    it('keeps the newest tree it showed, where a render of the route changed its tree alone', async () => {
+      const view = answering();
+      const frame = plainAt(5);
+      const shown = render(plainPage({ frame, text: 'first@5' }, view));
+      await settle();
+      // The same frame, another tree: what the root shows changes, its frame does not.
+      shown.rerender(plainPage({ frame, text: 'second@5' }, view));
+      await settle();
+      shown.unmount();
+
+      await interact(() => {
+        render(goneBackTo({ frame: plainAt(2) }, view));
+      });
+      await settle();
+
+      expect(shownText(PLAIN)).toBe('second@5');
+      expect(view).toHaveBeenCalledExactlyOnceWith({ subscription: frame.subscription, view: {} });
+    });
+
+    it('renders the least recently kept of 17 roots again first, and shows another at once', async () => {
+      const view = answering();
+      const keys = Array.from({ length: 17 }, (_, each) => `root:plain${String(each)}`);
+      for (const key of keys) {
+        await shownAndLeft({ frame: plainAt(5, key) }, view);
+      }
+
+      await interact(() => {
+        render(goneBackTo({ frame: plainAt(2, 'root:plain1') }, view));
+      });
+      await settle();
+
+      expect(shownText('root:plain1')).toBe('text@5');
+      // Shown at once, and asked for again: not held for it.
+      expect(view).toHaveBeenCalledExactlyOnceWith({
+        subscription: plainAt(5, 'root:plain1').subscription,
+        view: {},
+      });
+
+      // The first kept, let go of by the 17th: rendered again before it shows, as before.
+      const first = plainAt(2, 'root:plain0');
+      await interact(() => {
+        render(goneBackTo({ frame: first }, view));
+      });
+      await settle();
+
+      expect(view).toHaveBeenCalledTimes(2);
+      expect(view).toHaveBeenLastCalledWith({ subscription: first.subscription, view: {} });
+      expect(fallsBack()).toBe(true);
+    });
+
+    it('renders it again first where a write of the page’s own committed past it since', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      writeAnswered((operation) => receipt(operation.operationId, 6));
+      await vi.waitFor(() => {
+        expect(pageRuntime().carriedFloor(PLAIN)).toBe(6);
+      });
+
+      const kept = plainAt(2);
+      await interact(() => {
+        render(goneBackTo({ frame: kept }, view));
+      });
+      await settle();
+
+      // What it kept would show the write undone.
+      expect(view).toHaveBeenCalledExactlyOnceWith({ subscription: kept.subscription, view: {} });
+      expect(fallsBack()).toBe(true);
+    });
+
+    it('renders it again first once the page showed another session since, though it shows its own again', async () => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      // Another session's root on the page, then one of the first session's again.
+      await shownAndLeft({ frame: plainAt(6, 'root:plain:bob'), session: 'session:bob' }, view);
+      await shownAndLeft({ frame: plainAt(7, 'root:other') }, view);
+
+      expect(pageRuntime().store.session).toBe(ALICE);
+
+      const kept = plainAt(2);
+      await interact(() => {
+        render(goneBackTo({ frame: kept }, view));
+      });
+      await settle();
+
+      expect(view).toHaveBeenCalledExactlyOnceWith({ subscription: kept.subscription, view: {} });
+      expect(fallsBack()).toBe(true);
+    });
+
+    it.each([
+      [
+        'its stream says the session ended',
+        async () => {
+          pageRuntime().revoked('The session ended.');
+          await storeSays(({ revoked }) => revoked);
+        },
+      ],
+      [
+        'its stream says the build is another',
+        async () => {
+          pageRuntime().revoked('The application was updated.', 'BUILD_MISMATCH');
+          await storeSays(({ mismatched }) => mismatched);
+        },
+      ],
+      [
+        'a write is refused the session',
+        async () => {
+          writeAnswered(() => refusal(401, 'UNAUTHENTICATED', 'Sign in first.'));
+          await storeSays(({ revoked }) => revoked);
+        },
+      ],
+      [
+        'a write is refused for its build',
+        async () => {
+          writeAnswered(() => refusal(409, 'BUILD_MISMATCH', 'The application was updated.'));
+          await storeSays(({ mismatched }) => mismatched);
+        },
+      ],
+    ])('renders it again first once %s', async (_, end) => {
+      const view = answering();
+      await shownAndLeft({ frame: plainAt(5) }, view);
+      await end();
+
+      const kept = plainAt(2);
+      await interact(() => {
+        render(goneBackTo({ frame: kept }, view));
+      });
+      await settle();
+
+      expect(view).toHaveBeenCalledExactlyOnceWith({ subscription: kept.subscription, view: {} });
+      expect(fallsBack()).toBe(true);
+    });
+
+    it.each([
+      [
+        'no prefetch may carry',
+        (revision: number): Plain => ({ frame: plainAt(revision), prefetchable: false }),
+      ],
+      [
+        'of a field',
+        (revision: number): Plain => {
+          const field = { 'todos:t1:title': 'Plan' };
+          return { frame: frameAt(revision, field, { rootKey: PLAIN }) };
+        },
+      ],
+      [
+        'rendered for a site',
+        (revision: number): Plain => {
+          const site = viewOf({ filter: 'all' });
+          return { frame: frameAt(revision, {}, { rootKey: PLAIN, view: site }) };
+        },
+      ],
+    ])('keeps nothing of a root %s, which renders again first', async (_, plainOf) => {
+      const view = answering();
+      await shownAndLeft(plainOf(5), view);
+
+      const { frame } = plainOf(2);
+      await interact(() => {
+        render(goneBackTo(plainOf(2), view));
+      });
+      await settle();
+
+      expect(view).toHaveBeenCalledExactlyOnceWith({ subscription: frame.subscription, view: {} });
+      expect(fallsBack()).toBe(true);
     });
   });
 });

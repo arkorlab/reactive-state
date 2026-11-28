@@ -1,34 +1,19 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- a build's compile writes where the application's build says, as `./compile-on-build.ts` does */
-import { randomUUID } from 'node:crypto';
-import { mkdirSync, renameSync, rmdirSync, rmSync, writeFileSync } from 'node:fs';
+import { rmdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
 
 import { writeOutputs } from '../compiler/index.ts';
+import { writeWhole } from './write-whole.ts';
 
 /**
  * How the compile a build runs (`./compile-on-build.ts`) puts what it compiled on disk, at build
  * time: what an earlier compile wrote that this one does not is taken away first, as the compiler's
- * own write takes it away (`writeOutputs`); then each file is written whole; the manifest last.
+ * own write takes it away (`writeOutputs`); then each file is written whole (`./write-whole.ts`);
+ * the manifest last.
  */
 
 /** The manifest, which a compile writes last. */
 const MANIFEST = 'manifest.json';
-
-/** Writes `text` to `file` whole: beside it first, then in its place in one rename. */
-export function writeWhole(file: string, text: string): void {
-  mkdirSync(path.dirname(file), { recursive: true });
-  const temporary = path.join(
-    path.dirname(file),
-    `.${path.basename(file)}.${String(process.pid)}.${randomUUID()}.tmp`,
-  );
-  try {
-    writeFileSync(temporary, text);
-    renameSync(temporary, file);
-  } catch (error) {
-    rmSync(temporary, { force: true });
-    throw error;
-  }
-}
 
 /** Takes away `directory`, and each directory above it below `root`, while each is empty. */
 function removeEmptied(directory: string, root: string): void {

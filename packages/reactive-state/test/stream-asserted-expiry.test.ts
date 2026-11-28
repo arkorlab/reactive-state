@@ -177,18 +177,23 @@ function refusing(row: Row): () => Promise<Watched> {
 }
 
 /**
- * An authority as a stream sees one: it renders the root as `SHOWN` until `refuse` says its next
- * render is the one refused, as `row` says, and announces each commit as changing `READ`. It is no
- * engine that a constructor opened, so its clock is the wall clock the test moves (`engineNow`).
+ * An authority as a stream sees one: it admits a stream (`admitStream`, whose place `release` is
+ * given back), renders the root as `SHOWN` until `refuse` says its next render is the one refused,
+ * as `row` says, and announces each commit as changing `READ`. It is no engine that a constructor
+ * opened, so its clock is the wall clock the test moves (`engineNow`).
  */
 function authority(row: Row): {
   readonly commit: () => void;
   readonly engine: Engine;
   readonly refuse: () => void;
+  readonly release: () => void;
+  readonly released: () => number;
 } {
   const listeners = new Set<(event: CommitEvent) => void>();
+  const release = vi.fn<() => void>();
   let render = shown;
   const engine = {
+    admitStream: () => release,
     // Sampled at the clock's zero, as the engine's own is, and answered the later for the drift.
     expiresIn: () => {
       vi.setSystemTime(row.drift);
@@ -215,7 +220,15 @@ function authority(row: Row): {
     refuse: () => {
       render = refusing(row);
     },
+    release,
+    released: () => release.mock.calls.length,
   };
+}
+
+/** What a stream said, and how many times it gave back the place it was admitted with. */
+interface Outcome {
+  readonly events: Row['said'];
+  readonly released: number;
 }
 
 /** The events in what a stream wrote, in order: its comments are no events. */
@@ -233,8 +246,8 @@ function eventsIn(text: string): Row['said'] {
 }
 
 /** What the Durable Object's stream says once a commit's render is refused, until it ends. */
-async function saidByObject(row: Row): Promise<Row['said']> {
-  const { commit, engine, refuse } = authority(row);
+async function saidByObject(row: Row): Promise<Outcome> {
+  const { commit, engine, refuse, released } = authority(row);
   const stream = await new EventStreams(engine).open(row.session, 'subscription');
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -244,7 +257,7 @@ async function saidByObject(row: Row): Promise<Row['said']> {
   for (;;) {
     const { done, value } = await reader.read();
     if (done) {
-      return eventsIn(text);
+      return { events: eventsIn(text), released: released() };
     }
     text += decoder.decode(value);
   }
@@ -274,8 +287,8 @@ class Response extends EventEmitter {
 }
 
 /** What the Node authority's stream says once a commit's render is refused, until it ends. */
-async function saidByNode(row: Row): Promise<Row['said']> {
-  const { commit, engine, refuse } = authority(row);
+async function saidByNode(row: Row): Promise<Outcome> {
+  const { commit, engine, refuse, release, released } = authority(row);
   const res = new Response();
   // eslint-disable-next-line unicorn/prefer-event-target -- a Node request is an EventEmitter too
   const req = Object.assign(new EventEmitter(), { destroyed: false });
@@ -285,6 +298,7 @@ async function saidByNode(row: Row): Promise<Row['said']> {
     engine,
     expiresIn: row.lasts,
     initial: SHOWN,
+    release,
     sessionId: row.session,
     streams: new Set(),
     subscription: 'subscription',
@@ -294,7 +308,7 @@ async function saidByNode(row: Row): Promise<Row['said']> {
   await vi.waitFor(() => {
     expect(res.ended).toBe(true);
   });
-  return eventsIn(res.written.join(''));
+  return { events: eventsIn(res.written.join('')), released: released() };
 }
 
 describe.each([
@@ -314,6 +328,7 @@ describe.each([
   });
 
   it.each(ROWS)('$id', async (row) => {
-    await expect(said(row)).resolves.toStrictEqual(row.said);
+    // Whatever it says, it ends once and gives back its place once.
+    await expect(said(row)).resolves.toStrictEqual({ events: row.said, released: 1 });
   });
 });

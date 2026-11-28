@@ -31,6 +31,7 @@ import { storesOf } from './external.ts';
 import { writeField } from './fields.ts';
 import { frameOf } from './frames.ts';
 import { Memo } from './memo.ts';
+import { emptyMetrics } from './metrics.ts';
 import type {
   AuthorityEngineOptions,
   CommitListener,
@@ -54,6 +55,7 @@ import type { SiteFetch } from './shared-generate.ts';
 import { gateRequestOf, sharedRequestOf } from './shared-requests.ts';
 import { SharedStore } from './shared-store.ts';
 import { type SharedFollowing, SharedViews } from './shared-views.ts';
+import { StreamAdmission } from './stream-admission.ts';
 import { Tables } from './tables.ts';
 import { type Root, statusView, viewOf } from './views.ts';
 
@@ -118,33 +120,9 @@ export class AuthorityEngine {
   readonly #secret: string;
   readonly #public: PublicViews;
   readonly #listeners = new Set<CommitListener>();
-  readonly #metrics: Metrics = {
-    appReads: 0,
-    artifactBytes: 0,
-    artifactReads: 0,
-    artifactRenders: 0,
-    cacheHits: 0,
-    commits: 0,
-    deduplicated: 0,
-    evaluations: 0,
-    gateLookups: 0,
-    gateWaits: 0,
-    generationFailures: 0,
-    generations: 0,
-    guardEvaluations: 0,
-    invalidations: 0,
-    memoEvictions: 0,
-    memoHits: 0,
-    middlewareReads: 0,
-    nextRenders: 0,
-    operationRuns: 0,
-    queryEvaluations: 0,
-    renderQueries: 0,
-    renders: 0,
-    sharedEvaluations: 0,
-    siteRenders: 0,
-    updaterRuns: 0,
-  };
+  /** The event streams held open, by session: where a stream is admitted before it renders. */
+  readonly #streams = new StreamAdmission();
+  readonly #metrics: Metrics = emptyMetrics();
   readonly #evaluatedBy = new Map<string, number>();
   readonly #diagnostics: Diagnostics;
   readonly #core: Core;
@@ -328,6 +306,16 @@ export class AuthorityEngine {
     return () => {
       this.#listeners.delete(listener);
     };
+  }
+
+  /**
+   * Takes a place for an event stream of the session, before the stream renders or listens: the
+   * function answered gives the place back, once, when the stream ends however it ends. Refused
+   * with 429 `TOO_MANY_STREAMS` where the session, or the authority, holds as many as it may.
+   */
+  admitStream(sessionId: unknown): () => void {
+    const session = this.#session(sessionId);
+    return this.#streams.admit(session.key ?? session.id);
   }
 
   revision(): number {

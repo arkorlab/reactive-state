@@ -7,7 +7,9 @@ import { jsonBudget, MAX_JSON_LENGTH, toJson, toJsonRecord } from '../src/runtim
  * The bound a value is copied within (`JsonBudget`): the JSON it comes to, counted as it is copied,
  * every place an object stands in it counted — so that a value of a few objects that hold each
  * other many times over, as a Server Function's decoder hands a caller's, is refused once it is
- * counted past what a request carries, and not copied first.
+ * counted past what a request carries, and not copied first. A caller that holds its values to a
+ * count of its own beside it — a view's, an update's captures, an operation's arguments together —
+ * keeps that count: whichever is passed first refuses.
  */
 
 /** The bound, as the suite was written against it: what the authority reads of one request. */
@@ -178,5 +180,29 @@ describe('the bound a value is copied within', () => {
 
     expect(() => toJson(cycle)).toThrow(/nested more than 64 levels/u);
     expect(() => toJson(doubled(64))).toThrow(/nested more than 64 levels/u);
+  });
+
+  it('keeps a caller’s count of values as it was: one value more than the count is refused, naming the count', () => {
+    expect(toJson([0, 0], 'The change', 3)).toStrictEqual([0, 0]);
+    expect(() => toJson([0, 0, 0], 'The change', 3)).toThrow(
+      'The change[2] is more than 3 values, as many as the copy may make, which JSON does not carry as it is.',
+    );
+    expect(() => toJsonRecord({ a: [0, 0] }, 'The view', 3)).toThrow(
+      /^The view\.a\[1\] is more than 3 values, as many as the copy may make/u,
+    );
+  });
+
+  it('counts the JSON beside a caller’s count of values, in one budget: whichever is passed first refuses', () => {
+    const budget = jsonBudget(4);
+
+    expect(toJson([0], 'Argument 1', budget)).toStrictEqual([0]);
+    expect(toJson('x', 'Argument 2', budget)).toBe('x');
+    expect(() => toJson([0], 'Argument 3', budget)).toThrow(
+      /^Argument 3\[0\] is more than 4 values, as many as the copy may make/u,
+    );
+    // One value, within any count of them, of a character more of JSON than a request carries.
+    expect(() => toJson('x'.repeat(BOUND - 1), 'The text', BOUND)).toThrow(
+      'The text is past the 1048576 characters of JSON one request carries.',
+    );
   });
 });

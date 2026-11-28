@@ -348,6 +348,27 @@ describe('reactiveDb of a schema of SQLite', () => {
     ).resolves.toStrictEqual([{ done: true, id: 'a', title: 'one' }]);
   });
 
+  it("answers a write's own changes, not the rows the log's triggers wrote beside them", async () => {
+    const { db, orm } = await opened();
+    await orm.run(sql.raw(DDL));
+    const authority = await startAuthority({ buildId: BUILD, database: db, programs: [] });
+    onTestFinished(() => authority.close());
+
+    const inserted = await orm.insert(tasks).values({ id: 'a', title: 'one' }).run();
+    const [updated] = await orm.batch([
+      orm.update(tasks).set({ title: 'two' }).where(eq(tasks.id, 'a')),
+    ]);
+
+    expect(inserted).toMatchObject({ meta: { changes: 1 } });
+    expect(updated).toMatchObject({ meta: { changes: 1 } });
+    // The log's own rows of the two writes, which D1's count holds beside theirs.
+    await expect(
+      orm.all<{ entries: number }>(
+        sql`SELECT count(*) AS entries FROM _rs_changes WHERE id = 'row'`,
+      ),
+    ).resolves.toStrictEqual([{ entries: 2 }]);
+  });
+
   it('counts what a trigger writes in what a write changed, as D1 does', async () => {
     const binding = memory();
     await binding.prepare('CREATE TABLE a (id integer PRIMARY KEY)').run();

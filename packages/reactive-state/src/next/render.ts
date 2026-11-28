@@ -86,21 +86,62 @@ function actionOf(action: RenderedAction, elements: Elements): unknown {
 }
 
 /**
- * A prop's value: JSON as it is, a rendered element as one, an action as its Server Function.
+ * A prop's value: JSON as it is, a rendered element as one, an action as its Server Function. Of a
+ * prop the authority named (`nested`: an action stands in an object or an array of it) the walk goes
+ * into both, copying each only where something in it changed; any other prop is handed on as it is.
  *
  * @returns What the prop is rendered with.
  */
-function propValue(value: RenderedProp, elements: Elements): unknown {
+function propValue(value: RenderedProp, elements: Elements, nested = false): unknown {
   if (typeof value !== 'object' || value === null) {
     return value;
   }
   if (Array.isArray(value)) {
-    return value.map((item: RenderedProp) => propValue(item, elements));
+    return nested
+      ? changing(value, elements)
+      : value.map((item: RenderedProp) => propValue(item, elements));
   }
   if (isAction(value)) {
     return actionOf(value, elements);
   }
-  return isNode(value) ? toNode(value, elements) : value;
+  if (isNode(value)) {
+    return toNode(value, elements);
+  }
+  return nested ? fieldsValue(value as Readonly<Record<string, unknown>>, elements) : value;
+}
+
+/** A list's items, each as `propValue` has it of a nested prop: the list itself where none changes. */
+function changing(value: readonly RenderedProp[], elements: Elements): unknown {
+  let copy: unknown[] | undefined;
+  for (const [index, item] of value.entries()) {
+    const handed = propValue(item, elements, true);
+    if (copy === undefined && handed !== item) {
+      copy = value.slice(0, index);
+    }
+    copy?.push(handed);
+  }
+  return copy ?? value;
+}
+
+/** An object's fields, each as `propValue` has it of a nested prop: the object itself where none changes. */
+function fieldsValue(value: Readonly<Record<string, unknown>>, elements: Elements): unknown {
+  let copy: Record<string, unknown> | undefined;
+  for (const [name, field] of Object.entries(value)) {
+    const handed = propValue(field as RenderedProp, elements, true);
+    if (copy === undefined && handed !== field) {
+      copy = {};
+      for (const [before, kept] of Object.entries(value)) {
+        if (before === name) {
+          break;
+        }
+        own(copy, before, kept);
+      }
+    }
+    if (copy !== undefined) {
+      own(copy, name, handed);
+    }
+  }
+  return copy ?? value;
 }
 
 /** Makes `name` a property of `target`'s own, though it be `__proto__`, which an assignment sets. */
@@ -121,7 +162,7 @@ function propsOf(
   const props: Record<string, unknown> = {};
   for (const [name, value] of Object.entries(rendered.props)) {
     if (name !== 'children' && name !== 'key') {
-      own(props, name, propValue(value, elements));
+      own(props, name, propValue(value, elements, rendered.nested?.includes(name) === true));
     }
   }
   return props;
